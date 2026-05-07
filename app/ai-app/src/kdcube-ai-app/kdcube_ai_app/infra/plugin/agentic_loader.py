@@ -79,7 +79,6 @@ class APIEndpointSpec:
     user_types: tuple[str, ...] = ()
     roles: tuple[str, ...] = ()
     public_auth: "PublicAPIAuthSpec | None" = None
-    enabled_config: str | None = None
 
 
 @dataclass(frozen=True)
@@ -88,7 +87,6 @@ class MCPEndpointSpec:
     alias: str
     route: str = "operations"
     transport: str = "streamable-http"
-    enabled_config: str | None = None
 
 
 @dataclass(frozen=True)
@@ -105,7 +103,6 @@ class UIWidgetSpec:
     icon: dict[str, str]
     user_types: tuple[str, ...] = ()
     roles: tuple[str, ...] = ()
-    enabled_config: str | None = None
 
 
 @dataclass(frozen=True)
@@ -132,7 +129,6 @@ class CronJobSpec:
     timezone: str | None = None
     tz_config: str | None = None
     span: str = "system"
-    enabled_config: str | None = None
 
 
 @dataclass(frozen=True)
@@ -146,7 +142,45 @@ class BundleInterfaceManifest:
     on_message: OnMessageSpec | None = None
     on_job: OnJobSpec | None = None
     scheduled_jobs: tuple[CronJobSpec, ...] = ()
-    enabled_config: str | None = None
+
+
+_VALID_ENABLED_KINDS: frozenset = frozenset({"bundle", "api", "mcp", "widget", "cron"})
+
+
+def canonical_enabled_path(
+        kind: str,
+        *,
+        alias: str | None = None,
+        http_method: str | None = None,
+) -> str:
+    """Return the canonical bundle-props dot-path for a feature switch.
+
+    Mapping:
+      - kind="bundle"           -> "enabled.bundle"
+      - kind="api"              -> "enabled.api.<alias>.<METHOD>"  (flat, with literal dot)
+      - kind in {mcp, widget, cron} -> "enabled.<kind>.<alias>"
+
+    Aliases must not contain dots; for "api" this keeps the flat key
+    "<alias>.<METHOD>" unambiguous.
+    """
+    norm_kind = str(kind or "").strip().lower()
+    if norm_kind not in _VALID_ENABLED_KINDS:
+        raise ValueError(f"Unsupported enabled kind: {kind!r}")
+    if norm_kind == "bundle":
+        return "enabled.bundle"
+    norm_alias = str(alias or "").strip()
+    if not norm_alias:
+        raise ValueError(f"alias is required for enabled kind {norm_kind!r}")
+    if "." in norm_alias:
+        raise ValueError(
+            f"alias for enabled kind {norm_kind!r} must not contain '.': {alias!r}"
+        )
+    if norm_kind == "api":
+        norm_method = str(http_method or "").strip().upper()
+        if not norm_method:
+            raise ValueError("http_method is required for enabled kind 'api'")
+        return f"enabled.api.{norm_alias}.{norm_method}"
+    return f"enabled.{norm_kind}.{norm_alias}"
 
 
 def _clean_alias(value: str | None, default: str) -> str:
@@ -317,7 +351,6 @@ def agentic_workflow(
         version: str | None = None,
         priority: int = 100,
         allowed_roles: List[str] | Tuple[str, ...] | None = None,
-        enabled_config: str | None = None,
 ):
     """
     Mark a CLASS as the bundle's workflow CLASS.
@@ -331,16 +364,16 @@ def agentic_workflow(
         the session) intersect with allowed_roles will see this bundle.
         Empty or None means visible to all authenticated users.
 
-    enabled_config: dot-separated path into bundle props that resolves to a
-        boolean. If the resolved value is falsy, all inbound routes for this
-        bundle return 404. Absent or None means always enabled.
+    Bundle-level feature gating uses the canonical bundle-props path
+    ``enabled.bundle`` (resolved by the platform). When that value is falsy,
+    all inbound routes for the bundle return 404 and scheduled jobs are not
+    reconciled.
     """
     def _wrap(cls):
         setattr(cls, AGENTIC_ROLE_ATTR, "workflow_class")
         setattr(cls, AGENTIC_META_ATTR, {
             "name": name, "version": version, "priority": priority,
             "allowed_roles": _tuple_str(allowed_roles),
-            "enabled_config": str(enabled_config).strip() if enabled_config else None,
         })
         return cls
     return _wrap
@@ -376,7 +409,6 @@ def api(
         user_types: List[str] | Tuple[str, ...] | None = None,
         roles: List[str] | Tuple[str, ...] | None = None,
         public_auth: str | Dict[str, Any] | None = None,
-        enabled_config: str | None = None,
 ):
     http_method = _normalize_http_method(method)
     resolved_route = _normalize_api_route(route)
@@ -385,21 +417,27 @@ def api(
         user_types=user_types,
         roles=roles,
     )
-    resolved_enabled_config = str(enabled_config).strip() if enabled_config else None
 
     def _wrap(fn):
+        method_name = getattr(fn, "__name__", "api_method")
+        resolved_alias = _clean_alias(alias, method_name)
+        if "." in resolved_alias:
+            raise ValueError(
+                f"@api alias must not contain '.': {resolved_alias!r}. "
+                f"Aliases are mapped to the canonical enabled path "
+                f"'enabled.api.<alias>.<METHOD>' (flat key with a literal dot)."
+            )
         setattr(
             fn,
             API_METHOD_ATTR,
             APIEndpointSpec(
-                method_name=getattr(fn, "__name__", "api_method"),
-                alias=_clean_alias(alias, getattr(fn, "__name__", "api_method")),
+                method_name=method_name,
+                alias=resolved_alias,
                 http_method=http_method,
                 route=resolved_route,
                 user_types=resolved_user_types,
                 roles=resolved_roles,
                 public_auth=resolved_public_auth,
-                enabled_config=resolved_enabled_config,
             ),
         )
         return fn
@@ -413,25 +451,30 @@ def ui_widget(
         alias: str | None = None,
         user_types: List[str] | Tuple[str, ...] | None = None,
         roles: List[str] | Tuple[str, ...] | None = None,
-        enabled_config: str | None = None,
 ):
     resolved_user_types, resolved_roles = _normalize_visibility_selectors(
         user_types=user_types,
         roles=roles,
     )
-    resolved_enabled_config = str(enabled_config).strip() if enabled_config else None
 
     def _wrap(fn):
+        method_name = getattr(fn, "__name__", "widget")
+        resolved_alias = _clean_alias(alias, method_name)
+        if "." in resolved_alias:
+            raise ValueError(
+                f"@ui_widget alias must not contain '.': {resolved_alias!r}. "
+                f"Aliases are mapped to the canonical enabled path "
+                f"'enabled.widget.<alias>'."
+            )
         setattr(
             fn,
             UI_WIDGET_ATTR,
             UIWidgetSpec(
-                method_name=getattr(fn, "__name__", "widget"),
-                alias=_clean_alias(alias, getattr(fn, "__name__", "widget")),
+                method_name=method_name,
+                alias=resolved_alias,
                 icon=_normalize_icon_spec(icon),
                 user_types=resolved_user_types,
                 roles=resolved_roles,
-                enabled_config=resolved_enabled_config,
             ),
         )
         return fn
@@ -447,7 +490,6 @@ def mcp(
         user_types: List[str] | Tuple[str, ...] | None = None,
         roles: List[str] | Tuple[str, ...] | None = None,
         public_auth: str | Dict[str, Any] | None = None,
-        enabled_config: str | None = None,
 ):
     resolved_route = _normalize_api_route(route)
     resolved_transport = _normalize_mcp_transport(transport)
@@ -456,18 +498,24 @@ def mcp(
             "@mcp(...) does not support proc-side visibility or public_auth. "
             "MCP request authentication/authorization must be handled by the bundle MCP app."
         )
-    resolved_enabled_config = str(enabled_config).strip() if enabled_config else None
 
     def _wrap(fn):
+        method_name = getattr(fn, "__name__", "mcp")
+        resolved_alias = _clean_alias(alias, method_name)
+        if "." in resolved_alias:
+            raise ValueError(
+                f"@mcp alias must not contain '.': {resolved_alias!r}. "
+                f"Aliases are mapped to the canonical enabled path "
+                f"'enabled.mcp.<alias>'."
+            )
         setattr(
             fn,
             MCP_ENDPOINT_ATTR,
             MCPEndpointSpec(
-                method_name=getattr(fn, "__name__", "mcp"),
-                alias=_clean_alias(alias, getattr(fn, "__name__", "mcp")),
+                method_name=method_name,
+                alias=resolved_alias,
                 route=resolved_route,
                 transport=resolved_transport,
-                enabled_config=resolved_enabled_config,
             ),
         )
         return fn
@@ -555,7 +603,6 @@ def cron(
         timezone: str | None = None,
         tz_config: str | None = None,
         span: str = "system",
-        enabled_config: str | None = None,
 ):
     """
     Mark a bundle method as a scheduled job.
@@ -575,31 +622,38 @@ def cron(
             it takes precedence over ``timezone`` at runtime.
         span: exclusivity level — one of ``"process"``, ``"instance"``,
             ``"system"``. Defaults to ``"system"``.
-        enabled_config: dot-separated path into bundle props that resolves to
-            a boolean. If the resolved value is falsy, the job is not scheduled.
-            Absent or None means always enabled.
+
+    Feature gating uses the canonical bundle-props path
+    ``enabled.cron.<alias>`` (resolved by the platform). When that value is
+    falsy, the job is not scheduled. Bundle-level ``enabled.bundle = false``
+    overrides per-job values.
     """
     span_norm = str(span).strip().lower() if span else "system"
     if span_norm not in _VALID_CRON_SPANS:
         raise ValueError(
             f"Invalid cron span: {span!r}. Must be one of: process, instance, system"
         )
-    resolved_enabled_config = str(enabled_config).strip() if enabled_config else None
 
     def _wrap(fn):
         method_name = getattr(fn, "__name__", "cron_job")
+        resolved_alias = _clean_alias(alias, method_name)
+        if "." in resolved_alias:
+            raise ValueError(
+                f"@cron alias must not contain '.': {resolved_alias!r}. "
+                f"Aliases are mapped to the canonical enabled path "
+                f"'enabled.cron.<alias>'."
+            )
         setattr(
             fn,
             CRON_JOB_ATTR,
             CronJobSpec(
                 method_name=method_name,
-                alias=_clean_alias(alias, method_name),
+                alias=resolved_alias,
                 cron_expression=str(cron_expression).strip() if cron_expression is not None else None,
                 expr_config=str(expr_config).strip() if expr_config is not None else None,
                 timezone=str(timezone).strip() if timezone is not None else None,
                 tz_config=str(tz_config).strip() if tz_config is not None else None,
                 span=span_norm,
-                enabled_config=resolved_enabled_config,
             ),
         )
         return fn
@@ -1739,7 +1793,6 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
                 user_types=tuple(api_spec.user_types or ()),
                 roles=tuple(api_spec.roles or ()),
                 public_auth=api_spec.public_auth,
-                enabled_config=api_spec.enabled_config,
             )
             api_key = (resolved.alias, resolved.http_method, resolved.route)
             if api_key in seen_api:
@@ -1757,7 +1810,6 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
                 alias=mcp_spec.alias,
                 route=mcp_spec.route,
                 transport=mcp_spec.transport,
-                enabled_config=mcp_spec.enabled_config,
             )
             mcp_key = (resolved.alias, resolved.route)
             if mcp_key in seen_mcp:
@@ -1776,7 +1828,6 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
                 icon=dict(widget_spec.icon or {}),
                 user_types=tuple(widget_spec.user_types or ()),
                 roles=tuple(widget_spec.roles or ()),
-                enabled_config=widget_spec.enabled_config,
             )
             if resolved.alias in seen_widgets:
                 raise ValueError(f"Duplicate bundle widget alias detected: {resolved.alias}")
@@ -1814,12 +1865,10 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
                 timezone=cron_spec.timezone,
                 tz_config=cron_spec.tz_config,
                 span=cron_spec.span,
-                enabled_config=cron_spec.enabled_config,
             ))
 
     meta = getattr(cls, AGENTIC_META_ATTR, {}) or {}
     allowed_roles: tuple[str, ...] = _tuple_str(meta.get("allowed_roles"))
-    bundle_enabled_config: str | None = str(meta.get("enabled_config") or "").strip() or None
 
     api_endpoints.sort(key=lambda item: (item.alias, item.route, item.http_method, item.method_name))
     mcp_endpoints.sort(key=lambda item: (item.alias, item.route, item.transport, item.method_name))
@@ -1828,7 +1877,6 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
     return BundleInterfaceManifest(
         bundle_id=resolved_bundle_id,
         allowed_roles=allowed_roles,
-        enabled_config=bundle_enabled_config,
         ui_widgets=tuple(ui_widgets),
         api_endpoints=tuple(api_endpoints),
         mcp_endpoints=tuple(mcp_endpoints),

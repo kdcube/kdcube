@@ -101,35 +101,33 @@ def resolve_effective_cron(
 _SCHEDULER_DISABLED_VALUES: frozenset = frozenset({"false", "disable", "disabled", "off", "0"})
 
 
-def resolve_effective_enabled(
-    enabled_config: Optional[str],
-    props: Dict[str, Any],
-) -> bool:
-    """Return False if the job should be suppressed based on bundle props.
+def _resolve_scheduler_enabled_value(path: str, props: Dict[str, Any]) -> Any:
+    """Look up an ``enabled.*`` value with descriptor-file fallback.
 
     Resolution order (mirrors resolve_effective_cron):
     1. Redis bundle props (dot-path lookup in props dict).
     2. bundles.yaml / assembly.yaml via read_plain, when the path is absent
-       from Redis props (value is None after step 1).
-    3. Default: True (enabled) when the path is absent from both sources.
-
-    Falsy values: False (bool), 0 (int), or any of
-    "false" / "disable" / "disabled" / "off" / "0" (case-insensitive string).
+       from Redis props.
     """
-    if not enabled_config:
-        return True
     from kdcube_ai_app.infra.plugin.bundle_store import resolve_dot_path
-    value = resolve_dot_path(props, enabled_config)
-    if value is None:
-        try:
-            from kdcube_ai_app.apps.chat.sdk.config import read_plain
-            raw = read_plain(f"b:{enabled_config}", default=None)
-            if raw is None:
-                raw = read_plain(enabled_config, default=None)
-            if raw is not None:
-                value = raw
-        except Exception:
-            pass
+    value = resolve_dot_path(props, path)
+    if value is not None:
+        return value
+    try:
+        from kdcube_ai_app.apps.chat.sdk.config import read_plain
+        raw = read_plain(f"b:{path}", default=None)
+        if raw is None:
+            raw = read_plain(path, default=None)
+        if raw is not None:
+            return raw
+    except Exception:
+        pass
+    return None
+
+
+def _is_truthy_enabled(value: Any) -> bool:
+    """Default = enabled. Falsy values: False/0 or
+    "false"/"disable"/"disabled"/"off"/"0" (case-insensitive)."""
     if value is None:
         return True
     if isinstance(value, bool):
@@ -137,6 +135,18 @@ def resolve_effective_enabled(
     if isinstance(value, int):
         return value != 0
     return str(value).strip().lower() not in _SCHEDULER_DISABLED_VALUES
+
+
+def is_bundle_enabled(props: Dict[str, Any]) -> bool:
+    """Resolve the canonical ``enabled.bundle`` switch."""
+    return _is_truthy_enabled(_resolve_scheduler_enabled_value("enabled.bundle", props))
+
+
+def is_cron_job_enabled(props: Dict[str, Any], alias: str) -> bool:
+    """Resolve the canonical ``enabled.cron.<alias>`` switch."""
+    return _is_truthy_enabled(
+        _resolve_scheduler_enabled_value(f"enabled.cron.{alias}", props)
+    )
 
 
 def resolve_effective_timezone(
@@ -595,12 +605,11 @@ class BundleSchedulerManager:
                 props=props,
             )
 
-            manifest_enabled_config = getattr(manifest, "enabled_config", None)
-            if not resolve_effective_enabled(manifest_enabled_config, props):
+            if not is_bundle_enabled(props):
                 _log.info(
-                    "[scheduler] Bundle disabled via enabled_config: bundle=%s enabled_config=%r"
+                    "[scheduler] Bundle disabled via enabled.bundle: bundle=%s"
                     " - skipping all jobs",
-                    bundle_id, manifest_enabled_config,
+                    bundle_id,
                 )
                 continue
 
@@ -627,12 +636,10 @@ class BundleSchedulerManager:
                     )
                     continue
 
-                job_enabled_config = getattr(job_spec, "enabled_config", None)
-                if not resolve_effective_enabled(job_enabled_config, props):
+                if not is_cron_job_enabled(props, job_spec.alias):
                     _log.info(
-                        "[scheduler] Job disabled via enabled_config: bundle=%s alias=%s "
-                        "enabled_config=%r",
-                        bundle_id, job_spec.alias, job_enabled_config,
+                        "[scheduler] Job disabled via enabled.cron.<alias>: bundle=%s alias=%s",
+                        bundle_id, job_spec.alias,
                     )
                     continue
 

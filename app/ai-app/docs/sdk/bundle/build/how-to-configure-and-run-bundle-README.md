@@ -996,7 +996,7 @@ prepare this through `BaseWorkflow.build_react(...)`; isolated execution
 prepares it through `bootstrap_bind_all(...)`. Without that prep the helper
 raises a runtime error instead of creating an unscoped artifact.
 
-## Bundle Props, Secrets, And `enabled_config`
+## Bundle Props, Secrets, And Canonical `enabled.*`
 
 Deployment-scoped non-secret bundle config goes in `bundles.yaml`.
 
@@ -1011,9 +1011,9 @@ bundles:
       config:
         api:
           header_name: "X-My-Bundle-Token"
-        features:
-          admin_export:
-            enabled: false
+        enabled:
+          api:
+            "admin_export.POST": false
 ```
 
 Deployment-scoped secret bundle config goes in `bundles.secrets.yaml`.
@@ -1052,9 +1052,19 @@ kdcube bundle <bundle_id> --del-secret key.path \
 `kdcube bundle` only patches the staged files. It does not edit the original
 source descriptor directory. Run `kdcube reload` afterward to apply the change.
 
-`enabled_config` values belong in bundle props, not in secrets.
+Feature switches for bundle surfaces live under `enabled.*` in bundle props,
+not in secrets. The platform derives the canonical path from decorator
+metadata:
 
-Example bundle code:
+| Decorator | Canonical bundle-props path |
+| --- | --- |
+| `@agentic_workflow(...)` | `enabled.bundle` |
+| `@api(alias=A, method=M, ...)` | `enabled.api["A.M"]` (flat key, literal dot) |
+| `@mcp(alias=A, ...)` | `enabled.mcp.A` |
+| `@ui_widget(alias=A, ...)` | `enabled.widget.A` |
+| `@cron(alias=A, ...)` | `enabled.cron.A` |
+
+Example bundle code and props pair:
 
 ```python
 @api(
@@ -1062,15 +1072,21 @@ Example bundle code:
     route="operations",
     method="POST",
     user_types=("privileged",),
-    enabled_config="features.admin_export.enabled",
 )
 async def admin_export(self, **kwargs):
     return {"ok": True}
 ```
 
+```yaml
+config:
+  enabled:
+    api:
+      "admin_export.POST": false
+```
+
 Operational behavior:
 
-- missing path means enabled
+- missing key means enabled
 - `false`, `0`, `disable`, `disabled`, and `off` disable the surface
 
 After changing the prop, apply it with:

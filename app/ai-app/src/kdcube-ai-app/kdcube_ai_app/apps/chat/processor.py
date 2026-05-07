@@ -1742,6 +1742,20 @@ class EnhancedChatRequestProcessor:
                 backoff = 0.5
                 self._last_config_error = None
 
+                # Catch-up reconcile: pubsub does not buffer, so any
+                # bundles.update / bundles.props.update event published while
+                # this listener was disconnected was lost. Sync scheduler state
+                # to current Redis registry/props on every (re)subscribe.
+                if self._scheduler is not None:
+                    try:
+                        current_reg = await store_load(self.redis)
+                        await self._scheduler.reconcile(current_reg)
+                    except Exception:
+                        logger.warning(
+                            "Catch-up bundle scheduler reconcile after (re)subscribe failed",
+                            exc_info=True,
+                        )
+
                 while not self._stop_event.is_set():
                     try:
                         message = await asyncio.wait_for(

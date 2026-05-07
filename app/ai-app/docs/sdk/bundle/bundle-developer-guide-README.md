@@ -161,7 +161,7 @@ Practical rule:
 - use `@cron(...)` only for scheduled work
 - use `@on_job` when work is submitted to the background job stream and must be executed later by proc
 - use `@venv(...)` only for dependency-heavy leaf helpers, not general orchestration
-- `enabled_config` is available on bundle/workflow, API, MCP, widget, and cron decorators when you need runtime feature gating from bundle props
+- runtime feature gating uses canonical `enabled.*` switches in bundle props (see "Feature Gating With Canonical `enabled.*`" below)
 
 Background job rule:
 
@@ -222,34 +222,37 @@ Read the exact model here:
 - [bundle-reserved-platform-properties-README.md](bundle-reserved-platform-properties-README.md)
 - [build/how-to-configure-and-run-bundle-README.md](build/how-to-configure-and-run-bundle-README.md)
 
-## Feature Gating With `enabled_config`
+## Feature Gating With Canonical `enabled.*`
 
-`enabled_config` is the standard way to enable or disable bundle surfaces from
-bundle props instead of branching the code manually.
+The platform-native way to enable or disable bundle surfaces is the
+`enabled.*` section of effective bundle props. The platform derives the
+lookup path from decorator metadata, so there is one canonical place per
+surface.
 
-Use it on:
+Mapping per decorator:
 
-- `@agentic_workflow(...)` to gate the whole bundle
-- `@api(...)` to gate one operation
-- `@mcp(...)` to gate one MCP endpoint
-- `@ui_widget(...)` to gate one widget
-- `@cron(...)` to gate one scheduled job
+| Decorator | Canonical path |
+| --- | --- |
+| `@agentic_workflow(...)` | `enabled.bundle` |
+| `@api(alias=A, method=M, ...)` | `enabled.api["A.M"]` (flat key, literal dot) |
+| `@mcp(alias=A, ...)` | `enabled.mcp.A` |
+| `@ui_widget(alias=A, ...)` | `enabled.widget.A` |
+| `@cron(alias=A, ...)` | `enabled.cron.A` |
+
+Aliases must not contain `.`; the validator rejects them at decoration time.
+The flat `<alias>.<METHOD>` key under `enabled.api` is the only place a
+literal dot appears inside a section key.
 
 Example:
 
 ```python
-@agentic_workflow(
-    name="ops.dashboard",
-    version="1.0.0",
-    enabled_config="features.dashboard.enabled",
-)
+@agentic_workflow(name="ops.dashboard", version="1.0.0")
 @bundle_id("ops.dashboard@1.0.0")
 class OpsDashboard(BaseEntrypoint):
     @ui_widget(
         alias="dashboard",
         icon={"tailwind": "heroicons-outline:chart-bar"},
         user_types=("privileged",),
-        enabled_config="features.dashboard.widget_enabled",
     )
     def dashboard_widget(self, **kwargs):
         return ["<div>Dashboard</div>"]
@@ -260,16 +263,16 @@ bundles:
   items:
     - id: "ops.dashboard@1.0.0"
       config:
-        features:
-          dashboard:
-            enabled: true
-            widget_enabled: false
+        enabled:
+          bundle: true
+          widget:
+            dashboard: false
 ```
 
 Current rules:
 
-- the path is resolved against effective bundle props
-- missing path means enabled
+- missing section, missing sub-section, or missing key means enabled
+- bundle-level `enabled.bundle = false` overrides every resource-level value
 - disabled values are:
   - `false`
   - `0`
@@ -277,12 +280,10 @@ Current rules:
   - `disabled`
   - `off`
   - plus boolean `False` and integer `0`
-- bundle-level disable wins over resource-level enable
 
 Practical rule:
 
-- use `enabled_config` for deployment/runtime feature flags
-- keep the actual flag value in `bundles.yaml -> config:`
+- keep the switches in bundle props under `bundles.yaml -> config: enabled: ...`
 - do not invent parallel ad hoc `if self.bundle_prop(...): return 404` checks unless the logic is more complex than simple exposure gating
 
 ## Configuration Access Rules

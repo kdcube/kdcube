@@ -55,32 +55,42 @@ once per hour across the whole system.
     timezone: str | None = None,
     tz_config: str | None = None,
     span: str = "system",
-    enabled_config: str | None = None,
 )
 ```
 
 | Argument | Type | Description |
 |---|---|---|
-| `alias` | `str \| None` | Stable job identifier. Used in Redis lock keys and logs. Defaults to method name. |
+| `alias` | `str \| None` | Stable job identifier. Used in Redis lock keys and logs. Defaults to method name. Must not contain `.`. |
 | `cron_expression` | `str \| None` | Inline cron expression, e.g. `"*/15 * * * *"`. |
 | `expr_config` | `str \| None` | Dot-path into bundle props/config, e.g. `"routines.reindex.cron"`. Wins over `cron_expression`. |
 | `timezone` | `str \| None` | IANA timezone for cron interpretation, e.g. `"Europe/Berlin"`. Defaults to UTC. |
 | `tz_config` | `str \| None` | Dot-path into bundle props/config for the timezone override. Wins over `timezone`. |
 | `span` | `str` | Exclusivity: `"process"`, `"instance"`, `"system"`. Default: `"system"`. |
-| `enabled_config` | `str \| None` | Dot-path into bundle props that resolves to a boolean. Falsy → job not scheduled. `None` means always enabled. |
+
+Feature gating uses the canonical bundle-props path `enabled.cron.<alias>`
+(see "Feature gating" below).
 
 ---
 
-## Bundle-level enabled override
+## Feature gating
 
-If the bundle's `@agentic_workflow(enabled_config=...)` resolves to a falsy
-value from bundle props, **all** scheduled jobs for that bundle are skipped
-during reconcile — regardless of individual job `enabled_config` or
-`expr_config` values. The per-job checks are never reached.
+Each cron job has a canonical switch in bundle props:
 
-This is enforced in `bundle_scheduler.py` (`reconcile`) before the per-job
-loop. Use it as a single kill-switch to disable the entire bundle, including
-all its cron jobs, without touching each job individually.
+```yaml
+enabled:
+  cron:
+    <alias>: true|false
+```
+
+Resolution rules:
+
+- absent key → enabled
+- falsy value (`False`, `0`, or `"false" | "disable" | "disabled" | "off" | "0"`) → job not scheduled
+- bundle-level `enabled.bundle = false` overrides every per-job switch
+
+The bundle-level kill-switch is enforced in `bundle_scheduler.py`
+(`reconcile`) before the per-job loop. Use it to disable the entire bundle —
+including all its cron jobs — without touching each job individually.
 
 ---
 

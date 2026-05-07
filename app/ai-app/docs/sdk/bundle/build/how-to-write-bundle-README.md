@@ -199,8 +199,8 @@ When a bundle exists in a real environment, its lifecycle is:
 3. Decorators are discovered and the bundle interface manifest is built.
 4. The bundle becomes discoverable through integrations listing, subject to:
    - roles / user-types
-   - bundle-level `enabled_config`
-   - resource-level `enabled_config`
+   - bundle-level `enabled.bundle`
+   - resource-level `enabled.{api,mcp,widget,cron}.<alias>`
 5. The bundle is then entered through one of the runtime paths:
    - chat/on-message
    - operations/public API
@@ -958,14 +958,13 @@ async def sync(self, **kwargs):
 Reference:
 - [bundle-scheduled-jobs-README.md](../bundle-scheduled-jobs-README.md)
 
-### Platform-gated surface with `enabled_config`
+### Platform-gated surface via canonical `enabled.*`
 
 ```python
 @ui_widget(
     alias="task-board",
     icon={"tailwind": "heroicons-outline:check-badge"},
     user_types=("registered",),
-    enabled_config="features.task_board.widget_enabled",
 )
 def task_board(self, **kwargs):
     return ["<div id='root'></div>"]
@@ -976,13 +975,15 @@ bundles:
   items:
     - id: "task.board@1-0"
       config:
-        features:
-          task_board:
-            widget_enabled: true
+        enabled:
+          widget:
+            task-board: true
 ```
 
-Use this when the platform should hide or suppress the surface directly instead
-of the bundle method deciding at runtime.
+The platform derives the canonical bundle-props path from decorator metadata
+(see section 4.2 for the full mapping). Use this when the platform should hide
+or suppress the surface directly instead of the bundle method deciding at
+runtime.
 
 ### Bundle props and secrets
 
@@ -1018,38 +1019,67 @@ def render_report(payload: dict) -> dict:
 Reference:
 - [bundle-venv-README.md](../bundle-venv-README.md)
 
-## 4.2 Feature Gating With `enabled_config`
+## 4.2 Feature Gating With Canonical `enabled.*`
 
 This feature is important enough to treat as a first-class authoring tool.
 
-`enabled_config` is the platform-native feature flag for bundle surfaces.
+The platform-native feature flag for bundle surfaces lives under the
+`enabled.*` section of effective bundle props. The platform derives the
+lookup path from decorator metadata.
 
-You can attach it to:
+Canonical bundle-props shape:
 
-- `@agentic_workflow(...)`
-- `@api(...)`
-- `@mcp(...)`
-- `@ui_widget(...)`
-- `@cron(...)`
+```yaml
+enabled:
+  bundle: true|false
+  api:
+    "<api-alias>.<METHOD>": true|false   # flat key with literal dot
+  mcp:
+    <mcp-alias>: true|false
+  widget:
+    <widget-alias>: true|false
+  cron:
+    <cron-alias>: true|false
+```
 
-What it does:
+Mapping per decorator:
 
-- resolves a dot-path against effective bundle props
-- if the resolved value is disabled, the platform suppresses that surface
-- missing path means enabled
-- bundle-level disable overrides resource-level settings
+| Decorator | Canonical path |
+| --- | --- |
+| `@agentic_workflow(...)` | `enabled.bundle` |
+| `@api(alias=A, method=M, ...)` | `enabled.api["A.M"]` (flat key, literal dot) |
+| `@mcp(alias=A, ...)` | `enabled.mcp.A` |
+| `@ui_widget(alias=A, ...)` | `enabled.widget.A` |
+| `@cron(alias=A, ...)` | `enabled.cron.A` |
 
-Current disabled values:
+Aliases must not contain `.`; the validator rejects them at decoration time.
+For `@api` the flat key `<alias>.<METHOD>` is the only place a literal dot
+appears inside a section key. For `@mcp` / `@ui_widget` / `@cron` the alias is
+a normal nested map key.
+
+Resolution rules:
+
+- missing section, missing sub-section, or missing key → enabled
+- bundle-level `enabled.bundle = false` overrides every resource-level value
+- resource-level value is checked only when `enabled.bundle` is enabled
+
+Disabled values:
 
 - boolean `False`
 - integer `0`
-- strings `false`, `disable`, `disabled`, `off`, `0`
+- strings `false`, `disable`, `disabled`, `off`, `0` (case-insensitive)
+
+Effect on each surface:
+
+- API / MCP / widget: platform returns 404 when the surface is disabled
+- cron: scheduler skips reconciliation for the job
+- on_message / on_job: covered transitively by `enabled.bundle`
 
 Use it for:
 
 - staged rollout
 - environment-specific exposure
-- disabling one job/widget/API without deleting code
+- disabling one job/widget/API/MCP without deleting code
 - temporarily hiding unfinished surfaces
 
 Do not use it for:
@@ -1060,9 +1090,9 @@ Do not use it for:
 
 Authoring rule:
 
-- put the flag value in bundle props under `bundles.yaml -> config:`
-- keep the decorator path stable
-- let the platform do the 404/scheduler suppression instead of duplicating the check in method bodies
+- set switches in bundle props under `bundles.yaml -> config: enabled: ...`
+- let the platform do the 404 / scheduler suppression instead of duplicating
+  the check in method bodies
 
 ## 5. Entrypoint Rules
 

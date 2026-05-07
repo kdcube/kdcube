@@ -53,7 +53,6 @@ from kdcube_ai_app.infra.plugin.bundle_store import (
     get_bundle_props as store_get_bundle_props,
     patch_bundle_props as store_patch_bundle_props,
     put_bundle_props as store_put_bundle_props,
-    resolve_dot_path as _resolve_prop_path,
 )
 from kdcube_ai_app.infra.plugin.agentic_loader import (
     AgenticBundleSpec,
@@ -62,6 +61,7 @@ from kdcube_ai_app.infra.plugin.agentic_loader import (
     MCPEndpointSpec,
     UIWidgetSpec,
     cache_key_for_spec,
+    canonical_enabled_path,
     discover_bundle_interface_manifest,
     get_cached_manifest,
     get_workflow_instance_async,
@@ -88,17 +88,8 @@ _integrations_semaphore = None
 _DISABLED_PROP_VALUES: frozenset = frozenset({"false", "disable", "disabled", "off", "0"})
 
 
-def _is_enabled_from_props(props: Dict[str, Any], enabled_config: Optional[str]) -> bool:
-    """Return True if the endpoint/bundle is enabled according to bundle props.
-
-    - No enabled_config declared -> always enabled.
-    - Path absent in props -> enabled (opt-in disabling, not opt-in enabling).
-    - Value is bool/int -> direct truthiness.
-    - Value is string -> disabled only for "false"/"disable"/"disabled"/"off"/"0".
-    """
-    if not enabled_config:
-        return True
-    value = _resolve_prop_path(props, enabled_config)
+def _is_truthy_enabled(value: Any) -> bool:
+    """Interpret a bundle-props value as a feature switch (default = enabled)."""
     if value is None:
         return True
     if isinstance(value, bool):
@@ -106,6 +97,49 @@ def _is_enabled_from_props(props: Dict[str, Any], enabled_config: Optional[str])
     if isinstance(value, int):
         return value != 0
     return str(value).strip().lower() not in _DISABLED_PROP_VALUES
+
+
+def _enabled_section(props: Optional[Dict[str, Any]], kind: str) -> Optional[Dict[str, Any]]:
+    """Return the ``enabled.<kind>`` sub-dict from bundle props, or None if absent."""
+    section = (props or {}).get("enabled")
+    if not isinstance(section, dict):
+        return None
+    sub = section.get(kind)
+    if not isinstance(sub, dict):
+        return None
+    return sub
+
+
+def is_bundle_enabled(props: Optional[Dict[str, Any]]) -> bool:
+    """Resolve ``enabled.bundle`` against bundle props (default = enabled)."""
+    section = (props or {}).get("enabled")
+    if not isinstance(section, dict):
+        return True
+    return _is_truthy_enabled(section.get("bundle"))
+
+
+def is_api_enabled(props: Optional[Dict[str, Any]], spec: APIEndpointSpec) -> bool:
+    """Resolve ``enabled.api["<alias>.<METHOD>"]`` (flat key with literal dot)."""
+    sub = _enabled_section(props, "api")
+    if sub is None:
+        return True
+    return _is_truthy_enabled(sub.get(f"{spec.alias}.{spec.http_method}"))
+
+
+def is_widget_enabled(props: Optional[Dict[str, Any]], spec: UIWidgetSpec) -> bool:
+    """Resolve ``enabled.widget.<alias>`` (nested)."""
+    sub = _enabled_section(props, "widget")
+    if sub is None:
+        return True
+    return _is_truthy_enabled(sub.get(spec.alias))
+
+
+def is_mcp_enabled(props: Optional[Dict[str, Any]], spec: MCPEndpointSpec) -> bool:
+    """Resolve ``enabled.mcp.<alias>`` (nested)."""
+    sub = _enabled_section(props, "mcp")
+    if sub is None:
+        return True
+    return _is_truthy_enabled(sub.get(spec.alias))
 
 
 def _resolve_integrations_limit() -> Optional[int]:
@@ -864,7 +898,7 @@ async def _get_bundle_manifest(
 def _manifest_to_descriptor(manifest: BundleInterfaceManifest) -> Dict[str, Any]:
     """Serialise a full (unfiltered) manifest to a plain dict."""
     return {
-        "enabled_config": manifest.enabled_config,
+        "enabled_path": canonical_enabled_path("bundle"),
         "apis": [
             {
                 "alias": s.alias,
@@ -872,7 +906,7 @@ def _manifest_to_descriptor(manifest: BundleInterfaceManifest) -> Dict[str, Any]
                 "route": s.route,
                 "user_types": list(s.user_types),
                 "roles": list(s.roles),
-                "enabled_config": s.enabled_config,
+                "enabled_path": canonical_enabled_path("api", alias=s.alias, http_method=s.http_method),
             }
             for s in manifest.api_endpoints
         ],
@@ -881,7 +915,7 @@ def _manifest_to_descriptor(manifest: BundleInterfaceManifest) -> Dict[str, Any]
                 "alias": s.alias,
                 "route": s.route,
                 "transport": s.transport,
-                "enabled_config": s.enabled_config,
+                "enabled_path": canonical_enabled_path("mcp", alias=s.alias),
             }
             for s in manifest.mcp_endpoints
         ],
@@ -891,7 +925,7 @@ def _manifest_to_descriptor(manifest: BundleInterfaceManifest) -> Dict[str, Any]
                 "icon": s.icon,
                 "user_types": list(s.user_types),
                 "roles": list(s.roles),
-                "enabled_config": s.enabled_config,
+                "enabled_path": canonical_enabled_path("widget", alias=s.alias),
             }
             for s in manifest.ui_widgets
         ],
@@ -906,7 +940,7 @@ def _manifest_to_descriptor(manifest: BundleInterfaceManifest) -> Dict[str, Any]
                 "timezone": s.timezone,
                 "tz_config": s.tz_config,
                 "span": s.span,
-                "enabled_config": s.enabled_config,
+                "enabled_path": canonical_enabled_path("cron", alias=s.alias),
             }
             for s in manifest.scheduled_jobs
         ],
@@ -919,7 +953,7 @@ def _manifest_to_descriptor_filtered(
 ) -> Dict[str, Any]:
     """Serialise a manifest filtered to the endpoint visibility rules for session."""
     return {
-        "enabled_config": manifest.enabled_config,
+        "enabled_path": canonical_enabled_path("bundle"),
         "apis": [
             {
                 "alias": s.alias,
@@ -927,7 +961,7 @@ def _manifest_to_descriptor_filtered(
                 "route": s.route,
                 "user_types": list(s.user_types),
                 "roles": list(s.roles),
-                "enabled_config": s.enabled_config,
+                "enabled_path": canonical_enabled_path("api", alias=s.alias, http_method=s.http_method),
             }
             for s in manifest.api_endpoints
             if _endpoint_visible(s.user_types, s.roles, session)
@@ -937,7 +971,7 @@ def _manifest_to_descriptor_filtered(
                 "alias": s.alias,
                 "route": s.route,
                 "transport": s.transport,
-                "enabled_config": s.enabled_config,
+                "enabled_path": canonical_enabled_path("mcp", alias=s.alias),
             }
             for s in manifest.mcp_endpoints
         ],
@@ -947,7 +981,7 @@ def _manifest_to_descriptor_filtered(
                 "icon": s.icon,
                 "user_types": list(s.user_types),
                 "roles": list(s.roles),
-                "enabled_config": s.enabled_config,
+                "enabled_path": canonical_enabled_path("widget", alias=s.alias),
             }
             for s in manifest.ui_widgets
             if _endpoint_visible(s.user_types, s.roles, session)
@@ -963,7 +997,7 @@ def _manifest_to_descriptor_filtered(
                 "timezone": s.timezone,
                 "tz_config": s.tz_config,
                 "span": s.span,
-                "enabled_config": s.enabled_config,
+                "enabled_path": canonical_enabled_path("cron", alias=s.alias),
             }
             for s in manifest.scheduled_jobs
         ],
@@ -1056,9 +1090,9 @@ async def get_bundles(
         )
         if not _bundle_allowed_for_session(manifest, session):
             continue
-        if manifest is not None and manifest.enabled_config:
+        if manifest is not None:
             props = await store_get_bundle_props(redis, tenant=tenant_id, project=project_id, bundle_id=bid)
-            if not _is_enabled_from_props(props, manifest.enabled_config):
+            if not is_bundle_enabled(props):
                 continue
         descriptor: Dict[str, Any] = {
             "id": bid,
@@ -2054,7 +2088,7 @@ async def get_bundle_interface(
                 "timezone": spec.timezone,
                 "tz_config": spec.tz_config,
                 "span": spec.span,
-                "enabled_config": spec.enabled_config,
+                "enabled_path": canonical_enabled_path("cron", alias=spec.alias),
             }
             for spec in manifest.scheduled_jobs
         ],
@@ -2130,9 +2164,9 @@ async def _fetch_bundle_widget_payload(
         _get_app_redis(request), tenant=tenant_id, project=project_id, bundle_id=spec_resolved.id,
     )
     workflow_props = _apply_rest_bundle_props_to_workflow(workflow=workflow, props=_props)
-    if not _is_enabled_from_props(_props, manifest.enabled_config):
+    if not is_bundle_enabled(_props):
         raise HTTPException(status_code=404, detail=f"Bundle {spec_resolved.id} is disabled")
-    if not _is_enabled_from_props(_props, widget_spec.enabled_config):
+    if not is_widget_enabled(_props, widget_spec):
         raise HTTPException(status_code=404, detail=f"Bundle widget {widget_alias} is not available")
 
     widget_static_cfg = None
@@ -2304,9 +2338,9 @@ async def _serve_static_widget_app(
         _get_app_redis(request), tenant=tenant_id, project=project_id, bundle_id=spec_resolved.id,
     )
     workflow_props = _apply_rest_bundle_props_to_workflow(workflow=workflow, props=_props)
-    if not _is_enabled_from_props(_props, manifest.enabled_config):
+    if not is_bundle_enabled(_props):
         raise HTTPException(status_code=404, detail=f"Bundle {spec_resolved.id} is disabled")
-    if not _is_enabled_from_props(_props, widget_spec.enabled_config):
+    if not is_widget_enabled(_props, widget_spec):
         raise HTTPException(status_code=404, detail=f"Bundle widget {widget_alias} is not available")
     widget_static_cfg = None
     if not _static_widget_explicitly_disabled(_props or {}, widget_alias=widget_spec.alias):
@@ -2659,9 +2693,9 @@ async def _call_bundle_mcp_inner(
         _get_app_redis(request), tenant=tenant_id, project=project_id, bundle_id=spec_resolved.id,
     )
     _apply_rest_bundle_props_to_workflow(workflow=workflow, props=_props)
-    if not _is_enabled_from_props(_props, manifest.enabled_config):
+    if not is_bundle_enabled(_props):
         raise HTTPException(status_code=404, detail=f"Bundle {spec_resolved.id} is disabled")
-    if not _is_enabled_from_props(_props, endpoint_spec.enabled_config):
+    if not is_mcp_enabled(_props, endpoint_spec):
         raise HTTPException(status_code=404, detail=f"Bundle MCP endpoint {endpoint_alias} is not available")
 
     try:
@@ -3068,9 +3102,9 @@ async def _call_bundle_op_inner(
         _get_app_redis(request), tenant=tenant_id, project=project_id, bundle_id=spec_resolved.id,
     )
     _apply_rest_bundle_props_to_workflow(workflow=workflow, props=_props)
-    if not _is_enabled_from_props(_props, manifest.enabled_config):
+    if not is_bundle_enabled(_props):
         raise HTTPException(status_code=404, detail=f"Bundle {spec_resolved.id} is disabled")
-    if not _is_enabled_from_props(_props, endpoint_spec.enabled_config):
+    if not is_api_enabled(_props, endpoint_spec):
         raise HTTPException(status_code=404, detail=f"Bundle operation {operation} is not available")
 
     try:

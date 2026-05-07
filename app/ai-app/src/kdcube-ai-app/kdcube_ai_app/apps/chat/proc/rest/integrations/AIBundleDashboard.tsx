@@ -35,14 +35,14 @@ interface BundleAPIEndpoint {
     route: string;
     user_types: string[];
     roles: string[];
-    enabled_config?: string | null;
+    enabled_path?: string | null;
 }
 
 interface BundleMCPEndpoint {
     alias: string;
     route: string;
     transport: string;
-    enabled_config?: string | null;
+    enabled_path?: string | null;
 }
 
 interface BundleScheduledJob {
@@ -53,7 +53,7 @@ interface BundleScheduledJob {
     timezone?: string | null;
     tz_config?: string | null;
     span?: string | null;
-    enabled_config?: string | null;
+    enabled_path?: string | null;
 }
 
 interface BundleEntry {
@@ -73,7 +73,7 @@ interface BundleEntry {
     scheduled_jobs?: BundleScheduledJob[] | null;
     on_message?: string | null;
     on_job?: string | null;
-    enabled_config?: string | null;
+    enabled_path?: string | null;
 }
 
 interface BundlesResponse {
@@ -1675,7 +1675,7 @@ const AIBundleDashboard: React.FC = () => {
                                                             <th className="px-3 py-2 text-left font-semibold">Route</th>
                                                             <th className="px-3 py-2 text-left font-semibold">User types</th>
                                                             <th className="px-3 py-2 text-left font-semibold">Roles</th>
-                                                            <th className="px-3 py-2 text-left font-semibold">Enabled config</th>
+                                                            <th className="px-3 py-2 text-left font-semibold">Enabled path</th>
                                                         </tr>
                                                     </thead>
                                                     <tbody className="divide-y divide-gray-100">
@@ -1686,7 +1686,7 @@ const AIBundleDashboard: React.FC = () => {
                                                                 <td className="px-3 py-2 font-mono text-gray-700">{ep.route}</td>
                                                                 <td className="px-3 py-2 text-gray-600">{ep.user_types?.join(', ') || '—'}</td>
                                                                 <td className="px-3 py-2 text-gray-600">{ep.roles?.join(', ') || '—'}</td>
-                                                                <td className="px-3 py-2 font-mono text-gray-500">{ep.enabled_config || '—'}</td>
+                                                                <td className="px-3 py-2 font-mono text-gray-500">{ep.enabled_path || '—'}</td>
                                                             </tr>
                                                         ))}
                                                     </tbody>
@@ -1708,7 +1708,7 @@ const AIBundleDashboard: React.FC = () => {
                                                             <th className="px-3 py-2 text-left font-semibold">Alias</th>
                                                             <th className="px-3 py-2 text-left font-semibold">Route</th>
                                                             <th className="px-3 py-2 text-left font-semibold">Transport</th>
-                                                            <th className="px-3 py-2 text-left font-semibold">Enabled config</th>
+                                                            <th className="px-3 py-2 text-left font-semibold">Enabled path</th>
                                                         </tr>
                                                     </thead>
                                                     <tbody className="divide-y divide-gray-100">
@@ -1717,7 +1717,7 @@ const AIBundleDashboard: React.FC = () => {
                                                                 <td className="px-3 py-2 font-mono font-semibold text-gray-900">{ep.alias}</td>
                                                                 <td className="px-3 py-2 font-mono text-gray-700">{ep.route}</td>
                                                                 <td className="px-3 py-2 text-gray-600">{ep.transport}</td>
-                                                                <td className="px-3 py-2 font-mono text-gray-500">{ep.enabled_config || '—'}</td>
+                                                                <td className="px-3 py-2 font-mono text-gray-500">{ep.enabled_path || '—'}</td>
                                                             </tr>
                                                         ))}
                                                     </tbody>
@@ -1743,7 +1743,7 @@ const AIBundleDashboard: React.FC = () => {
                                                             <th className="px-3 py-2 text-left font-semibold">Timezone</th>
                                                             <th className="px-3 py-2 text-left font-semibold">Tz config</th>
                                                             <th className="px-3 py-2 text-left font-semibold">Span</th>
-                                                            <th className="px-3 py-2 text-left font-semibold">Enabled config</th>
+                                                            <th className="px-3 py-2 text-left font-semibold">Enabled path</th>
                                                         </tr>
                                                     </thead>
                                                     <tbody className="divide-y divide-gray-100">
@@ -1756,7 +1756,7 @@ const AIBundleDashboard: React.FC = () => {
                                                                 <td className="px-3 py-2 text-gray-600">{job.timezone || '—'}</td>
                                                                 <td className="px-3 py-2 font-mono text-gray-500">{job.tz_config || '—'}</td>
                                                                 <td className="px-3 py-2 text-gray-600">{job.span || '—'}</td>
-                                                                <td className="px-3 py-2 font-mono text-gray-500">{job.enabled_config || '—'}</td>
+                                                                <td className="px-3 py-2 font-mono text-gray-500">{job.enabled_path || '—'}</td>
                                                             </tr>
                                                         ))}
                                                     </tbody>
