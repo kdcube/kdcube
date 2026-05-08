@@ -1626,6 +1626,61 @@ def _sync_email_mcp_task_state(
         )
 
 
+def _email_processor_failure_response(
+    *,
+    account: Mapping[str, Any],
+    task_id: str,
+    state_task_id: str,
+    mailbox: str,
+    unread_only: bool,
+    provider_query: str,
+    processing_mode: str,
+    checked_count: int,
+    error_code: str,
+    error_message: str,
+    run_id: str = "",
+    warnings: list[Dict[str, Any]] | None = None,
+    claude_result: Mapping[str, Any] | None = None,
+) -> Dict[str, Any]:
+    compact_claude, processor_result = _compact_claude_code_mcp_result(claude_result)
+    executive_journal = _compact_executive_journal(claude_result)
+    normalized_code = str(error_code or "email_processor_failed").strip() or "email_processor_failed"
+    normalized_message = str(error_message or "Email processor failed before recording a result.").strip()
+    response = {
+        "ok": False,
+        "error": {
+            "code": "email_processor_failed",
+            "message": normalized_message,
+            "category": "internal_runtime",
+            "user_action_required": False,
+            "retryable": True,
+            "processor_error_code": normalized_code,
+            "run_id": str(run_id or ""),
+        },
+        "account": account,
+        "task_id": task_id,
+        "state_task_id": state_task_id,
+        "mailbox": mailbox or "inbox",
+        "unread_only": bool(unread_only),
+        "search_query": provider_query,
+        "gmail_query": provider_query,
+        "checked_count": max(0, int(checked_count or 0)),
+        "seen_count": 0,
+        "new_count": 0,
+        "messages": [],
+        "attachment_count": 0,
+        "attachment_index": [],
+        "processed_count": 0,
+        "processing_mode": processing_mode,
+        "warnings": list(warnings or []),
+        "claude_code_mcp": compact_claude,
+        "executive_journal": executive_journal,
+    }
+    if processor_result:
+        response["processor_result"] = processor_result
+    return response
+
+
 async def process_user_emails(
     *,
     entrypoint: Any,
@@ -1724,6 +1779,7 @@ async def process_user_emails(
 
     provider = str(selected.get("provider") or "google").strip().lower()
     provider_query = str(search_query or gmail_query or "").strip()
+    task_aware = bool(str(task_id or "").strip())
     logger.info(
         "[email.process] selected account | user_id=%s account=%s provider=%s provider_query=%r",
         user_id,
@@ -1876,7 +1932,7 @@ async def process_user_emails(
                     or "Claude Code email processing failed."
                 )
                 logger.warning(
-                    "[email.process] claude-code mcp unavailable; returning messages for react review | "
+                    "[email.process] claude-code mcp unavailable | "
                     "user_id=%s account=%s run_id=%s status=%s code=%s error=%s",
                     user_id,
                     selected.get("email") or selected.get("account_id"),
@@ -1885,6 +1941,60 @@ async def process_user_emails(
                     error_code,
                     error_message,
                 )
+                warnings.append(
+                    {
+                        "code": error_code,
+                        "message": error_message,
+                        "run_id": claude_result.get("run_id"),
+                        "category": "internal_runtime",
+                    }
+                )
+                if task_aware:
+                    await store.write_run_state_async(
+                        task_id=state_task_id,
+                        account_id=account_id,
+                        data={
+                            **dict(run_state or {}),
+                            "task_id": task_id,
+                            "account_id": account_id,
+                            "mailbox": mailbox or "inbox",
+                            "unread_only": bool(unread_only),
+                            "search_query": provider_query,
+                            "last_instruction": instruction,
+                            "last_task_definition": task_definition,
+                            "last_failed_at": _utc_now(),
+                            "last_error": {
+                                "code": error_code,
+                                "message": error_message,
+                                "run_id": claude_result.get("run_id"),
+                            },
+                            "last_processing_mode": processing_mode,
+                        },
+                    )
+                    logger.warning(
+                        "[email.process] task-aware processor failed closed | "
+                        "user_id=%s account=%s task_id=%s run_id=%s code=%s",
+                        user_id,
+                        selected.get("email") or selected.get("account_id"),
+                        task_id,
+                        claude_result.get("run_id"),
+                        error_code,
+                    )
+                    return _email_processor_failure_response(
+                        account=selected,
+                        task_id=task_id,
+                        state_task_id=state_task_id,
+                        mailbox=mailbox,
+                        unread_only=unread_only,
+                        provider_query=provider_query,
+                        processing_mode=processing_mode,
+                        checked_count=checked_count,
+                        error_code=error_code,
+                        error_message=error_message,
+                        run_id=str(claude_result.get("run_id") or ""),
+                        warnings=warnings,
+                        claude_result=claude_result,
+                    )
                 await store.write_run_state_async(
                     task_id=state_task_id,
                     account_id=account_id,
@@ -1905,14 +2015,6 @@ async def process_user_emails(
                             "run_id": claude_result.get("run_id"),
                         },
                     },
-                )
-                warnings.append(
-                    {
-                        "code": error_code,
-                        "message": error_message,
-                        "run_id": claude_result.get("run_id"),
-                        "category": "internal_runtime",
-                    }
                 )
                 fallback = await _fetch_for_react_review()
                 if fallback.get("ok"):
@@ -1960,13 +2062,63 @@ async def process_user_emails(
         if processing_mode == "claude_code_mcp":
             error_message = str(exc)
             logger.exception(
-                "[email.process] claude-code mcp exception; returning messages for react review | "
+                "[email.process] claude-code mcp exception | "
                 "user_id=%s account=%s task_id=%s execution_id=%s",
                 user_id,
                 selected.get("email") or selected.get("account_id"),
                 task_id or "",
                 execution_id or "",
             )
+            warnings.append(
+                {
+                    "code": "claude_code_email_processing_failed",
+                    "message": error_message,
+                    "category": "internal_runtime",
+                }
+            )
+            if task_aware:
+                await store.write_run_state_async(
+                    task_id=state_task_id,
+                    account_id=account_id,
+                    data={
+                        **dict(run_state or {}),
+                        "task_id": task_id,
+                        "account_id": account_id,
+                        "mailbox": mailbox or "inbox",
+                        "unread_only": bool(unread_only),
+                        "search_query": provider_query,
+                        "last_instruction": instruction,
+                        "last_task_definition": task_definition,
+                        "last_failed_at": _utc_now(),
+                        "last_error": {
+                            "code": "claude_code_email_processing_failed",
+                            "message": error_message,
+                        },
+                        "last_processing_mode": processing_mode,
+                    },
+                )
+                logger.warning(
+                    "[email.process] task-aware processor exception failed closed | "
+                    "user_id=%s account=%s task_id=%s error=%s",
+                    user_id,
+                    selected.get("email") or selected.get("account_id"),
+                    task_id,
+                    error_message,
+                )
+                return _email_processor_failure_response(
+                    account=selected,
+                    task_id=task_id,
+                    state_task_id=state_task_id,
+                    mailbox=mailbox,
+                    unread_only=unread_only,
+                    provider_query=provider_query,
+                    processing_mode=processing_mode,
+                    checked_count=checked_count,
+                    error_code="claude_code_email_processing_failed",
+                    error_message=error_message,
+                    warnings=warnings,
+                    claude_result=claude_result,
+                )
             await store.write_run_state_async(
                 task_id=state_task_id,
                 account_id=account_id,
@@ -1983,13 +2135,6 @@ async def process_user_emails(
                     "last_new_count": len(new_messages),
                     "last_error": {"code": "claude_code_email_processing_failed", "message": error_message},
                 },
-            )
-            warnings.append(
-                {
-                    "code": "claude_code_email_processing_failed",
-                    "message": error_message,
-                    "category": "internal_runtime",
-                }
             )
             fallback = await _fetch_for_react_review()
             if fallback.get("ok"):

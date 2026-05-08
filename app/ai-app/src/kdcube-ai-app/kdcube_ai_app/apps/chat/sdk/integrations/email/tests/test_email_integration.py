@@ -948,6 +948,89 @@ async def test_process_user_emails_returns_messages_when_claude_mcp_did_not_reco
     assert result["claude_code_mcp"]["ok"] is False
 
 
+@pytest.mark.asyncio
+async def test_process_user_emails_saved_task_fails_closed_when_claude_mcp_did_not_record_result(tmp_path, monkeypatch):
+    email_mod = email_accounts
+    secrets = {}
+
+    def fake_set_user_secret(key, value, *, user_id=None, bundle_id=None):
+        secrets[(user_id, bundle_id, key)] = value
+
+    async def fake_set_user_secret_async(key, value, *, user_id=None, bundle_id=None):
+        fake_set_user_secret(key, value, user_id=user_id, bundle_id=bundle_id)
+
+    def fake_get_user_secret(key, *, user_id=None, bundle_id=None):
+        return secrets.get((user_id, bundle_id, key))
+
+    async def fake_get_user_secret_async(key, *, user_id=None, bundle_id=None):
+        return fake_get_user_secret(key, user_id=user_id, bundle_id=bundle_id)
+
+    monkeypatch.setattr(email_mod, "set_user_secret", fake_set_user_secret)
+    monkeypatch.setattr(email_mod, "set_user_secret_async", fake_set_user_secret_async)
+    monkeypatch.setattr(email_mod, "get_user_secret", fake_get_user_secret)
+    monkeypatch.setattr(email_mod, "get_user_secret_async", fake_get_user_secret_async)
+
+    class _Entry:
+        def bundle_prop(self, path, default=None):
+            if path == "integrations.email.google.client_id":
+                return "client-id"
+            if path == "integrations.email.claude_code.enabled":
+                return True
+            return default
+
+    store = email_mod.EmailAccountStore(tmp_path, user_id="user-a", bundle_id="task-and-memo-app@1-0")
+    account = store.upsert_account({"provider": "google", "email": "user@example.test"})
+    store.set_tokens(account["account_id"], {"access_token": "access"})
+
+    fetch_called = False
+
+    async def fake_fetch_google_messages(**kwargs):
+        nonlocal fetch_called
+        fetch_called = True
+        return {"ok": True, "messages": [{"message_id": "m-1", "subject": "Should not leak"}]}
+
+    monkeypatch.setattr(email_mod, "fetch_google_messages", fake_fetch_google_messages)
+
+    async def fake_run_email_processor_with_claude_code(**kwargs):
+        return {
+            "ok": False,
+            "run_id": "email_mcp_test",
+            "status": "completed",
+            "candidate_message_count": 50,
+            "messages": [{"message_id": "m-1", "subject": "Should not leak"}],
+            "recorded_result": None,
+            "error_code": "claude_code_mcp_result_not_recorded",
+            "effective_error_message": "Claude Code completed without recording an MCP result.",
+        }
+
+    monkeypatch.setattr(email_claude, "run_email_processor_with_claude_code", fake_run_email_processor_with_claude_code)
+
+    result = await email_mod.process_user_emails(
+        entrypoint=_Entry(),
+        storage_root=tmp_path,
+        user_id="user-a",
+        bundle_id="task-and-memo-app@1-0",
+        tenant="demo-tenant",
+        project="demo-project",
+        task_id="task-email",
+        execution_id="exec-1",
+        instruction="Summarize new emails since last run.",
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "email_processor_failed"
+    assert result["error"]["processor_error_code"] == "claude_code_mcp_result_not_recorded"
+    assert result["error"]["retryable"] is True
+    assert result["messages"] == []
+    assert result["new_count"] == 0
+    assert result["checked_count"] == 50
+    assert fetch_called is False
+    state = await store.read_run_state_async(task_id="task-email", account_id=account["account_id"])
+    assert "last_failed_at" in state
+    assert "last_checked_at" not in state
+    assert "last_new_count" not in state
+
+
 def test_email_mcp_token_is_task_scoped_and_verifiable(tmp_path):
     mcp_mod = email_mcp
 

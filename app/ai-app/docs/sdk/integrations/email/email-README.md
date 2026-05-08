@@ -296,12 +296,38 @@ result = await process_user_emails(
 )
 ```
 
-It selects the connected account, fetches candidate messages, records diagnostic
-run metadata, and optionally delegates deeper analysis to Claude Code through
-the Email MCP service when enabled by bundle config.
+It selects the connected account, records diagnostic run metadata, and may
+delegate deeper analysis to Claude Code through the Email MCP service when
+enabled by bundle config.
+
+For manual/ad-hoc calls without a saved task id, the SDK can return raw
+provider message rows for the calling agent to inspect.
+
+For saved task calls with a `task_id`, the Claude/MCP processor result is the
+authoritative task-aware result. If that processor fails, times out, or does not
+call `record_processing_result`, `process_user_emails(...)` fails closed:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "email_processor_failed",
+    "retryable": true,
+    "category": "internal_runtime"
+  },
+  "messages": []
+}
+```
+
+That failure path does not return raw latest-mailbox rows and does not advance
+the cursor/high-watermark. The caller may retry the tool. This prevents a saved
+task such as "summarize only new emails" from silently degrading into "return
+the latest 50 inbox messages."
 
 Run metadata is diagnostic. It does not hide old messages with a processed-id
-ledger; task-specific future-run decisions belong to the task or MCP processor.
+ledger; task-specific future-run decisions belong to the task or MCP processor,
+and missing task-aware processor results are reported as retryable tool
+failures.
 
 ## Email MCP Service
 
@@ -357,7 +383,8 @@ from kdcube_ai_app.apps.chat.sdk.integrations.email import (
 The processor creates an MCP run, starts Claude Code with an email-specific
 prompt, reads the recorded MCP result, and returns a compact result payload.
 If the Claude process times out or fails after recording a result, the recorded
-result remains authoritative.
+result remains authoritative. If no result was recorded, saved task processing
+fails closed and should be retried instead of falling back to raw provider rows.
 
 Bundle compatibility shims may set:
 

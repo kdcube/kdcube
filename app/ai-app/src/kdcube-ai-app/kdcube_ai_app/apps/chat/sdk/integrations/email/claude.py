@@ -232,8 +232,8 @@ def _prompt(
             (
                 "3. Decide the email search query/range from the task goal. Use the default query only if it matches the goal. "
                 "For Gmail you may use Gmail search syntax; for iCloud use common filters such as from_email, to_email, subject, since, before, or query text. "
-                "For recurring 'new emails' tasks, use restored task-specific state only if it still matches the task goal. "
-                "The SDK does not suppress previously processed messages; you decide what counts as new for this task."
+                "For recurring 'new emails' tasks, use restored task-specific state only if it still matches the task goal; "
+                "do not rely on the outer process to reinterpret or deduplicate your result."
             ),
             (
                 "4. Call mcp__task_memo_email__search_messages. Use returned attachment metadata directly when "
@@ -259,6 +259,7 @@ def _prompt(
                 "Store message ids only if the task explicitly needs exact tie-breaking; never store an unbounded processed-email list."
             ),
             "10. Call mcp__task_memo_email__record_processing_result with processed_message_ids, matched_message_ids, summary, user_notification, and optional compact JSON details.",
+            "If no messages match the task condition, still call record_processing_result with empty id lists and a concise no-match summary.",
             (
                 f"11. If record_processing_result succeeds or fails in a way worth preserving, emit one final "
                 f"{CLAUDE_CODE_EXECUTIVE_JOURNAL_PREFIX} checkpoint before the final answer."

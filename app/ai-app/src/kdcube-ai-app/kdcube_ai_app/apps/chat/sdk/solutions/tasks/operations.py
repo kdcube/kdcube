@@ -589,6 +589,7 @@ def _run_prompt(*, task: Dict[str, Any], execution: Dict[str, Any], trigger: str
             "Use task_job.get_current_task if you need to inspect the task or linked task definitions.",
             "Use job_memory.search_memo only when durable user context materially changes this execution.",
             "Use email.process_user_emails for email-processing tasks; pass the concrete connected email address as account, the specific mailbox rule as instruction, and a bounded search_query when the task has a date/topic/sender/label constraint.",
+            "If email.process_user_emails returns email_processor_failed in a saved task, retry the same email tool call if rounds remain; otherwise record a task failure. Do not treat it as zero new emails or process web/search fallback.",
             "Use delivery.send_report when the task explicitly asks to deliver the generated report by email, Telegram, or both; pass generated artifact physical paths as attachments.",
             "Do not invent or pass task id, execution id, or task definition to email tools; those are injected from the bundle call context.",
             "Never ask for email passwords or raw credentials.",

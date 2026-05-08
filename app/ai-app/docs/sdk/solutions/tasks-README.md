@@ -79,6 +79,14 @@ tasks and prior outputs. `task_job.*` is for a fresh job conversation that is
 executing one saved task; task id and execution id come from injected runtime
 context, not model-authored parameters.
 
+Saved task jobs should treat integration tool failures as execution facts, not
+as user intent changes. For email-processing jobs, `email.process_user_emails`
+may return `email_processor_failed` when the stateful Claude/MCP processor fails
+before recording an authoritative result. The job prompt instructs the agent to
+retry the same tool call when rounds remain, or record the execution as failed.
+It must not reinterpret that failure as "no new emails" or replace it with a
+web/raw-mailbox fallback.
+
 ## Skills
 
 The task skills are loaded as SDK solution skills:
