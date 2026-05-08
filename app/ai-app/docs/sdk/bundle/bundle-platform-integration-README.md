@@ -306,6 +306,13 @@ Current fields:
   - tuple/list of raw external roles
   - use actual auth role ids such as `kdcube:role:super-admin`
   - empty means no raw-role restriction
+- `user_types_config` / `roles_config`
+  - optional dot-paths into bundle props
+  - when set and the path resolves to a list of strings, the resolved value
+    overrides the decorator default at request time (per-request lookup)
+  - empty list is a valid intentional override; invalid types fall back
+    silently to the decorator default
+  - missing path also falls back to the decorator default
 - `public_auth`
   - used only with `route="public"`
   - current built-in modes:
@@ -379,6 +386,12 @@ Current fields:
   - default: `operations`
 - `transport`
   - current supported value: `streamable-http`
+- `transport_config`
+  - optional dot-path into bundle props
+  - when set and the path resolves to a supported transport string, the
+    resolved value overrides the decorator default at request time
+  - invalid / unknown transport values fall back silently to the decorator default
+  - missing path also falls back to the decorator default
 - canonical feature gate: `enabled.mcp.<alias>`
   - boolean (or string equivalent) nested under `enabled.mcp` in bundle props
   - if the resolved value is falsy, the MCP endpoint returns 404
@@ -463,6 +476,13 @@ Current fields:
 - `roles`
   - raw external roles allowed to see the widget
   - use values such as `kdcube:role:super-admin`
+- `user_types_config` / `roles_config`
+  - optional dot-paths into bundle props
+  - when set and the path resolves to a list of strings, the resolved value
+    overrides the decorator default at request time (per-request lookup)
+  - empty list is a valid intentional override; invalid types fall back
+    silently to the decorator default
+  - missing path also falls back to the decorator default
 - canonical feature gate: `enabled.widget.<alias>`
   - boolean (or string equivalent) nested under `enabled.widget` in bundle props
   - if the resolved value is falsy, the widget fetch returns 404
@@ -682,7 +702,9 @@ class APIEndpointSpec:
     http_method: str = "POST"
     route: str = "operations"
     user_types: tuple[str, ...] = ()
+    user_types_config: str | None = None
     roles: tuple[str, ...] = ()
+    roles_config: str | None = None
 ```
 
 ### 2.2 `UIWidgetSpec`
@@ -694,7 +716,9 @@ class UIWidgetSpec:
     alias: str
     icon: dict[str, str]
     user_types: tuple[str, ...] = ()
+    user_types_config: str | None = None
     roles: tuple[str, ...] = ()
+    roles_config: str | None = None
 ```
 
 ### 2.3 `MCPEndpointSpec`
@@ -706,6 +730,7 @@ class MCPEndpointSpec:
     alias: str
     route: str = "operations"
     transport: str = "streamable-http"
+    transport_config: str | None = None
 ```
 
 ### 2.4 `OnMessageSpec`

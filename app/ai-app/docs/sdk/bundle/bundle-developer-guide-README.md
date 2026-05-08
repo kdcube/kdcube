@@ -286,6 +286,28 @@ Practical rule:
 - keep the switches in bundle props under `bundles.yaml -> config: enabled: ...`
 - do not invent parallel ad hoc `if self.bundle_prop(...): return 404` checks unless the logic is more complex than simple exposure gating
 
+### Runtime overrides for decorator defaults
+
+Beyond the on/off `enabled.*` switches, decorator defaults for `user_types`,
+`roles`, `transport`, `cron_expression`, and `timezone` can additionally be
+overridden from bundle props by declaring a `*_config` dot-path on the
+decorator:
+
+| Decorator | Overridable field | Parameter |
+| --- | --- | --- |
+| `@api(...)`, `@ui_widget(...)` | `user_types` | `user_types_config="..."` |
+| `@api(...)`, `@ui_widget(...)` | `roles` | `roles_config="..."` |
+| `@mcp(...)` | `transport` | `transport_config="..."` |
+| `@cron(...)` | `cron_expression` | `expr_config="..."` |
+| `@cron(...)` | `timezone` | `tz_config="..."` |
+
+When the dot-path resolves against effective bundle props, the resolved value
+replaces the decorator default at request/scheduling time. Empty list / blank
+string / invalid types fall back to the decorator default; missing path also
+falls back to the decorator default. The single exception is `@cron`'s
+`expr_config`: with `expr_config` declared, a missing path means "do not
+schedule" (see `bundle-scheduled-jobs-README.md` for the full cron contract).
+
 ## Configuration Access Rules
 
 Use the helper contract, not ad hoc access.
