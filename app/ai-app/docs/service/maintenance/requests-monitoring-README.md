@@ -58,6 +58,7 @@ Where to look:
 Important proc heartbeat fields:
 - `processor.current_load`
 - `processor.active_tasks`
+- `processor.active_task_details`
 - `processor.task_idle_timeout_sec`
 - `processor.task_max_wall_time_sec`
 - `processor.oldest_active_task_wall_age_sec`
@@ -75,7 +76,29 @@ How to interpret them:
 - `active_tasks > 0` with flat queue depth can still be normal if workflows are slow; check `avg wait` before assuming a stall.
 - `max_active_task_idle_age_sec` approaching `task_idle_timeout_sec` means an active turn is close to the idle watchdog limit.
 - `oldest_active_task_wall_age_sec` approaching `task_max_wall_time_sec` means a long warm turn is nearing its hard wall-time cap.
+- `active_task_details[*].last_activity_kind` should change when the workflow
+  emits chat events, for example `comm.emit:chat.delta`, or when SDK internals
+  mark progress, for example `claude_code.subprocess.running`.
+- `active_task_details[*].activity_count` should increase during a live
+  streaming turn. If user-facing events are visible but this count and
+  `last_activity_at` stay fixed, the event path is bypassing the processor
+  activity hook.
 - These watchdog fields are raw heartbeat/debug signals. They are not exported autoscaling metrics.
+
+Direct proc check:
+
+```bash
+curl -s http://localhost:<proc-port>/monitoring/processor
+```
+
+During an active turn, watch:
+
+```text
+processor.active_task_details[0].last_activity_kind
+processor.active_task_details[0].last_activity_at
+processor.active_task_details[0].activity_count
+processor.active_task_details[0].idle_age_sec
+```
 
 ## Fast reset actions (admin)
 Use this when 429/503 is stuck due to stale counters or misbehaving clients.

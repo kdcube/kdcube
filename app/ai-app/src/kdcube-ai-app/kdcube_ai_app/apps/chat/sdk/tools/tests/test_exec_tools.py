@@ -604,3 +604,56 @@ async def test_run_exec_tool_preserves_user_code_verbatim_and_uses_loader_wrappe
     assert captured["main.py"] == _build_exec_loader_wrapper()
     assert "ast.PyCF_ALLOW_TOP_LEVEL_AWAIT" in captured["main.py"]
     assert "scope['__name__'] = '__kdcube_exec_user_code__'" in captured["main.py"]
+
+
+@pytest.mark.asyncio
+async def test_run_exec_tool_uses_configured_text_preview_symbols(tmp_path, monkeypatch):
+    class _FakeRuntime:
+        def __init__(self, logger):
+            self.logger = logger
+
+        async def execute_py_code(self, **kwargs):
+            output_dir = kwargs["output_dir"]
+            artifact_root = exec_tools_module.artifact_outdir_for(output_dir)
+            target = artifact_root / "turn_1" / "outputs" / "report.txt"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("abcdef" * 20, encoding="utf-8")
+            return {"ok": True, "returncode": 0}
+
+    monkeypatch.setattr(exec_tools_module, "_InProcessRuntime", _FakeRuntime)
+    monkeypatch.setattr(
+        exec_tools_module,
+        "build_portable_spec",
+        lambda **_kwargs: SimpleNamespace(to_json=lambda: "{}"),
+    )
+
+    tool_manager = SimpleNamespace(
+        svc=object(),
+        comm=SimpleNamespace(_export_comm_spec_for_runtime=lambda: {}),
+        export_runtime_globals=lambda: {},
+        tool_modules_tuple_list=lambda: [],
+        bundle_root=None,
+    )
+
+    result = await run_exec_tool(
+        tool_manager=tool_manager,
+        output_contract={},
+        code="print('ok')",
+        contract=[{
+            "name": "report",
+            "filename": "turn_1/outputs/report.txt",
+            "mime": "text/plain",
+            "description": "Report text",
+            "visibility": "external",
+        }],
+        timeout_s=30,
+        workdir=tmp_path / "work",
+        outdir=tmp_path / "out",
+        text_preview_max_symbols=12,
+    )
+
+    output = next(item["output"] for item in result["artifacts"] if item["resource_id"] == "artifact:report")
+    assert output["text"].startswith("abcdefabcdef")
+    assert "...[truncated]" in output["text"]
+    assert output["text_truncated"] is True
+    assert output["text_preview_max_symbols"] == 12

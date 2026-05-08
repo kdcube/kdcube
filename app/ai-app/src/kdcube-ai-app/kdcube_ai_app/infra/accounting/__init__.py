@@ -834,7 +834,14 @@ def grouped_by_component_and_seed() -> "callable":
         tenant = (event.tenant_id or event.context.get("tenant_id") or "unknown")
         project = (event.project_id or event.context.get("project_id") or "unknown")
         service_type = event.service_type.value if hasattr(event.service_type, "value") else str(event.service_type)
-        agent_name = event.context.get("agent") or event.context.get("provider")
+        metadata = event.metadata or {}
+        agent_name = (
+            event.context.get("agent")
+            or metadata.get("agent")
+            or metadata.get("agent_name")
+            or metadata.get("role")
+            or event.context.get("provider")
+        )
         provider = event.provider
 
         # Determine group folder (unchanged)

@@ -137,6 +137,31 @@ Operational guidance:
 - HTTPS + PAT is usually the simpler deployment/runtime choice
 - SSH is supported, but it additionally requires mounted key and host-verification material
 
+### ReAct visible read and exec preview limits
+
+The proc service reads these non-secret ReAct limits from `assembly.yaml` through
+`get_settings()` and passes them into `RuntimeCtx`.
+
+| Env var | Descriptor path | Descriptor file | Modes | Meaning |
+|---|---|---|---|---|
+| `AI_REACT_CONTEXT_MAX_TOKENS` | `ai.react.context_max_tokens` | `assembly.yaml` | all modes | hard render budget before compaction |
+| `AI_REACT_READ_VISIBLE_MAX_TEXT_SYMBOLS` | `ai.react.read_visible_max_text_symbols` | `assembly.yaml` | all modes | max visible text characters per `react.read` text path |
+| `AI_REACT_READ_VISIBLE_MAX_TOKENS` | `ai.react.read_visible_max_tokens` | `assembly.yaml` | all modes | token guard per `react.read` text path |
+| `AI_REACT_READ_VISIBLE_MAX_BYTES` | `ai.react.read_visible_max_bytes` | `assembly.yaml` | all modes | raw byte guard for every `react.read` payload |
+| `AI_REACT_READ_VISIBLE_CONTEXT_FRACTION` | `ai.react.read_visible_context_fraction` | `assembly.yaml` | all modes | additional clamp against the current ReAct context budget |
+| `AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS` | `ai.react.exec_text_preview_max_symbols` | `assembly.yaml` | all modes | text preview cap for each exec-produced text artifact |
+
+Unit contract:
+
+- `*_TEXT_SYMBOLS` means text characters and only applies to text materialized
+  into model-visible context. Oversized text reads return configured bounded
+  previews; per-call `max_text_symbols` only asks for a smaller explicit text
+  preview. Caps apply per requested path.
+- `*_TOKENS` is a model-context budget guard.
+- `*_BYTES` is a raw payload guard. PDF/image reads are either attached whole
+  under the byte cap or represented by a recovery marker; they are not partially
+  sliced by `max_text_symbols`.
+
 ### Isolated execution defaults
 
 The proc service reads ISO runtime defaults from `assembly.yaml` through

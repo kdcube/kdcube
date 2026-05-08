@@ -37,6 +37,10 @@ It reflects the current server implementation (ingress + processor split) and th
 - The transport route name (for example `chat_step`) is **not** the same as `env.type` inside the JSON payload.
 - The route name is transport-level routing. The payload `type` is the semantic event type.
 - Bundles may emit **custom event types**, so clients must treat unknown types as generic `chat_step` events unless they explicitly support them.
+- In the processor request path, successful `ChatCommunicator` emissions also
+  refresh the active task idle watchdog. Long-running SDK internals may refresh
+  the same watchdog through an internal activity hook without emitting a
+  synthetic stream event.
 
 ---
 

@@ -46,8 +46,8 @@ needs a local file.
 
 | Family | Use when | Required input | Backing store |
 |---|---|---|---|
-| Semantic | the model remembers a topic or phrase | `query` | conversation index over user/assistant/artifact rows |
-| Turn catalog | the model needs turns by order or time | `mode`, `ordinal` and/or `from`/`to` | Postgres turn-log rows with timestamp ordering |
+| Semantic | the model remembers a topic or phrase | `query`, optional `scope` | conversation index over user/assistant/artifact rows; `scope=user` searches this user across conversations |
+| Turn catalog | the model needs turns by order or time | `mode`, `ordinal` and/or `from`/`to`, optional `scope` | Postgres turn-log rows with timestamp ordering |
 
 The turn catalog is backed by persisted `kind:turn.log` rows. It uses
 Postgres timestamps and window-function ordinals, not timestamp-shaped
@@ -92,13 +92,40 @@ compacted_time_range: ...
 conversation_first_message_ts: ...
 origin: model-generated compaction of older timeline blocks removed from the visible stream
 recovery: use logical paths from the summary or react.memsearch/react.read when exact old content is needed
-<model-generated summary text>
+## Active Work Reminder
+active_request:
+- ...
+retrieval_anchors:
+- phrase: "exact error, user wording, log phrase, or title"
+- entity: "tool id, function/class, bundle id, task id, turn id, subsystem"
+- time: "timestamp or time range if known"
+read_refs:
+- "KDCube logical path only: ar:/tc:/fi:/ws:/su:/so:, or (none yet)"
+done:
+- ...
+open:
+- ...
+next:
+- ...
+recovery_plan:
+- first: "Use this visible reminder and retained suffix."
+- if_needed: "Use react.memsearch with exact phrase/entity anchors."
+- then_read: "Use react.read(read_refs), or ctx_tools.fetch_ctx(path=...) only for large tc: results listed in read_refs."
+
+<rest of model-generated summary text>
 [END COMPACTED PRIOR CONVERSATION MEMORY]
 ```
 
-That checkpoint is the first map. It should include the important goals,
-outcomes, decisions, artifacts, and logical refs that survived through the
-compaction prompt.
+That checkpoint is the first map. `Active Work Reminder` is the retrieval-ready
+handoff: it must include exact phrases, entities, timestamps, KDCube logical
+refs, and a concrete recovery plan so the next model can recognize the active
+task before it searches. Physical host paths are not readable recovery handles;
+if they were mentioned by a user, they may be preserved as quoted context, but
+not as `read_refs`. `active_request` is the immediate resumable item; `Goals`
+in the rest of the checkpoint is the broader set of user/project objectives.
+The rest of the checkpoint should include the important goals, outcomes,
+decisions, artifacts, and logical refs that survived through the compaction
+prompt.
 
 If compaction cuts the currently running turn, the checkpoint is followed by a
 timeline-shaped compacted prefix:
@@ -134,12 +161,13 @@ visible summary/checkpoint
   -> react.read([path])
 ```
 
-For oversized text payloads, `react.read` returns a compact marker instead of
-copying the full content into the visible timeline:
+For oversized text payloads, `react.read` returns a bounded visible preview
+instead of copying the full content into the visible timeline:
 
 ```text
 react.read(["tc:<turn>.<call>.result"])
-  -> status=too_large_for_visible_context
+  -> status=truncated_for_visible_context
+  -> preview is capped by ai.react.read_visible_* settings
   -> exact path remains recoverable
   -> use exec_tools.execute_code_python
      -> ctx_tools.fetch_ctx(path="tc:<turn>.<call>.result")
@@ -147,6 +175,16 @@ react.read(["tc:<turn>.<call>.result"])
 
 This is the preferred path for bulk JSON/email/search results: process the exact
 payload once inside exec code and write a smaller derived artifact.
+
+When the agent first needs only shape/size metadata, it can avoid visible
+content entirely:
+
+```text
+react.read({"paths":["tc:<turn>.<call>.result"],"stats_only":true})
+  -> status=stats_only
+  -> bytes/tokens/text_symbols/mime in the status block
+  -> no content block added to the visible timeline
+```
 
 Examples:
 

@@ -1340,7 +1340,7 @@ class ReactSolverV2:
             "react.search_files",
         }:
             if tool_id == "react.read":
-                allowed_params.update({"paths"})
+                allowed_params.update({"paths", "max_text_symbols"})
             elif tool_id == "react.pull":
                 allowed_params.update({"paths"})
             elif tool_id == "react.checkout":
@@ -1717,29 +1717,24 @@ class ReactSolverV2:
         )
         model_kind = state.get("next_decision_model") or "strong"
         role = f"{self.MODULE_AGENT_NAME}.{self.DECISION_AGENT_NAME}.{model_kind}"
-        async with with_accounting(
-            self.ctx_browser.runtime_ctx.bundle_id,
-            agent=role,
-            metadata={"agent": role},
-        ):
-            mainstream = self._mk_mainstream(f"decision ({iteration})")
-            pending_tool_call_id = f"tc_{uuid.uuid4().hex[:12]}"
-            exec_id = new_exec_id()
-            exec_streamer_idx = self._next_tool_streamer_idx(
-                pathlib.Path(state["outdir"]),
-                "exec_tools.execute_code_python",
-            )
-            exec_streamer_fn, exec_streamer_widget = self._mk_exec_code_streamer(
-                f"decision ({iteration})",
-                exec_streamer_idx,
-                execution_id=exec_id,
-            )
+        mainstream = self._mk_mainstream(f"decision ({iteration})")
+        pending_tool_call_id = f"tc_{uuid.uuid4().hex[:12]}"
+        exec_id = new_exec_id()
+        exec_streamer_idx = self._next_tool_streamer_idx(
+            pathlib.Path(state["outdir"]),
+            "exec_tools.execute_code_python",
+        )
+        exec_streamer_fn, exec_streamer_widget = self._mk_exec_code_streamer(
+            f"decision ({iteration})",
+            exec_streamer_idx,
+            execution_id=exec_id,
+        )
+        sources_list = []
+        try:
+            if self.ctx_browser:
+                sources_list = list(self.ctx_browser.sources_pool or [])
+        except Exception:
             sources_list = []
-            try:
-                if self.ctx_browser:
-                    sources_list = list(self.ctx_browser.sources_pool or [])
-            except Exception:
-                sources_list = []
         record_streamer_fns, record_streamers = self._mk_content_streamers(
             f"decision.record ({iteration})",
             sources_list=sources_list,
@@ -1813,18 +1808,23 @@ class ReactSolverV2:
         except Exception:
             pass
         try:
-            decision = await retry_with_compaction(
-                ctx_browser=self.ctx_browser,
-                system_text_fn=lambda: build_decision_system_text(
-                    adapters=announced_adapters,
-                    infra_adapters=extra_adapters_for_decision,
-                    workspace_implementation=getattr(getattr(self.ctx_browser, "runtime_ctx", None), "workspace_implementation", "custom"),
-                    additional_instructions=self.additional_instructions,
-                ),
-                render_params=render_params,
-                agent_fn=_decision_agent,
-                emit_status=None,
-            )
+            async with with_accounting(
+                self.ctx_browser.runtime_ctx.bundle_id,
+                agent=role,
+                metadata={"agent": role},
+            ):
+                decision = await retry_with_compaction(
+                    ctx_browser=self.ctx_browser,
+                    system_text_fn=lambda: build_decision_system_text(
+                        adapters=announced_adapters,
+                        infra_adapters=extra_adapters_for_decision,
+                        workspace_implementation=getattr(getattr(self.ctx_browser, "runtime_ctx", None), "workspace_implementation", "custom"),
+                        additional_instructions=self.additional_instructions,
+                    ),
+                    render_params=render_params,
+                    agent_fn=_decision_agent,
+                    emit_status=None,
+                )
         finally:
             if self._active_phase_cancelled_by_steer or self._steer_interrupt_requested:
                 self._stash_interrupted_generation_snapshot()

@@ -1231,7 +1231,10 @@ class AccountingAggregator:
         metadata = ev.get("metadata") or {}
         agent = (
                 metadata.get("agent")
+                or metadata.get("agent_name")
+                or metadata.get("role")
                 or ctx.get("agent")
+                or ctx.get("role")
                 or ev.get("agent")
                 or ev.get("agent_name")
         )

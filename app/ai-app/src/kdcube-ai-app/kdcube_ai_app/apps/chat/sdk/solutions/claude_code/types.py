@@ -100,6 +100,8 @@ class ClaudeCodeAgentConfig:
         CLAUDE_CODE_EXECUTIVE_JOURNAL_CODE_PREFIX,
     )
     executive_journal_max_entries: int = 100
+    log_stream_output: bool = False
+    log_stream_output_max_chars: int = 1200
     on_structured_output: ClaudeCodeStructuredEventCallback | None = None
     on_text_chunk: ClaudeCodeTextChunkCallback | None = None
     workspace_config: ClaudeCodeWorkspaceConfig | None = None
@@ -141,6 +143,12 @@ class ClaudeCodeAgentConfig:
         except Exception as exc:
             raise ValueError("executive_journal_max_entries must be numeric") from exc
         object.__setattr__(self, "executive_journal_max_entries", max(0, max_entries))
+        try:
+            log_max_chars = int(self.log_stream_output_max_chars or 0)
+        except Exception as exc:
+            raise ValueError("log_stream_output_max_chars must be numeric") from exc
+        object.__setattr__(self, "log_stream_output", bool(self.log_stream_output))
+        object.__setattr__(self, "log_stream_output_max_chars", max(120, log_max_chars))
         object.__setattr__(self, "model", str(self.model or "").strip() or None)
         if self.permission_mode is not None:
             object.__setattr__(self, "permission_mode", str(self.permission_mode).strip() or None)
@@ -183,5 +191,6 @@ class ClaudeCodeRunResult:
     error_message: str | None = None
     timed_out: bool = False
     timeout_seconds: float | None = None
+    failure_diagnostics: dict[str, Any] = field(default_factory=dict)
     structured_events: list[dict[str, Any]] = field(default_factory=list)
     executive_journal: list[dict[str, Any]] = field(default_factory=list)

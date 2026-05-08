@@ -36,6 +36,13 @@ async def test_compaction_inserts_summary_and_keeps_cut_block(monkeypatch):
         return "SUMMARY"
 
     async def _fake_prefix(*args, **kwargs):
+        prefix_blocks = kwargs.get("blocks") or []
+        assert any(
+            b.get("path") == email_result_path
+            and not b.get("hidden")
+            and "email body" in (b.get("text") or "")
+            for b in prefix_blocks
+        )
         return "PREFIX"
 
     import kdcube_ai_app.apps.chat.sdk.tools.backends.summary.conv_progressive_summary as summary_mod
@@ -206,9 +213,9 @@ async def test_compaction_summary_metadata_keeps_temporal_bounds(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_split_turn_prefix_summary(monkeypatch):
+async def test_current_turn_split_does_not_create_prior_summary(monkeypatch):
     async def _fake_summary(*args, **kwargs):
-        return "SUMMARY"
+        raise AssertionError("current-turn-only compaction must not summarize a fake prior history")
 
     async def _fake_prefix(*args, **kwargs):
         return "PREFIX"
@@ -221,7 +228,7 @@ async def test_split_turn_prefix_summary(monkeypatch):
     runtime = RuntimeCtx(turn_id="turn_2", max_tokens=120)
     tl = Timeline(runtime=runtime, svc=object())
 
-    # Single turn with multiple blocks so cut falls inside the same turn
+    # Single turn with multiple blocks so cut falls inside the current turn.
     blocks = [
         _blk(btype="turn.header", text="[TURN turn_2]", turn_id="turn_2"),
         _blk(btype="user.prompt", text="user asks" * 30, turn_id="turn_2"),
@@ -237,10 +244,14 @@ async def test_split_turn_prefix_summary(monkeypatch):
         force=True,
     )
 
-    summary_blocks = [b for b in updated if b.get("type") == "conv.range.summary"]
-    assert summary_blocks, "summary block not inserted"
-    summary_text = summary_blocks[0].get("text") or ""
-    assert "Turn Context (split turn)" in summary_text
+    assert not [b for b in updated if b.get("type") == "conv.range.summary"]
+    checkpoints = [b for b in updated if b.get("type") == "react.current_turn.compaction_checkpoint"]
+    assert checkpoints
+    assert "PREFIX" in (checkpoints[-1].get("text") or "")
+    rendered = await tl.render(cache_last=False, system_text="sys", include_sources=False)
+    text = "\n".join(b.get("text", "") for b in rendered if b.get("type") == "text")
+    assert "[MID-TURN COMPACTION 1]" in text
+    assert "semantic_progress:" in text
 
 
 @pytest.mark.asyncio
@@ -319,26 +330,171 @@ async def test_split_turn_compaction_preserves_round_ledger(monkeypatch):
         force=True,
     )
 
-    compacted_rounds = [b for b in updated if b.get("type") == "react.rounds.compacted"]
-    assert compacted_rounds
+    assert not [b for b in updated if b.get("type") == "conv.range.summary"]
+    assert not [b for b in updated if b.get("type") == "react.rounds.compacted"]
+    result_blocks = [b for b in updated if b.get("path") == email_result_path]
+    assert result_blocks
+    assert result_blocks[0].get("hidden") is True
+    assert result_blocks[0].get("text")
+    persisted_blocks = tl._blocks_for_persist()
+    persisted_result = [b for b in persisted_blocks if b.get("path") == email_result_path]
+    assert persisted_result and persisted_result[0].get("text") == result_blocks[0].get("text")
     rendered = await tl.render(cache_last=False, system_text="sys", include_sources=False)
     text = "\n".join(b.get("text", "") for b in rendered if b.get("type") == "text")
 
-    assert "[COMPACTED CURRENT TURN PREFIX]" in text
-    assert "COMPACTED ROUND 1" in text
+    assert "[MID-TURN COMPACTION 1]" in text
     assert "[USER MESSAGE]" in text
     assert "scheduled email digest" in text
-    assert "Need to fetch emails, then generate a report from exact data." in text
-    assert "Email result path must be processed exactly" in text
-    assert "[TOOL CALL tc_email].call email.process_user_emails" in text
-    assert "[TOOL RESULT tc_email].result email.process_user_emails" in text
-    assert "[TOOL CALL tc_read].call react.read" in text
-    assert "[TOOL RESULT tc_read].result react.read" in text
+    assert "semantic_progress:" in text
+    assert "PREFIX" in text
+    assert "engineering_ledger:" in text
+    assert "tool_call_id: tc_email" in text
+    assert "call: tc:turn_job.tc_email.call" in text
+    assert "result: tc:turn_job.tc_email.result" in text
+    assert "tool: email.process_user_emails" in text
+    assert "tool: react.read" in text
     assert email_result_path in text
-    assert "read_paths:" in text
-    assert "compacted large result" in text
-    assert "recover_with: exec_tools.execute_code_python + ctx_tools.fetch_ctx" in text
-    assert "compacted_time_range: 2026-05-08T09:00:00Z -> 2026-05-08T09:01:00Z" in text
+    assert "result_tokens_estimate:" in text
+    assert "position: current-turn prefix compacted here" in text
+    assert "exact source blocks remain in timeline.json" in text
+    assert text.index("[USER MESSAGE]") < text.index("[MID-TURN COMPACTION 1]")
+    assert text.index("[MID-TURN COMPACTION 1]") < text.index("[ASSISTANT MESSAGE]")
+
+
+@pytest.mark.asyncio
+async def test_mid_turn_engineering_ledger_groups_outputs_by_tool_call(monkeypatch):
+    async def _fake_summary(*args, **kwargs):
+        return "SUMMARY"
+
+    async def _fake_prefix(*args, **kwargs):
+        return "Grouped progress summary."
+
+    import kdcube_ai_app.apps.chat.sdk.tools.backends.summary.conv_progressive_summary as summary_mod
+
+    monkeypatch.setattr(summary_mod, "summarize_context_blocks_progressive", _fake_summary)
+    monkeypatch.setattr(summary_mod, "summarize_turn_prefix_progressive", _fake_prefix)
+
+    runtime = RuntimeCtx(turn_id="turn_job", max_tokens=120)
+    tl = Timeline(runtime=runtime, svc=object())
+    blocks = [
+        _blk(btype="turn.header", text="[TURN turn_job]", turn_id="turn_job", ts="2026-05-08T09:00:00Z"),
+        _blk(btype="user.prompt", text="run tools", turn_id="turn_job", ts="2026-05-08T09:00:01Z"),
+        {
+            "type": "react.tool.call",
+            "turn_id": "turn_job",
+            "call_id": "tc_exec",
+            "path": "tc:turn_job.tc_exec.call",
+            "mime": "application/json",
+            "text": json.dumps({"tool_id": "exec_tools.execute_code_python", "tool_call_id": "tc_exec", "params": {"code": "write files"}}),
+        },
+        {
+            "type": "react.tool.result",
+            "turn_id": "turn_job",
+            "call_id": "tc_exec",
+            "path": "tc:turn_job.tc_exec.result",
+            "mime": "application/json",
+            "text": json.dumps({
+                "ok": True,
+                "artifact_type": "files",
+                "files": [
+                    {"artifact_path": "fi:turn_job.outputs/a.pdf"},
+                    {"artifact_path": "fi:turn_job.outputs/b.csv"},
+                    {"artifact_path": "fi:turn_job.outputs/c.json"},
+                ],
+            }),
+            "meta": {"tool_call_id": "tc_exec", "tool_id": "exec_tools.execute_code_python"},
+        },
+        {"type": "react.tool.result", "turn_id": "turn_job", "call_id": "tc_exec", "path": "fi:turn_job.outputs/a.pdf", "mime": "application/pdf", "meta": {"tool_call_id": "tc_exec"}},
+        {"type": "react.tool.result", "turn_id": "turn_job", "call_id": "tc_exec", "path": "fi:turn_job.outputs/b.csv", "mime": "text/csv", "meta": {"tool_call_id": "tc_exec"}},
+        {"type": "react.tool.result", "turn_id": "turn_job", "call_id": "tc_exec", "path": "fi:turn_job.outputs/c.json", "mime": "application/json", "meta": {"tool_call_id": "tc_exec"}},
+        {
+            "type": "react.tool.call",
+            "turn_id": "turn_job",
+            "call_id": "tc_web",
+            "path": "tc:turn_job.tc_web.call",
+            "mime": "application/json",
+            "text": json.dumps({"tool_id": "web_tools.web_search", "tool_call_id": "tc_web", "params": {"query": "news"}}),
+        },
+        {
+            "type": "react.tool.result",
+            "turn_id": "turn_job",
+            "call_id": "tc_web",
+            "path": "tc:turn_job.tc_web.result",
+            "mime": "application/json",
+            "text": json.dumps({"ok": True, "sources_used": [1, 2, 3], "results": [{"sid": 1}, {"sid": 2}, {"sid": 3}]}),
+            "meta": {"tool_call_id": "tc_web", "tool_id": "web_tools.web_search", "sources_used": [1, 2, 3]},
+        },
+        {
+            "type": "react.tool.call",
+            "turn_id": "turn_job",
+            "call_id": "tc_render",
+            "path": "tc:turn_job.tc_render.call",
+            "mime": "application/json",
+            "text": json.dumps({"tool_id": "rendering_tools.write_pdf", "tool_call_id": "tc_render", "params": {"path": "outputs/report.pdf"}}),
+        },
+        {
+            "type": "react.tool.result",
+            "turn_id": "turn_job",
+            "call_id": "tc_render",
+            "path": "tc:turn_job.tc_render.result",
+            "mime": "application/json",
+            "text": json.dumps({"ok": True, "artifact_path": "fi:turn_job.outputs/report.pdf", "mime": "application/pdf"}),
+            "meta": {"tool_call_id": "tc_render", "tool_id": "rendering_tools.write_pdf"},
+        },
+        {"type": "react.tool.result", "turn_id": "turn_job", "call_id": "tc_render", "path": "fi:turn_job.outputs/report.pdf", "mime": "application/pdf", "meta": {"tool_call_id": "tc_render"}},
+        _blk(btype="assistant.completion", text="continue", turn_id="turn_job", ts="2026-05-08T09:02:00Z"),
+    ]
+    monkeypatch.setattr(tl, "_find_compaction_cut_point", lambda *args, **kwargs: (len(blocks) - 1, 0, True))
+
+    await tl.sanitize_context_blocks(system_text="sys", blocks=blocks, max_tokens=80, force=True)
+    rendered = await tl.render(cache_last=False, system_text="sys", include_sources=False)
+    text = "\n".join(b.get("text", "") for b in rendered if b.get("type") == "text")
+
+    assert "tool_call_id: tc_exec" in text
+    assert "tool: exec_tools.execute_code_python" in text
+    assert "files:" in text
+    assert "fi:turn_job.outputs/a.pdf mime=application/pdf" in text
+    assert "fi:turn_job.outputs/b.csv mime=text/csv" in text
+    assert "fi:turn_job.outputs/c.json mime=application/json" in text
+    assert "tool_call_id: tc_web" in text
+    assert "tool: web_tools.web_search" in text
+    assert "so:sources_pool[1-3]" in text
+    assert "tool_call_id: tc_render" in text
+    assert "tool: rendering_tools.write_pdf" in text
+    assert "fi:turn_job.outputs/report.pdf mime=application/pdf" in text
+    assert text.index("tool_call_id: tc_exec") < text.index("tool_call_id: tc_web") < text.index("tool_call_id: tc_render")
+
+
+@pytest.mark.asyncio
+async def test_render_shows_only_latest_mid_turn_compaction_checkpoint():
+    runtime = RuntimeCtx(turn_id="turn_job", max_tokens=1000)
+    tl = Timeline(runtime=runtime, svc=object())
+    tl.blocks = [
+        _blk(btype="turn.header", text="[TURN turn_job]", turn_id="turn_job", ts="2026-05-08T09:00:00Z"),
+        _blk(btype="user.prompt", text="run the job", turn_id="turn_job", ts="2026-05-08T09:00:01Z"),
+        {
+            "type": "react.current_turn.compaction_checkpoint",
+            "turn_id": "turn_job",
+            "path": "ar:turn_job.react.mid_turn.compaction.1",
+            "text": "[MID-TURN COMPACTION 1]\nold checkpoint\n[/MID-TURN COMPACTION 1]",
+            "meta": {"current_turn_compaction_checkpoint": True, "marker_index": 1},
+        },
+        {
+            "type": "react.current_turn.compaction_checkpoint",
+            "turn_id": "turn_job",
+            "path": "ar:turn_job.react.mid_turn.compaction.2",
+            "text": "[MID-TURN COMPACTION 2]\nlatest checkpoint\n[/MID-TURN COMPACTION 2]",
+            "meta": {"current_turn_compaction_checkpoint": True, "marker_index": 2},
+        },
+        _blk(btype="assistant.completion", text="done", turn_id="turn_job", ts="2026-05-08T09:02:00Z"),
+    ]
+
+    rendered = await tl.render(cache_last=False, system_text="sys", include_sources=False)
+    text = "\n".join(b.get("text", "") for b in rendered if b.get("type") == "text")
+
+    assert "[MID-TURN COMPACTION 1]" not in text
+    assert "[MID-TURN COMPACTION 2]" in text
+    assert "latest checkpoint" in text
 
 
 @pytest.mark.asyncio
@@ -432,6 +588,47 @@ def test_blocks_for_persist_trims_before_summary():
     persisted = tl._blocks_for_persist()
     assert persisted[0].get("type") == "conv.range.summary"
     assert len(persisted) == 2
+
+
+def test_turn_prefix_serializer_caps_large_tool_result_without_hiding():
+    from kdcube_ai_app.apps.chat.sdk.tools.backends.summary.conv_progressive_summary import (
+        _serialize_context_blocks_for_compaction,
+    )
+
+    payload = {
+        "ok": True,
+        "messages": [
+            {
+                "message_id": f"msg_{idx}",
+                "thread_id": f"thr_{idx}",
+                "from": "Sender <sender@example.com>",
+                "subject": f"Subject {idx}",
+                "date": "Fri, 08 May 2026 10:00:00 +0000",
+                "body_excerpt": "body " * 2000,
+            }
+            for idx in range(8)
+        ],
+    }
+    text = _serialize_context_blocks_for_compaction([
+        {
+            "type": "react.tool.result",
+            "turn_id": "turn_job",
+            "call_id": "tc_email",
+            "path": "tc:turn_job.tc_email.result",
+            "mime": "application/json",
+            "text": json.dumps(payload),
+            "meta": {"tool_call_id": "tc_email", "tool_id": "email.process_user_emails"},
+        }
+    ])
+
+    assert "hidden=true" not in text
+    assert "[TRUNCATED LARGE TOOL RESULT FOR COMPACTION SUMMARY]" in text
+    assert "shape:" in text
+    assert "sample:" in text
+    assert '"messages"' in text
+    assert '"message_id": "msg_0"' in text
+    assert "ctx_tools.fetch_ctx(path=\"tc:turn_job.tc_email.result\")" in text
+    assert "msg_7" not in text
 
 
 @pytest.mark.asyncio
@@ -1027,6 +1224,63 @@ def test_cache_ttl_pruning_keeps_working_summary_visible():
     assert all(not b.get("hidden") for b in summary_blocks)
     assert "ws:turn_old.conv.working.summary.attempt.1" not in (res.get("hidden_paths") or [])
     assert "ws:turn_old.conv.working.summary" not in (res.get("hidden_paths") or [])
+
+
+def test_cache_ttl_pruning_preserves_react_read_large_binary_marker_shape():
+    runtime = RuntimeCtx(turn_id="turn_cur")
+    tl = Timeline(runtime=runtime, svc=None)
+    marker_path = "fi:turn_src.outputs/large-report.pdf"
+    tl.blocks = [
+        {
+            "type": "turn.header",
+            "turn_id": "turn_old",
+            "ts": "2026-02-09T00:00:00Z",
+            "text": "[TURN turn_old]",
+        },
+        {
+            "type": "react.tool.call",
+            "turn_id": "turn_old",
+            "call_id": "r_read",
+            "path": "tc:turn_old.r_read.call",
+            "text": json.dumps({
+                "tool_id": "react.read",
+                "tool_call_id": "r_read",
+                "params": {"paths": [marker_path]},
+            }),
+        },
+        {
+            "type": "react.tool.result",
+            "turn_id": "turn_old",
+            "call_id": "r_read",
+            "path": marker_path,
+            "mime": "text/markdown",
+            "text": "\n".join([
+                "[LARGE READ NOT MATERIALIZED]",
+                f"path: {marker_path}",
+                "bytes: 24000000",
+                "visible_read_limit_bytes: 10485760",
+                "exact_content: recoverable by logical path",
+            ]),
+        },
+    ]
+    tl.cache_last_touch_at = 0
+
+    res = apply_cache_ttl_pruning(
+        timeline=tl,
+        ttl_seconds=1,
+        buffer_seconds=0,
+        keep_recent_turns=0,
+        keep_recent_intact_turns=0,
+    )
+
+    assert res.get("status") in {"pruned", "pruned_light", "no_effect"}
+    marker = next(b for b in tl.blocks if b.get("path") == marker_path)
+    assert marker.get("hidden") is True
+    replacement = marker.get("replacement_text") or ""
+    assert "LARGE READ NOT MATERIALIZED" in replacement
+    assert f"path: {marker_path}" in replacement
+    assert "bytes: 24000000" in replacement
+    assert "visible_read_limit_bytes: 10485760" in replacement
 
 
 def test_cache_ttl_pruning_keeps_external_turn_events_visible():

@@ -119,7 +119,7 @@ async def test_read_tc_result_prefers_inline_payload_over_meta(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_read_large_tc_result_returns_recovery_marker_not_payload(tmp_path):
+async def test_read_large_tc_result_returns_configured_preview_not_full_payload(tmp_path):
     runtime = RuntimeCtx(turn_id="turn_read", outdir=str(tmp_path), workdir=str(tmp_path), max_tokens=80_000)
     ctx = FakeBrowser(runtime)
     source_path = "tc:turn_src.tc_big.result"
@@ -143,17 +143,240 @@ async def test_read_large_tc_result_returns_recovery_marker_not_payload(tmp_path
         if b.get("type") == "react.tool.result" and b.get("call_id") == "r_large"
     ]
     assert not any(b.get("text") == large_text for b in read_blocks)
-    marker = next(b for b in read_blocks if b.get("path") == source_path)
-    assert "LARGE READ NOT MATERIALIZED" in marker["text"]
-    assert "ctx_tools.fetch_ctx" in marker["text"]
+    preview = next(b for b in read_blocks if b.get("path") == source_path)
+    assert "READ PREVIEW TRUNCATED" in preview["text"]
+    assert "ctx_tools.fetch_ctx" in preview["text"]
 
     status = next(
         json.loads(b["text"])
         for b in read_blocks
         if b.get("path") == "tc:turn_read.r_large.result" and b.get("mime") == "application/json"
     )
-    assert status["paths"][0]["status"] == "too_large_for_visible_context"
-    assert status["large_paths"][0]["path"] == source_path
+    assert status["paths"][0]["status"] == "truncated_for_visible_context"
+    assert status["truncated_paths"][0]["path"] == source_path
+
+
+@pytest.mark.asyncio
+async def test_read_mid_sized_payload_uses_configured_preview(tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_read", outdir=str(tmp_path), workdir=str(tmp_path), max_tokens=80_000)
+    ctx = FakeBrowser(runtime)
+    source_path = "tc:turn_src.tc_mid.result"
+    raw_text = "email body with enough detail\n" * 9000
+    ctx.timeline.blocks.append({
+        "type": "react.tool.result",
+        "mime": "text/plain",
+        "path": source_path,
+        "text": raw_text,
+        "turn_id": "turn_src",
+        "call_id": "tc_mid",
+        "meta": {"tool_call_id": "tc_mid", "tool_id": "exec_tools.execute_code_python"},
+    })
+
+    state = {"last_decision": {"tool_call": {"params": {"paths": [source_path]}}}}
+    await handle_react_read(ctx_browser=ctx, state=state, tool_call_id="r_mid_large")
+
+    read_blocks = [
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result" and b.get("call_id") == "r_mid_large"
+    ]
+    assert not any(b.get("text") == raw_text for b in read_blocks)
+    preview = next(b for b in read_blocks if b.get("path") == source_path)
+    assert "READ PREVIEW TRUNCATED" in preview["text"]
+
+
+@pytest.mark.asyncio
+async def test_read_large_payload_with_max_text_symbols_returns_bounded_preview(tmp_path):
+    runtime = RuntimeCtx(
+        turn_id="turn_read",
+        outdir=str(tmp_path),
+        workdir=str(tmp_path),
+        max_tokens=80_000,
+        read_visible_max_text_symbols=1_200,
+        read_visible_max_tokens=800,
+    )
+    ctx = FakeBrowser(runtime)
+    source_path = "tc:turn_src.tc_preview.result"
+    raw_text = "0123456789abcdef\n" * 1000
+    ctx.timeline.blocks.append({
+        "type": "react.tool.result",
+        "mime": "text/plain",
+        "path": source_path,
+        "text": raw_text,
+        "turn_id": "turn_src",
+        "call_id": "tc_preview",
+        "meta": {"tool_call_id": "tc_preview", "tool_id": "email.process_user_emails"},
+    })
+
+    state = {"last_decision": {"tool_call": {"params": {"paths": [source_path], "max_text_symbols": 500}}}}
+    await handle_react_read(ctx_browser=ctx, state=state, tool_call_id="r_preview")
+
+    read_blocks = [
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result" and b.get("call_id") == "r_preview"
+    ]
+    preview = next(b for b in read_blocks if b.get("path") == source_path)
+    assert "READ PREVIEW TRUNCATED" in preview["text"]
+    assert "omitted_text_symbols:" in preview["text"]
+    assert raw_text not in preview["text"]
+    status = next(
+        json.loads(b["text"])
+        for b in read_blocks
+        if b.get("path") == "tc:turn_read.r_preview.result" and b.get("mime") == "application/json"
+    )
+    assert status["paths"][0]["status"] == "truncated_for_visible_context"
+    assert status["requested_text_symbols"] == 500
+
+
+@pytest.mark.asyncio
+async def test_read_text_payload_honors_raw_byte_cap(tmp_path):
+    runtime = RuntimeCtx(
+        turn_id="turn_read",
+        outdir=str(tmp_path),
+        workdir=str(tmp_path),
+        max_tokens=80_000,
+        read_visible_max_text_symbols=10_000,
+        read_visible_max_tokens=4_000,
+        read_visible_max_bytes=64,
+    )
+    ctx = FakeBrowser(runtime)
+    source_path = "tc:turn_src.tc_bytes.result"
+    raw_text = "0123456789abcdef" * 20
+    ctx.timeline.blocks.append({
+        "type": "react.tool.result",
+        "mime": "text/plain",
+        "path": source_path,
+        "text": raw_text,
+        "turn_id": "turn_src",
+        "call_id": "tc_bytes",
+        "meta": {"tool_call_id": "tc_bytes", "tool_id": "email.process_user_emails"},
+    })
+
+    state = {"last_decision": {"tool_call": {"params": {"paths": [source_path]}}}}
+    await handle_react_read(ctx_browser=ctx, state=state, tool_call_id="r_bytes")
+
+    read_blocks = [
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result" and b.get("call_id") == "r_bytes"
+    ]
+    marker = next(b for b in read_blocks if b.get("path") == source_path)
+    assert "READ PREVIEW TRUNCATED" in marker["text"]
+    assert "bytes:" in marker["text"]
+    status = next(
+        json.loads(b["text"])
+        for b in read_blocks
+        if b.get("path") == "tc:turn_read.r_bytes.result" and b.get("mime") == "application/json"
+    )
+    assert status["paths"][0]["status"] == "truncated_for_visible_context"
+    assert status["paths"][0]["bytes"] > status["visible_read_limit_bytes"]
+    assert status["truncated_paths"][0]["bytes"] > status["visible_read_limit_bytes"]
+
+
+@pytest.mark.asyncio
+async def test_read_large_text_file_returns_configured_preview(tmp_path):
+    runtime = RuntimeCtx(
+        turn_id="turn_read",
+        outdir=str(tmp_path),
+        workdir=str(tmp_path),
+        max_tokens=80_000,
+        read_visible_max_text_symbols=120,
+        read_visible_max_tokens=200,
+        read_visible_max_bytes=512,
+    )
+    ctx = FakeBrowser(runtime)
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    full_text = "large file line with details\n" * 200
+    (logs_dir / "large.txt").write_text(full_text, encoding="utf-8")
+
+    source_path = "fi:logs/large.txt"
+    state = {"last_decision": {"tool_call": {"params": {"paths": [source_path]}}}}
+    await handle_react_read(ctx_browser=ctx, state=state, tool_call_id="r_file_large")
+
+    read_blocks = [
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result" and b.get("call_id") == "r_file_large"
+    ]
+    preview = next(b for b in read_blocks if b.get("path") == source_path)
+    assert "READ PREVIEW TRUNCATED" in preview["text"]
+    assert "large file line" in preview["text"]
+    assert full_text not in preview["text"]
+    status = next(
+        json.loads(b["text"])
+        for b in read_blocks
+        if b.get("path") == "tc:turn_read.r_file_large.result" and b.get("mime") == "application/json"
+    )
+    assert status["paths"][0]["status"] == "truncated_for_visible_context"
+    assert status["paths"][0]["bytes"] > status["visible_read_limit_bytes"]
+
+
+@pytest.mark.asyncio
+async def test_read_stats_only_returns_metadata_without_materializing_tc_text(tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_read", outdir=str(tmp_path), workdir=str(tmp_path), max_tokens=80_000)
+    ctx = FakeBrowser(runtime)
+    source_path = "tc:turn_src.tc_stats.result"
+    raw_text = json.dumps({"ok": True, "messages": ["email body " * 100 for _ in range(3)]})
+    ctx.timeline.blocks.append({
+        "type": "react.tool.result",
+        "mime": "application/json",
+        "path": source_path,
+        "text": raw_text,
+        "turn_id": "turn_src",
+        "call_id": "tc_stats",
+        "meta": {"tool_call_id": "tc_stats", "tool_id": "email.process_user_emails"},
+    })
+
+    state = {"last_decision": {"tool_call": {"params": {"paths": [source_path], "stats_only": True}}}}
+    await handle_react_read(ctx_browser=ctx, state=state, tool_call_id="r_stats")
+
+    read_blocks = [
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result" and b.get("call_id") == "r_stats"
+    ]
+    assert not any(b.get("path") == source_path for b in read_blocks)
+    status = json.loads(next(
+        b["text"]
+        for b in read_blocks
+        if b.get("path") == "tc:turn_read.r_stats.result" and b.get("mime") == "application/json"
+    ))
+    assert status["stats_only"] is True
+    assert status["paths"][0]["path"] == source_path
+    assert status["paths"][0]["status"] == "stats_only"
+    assert status["paths"][0]["mime"] == "application/json"
+    assert status["paths"][0]["tokens"] > 0
+    assert status["paths"][0]["text_symbols"] == len(raw_text)
+    assert status["paths"][0]["bytes"] == len(raw_text.encode("utf-8"))
+
+
+@pytest.mark.asyncio
+async def test_read_stats_only_returns_file_metadata_without_base64(tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_read", outdir=str(tmp_path), workdir=str(tmp_path))
+    ctx = FakeBrowser(runtime)
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    payload = b"%PDF-1.7\n" + (b"x" * 2048)
+    (logs_dir / "report.pdf").write_bytes(payload)
+
+    source_path = "fi:logs/report.pdf"
+    state = {"last_decision": {"tool_call": {"params": {"paths": [source_path], "stats_only": True}}}}
+    await handle_react_read(ctx_browser=ctx, state=state, tool_call_id="r_file_stats")
+
+    read_blocks = [
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result" and b.get("call_id") == "r_file_stats"
+    ]
+    assert not any(b.get("path") == source_path for b in read_blocks)
+    assert not any(b.get("base64") for b in read_blocks)
+    status = json.loads(next(
+        b["text"]
+        for b in read_blocks
+        if b.get("path") == "tc:turn_read.r_file_stats.result" and b.get("mime") == "application/json"
+    ))
+    assert status["stats_only"] is True
+    assert status["paths"][0]["path"] == source_path
+    assert status["paths"][0]["status"] == "stats_only"
+    assert status["paths"][0]["kind"] == "binary"
+    assert status["paths"][0]["mime"] == "application/pdf"
+    assert status["paths"][0]["bytes"] == len(payload)
 
 
 @pytest.mark.asyncio

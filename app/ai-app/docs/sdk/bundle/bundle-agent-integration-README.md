@@ -751,6 +751,16 @@ Current Claude Code customization knobs exposed by the SDK runner:
 - `workspace_config` for SDK-managed `.mcp.json`,
   `.claude/settings.local.json`, and `CLAUDE.md`
 
+Runtime behavior:
+
+- Claude stdout/stderr is consumed with chunk-based line assembly so a single
+  large `stream-json` line does not crash the reader.
+- The runner touches the processor task watchdog on subprocess start,
+  stdout/stderr activity, and while the subprocess remains alive. These touches
+  are internal activity signals; they do not emit synthetic chat events.
+- The processor hard wall-time cap still applies even when internal activity is
+  present.
+
 Workspace and secret boundary:
 
 - `workspace_path` means "run Claude from this directory."

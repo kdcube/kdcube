@@ -356,6 +356,7 @@ async def _execute_exec_tool(
         exec_id=exec_id,
         exec_runtime=copy.deepcopy(getattr(runtime_ctx, "exec_runtime", {}) or {}),
         bundle_storage_dir=str(bundle_storage_dir) if bundle_storage_dir is not None else None,
+        text_preview_max_symbols=getattr(runtime_ctx, "exec_text_preview_max_symbols", None),
     )
     exec_ms = int((time.perf_counter() - exec_t0) * 1000)
     if exec_streamer:

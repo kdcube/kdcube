@@ -32,6 +32,9 @@ It reflects the actual behavior in code (SSE/Socket.IO are gated; REST is sessio
   - Ingress REST latency (p50/p95/p99, 1m/15m/1h)
 - **Draining indicator**: instances that stopped heartbeating recently are marked as *draining* before becoming stale
 - **Proc runtime metadata in raw heartbeats**: queue/config loop lag, recent Redis errors, and proc watchdog state (idle/hard-cap config plus active-task ages) are attached to proc process heartbeats
+- **Active task activity**: processor task idle age is refreshed by normal chat
+  communicator emissions and by explicit SDK internal activity touches for
+  long-running subprocesses that may not emit user-facing events
 
 ```mermaid
 graph TD
@@ -92,6 +95,12 @@ Pool reporting note:
 Proc stall note:
 - Detailed proc runtime metadata is attached to the raw process heartbeat JSON in Redis.
 - Use the Redis Browser or direct Redis access to inspect heartbeat `metadata.processor.*` fields such as queue loop lag, last queue error, `task_idle_timeout_sec`, `task_max_wall_time_sec`, `oldest_active_task_wall_age_sec`, and `max_active_task_idle_age_sec`.
+- On a proc instance, `GET /monitoring/processor` returns the same processor
+  metadata directly, including `active_task_details[*].last_activity_kind`,
+  `last_activity_at`, `activity_count`, `idle_age_sec`, and `wall_age_sec`.
+- Chat events emitted through `ChatCommunicator` refresh active-task idle
+  activity. SDK internals may also call the request-local task activity hook
+  without sending synthetic chat events.
 - These watchdog fields are not first-class exported metrics from the Metrics service; they are raw runtime observability signals.
 
 ### Metrics service

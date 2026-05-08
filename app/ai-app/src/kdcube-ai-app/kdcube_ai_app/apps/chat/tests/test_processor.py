@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,6 +23,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import (
     set_current_bundle_call_context,
     set_current_request_context,
     snapshot_ctxvars as snapshot_comm_ctxvars,
+    touch_current_task_activity,
 )
 from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload
 from kdcube_ai_app.infra.jobs.stream import BackgroundJob, BackgroundJobClaim
@@ -186,29 +188,40 @@ class _DummyChatCommunicator:
     def __init__(self, *args, **kwargs):
         del args, kwargs
 
+    def _touch(self, kind):
+        touch_current_task_activity(kind)
+
     async def start(self, **kwargs):
         del kwargs
+        self._touch("dummy.chat.start")
 
     async def step(self, **kwargs):
         del kwargs
+        self._touch("dummy.chat.step")
 
     async def complete(self, **kwargs):
         del kwargs
+        self._touch("dummy.chat.complete")
 
     async def error(self, **kwargs):
         type(self).error_calls.append(kwargs)
+        self._touch("dummy.chat.error")
 
     async def delta(self, **kwargs):
         del kwargs
+        self._touch("dummy.chat.delta")
 
     async def event(self, **kwargs):
         del kwargs
+        self._touch("dummy.chat.event")
 
     async def emit(self, *args, **kwargs):
         del args, kwargs
+        self._touch("dummy.chat.emit")
 
     async def emit_enveloped(self, *args, **kwargs):
         del args, kwargs
+        self._touch("dummy.chat.emit_enveloped")
 
 
 class _DummyEnvelope:
@@ -873,6 +886,93 @@ async def test_process_task_idle_watchdog_times_out_silent_handler(_patch_proces
 
 
 @pytest.mark.asyncio
+async def test_process_task_internal_activity_touch_prevents_idle_timeout(_patch_processor_dependencies):
+    redis = _MinimalRedis()
+
+    async def _internally_active_handler(_payload):
+        for _ in range(5):
+            await asyncio.sleep(0.02)
+            assert touch_current_task_activity("test.internal_activity")
+        return {"ok": True}
+
+    processor = _build_processor(
+        redis,
+        handler=_internally_active_handler,
+        task_idle_timeout_sec=1,
+        task_max_wall_time_sec=5,
+    )
+    processor.task_idle_timeout_sec = 0.05
+    processor.task_max_wall_time_sec = 1.0
+    processor._task_watchdog_poll_interval_sec = 0.01
+
+    task_payload = _build_task_payload("internal-activity-task")
+    raw_payload = json.dumps(task_payload).encode("utf-8")
+    inflight_key = "queue:inflight:registered"
+    lock_key = "lock:internal-activity-task"
+    redis.seed_list(inflight_key, [raw_payload])
+    redis.lock_ttls[lock_key] = 300
+    processor._current_load = 1
+
+    task_data = dict(task_payload)
+    task_data["_lock_key"] = lock_key
+    task_data["_raw_payload"] = raw_payload
+    task_data["_ready_queue_key"] = "queue:registered"
+    task_data["_inflight_queue_key"] = inflight_key
+    task_data["_queue_wait_ms"] = 10
+
+    await processor._process_task(task_data)
+
+    assert redis.lists[inflight_key] == []
+    assert processor.get_current_load() == 0
+    assert not _patch_processor_dependencies.error_calls
+
+
+@pytest.mark.asyncio
+async def test_process_task_raw_communicator_emit_updates_idle_activity(_patch_processor_dependencies):
+    redis = _MinimalRedis()
+
+    async def _raw_comm_active_handler(_payload):
+        comm = get_current_comm()
+        raw_comm = getattr(comm, "_inner", comm)
+        assert raw_comm is not None
+        for idx in range(5):
+            await asyncio.sleep(0.02)
+            await raw_comm.delta(text=f"chunk-{idx}", index=idx, marker="thinking")
+        return {"ok": True}
+
+    processor = _build_processor(
+        redis,
+        handler=_raw_comm_active_handler,
+        task_idle_timeout_sec=1,
+        task_max_wall_time_sec=5,
+    )
+    processor.task_idle_timeout_sec = 0.05
+    processor.task_max_wall_time_sec = 1.0
+    processor._task_watchdog_poll_interval_sec = 0.01
+
+    task_payload = _build_task_payload("raw-comm-activity-task")
+    raw_payload = json.dumps(task_payload).encode("utf-8")
+    inflight_key = "queue:inflight:registered"
+    lock_key = "lock:raw-comm-activity-task"
+    redis.seed_list(inflight_key, [raw_payload])
+    redis.lock_ttls[lock_key] = 300
+    processor._current_load = 1
+
+    task_data = dict(task_payload)
+    task_data["_lock_key"] = lock_key
+    task_data["_raw_payload"] = raw_payload
+    task_data["_ready_queue_key"] = "queue:registered"
+    task_data["_inflight_queue_key"] = inflight_key
+    task_data["_queue_wait_ms"] = 10
+
+    await processor._process_task(task_data)
+
+    assert redis.lists[inflight_key] == []
+    assert processor.get_current_load() == 0
+    assert not _patch_processor_dependencies.error_calls
+
+
+@pytest.mark.asyncio
 async def test_process_task_hard_cap_wins_even_with_ongoing_activity(_patch_processor_dependencies):
     redis = _MinimalRedis()
 
@@ -915,3 +1015,41 @@ async def test_process_task_hard_cap_wins_even_with_ongoing_activity(_patch_proc
     assert metadata["task_max_wall_time_sec"] == pytest.approx(0.06, rel=0, abs=1e-6)
     assert _patch_processor_dependencies.error_calls[-1]["data"]["error_type"] == "task_watchdog_timeout"
     assert _patch_processor_dependencies.error_calls[-1]["data"]["timeout_kind"] == "wall"
+
+
+@pytest.mark.asyncio
+async def test_runtime_metadata_includes_active_task_activity_details(_patch_processor_dependencies):
+    redis = _MinimalRedis()
+    processor = _build_processor(redis)
+
+    async def _never_done():
+        await asyncio.Event().wait()
+
+    task = asyncio.create_task(_never_done())
+    now_iso = "2026-05-08T16:00:00Z"
+    try:
+        processor._active_tasks.add(task)
+        processor._active_task_details[task] = {
+            "task_id": "task-active",
+            "queue_key": "queue:registered",
+            "inflight_queue_key": "queue:inflight:registered",
+            "claimed_at": now_iso,
+            "claimed_monotonic": time.monotonic() - 4,
+            "started_at": now_iso,
+            "started_monotonic": time.monotonic() - 3,
+            "started_execution": True,
+            "last_activity_at": now_iso,
+            "last_activity_monotonic": time.monotonic() - 1,
+            "last_activity_kind": "comm.emit:chat.delta",
+            "activity_count": 7,
+        }
+
+        metadata = processor.get_runtime_metadata()
+
+        assert metadata["active_tasks"] == 1
+        assert metadata["active_task_details"][0]["task_id"] == "task-active"
+        assert metadata["active_task_details"][0]["last_activity_kind"] == "comm.emit:chat.delta"
+        assert metadata["active_task_details"][0]["activity_count"] == 7
+        assert metadata["active_task_details"][0]["idle_age_sec"] >= 0
+    finally:
+        task.cancel()

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Optional, Dict, Any, Mapping
+from typing import Optional, Dict, Any, Callable, Mapping
 
 from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
 from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload
@@ -16,6 +16,7 @@ COMM_CV: ContextVar[object | None] = ContextVar("COMM_CV", default=None)
 REQUEST_CONTEXT_CV: ContextVar[ChatTaskPayload | None] = ContextVar("REQUEST_CONTEXT_CV", default=None)
 BUNDLE_ID_CV: ContextVar[str | None] = ContextVar("BUNDLE_ID_CV", default=None)
 BUNDLE_CALL_CONTEXT_CV: ContextVar[Dict[str, Any]] = ContextVar("BUNDLE_CALL_CONTEXT_CV", default={})
+TASK_ACTIVITY_TOUCH_CV: ContextVar[Callable[[str], None] | None] = ContextVar("TASK_ACTIVITY_TOUCH_CV", default=None)
 _BIND_COMM_UNSET = object()
 _BIND_BUNDLE_UNSET = object()
 _BIND_BUNDLE_CALL_CONTEXT_UNSET = object()
@@ -53,6 +54,24 @@ def get_current_bundle_call_context() -> Dict[str, Any]:
     """Get JSON-safe bundle-owned call metadata bound to this execution context."""
     value = BUNDLE_CALL_CONTEXT_CV.get({})
     return dict(value) if isinstance(value, dict) else {}
+
+
+def touch_current_task_activity(kind: str) -> bool:
+    """Mark processor task activity without emitting a chat event."""
+    callback = TASK_ACTIVITY_TOUCH_CV.get()
+    if callback is None:
+        return False
+    callback(str(kind or "sdk.activity"))
+    return True
+
+
+@contextmanager
+def bind_current_task_activity_touch(callback: Callable[[str], None] | None):
+    token = TASK_ACTIVITY_TOUCH_CV.set(callback)
+    try:
+        yield callback
+    finally:
+        TASK_ACTIVITY_TOUCH_CV.reset(token)
 
 
 @contextmanager

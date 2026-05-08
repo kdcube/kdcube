@@ -673,6 +673,11 @@ class Settings(PLATFORM_CONFIG):
     AI_REACT_AGENT_VERSION: str = Field(default="v2")
     AI_REACT_AGENT_MULTI_ACTION: str = Field(default="off")
     AI_REACT_CONTEXT_MAX_TOKENS: int | None = Field(default=80000)
+    AI_REACT_READ_VISIBLE_MAX_TEXT_SYMBOLS: int = Field(default=48000)
+    AI_REACT_READ_VISIBLE_MAX_TOKENS: int = Field(default=12000)
+    AI_REACT_READ_VISIBLE_MAX_BYTES: int = Field(default=10 * 1024 * 1024)
+    AI_REACT_READ_VISIBLE_CONTEXT_FRACTION: float = Field(default=0.15)
+    AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS: int = Field(default=8000)
     AI_REACT_CACHE_KEEP_RECENT_TURNS: int = Field(default=6)
     AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS: int = Field(default=1)
     AI_REACT_WORKING_SUMMARY_ENABLED: bool = Field(default=True)
@@ -1109,6 +1114,31 @@ class Settings(PLATFORM_CONFIG):
             "AI_REACT_CONTEXT_MAX_TOKENS",
             "ai.react.context_max_tokens",
             self.AI_REACT_CONTEXT_MAX_TOKENS,
+        )
+        self.AI_REACT_READ_VISIBLE_MAX_TEXT_SYMBOLS = self._resolve_int(
+            "AI_REACT_READ_VISIBLE_MAX_TEXT_SYMBOLS",
+            "ai.react.read_visible_max_text_symbols",
+            self.AI_REACT_READ_VISIBLE_MAX_TEXT_SYMBOLS,
+        )
+        self.AI_REACT_READ_VISIBLE_MAX_TOKENS = self._resolve_int(
+            "AI_REACT_READ_VISIBLE_MAX_TOKENS",
+            "ai.react.read_visible_max_tokens",
+            self.AI_REACT_READ_VISIBLE_MAX_TOKENS,
+        )
+        self.AI_REACT_READ_VISIBLE_MAX_BYTES = self._resolve_int(
+            "AI_REACT_READ_VISIBLE_MAX_BYTES",
+            "ai.react.read_visible_max_bytes",
+            self.AI_REACT_READ_VISIBLE_MAX_BYTES,
+        )
+        self.AI_REACT_READ_VISIBLE_CONTEXT_FRACTION = self._resolve_float(
+            "AI_REACT_READ_VISIBLE_CONTEXT_FRACTION",
+            "ai.react.read_visible_context_fraction",
+            self.AI_REACT_READ_VISIBLE_CONTEXT_FRACTION,
+        )
+        self.AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS = self._resolve_int(
+            "AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS",
+            "ai.react.exec_text_preview_max_symbols",
+            self.AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS,
         )
         self.AI_REACT_CACHE_KEEP_RECENT_TURNS = self._resolve_int(
             "AI_REACT_CACHE_KEEP_RECENT_TURNS",

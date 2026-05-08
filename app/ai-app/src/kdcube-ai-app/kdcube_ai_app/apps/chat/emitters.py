@@ -35,6 +35,14 @@ _EVENT_MAP = {
 def _now_ms() -> int:
     return int(time.time() * 1000)
 
+
+def _touch_current_task_activity(kind: str) -> None:
+    try:
+        from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import touch_current_task_activity
+        touch_current_task_activity(kind)
+    except Exception:
+        logger.debug("Failed to touch current task activity kind=%s", kind, exc_info=True)
+
 @dataclass
 class _DeltaChunk:
     ts: int
@@ -537,6 +545,12 @@ class ChatCommunicator:
             tenant=self.tenant,
             project=self.project,
         )
+        typ = ""
+        try:
+            typ = str((data or {}).get("type") or event or "").strip().lower()
+        except Exception:
+            typ = str(event or "emit")
+        _touch_current_task_activity(f"comm.emit:{typ or 'event'}")
         await self._notify_activity_listeners(event=event, data=data, broadcast=broadcast)
 
     # ----- internal buffer helpers -----

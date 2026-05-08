@@ -58,22 +58,55 @@ Do not pass logical `fi:` paths to `react.write` or `react.patch`.
 Reads existing logical artifacts back into the visible timeline.
 
 - input: `paths: list[str]`
+- optional input: `max_text_symbols` — maximum visible text characters per text
+  path. This requests a smaller explicit preview than the configured default.
+- optional input: `stats_only: true` — return size/mime/token metadata in the
+  status block without emitting content blocks.
+- byte cap: `read_visible_max_bytes` is a raw-payload guard for every path.
+  For PDF/image multimodal reads there is no partial read: the payload is
+  attached only when it is under the byte cap; otherwise `react.read` returns a
+  recovery marker.
 - accepted paths: `ar:`, `tc:`, `fi:`, `so:`, `su:`, `ws:`, `ks:`, `sk:`
 - emits: one JSON status/result block plus one visible content block per reopened path
 - deduplication: visible blocks are not duplicated
 - hidden data: hidden/pruned blocks can be reopened by exact path
 - generated views: `ar:<turn_id>.react.turn.index` is reconstructed on demand from the persisted turn log
-- large text guard: oversized text payloads are not copied back into the visible
-  timeline; the status row uses `status=too_large_for_visible_context` and a
-  visible marker names the exact path
+- large text guard: oversized text payloads are copied back only as bounded
+  visible previews. The status row uses
+  `status=truncated_for_visible_context`, the preview names the exact path, and
+  the full payload remains recoverable by logical path. If the caller supplies
+  `max_text_symbols`, the preview is further clamped to that text-only limit.
+- cap distribution: caps are applied independently per requested path, not
+  divided across the `paths` list. For broad batches, use `stats_only: true` or
+  a smaller `max_text_symbols` before deciding what to materialize.
+- caps are configured under `ai.react` in `assembly.yaml`:
+  `read_visible_max_text_symbols`, `read_visible_max_tokens`,
+  `read_visible_max_bytes`, `read_visible_context_fraction`, and
+  `exec_text_preview_max_symbols`.
+- units are intentionally separate:
+  - text symbols = text characters, only for text previews
+  - tokens = model-visible budget guard
+  - bytes = raw payload admission guard for all readable payloads
 
 Use it when the path already exists and React needs to inspect the content again.
 
-For large `tc:`/`fi:` payloads, use `react.read` only to confirm the path. Then
-process the exact content inside `exec_tools.execute_code_python` by calling
-`ctx_tools.fetch_ctx(path=...)` from the exec code. Repeating `react.read` on the
-same large payload returns the marker again and should not be used as a bulk-data
-processing loop.
+For large `tc:`/`fi:` payloads, use `react.read` to inspect a bounded preview and
+confirm the path. Then process the exact content inside
+`exec_tools.execute_code_python` by calling `ctx_tools.fetch_ctx(path=...)` from
+the exec code. Repeating `react.read` on the same large payload returns another
+bounded preview and should not be used as a bulk-data processing loop.
+
+Example bounded preview:
+
+```json
+{"paths":["fi:turn_abc.outputs/report.md"],"max_text_symbols":4000}
+```
+
+Example metadata-only read:
+
+```json
+{"paths":["tc:turn_abc.tc_big.result","fi:turn_abc.outputs/report.pdf"],"stats_only":true}
+```
 
 ### `react.pull`
 
@@ -136,7 +169,7 @@ Inputs:
 - `query`: natural-language query. Required for semantic search. Optional for ordinal/temporal/timeline lookup.
 - `targets`: list of snippet families to return. Supported values: `summary`, `user`, `assistant`, `attachment`.
 - `mode`: `semantic`, `ordinal`, `temporal`, or `timeline`. Default: `semantic`.
-- `scope`: `conversation` or `user`. Default: `conversation`.
+- `scope`: `conversation` or `user`. Default: `conversation`. `user` searches the current user across conversations while preserving the same tenant/project and storage boundary.
 - `ordinal`: 1-based turn number in the selected scope/window. Used by `mode="ordinal"`.
 - `from` / `to`: ISO timestamps. `to` is exclusive.
 - `top_k`: maximum turn hits.

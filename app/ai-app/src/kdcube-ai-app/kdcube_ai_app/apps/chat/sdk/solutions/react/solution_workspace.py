@@ -56,19 +56,38 @@ def _is_base64_allowed_mime(mime: str) -> bool:
     return False
 
 
-def _read_local_file(abs_path: pathlib.Path, mime: str) -> tuple[Optional[str], Optional[str]]:
+def _read_local_file(
+    abs_path: pathlib.Path,
+    mime: str,
+    *,
+    max_bytes: Optional[int] = None,
+    max_text_symbols: Optional[int] = None,
+) -> tuple[Optional[str], Optional[str], Optional[str], Optional[int], bool]:
     try:
         if not abs_path.exists() or not abs_path.is_file():
-            return None, None
+            return None, None, None, None, False
+        size_bytes = abs_path.stat().st_size
         if _is_text_mime(mime or ""):
-            return abs_path.read_text(encoding="utf-8", errors="replace"), None
+            read_limit: Optional[int] = None
+            if max_bytes and max_bytes > 0:
+                read_limit = int(max_bytes)
+            if max_text_symbols and max_text_symbols > 0:
+                symbol_byte_limit = int(max_text_symbols) * 4 + 4096
+                read_limit = min(read_limit, symbol_byte_limit) if read_limit else symbol_byte_limit
+            if read_limit and read_limit > 0 and size_bytes > read_limit:
+                with abs_path.open("rb") as fh:
+                    data = fh.read(read_limit + 1)
+                return data.decode("utf-8", errors="replace"), None, None, size_bytes, True
+            return abs_path.read_text(encoding="utf-8", errors="replace"), None, None, size_bytes, False
+        if max_bytes and max_bytes > 0 and size_bytes > max_bytes:
+            return None, None, "file_too_large_for_visible_context", size_bytes, False
         if _is_base64_allowed_mime(mime or ""):
             data = abs_path.read_bytes()
             import base64 as _b64
-            return None, _b64.b64encode(data).decode("utf-8")
+            return None, _b64.b64encode(data).decode("utf-8"), None, size_bytes, False
     except Exception:
-        return None, None
-    return None, None
+        return None, None, None, None, False
+    return None, None, None, None, False
 
 
 async def read_artifact_for_react(
@@ -76,6 +95,9 @@ async def read_artifact_for_react(
         ctx_browser: Any,
         path: str,
         outdir: pathlib.Path,
+        max_bytes: Optional[int] = None,
+        max_text_symbols: Optional[int] = None,
+        stats_only: bool = False,
 ) -> Dict[str, Any]:
     """
     Resolve a fi: artifact path to a local file (rehosting if needed) and read its
@@ -152,7 +174,35 @@ async def read_artifact_for_react(
                 "missing": True,
                 "error": "file_missing",
             }
-        text, b64 = _read_local_file(abs_path, mime)
+        if stats_only:
+            try:
+                size_bytes = abs_path.stat().st_size
+            except Exception:
+                size_bytes = None
+            return {
+                "artifact": artifact,
+                "mime": mime,
+                "physical_path": physical_path,
+                "size_bytes": size_bytes,
+                "stats_only": True,
+                "missing": False,
+            }
+        text, b64, read_error, size_bytes, source_truncated = _read_local_file(
+            abs_path,
+            mime,
+            max_bytes=max_bytes,
+            max_text_symbols=max_text_symbols,
+        )
+        if read_error:
+            return {
+                "artifact": artifact,
+                "mime": mime,
+                "physical_path": physical_path,
+                "missing": False,
+                "error": read_error,
+                "size_bytes": size_bytes,
+                "max_bytes": max_bytes,
+            }
         if text is not None or b64 is not None:
             return {
                 "artifact": artifact,
@@ -160,6 +210,8 @@ async def read_artifact_for_react(
                 "text": text,
                 "base64": b64,
                 "physical_path": physical_path,
+                "size_bytes": size_bytes,
+                "source_truncated": source_truncated,
                 "missing": False,
             }
 

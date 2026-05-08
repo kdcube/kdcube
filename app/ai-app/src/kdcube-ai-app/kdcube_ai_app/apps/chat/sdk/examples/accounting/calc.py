@@ -81,7 +81,10 @@ def build_agent_usage(root_dir: str) -> Dict[str, List[Dict[str, Any]]]:
 
         agent = (
                 metadata.get("agent")
+                or metadata.get("agent_name")
+                or metadata.get("role")
                 or context.get("agent")
+                or context.get("role")
                 or ev.get("agent")
                 or ev.get("agent_name")
                 or "unknown"

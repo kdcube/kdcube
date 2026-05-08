@@ -203,6 +203,7 @@ async def test_memsearch_summary_target_includes_working_summary_blocks(tmp_path
     out = await handle_react_memsearch(ctx_browser=ctx, state=state, tool_call_id="ms2")
 
     assert captured_search["targets"] == [{"where": "assistant", "query": "Anthropic invoices zip"}]
+    assert captured_search["scope"] == "conversation"
     hits = out["last_tool_result"]
     assert len(hits) == 1
     snippets = hits[0]["snippets"]
@@ -357,6 +358,63 @@ async def test_memsearch_semantic_with_temporal_bounds_passes_timestamp_filters(
         {"op": "<", "value": "2026-04-01T00:00:00Z"},
     ]
     assert out["last_tool_result"][0]["turn_id"] == "turn_prev"
+
+
+@pytest.mark.asyncio
+async def test_memsearch_semantic_user_scope_is_forwarded(tmp_path):
+    runtime = RuntimeCtx(
+        turn_id="turn_current",
+        outdir=str(tmp_path / "out"),
+        workdir=str(tmp_path / "work"),
+        conversation_id="conv_1",
+        user_id="user_1",
+    )
+    ctx = FakeBrowser(runtime)
+    captured_search = {}
+
+    async def _search(**kwargs):
+        captured_search.update(kwargs)
+        return "turn_cross", [{
+            "turn_id": "turn_cross",
+            "score": 0.8,
+            "sim": 0.75,
+            "rec": 0.9,
+            "matched_via_role": "assistant",
+            "source_query": "invoice",
+            "ts": "2026-03-12T10:00:00Z",
+        }]
+
+    ctx.search = _search
+    ctx._turn_logs["turn_cross"] = {
+        "blocks": [
+            {
+                "type": "conv.working.summary",
+                "turn_id": "turn_cross",
+                "ts": "2026-03-12T10:00:00Z",
+                "path": "ws:turn_cross.conv.working.summary",
+                "text": "Goal: retrieve March invoices.",
+                "meta": {},
+            }
+        ],
+        "sources_pool": [],
+    }
+
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "params": {
+                    "query": "invoice",
+                    "targets": ["summary"],
+                    "scope": "user",
+                }
+            }
+        }
+    }
+
+    out = await handle_react_memsearch(ctx_browser=ctx, state=state, tool_call_id="ms_user")
+
+    assert captured_search["scope"] == "user"
+    assert out["last_tool_result"][0]["turn_id"] == "turn_cross"
 
 
 @pytest.mark.asyncio

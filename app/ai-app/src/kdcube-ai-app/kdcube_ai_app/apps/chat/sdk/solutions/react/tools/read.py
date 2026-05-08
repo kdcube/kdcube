@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-import os
 import pathlib
 
 import json
@@ -16,9 +15,6 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.solution_workspace import (
     read_artifact_for_react,
-    _safe_relpath,
-    _guess_mime_from_path,
-    _read_local_file,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.timeline import (
     build_turn_index_text,
@@ -31,7 +27,11 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.common import (
     tc_result_path,
 )
 
-DEFAULT_VISIBLE_READ_MAX_TOKENS = 24_000
+DEFAULT_VISIBLE_READ_MAX_TEXT_SYMBOLS = 48_000
+DEFAULT_VISIBLE_READ_MAX_TOKENS = 12_000
+DEFAULT_VISIBLE_READ_MAX_BYTES = 10 * 1024 * 1024
+DEFAULT_VISIBLE_READ_CONTEXT_FRACTION = 0.15
+DEFAULT_SYMBOLS_PER_TOKEN_BUDGET = 4
 MIN_VISIBLE_READ_MAX_TOKENS = 4_000
 READ_DEDUP_PREFIXES = ("fi:", "so:", "sk:", "tc:", "ar:", "ks:", "su:", "ws:")
 
@@ -52,7 +52,8 @@ TOOL_SPEC = {
         "Inspect those with code and exec tool against their physical OUTPUT_DIR path. "
         "If your own earlier tools produced the binary file, inspect the generating tool call/result (tc:) and any related text/code source artifacts (fi:) "
         "from that generating step; do not expect react.read on the binary fi: file itself to reveal its content. "
-        "Oversized text results are not rematerialized into visible context; react.read returns a recovery marker and the exact path. "
+        "Oversized text results are rematerialized as bounded visible previews using configured text/token/byte caps. "
+        "Caps apply independently per requested path. "
         "For bulk processing of such payloads, use exec_tools.execute_code_python and call ctx_tools.fetch_ctx(path=...) inside the exec code."
     ),
     "args": {
@@ -65,42 +66,129 @@ TOOL_SPEC = {
             "knowledge space via ks:<relpath> (read-only reference files). "
             "fi: normally yields full text for text files and multimodal/base64 payloads for PDF/images only."
         ),
+        "max_text_symbols": (
+            "optional int; for text payloads, materialize at most this many visible characters/symbols per path. "
+            "Use when a large file/result needs a smaller explicit in-context preview than the configured default. "
+            "The runtime clamps it to the configured ai.react.read_visible_max_text_symbols and token budget."
+        ),
+        "stats_only": (
+            "optional bool, default false. When true, resolve each path and return size/mime/token metadata in "
+            "the status block without adding text/base64 content blocks to the visible timeline."
+        ),
     },
     "returns": (
-        "ok for readable text/PDF/image paths; for unsupported binary files react.read may only surface metadata/path presence. "
-        "Oversized readable payloads return status=too_large_for_visible_context instead of full content. "
+        "ok for readable text/PDF/image paths; max_text_symbols applies only to text. "
+        "PDF/image payloads are not partially read; they are attached as multimodal content only when under the configured byte cap. "
+        "For unsupported binary files react.read may only surface metadata/path presence. "
+        "Oversized text payloads return status=truncated_for_visible_context with a bounded preview. "
+        "Oversized PDF/image payloads return status=too_large_for_visible_context_bytes instead of partial content. "
         "Deeper inspection should be done with code and exec tool, or via related tc: and text/code fi: artifacts from the generating step."
     ),
 }
 
 
-def _visible_read_token_cap(runtime_ctx: Any) -> int:
-    raw = os.getenv("KDCUBE_REACT_READ_VISIBLE_MAX_TOKENS", "").strip()
-    if raw:
-        try:
-            return max(MIN_VISIBLE_READ_MAX_TOKENS, int(raw))
-        except Exception:
-            pass
+def _positive_int(value: Any) -> Optional[int]:
+    try:
+        parsed = int(value)
+    except Exception:
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _bool_param(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _count_tokens(text: str) -> int:
+    try:
+        from kdcube_ai_app.apps.chat.sdk.util import token_count
+        return int(token_count(text))
+    except Exception:
+        return 0
+
+
+def _visible_read_limits(runtime_ctx: Any, *, params: Dict[str, Any]) -> Dict[str, Optional[int] | float]:
     runtime_max = 0
     try:
         runtime_max = int(getattr(runtime_ctx, "max_tokens", 0) or 0)
     except Exception:
         runtime_max = 0
+
+    configured_text_symbols = _positive_int(getattr(runtime_ctx, "read_visible_max_text_symbols", None))
+    configured_tokens = _positive_int(getattr(runtime_ctx, "read_visible_max_tokens", None))
+    configured_bytes = _positive_int(getattr(runtime_ctx, "read_visible_max_bytes", None))
+    configured_fraction = getattr(runtime_ctx, "read_visible_context_fraction", None)
+    try:
+        fraction = float(configured_fraction)
+    except Exception:
+        fraction = DEFAULT_VISIBLE_READ_CONTEXT_FRACTION
+    if fraction <= 0:
+        fraction = DEFAULT_VISIBLE_READ_CONTEXT_FRACTION
+
+    max_tokens = configured_tokens or DEFAULT_VISIBLE_READ_MAX_TOKENS
     if runtime_max > 0:
-        return max(MIN_VISIBLE_READ_MAX_TOKENS, min(DEFAULT_VISIBLE_READ_MAX_TOKENS, int(runtime_max * 0.30)))
-    return DEFAULT_VISIBLE_READ_MAX_TOKENS
+        max_tokens = min(max_tokens, int(runtime_max * fraction))
+    max_tokens = max(MIN_VISIBLE_READ_MAX_TOKENS, max_tokens)
+
+    max_text_symbols = configured_text_symbols or DEFAULT_VISIBLE_READ_MAX_TEXT_SYMBOLS
+    if runtime_max > 0:
+        max_text_symbols = min(max_text_symbols, max_tokens * DEFAULT_SYMBOLS_PER_TOKEN_BUDGET)
+    max_text_symbols = max(1, int(max_text_symbols))
+
+    requested = _positive_int(params.get("max_text_symbols"))
+    if requested is not None:
+        requested = min(requested, max_text_symbols)
+
+    return {
+        "max_text_symbols": max_text_symbols,
+        "max_tokens": max_tokens,
+        "max_bytes": configured_bytes or DEFAULT_VISIBLE_READ_MAX_BYTES,
+        "requested_text_symbols": requested,
+        "context_fraction": fraction,
+    }
 
 
-def _large_read_marker_text(*, path: str, tokens: int, cap: int) -> str:
+def _large_byte_marker_text(*, path: str, size_bytes: int, byte_cap: int) -> str:
     return "\n".join([
         "[LARGE READ NOT MATERIALIZED]",
         f"path: {path}",
-        f"tokens: {tokens}",
-        f"visible_read_limit_tokens: {cap}",
+        f"bytes: {size_bytes}",
+        f"visible_read_limit_bytes: {byte_cap}",
+        "exact_content: recoverable by logical path",
+        "note: PDF/image and other binary payloads are not partially read into visible context",
+        "bulk_processing: use exec_tools.execute_code_python with a physical file path, or ctx_tools.fetch_ctx(path=...) for supported logical paths",
+    ])
+
+
+def _truncated_read_text(
+    *,
+    path: str,
+    text: str,
+    source_tokens: int,
+    source_text_symbols: int,
+    source_bytes: int,
+    limit_text_symbols: int,
+    byte_cap: int,
+) -> str:
+    clipped = text[:max(0, limit_text_symbols)].rstrip()
+    omitted_text_symbols = max(0, source_text_symbols - len(clipped))
+    return "\n".join([
+        clipped,
+        "",
+        "[READ PREVIEW TRUNCATED]",
+        f"path: {path}",
+        f"visible_text_symbols: {len(clipped)}",
+        f"omitted_text_symbols: {omitted_text_symbols}",
+        f"source_tokens_estimate: {source_tokens}",
+        f"bytes: {source_bytes}",
+        f"visible_read_limit_bytes: {byte_cap}",
         "exact_content: recoverable by logical path",
         "bulk_processing: use exec_tools.execute_code_python and call ctx_tools.fetch_ctx(path=...) inside the exec code",
-        "do_not_repeat: do not call react.read repeatedly for this path; it will return this marker until a smaller derived artifact is created",
-    ])
+    ]).strip()
 
 
 async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_call_id: str) -> Dict[str, Any]:
@@ -113,6 +201,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
         raw_paths = params
     raw_paths = raw_paths if isinstance(raw_paths, list) else []
     paths = [str(p).strip() for p in raw_paths if str(p).strip()]
+    stats_only = _bool_param(params.get("stats_only"))
 
     turn_id = (ctx_browser.runtime_ctx.turn_id or "")
     tool_call_block(
@@ -250,21 +339,20 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
         pending_blocks.append(block)
         return True
 
-    def _emit_large_text_marker(*, ctx_path: str, tokens: int, meta_extra: Dict[str, Any]) -> bool:
+    def _emit_large_byte_marker(*, ctx_path: str, size_bytes: int, meta_extra: Dict[str, Any]) -> bool:
         large_info = {
             "path": ctx_path,
-            "tokens": tokens,
-            "visible_read_limit_tokens": visible_read_token_cap,
-            "status": "too_large_for_visible_context",
-            "recover_with": "exec_tools.execute_code_python + ctx_tools.fetch_ctx(path)",
+            "bytes": size_bytes,
+            "visible_read_limit_bytes": visible_read_byte_cap,
+            "status": "too_large_for_visible_context_bytes",
+            "recover_with": "exec_tools.execute_code_python or react.pull for exact file handling",
         }
         large_paths.append(large_info)
         marker_meta = dict(meta_extra or {})
         marker_meta.update({
             "large_read_guard": True,
-            "source_tokens": tokens,
-            "visible_read_limit_tokens": visible_read_token_cap,
-            "recover_with": "ctx_tools.fetch_ctx",
+            "source_bytes": size_bytes,
+            "visible_read_limit_bytes": visible_read_byte_cap,
         })
         return _maybe_add_block({
             "turn": turn_id,
@@ -272,11 +360,15 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             "call_id": tool_call_id,
             "mime": "text/markdown",
             "path": ctx_path,
-            "text": _large_read_marker_text(path=ctx_path, tokens=tokens, cap=visible_read_token_cap),
+            "text": _large_byte_marker_text(
+                path=ctx_path,
+                size_bytes=size_bytes,
+                byte_cap=visible_read_byte_cap,
+            ),
             "meta": marker_meta,
         })
 
-    if skill_paths:
+    if skill_paths and not stats_only:
         try:
             from kdcube_ai_app.apps.chat.sdk.skills.skills_registry import (
                 import_skillset,
@@ -394,15 +486,179 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
         paths_seen = {item.get("context_path") for item in (items or []) if item.get("context_path")}
         if fi_paths:
             paths_seen.update(fi_paths)
-        if paths_seen:
+        if paths_seen and not stats_only:
             ctx_browser.unhide_paths(paths=list(paths_seen))
     except Exception:
         pass
     total_tokens = 0
-    visible_read_token_cap = _visible_read_token_cap(getattr(ctx_browser, "runtime_ctx", None))
+    visible_limits = _visible_read_limits(getattr(ctx_browser, "runtime_ctx", None), params=params)
+    visible_read_token_cap = int(visible_limits.get("max_tokens") or DEFAULT_VISIBLE_READ_MAX_TOKENS)
+    visible_read_text_symbol_cap = int(visible_limits.get("max_text_symbols") or DEFAULT_VISIBLE_READ_MAX_TEXT_SYMBOLS)
+    visible_read_byte_cap = int(visible_limits.get("max_bytes") or DEFAULT_VISIBLE_READ_MAX_BYTES)
+    requested_read_text_symbols = visible_limits.get("requested_text_symbols")
+    requested_read_text_symbols = int(requested_read_text_symbols) if requested_read_text_symbols else None
     per_path: List[Dict[str, Any]] = []
     large_paths: List[Dict[str, Any]] = []
+    truncated_paths: List[Dict[str, Any]] = []
     items_by_path = {item.get("context_path"): item for item in (items or []) if item.get("context_path")}
+
+    def _stats_entry_for_text(*, path: str, text: str, mime: str = "", bytes_override: Optional[int] = None) -> Dict[str, Any]:
+        entry: Dict[str, Any] = {
+            "path": path,
+            "status": "stats_only",
+            "kind": "text",
+            "tokens": _count_tokens(text),
+            "text_symbols": len(text),
+            "bytes": int(bytes_override if bytes_override is not None else len(text.encode("utf-8", errors="ignore"))),
+        }
+        if mime:
+            entry["mime"] = mime
+        return entry
+
+    def _stats_entry_for_binary(*, path: str, mime: str = "", bytes_value: Optional[int] = None) -> Dict[str, Any]:
+        entry: Dict[str, Any] = {
+            "path": path,
+            "status": "stats_only",
+            "kind": "binary",
+        }
+        if mime:
+            entry["mime"] = mime
+        if bytes_value is not None:
+            entry["bytes"] = int(bytes_value)
+        return entry
+
+    if stats_only and skill_paths:
+        for skill_path in skill_paths:
+            per_path.append({
+                "path": skill_path,
+                "status": "stats_only",
+                "kind": "skill",
+                "content_materialized": False,
+            })
+
+    def _truncated_text_status_entry(path: str, emitted: Dict[str, Any]) -> Dict[str, Any]:
+        entry: Dict[str, Any] = {
+            "path": path,
+            "tokens": int(emitted.get("tokens") or 0),
+            "status": "truncated_for_visible_context",
+            "visible_read_limit_tokens": visible_read_token_cap,
+            "visible_read_limit_text_symbols": visible_read_text_symbol_cap,
+            "visible_read_limit_bytes": visible_read_byte_cap,
+        }
+        if emitted.get("text_symbols"):
+            entry["text_symbols"] = int(emitted.get("text_symbols") or 0)
+        if emitted.get("bytes"):
+            entry["bytes"] = int(emitted.get("bytes") or 0)
+        return entry
+
+    def _materialize_text_block(
+        *,
+        ctx_path: str,
+        text: str,
+        mime: str,
+        meta_extra: Dict[str, Any],
+        force_truncated: bool = False,
+        source_bytes_override: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        source_tokens = _count_tokens(text)
+        source_text_symbols = len(text)
+        actual_text_bytes = len(text.encode("utf-8", errors="ignore"))
+        source_bytes = int(source_bytes_override or actual_text_bytes)
+        if source_tokens:
+            total = source_tokens
+        else:
+            total = 0
+        limit_text_symbols = visible_read_text_symbol_cap
+        if requested_read_text_symbols is not None:
+            limit_text_symbols = min(requested_read_text_symbols, visible_read_text_symbol_cap)
+        must_truncate = (
+            force_truncated
+            or source_text_symbols > limit_text_symbols
+            or source_tokens > visible_read_token_cap
+            or source_text_symbols > visible_read_text_symbol_cap
+            or source_bytes > visible_read_byte_cap
+        )
+
+        if must_truncate:
+            clipped = text[:limit_text_symbols]
+            clipped_tokens = _count_tokens(clipped)
+            clipped_bytes = len(clipped.encode("utf-8", errors="ignore"))
+            while (clipped_tokens > visible_read_token_cap or clipped_bytes > visible_read_byte_cap) and len(clipped) > 1:
+                next_len = max(1, int(len(clipped) * 0.75))
+                if next_len >= len(clipped):
+                    next_len = len(clipped) - 1
+                clipped = clipped[:next_len]
+                clipped_tokens = _count_tokens(clipped)
+                clipped_bytes = len(clipped.encode("utf-8", errors="ignore"))
+            if clipped_bytes > visible_read_byte_cap and visible_read_byte_cap > 0:
+                clipped = clipped.encode("utf-8", errors="ignore")[:visible_read_byte_cap].decode("utf-8", errors="ignore")
+                clipped_tokens = _count_tokens(clipped)
+                clipped_bytes = len(clipped.encode("utf-8", errors="ignore"))
+            source_text_symbols_for_footer = source_text_symbols
+            if force_truncated and source_text_symbols_for_footer <= len(clipped):
+                source_text_symbols_for_footer = len(clipped) + 1
+            preview_text = _truncated_read_text(
+                path=ctx_path,
+                text=clipped,
+                source_tokens=source_tokens,
+                source_text_symbols=source_text_symbols_for_footer,
+                source_bytes=source_bytes,
+                limit_text_symbols=len(clipped),
+                byte_cap=visible_read_byte_cap,
+            )
+            marker_meta = dict(meta_extra or {})
+            marker_meta.update({
+                "read_preview_truncated": True,
+                "source_tokens": source_tokens,
+                "source_text_symbols": source_text_symbols,
+                "source_bytes": source_bytes,
+                "visible_text_symbols": len(clipped),
+                "visible_read_limit_tokens": visible_read_token_cap,
+                "visible_read_limit_text_symbols": visible_read_text_symbol_cap,
+                "visible_read_limit_bytes": visible_read_byte_cap,
+                "requested_text_symbols": requested_read_text_symbols,
+                "recover_with": "ctx_tools.fetch_ctx",
+            })
+            added = _maybe_add_block({
+                "turn": turn_id,
+                "type": "react.tool.result",
+                "call_id": tool_call_id,
+                "mime": mime or "text/markdown",
+                "path": ctx_path or tc_result_path(turn_id=turn_id, call_id=tool_call_id),
+                "text": preview_text,
+                "meta": marker_meta,
+            })
+            truncated_paths.append({
+                "path": ctx_path,
+                "tokens": source_tokens,
+                "text_symbols": source_text_symbols,
+                "bytes": source_bytes,
+                "visible_text_symbols": len(clipped),
+                "visible_read_limit_tokens": visible_read_token_cap,
+                "visible_read_limit_text_symbols": visible_read_text_symbol_cap,
+                "visible_read_limit_bytes": visible_read_byte_cap,
+                "status": "truncated_for_visible_context",
+                "recover_with": "exec_tools.execute_code_python + ctx_tools.fetch_ctx(path)",
+            })
+            return {
+                "added": added,
+                "tokens": total,
+                "text_symbols": source_text_symbols,
+                "bytes": source_bytes,
+                "status": "truncated_for_visible_context",
+                "truncated": True,
+            }
+
+        added = _maybe_add_block({
+            "turn": turn_id,
+            "type": "react.tool.result",
+            "call_id": tool_call_id,
+            "mime": mime or "text/markdown",
+            "path": ctx_path or tc_result_path(turn_id=turn_id, call_id=tool_call_id),
+            "text": text,
+            "meta": meta_extra,
+        })
+        return {"added": added, "tokens": total}
 
     async def _emit_fi_path(ctx_path: str) -> None:
         nonlocal total_tokens
@@ -419,6 +675,9 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                     ctx_browser=ctx_browser,
                     path=ctx_path,
                     outdir=outdir,
+                    max_bytes=visible_read_byte_cap,
+                    max_text_symbols=requested_read_text_symbols or visible_read_text_symbol_cap,
+                    stats_only=stats_only,
                 )
             except Exception:
                 res = {"missing": True}
@@ -429,9 +688,46 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             missing_artifacts.append(ctx_path)
             per_path.append({"path": ctx_path, "missing": True})
             return
+        if res.get("error") == "file_too_large_for_visible_context":
+            size_bytes = int(res.get("size_bytes") or 0)
+            _emit_large_byte_marker(
+                ctx_path=ctx_path,
+                size_bytes=size_bytes,
+                meta_extra={
+                    "tool_call_id": tool_call_id,
+                    "turn_id": turn_id,
+                    "tool_id": tool_id,
+                },
+            )
+            per_path.append({
+                "path": ctx_path,
+                "bytes": size_bytes,
+                "status": "too_large_for_visible_context_bytes",
+                "visible_read_limit_bytes": visible_read_byte_cap,
+                "recover_with": "exec_tools.execute_code_python or react.pull for exact file handling",
+            })
+            return
 
         artifact = res.get("artifact") or {}
         physical_path = res.get("physical_path") or ""
+        art_mime = (res.get("mime") or "").strip() or "application/octet-stream"
+        if stats_only:
+            size_bytes_raw = res.get("size_bytes")
+            size_bytes = int(size_bytes_raw) if size_bytes_raw is not None else None
+            is_text = art_mime.startswith("text/") or art_mime in {"application/json", "application/xml", "application/yaml"}
+            entry = {
+                "path": ctx_path,
+                "status": "stats_only",
+                "kind": "text" if is_text else "binary",
+                "mime": art_mime,
+                "content_materialized": False,
+            }
+            if size_bytes is not None:
+                entry["bytes"] = size_bytes
+            if artifact.get("visibility"):
+                entry["visibility"] = artifact.get("visibility")
+            per_path.append(entry)
+            return
         # Emit the original metadata block text (digest) when available.
         digest_text = artifact.get("digest") if isinstance(artifact.get("digest"), str) else ""
         if not digest_text:
@@ -466,43 +762,41 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
 
         art_text = res.get("text")
         art_base64 = res.get("base64")
-        art_mime = (res.get("mime") or "").strip() or "application/octet-stream"
         tokens = 0
 
         added_any = False
         if isinstance(art_text, str) and art_text.strip():
-            try:
-                from kdcube_ai_app.apps.chat.sdk.util import token_count
-                tokens = token_count(art_text)
-                total_tokens += tokens
-            except Exception:
-                pass
-            if tokens > visible_read_token_cap:
-                _emit_large_text_marker(
+            emitted = _materialize_text_block(
+                ctx_path=ctx_path,
+                text=art_text,
+                mime=art_mime if art_mime else "text/markdown",
+                meta_extra=meta_extra,
+                force_truncated=bool(res.get("source_truncated")),
+                source_bytes_override=int(res.get("size_bytes") or 0) or None,
+            )
+            tokens = int(emitted.get("tokens") or 0)
+            total_tokens += tokens
+            if emitted.get("added"):
+                added_any = True
+            if emitted.get("truncated"):
+                per_path.append(_truncated_text_status_entry(ctx_path, emitted))
+                return
+        elif isinstance(art_base64, str) and art_base64:
+            estimated_bytes = (len(art_base64) * 3) // 4
+            if estimated_bytes > visible_read_byte_cap:
+                _emit_large_byte_marker(
                     ctx_path=ctx_path,
-                    tokens=tokens,
+                    size_bytes=estimated_bytes,
                     meta_extra=meta_extra,
                 )
                 per_path.append({
                     "path": ctx_path,
-                    "tokens": tokens,
-                    "status": "too_large_for_visible_context",
-                    "visible_read_limit_tokens": visible_read_token_cap,
-                    "recover_with": "exec_tools.execute_code_python + ctx_tools.fetch_ctx(path)",
+                    "bytes": estimated_bytes,
+                    "status": "too_large_for_visible_context_bytes",
+                    "visible_read_limit_bytes": visible_read_byte_cap,
+                    "recover_with": "exec_tools.execute_code_python or react.pull for exact file handling",
                 })
                 return
-            blk = {
-                "turn": turn_id,
-                "type": "react.tool.result",
-                "call_id": tool_call_id,
-                "mime": art_mime if art_mime else "text/markdown",
-                "path": ctx_path or tc_result_path(turn_id=turn_id, call_id=tool_call_id),
-                "text": art_text,
-                "meta": meta_extra,
-            }
-            if _maybe_add_block(blk):
-                added_any = True
-        elif isinstance(art_base64, str) and art_base64:
             blk = {
                 "turn": turn_id,
                 "type": "react.tool.result",
@@ -585,6 +879,15 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             })
             return
 
+        if stats_only:
+            if isinstance(text, str):
+                per_path.append(_stats_entry_for_text(path=ctx_path, text=text, mime=mime or "text/markdown"))
+            elif isinstance(base64, str):
+                per_path.append(_stats_entry_for_binary(path=ctx_path, mime=mime or "application/octet-stream", bytes_value=(len(base64) * 3) // 4))
+            else:
+                per_path.append({"path": ctx_path, "status": "stats_only", "content_materialized": False})
+            return
+
         meta_block = build_artifact_meta_block(
             turn_id=turn_id,
             tool_call_id=tool_call_id,
@@ -600,37 +903,17 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             "physical_path": str(abs_path) if abs_path else "",
         }
         if isinstance(text, str) and text.strip():
-            tokens = 0
-            try:
-                from kdcube_ai_app.apps.chat.sdk.util import token_count
-                tokens = token_count(text)
-                total_tokens += tokens
-            except Exception:
-                tokens = 0
-            if tokens > visible_read_token_cap:
-                _emit_large_text_marker(
-                    ctx_path=ctx_path,
-                    tokens=tokens,
-                    meta_extra=meta_extra,
-                )
-                per_path.append({
-                    "path": ctx_path,
-                    "tokens": tokens,
-                    "status": "too_large_for_visible_context",
-                    "visible_read_limit_tokens": visible_read_token_cap,
-                    "recover_with": "exec_tools.execute_code_python + ctx_tools.fetch_ctx(path)",
-                })
-                return
-            blk = {
-                "turn": turn_id,
-                "type": "react.tool.result",
-                "call_id": tool_call_id,
-                "mime": mime or "text/markdown",
-                "path": ctx_path,
-                "text": text,
-                "meta": meta_extra,
-            }
-            if _maybe_add_block(blk):
+            emitted = _materialize_text_block(
+                ctx_path=ctx_path,
+                text=text,
+                mime=mime or "text/markdown",
+                meta_extra=meta_extra,
+            )
+            tokens = int(emitted.get("tokens") or 0)
+            total_tokens += tokens
+            if emitted.get("truncated"):
+                per_path.append(_truncated_text_status_entry(ctx_path, emitted))
+            elif emitted.get("added"):
                 entry = {"path": ctx_path}
                 if tokens:
                     entry["tokens"] = tokens
@@ -644,22 +927,21 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
 
             return
         if isinstance(base64, str) and base64:
-            blk = {
-                "turn": turn_id,
-                "type": "react.tool.result",
-                "call_id": tool_call_id,
-                "mime": mime or "application/octet-stream",
-                "path": ctx_path,
-                "base64": base64,
-                "meta": meta_extra,
-            }
-            if _maybe_add_block(blk):
-                per_path.append({"path": ctx_path})
-            else:
-                exists_paths.append(ctx_path)
-                per_path.append({"path": ctx_path, "status": "exists_in_visible_context"})
-            return
-        if isinstance(base64, str) and base64:
+            estimated_bytes = (len(base64) * 3) // 4
+            if estimated_bytes > visible_read_byte_cap:
+                _emit_large_byte_marker(
+                    ctx_path=ctx_path,
+                    size_bytes=estimated_bytes,
+                    meta_extra=meta_extra,
+                )
+                per_path.append({
+                    "path": ctx_path,
+                    "bytes": estimated_bytes,
+                    "status": "too_large_for_visible_context_bytes",
+                    "visible_read_limit_bytes": visible_read_byte_cap,
+                    "recover_with": "exec_tools.execute_code_python or react.pull for exact file handling",
+                })
+                return
             blk = {
                 "turn": turn_id,
                 "type": "react.tool.result",
@@ -724,6 +1006,17 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             per_path.append({"path": ctx_path, "missing": True, "status": "turn_log_missing"})
             return
 
+        if stats_only:
+            per_path.append({
+                "path": ctx_path,
+                "status": "stats_only",
+                "kind": "generated_view",
+                "source_turn_id": source_turn_id,
+                "source_blocks": len(blocks),
+                "content_materialized": False,
+            })
+            return
+
         text = build_turn_index_text(
             turn_id=source_turn_id,
             blocks=blocks,
@@ -779,6 +1072,15 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 except Exception:
                     rows = []
                 if rows:
+                    if stats_only:
+                        per_path.append({
+                            "path": raw_path,
+                            "status": "stats_only",
+                            "kind": "sources_pool",
+                            "items": len(rows),
+                            "content_materialized": False,
+                        })
+                        continue
                     file_rows = []
                     other_rows = []
                     for row in rows:
@@ -804,25 +1106,17 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                         try:
                             from kdcube_ai_app.apps.chat.sdk.solutions.react.layout import build_sources_pool_text
                             art_text = build_sources_pool_text(sources_pool=other_rows)
-                            tokens = 0
-                            try:
-                                from kdcube_ai_app.apps.chat.sdk.util import token_count
-                                tokens = token_count(art_text)
-                                total_tokens += tokens
-                            except Exception:
-                                pass
-                            blk = {
-                                "turn": turn_id,
-                                "type": "react.tool.result",
-                                "call_id": tool_call_id,
-                                "mime": "text/markdown",
-                                "path": raw_path or tc_result_path(turn_id=turn_id, call_id=tool_call_id),
-                                "text": art_text,
-                                "meta": {
-                                    "tool_call_id": tool_call_id,
-                                },
-                            }
-                            if _maybe_add_block(blk):
+                            emitted = _materialize_text_block(
+                                ctx_path=raw_path or tc_result_path(turn_id=turn_id, call_id=tool_call_id),
+                                text=art_text,
+                                mime="text/markdown",
+                                meta_extra={"tool_call_id": tool_call_id},
+                            )
+                            tokens = int(emitted.get("tokens") or 0)
+                            total_tokens += tokens
+                            if emitted.get("truncated"):
+                                per_path.append(_truncated_text_status_entry(raw_path, emitted))
+                            elif emitted.get("added"):
                                 per_path_entry = {"path": raw_path}
                                 if tokens:
                                     per_path_entry["tokens"] = tokens
@@ -851,16 +1145,6 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
         ctx_path = item.get("context_path") or path
         if display_path.startswith("so:"):
             ctx_path = display_path
-        meta_block = build_artifact_meta_block(
-            turn_id=turn_id,
-            tool_call_id=tool_call_id,
-            artifact={"tool_id": tool_id, "tool_call_id": tool_call_id, "value": {}},
-            artifact_path=ctx_path,
-            physical_path="",
-        )
-        pending_blocks.append(meta_block)
-
-        tokens = 0
         art_text = art.get("text") if isinstance(art, dict) else None
         art_base64 = art.get("base64") if isinstance(art, dict) else None
         art_fmt = (art.get("format") or "text").lower() if isinstance(art, dict) else "text"
@@ -874,50 +1158,66 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                     art_fmt = "text"
             except Exception:
                 pass
+        if stats_only:
+            if isinstance(art_text, str) and art_text.strip():
+                if art_fmt in {"json"}:
+                    mime = "application/json"
+                elif art_fmt in {"html"}:
+                    mime = "text/html"
+                else:
+                    mime = art_mime or "text/markdown"
+                per_path.append(_stats_entry_for_text(path=ctx_path, text=art_text, mime=mime))
+            elif isinstance(art_base64, str) and art_base64:
+                per_path.append(_stats_entry_for_binary(path=ctx_path, mime=art_mime or "application/octet-stream", bytes_value=(len(art_base64) * 3) // 4))
+            else:
+                per_path.append({"path": ctx_path, "status": "stats_only", "content_materialized": False})
+            continue
+        meta_block = build_artifact_meta_block(
+            turn_id=turn_id,
+            tool_call_id=tool_call_id,
+            artifact={"tool_id": tool_id, "tool_call_id": tool_call_id, "value": {}},
+            artifact_path=ctx_path,
+            physical_path="",
+        )
+        pending_blocks.append(meta_block)
+
+        tokens = 0
         if isinstance(art_text, str) and art_text.strip():
-            try:
-                from kdcube_ai_app.apps.chat.sdk.util import token_count
-                tokens = token_count(art_text)
-                total_tokens += tokens
-            except Exception:
-                pass
-            if tokens > visible_read_token_cap:
-                _emit_large_text_marker(
-                    ctx_path=ctx_path,
-                    tokens=tokens,
-                    meta_extra={
-                        "tool_call_id": tool_call_id,
-                        "tool_id": tool_id,
-                    },
-                )
-                per_path.append({
-                    "path": ctx_path,
-                    "tokens": tokens,
-                    "status": "too_large_for_visible_context",
-                    "visible_read_limit_tokens": visible_read_token_cap,
-                    "recover_with": "exec_tools.execute_code_python + ctx_tools.fetch_ctx(path)",
-                })
-                continue
             if art_fmt in {"json"}:
                 mime = "application/json"
             elif art_fmt in {"html"}:
                 mime = "text/html"
             else:
                 mime = "text/markdown"
-            blk = {
-                "turn": turn_id,
-                "type": "react.tool.result",
-                "call_id": tool_call_id,
-                "mime": mime,
-                "path": ctx_path or tc_result_path(turn_id=turn_id, call_id=tool_call_id),
-                "text": art_text,
-                "meta": {
-                    "tool_call_id": tool_call_id,
-                },
-            }
-            if not _maybe_add_block(blk):
+            emitted = _materialize_text_block(
+                ctx_path=ctx_path or tc_result_path(turn_id=turn_id, call_id=tool_call_id),
+                text=art_text,
+                mime=mime,
+                meta_extra={"tool_call_id": tool_call_id, "tool_id": tool_id},
+            )
+            tokens = int(emitted.get("tokens") or 0)
+            total_tokens += tokens
+            if emitted.get("truncated"):
+                per_path.append(_truncated_text_status_entry(ctx_path, emitted))
+                continue
+            if not emitted.get("added"):
                 exists_paths.append(ctx_path)
         elif isinstance(art_base64, str) and art_base64:
+            estimated_bytes = (len(art_base64) * 3) // 4
+            if estimated_bytes > visible_read_byte_cap:
+                _emit_large_byte_marker(
+                    ctx_path=ctx_path,
+                    size_bytes=estimated_bytes,
+                    meta_extra={"tool_call_id": tool_call_id, "tool_id": tool_id},
+                )
+                per_path.append({
+                    "path": ctx_path,
+                    "bytes": estimated_bytes,
+                    "status": "too_large_for_visible_context_bytes",
+                    "visible_read_limit_bytes": visible_read_byte_cap,
+                    "recover_with": "exec_tools.execute_code_python or react.pull for exact file handling",
+                })
+                continue
             blk = {
                 "turn": turn_id,
                 "type": "react.tool.result",
@@ -937,7 +1237,16 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
         per_path.append(per_path_entry)
 
     if artifact_paths or skill_paths or ks_paths or turn_index_paths:
-        summary = {"paths": per_path, "total_tokens": total_tokens}
+        summary = {
+            "paths": per_path,
+            "total_tokens": total_tokens,
+            "visible_read_limit_tokens": visible_read_token_cap,
+            "visible_read_limit_text_symbols": visible_read_text_symbol_cap,
+            "visible_read_limit_bytes": visible_read_byte_cap,
+            "stats_only": stats_only,
+        }
+        if requested_read_text_symbols is not None:
+            summary["requested_text_symbols"] = requested_read_text_symbols
         if missing_artifacts:
             summary["missing"] = missing_artifacts
         if missing_skills:
@@ -948,6 +1257,8 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             summary["visible_context_refs"] = visible_context_refs
         if large_paths:
             summary["large_paths"] = large_paths
+        if truncated_paths:
+            summary["truncated_paths"] = truncated_paths
         add_block(ctx_browser, {
             "turn": turn_id,
             "type": "react.tool.result",

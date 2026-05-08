@@ -74,6 +74,11 @@ These env vars are the direct runtime surface for assembly-backed settings.
 | `AI_REACT_AGENT_VERSION` | `ai.react.react_agent_version` | `get_settings()` | all modes |
 | `AI_REACT_AGENT_MULTI_ACTION` | `ai.react.react_agent_multiaction` | `get_settings()` | all modes |
 | `AI_REACT_CONTEXT_MAX_TOKENS` | `ai.react.context_max_tokens` | `get_settings()` | all modes |
+| `AI_REACT_READ_VISIBLE_MAX_TEXT_SYMBOLS` | `ai.react.read_visible_max_text_symbols` | `get_settings()` | all modes |
+| `AI_REACT_READ_VISIBLE_MAX_TOKENS` | `ai.react.read_visible_max_tokens` | `get_settings()` | all modes |
+| `AI_REACT_READ_VISIBLE_MAX_BYTES` | `ai.react.read_visible_max_bytes` | `get_settings()` | all modes |
+| `AI_REACT_READ_VISIBLE_CONTEXT_FRACTION` | `ai.react.read_visible_context_fraction` | `get_settings()` | all modes |
+| `AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS` | `ai.react.exec_text_preview_max_symbols` | `get_settings()` | all modes |
 | `AI_REACT_CACHE_KEEP_RECENT_TURNS` | `ai.react.cache_keep_recent_turns` | `get_settings()` | all modes |
 | `AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS` | `ai.react.cache_keep_recent_intact_turns` | `get_settings()` | all modes |
 | `CLAUDE_CODE_SESSION_STORE_IMPLEMENTATION` | `storage.claude_code_session.type` | `get_settings()` | CLI local compose, direct local service run |
@@ -166,6 +171,11 @@ ai:
     react_agent_version: "v3"          # AI_REACT_AGENT_VERSION
     react_agent_multiaction: "off"     # AI_REACT_AGENT_MULTI_ACTION
     context_max_tokens: 80000          # AI_REACT_CONTEXT_MAX_TOKENS
+    read_visible_max_text_symbols: 48000 # AI_REACT_READ_VISIBLE_MAX_TEXT_SYMBOLS
+    read_visible_max_tokens: 12000      # AI_REACT_READ_VISIBLE_MAX_TOKENS
+    read_visible_max_bytes: 10485760    # AI_REACT_READ_VISIBLE_MAX_BYTES
+    read_visible_context_fraction: 0.15 # AI_REACT_READ_VISIBLE_CONTEXT_FRACTION
+    exec_text_preview_max_symbols: 8000 # AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS
     cache_keep_recent_turns: 6         # AI_REACT_CACHE_KEEP_RECENT_TURNS
     cache_keep_recent_intact_turns: 1  # AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS
     working_summary_enabled: true      # AI_REACT_WORKING_SUMMARY_ENABLED
@@ -177,10 +187,28 @@ ai:
 | `react_agent_version` | `AI_REACT_AGENT_VERSION` | React decision runtime version (`v2` or `v3`) |
 | `react_agent_multiaction` | `AI_REACT_AGENT_MULTI_ACTION` | Experimental multi-action decision mode (`on` or `off`) |
 | `context_max_tokens` | `AI_REACT_CONTEXT_MAX_TOKENS` | Default hard render budget before compaction when a bundle does not set `max_tokens`; default `80000` |
+| `read_visible_max_text_symbols` | `AI_REACT_READ_VISIBLE_MAX_TEXT_SYMBOLS` | Default max visible text characters per `react.read` text path; default `48000` |
+| `read_visible_max_tokens` | `AI_REACT_READ_VISIBLE_MAX_TOKENS` | Default token guard per `react.read` text path; default `12000` |
+| `read_visible_max_bytes` | `AI_REACT_READ_VISIBLE_MAX_BYTES` | Raw byte guard for every `react.read` payload; PDF/image content is attached whole only when under this cap; default `10485760` |
+| `read_visible_context_fraction` | `AI_REACT_READ_VISIBLE_CONTEXT_FRACTION` | Additional clamp so one read does not consume more than this fraction of the React context budget; default `0.15` |
+| `exec_text_preview_max_symbols` | `AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS` | Max text characters embedded as preview for each text file produced by exec tools; default `8000` |
 | `cache_keep_recent_turns` | `AI_REACT_CACHE_KEEP_RECENT_TURNS` | Recent turns kept visible after TTL pruning; default `6` |
 | `cache_keep_recent_intact_turns` | `AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS` | Newest turns kept untrimmed during TTL pruning; default `1` |
 | `working_summary_enabled` | `AI_REACT_WORKING_SUMMARY_ENABLED` | Capture React `channel:summary` on complete/exit, emit it as `conv.working.summary`, and embed it for memory search; default `true` |
 | `pruned_turn_summary_mode` | `AI_REACT_PRUNED_TURN_SUMMARY_MODE` | Prefer working-summary cards when rendering pruned historical turns; multiple same-turn summaries are preserved; set to `working_summary` by default |
+
+Visible read limits use separate units:
+
+- `read_visible_max_text_symbols` and per-call `max_text_symbols` apply only to
+  text payloads. Oversized text returns a bounded preview by default; per-call
+  `max_text_symbols` requests a smaller explicit preview. Caps apply per
+  requested path.
+- `read_visible_max_tokens` guards the model-visible text budget.
+- `read_visible_max_bytes` guards raw bytes for all payloads. PDF/image reads
+  are not partially sliced: under the byte cap they are attached whole as
+  multimodal content; over the cap React emits a recovery marker.
+- `exec_text_preview_max_symbols` affects exec-produced text artifact previews,
+  not `react.read`.
 
 These settings are part of the cold-cache cost control path. A long persisted
 timeline should render as compact working-summary cards plus recent tail, not

@@ -482,7 +482,7 @@ Use user-friendly language like "I no longer have the earlier details here" or "
 
 Artifacts produced in your react loop are shown in the tool result blocks.
 Sometimes artifact content is large; we only show summary/truncated content in the tool result block and mark it. 
-If you do not see the full content of an artifact in the visible context, you MUST read it in full with react.read before building on it or editing it.
+If you do not see enough of an artifact in the visible context, use react.read. Large text returns a configured bounded visible preview by default; add max_text_symbols only for a smaller explicit preview. For exact bulk processing, use exec code with ctx_tools.fetch_ctx(path).
 The artifact description includes the path you use with react.read and the tool id + tool call id they resulted from.
 Provide telegraphic notes in the root-level `notes` field when you call tools. We show these notes in the user timeline (user visible). 
 
@@ -596,8 +596,12 @@ It is preferable to use react.write for streaming large content and use renderin
 [react.read (CRITICAL)]
 - Use react.read([...]) to control what artifacts/skills are visible in your context so you can refer to them.
   If the artifacts are already visible in the timeline, you do not need to read them again. This is for artifacts which content is not visible. 
+- For large text, `react.read` will not dump the whole payload into context; it returns a configured bounded preview by default. Use `max_text_symbols` only when you need a smaller in-context preview; use exec + `ctx_tools.fetch_ctx(path)` when you need to process all bytes.
+- `react.read` caps apply per path. For metadata-only discovery, use `stats_only:true`; it returns size/mime/token metadata without adding content blocks.
 - Example tool_call (load sources + artifact + skill):
   {{"tool_id":"react.read","params":["so:sources_pool[2,3]","fi:<turn_id>.files/some_art.md","sk:<skill id or num>"]}}
+- Example bounded preview:
+  {{"tool_id":"react.read","params":{{"paths":["fi:<turn_id>.outputs/report.md"],"max_text_symbols":4000}}}}
 
 {REACT_ARTIFACTS_AND_PATHS}
 """

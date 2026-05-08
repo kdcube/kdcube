@@ -37,6 +37,15 @@ React is selected before the runtime instance is built:
 - `bundle_id`: bundle id for the agent run.
 - `timezone`: user timezone.
 - `max_tokens`: max model tokens used for compaction decisions.
+- `read_visible_max_text_symbols`: max visible text characters per `react.read`
+  text path.
+- `read_visible_max_tokens`: max model-visible tokens per `react.read` text
+  path.
+- `read_visible_max_bytes`: raw byte cap for every `react.read` payload.
+- `read_visible_context_fraction`: additional clamp that limits a read preview
+  to a fraction of `max_tokens`.
+- `exec_text_preview_max_symbols`: max text characters embedded as preview for
+  each text artifact produced by exec tools.
 - `max_iterations`: max React iterations.
 - `reactive_event_iteration_credit_enabled`: enable live reactive-event iteration credit on the current turn. Default `true`.
 - `reactive_event_iteration_credit_per_event`: default iteration credit minted by one accepted live reactive event. Default `1`.
@@ -101,6 +110,33 @@ This is the only React workspace paradigm switch:
   - agent is instructed that the activated current-turn workspace can be explored locally with git commands except pull/push/fetch
 
 Exact attachment/binary pulls remain point-wise and hosting-backed in both modes.
+
+## Visible read limits
+
+`react.read` has three different limits because the payloads have different
+units:
+
+| RuntimeCtx field | Assembly path | Unit | Applies to |
+|---|---|---|---|
+| `read_visible_max_text_symbols` | `ai.react.read_visible_max_text_symbols` | text characters | text content returned by `react.read` |
+| `read_visible_max_tokens` | `ai.react.read_visible_max_tokens` | model tokens | text content returned by `react.read` |
+| `read_visible_max_bytes` | `ai.react.read_visible_max_bytes` | raw bytes | every readable payload, including PDF/image |
+| `read_visible_context_fraction` | `ai.react.read_visible_context_fraction` | fraction of `max_tokens` | text read budget clamp |
+| `exec_text_preview_max_symbols` | `ai.react.exec_text_preview_max_symbols` | text characters | text files emitted by exec tools |
+
+Text reads return a configured bounded preview when the payload is larger than
+the visible caps. Per-call
+`react.read({"paths":[...],"max_text_symbols":N})` is a text-only request for a
+smaller explicit preview. It is clamped by
+`read_visible_max_text_symbols`, `read_visible_max_tokens`, and
+`read_visible_context_fraction`. These caps apply per requested path, not across
+the whole `paths` list. `stats_only: true` bypasses content materialization and
+returns metadata in the `react.read` status block.
+
+PDF/image reads are not partially sliced. If the raw payload is under
+`read_visible_max_bytes`, React attaches it whole as multimodal content. If it
+is over the cap, React emits a metadata/recovery marker instead of a partial
+image or partial PDF.
 
 ### Reactive external-event iteration credit
 

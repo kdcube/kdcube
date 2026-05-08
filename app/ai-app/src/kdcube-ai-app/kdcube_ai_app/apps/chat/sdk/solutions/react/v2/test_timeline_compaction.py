@@ -72,9 +72,9 @@ async def test_compaction_inserts_summary_and_keeps_cut_block(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_split_turn_prefix_summary(monkeypatch):
+async def test_current_turn_split_does_not_create_prior_summary(monkeypatch):
     async def _fake_summary(*args, **kwargs):
-        return "SUMMARY"
+        raise AssertionError("current-turn-only compaction must not summarize a fake prior history")
 
     async def _fake_prefix(*args, **kwargs):
         return "PREFIX"
@@ -87,7 +87,7 @@ async def test_split_turn_prefix_summary(monkeypatch):
     runtime = RuntimeCtx(turn_id="turn_2", max_tokens=120)
     tl = Timeline(runtime=runtime, svc=object())
 
-    # Single turn with multiple blocks so cut falls inside the same turn
+    # Single turn with multiple blocks so cut falls inside the current turn.
     blocks = [
         _blk(btype="turn.header", text="[TURN turn_2]", turn_id="turn_2"),
         _blk(btype="user.prompt", text="user asks" * 30, turn_id="turn_2"),
@@ -103,10 +103,14 @@ async def test_split_turn_prefix_summary(monkeypatch):
         force=True,
     )
 
-    summary_blocks = [b for b in updated if b.get("type") == "conv.range.summary"]
-    assert summary_blocks, "summary block not inserted"
-    summary_text = summary_blocks[0].get("text") or ""
-    assert "Turn Context (split turn)" in summary_text
+    assert not [b for b in updated if b.get("type") == "conv.range.summary"]
+    checkpoints = [b for b in updated if b.get("type") == "react.current_turn.compaction_checkpoint"]
+    assert checkpoints
+    assert "PREFIX" in (checkpoints[-1].get("text") or "")
+    rendered = await tl.render(cache_last=False, system_text="sys", include_sources=False)
+    text = "\n".join(b.get("text", "") for b in rendered if b.get("type") == "text")
+    assert "[MID-TURN COMPACTION 1]" in text
+    assert "semantic_progress:" in text
 
 
 def test_blocks_for_persist_trims_before_summary():

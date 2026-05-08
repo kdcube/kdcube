@@ -248,6 +248,7 @@ async def handle_react_memsearch(*, ctx_browser: Any, state: Dict[str, Any], too
                 targets=search_targets,
                 user=user,
                 conv=conversation_id,
+                scope=scope,
                 scoring_mode="hybrid",
                 half_life_days=7.0,
                 top_k=top_k,

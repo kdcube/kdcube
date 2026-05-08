@@ -284,7 +284,10 @@ def _group_key(ev: Dict[str, Any], group_by: List[str]) -> Tuple[Any, ...]:
             # Try multiple locations for agent name
             agent = (
                     metadata.get("agent")
+                    or metadata.get("agent_name")
+                    or metadata.get("role")
                     or ctx.get("agent")
+                    or ctx.get("role")
                     or ev.get("agent")
                     or ev.get("agent_name")
             )
@@ -558,7 +561,10 @@ class AccountingCalculator:
             context = ev.get("context") or {}
             agent = (
                     metadata.get("agent")
+                    or metadata.get("agent_name")
+                    or metadata.get("role")
                     or context.get("agent")
+                    or context.get("role")
                     or ev.get("agent")
                     or ev.get("agent_name")
             )
@@ -2144,7 +2150,10 @@ class RateCalculator(AccountingCalculator):
 
             agent = (
                     metadata.get("agent")
+                    or metadata.get("agent_name")
+                    or metadata.get("role")
                     or context.get("agent")
+                    or context.get("role")
                     or ev.get("agent")
                     or ev.get("agent_name")
             )

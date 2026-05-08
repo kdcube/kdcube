@@ -54,6 +54,8 @@ Main features:
 - optional framed structured-output extraction from streamed assistant text
 - optional per-turn timeout
 - separate stderr step emission
+- bounded failure diagnostics with stdout/stderr tails
+- optional bounded stdout stream logging for debugging
 - support for `regular`, `followup`, and `steer` turns
 
 ## Mental model
@@ -162,6 +164,35 @@ result = await agent.run_turn(
     resume_existing=True,
 )
 ```
+
+## Output diagnostics
+
+Claude Code emits `stream-json` stdout. The runner always stores capped raw
+stdout lines in `ClaudeCodeRunResult.raw_output_lines`. Failed runs also include
+`failure_diagnostics` with:
+
+- failure reason and interpretation
+- timeout/exit details
+- stdout/stderr tails
+- final text tail
+- result-event presence
+- structured-output and executive-journal tails
+- usage/model snapshot when available
+
+Full stream logging is opt-in because stdout can contain private user data or
+large intermediate payloads:
+
+```python
+agent = ClaudeCodeAgent.from_current_context(
+    agent_name="kb-writer",
+    workspace_path=Path("/workspace/docs"),
+    log_stream_output=True,
+    log_stream_output_max_chars=1200,
+)
+```
+
+When enabled, each stdout event is written as one bounded log line with the
+event type, raw size, and a tail preview.
 
 ## CLI invocation model
 
@@ -508,6 +539,15 @@ Current behavior:
   - `raw_result_event`
   - `timed_out`
   - `timeout_seconds`
+  - `failure_diagnostics`
+
+`failure_diagnostics` is a compact debugging snapshot for failed runs. It
+includes the failure reason (`timeout_waiting_for_process_result`,
+`timeout_after_result_event`, `stream_reader_failed`, or `nonzero_exit`), a
+short interpretation, stdout/stderr tails, final text tail, delta count,
+structured-output counts/tails, executive-journal tail, usage snapshot, model
+resolution, and whether a Claude result event was seen. It is intentionally a
+diagnostic view; it does not change cache accounting or retry behavior.
 
 The runner is designed so failures are visible both:
 
@@ -527,6 +567,16 @@ It can write standard workspace support files when `workspace_config` is
 provided, but the caller still owns the policy for which MCP servers, headers,
 instructions, skills, and permissions are safe to write.
 
+Stream and watchdog behavior:
+
+- Claude Code `stream-json` stdout/stderr is read in chunks and assembled into
+  lines by the SDK, so large single-line JSON events do not trip Python's
+  default `StreamReader.readline()` limit.
+- While the subprocess is alive, the runner marks processor task activity
+  internally. This keeps long Claude turns from being treated as idle without
+  emitting fake user-facing events.
+- The processor hard wall-time cap still wins over ongoing activity.
+
 The generic runner still does not itself own repo bootstrap/publish policy. That
 is handled by the higher-level Claude workspace/session-store runtime layer.
 
@@ -545,6 +595,8 @@ Covered cases:
 - incremental snapshot-to-delta conversion
 - stderr emission
 - failure reporting
+- large single-line `stream-json` events
+- internal processor activity touch for long-running subprocesses
 - first-turn `--session-id` vs resumed-turn `--resume`
 - session reuse across `followup` and `steer`
 - git-backed session bootstrap/publish through `run_claude_code_turn(...)`

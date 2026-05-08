@@ -119,6 +119,11 @@ ai:
     react_agent_version: "v2"       # AI_REACT_AGENT_VERSION: v2 | v3
     react_agent_multiaction: "off"  # AI_REACT_AGENT_MULTI_ACTION: on | off
     context_max_tokens: 80000       # AI_REACT_CONTEXT_MAX_TOKENS: hard render budget before compaction
+    read_visible_max_text_symbols: 48000 # AI_REACT_READ_VISIBLE_MAX_TEXT_SYMBOLS: max visible text characters per react.read text path
+    read_visible_max_tokens: 12000  # AI_REACT_READ_VISIBLE_MAX_TOKENS: max visible tokens per react.read path
+    read_visible_max_bytes: 10485760 # AI_REACT_READ_VISIBLE_MAX_BYTES: max raw bytes per react.read payload
+    read_visible_context_fraction: 0.15 # AI_REACT_READ_VISIBLE_CONTEXT_FRACTION: read cap as fraction of context budget
+    exec_text_preview_max_symbols: 8000 # AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS: text preview cap for exec-produced files
     cache_keep_recent_turns: 6      # AI_REACT_CACHE_KEEP_RECENT_TURNS: recent turns kept visible after TTL pruning
     cache_keep_recent_intact_turns: 1  # AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS: newest turns kept untrimmed
     working_summary_enabled: true   # AI_REACT_WORKING_SUMMARY_ENABLED: emit/embed channel:summary as conv.working.summary timeline events

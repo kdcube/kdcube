@@ -257,6 +257,11 @@ class BaseWorkflow():
                 turn_id=self.comm_context.routing.turn_id,
                 bundle_id=self.config.ai_bundle_spec.id,
                 max_tokens=runtime_max_tokens,
+                read_visible_max_text_symbols=_positive_int(getattr(settings, "AI_REACT_READ_VISIBLE_MAX_TEXT_SYMBOLS", None)),
+                read_visible_max_tokens=_positive_int(getattr(settings, "AI_REACT_READ_VISIBLE_MAX_TOKENS", None)),
+                read_visible_max_bytes=_positive_int(getattr(settings, "AI_REACT_READ_VISIBLE_MAX_BYTES", None)),
+                read_visible_context_fraction=getattr(settings, "AI_REACT_READ_VISIBLE_CONTEXT_FRACTION", None),
+                exec_text_preview_max_symbols=_positive_int(getattr(settings, "AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS", None)),
                 bundle_storage=self._resolve_runtime_ctx_bundle_storage(),
                 workspace_implementation=settings.REACT_WORKSPACE_IMPLEMENTATION,
                 workspace_git_repo=settings.REACT_WORKSPACE_GIT_REPO,
@@ -275,6 +280,11 @@ class BaseWorkflow():
         except Exception:
             self.runtime_ctx = RuntimeCtx(
                 max_tokens=runtime_max_tokens,
+                read_visible_max_text_symbols=_positive_int(getattr(settings, "AI_REACT_READ_VISIBLE_MAX_TEXT_SYMBOLS", None)),
+                read_visible_max_tokens=_positive_int(getattr(settings, "AI_REACT_READ_VISIBLE_MAX_TOKENS", None)),
+                read_visible_max_bytes=_positive_int(getattr(settings, "AI_REACT_READ_VISIBLE_MAX_BYTES", None)),
+                read_visible_context_fraction=getattr(settings, "AI_REACT_READ_VISIBLE_CONTEXT_FRACTION", None),
+                exec_text_preview_max_symbols=_positive_int(getattr(settings, "AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS", None)),
                 workspace_implementation=settings.REACT_WORKSPACE_IMPLEMENTATION,
                 workspace_git_repo=settings.REACT_WORKSPACE_GIT_REPO,
                 multi_action_mode=settings.AI_REACT_AGENT_MULTI_ACTION,

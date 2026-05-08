@@ -397,6 +397,43 @@ async def test_run_turn_streams_incremental_deltas(monkeypatch, tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_run_turn_handles_large_single_stdout_json_line(monkeypatch, tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    comm, emitter = _make_comm()
+    ctx = _ctx()
+    large_text = "x" * (96 * 1024)
+    outputs = [
+        json.dumps({"message": {"content": [{"type": "text", "text": large_text}]}}) + "\n",
+    ]
+
+    async def _fake_create_subprocess_exec(*args, **kwargs):
+        del args, kwargs
+        return _FakeProcess(stdout_lines=outputs, stderr_lines=[], returncode=0)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_create_subprocess_exec)
+
+    with bind_current_request_context(ctx, comm=comm):
+        agent = ClaudeCodeAgent.from_current_context(
+            agent_name="kb-writer",
+            workspace_path=workspace,
+            allowed_tools=("Read",),
+        )
+        result = await agent.run_turn("Summarize repo")
+
+    deltas = [
+        envelope["delta"]["text"]
+        for _, envelope in emitter.events
+        if envelope.get("type") == "chat.delta"
+    ]
+
+    assert result.status == "completed"
+    assert result.final_text == large_text
+    assert result.delta_count == 1
+    assert deltas == [large_text]
+
+
+@pytest.mark.asyncio
 async def test_run_turn_preserves_multiple_distinct_claude_messages(monkeypatch, tmp_path: Path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -583,7 +620,12 @@ async def test_run_turn_timeout_marks_failure_and_emits_timeout_metadata(monkeyp
 
     async def _fake_create_subprocess_exec(*args, **kwargs):
         del args, kwargs
-        return _FakeProcess(stdout_lines=[], stderr_lines=[], returncode=0, wait_delay=5.0)
+        return _FakeProcess(
+            stdout_lines=["working on the mailbox\n"],
+            stderr_lines=["warning: still running\n"],
+            returncode=0,
+            wait_delay=5.0,
+        )
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_create_subprocess_exec)
 
@@ -607,8 +649,13 @@ async def test_run_turn_timeout_marks_failure_and_emits_timeout_metadata(monkeyp
     assert result.duration_ms is not None
     assert result.duration_ms >= 0
     assert "timeout" in (result.error_message or "").lower()
+    assert result.failure_diagnostics["reason"] == "timeout_waiting_for_process_result"
+    assert result.failure_diagnostics["stdout_tail"][-1] == "working on the mailbox"
+    assert result.failure_diagnostics["stderr_tail"][-1] == "warning: still running"
+    assert result.failure_diagnostics["raw_result_event_seen"] is False
     assert error_steps[-1]["data"]["timed_out"] is True
     assert error_steps[-1]["data"]["timeout_seconds"] == pytest.approx(0.01)
+    assert error_steps[-1]["data"]["failure_diagnostics"]["reason"] == "timeout_waiting_for_process_result"
 
 
 @pytest.mark.asyncio
@@ -737,6 +784,8 @@ async def test_run_turn_emits_accounting_event_with_usage(monkeypatch, tmp_path:
     assert event["usage"]["cache_creation_tokens"] == 40
     assert event["usage"]["cache_read_tokens"] == 5
     assert event["usage"]["cost_usd"] == pytest.approx(0.0123)
+    assert event["metadata"]["agent"] == "kb-writer"
+    assert event["metadata"]["agent_name"] == "kb-writer"
     assert event["metadata"]["runtime"] == "claude_code"
     assert event["metadata"]["turn_kind"] == "regular"
 

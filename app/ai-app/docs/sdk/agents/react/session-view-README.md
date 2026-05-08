@@ -277,6 +277,14 @@ See `runtime-configuration-README.md` for the full list of runtime fields.
 - `debug_log_announce`: emit announce blocks in debug logs.
 - `debug_log_sources_pool`: emit sources pool in debug logs.
 - `session`: session-level configuration for cache TTL and truncation thresholds.
+- `read_visible_max_text_symbols`: max visible text characters for each
+  `react.read` text path.
+- `read_visible_max_tokens`: max visible tokens for each `react.read` text path.
+- `read_visible_max_bytes`: raw byte cap for every `react.read` payload,
+  including PDF/image.
+- `read_visible_context_fraction`: additional read cap relative to `max_tokens`.
+- `exec_text_preview_max_symbols`: max text characters embedded from each
+  exec-produced text artifact.
 
 Runtime session fields:
 
@@ -300,6 +308,17 @@ working-summary/checkpoint facts. It should call `react.read(path)` only when
 the exact hidden artifact/message/tool result is needed. When plan-history refs
 are present after compaction, those `ar:` refs are usually the smoothest way to
 reopen an older compacted plan in the same turn.
+
+`react.read` is visible-context retrieval, not an unlimited loader. Text reads
+are bounded by text-character and token caps, and every payload is bounded by a
+raw byte cap. If text is larger than the visible read caps, React emits a
+bounded preview with `status=truncated_for_visible_context`. The agent can
+request a smaller visible preview with `max_text_symbols`; for exact bulk
+processing it should use exec code and a supported logical fetch path or a
+physical file path. Caps apply independently per requested path. For discovery
+without visible content, call `react.read` with `stats_only: true`; it emits
+metadata in the status block only. PDF/image reads are all-or-marker under the
+raw byte cap.
 
 ## Timeline Persistence (what is stored)
 

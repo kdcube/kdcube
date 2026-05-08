@@ -259,6 +259,22 @@ Tool calls/results are rendered into a compact, consistent view:
 - **Each artifact**: `[TOOL RESULT <id>].artifact <tool_id>`  
   `logical_path: ...` (+ `physical_path` only if hosted) followed immediately by content
 
+### Visible read payload caps
+
+`react.read` can add new visible blocks to this same timeline. Its admission
+rules are separate from TTL pruning:
+
+- text content is bounded by `read_visible_max_text_symbols`,
+  `read_visible_max_tokens`, `read_visible_context_fraction`, and optional
+  per-call `max_text_symbols`; the cap is per requested path
+- raw payloads are bounded by `read_visible_max_bytes`
+- `stats_only: true` records path metadata in the `react.read` status block
+  without adding content blocks to the visible timeline
+- PDF/image content is all-or-marker: if under the byte cap it renders as a
+  normal multimodal block; if over the cap, React renders a recovery marker
+  with bytes/path metadata
+- unsupported binaries such as xlsx/pptx/docx/zip remain metadata-only
+
 Assistant completion blocks (`assistant.completion`) are rendered with an extra line when
 `meta.sources_used` is present:
 ```

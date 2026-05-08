@@ -874,6 +874,19 @@ async def health():
     return payload
 
 
+@app.get("/monitoring/processor")
+async def monitoring_processor():
+    processor = getattr(app.state, "processor", None)
+    if processor is None:
+        return JSONResponse(status_code=503, content={"status": "not_ready", "processor": None})
+    return {
+        "status": "ok",
+        "service": "chat-proc",
+        "instance_id": INSTANCE_ID,
+        "processor": processor.get_runtime_metadata(),
+    }
+
+
 # Mount integrations API at /api/integrations
 mount_integrations_routers(app)
 

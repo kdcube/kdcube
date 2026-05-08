@@ -98,6 +98,11 @@ class RuntimeCtx:
     timezone: Optional[str] = None
     max_tokens: Optional[int] = None
     max_iterations: Optional[int] = None
+    read_visible_max_text_symbols: Optional[int] = None
+    read_visible_max_tokens: Optional[int] = None
+    read_visible_max_bytes: Optional[int] = None
+    read_visible_context_fraction: Optional[float] = None
+    exec_text_preview_max_symbols: Optional[int] = None
     reactive_event_iteration_credit_enabled: bool = True
     reactive_event_iteration_credit_per_event: int = 1
     reactive_event_iteration_credit_cap: Optional[int] = None
@@ -153,6 +158,11 @@ class RuntimeCtx:
             "timezone": self.timezone,
             "max_tokens": self.max_tokens,
             "max_iterations": self.max_iterations,
+            "read_visible_max_text_symbols": self.read_visible_max_text_symbols,
+            "read_visible_max_tokens": self.read_visible_max_tokens,
+            "read_visible_max_bytes": self.read_visible_max_bytes,
+            "read_visible_context_fraction": self.read_visible_context_fraction,
+            "exec_text_preview_max_symbols": self.exec_text_preview_max_symbols,
             "reactive_event_iteration_credit_enabled": bool(self.reactive_event_iteration_credit_enabled),
             "reactive_event_iteration_credit_per_event": int(self.reactive_event_iteration_credit_per_event or 1),
             "reactive_event_iteration_credit_cap": self.reactive_event_iteration_credit_cap,

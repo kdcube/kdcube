@@ -385,6 +385,26 @@ prompt, reads the recorded MCP result, and returns a compact result payload.
 If the Claude process times out or fails after recording a result, the recorded
 result remains authoritative. If no result was recorded, saved task processing
 fails closed and should be retried instead of falling back to raw provider rows.
+Failures include `failure_diagnostics` from the Claude Code runner: failure
+reason, timeout/exit details, stdout/stderr tails, final text tail, usage/model
+snapshot, raw-result-event presence, and executive-journal tail. This helps
+separate "Claude timed out before producing a result" from "Claude recorded the
+MCP result but did not exit cleanly afterward."
+
+Claude stdout stream logging is intentionally opt-in because mailbox processing
+can include private content. Configure it when debugging a deployment:
+
+```yaml
+integrations:
+  email:
+    claude_code:
+      log_stream_output: true
+      log_stream_output_max_chars: 1200
+```
+
+When enabled, each Claude stdout event is logged as a bounded line with event
+type, raw size, and a tail preview. Failed runs still include bounded stdout and
+stderr tails in `failure_diagnostics` even when stream logging is disabled.
 
 Bundle compatibility shims may set:
 

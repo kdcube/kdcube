@@ -7,6 +7,7 @@ import json
 import logging
 import hashlib
 import traceback
+import copy
 
 import time
 import datetime as _dt
@@ -2140,6 +2141,577 @@ class Timeline:
                 return idx
         return -1
 
+    def _find_turn_extent_start_index(
+        self,
+        blocks: List[Dict[str, Any]],
+        turn_start_index: int,
+        start_index: int,
+        turn_id: str,
+    ) -> int:
+        """
+        Return the earliest contiguous block for ``turn_id`` immediately before
+        ``turn_start_index``. This protects a current turn whose start was
+        detected at the user block while a preceding turn.header has the same
+        turn_id.
+        """
+        if turn_start_index < start_index:
+            return turn_start_index
+        tid = (turn_id or "").strip()
+        if not tid:
+            return turn_start_index
+        first = turn_start_index
+        for idx in range(turn_start_index - 1, start_index - 1, -1):
+            blk = blocks[idx]
+            if not isinstance(blk, dict):
+                break
+            blk_turn = (blk.get("turn_id") or blk.get("turn") or "").strip()
+            if blk_turn != tid:
+                break
+            first = idx
+        return first
+
+    @staticmethod
+    def _is_meaningful_compaction_history_block(block: Dict[str, Any]) -> bool:
+        if not isinstance(block, dict):
+            return False
+        btype = (block.get("type") or "").strip()
+        if btype in {"turn.header", "conv.range.summary"}:
+            return False
+        text = block.get("text")
+        if isinstance(text, str) and text.strip():
+            return True
+        if block.get("base64") or block.get("data"):
+            return True
+        meta = block.get("meta") if isinstance(block.get("meta"), dict) else {}
+        return bool(meta)
+
+    def _payload_shape_hint(self, payload: Any, *, max_items: int = 8) -> str:
+        if isinstance(payload, list):
+            return f"list[{len(payload)}]"
+        if not isinstance(payload, dict):
+            return type(payload).__name__
+        parts: List[str] = []
+        for key, value in list(payload.items())[:max_items]:
+            if isinstance(value, list):
+                parts.append(f"{key}=list[{len(value)}]")
+            elif isinstance(value, dict):
+                parts.append(f"{key}=dict[{len(value)}]")
+            else:
+                parts.append(f"{key}={type(value).__name__}")
+        if len(payload) > max_items:
+                parts.append(f"... keys={len(payload)}")
+        return ", ".join(parts)
+
+    @staticmethod
+    def _format_sources_pool_selector_from_sids(sids: List[int]) -> str:
+        vals = sorted({int(s) for s in (sids or []) if isinstance(s, int) and s > 0})
+        if not vals:
+            return ""
+        ranges: List[tuple[int, int]] = []
+        start = prev = vals[0]
+        for sid in vals[1:]:
+            if sid == prev + 1:
+                prev = sid
+                continue
+            ranges.append((start, prev))
+            start = prev = sid
+        ranges.append((start, prev))
+        parts = [str(a) if a == b else f"{a}-{b}" for a, b in ranges]
+        return f"so:sources_pool[{', '.join(parts)}]"
+
+    @staticmethod
+    def _extract_fi_paths_from_payload(value: Any, *, limit: int = 20) -> List[str]:
+        out: List[str] = []
+        seen: set[str] = set()
+
+        def visit(obj: Any, depth: int = 0) -> None:
+            if len(out) >= limit or depth > 6:
+                return
+            if isinstance(obj, dict):
+                for key in ("artifact_path", "logical_path", "path"):
+                    val = obj.get(key)
+                    if isinstance(val, str) and val.startswith("fi:") and val not in seen:
+                        seen.add(val)
+                        out.append(val)
+                        if len(out) >= limit:
+                            return
+                for val in obj.values():
+                    visit(val, depth + 1)
+                    if len(out) >= limit:
+                        return
+            elif isinstance(obj, list):
+                for item in obj:
+                    visit(item, depth + 1)
+                    if len(out) >= limit:
+                        return
+
+        visit(value)
+        return out
+
+    @staticmethod
+    def _source_sids_from_selector(path: str) -> List[int]:
+        raw = str(path or "").strip()
+        if raw.startswith("so:"):
+            raw = raw[3:]
+        if not raw.startswith("sources_pool[") or not raw.endswith("]"):
+            return []
+        body = raw[len("sources_pool["):-1]
+        out: List[int] = []
+        for part in body.split(","):
+            item = part.strip()
+            if not item:
+                continue
+            if "-" in item:
+                left, right = item.split("-", 1)
+                try:
+                    a = int(left.strip())
+                    b = int(right.strip())
+                except Exception:
+                    continue
+                if a <= b:
+                    out.extend(range(a, b + 1))
+                continue
+            try:
+                out.append(int(item))
+            except Exception:
+                continue
+        return out
+
+    def _source_sids_from_block(self, block: Dict[str, Any], payload: Any = None) -> List[int]:
+        sids: List[int] = []
+        seen: set[int] = set()
+
+        def add_many(values: Any) -> None:
+            for sid in extract_source_sids(values):
+                if sid not in seen:
+                    seen.add(sid)
+                    sids.append(sid)
+
+        path = (block.get("path") or "").strip()
+        add_many(self._source_sids_from_selector(path))
+        meta = block.get("meta") if isinstance(block.get("meta"), dict) else {}
+        add_many(meta.get("sources_used"))
+        if isinstance(payload, dict):
+            add_many(payload.get("sources_used"))
+            add_many(payload.get("source_sids"))
+            add_many(payload.get("sources"))
+            result = payload.get("result")
+            if isinstance(result, dict):
+                add_many(result.get("sources_used"))
+                add_many(result.get("source_sids"))
+                add_many(result.get("sources"))
+        elif isinstance(payload, list):
+            add_many(payload)
+        return sids
+
+    def _current_turn_engineering_ref(self, block: Dict[str, Any], *, tokens: int) -> Dict[str, Any]:
+        btype = (block.get("type") or "").strip() or "block"
+        path = (block.get("path") or "").strip()
+        meta = block.get("meta") if isinstance(block.get("meta"), dict) else {}
+        call_id = (block.get("call_id") or meta.get("tool_call_id") or meta.get("call_id") or "").strip()
+        if not call_id:
+            source_tool = str(meta.get("source_tool") or "").strip()
+            if source_tool.startswith("tc_") or source_tool.startswith("tc-"):
+                call_id = source_tool
+        if not call_id and path:
+            call_id = self._call_id_from_path_for_stub(path)
+        tool_id = (block.get("tool_id") or meta.get("tool_id") or "").strip()
+        text = block.get("text")
+        payload = _maybe_parse_json(text or "") if isinstance(text, str) else None
+        if isinstance(payload, dict):
+            tool_id = tool_id or str(payload.get("tool_id") or "").strip()
+            call_id = call_id or str(payload.get("tool_call_id") or "").strip()
+
+        if path.startswith("fi:"):
+            return {
+                "kind": "file",
+                "path": path,
+                "call_id": call_id,
+                "tool_id": tool_id,
+                "mime": (block.get("mime") or block.get("media_type") or meta.get("mime") or "").strip(),
+                "hint": self._one_line_preview(text, limit=220),
+            }
+
+        if path.startswith("so:"):
+            return {
+                "kind": "sources",
+                "path": path,
+                "call_id": call_id,
+                "tool_id": tool_id,
+                "source_sids": self._source_sids_from_block(block, payload),
+                "hint": self._one_line_preview(text, limit=260),
+            }
+
+        if btype == "react.tool.call":
+            params = payload.get("params") if isinstance(payload, dict) else None
+            params_text = _compact_hint(params, max_chars=1800)
+            return {
+                "kind": "tool_call",
+                "path": path,
+                "call_id": call_id,
+                "tool_id": tool_id,
+                "tokens_estimate": tokens,
+                "params": params_text,
+            }
+
+        if btype == "react.tool.result":
+            hint = self._tool_result_hint_for_stub(payload) if payload is not None else self._one_line_preview(text, limit=300)
+            shape = self._payload_shape_hint(payload) if payload is not None else ""
+            return {
+                "kind": "tool_result",
+                "path": path,
+                "call_id": call_id,
+                "tool_id": tool_id,
+                "tokens_estimate": tokens,
+                "shape": shape,
+                "hint": hint,
+                "files": self._extract_fi_paths_from_payload(payload),
+                "source_sids": self._source_sids_from_block(block, payload),
+            }
+
+        if btype == "react.current_turn.compaction_checkpoint":
+            return {
+                "kind": "previous_mid_turn_compaction",
+                "path": path,
+                "text": text if isinstance(text, str) else "",
+            }
+
+        kind = btype.replace(".", "_")
+        preview = self._one_line_preview(text, limit=300)
+        return {
+            "kind": kind,
+            "path": path,
+            "call_id": call_id,
+            "tool_id": tool_id,
+            "tokens_estimate": tokens,
+            "hint": preview,
+        }
+
+    @staticmethod
+    def _append_unique(values: List[Any], value: Any) -> None:
+        if value in (None, ""):
+            return
+        if value not in values:
+            values.append(value)
+
+    def _format_mid_turn_engineering_ledger(self, refs: List[Dict[str, Any]]) -> List[str]:
+        groups: List[Dict[str, Any]] = []
+        by_call: Dict[str, Dict[str, Any]] = {}
+        loose_files: List[Dict[str, Any]] = []
+        loose_sids: List[int] = []
+
+        def add_file(target: List[Dict[str, Any]], item: Any) -> None:
+            if isinstance(item, str):
+                entry = {"path": item}
+            elif isinstance(item, dict):
+                entry = dict(item)
+            else:
+                return
+            path = str(entry.get("path") or "").strip()
+            if not path:
+                return
+            for existing in target:
+                if isinstance(existing, dict) and str(existing.get("path") or "").strip() == path:
+                    for key, value in entry.items():
+                        if value and not existing.get(key):
+                            existing[key] = value
+                    return
+            target.append(entry)
+
+        def group_for(call_id: str, tool_id: str = "") -> Dict[str, Any]:
+            cid = str(call_id or "").strip()
+            if not cid:
+                cid = f"unknown_{len(groups) + 1}"
+            group = by_call.get(cid)
+            if group is None:
+                group = {
+                    "call_id": cid,
+                    "tool_id": str(tool_id or "").strip(),
+                    "call": None,
+                    "result": None,
+                    "files": [],
+                    "source_sids": [],
+                    "other": [],
+                }
+                by_call[cid] = group
+                groups.append(group)
+            elif tool_id and not group.get("tool_id"):
+                group["tool_id"] = str(tool_id).strip()
+            return group
+
+        for ref in refs or []:
+            if not isinstance(ref, dict):
+                continue
+            kind = str(ref.get("kind") or "").strip()
+            call_id = str(ref.get("call_id") or "").strip()
+            tool_id = str(ref.get("tool_id") or "").strip()
+            if kind == "previous_mid_turn_compaction":
+                continue
+            if kind == "tool_call":
+                group_for(call_id, tool_id)["call"] = ref
+                continue
+            if kind == "tool_result":
+                group = group_for(call_id, tool_id)
+                group["result"] = ref
+                for path in ref.get("files") or []:
+                    add_file(group["files"], path)
+                for sid in ref.get("source_sids") or []:
+                    self._append_unique(group["source_sids"], sid)
+                continue
+            if kind == "file":
+                if call_id:
+                    add_file(group_for(call_id, tool_id)["files"], ref)
+                else:
+                    add_file(loose_files, ref)
+                continue
+            if kind == "sources":
+                sids = [int(s) for s in (ref.get("source_sids") or []) if isinstance(s, int)]
+                if call_id:
+                    group = group_for(call_id, tool_id)
+                    for sid in sids:
+                        self._append_unique(group["source_sids"], sid)
+                    if not sids and ref.get("path"):
+                        group.setdefault("source_paths", [])
+                        self._append_unique(group["source_paths"], ref.get("path"))
+                else:
+                    for sid in sids:
+                        self._append_unique(loose_sids, sid)
+                continue
+            if call_id:
+                self._append_unique(group_for(call_id, tool_id)["other"], ref)
+
+        lines: List[str] = []
+        for group in groups:
+            call = group.get("call") or {}
+            result = group.get("result") or {}
+            call_id = str(group.get("call_id") or "").strip()
+            tool_id = str(group.get("tool_id") or call.get("tool_id") or result.get("tool_id") or "").strip()
+            lines.append(f"- tool_call_id: {call_id}")
+            if tool_id:
+                lines.append(f"  tool: {tool_id}")
+            call_path = str(call.get("path") or "").strip()
+            if call_path:
+                lines.append(f"  call: {call_path}")
+            if call.get("params"):
+                lines.append(f"  params: {json.dumps(call.get('params'), ensure_ascii=False)}")
+            result_path = str(result.get("path") or "").strip()
+            if result_path:
+                lines.append(f"  result: {result_path}")
+            if result.get("tokens_estimate"):
+                lines.append(f"  result_tokens_estimate: {result.get('tokens_estimate')}")
+            if result.get("shape"):
+                lines.append(f"  result_shape: {json.dumps(result.get('shape'), ensure_ascii=False)}")
+            if result.get("hint"):
+                lines.append(f"  result_hint: {json.dumps(result.get('hint'), ensure_ascii=False)}")
+            files = group.get("files") or []
+            if files:
+                lines.append("  files:")
+                for item in files:
+                    if isinstance(item, dict):
+                        fpath = str(item.get("path") or "").strip()
+                        if not fpath:
+                            continue
+                        suffix = ""
+                        mime = str(item.get("mime") or "").strip()
+                        if mime:
+                            suffix = f" mime={mime}"
+                        lines.append(f"  - {fpath}{suffix}")
+                    elif isinstance(item, str) and item:
+                        lines.append(f"  - {item}")
+            selector = self._format_sources_pool_selector_from_sids(group.get("source_sids") or [])
+            source_paths = group.get("source_paths") or []
+            if selector or source_paths:
+                lines.append("  sources:")
+                if selector:
+                    lines.append(f"  - {selector}")
+                for source_path in source_paths:
+                    lines.append(f"  - {source_path}")
+            for other in group.get("other") or []:
+                opath = str(other.get("path") or "").strip()
+                okind = str(other.get("kind") or "block").strip()
+                if opath:
+                    lines.append(f"  {okind}: {opath}")
+
+        if loose_files:
+            lines.append("- files_without_tool_call:")
+            for item in loose_files:
+                fpath = str(item.get("path") or "").strip()
+                if fpath:
+                    lines.append(f"  - {fpath}")
+        loose_selector = self._format_sources_pool_selector_from_sids(loose_sids)
+        if loose_selector:
+            lines.append("- sources_without_tool_call:")
+            lines.append(f"  - {loose_selector}")
+        return lines
+
+    def _compact_current_turn_prefix_blocks_in_place(
+        self,
+        *,
+        blocks: List[Dict[str, Any]],
+        turn_id: str,
+        start_index: int,
+        end_index: int,
+        min_user_tokens: int = 12000,
+    ) -> Dict[str, Any]:
+        """
+        Compact only the rendered presentation of a current-turn prefix.
+
+        The original block remains in ``blocks`` with its original logical path
+        and text/base64 payload so react.read/fetch_ctx can still resolve it
+        before the turn has been finalized into immutable history.
+        """
+        tid = (turn_id or "").strip()
+        if not tid:
+            return {"blocks_hidden": 0, "tokens_hidden": 0, "refs": [], "hidden_paths": []}
+        hidden = 0
+        tokens_hidden = 0
+        refs: List[Dict[str, Any]] = []
+        hidden_paths: List[str] = []
+        upper = min(max(end_index, 0), len(blocks))
+        lower = max(start_index, 0)
+        progress_types = {
+            "react.round.start",
+            "react.thinking",
+            "react.notes",
+            "react.note",
+            "react.notice",
+            "react.decision.raw",
+            "react.current_turn.compaction_checkpoint",
+            "assistant.completion",
+            "react.tool.call",
+            "react.tool.result",
+            "react.tool.code",
+        }
+        user_visible_types = {
+            "turn.header",
+            "user.prompt",
+            "user.attachment",
+            "user.attachment.meta",
+            "user.attachment.text",
+            "user.followup",
+            "user.steer",
+            "user.followup.preserved",
+            "user.steer.preserved",
+        }
+        for idx in range(lower, upper):
+            blk = blocks[idx]
+            if not isinstance(blk, dict):
+                continue
+            blk_turn = (blk.get("turn_id") or blk.get("turn") or "").strip()
+            if blk_turn != tid:
+                continue
+            btype = (blk.get("type") or "").strip()
+            path = (blk.get("path") or "").strip()
+            meta = blk.get("meta") if isinstance(blk.get("meta"), dict) else {}
+            already_current_compacted = bool(
+                meta.get("current_turn_prefix_compacted")
+                or meta.get("current_turn_compacted")
+                or meta.get("kind") == "current_turn_compacted"
+            )
+            if (blk.get("hidden") or meta.get("hidden")) and not already_current_compacted:
+                continue
+            try:
+                tokens = int(meta.get("original_tokens_estimate") or 0) or self._estimate_block_tokens(blk)
+            except Exception:
+                tokens = 0
+
+            should_hide = already_current_compacted or btype in progress_types
+            if not should_hide and path.startswith(("fi:", "so:")):
+                should_hide = True
+            if not should_hide and btype in user_visible_types and tokens >= min_user_tokens:
+                should_hide = True
+            if not should_hide:
+                continue
+            tool_id = (blk.get("tool_id") or meta.get("tool_id") or "").strip()
+            call_id = (blk.get("call_id") or meta.get("tool_call_id") or "").strip()
+            if not tool_id and btype in {"react.tool.call", "react.tool.result", "react.tool.code"}:
+                parsed = _maybe_parse_json(blk.get("text") or "") if isinstance(blk.get("text"), str) else None
+                if isinstance(parsed, dict):
+                    tool_id = (parsed.get("tool_id") or "").strip()
+                    call_id = call_id or (parsed.get("tool_call_id") or "").strip()
+            ref = self._current_turn_engineering_ref(blk, tokens=tokens)
+            new_meta = dict(meta)
+            new_meta["kind"] = "current_turn_compacted"
+            new_meta["current_turn_compacted"] = True
+            new_meta["current_turn_prefix_compacted"] = True
+            new_meta["original_tokens_estimate"] = tokens
+            if tool_id:
+                new_meta["tool_id"] = tool_id
+            if call_id:
+                new_meta["tool_call_id"] = call_id
+            blk["meta"] = new_meta
+            blk["hidden"] = True
+            try:
+                blk["replacement_text"] = json.dumps(ref, ensure_ascii=False)
+            except Exception:
+                blk["replacement_text"] = self._hidden_retrieval_stub(blk, include_path=True)
+            if path:
+                hidden_paths.append(path)
+            if ref and ref.get("kind") != "previous_mid_turn_compaction":
+                refs.append(ref)
+            hidden += 1
+            tokens_hidden += tokens
+        return {"blocks_hidden": hidden, "tokens_hidden": tokens_hidden, "refs": refs, "hidden_paths": hidden_paths}
+
+    def _build_mid_turn_compaction_checkpoint_block(
+        self,
+        *,
+        turn_id: str,
+        semantic_summary: str,
+        refs: List[Dict[str, Any]],
+        hidden_paths: List[str],
+        ts: str,
+        sequence: int = 1,
+    ) -> Optional[Dict[str, Any]]:
+        tid = (turn_id or "").strip()
+        rows = [r for r in refs or [] if isinstance(r, dict)]
+        if not tid:
+            return None
+        marker_index = max(1, int(sequence or 1))
+        lines = [
+            f"[MID-TURN COMPACTION {marker_index}]",
+            f"turn_id: {tid}",
+            "position: current-turn prefix compacted here; newer timeline blocks below are normal",
+            "use: continue from the timeline below; this is not prior conversation memory",
+            "recovery: exact source blocks remain in timeline.json; use react.read(path) or ctx_tools.fetch_ctx(path) from exec",
+            "",
+            "semantic_progress:",
+        ]
+        summary_text = str(semantic_summary or "").strip()
+        if summary_text:
+            lines.append(summary_text)
+        else:
+            lines.append("- Semantic summary was unavailable; use the engineering ledger and logical paths.")
+        lines.extend(["", "engineering_ledger:"])
+        paths: List[str] = [str(p or "").strip() for p in hidden_paths or [] if str(p or "").strip()]
+        for ref in rows:
+            path = str(ref.get("path") or "").strip()
+            if path and path not in paths:
+                paths.append(path)
+            for file_path in ref.get("files") or []:
+                file_path = str(file_path or "").strip()
+                if file_path and file_path not in paths:
+                    paths.append(file_path)
+        ledger_lines = self._format_mid_turn_engineering_ledger(rows)
+        if ledger_lines:
+            lines.extend(ledger_lines)
+        else:
+            lines.append("- (no path-addressable blocks were compacted)")
+        lines.append(f"[/MID-TURN COMPACTION {marker_index}]")
+        return self._block(
+            type="react.current_turn.compaction_checkpoint",
+            author="react",
+            turn_id=tid,
+            ts=ts or "",
+            text="\n".join(lines).strip(),
+            path=f"ar:{tid}.react.mid_turn.compaction.{marker_index}",
+            meta={
+                "current_turn_compaction_checkpoint": True,
+                "marker_index": marker_index,
+                "contains_paths": paths,
+            },
+        )
+
     def _find_recent_turn_start_index(
         self,
         blocks: List[Dict[str, Any]],
@@ -2925,6 +3497,23 @@ class Timeline:
         emitted_working_summary_paths: set[str] = set()
         emitted_turn_status: set[str] = set()
         emitted_pruned_turn_data: set[str] = set()
+        explicit_current_turn_compacted_paths: set[str] = set()
+        latest_mid_turn_checkpoint_by_turn: Dict[str, str] = {}
+        for blk in blocks:
+            if not isinstance(blk, dict):
+                continue
+            blk_type = (blk.get("type") or "").strip()
+            blk_turn = (blk.get("turn_id") or blk.get("turn") or "").strip()
+            blk_path = (blk.get("path") or "").strip()
+            if blk_type == "react.current_turn.compaction_checkpoint" and blk_turn and blk_path:
+                latest_mid_turn_checkpoint_by_turn[blk_turn] = blk_path
+            if blk_type not in {"react.current_turn.compacted_data", "react.current_turn.compaction_checkpoint"}:
+                continue
+            meta = blk.get("meta") if isinstance(blk.get("meta"), dict) else {}
+            for path in meta.get("contains_paths") or []:
+                path_str = str(path or "").strip()
+                if path_str:
+                    explicit_current_turn_compacted_paths.add(path_str)
         for blk in blocks:
             if not isinstance(blk, dict):
                 continue
@@ -2934,6 +3523,14 @@ class Timeline:
             if btype == "conv.working.summary" and blk_path in emitted_working_summary_paths:
                 continue
             meta = blk.get("meta") if isinstance(blk.get("meta"), dict) else {}
+            if (
+                btype == "react.current_turn.compaction_checkpoint"
+                and turn_id
+                and blk_path
+                and latest_mid_turn_checkpoint_by_turn.get(turn_id)
+                and latest_mid_turn_checkpoint_by_turn.get(turn_id) != blk_path
+            ):
+                continue
             if not (blk.get("hidden") or meta.get("hidden")):
                 if btype == "conv.working.summary" and blk_path:
                     emitted_working_summary_paths.add(blk_path)
@@ -3005,31 +3602,58 @@ class Timeline:
             if meta.get("kind") == "cache_ttl_pruned":
                 hidden_seen.add(path)
                 continue
+            current_turn_compacted = bool(
+                meta.get("current_turn_compacted")
+                or meta.get("current_turn_compaction_checkpoint")
+                or meta.get("kind") == "current_turn_compacted"
+            )
             hidden_seen.add(path)
+            if current_turn_compacted and path in explicit_current_turn_compacted_paths:
+                continue
             if turn_id and turn_id not in emitted_pruned_turn_data:
-                out.append({
-                    "type": "react.pruned.turn_data",
-                    "author": "react",
-                    "turn_id": turn_id,
-                    "path": f"ar:{turn_id}.react.pruned.turn_data",
-                    "text": (
+                if current_turn_compacted:
+                    data_type = "react.current_turn.compaction_checkpoint"
+                    data_path = f"ar:{turn_id}.react.mid_turn.compaction.fallback"
+                    data_text = (
+                        "[MID-TURN COMPACTION]\n"
+                        f"turn_id: {turn_id}\n"
+                        "position: current-turn prefix compacted here; newer timeline blocks below are normal\n"
+                        "semantic_progress:\n"
+                        "- Semantic summary unavailable for this fallback marker.\n"
+                        "engineering_ledger:"
+                    )
+                    data_meta = {"current_turn_compaction_checkpoint": True}
+                else:
+                    data_type = "react.pruned.turn_data"
+                    data_path = f"ar:{turn_id}.react.pruned.turn_data"
+                    data_text = (
                         "[PRUNED TURN DATA]\n"
                         f"turn_id: {turn_id}\n"
                         "retrieval_rows: logical paths and hints for hidden historical blocks"
-                    ),
+                    )
+                    data_meta = {"pruned_turn_data": True}
+                out.append({
+                    "type": data_type,
+                    "author": "react",
+                    "turn_id": turn_id,
+                    "path": data_path,
+                    "text": data_text,
                     "hidden": False,
                     "ts": "",
-                    "meta": {"pruned_turn_data": True},
+                    "meta": data_meta,
                 })
                 emitted_pruned_turn_data.add(turn_id)
             repl_blk = dict(blk)
             repl_blk.pop("base64", None)
             repl_meta = dict(meta)
-            repl_meta["pruned_retrieval_stub"] = True
+            if current_turn_compacted:
+                repl_meta["current_turn_compacted_ref"] = True
+            else:
+                repl_meta["pruned_retrieval_stub"] = True
             repl_blk["meta"] = repl_meta
             repl_blk["text"] = self._hidden_retrieval_stub(blk, include_path=True)
             repl_blk["hidden"] = False
-            repl_blk["type"] = "react.pruned.ref"
+            repl_blk["type"] = "react.current_turn.compacted_ref" if current_turn_compacted else "react.pruned.ref"
             repl_blk["ts"] = ""
             out.append(repl_blk)
         return out
@@ -3303,6 +3927,79 @@ class Timeline:
             keep_recent_tokens,
         )
 
+        split_turn_id = ""
+        protected_turn_start_index = turn_start_index
+        if is_split_turn and turn_start_index != -1:
+            split_turn_id = (blocks[turn_start_index].get("turn_id") or blocks[turn_start_index].get("turn") or "").strip()
+            protected_turn_start_index = self._find_turn_extent_start_index(
+                blocks,
+                turn_start_index,
+                boundary_start,
+                split_turn_id,
+            )
+
+        current_turn_id = (self.runtime.turn_id or "").strip()
+        split_current_turn = bool(is_split_turn and split_turn_id and current_turn_id and split_turn_id == current_turn_id)
+        current_turn_compaction: Dict[str, Any] = {"blocks_hidden": 0, "tokens_hidden": 0, "refs": [], "hidden_paths": []}
+        if split_current_turn:
+            original_cut_index = cut_index
+            prefix_summary = ""
+            prefix_blocks_for_summary = copy.deepcopy(blocks[protected_turn_start_index:original_cut_index])
+            if prefix_blocks_for_summary:
+                try:
+                    prefix_working_summary_blocks = self._working_summary_blocks_for_turns(
+                        blocks=blocks,
+                        turn_ids=extract_turn_ids_from_blocks(prefix_blocks_for_summary),
+                        exclude_blocks=prefix_blocks_for_summary,
+                    )
+                    from kdcube_ai_app.apps.chat.sdk.tools.backends.summary.conv_progressive_summary import summarize_turn_prefix_progressive
+                    prefix_summary = await summarize_turn_prefix_progressive(
+                        svc=self.svc,
+                        blocks=prefix_blocks_for_summary,
+                        max_tokens=900,
+                        working_summary_blocks=prefix_working_summary_blocks,
+                    ) or ""
+                except Exception:
+                    logger.exception(
+                        "[context.compaction:current_turn_prefix_summary_failed] split_turn_id=%s prefix_blocks=%s",
+                        split_turn_id,
+                        len(prefix_blocks_for_summary),
+                    )
+                    prefix_summary = ""
+            current_turn_compaction = self._compact_current_turn_prefix_blocks_in_place(
+                blocks=blocks,
+                turn_id=split_turn_id,
+                start_index=protected_turn_start_index,
+                end_index=original_cut_index,
+            )
+            compacted_data_sequence = 1 + sum(
+                1
+                for blk in blocks
+                if isinstance(blk, dict)
+                and (blk.get("type") or "").strip() == "react.current_turn.compaction_checkpoint"
+                and (blk.get("turn_id") or blk.get("turn") or "").strip() == split_turn_id
+            )
+            compacted_data_block = self._build_mid_turn_compaction_checkpoint_block(
+                turn_id=split_turn_id,
+                semantic_summary=prefix_summary,
+                refs=current_turn_compaction.get("refs") or [],
+                hidden_paths=current_turn_compaction.get("hidden_paths") or [],
+                ts=_last_block_ts(blocks[protected_turn_start_index:original_cut_index]),
+                sequence=compacted_data_sequence,
+            )
+            if compacted_data_block:
+                blocks.insert(original_cut_index, compacted_data_block)
+                boundary_end += 1
+            # Current-turn data has not yet been finalized into immutable turn
+            # history. The compaction boundary must therefore never move past
+            # any current-turn block. We compact only prior history here; large
+            # current-turn blocks stay in the timeline, are hidden only in the
+            # rendered projection, and get one explicit retrieval block at the
+            # original cut point.
+            cut_index = protected_turn_start_index
+            turn_start_index = protected_turn_start_index
+            is_split_turn = False
+
         previous_summary: Optional[str] = None
         previous_summary_meta: Dict[str, Any] = {}
         for idx in range(boundary_start - 1, -1, -1):
@@ -3319,11 +4016,29 @@ class Timeline:
             break
 
         history_end = turn_start_index if is_split_turn else cut_index
-        history_blocks = [
+        raw_history_blocks = [
             blk
             for blk in blocks[boundary_start:history_end]
             if not self._is_compaction_summary_block(blk)
         ]
+        history_has_meaningful_blocks = any(
+            self._is_meaningful_compaction_history_block(blk)
+            for blk in raw_history_blocks
+        )
+        history_blocks = raw_history_blocks if history_has_meaningful_blocks else []
+
+        if split_current_turn and not history_blocks:
+            self.blocks = list(blocks)
+            if int(current_turn_compaction.get("blocks_hidden") or 0) > 0:
+                self.update_timestamp()
+            logger.info(
+                "[context.compaction:current_turn_only] split_turn_id=%s current_blocks_preserved=true blocks_hidden=%s tokens_hidden=%s",
+                split_turn_id,
+                current_turn_compaction.get("blocks_hidden"),
+                current_turn_compaction.get("tokens_hidden"),
+            )
+            return blocks
+
         history_working_summary_blocks = self._working_summary_blocks_for_turns(
             blocks=blocks,
             turn_ids=extract_turn_ids_from_blocks(history_blocks),

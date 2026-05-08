@@ -68,7 +68,7 @@ def _split_turn_artifact_path(path: str) -> Optional[Tuple[str, str, str]]:
         return None
     return turn_id, namespace, rel
 
-EXEC_TEXT_PREVIEW_MAX_BYTES = 20000
+EXEC_TEXT_PREVIEW_MAX_SYMBOLS = 8000
 INFRA_LOG_TAIL_CHARS = 12000
 USER_LOG_TAIL_CHARS = 4000
 TEXT_MIME_TYPES = {
@@ -773,7 +773,7 @@ class ExecTools:
         contract: Annotated[Any, "List or JSON string of artifact specs (filename, description, optional visibility=external|internal) that you plan your future code to produce."],
         prog_name: Annotated[Optional[str], "Short name of the program for UI labeling."] = None,
         timeout_s: Annotated[Optional[int], "Execution timeout seconds (default: 600)."] = None,
-    ) -> Annotated[dict, "Envelope: ok/out_dyn/out/error/summary."]:
+    ) -> Annotated[dict, "Envelope: ok/artifacts/items/error/report_text."]:
         pass
 
     # @kernel_function(
@@ -831,7 +831,7 @@ class ExecTools:
         self,
         prog_name: Annotated[Optional[str], "Short name of the program for UI labeling."] = None,
         timeout_s: Annotated[Optional[int], "Execution timeout seconds (default: 600)."] = None,
-    ) -> Annotated[dict, "Envelope: ok/out_dyn/out/error/summary."]:
+    ) -> Annotated[dict, "Envelope: ok/artifacts/items/error/report_text."]:
         pass
 
 
@@ -848,6 +848,7 @@ async def run_exec_tool(
     exec_id: Optional[str] = None,
     exec_runtime: Optional[Dict[str, Any]] = None,
     bundle_storage_dir: Optional[str] = None,
+    text_preview_max_symbols: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Execute pre-written code using the same runtime as codegen.
@@ -956,6 +957,11 @@ async def run_exec_tool(
     missing: List[str] = []
     errors: List[Dict[str, Any]] = []
     succeeded: List[Dict[str, Any]] = []
+    try:
+        preview_max_symbols = int(text_preview_max_symbols or EXEC_TEXT_PREVIEW_MAX_SYMBOLS)
+    except Exception:
+        preview_max_symbols = EXEC_TEXT_PREVIEW_MAX_SYMBOLS
+    preview_max_symbols = max(0, preview_max_symbols)
     for a in contract or []:
         rel = a["filename"]
         p = resolve_artifact_path(outdir, rel)
@@ -1015,16 +1021,15 @@ async def run_exec_tool(
             })
             continue
         text_content = ""
+        text_truncated = False
         is_text = _is_text_mime(a.get("mime") or "")
         if is_text:
             try:
-                with p.open("rb") as fh:
-                    data = fh.read(EXEC_TEXT_PREVIEW_MAX_BYTES + 1)
-                truncated = len(data) > EXEC_TEXT_PREVIEW_MAX_BYTES
-                if truncated:
-                    data = data[:EXEC_TEXT_PREVIEW_MAX_BYTES]
-                text_content = data.decode("utf-8", errors="ignore")
-                if truncated:
+                with p.open("r", encoding="utf-8", errors="ignore") as fh:
+                    text_content = fh.read(preview_max_symbols + 1) if preview_max_symbols else ""
+                text_truncated = len(text_content) > preview_max_symbols
+                if text_truncated:
+                    text_content = text_content[:preview_max_symbols]
                     text_content = (text_content.rstrip() + "\n...[truncated]").strip()
             except Exception:
                 text_content = ""
@@ -1037,6 +1042,9 @@ async def run_exec_tool(
             "description": a["description"],
             "visibility": a.get("visibility") or "external",
             "size_bytes": stats.get("size_bytes") if isinstance(stats, dict) else None,
+            "text_preview_symbols": len(text_content) if is_text else 0,
+            "text_preview_max_symbols": preview_max_symbols if is_text else 0,
+            "text_truncated": bool(text_truncated) if is_text else False,
             "write_warning": stats.get("write_warning") if isinstance(stats, dict) else None,
         }
         succeeded.append({

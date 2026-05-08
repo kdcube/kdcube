@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import json
 import logging
 
-from kdcube_ai_app.infra.accounting import with_accounting
+from kdcube_ai_app.infra.accounting import get_context, with_accounting
 from kdcube_ai_app.infra.service_hub.inventory import (
     create_cached_system_message,
     create_cached_human_message,
@@ -22,6 +22,14 @@ from kdcube_ai_app.apps.chat.sdk.tools import tools_insights
 log = logging.getLogger(__name__)
 
 
+def _caller_accounting_component(*, default: str = "context.compaction") -> str:
+    try:
+        component = str((get_context() or {}).get("component") or "").strip()
+    except Exception:
+        component = ""
+    return component or default
+
+
 SUMMARIZATION_SYSTEM_PROMPT = """You are a context summarization assistant. Your task is to read a conversation between a user and an AI coding assistant, then produce a structured summary following the exact format specified.
 
 Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary."""
@@ -30,7 +38,27 @@ SUMMARIZATION_PROMPT = """The messages above are a conversation to summarize. Cr
 
 Use this EXACT format:
 
-## Goal
+## Active Work Reminder
+active_request:
+- [One or two bullets that make the active request recognizable after compaction]
+retrieval_anchors:
+- phrase: "[exact user wording, error text, log phrase, or unique title]"
+- entity: "[tool id, function/class name, bundle id, task id, turn id, or subsystem]"
+- time: "[timestamp or time range if known]"
+read_refs:
+- [KDCube logical path only: ar:/tc:/fi:/ws:/su:/so:, or "(none yet)"]
+done:
+- [What has already been completed toward this active request]
+open:
+- [What remains unresolved or needs verification]
+next:
+- [The immediate next action the continuing model should take]
+recovery_plan:
+- first: "Use this visible reminder and the retained suffix before searching."
+- if_needed: "Use react.memsearch with the exact phrase/entity anchors above."
+- then_read: "Use react.read(read_refs) for exact old content; use ctx_tools.fetch_ctx(path=...) from exec only for large tc: results listed in read_refs."
+
+## Goals
 [What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]
 
 ## Constraints & Preferences
@@ -76,7 +104,7 @@ Treat these as high-signal. Preserve them in the appropriate sections:
 Live turn events may appear as `user.followup` or `user.steer` blocks:
 - `user.followup` = additional user input for the same running turn
 - `user.steer` = user redirection/stop signal for the same running turn
-Treat both as high-priority user intent updates. Preserve them in Goal, Constraints & Preferences, Key Decisions, Next Steps, or Critical Context wherever they materially changed what the agent should do next.
+Treat both as high-priority user intent updates. Preserve them in Goals, Constraints & Preferences, Key Decisions, Next Steps, or Critical Context wherever they materially changed what the agent should do next.
 
 If exact tool-result or artifact content is large enough that it will not remain
 visible after compaction, do not say the exact data is still "loaded", "in
@@ -84,7 +112,24 @@ memory", or "available" without naming the recovery path. Preserve the logical
 path and state that exact bulk processing should use exec code with
 `ctx_tools.fetch_ctx(path=...)` instead of repeated `react.read`.
 
-Keep each section concise. Preserve exact file paths, function names, and error messages."""
+The Active Work Reminder is the handoff and retrieval anchor for a future model
+that sees only compacted memory. Make it recognizable and searchable: include
+exact phrases, tool ids, task ids, turn ids, timestamps, and KDCube logical
+paths where available. `read_refs` must contain only model-facing logical refs
+(`ar:`, `tc:`, `fi:`, `ws:`, `su:`, or `so:`). Do not invent physical host file
+paths as recovery handles. If a user mentioned a host/local path, preserve it
+only as quoted context in `phrase` or Critical Context, not as `read_refs`.
+Avoid vague references like "that log" unless the same line names exact visible
+text or a logical ref. If there is truly no active work, write
+`open: - (none)`, `next: - wait for new user input`, `read_refs: - (none yet)`,
+and `recovery_plan: - first: "No recovery needed."`.
+`active_request` is the narrow resumable task the next model should recognize
+and continue. `## Goals` is the broader user/project objective set and may include
+completed or parked goals. Do not duplicate the same vague sentence in both.
+
+Keep each section concise. Preserve exact logical paths, function names, and
+error messages. Preserve user-provided physical paths only as context, not as
+readable recovery paths."""
 
 UPDATE_SUMMARIZATION_PROMPT = """The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.
 
@@ -98,7 +143,27 @@ Update the existing structured summary with new information. RULES:
 
 Use this EXACT format:
 
-## Goal
+## Active Work Reminder
+active_request:
+- [Refresh this from the latest user request and active unresolved work]
+retrieval_anchors:
+- phrase: "[exact user wording, error text, log phrase, or unique title]"
+- entity: "[tool id, function/class name, bundle id, task id, turn id, or subsystem]"
+- time: "[timestamp or time range if known]"
+read_refs:
+- [KDCube logical path only: ar:/tc:/fi:/ws:/su:/so:, or "(none yet)"]
+done:
+- [Completed work relevant to the active request]
+open:
+- [Current unresolved work or verification gaps]
+next:
+- [The immediate next action]
+recovery_plan:
+- first: "Use this visible reminder and the retained suffix before searching."
+- if_needed: "Use react.memsearch with the exact phrase/entity anchors above."
+- then_read: "Use react.read(read_refs) for exact old content; use ctx_tools.fetch_ctx(path=...) from exec only for large tc: results listed in read_refs."
+
+## Goals
 [Preserve existing goals, add new ones if the task expanded]
 
 ## Constraints & Preferences
@@ -142,7 +207,7 @@ Treat these as high-signal. Preserve them in the appropriate sections:
 Live turn events may appear as `user.followup` or `user.steer` blocks:
 - `user.followup` = additional user input for the same running turn
 - `user.steer` = user redirection/stop signal for the same running turn
-Treat both as high-priority user intent updates. Preserve them in Goal, Constraints & Preferences, Key Decisions, Next Steps, or Critical Context wherever they materially changed what the agent should do next.
+Treat both as high-priority user intent updates. Preserve them in Goals, Constraints & Preferences, Key Decisions, Next Steps, or Critical Context wherever they materially changed what the agent should do next.
 
 If exact tool-result or artifact content is large enough that it will not remain
 visible after compaction, do not say the exact data is still "loaded", "in
@@ -150,20 +215,79 @@ memory", or "available" without naming the recovery path. Preserve the logical
 path and state that exact bulk processing should use exec code with
 `ctx_tools.fetch_ctx(path=...)` instead of repeated `react.read`.
 
-Keep each section concise. Preserve exact file paths, function names, and error messages."""
+The Active Work Reminder is the handoff and retrieval anchor for a future model
+that sees only compacted memory. Keep it fresh, specific, and searchable:
+active request, exact phrase/entity/time anchors, KDCube logical refs,
+completed work, unresolved work, immediate next action, and concrete recovery
+path. `read_refs` must contain only model-facing logical refs (`ar:`, `tc:`,
+`fi:`, `ws:`, `su:`, or `so:`). Do not invent physical host file paths as
+recovery handles. If a user mentioned a host/local path, preserve it only as
+quoted context in `phrase` or Critical Context, not as `read_refs`. If there is
+truly no active work, write `open: - (none)`, `next: - wait for new user input`,
+`read_refs: - (none yet)`, and `recovery_plan: - first: "No recovery needed."`.
+`active_request` is the narrow resumable task the next model should recognize
+and continue. `## Goals` is the broader user/project objective set and may include
+completed or parked goals. Do not duplicate the same vague sentence in both.
+
+Keep each section concise. Preserve exact logical paths, function names, and
+error messages. Preserve user-provided physical paths only as context, not as
+readable recovery paths."""
 
 TURN_PREFIX_SUMMARIZATION_PROMPT = """This is the PREFIX of a turn that was too large to keep. The SUFFIX (recent work) is retained.
 
-Summarize the prefix to provide context for the retained suffix:
+Summarize the prefix to provide context for the retained suffix.
+Do not output a full conversation summary. Do not use `## Active Work Reminder`
+or `## Goals` here; those sections belong to prior-conversation summaries.
+This output is embedded under a `[MID-TURN COMPACTION]` block as
+`semantic_progress`.
 
-## Original Request
-[What did the user ask for in this turn?]
+active_request:
+- [Make the current turn's active request recognizable]
+retrieval_anchors:
+- phrase: "[exact user wording, error text, log phrase, result title, or unique phrase]"
+- entity: "[tool id, call id, artifact name, bundle id, task id, turn id, or subsystem]"
+- time: "[timestamp or time range if known]"
+read_refs:
+- [KDCube logical path only: ar:/tc:/fi:/ws:/su:/so:, or "(none yet)"]
+done:
+- [What the prefix already completed]
+open:
+- [What the suffix still needs to resolve]
+next:
+- [The immediate next action]
+recovery_plan:
+- first: "Continue from the retained suffix and this reminder."
+- if_needed: "Use react.memsearch with phrase/entity anchors."
+- then_read: "Use react.read(read_refs), or ctx_tools.fetch_ctx(path=...) only for large tc: results listed in read_refs."
 
-## Early Progress
+original_request:
+- [What did the user ask for in this turn?]
+
+early_progress:
 - [Key decisions and work done in the prefix]
 
-## Context for Suffix
+context_for_suffix:
 - [Information needed to understand the retained recent work]
+
+compacted_large_results:
+- [For each large tool result or artifact that will be compacted out of the
+  rendered prefix, name the logical path and explain how to exploit it
+  programmatically.]
+- Include the result shape/schema: top-level keys, important nested arrays,
+  item fields, counts, and status/error fields.
+- Include a tiny representative sample, not the whole payload. For list-like
+  data, show 1-2 sample items with field names and shortened values. For email
+  batches, include an example message object shape such as sender/from, subject,
+  date/internal_date, snippet/body_excerpt, message/thread ids, and any flags
+  present.
+- State the recommended recovery method, usually
+  `ctx_tools.fetch_ctx(path="<tc:...result>")` inside exec code for bulk
+  processing, or `react.read(["<tc:...result>"])` for small targeted inspection.
+- If there are files or sources produced by the result, mention their logical
+  paths or selector shape (`fi:...`, `so:sources_pool[...]`) and which tool call
+  produced them.
+- Do not claim the future agent has the full payload visible. Explain that the
+  payload is compacted in the render and must be reopened by logical path.
 
 Internal notes may appear as `react.note` blocks and are tagged [P]/[D]/[S]/[A]/[K].
 [A] means achievements, completed milestones, or project-level accomplishment notes.
@@ -175,7 +299,11 @@ If exact tool-result or artifact content is large enough that it will not remain
 visible after compaction, do not say the exact data is still "loaded", "in
 memory", or "available" without naming the recovery path. Preserve the logical
 path and state that exact bulk processing should use exec code with
-`ctx_tools.fetch_ctx(path=...)` instead of repeated `react.read`.
+`ctx_tools.fetch_ctx(path=...)` instead of repeated `react.read`. Also preserve
+enough structure and a tiny sample for the next model to write correct recovery
+code without guessing the payload schema.
+`active_request` is the narrow resumable task inside this turn prefix.
+`original_request` is the full user ask that started the turn.
 
 Be concise. Focus on what's needed to understand the kept suffix."""
 
@@ -215,6 +343,104 @@ def _textish(value: Any) -> str:
     if isinstance(value, str):
         return value.strip()
     return str(value).strip()
+
+
+def _clip_summary_value(value: Any, *, max_chars: int = 220) -> Any:
+    if isinstance(value, str):
+        text = " ".join(value.split())
+        if len(text) <= max_chars:
+            return text
+        return text[: max(0, max_chars - 1)].rstrip() + "…"
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    if isinstance(value, list):
+        return [_clip_summary_value(v, max_chars=max_chars) for v in value[:2]]
+    if isinstance(value, dict):
+        return {
+            str(k): _clip_summary_value(v, max_chars=max_chars)
+            for k, v in list(value.items())[:12]
+        }
+    return _clip_summary_value(str(value), max_chars=max_chars)
+
+
+def _payload_shape(value: Any, *, depth: int = 0) -> Any:
+    if depth > 3:
+        return type(value).__name__
+    if isinstance(value, list):
+        item_shape = _payload_shape(value[0], depth=depth + 1) if value else "empty"
+        return {"type": "list", "count": len(value), "item": item_shape}
+    if isinstance(value, dict):
+        return {
+            str(k): _payload_shape(v, depth=depth + 1)
+            for k, v in list(value.items())[:24]
+        }
+    if isinstance(value, str):
+        return "str"
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, int):
+        return "int"
+    if isinstance(value, float):
+        return "float"
+    if value is None:
+        return "null"
+    return type(value).__name__
+
+
+def _payload_sample(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_payload_sample(v) for v in value[:2]]
+    if isinstance(value, dict):
+        return {
+            str(k): _payload_sample(v)
+            for k, v in list(value.items())[:16]
+        }
+    return _clip_summary_value(value, max_chars=260)
+
+
+def _summarize_large_tool_result_text(
+    *,
+    text: str,
+    header: str,
+    path: str,
+    min_tokens: int = 3000,
+) -> str:
+    approx_tokens = _approx_tokens(text)
+    if approx_tokens < min_tokens:
+        return text.strip()
+    parsed: Any = None
+    parse_error = ""
+    try:
+        parsed = json.loads(text)
+    except Exception as exc:
+        parse_error = str(exc)
+
+    lines = [
+        f"({header})",
+        "[TRUNCATED LARGE TOOL RESULT FOR COMPACTION SUMMARY]",
+        f"approx_tokens: {approx_tokens}",
+    ]
+    if path:
+        lines.append(f"logical_path: {path}")
+        lines.append(f"recover_with: ctx_tools.fetch_ctx(path={json.dumps(path)}) inside exec code for bulk processing")
+    else:
+        lines.append("recover_with: use the matching tc:<turn>.<call>.result path from the engineering ledger")
+
+    if parsed is not None:
+        try:
+            lines.append("shape:")
+            lines.append(json.dumps(_payload_shape(parsed), ensure_ascii=False, indent=2)[:4000])
+            lines.append("sample:")
+            lines.append(json.dumps(_payload_sample(parsed), ensure_ascii=False, indent=2)[:8000])
+        except Exception:
+            lines.append("sample:")
+            lines.append(text[:8000])
+    else:
+        lines.append(f"parse_error: {parse_error}")
+        lines.append("sample:")
+        lines.append(text[:8000])
+    lines.append("[END TRUNCATED LARGE TOOL RESULT]")
+    return "\n".join(lines).strip()
 
 
 def _serialize_context_blocks_for_compaction(blocks: List[dict]) -> str:
@@ -329,7 +555,12 @@ def _serialize_context_blocks_for_compaction(blocks: List[dict]) -> str:
 
         if btype == "react.tool.result":
             if isinstance(text, str) and text.strip():
-                parts.append(f"[Tool result]: {text.strip()}")
+                rendered = _summarize_large_tool_result_text(
+                    text=text,
+                    header=_format_header(header_parts),
+                    path=path,
+                )
+                parts.append(f"[Tool result]: {rendered}")
             else:
                 parts.append(f"[Tool result]: ({_format_header(header_parts)})")
             continue
@@ -720,7 +951,7 @@ async def summarize_context_blocks_progressive(
         user_message = create_cached_human_message(prompt_text)
         role = "context.compaction.summary"
         token_cap = max(1, int(max_tokens * 0.8)) if max_tokens else max_tokens
-        async with with_accounting("context.compaction", agent=role, metadata={"agent": role}):
+        async with with_accounting(_caller_accounting_component(), agent=role, metadata={"agent": role}):
             result = await stream_agent_to_json(
                 svc,
                 client_name=role,
@@ -796,7 +1027,7 @@ async def summarize_turn_prefix_progressive(
         user_message = create_cached_human_message(prompt_text)
         role = "context.compaction.turn_prefix"
         token_cap = max(1, int(max_tokens * 0.8)) if max_tokens else max_tokens
-        async with with_accounting("context.compaction", agent=role, metadata={"agent": role}):
+        async with with_accounting(_caller_accounting_component(), agent=role, metadata={"agent": role}):
             result = await stream_agent_to_json(
                 svc,
                 client_name=role,

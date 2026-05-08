@@ -254,6 +254,12 @@ class ReactReadView(ToolCallView):
         cfg: Optional[TruncationConfig] = None,
     ) -> str:
         cfg = _tool_result_cfg(cfg)
+        text = tool_result_block.get("text")
+        if isinstance(text, str) and (
+            "[LARGE READ NOT MATERIALIZED]" in text
+            or "[READ PREVIEW TRUNCATED]" in text
+        ):
+            return _compact_replacement_lines(text, cfg) or _truncate_text_block(text, cfg)[0]
         truncated_payload, did = _truncate_payload(payload, cfg)
         out = {
             "tool_id": self.tool_id,
@@ -677,6 +683,10 @@ _TTL_REPLACEMENT_KEEP_KEYS = (
     "physical_path",
     "filename",
     "mime",
+    "bytes:",
+    "tokens:",
+    "text_symbols:",
+    "visible_read_limit",
     "url",
     "sid",
     "react.read",
@@ -1072,7 +1082,20 @@ def apply_cache_ttl_pruning(
                 view = _get_view(tool_id)
                 rep = view.build_result_replacement(tool_result_block=blk, payload=payload or {}, cfg=cfg)
         elif path.startswith("fi:"):
-            rep = _build_file_replacement(blk)
+            meta = blk.get("meta") if isinstance(blk.get("meta"), dict) else {}
+            call_id = (meta.get("tool_call_id") or blk.get("call_id") or "").strip()
+            tool_id = ""
+            if call_id and call_id in call_meta:
+                tool_id = call_meta[call_id].get("tool_id") or ""
+            if btype == "react.tool.result" and tool_id == "react.read":
+                payload = _parse_json(blk.get("text") or "") if isinstance(blk.get("text"), str) else None
+                rep = _get_view(tool_id).build_result_replacement(
+                    tool_result_block=blk,
+                    payload=payload or {},
+                    cfg=cfg,
+                )
+            else:
+                rep = _build_file_replacement(blk)
         else:
             rep = _build_generic_replacement(blk, cfg)
 

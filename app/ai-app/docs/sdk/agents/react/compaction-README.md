@@ -107,17 +107,16 @@ A **turn start block** is:
 - `turn.header` or `user.prompt`, or
 - any block with `author == user`
 
-If the cut does **not** land on a turn start in the **current turn**, it is a
-split‑turn cut and the prefix of that turn is summarized separately under:
-
-`"Turn Context (split turn)"`
-
-The cut block itself remains in the retained window.
+If the tentative cut lands inside the **current turn**, the current turn is
+protected. Blocks from the active turn have not yet been finalized into an
+immutable turn log, so compaction must not move the summary boundary past them.
+Large current-turn blocks may be hidden in the model-facing projection, but the
+original `tc:`, `ar:`, and `fi:` blocks stay in the active timeline under their
+original logical paths.
 
 If the tentative cut lands inside a historical, non-current turn, the cut is advanced
 to the next turn boundary and the historical turn is compacted as a whole. The
-turn-prefix summarizer is only for a too-large current turn prefix; it is not a
-gate that decides whether historical compaction may proceed.
+turn-prefix summarizer is not allowed to replace active current-turn data.
 
 ---
 
@@ -128,7 +127,8 @@ Compaction inserts a **summary block**:
 - `path = su:<turn_id>.conv.range.summary`
 - `meta.compaction_digest` describes compacted artifacts
 - `meta.covered_turn_ids` lists turns compacted into the summary
-- `meta.split_turn_id` exists if compaction cut a turn in half
+- `meta.split_turn_id` may exist on older/legacy summaries; current-turn data
+  must not be summarized behind a split-turn summary boundary
 
 The model-facing renderer wraps this block as a prior-conversation checkpoint:
 
@@ -138,13 +138,44 @@ The model-facing renderer wraps this block as a prior-conversation checkpoint:
 covered_turns: first_turn, second_turn, ... penultimate_turn, last_turn (count=N)
 compacted_time_range: 2026-02-01T10:00:00Z -> 2026-02-03T12:30:00Z
 conversation_first_message_ts: 2026-02-01T10:00:00Z
-split_turn_id: turn_b
 origin: model-generated compaction of older timeline blocks removed from the visible stream
 use: treat this as prior conversation state; newer visible turns below may supersede it
 recovery: use logical paths from the summary or react.memsearch/react.read when exact old content is needed
-<model-generated summary text>
+## Active Work Reminder
+active_request:
+- <recognizable active request>
+retrieval_anchors:
+- phrase: "<exact error, log phrase, user wording, or unique title>"
+- entity: "<tool id, function/class name, bundle id, task id, turn id, or subsystem>"
+- time: "<timestamp or time range if known>"
+read_refs:
+- <KDCube logical path only: ar:/tc:/fi:/ws:/su:/so:, or "(none yet)">
+done:
+- <completed work relevant to this request>
+open:
+- <unresolved work or verification gaps>
+next:
+- <immediate next action>
+recovery_plan:
+- first: "Use this visible reminder and retained suffix before searching."
+- if_needed: "Use react.memsearch with the exact phrase/entity anchors above."
+- then_read: "Use react.read(read_refs) for exact old content; use ctx_tools.fetch_ctx(path=...) from exec only for large tc: results listed in read_refs."
+
+<rest of model-generated summary text>
 [END COMPACTED PRIOR CONVERSATION MEMORY]
 ```
+
+`Active Work Reminder` is intentionally duplicated inside every compacted memory
+summary. It is the fast re-orientation and retrieval block for the next model
+after one or many compactions. It should make a follow-up like "do this now" or
+"address the other issue from that log" resolvable before the model decides
+whether to use `react.memsearch`. If search is needed, the reminder should
+already contain exact phrases, entities, timestamps, and model-facing logical
+refs that make search and read recovery cheap and precise. `read_refs` must not
+contain physical host paths; only KDCube logical paths are readable by
+`react.read`. `active_request` is the narrow resumable task; `Goals` in the
+rest of the summary is the broader set of user/project objectives and may
+include completed or parked work.
 
 The debug files under `debug/rendering/rendered-...txt` are written from the
 same model message blocks sent to the decision agent, so they are the right
@@ -171,45 +202,81 @@ Compaction may also insert plan-carry blocks immediately after the summary:
 - stable `ar:` latest-snapshot aliases for plans:
   - `ar:plan.latest:<plan_id>`
 
-When compaction cuts the **current turn** before it completes, it also inserts a
-compact current-turn prefix in timeline shape:
+When compaction is forced by a too-large **current turn**, it does **not** insert
+a prior-conversation summary for the current turn prefix. Instead:
 
-- `type = react.rounds.compacted`
-- `path = ar:<turn_id>.react.rounds.compacted`
-- includes compact user/followup/steer messages from the compacted prefix
-- includes compact rounds with `react.thinking`, `react.notes`, `react.note`,
-  tool calls, tool results, notices, code blocks, and assistant messages
-- large tool results render as compact result rows with logical recovery paths
+- prior history, if any, is summarized before the current turn
+- if there is no prior history, no `conv.range.summary` is created
+- current-turn blocks stay in the timeline and in `timeline.json`
+- the compacted current-turn prefix is hidden only in the rendered projection
+- the compactor inserts one visible `[MID-TURN COMPACTION n]` checkpoint at the
+  original cut point, between the compacted prefix and the retained suffix
+- if multiple mid-turn compactions happen in one turn, the renderer shows only
+  the latest checkpoint
+- the checkpoint `engineering_ledger` is rebuilt from the current-turn timeline
+  prefix each time; it is not copied or parsed from older checkpoint text
+- blocks hidden by an earlier mid-turn compaction are still scanned when the
+  latest checkpoint is rebuilt, because they remain timeline blocks with their
+  original logical paths and original token estimates
 
 Model-facing shape:
 
 ```text
-[COMPACTED CURRENT TURN PREFIX]
-[path: ar:<turn_id>.react.rounds.compacted]
 TURN <turn_id> (started at ...)
-[compacted current-turn prefix: continue from this timeline; do not assume the turn is blank]
 
 [USER MESSAGE]
 [path: ar:<turn_id>.user.prompt]
 ...
 
-┌──────── COMPACTED ROUND 1 ────────┐
-  [AI Agent thinking...]
-  ...
-  [AI Agent say]: ...
-  [TOOL CALL <call_id>].call email.process_user_emails
-  tc:<turn_id>.<call_id>.call
-  Params:
-  mailbox="INBOX" max_messages=50
-  [TOOL RESULT <call_id>].result email.process_user_emails
-  logical_path: tc:<turn_id>.<call_id>.result
-  Status: success
-  result_tokens: 89167
-  result: compacted large result; exact content is recoverable by logical_path
-  recover_with: exec_tools.execute_code_python + ctx_tools.fetch_ctx(path='tc:<turn_id>.<call_id>.result')
-└────────────────────────┘
+[MID-TURN COMPACTION 1]
+turn_id: <turn_id>
+position: current-turn prefix compacted here; newer timeline blocks below are normal
+use: continue from the timeline below; this is not prior conversation memory
+recovery: exact source blocks remain in timeline.json; use react.read(path) or ctx_tools.fetch_ctx(path) from exec
 
-┌──────── COMPACTED ROUND 2 ────────┐
+semantic_progress:
+active_request:
+- <immediate current-turn request>
+retrieval_anchors:
+- phrase: "<exact user wording, error text, result title, or unique phrase>"
+- entity: "<tool id, call id, artifact name, turn id, or subsystem>"
+- time: "<timestamp or range if known>"
+read_refs:
+- <tc:/ar:/fi:/ws:/su:/so: logical refs, or "(none yet)">
+done:
+- <prefix work already completed>
+open:
+- <what the retained suffix still needs to resolve>
+next:
+- <immediate next action>
+recovery_plan:
+- first: "Continue from the retained suffix and this reminder."
+- then_read: "Use ctx_tools.fetch_ctx(path=...) from exec for large tc: results."
+original_request:
+- <full user ask that started the turn>
+early_progress:
+- <key choices and work done before this checkpoint>
+context_for_suffix:
+- <facts needed to understand the normal timeline blocks below>
+compacted_large_results:
+- <logical path, result shape/schema, tiny sample, and recovery method>
+
+engineering_ledger:
+- tool_call_id: <call_id>
+  tool: email.process_user_emails
+  call: tc:<turn_id>.<call_id>.call
+  params: "..."
+  result: tc:<turn_id>.<call_id>.result
+  result_tokens_estimate: 89167
+  result_shape: "ok=bool, messages=list[50]"
+  result_hint: "ok=true ..."
+  files:
+  - fi:<turn_id>.outputs/report.pdf mime=application/pdf
+  sources:
+  - so:sources_pool[1-3]
+[/MID-TURN COMPACTION 1]
+
+┌──────── ROUND 2 ────────┐
   [TOOL CALL <read_call>].call react.read
   ...
   [TOOL RESULT <read_call>].result react.read
@@ -220,7 +287,8 @@ TURN <turn_id> (started at ...)
 
 **Summary content** is generated by:
 - `summarize_context_blocks_progressive(..., max_tokens=800)`
-- plus `summarize_turn_prefix_progressive(..., max_tokens=400)` only if the cut splits the current turn
+- `summarize_turn_prefix_progressive(..., max_tokens=900)` for the
+  `semantic_progress` section of mid-turn checkpoints
 
 Compaction summaries are model-generated. If the model returns an empty summary,
 the caller must treat that as a failed/empty compaction result and avoid replacing
@@ -230,10 +298,16 @@ history with a mechanical fallback summary.
 
 ## What Exactly Gets Summarized
 Compaction summarizes **everything between the last summary (if any) and the cut point**.
-The retained window starts **at the cut point**.
+For historical compaction, the retained window starts **at the cut point**.
+For a current-turn split, the cut point is moved back to the beginning of the
+current turn before summary insertion.
 
-If the cut falls **inside a turn**, only the **prefix** of that turn is summarized
-(and included under “Turn Context (split turn)”). The cut block itself stays visible.
+If the cut falls inside the **current turn**, current-turn blocks are not
+summarized away. The compaction boundary is moved to before the current turn,
+and large current-turn data blocks are compacted only in the rendered view.
+
+If the cut falls inside an older turn, the cut advances to the next turn
+boundary so the older turn is summarized as a whole.
 
 If a turn contains multiple `assistant.completion` blocks, compaction treats each visible
 completion as an ordinary message block. The latest-path alias still points to the most recent
@@ -266,12 +340,29 @@ origin: model-generated compaction of older timeline blocks removed from the vis
 use: prior conversation state; newer visible turns below may supersede it
 recovery: use logical paths from the summary or react.memsearch/react.read for exact content
 
-Goal: ...
-Outcome: ...
-Key facts:
-- ...
-Key artifacts:
-- fi:...
+## Active Work Reminder
+active_request:
+- fix the processor idle watchdog regression from the May 8 log
+retrieval_anchors:
+- phrase: "Task idle timeout exceeded after 600.768s"
+- entity: "processor watchdog; ChatCommunicator.emit; ClaudeCodeAgent stdout reader"
+- time: "2026-05-08T14:01:55Z to 2026-05-08T16:12:15Z"
+read_refs:
+- su:<turn_id>.conv.range.summary
+- ar:<turn_id>.assistant.completion
+done:
+- mid-turn compaction representation was fixed
+open:
+- verify chat emissions refresh active task activity during long ReAct turns
+next:
+- inspect processor activity tracking and communicator event paths
+recovery_plan:
+- first: "Use this visible reminder and the retained suffix."
+- if_needed: "react.memsearch query='Task idle timeout exceeded after 600.768s processor watchdog' targets=['summary','user','assistant','tool'] mode='timeline'"
+- then_read: "react.read(read_refs plus any ar:/tc:/su: paths named by memsearch results)"
+
+## Goals
+...
 [END COMPACTED PRIOR CONVERSATION MEMORY]
 
 [ACTIVE/CARRIED PLAN]             # only if an active plan would otherwise be lost
@@ -290,21 +381,30 @@ SOURCES POOL / ANNOUNCE           # appended tail blocks when requested
 Schematic visible stream when the current turn itself is too large:
 
 ```text
-[COMPACTED PRIOR CONVERSATION MEMORY]
+[COMPACTED PRIOR CONVERSATION MEMORY]   # only when prior history existed
 path: su:<current_turn>.conv.range.summary
-covered_turns: previous turns and the current-turn prefix
-split_turn_id: <current_turn>
-
-<summary of prior history>
-
----
-
-Turn Context (split turn):
-<summary of current-turn prefix>
+covered_turns: previous historical turns
+<summary of prior history only>
 [END COMPACTED PRIOR CONVERSATION MEMORY]
 
 TURN <current_turn> (started at ...)
-  ... retained current-turn suffix from the cut point onward ...
+  [USER MESSAGE]
+
+[MID-TURN COMPACTION 1]             # inserted where the compaction cut happened
+semantic_progress:
+active_request:
+- <current-turn request>
+done/open/next:
+- <compact turn-prefix handoff>
+compacted_large_results:
+- <large result paths, shape, and recovery method>
+engineering_ledger:
+- tool_call: path=tc:<current_turn>.<call>.call ...
+- tool_result: path=tc:<current_turn>.<call>.result ...
+[/MID-TURN COMPACTION 1]
+
+  [TOOL CALL react.read or exec_tools.execute_code_python ...]
+  ... current turn continues ...
 ```
 
 What remains visible after compaction:
@@ -313,6 +413,11 @@ What remains visible after compaction:
 - plan carry/history blocks needed to preserve active plan state
 - preserved user followup/steer blocks whose originals fell behind the cut
 - the retained suffix from the selected cut point onward
+- for current-turn splits, the entire active current turn with large data blocks
+  retained in `timeline.json`; the rendered view shows only the latest
+  mid-turn compaction checkpoint plus the normal retained suffix
+- the latest mid-turn checkpoint's `engineering_ledger`, recomputed from the
+  current-turn timeline prefix rather than inherited from older checkpoint text
 - user/assistant messages, tool calls/results, files, source-pool rows, and
   attachment blocks that belong to the retained suffix
 - appended sources/announce blocks when render requested them
@@ -323,17 +428,20 @@ What does not remain visible:
 - older raw turns that were summarized into the checkpoint
 - older hidden TTL-pruning skeleton rows that fell before the compaction cut
 
-The old artifacts are not deleted by compaction. Their logical paths remain
-recoverable through `react.read`, `react.memsearch`, and refs carried in the
-summary/digest.
+Historical artifacts are not deleted from durable storage by compaction. Current
+turn artifacts are stronger: they are not moved behind the summary boundary at
+all, because before turn finalization the active timeline is their source of
+truth. Their logical paths remain directly reachable by `react.read` and by
+`ctx_tools.fetch_ctx(path=...)` from generated exec code.
 
 ---
 
 ## Persistence Rule
 After compaction, the timeline is **persisted from the last summary onward**:
 
-- In‑memory for the current turn: pre‑summary blocks still exist but are no
-  longer visible.
+- Current-turn split invariant: the latest summary, if inserted, is placed
+  before the current turn. Current-turn blocks remain after the summary and are
+  persisted with their original logical paths.
 - On persistence / next turn load: only blocks **from the latest summary onward**
   are kept.
 - Historical plan refs that were carried forward remain readable after persistence because their preserved copies live after the summary boundary.
@@ -354,6 +462,16 @@ The rules are the same as normal rendering:
 3. **Tail cache point** (last block in visible stream)
 
 This ensures caching stays valid even after summary insertion.
+
+## Accounting
+Compaction LLM calls are charged under the caller component, usually the active
+bundle id, with the specific compaction role stored as the accounting agent:
+
+- `context.compaction.summary`
+- `context.compaction.turn_prefix`
+
+This keeps bundle-level spend grouped with the turn that triggered compaction
+while still preserving a breakdown by compaction role.
 
 ---
 

@@ -15,7 +15,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Dict, Any, Iterable
+from typing import Optional, Dict, Any, Iterable, List
 
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.continuations import build_conversation_continuation_source
@@ -26,7 +26,10 @@ from kdcube_ai_app.apps.chat.processor_scheduler_backend import (
 )
 from kdcube_ai_app.apps.chat.sdk.continuations import bind_current_conversation_continuation_source
 from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_rag import ContextRAGClient
-from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_request_context
+from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import (
+    bind_current_request_context,
+    bind_current_task_activity_touch,
+)
 from kdcube_ai_app.infra.availability.health_and_heartbeat import MultiprocessDistributedMiddleware, logger
 from kdcube_ai_app.infra.aws.ecs_container_instance_drain import (
     build_ecs_container_instance_drain_detector,
@@ -515,6 +518,7 @@ class EnhancedChatRequestProcessor:
         now = time.monotonic()
         oldest_active_task_wall_age_sec = 0.0
         max_active_task_idle_age_sec = 0.0
+        active_task_details: List[Dict[str, Any]] = []
         for task in list(self._active_tasks):
             info = self._active_task_details.get(task) or {}
             ages = self._task_age_snapshot(info, now=now)
@@ -524,9 +528,32 @@ class EnhancedChatRequestProcessor:
                 oldest_active_task_wall_age_sec = max(oldest_active_task_wall_age_sec, float(wall_age))
             if idle_age is not None:
                 max_active_task_idle_age_sec = max(max_active_task_idle_age_sec, float(idle_age))
+            active_task_details.append(
+                {
+                    "task_id": info.get("task_id"),
+                    "queue_key": info.get("queue_key"),
+                    "inflight_queue_key": info.get("inflight_queue_key"),
+                    "started_execution": bool(info.get("started_execution")),
+                    "started_at": info.get("started_at"),
+                    "claimed_at": info.get("claimed_at"),
+                    "last_activity_at": info.get("last_activity_at"),
+                    "last_activity_kind": info.get("last_activity_kind"),
+                    "activity_count": int(info.get("activity_count") or 0),
+                    "wall_age_sec": wall_age,
+                    "idle_age_sec": idle_age,
+                }
+            )
+        active_task_details.sort(
+            key=lambda row: (
+                float(row.get("idle_age_sec") or 0.0),
+                str(row.get("task_id") or ""),
+            ),
+            reverse=True,
+        )
         metadata = {
             "current_load": self._current_load,
             "active_tasks": len(self._active_tasks),
+            "active_task_details": active_task_details,
             "draining": self._stop_event.is_set(),
             "host_draining": self._host_draining,
             "host_draining_since": self._host_draining_since,
@@ -2120,8 +2147,14 @@ class EnhancedChatRequestProcessor:
                             "turn_id": payload.routing.turn_id,
                         }):
                             with bind_current_request_context(payload, comm=tracked_comm):
-                                with bind_current_conversation_continuation_source(continuation_source):
-                                    result = await self._run_handler_with_watchdog(payload)
+                                with bind_current_task_activity_touch(
+                                        lambda kind, _task=processor_task: self._touch_task_activity(
+                                            kind,
+                                            task=_task,
+                                        )
+                                ):
+                                    with bind_current_conversation_continuation_source(continuation_source):
+                                        result = await self._run_handler_with_watchdog(payload)
 
                 result = result or {}
                 success = True

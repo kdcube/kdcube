@@ -446,6 +446,8 @@ Skills (react.read only):
 HARD:
 - `react.read` expects LOGICAL paths.
 - If you need several exact objects, pass all known paths in one react.read call instead of spending one round per path.
+- For large text, `react.read` is visible-context retrieval, not bulk loading. It returns a configured bounded text preview by default; use `max_text_symbols` only when you need a smaller explicit preview. Use exec code with `ctx_tools.fetch_ctx(path)` for exact bulk processing when supported. `max_text_symbols` does not apply to PDF/image multimodal data; those are attached only when under the configured byte cap.
+- `react.read` caps apply per path, not across the whole path list. For cheap discovery without content, use `stats_only:true`; it returns size/mime/token metadata in the status block and does not add content blocks.
 - `ctx_tools.fetch_ctx` expects LOGICAL paths, but only supports `ar:`, `tc:`, `so:` namespaces. `fi:`, `ks:`, `sk:`, or `su:` are not supported.
 - Tools that take paths (`react.patch`, `rendering_tools.write_*`) expect PHYSICAL paths.
 - Exec code reads and writes PHYSICAL OUTPUT_DIR-relative paths.
@@ -533,6 +535,7 @@ Using unsupported logical namespaces with fetch_ctx returns an error rather than
   - `size_bytes`
   - `logical_path`: for OUT_DIR hits, suitable for `react.read`
 - OUT_DIR hits are readable via `react.read(logical_path)`.
+- If the text file is large and you only need to inspect shape/content, call `react.read({"paths":[logical_path]})` for the configured preview, or add `max_text_symbols` for a smaller explicit preview. If you only need metadata first, call `react.read({"paths":[logical_path],"stats_only":true})`. If you need all bytes, process it with exec using the physical OUTPUT_DIR path or a supported logical `ctx_tools.fetch_ctx` path.
 - workdir hits remain discovery-only with the current toolset.
 - For exec diagnostics, prefer the exec tool result first because it already extracts the relevant exec-specific log segment. Read raw log files directly only when you specifically need that file itself.
 

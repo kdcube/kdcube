@@ -100,16 +100,27 @@ If the target path is **before** the pre‑tail cache point, the tool returns
 
 Behavior
 - Emits a **status block first** at `tc:<turn_id>.<tool_call_id>.result` with:
-  `paths`, `missing`, `missing_skills`, `exists_in_visible_context`, `total_tokens`.
+  `paths`, `missing`, `missing_skills`, `exists_in_visible_context`, `total_tokens`,
+  and the active visible read caps.
 - Emits result blocks **after** the status block.
 - Re-exposes hidden artifacts (output blocks always have `hidden=false`).
 - Dedup: if the reconstructed block already exists in visible context (same path + hash),
   it is not re-emitted and the status block records `exists_in_visible_context`.
+- Text reads are bounded by `read_visible_max_text_symbols`,
+  `read_visible_max_tokens`, and optional per-call `max_text_symbols`.
+- These caps apply per path. They are not divided across a multi-path
+  `react.read` call.
+- All readable payloads are also bounded by `read_visible_max_bytes`.
+- `stats_only: true` emits only the status block with size/mime/token metadata
+  and does not materialize text or base64 content blocks.
+- PDF/image reads are not partially sliced. Under the byte cap, the whole
+  payload is emitted as multimodal `base64`; over the cap, React emits a
+  recovery marker instead of content.
 
 Path handling
 - `fi:` rehosts the file locally and emits:
   - metadata digest block (JSON text)
-  - file content block when readable (text or base64 for pdf/image); binary files emit metadata only
+  - file content block when readable and under caps (text or base64 for pdf/image); binary files emit metadata only
 - `so:sources_pool[...]`:
   - file/attachment rows resolve as `fi:`
   - non-file rows render as sources_pool text
@@ -230,8 +241,10 @@ Exec tools produce:
 - A **text report** at `tc:<turn_id>.<tool_call_id>.result` describing runtime error (if any),
   file‑level errors, and the list of produced files.
 - Per‑file blocks **only for produced artifacts** (meta + optional binary/text).
-- For **text files**, exec will embed up to **20 KB** of file content in the content block
-  (larger files are truncated with a `...[truncated]` suffix).
+- For **text files**, exec embeds a bounded text preview in the content block.
+  The cap is `ai.react.exec_text_preview_max_symbols` /
+  `AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS` and is measured in text characters.
+  Larger files are truncated with a `...[truncated]` suffix.
 - Each contracted output may optionally declare `visibility=external|internal`.
   - `external` is the default and is user-shareable.
   - `internal` remains agent-visible in timeline/OUT_DIR but is not hosted or sent to the user.
@@ -255,7 +268,7 @@ The model does **not** see raw blocks; it sees the rendered message content:
 **Text file (exec output)**
 ```
 <text: meta JSON including tool_call_id, size_bytes, etc.>
-<text: file contents up to 20KB, then "...[truncated]" if longer>
+<text: file contents up to exec_text_preview_max_symbols, then "...[truncated]" if longer>
 ```
 
 **Important:** Exec tools do **not** emit `tool_call_error` or `tool_result_error` notices.
@@ -340,7 +353,7 @@ react.tool.result          # sources_pool text for non-file rows
 react.tool.result          # meta digest for fi:<turnA>.user.attachments/notes.txt
 react.tool.result          # file block (text) for fi:<turnA>.user.attachments/notes.txt
 react.tool.result          # meta digest for fi:<turnA>.user.attachments/image.png
-react.tool.result          # file block (base64) for fi:<turnA>.user.attachments/image.png
+react.tool.result          # file block (base64) for fi:<turnA>.user.attachments/image.png when under read_visible_max_bytes
 react.tool.result          # meta digest for fi:<turnB>.files/board.pptx
 react.tool.result          # file block (binary, no base64) for fi:<turnB>.files/board.pptx
 ```

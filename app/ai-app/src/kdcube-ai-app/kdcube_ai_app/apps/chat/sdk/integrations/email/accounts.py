@@ -1558,6 +1558,8 @@ def _compact_claude_code_mcp_result(
             diagnostics["timeout_seconds"] = float(result.get("timeout_seconds") or 0.0)
         except Exception:
             pass
+    if isinstance(result.get("failure_diagnostics"), Mapping):
+        diagnostics["failure_diagnostics"] = dict(result.get("failure_diagnostics") or {})
     if result.get("duration_ms") is not None:
         try:
             diagnostics["duration_ms"] = int(result.get("duration_ms") or 0)

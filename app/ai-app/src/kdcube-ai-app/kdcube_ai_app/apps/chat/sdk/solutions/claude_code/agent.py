@@ -17,6 +17,7 @@ from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload
 from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import (
     get_current_comm,
     get_current_request_context,
+    touch_current_task_activity,
 )
 from kdcube_ai_app.infra.accounting import track_llm
 from kdcube_ai_app.infra.accounting.usage import ServiceUsage, _norm_usage_dict
@@ -40,6 +41,81 @@ from kdcube_ai_app.apps.chat.sdk.solutions.claude_code.types import (
     ClaudeCodeTurnKind,
     ClaudeCodeWorkspaceConfig,
 )
+
+
+_STREAM_READ_CHUNK_BYTES = 64 * 1024
+_STREAM_LINE_BUFFER_LIMIT_BYTES = 64 * 1024 * 1024
+_RAW_OUTPUT_LINE_KEEP_CHARS = 256 * 1024
+_SUBPROCESS_ACTIVITY_TOUCH_INTERVAL_SEC = 5.0
+_FAILURE_TAIL_CHARS = 2000
+
+
+def _cap_raw_output_line(line: str) -> str:
+    if len(line) <= _RAW_OUTPUT_LINE_KEEP_CHARS:
+        return line
+    omitted = len(line) - _RAW_OUTPUT_LINE_KEEP_CHARS
+    return f"{line[:_RAW_OUTPUT_LINE_KEEP_CHARS]}\n[TRUNCATED raw claude output line: omitted {omitted} chars]"
+
+
+def _tail_text(value: Any, *, max_chars: int = _FAILURE_TAIL_CHARS) -> str:
+    text = str(value or "")
+    if len(text) <= max_chars:
+        return text
+    return text[-max_chars:]
+
+
+def _compact_jsonish(value: Any, *, max_chars: int = _FAILURE_TAIL_CHARS) -> Any:
+    if isinstance(value, str):
+        return _tail_text(value, max_chars=max_chars)
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    if isinstance(value, Mapping):
+        compact: dict[str, Any] = {}
+        for key, item in list(value.items())[:20]:
+            compact[str(key)] = _compact_jsonish(item, max_chars=max_chars)
+        return compact
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_compact_jsonish(item, max_chars=max_chars) for item in list(value)[-5:]]
+    return _tail_text(value, max_chars=max_chars)
+
+
+def _event_type(payload: Mapping[str, Any] | None) -> str:
+    if not payload:
+        return ""
+    return str(
+        payload.get("type")
+        or payload.get("subtype")
+        or payload.get("event")
+        or payload.get("message_type")
+        or ""
+    ).strip()
+
+
+async def _iter_stream_text_lines(
+    reader: asyncio.StreamReader,
+    *,
+    chunk_size: int = _STREAM_READ_CHUNK_BYTES,
+    max_buffer_bytes: int = _STREAM_LINE_BUFFER_LIMIT_BYTES,
+):
+    buffer = bytearray()
+    while True:
+        chunk = await reader.read(chunk_size)
+        if not chunk:
+            break
+        buffer.extend(chunk)
+        while True:
+            newline_index = buffer.find(b"\n")
+            if newline_index < 0:
+                break
+            raw_line = bytes(buffer[:newline_index])
+            del buffer[: newline_index + 1]
+            yield raw_line.decode("utf-8", errors="replace").replace("\r", "")
+        if len(buffer) > max_buffer_bytes:
+            raw_line = bytes(buffer)
+            buffer.clear()
+            yield raw_line.decode("utf-8", errors="replace").replace("\r", "")
+    if buffer:
+        yield bytes(buffer).decode("utf-8", errors="replace").replace("\r", "")
 
 
 def _claude_code_provider_extractor(result, *_args, **_kwargs) -> str:
@@ -157,6 +233,8 @@ class ClaudeCodeAgent:
         structured_output_prefixes: Sequence[str] = (),
         executive_journal_prefixes: Sequence[str] | None = None,
         executive_journal_max_entries: int = 100,
+        log_stream_output: bool = False,
+        log_stream_output_max_chars: int = 1200,
         on_structured_output=None,
         on_text_chunk=None,
         workspace_config: ClaudeCodeWorkspaceConfig | None = None,
@@ -190,6 +268,8 @@ class ClaudeCodeAgent:
                     )
                 ),
                 executive_journal_max_entries=executive_journal_max_entries,
+                log_stream_output=log_stream_output,
+                log_stream_output_max_chars=log_stream_output_max_chars,
                 on_structured_output=on_structured_output,
                 on_text_chunk=on_text_chunk,
                 workspace_config=workspace_config,
@@ -257,6 +337,32 @@ class ClaudeCodeAgent:
         structured_buffer = ""
         started_at = time.monotonic()
 
+        def _touch_activity(kind: str) -> None:
+            try:
+                touch_current_task_activity(kind)
+            except Exception:
+                self.logger.debug("[ClaudeCodeAgent] failed to touch task activity kind=%s", kind, exc_info=True)
+
+        def _log_stdout_event(raw_line: str, *, parsed: Mapping[str, Any] | None = None, text: str = "") -> None:
+            if not self.config.log_stream_output:
+                return
+            try:
+                max_chars = int(self.config.log_stream_output_max_chars or 1200)
+                event_type = _event_type(parsed) if parsed is not None else "text"
+                preview = (text or "").strip()
+                if not preview:
+                    preview = raw_line.strip()
+                self.logger.info(
+                    "[ClaudeCodeAgent] stdout agent=%s session=%s event=%s raw_chars=%s text_tail=%s",
+                    self.config.agent_name,
+                    self.binding.claude_session_id,
+                    event_type or "unknown",
+                    len(raw_line or ""),
+                    _tail_text(preview, max_chars=max_chars),
+                )
+            except Exception:
+                self.logger.debug("[ClaudeCodeAgent] failed to log stdout event", exc_info=True)
+
         process = await asyncio.create_subprocess_exec(
             self.config.command,
             *self.build_args(prompt, resume_existing=resume_existing),
@@ -266,6 +372,7 @@ class ClaudeCodeAgent:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
+        _touch_activity("claude_code.process_started")
 
         async def _emit_structured_event(record: dict[str, Any]) -> None:
             structured_events.append(record)
@@ -408,14 +515,16 @@ class ClaudeCodeAgent:
             nonlocal resolved_from_stream
 
             assert process.stdout is not None
-            async for raw_line in process.stdout:
-                line = raw_line.decode("utf-8", errors="replace").replace("\r", "").rstrip("\n")
+            async for line in _iter_stream_text_lines(process.stdout):
+                _touch_activity("claude_code.stdout")
+                line = line.rstrip("\n")
                 if not line.strip():
                     continue
-                raw_output_lines.append(line)
+                raw_output_lines.append(_cap_raw_output_line(line))
                 try:
                     parsed = json.loads(line)
                 except json.JSONDecodeError:
+                    _log_stdout_event(line)
                     final_text += line
                     await self._emit_delta(text=line, index=delta_count)
                     delta_count += 1
@@ -453,6 +562,7 @@ class ClaudeCodeAgent:
                     resolved_from_stream = True
 
                 text = extract_text_from_claude_event(parsed)
+                _log_stdout_event(line, parsed=parsed if isinstance(parsed, Mapping) else None, text=text)
                 if not text:
                     continue
                 transcript, snapshot, chunk = accumulate_transcript(transcript, snapshot, text)
@@ -473,8 +583,9 @@ class ClaudeCodeAgent:
 
         async def _consume_stderr() -> None:
             assert process.stderr is not None
-            async for raw_line in process.stderr:
-                line = raw_line.decode("utf-8", errors="replace").replace("\r", "").rstrip("\n")
+            async for line in _iter_stream_text_lines(process.stderr):
+                _touch_activity("claude_code.stderr")
+                line = line.rstrip("\n")
                 if not line.strip():
                     continue
                 stderr_lines.append(line)
@@ -491,8 +602,16 @@ class ClaudeCodeAgent:
                         },
                     )
 
+        async def _touch_running_subprocess() -> None:
+            while True:
+                await asyncio.sleep(_SUBPROCESS_ACTIVITY_TOUCH_INTERVAL_SEC)
+                if getattr(process, "returncode", None) is not None:
+                    return
+                _touch_activity("claude_code.subprocess.running")
+
         stdout_task = asyncio.create_task(_consume_stdout())
         stderr_task = asyncio.create_task(_consume_stderr())
+        activity_task = asyncio.create_task(_touch_running_subprocess())
 
         try:
             if self.config.timeout_seconds is not None:
@@ -519,14 +638,29 @@ class ClaudeCodeAgent:
                 except ProcessLookupError:
                     pass
                 exit_code = await process.wait()
-        await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+        activity_task.cancel()
+        try:
+            await activity_task
+        except asyncio.CancelledError:
+            pass
+        stream_results = await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+        stream_error = None
+        for result in stream_results:
+            if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
+                stream_error = result
+                self.logger.error(
+                    "[ClaudeCodeAgent] stream reader failed",
+                    exc_info=(type(result), result, result.__traceback__),
+                )
+                stderr_lines.append(f"Claude stream reader failed: {type(result).__name__}: {result}")
+                break
         if structured_buffer.strip():
             await _ingest_structured_line(structured_buffer)
         wall_duration_ms = int((time.monotonic() - started_at) * 1000)
         if duration_ms is None:
             duration_ms = wall_duration_ms
 
-        status = "completed" if exit_code == 0 and not timed_out else "failed"
+        status = "completed" if exit_code == 0 and not timed_out and stream_error is None else "failed"
         usage_payload = dict(usage_totals or {}) or None
         if usage_payload is not None:
             if usage_payload.get("requests") in (None, 0):
@@ -568,6 +702,79 @@ class ClaudeCodeAgent:
             else:
                 error_message = stderr_lines[-1] if stderr_lines else f"Claude exited with code {exit_code}"
 
+        failure_diagnostics: dict[str, Any] = {}
+        if status != "completed":
+            raw_result_type = ""
+            if isinstance(raw_result_event, Mapping):
+                raw_result_type = str(
+                    raw_result_event.get("type")
+                    or raw_result_event.get("subtype")
+                    or raw_result_event.get("event")
+                    or ""
+                ).strip()
+            if timed_out and raw_result_event is None:
+                reason = "timeout_waiting_for_process_result"
+                interpretation = (
+                    "Claude Code was still running at the timeout and did not emit a final "
+                    "result event before termination. Inspect stdout/stderr tails and "
+                    "executive_journal_tail for the last useful progress signal."
+                )
+            elif timed_out:
+                reason = "timeout_after_result_event"
+                interpretation = (
+                    "Claude Code emitted a result event but the process did not exit before "
+                    "the timeout, which points to post-result cleanup or subprocess shutdown."
+                )
+            elif stream_error is not None:
+                reason = "stream_reader_failed"
+                interpretation = "The stdout/stderr reader failed while consuming Claude Code output."
+            else:
+                reason = "nonzero_exit"
+                interpretation = "Claude Code exited non-zero; inspect stderr_tail and raw_result_event."
+            failure_diagnostics = {
+                "reason": reason,
+                "interpretation": interpretation,
+                "timed_out": bool(timed_out),
+                "timeout_seconds": self.config.timeout_seconds,
+                "exit_code": exit_code,
+                "duration_ms": duration_ms,
+                "api_duration_ms": api_duration_ms,
+                "delta_count": delta_count,
+                "stdout_line_count": len(raw_output_lines),
+                "stderr_line_count": len(stderr_lines),
+                "stdout_tail": [_tail_text(line) for line in raw_output_lines[-3:]],
+                "stderr_tail": [_tail_text(line) for line in stderr_lines[-5:]],
+                "final_text_tail": _tail_text(final_text),
+                "raw_result_event_seen": raw_result_event is not None,
+                "raw_result_event_type": raw_result_type or None,
+                "raw_result_event": _compact_jsonish(raw_result_event) if raw_result_event else None,
+                "structured_events_count": len(structured_events),
+                "structured_events_tail": _compact_jsonish(structured_events[-3:]) if structured_events else [],
+                "executive_journal_count": len(executive_journal),
+                "executive_journal_tail": _compact_jsonish(executive_journal[-5:]) if executive_journal else [],
+                "usage": dict(usage_payload or {}),
+                "requested_model": self.config.model,
+                "resolved_model": resolved_model,
+                "resolved_from_stream": bool(resolved_from_stream),
+            }
+            self.logger.error(
+                "[ClaudeCodeAgent] failure diagnostics agent=%s session=%s reason=%s "
+                "timed_out=%s exit_code=%s duration_ms=%s stdout_lines=%s stderr_lines=%s "
+                "delta_count=%s raw_result_event_seen=%s last_stdout=%s last_stderr=%s",
+                self.config.agent_name,
+                self.binding.claude_session_id,
+                failure_diagnostics.get("reason"),
+                timed_out,
+                exit_code,
+                duration_ms,
+                len(raw_output_lines),
+                len(stderr_lines),
+                delta_count,
+                raw_result_event is not None,
+                (failure_diagnostics.get("stdout_tail") or [None])[-1],
+                (failure_diagnostics.get("stderr_tail") or [None])[-1],
+            )
+
         return ClaudeCodeRunResult(
             status=status,
             session_id=self.binding.claude_session_id,
@@ -590,6 +797,7 @@ class ClaudeCodeAgent:
             error_message=error_message,
             timed_out=timed_out,
             timeout_seconds=self.config.timeout_seconds,
+            failure_diagnostics=failure_diagnostics,
             structured_events=structured_events,
             executive_journal=executive_journal,
         )
@@ -673,7 +881,7 @@ class ClaudeCodeAgent:
         else:
             self.logger.error(
                 "[ClaudeCodeAgent] run failed agent=%s session=%s kind=%s exit_code=%s timed_out=%s "
-                "last_stderr=%s raw_result_event=%s",
+                "last_stderr=%s raw_result_event=%s failure_reason=%s",
                 self.config.agent_name,
                 self.binding.claude_session_id,
                 kind,
@@ -681,6 +889,7 @@ class ClaudeCodeAgent:
                 result.timed_out,
                 (result.stderr_lines[-1] if result.stderr_lines else None),
                 result.raw_result_event,
+                (result.failure_diagnostics or {}).get("reason"),
             )
             await self._emit_final_error(
                 message=result.error_message or f"Claude exited with code {result.exit_code}",
@@ -691,6 +900,7 @@ class ClaudeCodeAgent:
                 raw_result_event=result.raw_result_event,
                 timed_out=result.timed_out,
                 timeout_seconds=result.timeout_seconds,
+                failure_diagnostics=result.failure_diagnostics,
             )
 
         return result
@@ -714,6 +924,7 @@ class ClaudeCodeAgent:
 
     def _metadata(self, *, kind: ClaudeCodeTurnKind, resume_existing: bool = False) -> dict:
         return {
+            "agent": self.config.agent_name,
             "agent_name": self.config.agent_name,
             "turn_kind": kind,
             "resume_existing": resume_existing,
@@ -762,6 +973,7 @@ class ClaudeCodeAgent:
         raw_result_event: dict[str, Any] | None = None,
         timed_out: bool = False,
         timeout_seconds: float | None = None,
+        failure_diagnostics: dict[str, Any] | None = None,
     ) -> None:
         await self._emit_step(
             step=self.config.step_name,
@@ -776,6 +988,7 @@ class ClaudeCodeAgent:
                 "raw_result_event": raw_result_event,
                 "timed_out": timed_out,
                 "timeout_seconds": timeout_seconds,
+                "failure_diagnostics": dict(failure_diagnostics or {}),
             },
         )
 

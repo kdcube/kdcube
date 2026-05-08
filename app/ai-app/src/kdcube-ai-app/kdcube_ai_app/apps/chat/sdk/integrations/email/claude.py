@@ -58,6 +58,20 @@ def claude_code_enabled(entrypoint: Any) -> bool:
     return bool(entrypoint.bundle_prop("integrations.email.claude_code.enabled", True))
 
 
+def _bool_prop(entrypoint: Any, key: str, default: bool = False) -> bool:
+    value = entrypoint.bundle_prop(key, default)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _int_prop(entrypoint: Any, key: str, default: int) -> int:
+    try:
+        return int(entrypoint.bundle_prop(key, default) or default)
+    except Exception:
+        return default
+
+
 def _secret_lookup(*keys: str) -> str:
     if get_secret is None:
         return ""
@@ -384,6 +398,12 @@ async def run_email_processor_with_claude_code(
             timeout_seconds=timeout_seconds,
             step_name="email.claude_code",
             delta_marker="email_processing",
+            log_stream_output=_bool_prop(entrypoint, "integrations.email.claude_code.log_stream_output", False),
+            log_stream_output_max_chars=_int_prop(
+                entrypoint,
+                "integrations.email.claude_code.log_stream_output_max_chars",
+                1200,
+            ),
             executive_journal_prefixes=(
                 CLAUDE_CODE_EXECUTIVE_JOURNAL_PREFIX,
                 CLAUDE_CODE_EXECUTIVE_JOURNAL_CODE_PREFIX,
@@ -415,6 +435,7 @@ async def run_email_processor_with_claude_code(
     warnings: list[Dict[str, Any]] = []
     error_message = str(result.error_message or "").strip()
     error_code = ""
+    failure_diagnostics = dict(getattr(result, "failure_diagnostics", None) or {})
     if recorded_ok and result.status != "completed":
         warnings.append(
             {
@@ -425,15 +446,21 @@ async def run_email_processor_with_claude_code(
                 ),
                 "status": result.status,
                 "process_error": error_message,
+                "failure_diagnostics": failure_diagnostics,
             }
         )
         logger.warning(
             "[email.claude] MCP result recorded but Claude process failed | "
-            "run_id=%s status=%s exit_code=%s error=%s",
+            "run_id=%s status=%s exit_code=%s error=%s failure_reason=%s "
+            "stdout_tail=%s stderr_tail=%s raw_result_event_seen=%s",
             run_id,
             result.status,
             result.exit_code,
             error_message,
+            failure_diagnostics.get("reason"),
+            (failure_diagnostics.get("stdout_tail") or [None])[-1],
+            (failure_diagnostics.get("stderr_tail") or [None])[-1],
+            failure_diagnostics.get("raw_result_event_seen"),
         )
     elif result.status == "completed" and not recorded_ok:
         error_code = "claude_code_mcp_result_not_recorded"
@@ -462,12 +489,15 @@ async def run_email_processor_with_claude_code(
         )
     else:
         logger.warning(
-            "[email.claude] turn failed | run_id=%s status=%s exit_code=%s error=%s stderr_tail=%s",
+            "[email.claude] turn failed | run_id=%s status=%s exit_code=%s error=%s "
+            "failure_reason=%s stdout_tail=%s stderr_tail=%s",
             run_id,
             result.status,
             result.exit_code,
             error_message,
-            result.stderr_lines[-5:],
+            failure_diagnostics.get("reason"),
+            (failure_diagnostics.get("stdout_tail") or [None])[-1],
+            (failure_diagnostics.get("stderr_tail") or result.stderr_lines[-5:] or [None])[-1],
         )
     return {
         "ok": mcp_ok,
@@ -489,6 +519,7 @@ async def run_email_processor_with_claude_code(
         "effective_error_message": error_message,
         "timed_out": bool(getattr(result, "timed_out", False)),
         "timeout_seconds": getattr(result, "timeout_seconds", None),
+        "failure_diagnostics": failure_diagnostics,
         "warnings": warnings,
         "stderr_tail": result.stderr_lines[-5:],
         "model": result.model,
