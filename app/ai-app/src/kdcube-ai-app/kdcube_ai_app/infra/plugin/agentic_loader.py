@@ -22,6 +22,7 @@ import subprocess
 import threading
 import traceback
 import time
+import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Tuple, Any, Dict, List
@@ -77,7 +78,9 @@ class APIEndpointSpec:
     http_method: str = "POST"
     route: str = "operations"
     user_types: tuple[str, ...] = ()
+    user_types_config: str | None = None
     roles: tuple[str, ...] = ()
+    roles_config: str | None = None
     public_auth: "PublicAPIAuthSpec | None" = None
 
 
@@ -87,6 +90,7 @@ class MCPEndpointSpec:
     alias: str
     route: str = "operations"
     transport: str = "streamable-http"
+    transport_config: str | None = None
 
 
 @dataclass(frozen=True)
@@ -102,7 +106,9 @@ class UIWidgetSpec:
     alias: str
     icon: dict[str, str]
     user_types: tuple[str, ...] = ()
+    user_types_config: str | None = None
     roles: tuple[str, ...] = ()
+    roles_config: str | None = None
 
 
 @dataclass(frozen=True)
@@ -157,11 +163,17 @@ def canonical_enabled_path(
 
     Mapping:
       - kind="bundle"           -> "enabled.bundle"
-      - kind="api"              -> "enabled.api.<alias>.<METHOD>"  (flat, with literal dot)
+      - kind="api"              -> "enabled.api.<alias>.<METHOD>"
+        (flat key under ``enabled.api`` whose name is the literal string
+        ``<alias>.<METHOD>``; if ``<alias>`` itself contains dots they remain
+        part of the same flat key)
       - kind in {mcp, widget, cron} -> "enabled.<kind>.<alias>"
+        (alias is a single map key under ``enabled.<kind>``, dots in the alias
+        are part of that key)
 
-    Aliases must not contain dots; for "api" this keeps the flat key
-    "<alias>.<METHOD>" unambiguous.
+    The returned string is for display; runtime gating uses direct dict lookup
+    at the section level, so dots in the alias are treated as literal
+    characters in the key, not path separators.
     """
     norm_kind = str(kind or "").strip().lower()
     if norm_kind not in _VALID_ENABLED_KINDS:
@@ -171,16 +183,106 @@ def canonical_enabled_path(
     norm_alias = str(alias or "").strip()
     if not norm_alias:
         raise ValueError(f"alias is required for enabled kind {norm_kind!r}")
-    if "." in norm_alias:
-        raise ValueError(
-            f"alias for enabled kind {norm_kind!r} must not contain '.': {alias!r}"
-        )
     if norm_kind == "api":
         norm_method = str(http_method or "").strip().upper()
         if not norm_method:
             raise ValueError("http_method is required for enabled kind 'api'")
         return f"enabled.api.{norm_alias}.{norm_method}"
     return f"enabled.{norm_kind}.{norm_alias}"
+
+
+def _resolve_override_value(config_path: str | None, props: dict[str, Any]) -> Any:
+    """Resolve a ``*_config`` dot-path against bundle props, with descriptor-file
+    fallback (mirrors ``resolve_effective_cron``).
+
+    Returns ``None`` when ``config_path`` is empty or the path is unresolvable.
+    """
+    if not config_path:
+        return None
+    from kdcube_ai_app.infra.plugin.bundle_store import resolve_dot_path
+    value = resolve_dot_path(props, config_path)
+    if value is not None:
+        return value
+    try:
+        from kdcube_ai_app.apps.chat.sdk.config import read_plain
+        raw = read_plain(f"b:{config_path}", default=None)
+        if raw is None:
+            raw = read_plain(config_path, default=None)
+        if raw is not None:
+            return raw
+    except Exception:
+        pass
+    return None
+
+
+def _coerce_string_list_override(value: Any) -> tuple[str, ...] | None:
+    """Coerce a resolved override into a tuple of strings.
+
+    - ``None`` (path missing) -> ``None``
+    - single string -> 1-tuple
+    - list/tuple of strings -> tuple (empty list kept as empty tuple, intentional override)
+    - anything else -> ``None`` (invalid type, caller falls back to default)
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, (list, tuple)):
+        out: list[str] = []
+        for item in value:
+            if not isinstance(item, str):
+                return None
+            out.append(item)
+        return tuple(out)
+    return None
+
+
+def _coerce_string_override(value: Any) -> str | None:
+    """Coerce a resolved override into a non-blank string, or None on miss."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def apply_api_overrides(spec: APIEndpointSpec, props: dict[str, Any]) -> APIEndpointSpec:
+    """Return a new APIEndpointSpec with bundle-props overrides applied for any
+    fields whose ``*_config`` path resolves to a valid value."""
+    user_types = _coerce_string_list_override(_resolve_override_value(spec.user_types_config, props))
+    roles = _coerce_string_list_override(_resolve_override_value(spec.roles_config, props))
+    if user_types is None and roles is None:
+        return spec
+    return dataclasses.replace(
+        spec,
+        user_types=user_types if user_types is not None else spec.user_types,
+        roles=roles if roles is not None else spec.roles,
+    )
+
+
+def apply_widget_overrides(spec: UIWidgetSpec, props: dict[str, Any]) -> UIWidgetSpec:
+    user_types = _coerce_string_list_override(_resolve_override_value(spec.user_types_config, props))
+    roles = _coerce_string_list_override(_resolve_override_value(spec.roles_config, props))
+    if user_types is None and roles is None:
+        return spec
+    return dataclasses.replace(
+        spec,
+        user_types=user_types if user_types is not None else spec.user_types,
+        roles=roles if roles is not None else spec.roles,
+    )
+
+
+def apply_mcp_overrides(spec: MCPEndpointSpec, props: dict[str, Any]) -> MCPEndpointSpec:
+    raw = _coerce_string_override(_resolve_override_value(spec.transport_config, props))
+    if raw is None:
+        return spec
+    try:
+        normalized = _normalize_mcp_transport(raw)
+    except ValueError:
+        # Invalid transport override -> keep decorator default. Caller may log.
+        return spec
+    return dataclasses.replace(spec, transport=normalized)
 
 
 def _clean_alias(value: str | None, default: str) -> str:
@@ -407,9 +509,19 @@ def api(
         alias: str | None = None,
         route: str = "operations",
         user_types: List[str] | Tuple[str, ...] | None = None,
+        user_types_config: str | None = None,
         roles: List[str] | Tuple[str, ...] | None = None,
+        roles_config: str | None = None,
         public_auth: str | Dict[str, Any] | None = None,
 ):
+    """
+    ``user_types`` / ``roles`` are decorator defaults — the contract baseline
+    declared in code. ``user_types_config`` / ``roles_config`` are dot-paths
+    into bundle props; when set and resolvable, the resolved value overrides
+    the decorator default at request time. Empty list resolves to "no
+    restriction" (intentional override). Invalid types fall back silently to
+    the decorator default.
+    """
     http_method = _normalize_http_method(method)
     resolved_route = _normalize_api_route(route)
     resolved_public_auth = _normalize_public_api_auth(resolved_route, public_auth)
@@ -417,16 +529,12 @@ def api(
         user_types=user_types,
         roles=roles,
     )
+    resolved_user_types_config = str(user_types_config).strip() if user_types_config else None
+    resolved_roles_config = str(roles_config).strip() if roles_config else None
 
     def _wrap(fn):
         method_name = getattr(fn, "__name__", "api_method")
         resolved_alias = _clean_alias(alias, method_name)
-        if "." in resolved_alias:
-            raise ValueError(
-                f"@api alias must not contain '.': {resolved_alias!r}. "
-                f"Aliases are mapped to the canonical enabled path "
-                f"'enabled.api.<alias>.<METHOD>' (flat key with a literal dot)."
-            )
         setattr(
             fn,
             API_METHOD_ATTR,
@@ -436,7 +544,9 @@ def api(
                 http_method=http_method,
                 route=resolved_route,
                 user_types=resolved_user_types,
+                user_types_config=resolved_user_types_config,
                 roles=resolved_roles,
+                roles_config=resolved_roles_config,
                 public_auth=resolved_public_auth,
             ),
         )
@@ -450,22 +560,25 @@ def ui_widget(
         icon: str | Dict[str, str],
         alias: str | None = None,
         user_types: List[str] | Tuple[str, ...] | None = None,
+        user_types_config: str | None = None,
         roles: List[str] | Tuple[str, ...] | None = None,
+        roles_config: str | None = None,
 ):
+    """
+    ``user_types`` / ``roles`` are decorator defaults. ``user_types_config`` /
+    ``roles_config`` are dot-paths into bundle props; when set and resolvable,
+    the resolved value overrides the decorator default at request time.
+    """
     resolved_user_types, resolved_roles = _normalize_visibility_selectors(
         user_types=user_types,
         roles=roles,
     )
+    resolved_user_types_config = str(user_types_config).strip() if user_types_config else None
+    resolved_roles_config = str(roles_config).strip() if roles_config else None
 
     def _wrap(fn):
         method_name = getattr(fn, "__name__", "widget")
         resolved_alias = _clean_alias(alias, method_name)
-        if "." in resolved_alias:
-            raise ValueError(
-                f"@ui_widget alias must not contain '.': {resolved_alias!r}. "
-                f"Aliases are mapped to the canonical enabled path "
-                f"'enabled.widget.<alias>'."
-            )
         setattr(
             fn,
             UI_WIDGET_ATTR,
@@ -474,7 +587,9 @@ def ui_widget(
                 alias=resolved_alias,
                 icon=_normalize_icon_spec(icon),
                 user_types=resolved_user_types,
+                user_types_config=resolved_user_types_config,
                 roles=resolved_roles,
+                roles_config=resolved_roles_config,
             ),
         )
         return fn
@@ -487,10 +602,17 @@ def mcp(
         alias: str | None = None,
         route: str = "operations",
         transport: str = "streamable-http",
+        transport_config: str | None = None,
         user_types: List[str] | Tuple[str, ...] | None = None,
         roles: List[str] | Tuple[str, ...] | None = None,
         public_auth: str | Dict[str, Any] | None = None,
 ):
+    """
+    ``transport`` is the decorator default. ``transport_config`` is a dot-path
+    into bundle props; when set and resolvable, the resolved value overrides
+    the decorator default at request time. Invalid transport values (not in
+    the supported set) fall back silently to the decorator default.
+    """
     resolved_route = _normalize_api_route(route)
     resolved_transport = _normalize_mcp_transport(transport)
     if user_types or roles or public_auth is not None:
@@ -498,16 +620,11 @@ def mcp(
             "@mcp(...) does not support proc-side visibility or public_auth. "
             "MCP request authentication/authorization must be handled by the bundle MCP app."
         )
+    resolved_transport_config = str(transport_config).strip() if transport_config else None
 
     def _wrap(fn):
         method_name = getattr(fn, "__name__", "mcp")
         resolved_alias = _clean_alias(alias, method_name)
-        if "." in resolved_alias:
-            raise ValueError(
-                f"@mcp alias must not contain '.': {resolved_alias!r}. "
-                f"Aliases are mapped to the canonical enabled path "
-                f"'enabled.mcp.<alias>'."
-            )
         setattr(
             fn,
             MCP_ENDPOINT_ATTR,
@@ -516,6 +633,7 @@ def mcp(
                 alias=resolved_alias,
                 route=resolved_route,
                 transport=resolved_transport,
+                transport_config=resolved_transport_config,
             ),
         )
         return fn
@@ -1791,7 +1909,9 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
                 http_method=api_spec.http_method,
                 route=api_spec.route,
                 user_types=tuple(api_spec.user_types or ()),
+                user_types_config=api_spec.user_types_config,
                 roles=tuple(api_spec.roles or ()),
+                roles_config=api_spec.roles_config,
                 public_auth=api_spec.public_auth,
             )
             api_key = (resolved.alias, resolved.http_method, resolved.route)
@@ -1810,6 +1930,7 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
                 alias=mcp_spec.alias,
                 route=mcp_spec.route,
                 transport=mcp_spec.transport,
+                transport_config=mcp_spec.transport_config,
             )
             mcp_key = (resolved.alias, resolved.route)
             if mcp_key in seen_mcp:
@@ -1827,7 +1948,9 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
                 alias=widget_spec.alias,
                 icon=dict(widget_spec.icon or {}),
                 user_types=tuple(widget_spec.user_types or ()),
+                user_types_config=widget_spec.user_types_config,
                 roles=tuple(widget_spec.roles or ()),
+                roles_config=widget_spec.roles_config,
             )
             if resolved.alias in seen_widgets:
                 raise ValueError(f"Duplicate bundle widget alias detected: {resolved.alias}")

@@ -60,6 +60,9 @@ from kdcube_ai_app.infra.plugin.agentic_loader import (
     BundleInterfaceManifest,
     MCPEndpointSpec,
     UIWidgetSpec,
+    apply_api_overrides,
+    apply_mcp_overrides,
+    apply_widget_overrides,
     cache_key_for_spec,
     canonical_enabled_path,
     discover_bundle_interface_manifest,
@@ -389,17 +392,42 @@ def _user_types_visible(required_user_types: tuple[str, ...] | list[str] | None,
     return current_rank >= min(thresholds)
 
 
-def _visible_widget_specs(manifest: BundleInterfaceManifest, session: UserSession) -> list[UIWidgetSpec]:
-    return [spec for spec in manifest.ui_widgets if _endpoint_visible(spec.user_types, spec.roles, session)]
+def _visible_widget_specs(
+        manifest: BundleInterfaceManifest,
+        session: UserSession,
+        props: Optional[Dict[str, Any]] = None,
+) -> list[UIWidgetSpec]:
+    """Return widget specs visible to ``session``, with bundle-props overrides applied."""
+    out: list[UIWidgetSpec] = []
+    for spec in manifest.ui_widgets:
+        effective = apply_widget_overrides(spec, props or {})
+        if _endpoint_visible(effective.user_types, effective.roles, session):
+            out.append(effective)
+    return out
 
 
-def _visible_api_specs(manifest: BundleInterfaceManifest, session: UserSession) -> list[APIEndpointSpec]:
-    return [spec for spec in manifest.api_endpoints if _endpoint_visible(spec.user_types, spec.roles, session)]
+def _visible_api_specs(
+        manifest: BundleInterfaceManifest,
+        session: UserSession,
+        props: Optional[Dict[str, Any]] = None,
+) -> list[APIEndpointSpec]:
+    """Return API specs visible to ``session``, with bundle-props overrides applied."""
+    out: list[APIEndpointSpec] = []
+    for spec in manifest.api_endpoints:
+        effective = apply_api_overrides(spec, props or {})
+        if _endpoint_visible(effective.user_types, effective.roles, session):
+            out.append(effective)
+    return out
 
 
-def _visible_mcp_specs(manifest: BundleInterfaceManifest, session: UserSession) -> list[MCPEndpointSpec]:
+def _visible_mcp_specs(
+        manifest: BundleInterfaceManifest,
+        session: UserSession,
+        props: Optional[Dict[str, Any]] = None,
+) -> list[MCPEndpointSpec]:
+    """Return MCP specs with bundle-props overrides applied (no visibility filtering)."""
     del session
-    return list(manifest.mcp_endpoints)
+    return [apply_mcp_overrides(spec, props or {}) for spec in manifest.mcp_endpoints]
 
 
 def _user_raw_roles(session: UserSession) -> set[str]:
@@ -895,114 +923,148 @@ async def _get_bundle_manifest(
         return None
 
 
-def _manifest_to_descriptor(manifest: BundleInterfaceManifest) -> Dict[str, Any]:
-    """Serialise a full (unfiltered) manifest to a plain dict."""
+def _api_spec_descriptor(spec: APIEndpointSpec, props: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    effective = apply_api_overrides(spec, props or {})
+    return {
+        "alias": spec.alias,
+        "http_method": spec.http_method,
+        "route": spec.route,
+        "user_types": list(effective.user_types),
+        "user_types_default": list(spec.user_types),
+        "user_types_config": spec.user_types_config,
+        "user_types_overridden": tuple(effective.user_types) != tuple(spec.user_types),
+        "roles": list(effective.roles),
+        "roles_default": list(spec.roles),
+        "roles_config": spec.roles_config,
+        "roles_overridden": tuple(effective.roles) != tuple(spec.roles),
+        "enabled_path": canonical_enabled_path("api", alias=spec.alias, http_method=spec.http_method),
+    }
+
+
+def _widget_spec_descriptor(spec: UIWidgetSpec, props: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    effective = apply_widget_overrides(spec, props or {})
+    return {
+        "alias": spec.alias,
+        "icon": spec.icon,
+        "user_types": list(effective.user_types),
+        "user_types_default": list(spec.user_types),
+        "user_types_config": spec.user_types_config,
+        "user_types_overridden": tuple(effective.user_types) != tuple(spec.user_types),
+        "roles": list(effective.roles),
+        "roles_default": list(spec.roles),
+        "roles_config": spec.roles_config,
+        "roles_overridden": tuple(effective.roles) != tuple(spec.roles),
+        "enabled_path": canonical_enabled_path("widget", alias=spec.alias),
+    }
+
+
+def _mcp_spec_descriptor(spec: MCPEndpointSpec, props: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    effective = apply_mcp_overrides(spec, props or {})
+    return {
+        "alias": spec.alias,
+        "route": spec.route,
+        "transport": effective.transport,
+        "transport_default": spec.transport,
+        "transport_config": spec.transport_config,
+        "transport_overridden": effective.transport != spec.transport,
+        "enabled_path": canonical_enabled_path("mcp", alias=spec.alias),
+    }
+
+
+def _cron_spec_descriptor(spec, props: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Serialise a CronJobSpec, computing effective cron_expression / timezone
+    after expr_config / tz_config overrides applied against bundle props."""
+    from kdcube_ai_app.apps.chat.sdk.runtime.bundle_scheduler import (
+        resolve_effective_cron,
+        resolve_effective_timezone,
+    )
+    effective_cron = resolve_effective_cron(
+        cron_expression=spec.cron_expression,
+        expr_config=spec.expr_config,
+        props=props or {},
+    )
+    effective_tz = resolve_effective_timezone(
+        timezone_name=spec.timezone,
+        tz_config=spec.tz_config,
+        props=props or {},
+    )
+    default_tz = (str(spec.timezone).strip() if spec.timezone else "UTC") or "UTC"
+    return {
+        "method_name": spec.method_name,
+        "alias": spec.alias,
+        "cron_expression": effective_cron,
+        "cron_expression_default": spec.cron_expression,
+        "expr_config": spec.expr_config,
+        "cron_expression_overridden": (
+            spec.expr_config is not None and effective_cron != spec.cron_expression
+        ),
+        "timezone": effective_tz,
+        "timezone_default": default_tz,
+        "tz_config": spec.tz_config,
+        "timezone_overridden": (
+            spec.tz_config is not None and effective_tz != default_tz
+        ),
+        "span": spec.span,
+        "enabled_path": canonical_enabled_path("cron", alias=spec.alias),
+    }
+
+
+def _manifest_to_descriptor(
+        manifest: BundleInterfaceManifest,
+        props: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Serialise a full (unfiltered) manifest to a plain dict.
+
+    When ``props`` is provided, effective values reflect bundle-props overrides
+    via ``*_config`` paths; otherwise effective == decorator defaults.
+    """
     return {
         "enabled_path": canonical_enabled_path("bundle"),
         "allowed_roles": list(manifest.allowed_roles),
-        "apis": [
-            {
-                "alias": s.alias,
-                "http_method": s.http_method,
-                "route": s.route,
-                "user_types": list(s.user_types),
-                "roles": list(s.roles),
-                "enabled_path": canonical_enabled_path("api", alias=s.alias, http_method=s.http_method),
-            }
-            for s in manifest.api_endpoints
-        ],
-        "mcp_endpoints": [
-            {
-                "alias": s.alias,
-                "route": s.route,
-                "transport": s.transport,
-                "enabled_path": canonical_enabled_path("mcp", alias=s.alias),
-            }
-            for s in manifest.mcp_endpoints
-        ],
-        "widgets": [
-            {
-                "alias": s.alias,
-                "icon": s.icon,
-                "user_types": list(s.user_types),
-                "roles": list(s.roles),
-                "enabled_path": canonical_enabled_path("widget", alias=s.alias),
-            }
-            for s in manifest.ui_widgets
-        ],
+        "apis": [_api_spec_descriptor(s, props) for s in manifest.api_endpoints],
+        "mcp_endpoints": [_mcp_spec_descriptor(s, props) for s in manifest.mcp_endpoints],
+        "widgets": [_widget_spec_descriptor(s, props) for s in manifest.ui_widgets],
         "on_message": manifest.on_message.method_name if manifest.on_message else None,
         "on_job": manifest.on_job.method_name if manifest.on_job else None,
-        "scheduled_jobs": [
-            {
-                "method_name": s.method_name,
-                "alias": s.alias,
-                "cron_expression": s.cron_expression,
-                "expr_config": s.expr_config,
-                "timezone": s.timezone,
-                "tz_config": s.tz_config,
-                "span": s.span,
-                "enabled_path": canonical_enabled_path("cron", alias=s.alias),
-            }
-            for s in manifest.scheduled_jobs
-        ],
+        "scheduled_jobs": [_cron_spec_descriptor(s, props=props) for s in manifest.scheduled_jobs],
     }
 
 
 def _manifest_to_descriptor_filtered(
         manifest: BundleInterfaceManifest,
         session: UserSession,
+        props: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Serialise a manifest filtered to the endpoint visibility rules for session."""
+    """Serialise a manifest filtered to the endpoint visibility rules for session.
+
+    Visibility is checked against the **effective** user_types/roles (after
+    bundle-props overrides have been applied).
+    """
     return {
         "enabled_path": canonical_enabled_path("bundle"),
         "allowed_roles": list(manifest.allowed_roles),
         "apis": [
-            {
-                "alias": s.alias,
-                "http_method": s.http_method,
-                "route": s.route,
-                "user_types": list(s.user_types),
-                "roles": list(s.roles),
-                "enabled_path": canonical_enabled_path("api", alias=s.alias, http_method=s.http_method),
-            }
+            _api_spec_descriptor(s, props)
             for s in manifest.api_endpoints
-            if _endpoint_visible(s.user_types, s.roles, session)
+            if _endpoint_visible(
+                apply_api_overrides(s, props or {}).user_types,
+                apply_api_overrides(s, props or {}).roles,
+                session,
+            )
         ],
-        "mcp_endpoints": [
-            {
-                "alias": s.alias,
-                "route": s.route,
-                "transport": s.transport,
-                "enabled_path": canonical_enabled_path("mcp", alias=s.alias),
-            }
-            for s in manifest.mcp_endpoints
-        ],
+        "mcp_endpoints": [_mcp_spec_descriptor(s, props) for s in manifest.mcp_endpoints],
         "widgets": [
-            {
-                "alias": s.alias,
-                "icon": s.icon,
-                "user_types": list(s.user_types),
-                "roles": list(s.roles),
-                "enabled_path": canonical_enabled_path("widget", alias=s.alias),
-            }
+            _widget_spec_descriptor(s, props)
             for s in manifest.ui_widgets
-            if _endpoint_visible(s.user_types, s.roles, session)
+            if _endpoint_visible(
+                apply_widget_overrides(s, props or {}).user_types,
+                apply_widget_overrides(s, props or {}).roles,
+                session,
+            )
         ],
         "on_message": manifest.on_message.method_name if manifest.on_message else None,
         "on_job": manifest.on_job.method_name if manifest.on_job else None,
-        "scheduled_jobs": [
-            {
-                "method_name": s.method_name,
-                "alias": s.alias,
-                "cron_expression": s.cron_expression,
-                "expr_config": s.expr_config,
-                "timezone": s.timezone,
-                "tz_config": s.tz_config,
-                "span": s.span,
-                "enabled_path": canonical_enabled_path("cron", alias=s.alias),
-            }
-            for s in manifest.scheduled_jobs
-        ],
+        "scheduled_jobs": [_cron_spec_descriptor(s, props=props) for s in manifest.scheduled_jobs],
     }
 
 
@@ -1023,6 +1085,7 @@ async def get_available_bundles(
     except Exception:
         raise HTTPException(status_code=503, detail="Failed to load bundles registry for tenant/project")
 
+    redis = _get_app_redis(request)
     bundles_out = {}
     for bid, entry in reg.bundles.items():
         manifest = await _get_bundle_manifest(
@@ -1046,7 +1109,8 @@ async def get_available_bundles(
             "git_commit": getattr(entry, "git_commit", None),
         }
         if manifest is not None:
-            descriptor.update(_manifest_to_descriptor(manifest))
+            props = await store_get_bundle_props(redis, tenant=tenant_id, project=project_id, bundle_id=bid)
+            descriptor.update(_manifest_to_descriptor(manifest, props=props))
         bundles_out[bid] = descriptor
 
     return {
@@ -1092,6 +1156,7 @@ async def get_bundles(
         )
         if not _bundle_allowed_for_session(manifest, session):
             continue
+        props: Optional[Dict[str, Any]] = None
         if manifest is not None:
             props = await store_get_bundle_props(redis, tenant=tenant_id, project=project_id, bundle_id=bid)
             if not is_bundle_enabled(props):
@@ -1104,7 +1169,7 @@ async def get_bundles(
             "version": getattr(entry, "version", None),
         }
         if manifest is not None:
-            descriptor.update(_manifest_to_descriptor_filtered(manifest, session))
+            descriptor.update(_manifest_to_descriptor_filtered(manifest, session, props=props))
         bundles_out[bid] = descriptor
 
     return {
@@ -2030,9 +2095,12 @@ async def get_bundle_interface(
         )
     )
     manifest = discover_bundle_interface_manifest(workflow, bundle_id=spec_resolved.id)
-    visible_widgets = _visible_widget_specs(manifest, session)
-    visible_apis = _visible_api_specs(manifest, session)
-    visible_mcp_endpoints = _visible_mcp_specs(manifest, session)
+    _props = await store_get_bundle_props(
+        _get_app_redis(request), tenant=tenant_id, project=project_id, bundle_id=spec_resolved.id,
+    )
+    visible_widgets = _visible_widget_specs(manifest, session, props=_props)
+    visible_apis = _visible_api_specs(manifest, session, props=_props)
+    visible_mcp_endpoints = _visible_mcp_specs(manifest, session, props=_props)
     return {
         "status": "ok",
         "tenant": tenant_id,
@@ -2081,19 +2149,7 @@ async def get_bundle_interface(
             if manifest.on_job
             else None
         ),
-        "scheduled_jobs": [
-            {
-                "method_name": spec.method_name,
-                "alias": spec.alias,
-                "cron_expression": spec.cron_expression,
-                "expr_config": spec.expr_config,
-                "timezone": spec.timezone,
-                "tz_config": spec.tz_config,
-                "span": spec.span,
-                "enabled_path": canonical_enabled_path("cron", alias=spec.alias),
-            }
-            for spec in manifest.scheduled_jobs
-        ],
+        "scheduled_jobs": [_cron_spec_descriptor(s, props=_props) for s in manifest.scheduled_jobs],
     }
 
 
@@ -2158,13 +2214,14 @@ async def _fetch_bundle_widget_payload(
     widget_spec = resolve_bundle_widget(workflow, alias=widget_alias, bundle_id=spec_resolved.id)
     if widget_spec is None:
         raise HTTPException(status_code=404, detail=f"Bundle does not define widget {widget_alias}")
-    if not _endpoint_visible(widget_spec.user_types, widget_spec.roles, session):
-        raise HTTPException(status_code=403, detail=f"Bundle widget {widget_alias} is not visible to this user")
 
     manifest = discover_bundle_interface_manifest(workflow, bundle_id=spec_resolved.id)
     _props = await store_get_bundle_props(
         _get_app_redis(request), tenant=tenant_id, project=project_id, bundle_id=spec_resolved.id,
     )
+    widget_spec = apply_widget_overrides(widget_spec, _props)
+    if not _endpoint_visible(widget_spec.user_types, widget_spec.roles, session):
+        raise HTTPException(status_code=403, detail=f"Bundle widget {widget_alias} is not visible to this user")
     workflow_props = _apply_rest_bundle_props_to_workflow(workflow=workflow, props=_props)
     if not is_bundle_enabled(_props):
         raise HTTPException(status_code=404, detail=f"Bundle {spec_resolved.id} is disabled")
@@ -2332,13 +2389,14 @@ async def _serve_static_widget_app(
     widget_spec = resolve_bundle_widget(workflow, alias=widget_alias, bundle_id=spec_resolved.id)
     if widget_spec is None:
         raise HTTPException(status_code=404, detail=f"Bundle does not define widget {widget_alias}")
-    if not _endpoint_visible(widget_spec.user_types, widget_spec.roles, session):
-        raise HTTPException(status_code=403, detail=f"Bundle widget {widget_alias} is not visible to this user")
 
     manifest = discover_bundle_interface_manifest(workflow, bundle_id=spec_resolved.id)
     _props = await store_get_bundle_props(
         _get_app_redis(request), tenant=tenant_id, project=project_id, bundle_id=spec_resolved.id,
     )
+    widget_spec = apply_widget_overrides(widget_spec, _props)
+    if not _endpoint_visible(widget_spec.user_types, widget_spec.roles, session):
+        raise HTTPException(status_code=403, detail=f"Bundle widget {widget_alias} is not visible to this user")
     workflow_props = _apply_rest_bundle_props_to_workflow(workflow=workflow, props=_props)
     if not is_bundle_enabled(_props):
         raise HTTPException(status_code=404, detail=f"Bundle {spec_resolved.id} is disabled")
@@ -2694,6 +2752,7 @@ async def _call_bundle_mcp_inner(
     _props = await store_get_bundle_props(
         _get_app_redis(request), tenant=tenant_id, project=project_id, bundle_id=spec_resolved.id,
     )
+    endpoint_spec = apply_mcp_overrides(endpoint_spec, _props)
     _apply_rest_bundle_props_to_workflow(workflow=workflow, props=_props)
     if not is_bundle_enabled(_props):
         raise HTTPException(status_code=404, detail=f"Bundle {spec_resolved.id} is disabled")
@@ -3096,13 +3155,14 @@ async def _call_bundle_op_inner(
         operation=operation,
         request=request,
     )
-    if not _endpoint_visible(endpoint_spec.user_types, endpoint_spec.roles, session):
-        raise HTTPException(status_code=403, detail=f"Bundle operation {operation} is not visible to this user")
 
     manifest = discover_bundle_interface_manifest(workflow, bundle_id=spec_resolved.id)
     _props = await store_get_bundle_props(
         _get_app_redis(request), tenant=tenant_id, project=project_id, bundle_id=spec_resolved.id,
     )
+    endpoint_spec = apply_api_overrides(endpoint_spec, _props)
+    if not _endpoint_visible(endpoint_spec.user_types, endpoint_spec.roles, session):
+        raise HTTPException(status_code=403, detail=f"Bundle operation {operation} is not visible to this user")
     _apply_rest_bundle_props_to_workflow(workflow=workflow, props=_props)
     if not is_bundle_enabled(_props):
         raise HTTPException(status_code=404, detail=f"Bundle {spec_resolved.id} is disabled")

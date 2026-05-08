@@ -34,7 +34,13 @@ interface BundleAPIEndpoint {
     http_method: string;
     route: string;
     user_types: string[];
+    user_types_default?: string[];
+    user_types_config?: string | null;
+    user_types_overridden?: boolean;
     roles: string[];
+    roles_default?: string[];
+    roles_config?: string | null;
+    roles_overridden?: boolean;
     enabled_path?: string | null;
 }
 
@@ -42,6 +48,9 @@ interface BundleMCPEndpoint {
     alias: string;
     route: string;
     transport: string;
+    transport_default?: string;
+    transport_config?: string | null;
+    transport_overridden?: boolean;
     enabled_path?: string | null;
 }
 
@@ -49,7 +58,13 @@ interface BundleWidget {
     alias: string;
     icon?: Record<string, string> | null;
     user_types: string[];
+    user_types_default?: string[];
+    user_types_config?: string | null;
+    user_types_overridden?: boolean;
     roles: string[];
+    roles_default?: string[];
+    roles_config?: string | null;
+    roles_overridden?: boolean;
     enabled_path?: string | null;
 }
 
@@ -57,9 +72,13 @@ interface BundleScheduledJob {
     method_name: string;
     alias?: string | null;
     cron_expression?: string | null;
+    cron_expression_default?: string | null;
     expr_config?: string | null;
+    cron_expression_overridden?: boolean;
     timezone?: string | null;
+    timezone_default?: string | null;
     tz_config?: string | null;
+    timezone_overridden?: boolean;
     span?: string | null;
     enabled_path?: string | null;
 }
@@ -527,6 +546,30 @@ const api = new IntegrationsAPI();
 const Card: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className = '' }) => (
     <div className={`bg-white rounded-2xl shadow-sm border border-gray-200/70 ${className}`}>{children}</div>
 );
+
+const OverridableValue: React.FC<{
+    value: string | string[] | null | undefined;
+    defaultValue?: string | string[] | null;
+    overridden?: boolean;
+}> = ({ value, defaultValue, overridden }) => {
+    const display = Array.isArray(value)
+        ? (value.length ? value.join(', ') : '—')
+        : (value || '—');
+    const defaultDisplay = Array.isArray(defaultValue)
+        ? (defaultValue.length ? defaultValue.join(', ') : '—')
+        : (defaultValue || '—');
+    const title = overridden ? `default: ${defaultDisplay}` : undefined;
+    return (
+        <span className="inline-flex items-center gap-1.5" title={title}>
+            <span>{display}</span>
+            {overridden && (
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-amber-800 text-[10px] font-semibold uppercase tracking-wide">
+                    overridden
+                </span>
+            )}
+        </span>
+    );
+};
 
 const CardHeader: React.FC<{ title: string; subtitle?: string; action?: React.ReactNode }> = ({ title, subtitle, action }) => (
     <div className="px-6 py-5 border-b border-gray-200/70">
@@ -1619,7 +1662,8 @@ const AIBundleDashboard: React.FC = () => {
                 <Card>
                     <CardHeader
                         title="Bundle interface"
-                        subtitle="Declared APIs, MCP endpoints, and scheduled jobs (cron) for the selected bundle."
+                        subtitle="Declared APIs, MCP endpoints, widgets, and scheduled jobs (cron) for the selected bundle."
+                        action={<Button variant="secondary" onClick={() => loadBundles()}>Refresh</Button>}
                     />
                     <CardBody className="space-y-5">
                         <div>
@@ -1701,7 +1745,9 @@ const AIBundleDashboard: React.FC = () => {
                                                             <th className="px-3 py-2 text-left font-semibold">Method</th>
                                                             <th className="px-3 py-2 text-left font-semibold">Route</th>
                                                             <th className="px-3 py-2 text-left font-semibold">User types</th>
+                                                            <th className="px-3 py-2 text-left font-semibold">User types config</th>
                                                             <th className="px-3 py-2 text-left font-semibold">Roles</th>
+                                                            <th className="px-3 py-2 text-left font-semibold">Roles config</th>
                                                             <th className="px-3 py-2 text-left font-semibold">Enabled path</th>
                                                         </tr>
                                                     </thead>
@@ -1711,8 +1757,22 @@ const AIBundleDashboard: React.FC = () => {
                                                                 <td className="px-3 py-2 font-mono font-semibold text-gray-900">{ep.alias}</td>
                                                                 <td className="px-3 py-2 font-mono uppercase text-blue-700">{ep.http_method}</td>
                                                                 <td className="px-3 py-2 font-mono text-gray-700">{ep.route}</td>
-                                                                <td className="px-3 py-2 text-gray-600">{ep.user_types?.join(', ') || '—'}</td>
-                                                                <td className="px-3 py-2 text-gray-600">{ep.roles?.join(', ') || '—'}</td>
+                                                                <td className="px-3 py-2 text-gray-600">
+                                                                    <OverridableValue
+                                                                        value={ep.user_types}
+                                                                        defaultValue={ep.user_types_default}
+                                                                        overridden={ep.user_types_overridden}
+                                                                    />
+                                                                </td>
+                                                                <td className="px-3 py-2 font-mono text-gray-500">{ep.user_types_config || '—'}</td>
+                                                                <td className="px-3 py-2 text-gray-600">
+                                                                    <OverridableValue
+                                                                        value={ep.roles}
+                                                                        defaultValue={ep.roles_default}
+                                                                        overridden={ep.roles_overridden}
+                                                                    />
+                                                                </td>
+                                                                <td className="px-3 py-2 font-mono text-gray-500">{ep.roles_config || '—'}</td>
                                                                 <td className="px-3 py-2 font-mono text-gray-500">{ep.enabled_path || '—'}</td>
                                                             </tr>
                                                         ))}
@@ -1735,7 +1795,9 @@ const AIBundleDashboard: React.FC = () => {
                                                             <th className="px-3 py-2 text-left font-semibold">Alias</th>
                                                             <th className="px-3 py-2 text-left font-semibold">Icon</th>
                                                             <th className="px-3 py-2 text-left font-semibold">User types</th>
+                                                            <th className="px-3 py-2 text-left font-semibold">User types config</th>
                                                             <th className="px-3 py-2 text-left font-semibold">Roles</th>
+                                                            <th className="px-3 py-2 text-left font-semibold">Roles config</th>
                                                             <th className="px-3 py-2 text-left font-semibold">Enabled path</th>
                                                         </tr>
                                                     </thead>
@@ -1748,8 +1810,22 @@ const AIBundleDashboard: React.FC = () => {
                                                                 <tr key={i} className="hover:bg-gray-50/70">
                                                                     <td className="px-3 py-2 font-mono font-semibold text-gray-900">{w.alias}</td>
                                                                     <td className="px-3 py-2 font-mono text-gray-500">{iconLabel || '—'}</td>
-                                                                    <td className="px-3 py-2 text-gray-600">{w.user_types?.join(', ') || '—'}</td>
-                                                                    <td className="px-3 py-2 text-gray-600">{w.roles?.join(', ') || '—'}</td>
+                                                                    <td className="px-3 py-2 text-gray-600">
+                                                                        <OverridableValue
+                                                                            value={w.user_types}
+                                                                            defaultValue={w.user_types_default}
+                                                                            overridden={w.user_types_overridden}
+                                                                        />
+                                                                    </td>
+                                                                    <td className="px-3 py-2 font-mono text-gray-500">{w.user_types_config || '—'}</td>
+                                                                    <td className="px-3 py-2 text-gray-600">
+                                                                        <OverridableValue
+                                                                            value={w.roles}
+                                                                            defaultValue={w.roles_default}
+                                                                            overridden={w.roles_overridden}
+                                                                        />
+                                                                    </td>
+                                                                    <td className="px-3 py-2 font-mono text-gray-500">{w.roles_config || '—'}</td>
                                                                     <td className="px-3 py-2 font-mono text-gray-500">{w.enabled_path || '—'}</td>
                                                                 </tr>
                                                             );
@@ -1773,6 +1849,7 @@ const AIBundleDashboard: React.FC = () => {
                                                             <th className="px-3 py-2 text-left font-semibold">Alias</th>
                                                             <th className="px-3 py-2 text-left font-semibold">Route</th>
                                                             <th className="px-3 py-2 text-left font-semibold">Transport</th>
+                                                            <th className="px-3 py-2 text-left font-semibold">Transport config</th>
                                                             <th className="px-3 py-2 text-left font-semibold">Enabled path</th>
                                                         </tr>
                                                     </thead>
@@ -1781,7 +1858,14 @@ const AIBundleDashboard: React.FC = () => {
                                                             <tr key={i} className="hover:bg-gray-50/70">
                                                                 <td className="px-3 py-2 font-mono font-semibold text-gray-900">{ep.alias}</td>
                                                                 <td className="px-3 py-2 font-mono text-gray-700">{ep.route}</td>
-                                                                <td className="px-3 py-2 text-gray-600">{ep.transport}</td>
+                                                                <td className="px-3 py-2 text-gray-600">
+                                                                    <OverridableValue
+                                                                        value={ep.transport}
+                                                                        defaultValue={ep.transport_default}
+                                                                        overridden={ep.transport_overridden}
+                                                                    />
+                                                                </td>
+                                                                <td className="px-3 py-2 font-mono text-gray-500">{ep.transport_config || '—'}</td>
                                                                 <td className="px-3 py-2 font-mono text-gray-500">{ep.enabled_path || '—'}</td>
                                                             </tr>
                                                         ))}
@@ -1816,9 +1900,21 @@ const AIBundleDashboard: React.FC = () => {
                                                             <tr key={i} className="hover:bg-gray-50/70">
                                                                 <td className="px-3 py-2 font-mono font-semibold text-gray-900">{job.alias || '—'}</td>
                                                                 <td className="px-3 py-2 font-mono text-gray-700">{job.method_name}</td>
-                                                                <td className="px-3 py-2 font-mono text-gray-700 whitespace-nowrap">{job.cron_expression || '—'}</td>
+                                                                <td className="px-3 py-2 font-mono text-gray-700 whitespace-nowrap">
+                                                                    <OverridableValue
+                                                                        value={job.cron_expression}
+                                                                        defaultValue={job.cron_expression_default}
+                                                                        overridden={job.cron_expression_overridden}
+                                                                    />
+                                                                </td>
                                                                 <td className="px-3 py-2 font-mono text-gray-500">{job.expr_config || '—'}</td>
-                                                                <td className="px-3 py-2 text-gray-600">{job.timezone || '—'}</td>
+                                                                <td className="px-3 py-2 text-gray-600">
+                                                                    <OverridableValue
+                                                                        value={job.timezone}
+                                                                        defaultValue={job.timezone_default}
+                                                                        overridden={job.timezone_overridden}
+                                                                    />
+                                                                </td>
                                                                 <td className="px-3 py-2 font-mono text-gray-500">{job.tz_config || '—'}</td>
                                                                 <td className="px-3 py-2 text-gray-600">{job.span || '—'}</td>
                                                                 <td className="px-3 py-2 font-mono text-gray-500">{job.enabled_path || '—'}</td>

@@ -113,6 +113,8 @@ def test_descriptor_filtered_includes_scheduled_jobs_regardless_of_role():
 
 
 def test_descriptor_preserves_all_fields():
+    """Cron descriptor exposes both the effective values (after expr_config /
+    tz_config overrides) and the decorator-declared defaults."""
     job = CronJobSpec(
         method_name="my_method",
         alias="my-alias",
@@ -122,12 +124,36 @@ def test_descriptor_preserves_all_fields():
         tz_config="some.timezone.path",
         span="instance",
     )
+    # No props: expr_config / tz_config paths do not resolve; effective cron
+    # is None (job not scheduled), effective timezone falls back to decorator
+    # default.
     desc = _manifest_to_descriptor(_make_manifest([job]))
     serialized = desc["scheduled_jobs"][0]
     assert serialized["method_name"] == "my_method"
     assert serialized["alias"] == "my-alias"
-    assert serialized["cron_expression"] == "*/30 * * * *"
+    assert serialized["cron_expression"] is None
+    assert serialized["cron_expression_default"] == "*/30 * * * *"
     assert serialized["expr_config"] == "some.config.path"
     assert serialized["timezone"] == "Europe/Berlin"
+    assert serialized["timezone_default"] == "Europe/Berlin"
     assert serialized["tz_config"] == "some.timezone.path"
     assert serialized["span"] == "instance"
+
+    # With props that resolve the override paths, effective values reflect
+    # the override and the *_overridden flags are set.
+    desc2 = _manifest_to_descriptor(
+        _make_manifest([job]),
+        props={
+            "some": {
+                "config": {"path": "*/15 * * * *"},
+                "timezone": {"path": "UTC"},
+            },
+        },
+    )
+    serialized2 = desc2["scheduled_jobs"][0]
+    assert serialized2["cron_expression"] == "*/15 * * * *"
+    assert serialized2["cron_expression_default"] == "*/30 * * * *"
+    assert serialized2["cron_expression_overridden"] is True
+    assert serialized2["timezone"] == "UTC"
+    assert serialized2["timezone_default"] == "Europe/Berlin"
+    assert serialized2["timezone_overridden"] is True
