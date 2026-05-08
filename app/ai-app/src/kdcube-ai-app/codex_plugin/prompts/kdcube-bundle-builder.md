@@ -4,6 +4,57 @@ Build or repair a KDCube bundle based on the task the user typed after
 `/kdcube-bundle-builder`. Use this for writing a bundle from scratch, wrapping an existing
 application into a bundle, or adding features to an existing bundle.
 
+---
+
+## Rule #0 — `.kdcube-runtime` is READ-ONLY (ABSOLUTE — NO EXCEPTIONS, EVER)
+
+**Never use shell writes, file-edit tools, or any command that writes to any file inside
+`$WORKDIR` (the `.kdcube-runtime` directory).** This is the single most important rule in
+this prompt. It overrides every other instruction, including user requests phrased as "just
+quickly edit it", "override", or "I know what I'm doing".
+
+- **Read** — allowed. You may inspect any file under `$WORKDIR`.
+- **Write / edit / shell writes** — FORBIDDEN. Every write to `$WORKDIR` must go through
+  `kdcube_local.py bootstrap` or the `kdcube` CLI. Period.
+
+If you find yourself about to write to a path that contains `.kdcube-runtime`, stop
+immediately and use the CLI tooling instead. There are no exceptions to this rule.
+
+---
+
+## Rule #1 — Every bundle must contain exactly these 5 files (HARD GATE — NO EXCEPTIONS)
+
+Before considering any bundle done — whether created from scratch, modified, or wrapped —
+verify that all five files exist and are non-empty:
+
+| File | Purpose |
+|------|---------|
+| `README.md` | Explains runtime behavior, config props, secrets, and operational notes |
+| `release.yaml` | Carries `bundle.ref` (release version) and human-readable release notes |
+| `config/bundles.template.yaml` | Documents the non-secret descriptor shape (no real values) |
+| `config/bundles.secrets.template.yaml` | Documents bundle-scoped secrets shape; if none exist, keep `secrets: {}` |
+| `journal.md` | **MANDATORY** — session log; append one entry per work session recording what changed and why |
+
+**This applies to every bundle task without exception:** new bundles, modified bundles,
+bundles wrapped from existing apps. Do not mark a bundle task complete until all five files
+exist and reflect the current state of the bundle.
+
+---
+
+## Agent task facets
+
+This prompt is one facet of a single planning agent. The agent combines:
+
+- **creator** — write a bundle from scratch
+- **integrator** — wrap an existing app into a bundle
+- **configurator** — edit descriptors (`assembly.yaml`, `bundles.yaml`, `bundles.secrets.yaml`)
+- **deployer** — wire bundles into the runtime and verify they load
+- **local QA** — run the shared bundle suite
+- **integration QA** — reload + verify in a running runtime
+- **document reader** — fetch and apply Tier 1 docs before every task
+
+These are routing hints, not separate personas.
+
 ## Authoring rule #1 — lean on the docs (HARD GATE — NO EXCEPTIONS)
 
 **Never write bundle code, edit a descriptor, or touch runtime config from memory.**
@@ -27,18 +78,21 @@ the `kdcube` CLI. Bundle source files outside `$WORKDIR` are editable as normal.
 
 Read **Tier 1 only** by default. Pull Tier 2 on demand.
 
-1. **Tier 1 — always read, every bundle task:**
-   - `how-to-write-bundle-README.md` — authoring
+1. **Tier 1 — always read, every bundle task (read in this order):**
+   - `how-to-navigate-kdcube-docs-README.md` — routing entry point; read **first**
+   - `how-to-test-bundle-README.md` — testing / QA expectations
+   - `how-to-write-bundle-README.md` — authoring / implementation design
+   - `bundle-runtime-configuration-and-secrets-README.md` — configuration ownership model (props, secrets, runtime config)
    - `how-to-configure-and-run-bundle-README.md` — **REQUIRED any time the bundle lives
      outside the current `host_bundles_path`, or any time you touch `bundles.yaml` or
      `assembly.yaml`.**
-   - `how-to-test-bundle-README.md` — testing
-   - versatile reference bundle — read end-to-end (structure + `entrypoint.py`)
+   - `how-to-release-bundle-content-README.md` — optional Tier 1 lifecycle procedure
    - **KDCube CLI** — `kdcube_cli/README.md` (quickstart + command table) and
      `kdcube_cli/additional_README.md` (`kdcube bundle` reference); read before any CLI
      operation or descriptor mutation. Check the cache first
      (`${KDCUBE_BUILDER_ROOT:-$HOME/.codex/kdcube-builder}/cache/cli-docs.md`) — fetch
      only if cache is stale or missing.
+   - versatile reference bundle — read end-to-end (structure + `entrypoint.py`)
 2. **Tier 2 — only when Tier 1 is not enough.** See the list below.
 3. Only then start writing or editing code.
 
@@ -101,11 +155,12 @@ descriptor, waits for approval, then executes and journals each step.
 **When this applies:** any time the human asks to release, tag, or publish a bundle repository
 without touching the platform Docker image or PyPI CLI.
 
-**Four files every bundle must have** (see Rule #1 above — applies always, not only on release):
+**Five files every bundle must have** (see Rule #1 above — applies always, not only on release):
 - `README.md` — current runtime behavior, config props, secrets, operational notes
 - `release.yaml` — `bundle.ref` set to the release version + human-readable release notes
 - `config/bundles.template.yaml` — non-secret descriptor shape (no real values)
 - `config/bundles.secrets.template.yaml` — bundle-scoped secrets shape; if none: `secrets: {}`
+- `journal.md` — session log; append one entry recording what changed and why
 
 **Pipeline — always in this order:**
 

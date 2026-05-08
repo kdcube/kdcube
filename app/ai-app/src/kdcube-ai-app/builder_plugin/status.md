@@ -172,6 +172,15 @@ Early work happened on `feat/claude-kdcube-cli-plugin` (now deleted); later work
 - Removed duplicate `.kdcube-runtime` mention from "Authoring rules" section (now points to Rule #0).
 - Content Release section 4-file list updated to reference Rule #1 instead of re-defining the requirement.
 
+**2026-05-08** — full codex_plugin sync with builder_plugin (detailed audit)
+- Added Rule #0 (`.kdcube-runtime` READ-ONLY) and Rule #1 (mandatory 5-file list incl.
+  `journal.md`) as named hard-gate blocks at the top of `kdcube-bundle-builder.md`
+- Fixed Mandatory pre-flight in `kdcube-bundle-builder.md`: added `how-to-navigate` as
+  first item, `bundle-runtime-configuration-and-secrets` and `how-to-release` were missing
+- Added "Agent task facets" section to `kdcube-bundle-builder.md`
+- Added `.kdcube-runtime` read-only rule to `AGENTS.md` General rules (was missing)
+- Updated Content Release "Four files" → "Five files"; added `journal.md`
+
 **2026-05-07** — journal.md requirement
 - Added `journal.md` to the mandatory 5-file list in Rule #1 of `bundle-builder/SKILL.md`
   (alongside `README.md`, `release.yaml`, `config/bundles.template.yaml`,

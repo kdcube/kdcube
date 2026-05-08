@@ -135,3 +135,9 @@ Non-negotiable rules for any bundle work:
 - **Always pair `reload` with `verify-reload`**.
 - **`--secrets-prompt` is interactive** — never run it non-interactively. Use
   `--secrets-set` instead.
+- **`.kdcube-runtime` is read-only — never use file-edit tools or shell writes on any
+  file inside `$WORKDIR`.** You may read files there to inspect current state (e.g. check
+  `bundles.yaml` or `assembly.yaml`). All mutations — descriptor edits, config changes,
+  secrets — must go through the `kdcube` CLI or the `kdcube_local.py` helper script.
+  Bundle source files that live outside `$WORKDIR` (e.g. `~/.kdcube/bundles/<id>/` or a
+  user-specified directory) are editable as normal.
