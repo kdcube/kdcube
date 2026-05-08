@@ -203,6 +203,21 @@ def _block_ts(block: Dict[str, Any]) -> str:
         return _dt.datetime.fromtimestamp(float(ts), tz=_dt.timezone.utc).isoformat().replace("+00:00", "Z")
     if isinstance(ts, str) and ts.strip():
         return isoz(ts)
+    meta = block.get("meta") if isinstance(block.get("meta"), dict) else {}
+    meta_ts = meta.get("ts") or meta.get("created_at")
+    if isinstance(meta_ts, (int, float)):
+        return _dt.datetime.fromtimestamp(float(meta_ts), tz=_dt.timezone.utc).isoformat().replace("+00:00", "Z")
+    if isinstance(meta_ts, str) and meta_ts.strip():
+        return isoz(meta_ts)
+    text = block.get("text")
+    if isinstance(text, str) and text.strip() and len(text) < 20000:
+        parsed = _maybe_parse_json(text)
+        if isinstance(parsed, dict):
+            payload_ts = parsed.get("ts")
+            if isinstance(payload_ts, (int, float)):
+                return _dt.datetime.fromtimestamp(float(payload_ts), tz=_dt.timezone.utc).isoformat().replace("+00:00", "Z")
+            if isinstance(payload_ts, str) and payload_ts.strip():
+                return isoz(payload_ts)
     return ""
 
 
@@ -2269,6 +2284,249 @@ class Timeline:
             )
         return preserved
 
+    def _build_compacted_round_blocks(
+        self,
+        *,
+        blocks: List[Dict[str, Any]],
+        turn_id: str,
+        split_turn_id: str,
+    ) -> List[Dict[str, Any]]:
+        if not split_turn_id:
+            return []
+
+        rows_by_key: Dict[str, Dict[str, Any]] = {}
+        order: List[str] = []
+
+        def _remember(row: Dict[str, Any]) -> None:
+            call_id = str(row.get("tool_call_id") or "").strip()
+            key = call_id or str(row.get("result_path") or row.get("call_path") or "").strip()
+            if not key:
+                return
+            prior = rows_by_key.get(key)
+            if prior:
+                merged = dict(prior)
+                for k, v in row.items():
+                    if v not in (None, "", [], {}):
+                        merged[k] = v
+                rows_by_key[key] = merged
+                return
+            rows_by_key[key] = dict(row)
+            order.append(key)
+
+        call_blocks: Dict[str, Dict[str, Any]] = {}
+        result_blocks: Dict[str, List[Dict[str, Any]]] = {}
+
+        for blk in blocks or []:
+            if not isinstance(blk, dict):
+                continue
+            btype = (blk.get("type") or "").strip()
+            blk_turn_id = _block_turn_id(blk)
+            if blk_turn_id and blk_turn_id != split_turn_id:
+                continue
+
+            if btype == "react.rounds.compacted":
+                payload = _maybe_parse_json(blk.get("text") or "") if isinstance(blk.get("text"), str) else None
+                rounds = payload.get("rounds") if isinstance(payload, dict) else None
+                if isinstance(rounds, list):
+                    for row in rounds:
+                        if isinstance(row, dict):
+                            _remember(row)
+                continue
+
+            call_id = _block_call_id(blk)
+            if not call_id:
+                continue
+            if btype == "react.tool.call":
+                call_blocks[call_id] = blk
+            elif btype == "react.tool.result":
+                result_blocks.setdefault(call_id, []).append(blk)
+
+        call_ids: List[str] = []
+        for blk in blocks or []:
+            if not isinstance(blk, dict):
+                continue
+            blk_turn_id = _block_turn_id(blk)
+            if blk_turn_id and blk_turn_id != split_turn_id:
+                continue
+            call_id = _block_call_id(blk)
+            if call_id and call_id not in call_ids and (call_id in call_blocks or call_id in result_blocks):
+                call_ids.append(call_id)
+
+        for call_id in call_ids:
+            call_blk = call_blocks.get(call_id)
+            results = result_blocks.get(call_id) or []
+            result_blk = next(
+                (b for b in reversed(results) if str(b.get("path") or "").strip().startswith("tc:")),
+                None,
+            ) or (results[-1] if results else None)
+            tool_id = _tool_id_from_call_or_result(result_blk or {}, call_blk)
+            call_path = (call_blk.get("path") or "").strip() if isinstance(call_blk, dict) else ""
+            result_path = (result_blk.get("path") or "").strip() if isinstance(result_blk, dict) else ""
+            if not call_path:
+                call_path = f"tc:{split_turn_id}.{call_id}.call"
+            if not result_path:
+                result_path = f"tc:{split_turn_id}.{call_id}.result"
+
+            payload = _tool_call_payload(call_blk or {})
+            params = payload.get("params") if isinstance(payload, dict) else None
+            status, hint = _tool_status_and_hint(result_blk)
+            tokens = self._estimate_block_tokens(result_blk) if isinstance(result_blk, dict) else 0
+            large_result = bool(tokens >= 12000)
+            read_paths: List[str] = []
+            if isinstance(result_blk, dict) and isinstance(result_blk.get("text"), str):
+                parsed = _maybe_parse_json(result_blk.get("text") or "")
+                if isinstance(parsed, dict):
+                    if not status and parsed.get("paths") is not None:
+                        status = "success"
+                    if isinstance(parsed.get("paths"), list):
+                        for row in parsed.get("paths") or []:
+                            if not isinstance(row, dict):
+                                continue
+                            p = str(row.get("path") or "").strip()
+                            if p:
+                                tok = row.get("tokens")
+                                row_status = str(row.get("status") or "").strip()
+                                suffix = []
+                                if tok:
+                                    suffix.append(f"tokens={tok}")
+                                if row_status:
+                                    suffix.append(f"status={row_status}")
+                                read_paths.append(p + (f" ({', '.join(suffix)})" if suffix else ""))
+                    if parsed.get("error") and not status:
+                        status = "error"
+            row = {
+                "tool_call_id": call_id,
+                "tool_id": tool_id,
+                "status": status or ("success" if result_blk is not None else "pending"),
+                "call_path": call_path,
+                "result_path": result_path,
+                "params": _compact_hint(params, max_chars=220) if params is not None else "",
+                "hint": hint,
+                "result_tokens": tokens or None,
+                "large_result": large_result or None,
+                "read_paths": read_paths[:8],
+            }
+            if large_result and result_path:
+                row["recover_with"] = f"exec_tools.execute_code_python + ctx_tools.fetch_ctx(path='{result_path}')"
+            _remember(row)
+
+        rows = [rows_by_key[key] for key in order if key in rows_by_key]
+        rows_by_call_id = {
+            str(row.get("tool_call_id") or "").strip(): row
+            for row in rows
+            if str(row.get("tool_call_id") or "").strip()
+        }
+
+        messages: List[Dict[str, Any]] = []
+        events: List[Dict[str, Any]] = []
+        turn_started_at = _first_block_ts(blocks)
+        user_like_types = {
+            "user.prompt": "USER MESSAGE",
+            "user.followup": "FOLLOWUP DURING TURN",
+            "user.followup.preserved": "FOLLOWUP DURING TURN",
+            "user.steer": "STEER DURING TURN",
+            "user.steer.preserved": "STEER DURING TURN",
+        }
+        for blk in blocks or []:
+            if not isinstance(blk, dict):
+                continue
+            blk_turn_id = _block_turn_id(blk)
+            if blk_turn_id and blk_turn_id != split_turn_id:
+                continue
+            btype = (blk.get("type") or "").strip()
+            txt = blk.get("text")
+            text = _compact_hint(txt, max_chars=700) if isinstance(txt, str) and txt.strip() else ""
+            call_id = _block_call_id(blk)
+            path = str(blk.get("path") or "").strip()
+            ts = _block_ts(blk)
+
+            if btype in user_like_types:
+                messages.append({
+                    "label": user_like_types[btype],
+                    "path": path,
+                    "ts": ts,
+                    "text": text,
+                })
+                continue
+            if btype == "turn.header":
+                continue
+            if btype == "react.thinking":
+                events.append({"kind": "thinking", "path": path, "ts": ts, "text": text})
+                continue
+            if btype == "react.notes":
+                events.append({"kind": "notes", "path": path, "ts": ts, "text": text, "tool_call_id": call_id})
+                continue
+            if btype in {"react.note", "react.note.preserved"}:
+                events.append({"kind": "internal_note", "path": path, "ts": ts, "text": text})
+                continue
+            if btype == "react.tool.call":
+                payload = _tool_call_payload(blk)
+                tool_id = str(payload.get("tool_id") or blk.get("tool_id") or "").strip()
+                params = payload.get("params") if isinstance(payload, dict) else None
+                events.append({
+                    "kind": "tool_call",
+                    "tool_id": tool_id,
+                    "tool_call_id": call_id,
+                    "path": path or (f"tc:{split_turn_id}.{call_id}.call" if call_id else ""),
+                    "ts": ts,
+                    "params": _compact_hint(params, max_chars=500) if params is not None else "",
+                })
+                continue
+            if btype == "react.tool.result":
+                row = rows_by_call_id.get(call_id) or {}
+                tool_id = str(row.get("tool_id") or _tool_id_from_call_or_result(blk, call_blocks.get(call_id)) or "").strip()
+                events.append({
+                    "kind": "tool_result",
+                    "tool_id": tool_id,
+                    "tool_call_id": call_id,
+                    "path": path or str(row.get("result_path") or "").strip(),
+                    "ts": ts,
+                    "status": row.get("status") or "",
+                    "hint": row.get("hint") or _compact_hint(text, max_chars=260),
+                    "result_tokens": row.get("result_tokens"),
+                    "large_result": bool(row.get("large_result")),
+                    "read_paths": row.get("read_paths") if isinstance(row.get("read_paths"), list) else [],
+                    "recover_with": row.get("recover_with") or "",
+                })
+                continue
+            if btype == "react.notice":
+                events.append({"kind": "notice", "path": path, "ts": ts, "text": text, "tool_call_id": call_id})
+                continue
+            if btype == "react.tool.code":
+                events.append({"kind": "code", "path": path, "ts": ts, "text": text, "tool_call_id": call_id})
+                continue
+            if btype == "assistant.completion":
+                events.append({"kind": "assistant", "path": path, "ts": ts, "text": text})
+
+        if not rows and not messages and not events:
+            return []
+
+        payload = {
+            "turn_id": split_turn_id,
+            "origin": "current turn prefix compacted before the turn completed",
+            "rounds": rows[-30:],
+            "messages": messages[-8:],
+            "events": events[-80:],
+        }
+        if turn_started_at:
+            payload["turn_started_at"] = turn_started_at
+        return [
+            self._block(
+                type="react.rounds.compacted",
+                author="system",
+                turn_id=turn_id,
+                ts=_last_block_ts(blocks),
+                mime="application/json",
+                text=json.dumps(payload, ensure_ascii=False, indent=2),
+                path=f"ar:{turn_id}.react.rounds.compacted" if turn_id else "",
+                meta={
+                    "preserved_by_compaction": True,
+                    "source_turn_id": split_turn_id,
+                    "artifact_kind": "react.rounds.compacted",
+                },
+            )
+        ]
+
     @staticmethod
     def _one_line_preview(value: Any, *, limit: int = 160) -> str:
         if value is None:
@@ -3203,6 +3461,11 @@ class Timeline:
             blocks=compacted_blocks,
             turn_id=summary_turn_id or self.runtime.turn_id or "",
         )
+        round_preserved_blocks = self._build_compacted_round_blocks(
+            blocks=compacted_blocks,
+            turn_id=summary_turn_id or self.runtime.turn_id or "",
+            split_turn_id=split_turn_id,
+        )
 
         active_plan_before = None
         if latest_current_plan_snapshot is not None:
@@ -3240,6 +3503,11 @@ class Timeline:
                 updated_blocks.insert(insert_pos, preserved_event)
                 insert_pos += 1
             inserted_blocks += len(external_event_preserved_blocks)
+        if round_preserved_blocks:
+            for preserved_round in round_preserved_blocks:
+                updated_blocks.insert(insert_pos, preserved_round)
+                insert_pos += 1
+            inserted_blocks += len(round_preserved_blocks)
         if history_index_block:
             updated_blocks.insert(insert_pos, history_index_block)
             insert_pos += 1
@@ -3886,8 +4154,7 @@ class Timeline:
             cache = bool(b.get("cache"))
             text = b.get("text")
             btype = (b.get("type") or "")
-            raw_ts = b.get("ts")
-            ts = str(raw_ts).strip() if raw_ts is not None else ""
+            ts = _block_ts(b)
             path = (b.get("path") or "").strip()
             meta = b.get("meta") if isinstance(b.get("meta"), dict) else {}
             extra_text_blocks: List[str] = []
@@ -4023,6 +4290,185 @@ class Timeline:
                 if text:
                     lines.append(str(text).strip())
                 lines.append("[END COMPACTED PRIOR CONVERSATION MEMORY]")
+                text = "\n".join(lines).strip()
+            elif btype == "react.rounds.compacted":
+                payload = _maybe_parse_json(text or "") if isinstance(text, str) else None
+                rounds = payload.get("rounds") if isinstance(payload, dict) else None
+                events = payload.get("events") if isinstance(payload, dict) else None
+                messages = payload.get("messages") if isinstance(payload, dict) else None
+                source_turn = str((payload or {}).get("turn_id") or meta.get("source_turn_id") or "").strip() if isinstance(payload, dict) else str(meta.get("source_turn_id") or "").strip()
+                turn_started_at = str((payload or {}).get("turn_started_at") or "").strip() if isinstance(payload, dict) else ""
+                lines = ["[COMPACTED CURRENT TURN PREFIX]"]
+                if path:
+                    lines.append(f"[path: {path}]")
+                if source_turn:
+                    lines.append(build_turn_header_text(turn_id=source_turn, started_at=turn_started_at))
+                lines.append("[compacted current-turn prefix: continue from this timeline; do not assume the turn is blank]")
+
+                if isinstance(messages, list):
+                    for msg in messages:
+                        if not isinstance(msg, dict):
+                            continue
+                        msg_lines: List[str] = []
+                        mts = str(msg.get("ts") or "").strip()
+                        if mts:
+                            msg_lines.append(f"[ts: {mts}]")
+                        label = str(msg.get("label") or "USER MESSAGE").strip()
+                        msg_lines.append(f"[{label}]")
+                        mpath = str(msg.get("path") or "").strip()
+                        if mpath:
+                            msg_lines.append(f"[path: {mpath}]")
+                        mtext = str(msg.get("text") or "").strip()
+                        if mtext:
+                            msg_lines.append(mtext)
+                        if msg_lines:
+                            lines.append("\n".join(msg_lines))
+
+                def _event_ts_line(event: Dict[str, Any]) -> str:
+                    ets = str(event.get("ts") or "").strip()
+                    return f"[ts: {ets}]" if ets else ""
+
+                def _append_round_event(round_lines: List[str], event: Dict[str, Any]) -> None:
+                    kind = str(event.get("kind") or "").strip()
+                    ets_line = _event_ts_line(event)
+                    if kind == "thinking":
+                        if ets_line:
+                            round_lines.append(ets_line)
+                        round_lines.append("[AI Agent thinking...]")
+                        etext = str(event.get("text") or "").strip()
+                        if etext:
+                            round_lines.append(etext)
+                        return
+                    if kind == "notes":
+                        if ets_line:
+                            round_lines.append(ets_line)
+                        etext = str(event.get("text") or "").strip()
+                        round_lines.append(f"[AI Agent say]: {etext}" if etext else "[AI Agent say]")
+                        return
+                    if kind == "internal_note":
+                        if ets_line:
+                            round_lines.append(ets_line)
+                        round_lines.append("[INTERNAL NOTE]")
+                        etext = str(event.get("text") or "").strip()
+                        if etext:
+                            round_lines.append(etext)
+                        return
+                    if kind == "tool_call":
+                        if ets_line:
+                            round_lines.append(ets_line)
+                        call_id = str(event.get("tool_call_id") or "").strip()
+                        short_id = _short_tc_id(call_id)
+                        tool_id = str(event.get("tool_id") or "").strip()
+                        header = f"[TOOL CALL {short_id}].call"
+                        if tool_id:
+                            header += f" {tool_id}"
+                        round_lines.append(header)
+                        epath = str(event.get("path") or "").strip()
+                        if epath:
+                            round_lines.append(epath)
+                        params_hint = str(event.get("params") or "").strip()
+                        if params_hint:
+                            round_lines.append("Params:\n" + params_hint)
+                        return
+                    if kind == "tool_result":
+                        if ets_line:
+                            round_lines.append(ets_line)
+                        call_id = str(event.get("tool_call_id") or "").strip()
+                        short_id = _short_tc_id(call_id)
+                        tool_id = str(event.get("tool_id") or "").strip()
+                        header = f"[TOOL RESULT {short_id}].result"
+                        if tool_id:
+                            header += f" {tool_id}"
+                        round_lines.append(header)
+                        epath = str(event.get("path") or "").strip()
+                        if epath:
+                            round_lines.append(f"logical_path: {epath}")
+                        status = str(event.get("status") or "").strip()
+                        if status:
+                            round_lines.append(f"Status: {status}")
+                        tokens = event.get("result_tokens")
+                        large_result = bool(event.get("large_result"))
+                        if tokens:
+                            round_lines.append(f"result_tokens: {tokens}")
+                        if large_result:
+                            round_lines.append("result: compacted large result; exact content is recoverable by logical_path")
+                        read_paths = event.get("read_paths")
+                        if isinstance(read_paths, list) and read_paths:
+                            round_lines.append("read_paths:")
+                            for p in read_paths:
+                                if p:
+                                    round_lines.append(f"- {p}")
+                        recover = str(event.get("recover_with") or "").strip()
+                        if recover:
+                            round_lines.append(f"recover_with: {recover}")
+                        hint = str(event.get("hint") or "").strip()
+                        if hint and not large_result:
+                            round_lines.append(f"hint: {_compact_hint(hint, max_chars=260)}")
+                        return
+                    if kind == "notice":
+                        if ets_line:
+                            round_lines.append(ets_line)
+                        round_lines.append("[REACT NOTICE]")
+                        etext = str(event.get("text") or "").strip()
+                        if etext:
+                            round_lines.append(etext)
+                        return
+                    if kind == "code":
+                        if ets_line:
+                            round_lines.append(ets_line)
+                        epath = str(event.get("path") or "").strip()
+                        round_lines.append(f"[AI Agent wrote code] {epath}:" if epath else "[AI Agent wrote code]:")
+                        etext = str(event.get("text") or "").strip()
+                        if etext:
+                            round_lines.append(etext)
+                        return
+                    if kind == "assistant":
+                        if ets_line:
+                            round_lines.append(ets_line)
+                        round_lines.append("[ASSISTANT MESSAGE]")
+                        epath = str(event.get("path") or "").strip()
+                        if epath:
+                            round_lines.append(f"[path: {epath}]")
+                        etext = str(event.get("text") or "").strip()
+                        if etext:
+                            round_lines.append(etext)
+
+                if isinstance(events, list) and events:
+                    compact_round_idx = 0
+                    current_round_lines: List[str] = []
+                    current_round_has_terminal = False
+
+                    def _flush_compact_round() -> None:
+                        nonlocal current_round_lines, current_round_has_terminal, compact_round_idx
+                        if not current_round_lines:
+                            return
+                        compact_round_idx += 1
+                        lines.append(f"┌──────── COMPACTED ROUND {compact_round_idx} ────────┐")
+                        lines.append(_indent_text_block("\n".join(current_round_lines)))
+                        lines.append("└────────────────────────┘")
+                        current_round_lines = []
+                        current_round_has_terminal = False
+
+                    for event in events:
+                        if not isinstance(event, dict):
+                            continue
+                        kind = str(event.get("kind") or "").strip()
+                        if kind == "thinking" and current_round_lines and current_round_has_terminal:
+                            _flush_compact_round()
+                        _append_round_event(current_round_lines, event)
+                        if kind in {"tool_result", "notice", "assistant"}:
+                            current_round_has_terminal = True
+                    _flush_compact_round()
+                elif isinstance(rounds, list) and rounds:
+                    # Backward-compatible renderer for old compacted-round payloads.
+                    lines.append("rounds:")
+                    for row in rounds:
+                        if not isinstance(row, dict):
+                            continue
+                        tool_id = str(row.get("tool_id") or "tool").strip()
+                        call_id = str(row.get("tool_call_id") or "").strip()
+                        status = str(row.get("status") or "").strip()
+                        lines.append(f"- tool={tool_id} call_id={call_id} status={status}".strip())
                 text = "\n".join(lines).strip()
             elif btype == "turn.feedback":
                 lines = []

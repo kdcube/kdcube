@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: MIT
 
+import json
+
 import pytest
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.plan import (
@@ -239,6 +241,104 @@ async def test_split_turn_prefix_summary(monkeypatch):
     assert summary_blocks, "summary block not inserted"
     summary_text = summary_blocks[0].get("text") or ""
     assert "Turn Context (split turn)" in summary_text
+
+
+@pytest.mark.asyncio
+async def test_split_turn_compaction_preserves_round_ledger(monkeypatch):
+    async def _fake_summary(*args, **kwargs):
+        return "SUMMARY"
+
+    async def _fake_prefix(*args, **kwargs):
+        return "PREFIX"
+
+    import kdcube_ai_app.apps.chat.sdk.tools.backends.summary.conv_progressive_summary as summary_mod
+
+    monkeypatch.setattr(summary_mod, "summarize_context_blocks_progressive", _fake_summary)
+    monkeypatch.setattr(summary_mod, "summarize_turn_prefix_progressive", _fake_prefix)
+
+    runtime = RuntimeCtx(turn_id="turn_job", max_tokens=120)
+    tl = Timeline(runtime=runtime, svc=object())
+    email_result_path = "tc:turn_job.tc_email.result"
+    blocks = [
+        _blk(btype="turn.header", text="[TURN turn_job]", turn_id="turn_job", ts="2026-05-08T09:00:00Z"),
+        _blk(btype="user.prompt", text="scheduled email digest", turn_id="turn_job", ts="2026-05-08T09:00:01Z"),
+        _blk(btype="react.thinking", text="Need to fetch emails, then generate a report from exact data.", turn_id="turn_job", ts="2026-05-08T09:00:01Z"),
+        _blk(btype="react.note", text="[K] Email result path must be processed exactly, not guessed.", turn_id="turn_job", ts="2026-05-08T09:00:01Z"),
+        {
+            "type": "react.tool.call",
+            "turn_id": "turn_job",
+            "call_id": "tc_email",
+            "path": "tc:turn_job.tc_email.call",
+            "mime": "application/json",
+            "ts": "2026-05-08T09:00:02Z",
+            "text": json.dumps({
+                "tool_id": "email.process_user_emails",
+                "tool_call_id": "tc_email",
+                "params": {"mailbox": "INBOX", "max_messages": 50},
+            }),
+        },
+        {
+            "type": "react.tool.result",
+            "turn_id": "turn_job",
+            "call_id": "tc_email",
+            "path": email_result_path,
+            "mime": "application/json",
+            "text": json.dumps({"ok": True, "messages": ["email body " * 2000 for _ in range(40)]}),
+            "meta": {"tool_call_id": "tc_email", "tool_id": "email.process_user_emails"},
+        },
+        {
+            "type": "react.tool.call",
+            "turn_id": "turn_job",
+            "call_id": "tc_read",
+            "path": "tc:turn_job.tc_read.call",
+            "mime": "application/json",
+            "ts": "2026-05-08T09:01:00Z",
+            "text": json.dumps({
+                "tool_id": "react.read",
+                "tool_call_id": "tc_read",
+                "params": {"paths": [email_result_path]},
+            }),
+        },
+        {
+            "type": "react.tool.result",
+            "turn_id": "turn_job",
+            "call_id": "tc_read",
+            "path": "tc:turn_job.tc_read.result",
+            "mime": "application/json",
+            "text": json.dumps({"paths": [{"path": email_result_path, "tokens": 89167}], "total_tokens": 89167}),
+            "meta": {"tool_call_id": "tc_read", "tool_id": "react.read"},
+        },
+        _blk(btype="assistant.completion", text="continue", turn_id="turn_job", ts="2026-05-08T09:02:00Z"),
+    ]
+    monkeypatch.setattr(tl, "_find_compaction_cut_point", lambda *args, **kwargs: (8, 0, True))
+
+    updated = await tl.sanitize_context_blocks(
+        system_text="sys",
+        blocks=blocks,
+        max_tokens=80,
+        force=True,
+    )
+
+    compacted_rounds = [b for b in updated if b.get("type") == "react.rounds.compacted"]
+    assert compacted_rounds
+    rendered = await tl.render(cache_last=False, system_text="sys", include_sources=False)
+    text = "\n".join(b.get("text", "") for b in rendered if b.get("type") == "text")
+
+    assert "[COMPACTED CURRENT TURN PREFIX]" in text
+    assert "COMPACTED ROUND 1" in text
+    assert "[USER MESSAGE]" in text
+    assert "scheduled email digest" in text
+    assert "Need to fetch emails, then generate a report from exact data." in text
+    assert "Email result path must be processed exactly" in text
+    assert "[TOOL CALL tc_email].call email.process_user_emails" in text
+    assert "[TOOL RESULT tc_email].result email.process_user_emails" in text
+    assert "[TOOL CALL tc_read].call react.read" in text
+    assert "[TOOL RESULT tc_read].result react.read" in text
+    assert email_result_path in text
+    assert "read_paths:" in text
+    assert "compacted large result" in text
+    assert "recover_with: exec_tools.execute_code_python + ctx_tools.fetch_ctx" in text
+    assert "compacted_time_range: 2026-05-08T09:00:00Z -> 2026-05-08T09:01:00Z" in text
 
 
 @pytest.mark.asyncio

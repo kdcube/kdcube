@@ -63,8 +63,17 @@ Reads existing logical artifacts back into the visible timeline.
 - deduplication: visible blocks are not duplicated
 - hidden data: hidden/pruned blocks can be reopened by exact path
 - generated views: `ar:<turn_id>.react.turn.index` is reconstructed on demand from the persisted turn log
+- large text guard: oversized text payloads are not copied back into the visible
+  timeline; the status row uses `status=too_large_for_visible_context` and a
+  visible marker names the exact path
 
 Use it when the path already exists and React needs to inspect the content again.
+
+For large `tc:`/`fi:` payloads, use `react.read` only to confirm the path. Then
+process the exact content inside `exec_tools.execute_code_python` by calling
+`ctx_tools.fetch_ctx(path=...)` from the exec code. Repeating `react.read` on the
+same large payload returns the marker again and should not be used as a bulk-data
+processing loop.
 
 ### `react.pull`
 

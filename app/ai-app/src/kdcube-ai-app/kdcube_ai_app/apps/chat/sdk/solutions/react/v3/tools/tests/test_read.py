@@ -119,6 +119,44 @@ async def test_read_tc_result_prefers_inline_payload_over_meta(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_read_large_tc_result_returns_recovery_marker_not_payload(tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_read", outdir=str(tmp_path), workdir=str(tmp_path), max_tokens=80_000)
+    ctx = FakeBrowser(runtime)
+    source_path = "tc:turn_src.tc_big.result"
+    large_text = json.dumps({"ok": True, "messages": ["email body " * 2000 for _ in range(80)]})
+
+    ctx.timeline.blocks.append({
+        "type": "react.tool.result",
+        "mime": "application/json",
+        "path": source_path,
+        "text": large_text,
+        "turn_id": "turn_src",
+        "call_id": "tc_big",
+        "meta": {"tool_call_id": "tc_big", "tool_id": "email.process_user_emails"},
+    })
+
+    state = {"last_decision": {"tool_call": {"params": {"paths": [source_path]}}}}
+    await handle_react_read(ctx_browser=ctx, state=state, tool_call_id="r_large")
+
+    read_blocks = [
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result" and b.get("call_id") == "r_large"
+    ]
+    assert not any(b.get("text") == large_text for b in read_blocks)
+    marker = next(b for b in read_blocks if b.get("path") == source_path)
+    assert "LARGE READ NOT MATERIALIZED" in marker["text"]
+    assert "ctx_tools.fetch_ctx" in marker["text"]
+
+    status = next(
+        json.loads(b["text"])
+        for b in read_blocks
+        if b.get("path") == "tc:turn_read.r_large.result" and b.get("mime") == "application/json"
+    )
+    assert status["paths"][0]["status"] == "too_large_for_visible_context"
+    assert status["large_paths"][0]["path"] == source_path
+
+
+@pytest.mark.asyncio
 async def test_read_turn_index_reconstructs_semantic_inventory_from_turn_log(tmp_path):
     runtime = RuntimeCtx(turn_id="turn_current", outdir=str(tmp_path), workdir=str(tmp_path))
     ctx = FakeBrowser(runtime)

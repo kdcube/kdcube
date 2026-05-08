@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+import os
 import pathlib
 
 import json
@@ -30,6 +31,10 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.common import (
     tc_result_path,
 )
 
+DEFAULT_VISIBLE_READ_MAX_TOKENS = 24_000
+MIN_VISIBLE_READ_MAX_TOKENS = 4_000
+READ_DEDUP_PREFIXES = ("fi:", "so:", "sk:", "tc:", "ar:", "ks:", "su:", "ws:")
+
 TOOL_SPEC = {
     "id": "react.read",
     "purpose": (
@@ -46,7 +51,9 @@ TOOL_SPEC = {
         "calling react.read on unsupported binary files returns only metadata, NOT content."
         "Inspect those with code and exec tool against their physical OUTPUT_DIR path. "
         "If your own earlier tools produced the binary file, inspect the generating tool call/result (tc:) and any related text/code source artifacts (fi:) "
-        "from that generating step; do not expect react.read on the binary fi: file itself to reveal its content."
+        "from that generating step; do not expect react.read on the binary fi: file itself to reveal its content. "
+        "Oversized text results are not rematerialized into visible context; react.read returns a recovery marker and the exact path. "
+        "For bulk processing of such payloads, use exec_tools.execute_code_python and call ctx_tools.fetch_ctx(path=...) inside the exec code."
     ),
     "args": {
         "paths": (
@@ -61,9 +68,39 @@ TOOL_SPEC = {
     },
     "returns": (
         "ok for readable text/PDF/image paths; for unsupported binary files react.read may only surface metadata/path presence. "
+        "Oversized readable payloads return status=too_large_for_visible_context instead of full content. "
         "Deeper inspection should be done with code and exec tool, or via related tc: and text/code fi: artifacts from the generating step."
     ),
 }
+
+
+def _visible_read_token_cap(runtime_ctx: Any) -> int:
+    raw = os.getenv("KDCUBE_REACT_READ_VISIBLE_MAX_TOKENS", "").strip()
+    if raw:
+        try:
+            return max(MIN_VISIBLE_READ_MAX_TOKENS, int(raw))
+        except Exception:
+            pass
+    runtime_max = 0
+    try:
+        runtime_max = int(getattr(runtime_ctx, "max_tokens", 0) or 0)
+    except Exception:
+        runtime_max = 0
+    if runtime_max > 0:
+        return max(MIN_VISIBLE_READ_MAX_TOKENS, min(DEFAULT_VISIBLE_READ_MAX_TOKENS, int(runtime_max * 0.30)))
+    return DEFAULT_VISIBLE_READ_MAX_TOKENS
+
+
+def _large_read_marker_text(*, path: str, tokens: int, cap: int) -> str:
+    return "\n".join([
+        "[LARGE READ NOT MATERIALIZED]",
+        f"path: {path}",
+        f"tokens: {tokens}",
+        f"visible_read_limit_tokens: {cap}",
+        "exact_content: recoverable by logical path",
+        "bulk_processing: use exec_tools.execute_code_python and call ctx_tools.fetch_ctx(path=...) inside the exec code",
+        "do_not_repeat: do not call react.read repeatedly for this path; it will return this marker until a smaller derived artifact is created",
+    ])
 
 
 async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_call_id: str) -> Dict[str, Any]:
@@ -206,12 +243,38 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             block["meta"].pop("replacement_text", None)
         block.pop("replacement_text", None)
         path = (block.get("path") or "").strip()
-        existing = _find_existing_block(block) if path.startswith(("fi:", "so:", "sk:")) else None
+        existing = _find_existing_block(block) if path.startswith(READ_DEDUP_PREFIXES) else None
         if existing:
             _remember_visible_ref(path, existing)
             return False
         pending_blocks.append(block)
         return True
+
+    def _emit_large_text_marker(*, ctx_path: str, tokens: int, meta_extra: Dict[str, Any]) -> bool:
+        large_info = {
+            "path": ctx_path,
+            "tokens": tokens,
+            "visible_read_limit_tokens": visible_read_token_cap,
+            "status": "too_large_for_visible_context",
+            "recover_with": "exec_tools.execute_code_python + ctx_tools.fetch_ctx(path)",
+        }
+        large_paths.append(large_info)
+        marker_meta = dict(meta_extra or {})
+        marker_meta.update({
+            "large_read_guard": True,
+            "source_tokens": tokens,
+            "visible_read_limit_tokens": visible_read_token_cap,
+            "recover_with": "ctx_tools.fetch_ctx",
+        })
+        return _maybe_add_block({
+            "turn": turn_id,
+            "type": "react.tool.result",
+            "call_id": tool_call_id,
+            "mime": "text/markdown",
+            "path": ctx_path,
+            "text": _large_read_marker_text(path=ctx_path, tokens=tokens, cap=visible_read_token_cap),
+            "meta": marker_meta,
+        })
 
     if skill_paths:
         try:
@@ -336,7 +399,9 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
     except Exception:
         pass
     total_tokens = 0
+    visible_read_token_cap = _visible_read_token_cap(getattr(ctx_browser, "runtime_ctx", None))
     per_path: List[Dict[str, Any]] = []
+    large_paths: List[Dict[str, Any]] = []
     items_by_path = {item.get("context_path"): item for item in (items or []) if item.get("context_path")}
 
     async def _emit_fi_path(ctx_path: str) -> None:
@@ -412,6 +477,20 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 total_tokens += tokens
             except Exception:
                 pass
+            if tokens > visible_read_token_cap:
+                _emit_large_text_marker(
+                    ctx_path=ctx_path,
+                    tokens=tokens,
+                    meta_extra=meta_extra,
+                )
+                per_path.append({
+                    "path": ctx_path,
+                    "tokens": tokens,
+                    "status": "too_large_for_visible_context",
+                    "visible_read_limit_tokens": visible_read_token_cap,
+                    "recover_with": "exec_tools.execute_code_python + ctx_tools.fetch_ctx(path)",
+                })
+                return
             blk = {
                 "turn": turn_id,
                 "type": "react.tool.result",
@@ -528,6 +607,20 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 total_tokens += tokens
             except Exception:
                 tokens = 0
+            if tokens > visible_read_token_cap:
+                _emit_large_text_marker(
+                    ctx_path=ctx_path,
+                    tokens=tokens,
+                    meta_extra=meta_extra,
+                )
+                per_path.append({
+                    "path": ctx_path,
+                    "tokens": tokens,
+                    "status": "too_large_for_visible_context",
+                    "visible_read_limit_tokens": visible_read_token_cap,
+                    "recover_with": "exec_tools.execute_code_python + ctx_tools.fetch_ctx(path)",
+                })
+                return
             blk = {
                 "turn": turn_id,
                 "type": "react.tool.result",
@@ -788,6 +881,23 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 total_tokens += tokens
             except Exception:
                 pass
+            if tokens > visible_read_token_cap:
+                _emit_large_text_marker(
+                    ctx_path=ctx_path,
+                    tokens=tokens,
+                    meta_extra={
+                        "tool_call_id": tool_call_id,
+                        "tool_id": tool_id,
+                    },
+                )
+                per_path.append({
+                    "path": ctx_path,
+                    "tokens": tokens,
+                    "status": "too_large_for_visible_context",
+                    "visible_read_limit_tokens": visible_read_token_cap,
+                    "recover_with": "exec_tools.execute_code_python + ctx_tools.fetch_ctx(path)",
+                })
+                continue
             if art_fmt in {"json"}:
                 mime = "application/json"
             elif art_fmt in {"html"}:
@@ -836,6 +946,8 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             summary["exists_in_visible_context"] = sorted(set(exists_paths))
         if visible_context_refs:
             summary["visible_context_refs"] = visible_context_refs
+        if large_paths:
+            summary["large_paths"] = large_paths
         add_block(ctx_browser, {
             "turn": turn_id,
             "type": "react.tool.result",

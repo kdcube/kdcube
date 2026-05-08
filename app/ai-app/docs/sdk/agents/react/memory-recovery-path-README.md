@@ -100,6 +100,27 @@ That checkpoint is the first map. It should include the important goals,
 outcomes, decisions, artifacts, and logical refs that survived through the
 compaction prompt.
 
+If compaction cuts the currently running turn, the checkpoint is followed by a
+timeline-shaped compacted prefix:
+
+```text
+[COMPACTED CURRENT TURN PREFIX]
+TURN <turn_id> (started at ...)
+[USER MESSAGE]
+...
+┌──────── COMPACTED ROUND 1 ────────┐
+  [AI Agent thinking...]
+  [AI Agent say]: ...
+  [TOOL CALL ...].call ...
+  [TOOL RESULT ...].result ...
+  result: compacted large result; exact content is recoverable by logical_path
+  recover_with: exec_tools.execute_code_python + ctx_tools.fetch_ctx(path='tc:...')
+└────────────────────────┘
+```
+
+Treat that as earlier rounds from the same turn. Continue from it; do not
+repeat completed rounds just because their full payloads are compacted.
+
 ## Recovery Chain
 
 ### 1. Exact path is visible
@@ -112,6 +133,20 @@ visible summary/checkpoint
   -> path is present
   -> react.read([path])
 ```
+
+For oversized text payloads, `react.read` returns a compact marker instead of
+copying the full content into the visible timeline:
+
+```text
+react.read(["tc:<turn>.<call>.result"])
+  -> status=too_large_for_visible_context
+  -> exact path remains recoverable
+  -> use exec_tools.execute_code_python
+     -> ctx_tools.fetch_ctx(path="tc:<turn>.<call>.result")
+```
+
+This is the preferred path for bulk JSON/email/search results: process the exact
+payload once inside exec code and write a smaller derived artifact.
 
 Examples:
 

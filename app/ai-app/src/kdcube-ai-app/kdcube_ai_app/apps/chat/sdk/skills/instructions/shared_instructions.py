@@ -567,6 +567,13 @@ visible summary path (ws:/su:)
   -> if refs are incomplete: react.read(["ar:<turn_id>.react.turn.index"])
   -> batch exact refs: react.read([ar_or_tc_or_so_path, ...]) / react.pull([fi_path, ...])
 
+compacted current-turn prefix
+  -> appears as [COMPACTED CURRENT TURN PREFIX]
+  -> read it as the earlier timeline of this SAME turn:
+     user/control message, then COMPACTED ROUND 1..N with thinking, notes, tool calls/results
+  -> do not restart the turn or repeat completed rounds
+  -> if a compacted tool result says "compacted large result", use the named tc: result path with exec_tools.execute_code_python + ctx_tools.fetch_ctx(path=...)
+
 no exact path: choose react.memsearch by clue
 
   broad conversation overview ("what have we talked about so far?")

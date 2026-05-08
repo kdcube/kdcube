@@ -78,6 +78,12 @@ Live turn events may appear as `user.followup` or `user.steer` blocks:
 - `user.steer` = user redirection/stop signal for the same running turn
 Treat both as high-priority user intent updates. Preserve them in Goal, Constraints & Preferences, Key Decisions, Next Steps, or Critical Context wherever they materially changed what the agent should do next.
 
+If exact tool-result or artifact content is large enough that it will not remain
+visible after compaction, do not say the exact data is still "loaded", "in
+memory", or "available" without naming the recovery path. Preserve the logical
+path and state that exact bulk processing should use exec code with
+`ctx_tools.fetch_ctx(path=...)` instead of repeated `react.read`.
+
 Keep each section concise. Preserve exact file paths, function names, and error messages."""
 
 UPDATE_SUMMARIZATION_PROMPT = """The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.
@@ -138,6 +144,12 @@ Live turn events may appear as `user.followup` or `user.steer` blocks:
 - `user.steer` = user redirection/stop signal for the same running turn
 Treat both as high-priority user intent updates. Preserve them in Goal, Constraints & Preferences, Key Decisions, Next Steps, or Critical Context wherever they materially changed what the agent should do next.
 
+If exact tool-result or artifact content is large enough that it will not remain
+visible after compaction, do not say the exact data is still "loaded", "in
+memory", or "available" without naming the recovery path. Preserve the logical
+path and state that exact bulk processing should use exec code with
+`ctx_tools.fetch_ctx(path=...)` instead of repeated `react.read`.
+
 Keep each section concise. Preserve exact file paths, function names, and error messages."""
 
 TURN_PREFIX_SUMMARIZATION_PROMPT = """This is the PREFIX of a turn that was too large to keep. The SUFFIX (recent work) is retained.
@@ -158,6 +170,12 @@ Internal notes may appear as `react.note` blocks and are tagged [P]/[D]/[S]/[A]/
 [K] means key artifacts/anchors with logical path and why they matter.
 Live turn events may appear as `user.followup` or `user.steer` blocks. They are real user control input for the same turn and should be preserved if they explain why the retained suffix changed direction, scope, or stopping behavior.
 Preserve their substance if they are relevant, especially when they explain why the retained suffix exists, what was already completed earlier in the turn, or which artifact the future agent should reopen first.
+
+If exact tool-result or artifact content is large enough that it will not remain
+visible after compaction, do not say the exact data is still "loaded", "in
+memory", or "available" without naming the recovery path. Preserve the logical
+path and state that exact bulk processing should use exec code with
+`ctx_tools.fetch_ctx(path=...)` instead of repeated `react.read`.
 
 Be concise. Focus on what's needed to understand the kept suffix."""
 
@@ -402,6 +420,81 @@ def _format_file_ops_summary(read_files: Set[str], modified_files: Set[str]) -> 
     if modified_list:
         sections.append("<modified-files>\n" + "\n".join(modified_list) + "\n</modified-files>")
     return "\n\n" + "\n\n".join(sections)
+
+
+def _large_tool_result_recovery_rows(blocks: List[dict], *, min_tokens: int = 12_000) -> List[Dict[str, Any]]:
+    tool_calls: Dict[str, Dict[str, Any]] = {}
+    for blk in blocks or []:
+        if not isinstance(blk, dict) or (blk.get("type") or "") != "react.tool.call":
+            continue
+        payload = _parse_json(blk.get("text") or "") if isinstance(blk.get("text"), str) else {}
+        call_id = str(payload.get("tool_call_id") or blk.get("call_id") or "").strip()
+        if not call_id:
+            continue
+        tool_calls[call_id] = {
+            "tool_id": str(payload.get("tool_id") or blk.get("tool_id") or "").strip(),
+            "turn_id": blk.get("turn_id") or blk.get("turn") or "",
+            "ts": blk.get("ts") or "",
+        }
+
+    rows: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for blk in blocks or []:
+        if not isinstance(blk, dict) or (blk.get("type") or "") != "react.tool.result":
+            continue
+        text = blk.get("text")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        approx_tokens = _approx_tokens(text)
+        if approx_tokens < min_tokens:
+            continue
+        call_id = str(blk.get("call_id") or "").strip()
+        tool_meta = tool_calls.get(call_id) or {}
+        turn_id = str(blk.get("turn_id") or blk.get("turn") or tool_meta.get("turn_id") or "").strip()
+        path = str(blk.get("path") or "").strip()
+        if not path and turn_id and call_id:
+            path = f"tc:{turn_id}.{call_id}.result"
+        key = path or f"{turn_id}:{call_id}"
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        rows.append({
+            "path": path,
+            "turn_id": turn_id,
+            "tool_call_id": call_id,
+            "tool_id": str((blk.get("meta") or {}).get("tool_id") or tool_meta.get("tool_id") or "").strip()
+            if isinstance(blk.get("meta"), dict) else str(tool_meta.get("tool_id") or "").strip(),
+            "approx_tokens": approx_tokens,
+        })
+        if len(rows) >= 20:
+            break
+    return rows
+
+
+def _format_large_tool_result_recovery(rows: List[Dict[str, Any]]) -> str:
+    if not rows:
+        return ""
+    lines = ["<recoverable-tool-results>"]
+    for row in rows:
+        parts = []
+        path = str(row.get("path") or "").strip()
+        if path:
+            parts.append(f"path={path}")
+        tool_id = str(row.get("tool_id") or "").strip()
+        if tool_id:
+            parts.append(f"tool_id={tool_id}")
+        call_id = str(row.get("tool_call_id") or "").strip()
+        if call_id:
+            parts.append(f"tool_call_id={call_id}")
+        approx_tokens = row.get("approx_tokens")
+        if approx_tokens:
+            parts.append(f"approx_tokens={approx_tokens}")
+        parts.append("exact_content_compacted=true")
+        parts.append("use=exec_tools.execute_code_python + ctx_tools.fetch_ctx(path) for bulk processing")
+        parts.append("avoid=repeated react.read")
+        lines.append("- " + " ".join(parts))
+    lines.append("</recoverable-tool-results>")
+    return "\n\n" + "\n".join(lines)
 
 
 def build_compaction_digest(blocks: List[dict]) -> Dict[str, Any]:
@@ -661,6 +754,7 @@ async def summarize_context_blocks_progressive(
             )
         read_files, modified_files = _extract_file_ops_from_blocks(blocks)
         summary += _format_file_ops_summary(read_files, modified_files)
+        summary += _format_large_tool_result_recovery(_large_tool_result_recovery_rows(blocks))
         return summary
     except Exception:
         log.exception("[context.compaction.summary:error] blocks=%s", len(blocks or []))
@@ -733,6 +827,7 @@ async def summarize_turn_prefix_progressive(
             len(summary),
             _approx_tokens(summary),
         )
+        summary += _format_large_tool_result_recovery(_large_tool_result_recovery_rows(blocks))
         return summary
     except Exception:
         log.exception("[context.compaction.turn_prefix:error] blocks=%s", len(blocks or []))
