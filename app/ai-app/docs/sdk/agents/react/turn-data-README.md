@@ -77,13 +77,14 @@ From the reconstructed turn view / ordered turn-log block stream:
 - `artifact:conv.user_shortcuts` (follow‑up suggestions, if provided this turn)
 - `artifact:conv.clarification_questions` (clarification questions, if provided this turn)
 
-`react.read` visibility caps affect only what the model-facing timeline block
-contains during the agent run. Caps apply per requested path. With
-`stats_only: true`, only metadata is emitted into the status block and no
-content block is added. Fetch/download payloads are reconstructed from artifact
-metadata and hosting fields (`rn`, `hosted_uri`, `physical_path`) when
-available; they should not rely on a large file having been inlined into the
-model context.
+Visibility caps affect only what the model-facing timeline block contains
+during the agent run. `react.read` caps apply per requested path. Large normal
+tool results are also prompt-capped before the next decision round while the
+full `tc:` block remains stored. With `stats_only: true`, only metadata is
+emitted into the status block and no content block is added. Fetch/download
+payloads are reconstructed from artifact metadata and hosting fields (`rn`,
+`hosted_uri`, `physical_path`) when available; they should not rely on a large
+file or tool result having been inlined into the model context.
 
 ### Example payloads (follow‑ups & clarifications)
 ```json

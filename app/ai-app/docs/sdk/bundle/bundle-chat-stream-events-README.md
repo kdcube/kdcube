@@ -55,7 +55,7 @@ The same semantic event envelope is delivered over two browser transports:
 - **Socket.IO**
   - `connect`
   - `chat_message`
-  - server-emitted `ready`, `chat_start`, `chat_step`, `chat_delta`, `chat_complete`, `chat_error`, `chat_service`, `conv_status`
+  - server-emitted `ready`, `chat_start`, `chat_step`, `chat_delta`, `chat_compaction`, `chat_complete`, `chat_error`, `chat_service`, `conv_status`
 
 The main difference is:
 
@@ -139,7 +139,7 @@ These events are **not** part of the chat envelope. They are transport signals f
 
 **Common Envelope (for chat events)**
 
-All chat events (including `chat_start`, `chat_step`, `chat_delta`, `chat_complete`, `chat_error`, `chat_service`, `conv_status`) use a common envelope with a **semantic type** and context metadata.
+All chat events (including `chat_start`, `chat_step`, `chat_delta`, `chat_compaction`, `chat_complete`, `chat_error`, `chat_service`, `conv_status`) use a common envelope with a **semantic type** and context metadata.
 
 Base envelope shape:
 
@@ -191,6 +191,7 @@ The server emits these transport event names:
 | `chat_start`    | `chat.start`                                    | Turn started.                                 |
 | `chat_step`     | `chat.step` **or any custom type**              | Structured step update.                       |
 | `chat_delta`    | `chat.delta`                                    | Streaming chunks (answer/thinking/artifacts). |
+| `chat_compaction` | `chat.compaction`                             | ReAct context compaction lifecycle.           |
 | `chat_complete` | `chat.complete`                                 | Turn completed.                               |
 | `chat_error`    | `chat.error`                                    | Turn failed.                                  |
 | `chat_service`  | `chat.service` or `gateway.*` or `rate_limit.*` or `queue.*` | Service‑level events.                         |
@@ -198,6 +199,7 @@ The server emits these transport event names:
 
 Important:
 - Many semantic event types ride on the `chat_step` route. Always inspect `env.type`.
+- `chat.compaction` has its own `chat_compaction` route so browser clients and adapters can render compaction start/completion without guessing from generic progress.
 - The same route names are used for both SSE and Socket.IO.
 
 ---
@@ -211,6 +213,7 @@ These are emitted by the default workflow and are stable across bundles.
 | `chat.start`    | `chat_start`    | Turn accepted.               | `data.message`, `data.queue_stats`                              |
 | `chat.step`     | `chat_step`     | Generic step status.         | `event.step`, `event.status`, `event.title`, `data`             |
 | `chat.delta`    | `chat_delta`    | Stream chunk.                | `delta.text`, `delta.index`, `delta.marker`, `delta.completed?` |
+| `chat.compaction` | `chat_compaction` | Context compaction progress. | `event.status`, `data.kind`, `data.compaction_id`, `data.before_tokens`, `data.after_tokens`, `data.compacted_tokens` |
 | `chat.complete` | `chat_complete` | Final answer.                | `data.final_answer`, `data.followups?`, `data.selected_model?`  |
 | `chat.error`    | `chat_error`    | Turn error.                  | `data.error`, `data.error_type?`, `data.reason?`, `data.task_id?` |
 | `chat.service`  | `chat_service`  | Service‑level event.         | `event.step`, `data`                                            |
@@ -232,6 +235,52 @@ These are produced by the base workflow. Clients should treat them as `chat_step
 | `accounting.usage`                 | `accounting`          | Cost breakdown.                        | `data.breakdown`, `data.cost_total_usd`, `event.markdown`                                                                        |
 | `solver.react.decision`            | `react(<n>).decision` | ReAct decision node.                   | `data` is full decision JSON                                                                                                     |
 | `chat.step`                        | varies                | Internal steps (persist, graph, etc.). | `event.step` values include `conversation.persist.user_message`, `conversation.persist.assistant_message`, `context.graph`, etc. |
+
+---
+
+**ReAct Compaction Events (`chat_compaction`)**
+
+Long ReAct turns can hit a context budget while they are still running. When the runtime actually starts or completes a compaction pass, it emits `env.type = "chat.compaction"` on the `chat_compaction` route.
+
+This is a progress event, not a turn-completion event. Clients should append it to the visible activity timeline or progress card and keep listening for later `chat_delta`, `chat_step`, `chat_complete`, or `chat_error` events.
+
+Common payload fields:
+
+| Field | Meaning |
+| --- | --- |
+| `event.status` | `started`, `completed`, `skipped`, or `error`. |
+| `data.kind` | Compaction scope, for example `history`, `history_with_split_turn`, or `current_turn_prefix`. |
+| `data.compaction_id` | Stable identifier for pairing start/completion events from one compaction pass. |
+| `data.before_tokens` / `data.after_tokens` | Estimated visible context before and after compaction when known. |
+| `data.compacted_tokens` | Estimated tokens hidden behind the compacted memory/checkpoint when known. |
+| `data.current_turn` / `data.split_turn` | Whether the compaction touched the in-progress turn prefix. |
+| `data.reason` | Present for `skipped` or `error` cases. |
+
+Example:
+
+```json
+{
+  "type": "chat.compaction",
+  "route": "chat_compaction",
+  "conversation": { "conversation_id": "conv_123", "turn_id": "turn_123" },
+  "event": {
+    "step": "context.compaction",
+    "status": "completed",
+    "title": "Context compaction completed",
+    "markdown": "Context compaction completed (compacted ~12,400 tokens; current turn prefix)."
+  },
+  "data": {
+    "compaction_id": "cmp_turn_123_1",
+    "kind": "current_turn_prefix",
+    "before_tokens": 95609,
+    "after_tokens": 48122,
+    "compacted_tokens": 47487,
+    "current_turn": true
+  }
+}
+```
+
+Adapters such as Telegram can render this as a short status line inside the in-progress card. Browser clients should bind the `chat_compaction` route explicitly.
 
 ---
 

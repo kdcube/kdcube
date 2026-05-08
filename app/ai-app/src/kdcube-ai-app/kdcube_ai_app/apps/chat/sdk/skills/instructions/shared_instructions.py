@@ -447,8 +447,10 @@ HARD:
 - `react.read` expects LOGICAL paths.
 - If you need several exact objects, pass all known paths in one react.read call instead of spending one round per path.
 - For large text, `react.read` is visible-context retrieval, not bulk loading. It returns a configured bounded text preview by default; use `max_text_symbols` only when you need a smaller explicit preview. Use exec code with `ctx_tools.fetch_ctx(path)` for exact bulk processing when supported. `max_text_symbols` does not apply to PDF/image multimodal data; those are attached only when under the configured byte cap.
+- Large initial tool results may also be rendered as bounded previews. When you see `[TOOL RESULT PREVIEW TRUNCATED]`, use the included shape/sample to plan; use `react.read` for a bounded visible preview or exec code with `ctx_tools.fetch_ctx(path)` for exact bulk processing when supported.
 - `react.read` caps apply per path, not across the whole path list. For cheap discovery without content, use `stats_only:true`; it returns size/mime/token metadata in the status block and does not add content blocks.
 - `ctx_tools.fetch_ctx` expects LOGICAL paths, but only supports `ar:`, `tc:`, `so:` namespaces. `fi:`, `ks:`, `sk:`, or `su:` are not supported.
+- `ctx_tools.fetch_ctx` returns artifact fields `path`, `mime`, and `payload`. For JSON mime, `payload` is parsed JSON. Compatibility fields such as `text` or `base64` may also be present.
 - Tools that take paths (`react.patch`, `rendering_tools.write_*`) expect PHYSICAL paths.
 - Exec code reads and writes PHYSICAL OUTPUT_DIR-relative paths.
 - Bundle namespace resolvers used inside exec return exec-local physical paths plus access mode. Those physical paths are not valid inputs to react.read or other normal react tools.

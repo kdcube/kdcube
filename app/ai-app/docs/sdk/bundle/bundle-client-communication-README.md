@@ -112,6 +112,8 @@ Supported query params:
 
 `stream_id` is the peer identifier later used for direct-delivery semantics.
 
+After the stream opens, clients should subscribe to the shared chat event catalog. In addition to the main lifecycle routes (`chat_start`, `chat_step`, `chat_delta`, `chat_complete`, `chat_error`, `chat_service`, `conv_status`), ReAct clients should also handle `chat_compaction`. That route carries `env.type = "chat.compaction"` and marks context compaction start/completion while a long turn is still running.
+
 ### Send chat request
 
 `POST /sse/chat`
@@ -145,6 +147,8 @@ The Socket.IO connection `sid` is the peer stream identifier for direct delivery
 Socket.IO clients send chat requests through the `chat_message` event.
 
 The logical request contract is the same as `POST /sse/chat`.
+
+Socket.IO clients should bind all shared server event routes, including `chat_compaction`. Compaction events are progress/status events; they do not complete the turn and should be appended to the same activity timeline or progress card as other in-progress updates.
 
 ---
 
@@ -230,6 +234,19 @@ Use:
 - [bundle-chat-stream-events-README.md](bundle-chat-stream-events-README.md)
 
 for the event semantics after acceptance.
+
+Important stream routes after acceptance:
+
+| Route | Use |
+| --- | --- |
+| `chat_start` | Turn began processing. |
+| `chat_step` | Structured progress, decisions, tool updates, custom bundle events. |
+| `chat_delta` | Streaming answer/thinking/artifact chunks. |
+| `chat_compaction` | ReAct context compaction started/completed/skipped during a long turn. |
+| `chat_complete` | Final answer and followups. |
+| `chat_error` | Turn failed. |
+| `chat_service` | Gateway, queue, and rate-limit events. |
+| `conv_status` | Conversation state snapshot. |
 
 ## 8. Integrations and Bundle REST Calls
 

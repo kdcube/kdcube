@@ -82,7 +82,9 @@ Reads existing logical artifacts back into the visible timeline.
 - caps are configured under `ai.react` in `assembly.yaml`:
   `read_visible_max_text_symbols`, `read_visible_max_tokens`,
   `read_visible_max_bytes`, `read_visible_context_fraction`, and
-  `exec_text_preview_max_symbols`.
+  `exec_text_preview_max_symbols`. Normal large tool results are also rendered
+  through `tool_result_preview_max_text_symbols` before the next decision
+  prompt, with a shape preview and recovery instructions.
 - units are intentionally separate:
   - text symbols = text characters, only for text previews
   - tokens = model-visible budget guard
@@ -93,8 +95,10 @@ Use it when the path already exists and React needs to inspect the content again
 For large `tc:`/`fi:` payloads, use `react.read` to inspect a bounded preview and
 confirm the path. Then process the exact content inside
 `exec_tools.execute_code_python` by calling `ctx_tools.fetch_ctx(path=...)` from
-the exec code. Repeating `react.read` on the same large payload returns another
-bounded preview and should not be used as a bulk-data processing loop.
+the exec code. `fetch_ctx` returns `path`, `mime`, and `payload`; for JSON mime,
+`payload` is parsed JSON. Repeating `react.read` on the same large payload
+returns another bounded preview and should not be used as a bulk-data processing
+loop.
 
 Example bounded preview:
 

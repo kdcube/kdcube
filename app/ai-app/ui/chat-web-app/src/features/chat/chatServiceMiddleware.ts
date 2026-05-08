@@ -6,6 +6,7 @@ import {
     chatCompleted,
     chatConnected,
     appendTurnUserMessage,
+    chatCompaction,
     chatDelta,
     chatDisconnected,
     chatStarted,
@@ -326,6 +327,9 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
             },
             onChatStep: (env) => {
                 dispatch(stepUpdate(env))
+            },
+            onChatCompaction: (env) => {
+                dispatch(chatCompaction(env))
             },
             onChatError: (env) => {
                 dispatch(turnError({turnId: env.conversation.turn_id, error: env.data.error}))

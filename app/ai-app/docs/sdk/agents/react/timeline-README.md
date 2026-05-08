@@ -255,7 +255,11 @@ Tool calls/results are rendered into a compact, consistent view:
 - **Artifact‑producing tools**: `[TOOL RESULT <id>].summary <tool_id>`  
   Status + artifact list (logical_path + key metadata, including `sources_used` when present)
 - **Non‑artifact tools**: `[TOOL RESULT <id>].result <tool_id>`  
-  `logical_path: ...` + result payload
+  `logical_path: ...` + result payload. If the payload exceeds
+  `tool_result_preview_max_text_symbols`, the prompt-visible view contains
+  `[TOOL RESULT PREVIEW TRUNCATED]`, size metadata, a depth-limited shape,
+  a bounded raw preview, and recovery instructions. The stored `tc:` result is
+  not truncated.
 - **Each artifact**: `[TOOL RESULT <id>].artifact <tool_id>`  
   `logical_path: ...` (+ `physical_path` only if hosted) followed immediately by content
 

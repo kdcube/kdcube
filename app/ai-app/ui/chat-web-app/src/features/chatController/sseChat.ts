@@ -1,5 +1,6 @@
 import {
     ChatBase,
+    ChatCompactionEnvelope,
     ChatCompleteEnvelope,
     ChatDeltaEnvelope,
     ChatErrorEnvelope, ChatMessageSendResponse,
@@ -76,6 +77,7 @@ class SSEChat extends ChatBase {
 
         bind<ChatStartEnvelope>("chat_start", this._eventHandlers?.onChatStart);
         bind<ChatStepEnvelope>("chat_step", this._eventHandlers?.onChatStep);
+        bind<ChatCompactionEnvelope>("chat_compaction", this._eventHandlers?.onChatCompaction);
         bind<ChatDeltaEnvelope>("chat_delta", this._eventHandlers?.onChatDelta);
         bind<ChatCompleteEnvelope>("chat_complete", this._eventHandlers?.onChatComplete);
         bind<ChatErrorEnvelope>("chat_error", this._eventHandlers?.onChatError);

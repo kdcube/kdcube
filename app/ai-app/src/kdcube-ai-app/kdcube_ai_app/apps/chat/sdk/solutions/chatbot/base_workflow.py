@@ -262,6 +262,7 @@ class BaseWorkflow():
                 read_visible_max_bytes=_positive_int(getattr(settings, "AI_REACT_READ_VISIBLE_MAX_BYTES", None)),
                 read_visible_context_fraction=getattr(settings, "AI_REACT_READ_VISIBLE_CONTEXT_FRACTION", None),
                 exec_text_preview_max_symbols=_positive_int(getattr(settings, "AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS", None)),
+                tool_result_preview_max_text_symbols=_positive_int(getattr(settings, "AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS", None)),
                 bundle_storage=self._resolve_runtime_ctx_bundle_storage(),
                 workspace_implementation=settings.REACT_WORKSPACE_IMPLEMENTATION,
                 workspace_git_repo=settings.REACT_WORKSPACE_GIT_REPO,
@@ -285,6 +286,7 @@ class BaseWorkflow():
                 read_visible_max_bytes=_positive_int(getattr(settings, "AI_REACT_READ_VISIBLE_MAX_BYTES", None)),
                 read_visible_context_fraction=getattr(settings, "AI_REACT_READ_VISIBLE_CONTEXT_FRACTION", None),
                 exec_text_preview_max_symbols=_positive_int(getattr(settings, "AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS", None)),
+                tool_result_preview_max_text_symbols=_positive_int(getattr(settings, "AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS", None)),
                 workspace_implementation=settings.REACT_WORKSPACE_IMPLEMENTATION,
                 workspace_git_repo=settings.REACT_WORKSPACE_GIT_REPO,
                 multi_action_mode=settings.AI_REACT_AGENT_MULTI_ACTION,
@@ -489,7 +491,7 @@ class BaseWorkflow():
         await self.comm.event(
             agent=evt.get("agent"),
             type=evt.get("type","chat.step"),
-            route="chat.step",
+            route=evt.get("route") or "chat.step",
             title=evt.get("title"),
             step=evt.get("step","event"),
             data=data,
@@ -497,6 +499,28 @@ class BaseWorkflow():
             status=evt.get("status","update"),
             broadcast=evt.get("broadcast", False),
         )
+
+    async def _emit_compaction_event(self, *, status: str, payload: Dict[str, Any] | None = None) -> None:
+        payload_dict = _to_jsonable(dict(payload or {}))
+        status_norm = str(status or payload_dict.get("status") or "update").strip().lower()
+        title_by_status = {
+            "started": "Context Compaction Started",
+            "completed": "Context Compaction Completed",
+            "skipped": "Context Compaction Skipped",
+            "error": "Context Compaction Failed",
+        }
+        title = title_by_status.get(status_norm, "Context Compaction")
+        payload_dict.setdefault("status", status_norm)
+        await self._emit({
+            "type": "chat.compaction",
+            "route": "chat.compaction",
+            "agent": "context.compaction",
+            "step": "context.compaction",
+            "status": status_norm,
+            "title": title,
+            "data": payload_dict,
+            "broadcast": False,
+        })
 
     def _envelope(self, evt: Dict[str, Any]) -> Dict[str, Any]:
         et = (evt.get("type") or "chat.step").strip()
@@ -1652,6 +1676,7 @@ class BaseWorkflow():
             )
             # Bundles can override gate_out_class after construction if they use a custom gate contract.
             async def _before_compaction(payload: dict) -> None:
+                await self._emit_compaction_event(status="started", payload=payload)
                 await self._emit_turn_work_status(
                     [
                         "compacting",
@@ -1660,6 +1685,10 @@ class BaseWorkflow():
                     ]
                 )
             async def _after_compaction(payload: dict) -> None:
+                status = "completed"
+                if isinstance(payload, dict) and payload.get("status"):
+                    status = str(payload.get("status") or "completed")
+                await self._emit_compaction_event(status=status, payload=payload)
                 await self._emit_turn_work_status(
                     [
                         "back to work",

@@ -79,6 +79,7 @@ These env vars are the direct runtime surface for assembly-backed settings.
 | `AI_REACT_READ_VISIBLE_MAX_BYTES` | `ai.react.read_visible_max_bytes` | `get_settings()` | all modes |
 | `AI_REACT_READ_VISIBLE_CONTEXT_FRACTION` | `ai.react.read_visible_context_fraction` | `get_settings()` | all modes |
 | `AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS` | `ai.react.exec_text_preview_max_symbols` | `get_settings()` | all modes |
+| `AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS` | `ai.react.tool_result_preview_max_text_symbols` | `get_settings()` | all modes |
 | `AI_REACT_CACHE_KEEP_RECENT_TURNS` | `ai.react.cache_keep_recent_turns` | `get_settings()` | all modes |
 | `AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS` | `ai.react.cache_keep_recent_intact_turns` | `get_settings()` | all modes |
 | `CLAUDE_CODE_SESSION_STORE_IMPLEMENTATION` | `storage.claude_code_session.type` | `get_settings()` | CLI local compose, direct local service run |
@@ -176,6 +177,7 @@ ai:
     read_visible_max_bytes: 10485760    # AI_REACT_READ_VISIBLE_MAX_BYTES
     read_visible_context_fraction: 0.15 # AI_REACT_READ_VISIBLE_CONTEXT_FRACTION
     exec_text_preview_max_symbols: 8000 # AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS
+    tool_result_preview_max_text_symbols: 12000 # AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS
     cache_keep_recent_turns: 6         # AI_REACT_CACHE_KEEP_RECENT_TURNS
     cache_keep_recent_intact_turns: 1  # AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS
     working_summary_enabled: true      # AI_REACT_WORKING_SUMMARY_ENABLED
@@ -192,6 +194,7 @@ ai:
 | `read_visible_max_bytes` | `AI_REACT_READ_VISIBLE_MAX_BYTES` | Raw byte guard for every `react.read` payload; PDF/image content is attached whole only when under this cap; default `10485760` |
 | `read_visible_context_fraction` | `AI_REACT_READ_VISIBLE_CONTEXT_FRACTION` | Additional clamp so one read does not consume more than this fraction of the React context budget; default `0.15` |
 | `exec_text_preview_max_symbols` | `AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS` | Max text characters embedded as preview for each text file produced by exec tools; default `8000` |
+| `tool_result_preview_max_text_symbols` | `AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS` | Max text characters embedded from a large initial tool result before the prompt renderer replaces the rest with shape/recovery metadata; default `12000` |
 | `cache_keep_recent_turns` | `AI_REACT_CACHE_KEEP_RECENT_TURNS` | Recent turns kept visible after TTL pruning; default `6` |
 | `cache_keep_recent_intact_turns` | `AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS` | Newest turns kept untrimmed during TTL pruning; default `1` |
 | `working_summary_enabled` | `AI_REACT_WORKING_SUMMARY_ENABLED` | Capture React `channel:summary` on complete/exit, emit it as `conv.working.summary`, and embed it for memory search; default `true` |
@@ -209,6 +212,9 @@ Visible read limits use separate units:
   multimodal content; over the cap React emits a recovery marker.
 - `exec_text_preview_max_symbols` affects exec-produced text artifact previews,
   not `react.read`.
+- `tool_result_preview_max_text_symbols` affects normal tool-result rendering
+  before any `react.read` call. The full `tc:` result remains stored and
+  recoverable; only the prompt-visible view is bounded.
 
 These settings are part of the cold-cache cost control path. A long persisted
 timeline should render as compact working-summary cards plus recent tail, not

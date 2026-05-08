@@ -78,12 +78,13 @@ Rendered model view (via `timeline.render`) groups tool output into:
 - `[TOOL RESULT <id>].result <tool_id>` (non‑artifact tools)
 - `[TOOL RESULT <id>].artifact <tool_id>` per artifact (logical_path + content)
 
-For `react.read` blocks, the turn log records the status/result blocks that
-were actually emitted. Large text reads may therefore appear as bounded previews
-or recovery markers rather than full content. `stats_only: true` reads appear as
-metadata-only status rows with no content block. PDF/image reads are stored as
-base64 only when the raw file is under `read_visible_max_bytes`; unsupported or
-oversized binaries remain metadata/recovery rows.
+The turn log stores full blocks. The model-facing render may still show bounded
+previews: large normal tool results are capped in the prompt view with shape and
+recovery metadata, and large `react.read` text blocks may appear as bounded
+previews or recovery markers rather than full content. `stats_only: true` reads
+appear as metadata-only status rows with no content block. PDF/image reads are
+stored as base64 only when the raw file is under `read_visible_max_bytes`;
+unsupported or oversized binaries remain metadata/recovery rows.
 
 ## Notes
 - No `user` / `assistant` fields are stored in the turn log.

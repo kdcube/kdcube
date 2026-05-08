@@ -124,6 +124,7 @@ ai:
     read_visible_max_bytes: 10485760 # AI_REACT_READ_VISIBLE_MAX_BYTES: max raw bytes per react.read payload
     read_visible_context_fraction: 0.15 # AI_REACT_READ_VISIBLE_CONTEXT_FRACTION: read cap as fraction of context budget
     exec_text_preview_max_symbols: 8000 # AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS: text preview cap for exec-produced files
+    tool_result_preview_max_text_symbols: 12000 # AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS: model-visible preview cap for large tool results
     cache_keep_recent_turns: 6      # AI_REACT_CACHE_KEEP_RECENT_TURNS: recent turns kept visible after TTL pruning
     cache_keep_recent_intact_turns: 1  # AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS: newest turns kept untrimmed
     working_summary_enabled: true   # AI_REACT_WORKING_SUMMARY_ENABLED: emit/embed channel:summary as conv.working.summary timeline events

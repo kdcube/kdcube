@@ -46,6 +46,9 @@ React is selected before the runtime instance is built:
   to a fraction of `max_tokens`.
 - `exec_text_preview_max_symbols`: max text characters embedded as preview for
   each text artifact produced by exec tools.
+- `tool_result_preview_max_text_symbols`: max text characters embedded from a
+  large initial tool result before the prompt renderer replaces the remainder
+  with shape/recovery metadata.
 - `max_iterations`: max React iterations.
 - `reactive_event_iteration_credit_enabled`: enable live reactive-event iteration credit on the current turn. Default `true`.
 - `reactive_event_iteration_credit_per_event`: default iteration credit minted by one accepted live reactive event. Default `1`.
@@ -123,6 +126,7 @@ units:
 | `read_visible_max_bytes` | `ai.react.read_visible_max_bytes` | raw bytes | every readable payload, including PDF/image |
 | `read_visible_context_fraction` | `ai.react.read_visible_context_fraction` | fraction of `max_tokens` | text read budget clamp |
 | `exec_text_preview_max_symbols` | `ai.react.exec_text_preview_max_symbols` | text characters | text files emitted by exec tools |
+| `tool_result_preview_max_text_symbols` | `ai.react.tool_result_preview_max_text_symbols` | text characters | large normal tool-result render previews |
 
 Text reads return a configured bounded preview when the payload is larger than
 the visible caps. Per-call
@@ -132,6 +136,15 @@ smaller explicit preview. It is clamped by
 `read_visible_context_fraction`. These caps apply per requested path, not across
 the whole `paths` list. `stats_only: true` bypasses content materialization and
 returns metadata in the `react.read` status block.
+
+Large initial tool results use `tool_result_preview_max_text_symbols` before
+the next decision prompt is built. The timeline keeps the full `tc:` result,
+but the model-visible view contains a truncated preview, a depth-limited shape,
+size metadata, and recovery instructions.
+
+ANNOUNCE includes a short `[CONTEXT CAPS]` line with the active read,
+tool-result-preview, and exec-file-preview caps so the model can choose between
+bounded `react.read` and exact bulk processing with `ctx_tools.fetch_ctx`.
 
 PDF/image reads are not partially sliced. If the raw payload is under
 `read_visible_max_bytes`, React attaches it whole as multimodal content. If it

@@ -41,6 +41,10 @@ SOURCES_POOL_KIND = "conv:sources_pool"
 
 TIMELINE_FILENAME = "timeline.json"
 
+DEFAULT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS = 12_000
+TOOL_RESULT_PREVIEW_SHAPE_DEPTH = 4
+TOOL_RESULT_PREVIEW_SHAPE_MAX_ITEMS = 10
+
 logger = logging.getLogger(__name__)
 
 def _maybe_parse_json(val: str) -> Optional[Any]:
@@ -2203,6 +2207,125 @@ class Timeline:
         return ", ".join(parts)
 
     @staticmethod
+    def _payload_scalar_shape(value: Any) -> str:
+        if value is None:
+            return "null"
+        if isinstance(value, bool):
+            return "bool"
+        if isinstance(value, int):
+            return "int"
+        if isinstance(value, float):
+            return "float"
+        if isinstance(value, str):
+            return f"str[{len(value)}]"
+        if isinstance(value, bytes):
+            return f"bytes[{len(value)}]"
+        return type(value).__name__
+
+    def _payload_shape_tree(
+        self,
+        value: Any,
+        *,
+        depth: int = 0,
+        max_depth: int = TOOL_RESULT_PREVIEW_SHAPE_DEPTH,
+        max_items: int = TOOL_RESULT_PREVIEW_SHAPE_MAX_ITEMS,
+    ) -> Any:
+        if depth >= max_depth:
+            return self._payload_scalar_shape(value)
+
+        if isinstance(value, dict):
+            fields: Dict[str, Any] = {}
+            for key, child in list(value.items())[:max_items]:
+                fields[str(key)] = self._payload_shape_tree(
+                    child,
+                    depth=depth + 1,
+                    max_depth=max_depth,
+                    max_items=max_items,
+                )
+            if len(value) > max_items:
+                fields["..."] = f"+{len(value) - max_items} keys"
+            return {
+                "type": f"dict[{len(value)}]",
+                "fields": fields,
+            }
+
+        if isinstance(value, list):
+            out: Dict[str, Any] = {"type": f"list[{len(value)}]"}
+            if value:
+                out["sample"] = self._payload_shape_tree(
+                    value[0],
+                    depth=depth + 1,
+                    max_depth=max_depth,
+                    max_items=max_items,
+                )
+            if len(value) > 1:
+                out["more_items"] = len(value) - 1
+            return out
+
+        return self._payload_scalar_shape(value)
+
+    def _tool_result_preview_max_text_symbols(self) -> int:
+        raw = getattr(self.runtime, "tool_result_preview_max_text_symbols", None)
+        try:
+            value = int(raw)
+        except Exception:
+            value = DEFAULT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS
+        if value <= 0:
+            value = DEFAULT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS
+        return value
+
+    def _tool_result_payload_text_for_prompt(
+        self,
+        *,
+        raw_text: str,
+        payload: Any,
+        path: str,
+        tool_id: str,
+    ) -> str:
+        text = raw_text if isinstance(raw_text, str) else str(raw_text or "")
+        cap = self._tool_result_preview_max_text_symbols()
+        if len(text) <= cap:
+            return text
+
+        preview = text[:cap].rstrip()
+        tokens_estimate = max(1, len(text) // 4)
+        try:
+            byte_count = len(text.encode("utf-8"))
+        except Exception:
+            byte_count = len(text)
+
+        shape_payload = payload
+        if shape_payload is None:
+            parsed = _maybe_parse_json(text)
+            shape_payload = parsed if parsed is not None else text
+
+        lines = [
+            "[TOOL RESULT PREVIEW TRUNCATED]",
+            f"full_text_chars: {len(text)}",
+            f"full_text_bytes: {byte_count}",
+            f"tokens_estimate: {tokens_estimate}",
+            f"visible_preview_chars: {len(preview)}",
+            f"preview_cap_text_symbols: {cap}",
+            f"shape_depth: {TOOL_RESULT_PREVIEW_SHAPE_DEPTH}",
+        ]
+        if tool_id:
+            lines.append(f"tool: {tool_id}")
+        if path:
+            lines.append(f"logical_path: {path}")
+        lines.append("shape:")
+        lines.append(json.dumps(self._payload_shape_tree(shape_payload), ensure_ascii=False, indent=2))
+        lines.append("preview:")
+        lines.append(preview)
+        lines.append("...[truncated]")
+        lines.append("recovery:")
+        if path:
+            lines.append(f"- react.read([\"{path}\"]) returns a bounded visible preview.")
+            lines.append(f"- exec code can use ctx_tools.fetch_ctx(path=\"{path}\") for exact bulk processing.")
+        else:
+            lines.append("- exact result remains stored in the timeline block; no logical path was supplied.")
+        return "\n".join(lines).strip()
+
+    @staticmethod
     def _format_sources_pool_selector_from_sids(sids: List[int]) -> str:
         vals = sorted({int(s) for s in (sids or []) if isinstance(s, int) and s > 0})
         if not vals:
@@ -2784,6 +2907,48 @@ class Timeline:
             return []
         idx = self._find_last_summary_index(blocks)
         return list(blocks[idx:]) if idx >= 0 else list(blocks)
+
+    def _restore_missing_turn_headers_for_render(self, blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if not blocks:
+            return []
+        out: List[Dict[str, Any]] = []
+        seen_turn_headers: set[str] = set()
+        last_turn_id = ""
+        for blk in blocks:
+            if not isinstance(blk, dict):
+                out.append(blk)
+                continue
+            btype = (blk.get("type") or "").strip()
+            turn_id = (blk.get("turn_id") or blk.get("turn") or "").strip()
+            if btype == "conv.range.summary":
+                out.append(blk)
+                continue
+            if btype == "turn.header":
+                if turn_id:
+                    seen_turn_headers.add(turn_id)
+                    last_turn_id = turn_id
+                out.append(blk)
+                continue
+            if (
+                turn_id
+                and turn_id != last_turn_id
+                and turn_id not in seen_turn_headers
+                and btype not in {"conv.range.summary"}
+            ):
+                out.append({
+                    "type": "turn.header",
+                    "author": "system",
+                    "turn_id": turn_id,
+                    "ts": (blk.get("ts") or "").strip(),
+                    "text": f"[TURN {turn_id}]",
+                    "meta": {"synthetic_after_compaction": True},
+                })
+                seen_turn_headers.add(turn_id)
+                last_turn_id = turn_id
+            elif turn_id:
+                last_turn_id = turn_id
+            out.append(blk)
+        return out
 
     def _clone_preserved_external_event_block(
         self,
@@ -3469,6 +3634,7 @@ class Timeline:
         summary_mode = str(getattr(session_cfg, "pruned_turn_summary_mode", "working_summary") or "working_summary").strip().lower()
         use_working_summaries = summary_mode in {"working_summary", "summary", "on", "true", "1"}
         working_summaries_by_turn: Dict[str, List[Dict[str, Any]]] = {}
+        visible_working_summary_turns: set[str] = set()
         if use_working_summaries:
             for blk in blocks:
                 if not isinstance(blk, dict):
@@ -3479,6 +3645,9 @@ class Timeline:
                 text = str(blk.get("text") or "").strip()
                 if turn_id and text:
                     working_summaries_by_turn.setdefault(turn_id, []).append(blk)
+                    meta = blk.get("meta") if isinstance(blk.get("meta"), dict) else {}
+                    if not (blk.get("hidden") or meta.get("hidden")):
+                        visible_working_summary_turns.add(turn_id)
         turn_status_blocks: Dict[str, List[Dict[str, Any]]] = {}
         for blk in blocks:
             if not isinstance(blk, dict):
@@ -3561,6 +3730,9 @@ class Timeline:
                         emitted_turn_status.add(turn_id)
                 continue
             if turn_id and turn_id in working_summaries_by_turn:
+                if turn_id in visible_working_summary_turns:
+                    hidden_seen.add(path)
+                    continue
                 for summary_src in working_summaries_by_turn.get(turn_id) or []:
                     summary_path = str(summary_src.get("path") or "").strip()
                     if summary_path and summary_path in emitted_working_summary_paths:
@@ -3807,6 +3979,24 @@ class Timeline:
         sys_est = max(1, int(len(system_text or "") / 4))
         block_est = self._estimate_blocks_tokens(blocks)
         total_est = sys_est + block_est
+        before_visible_tokens = self._estimate_blocks_tokens(self._slice_after_compaction_summary(blocks))
+
+        async def _emit_before_compaction(payload: Dict[str, Any]) -> None:
+            if not self.runtime.on_before_compaction:
+                return
+            try:
+                await self.runtime.on_before_compaction(payload)
+            except Exception:
+                logger.debug("[context.compaction:hook_failed] phase=before", exc_info=True)
+
+        async def _emit_after_compaction(payload: Dict[str, Any]) -> None:
+            if not self.runtime.on_after_compaction:
+                return
+            try:
+                await self.runtime.on_after_compaction(payload)
+            except Exception:
+                logger.debug("[context.compaction:hook_failed] phase=after", exc_info=True)
+
         if not force and total_est <= int(max_tokens * 0.9):
             logger.info(
                 "[context.compaction:skip] reason=within_budget force=%s total_est=%s max_tokens=%s threshold=%s blocks=%s",
@@ -3913,20 +4103,6 @@ class Timeline:
                 cut_index = next_turn_start_index
                 turn_start_index = -1
                 is_split_turn = False
-        logger.info(
-            "[context.compaction:start] force=%s blocks=%s total_est=%s max_tokens=%s boundary_start=%s cut_index=%s turn_start_index=%s split_turn=%s history_blocks_estimated=%s keep_recent_tokens=%s",
-            force,
-            len(blocks),
-            total_est,
-            max_tokens,
-            boundary_start,
-            cut_index,
-            turn_start_index,
-            is_split_turn,
-            max(0, (turn_start_index if is_split_turn else cut_index) - boundary_start),
-            keep_recent_tokens,
-        )
-
         split_turn_id = ""
         protected_turn_start_index = turn_start_index
         if is_split_turn and turn_start_index != -1:
@@ -3940,6 +4116,46 @@ class Timeline:
 
         current_turn_id = (self.runtime.turn_id or "").strip()
         split_current_turn = bool(is_split_turn and split_turn_id and current_turn_id and split_turn_id == current_turn_id)
+        compaction_kind = (
+            "current_turn_prefix"
+            if split_current_turn
+            else ("history_with_split_turn" if is_split_turn else "history")
+        )
+        compaction_id = f"{current_turn_id or split_turn_id or 'turn'}:{int(time.time() * 1000)}"
+        history_blocks_estimated = max(0, (turn_start_index if is_split_turn else cut_index) - boundary_start)
+
+        logger.info(
+            "[context.compaction:start] force=%s blocks=%s total_est=%s max_tokens=%s boundary_start=%s cut_index=%s turn_start_index=%s split_turn=%s history_blocks_estimated=%s keep_recent_tokens=%s",
+            force,
+            len(blocks),
+            total_est,
+            max_tokens,
+            boundary_start,
+            cut_index,
+            turn_start_index,
+            is_split_turn,
+            history_blocks_estimated,
+            keep_recent_tokens,
+        )
+        await _emit_before_compaction({
+            "compaction_id": compaction_id,
+            "status": "started",
+            "kind": compaction_kind,
+            "force": bool(force),
+            "blocks": len(blocks),
+            "before_tokens": before_visible_tokens,
+            "input_tokens_estimate": total_est,
+            "max_tokens": max_tokens,
+            "boundary_start": boundary_start,
+            "cut_index": cut_index,
+            "turn_start_index": turn_start_index,
+            "split_turn": bool(is_split_turn),
+            "split_turn_id": split_turn_id,
+            "current_turn": bool(split_current_turn),
+            "history_blocks_estimated": history_blocks_estimated,
+            "keep_recent_tokens": keep_recent_tokens,
+        })
+
         current_turn_compaction: Dict[str, Any] = {"blocks_hidden": 0, "tokens_hidden": 0, "refs": [], "hidden_paths": []}
         if split_current_turn:
             original_cut_index = cut_index
@@ -4037,6 +4253,23 @@ class Timeline:
                 current_turn_compaction.get("blocks_hidden"),
                 current_turn_compaction.get("tokens_hidden"),
             )
+            after_visible_tokens = self._estimate_blocks_tokens(self._slice_after_compaction_summary(blocks))
+            tokens_hidden = int(current_turn_compaction.get("tokens_hidden") or 0)
+            await _emit_after_compaction({
+                "compaction_id": compaction_id,
+                "status": "completed",
+                "kind": compaction_kind,
+                "force": bool(force),
+                "before_tokens": before_visible_tokens,
+                "after_tokens": after_visible_tokens,
+                "compacted_tokens": tokens_hidden or max(0, before_visible_tokens - after_visible_tokens),
+                "blocks_hidden": int(current_turn_compaction.get("blocks_hidden") or 0),
+                "tokens_hidden": tokens_hidden,
+                "split_turn": True,
+                "split_turn_id": split_turn_id,
+                "current_turn": True,
+                "history_compacted": False,
+            })
             return blocks
 
         history_working_summary_blocks = self._working_summary_blocks_for_turns(
@@ -4098,6 +4331,19 @@ class Timeline:
                         turn_start_index,
                         boundary_start,
                     )
+                    await _emit_after_compaction({
+                        "compaction_id": compaction_id,
+                        "status": "skipped",
+                        "kind": compaction_kind,
+                        "force": bool(force),
+                        "before_tokens": before_visible_tokens,
+                        "after_tokens": before_visible_tokens,
+                        "compacted_tokens": 0,
+                        "reason": "empty_turn_prefix_summary_no_safe_history_cut",
+                        "split_turn": bool(is_split_turn),
+                        "split_turn_id": split_turn_id,
+                        "current_turn": bool(split_current_turn),
+                    })
                     return blocks
 
         if summary is None and not history_blocks and not previous_summary:
@@ -4110,6 +4356,20 @@ class Timeline:
                 bool(previous_summary),
                 cut_index,
             )
+            await _emit_after_compaction({
+                "compaction_id": compaction_id,
+                "status": "skipped",
+                "kind": compaction_kind,
+                "force": bool(force),
+                "before_tokens": before_visible_tokens,
+                "after_tokens": before_visible_tokens,
+                "compacted_tokens": 0,
+                "reason": "empty_history_summary",
+                "history_blocks": len(history_blocks),
+                "split_turn": bool(is_split_turn),
+                "split_turn_id": split_turn_id,
+                "current_turn": bool(split_current_turn),
+            })
             return blocks
 
         if prefix_summary:
@@ -4285,6 +4545,29 @@ class Timeline:
             len(blocks),
             len(updated_blocks),
         )
+        after_visible_tokens = self._estimate_blocks_tokens(self._slice_after_compaction_summary(updated_blocks))
+        await _emit_after_compaction({
+            "compaction_id": compaction_id,
+            "status": "completed",
+            "kind": compaction_kind,
+            "force": bool(force),
+            "before_tokens": before_visible_tokens,
+            "after_tokens": after_visible_tokens,
+            "compacted_tokens": max(0, before_visible_tokens - after_visible_tokens),
+            "compacted_blocks": len(compacted_blocks),
+            "inserted_blocks": inserted_blocks,
+            "covered_turns": len(covered_turn_ids),
+            "covered_turn_ids": covered_turn_ids,
+            "split_turn": bool(is_split_turn),
+            "split_turn_id": split_turn_id,
+            "current_turn": bool(split_current_turn),
+            "summary_chars": len(summary or ""),
+            "before_blocks": len(blocks),
+            "after_blocks": len(updated_blocks),
+            "compacted_range_start_ts": compacted_range_start_ts,
+            "compacted_range_end_ts": compacted_range_end_ts,
+            "conversation_first_message_ts": conversation_first_message_ts,
+        })
         return updated_blocks
 
     async def render(
@@ -4342,16 +4625,6 @@ class Timeline:
         blocks = self._collect_blocks()
         if self.runtime.max_tokens:
             render_forces_sanitize = bool(force_sanitize)
-            before_tokens = None
-            after_tokens = None
-            compacted_tokens = None
-            if self.runtime.on_before_compaction:
-                try:
-                    before_visible = self._slice_after_compaction_summary(blocks)
-                    before_tokens = self._estimate_blocks_tokens(before_visible)
-                    await self.runtime.on_before_compaction({"before_tokens": before_tokens})
-                except Exception:
-                    pass
             try:
                 visible_probe = self._slice_after_compaction_summary(blocks)
                 visible_probe = self._apply_hidden_replacements(visible_probe)
@@ -4386,20 +4659,8 @@ class Timeline:
                 keep_recent_turns=keep_recent_turns,
                 force=render_forces_sanitize,
             )
-            if self.runtime.on_after_compaction:
-                try:
-                    after_visible = self._slice_after_compaction_summary(blocks)
-                    after_tokens = self._estimate_blocks_tokens(after_visible)
-                    if before_tokens is not None and after_tokens is not None:
-                        compacted_tokens = max(0, before_tokens - after_tokens)
-                    await self.runtime.on_after_compaction({
-                        "before_tokens": before_tokens,
-                        "after_tokens": after_tokens,
-                        "compacted_tokens": compacted_tokens,
-                    })
-                except Exception:
-                    pass
         visible_blocks = self._slice_after_compaction_summary(blocks)
+        visible_blocks = self._restore_missing_turn_headers_for_render(visible_blocks)
         visible_blocks = self._apply_hidden_replacements(visible_blocks)
         self._apply_cache_markers(visible_blocks, cache_last=cache_last)
         if debug_cache_trace:
@@ -5442,6 +5703,8 @@ class Timeline:
                         lines.append(header)
                         if path:
                             lines.append(f"logical_path: {path}")
+                        if mime_val:
+                            lines.append(f"mime: {mime_val}")
                         paths = payload.get("paths") or []
                         if isinstance(paths, list) and paths:
                             for row in paths:
@@ -5505,8 +5768,15 @@ class Timeline:
                             lines.append(f"logical_path: {range_path}")
                         elif path:
                             lines.append(f"logical_path: {path}")
-                        # keep payload as-is
-                        lines.append(text)
+                        if mime_val:
+                            lines.append(f"mime: {mime_val}")
+                        lines.append("payload:")
+                        lines.append(self._tool_result_payload_text_for_prompt(
+                            raw_text=text,
+                            payload=payload,
+                            path=range_path or path,
+                            tool_id=tool_id,
+                        ))
                         text = "\n".join([l for l in lines if l]).strip()
                     elif isinstance(payload, dict):
                         # Generic JSON payload (e.g. legacy fetch map): add tool result header.
@@ -5521,7 +5791,15 @@ class Timeline:
                         lines.append(header)
                         if path:
                             lines.append(f"logical_path: {path}")
-                        lines.append(text)
+                        if mime_val:
+                            lines.append(f"mime: {mime_val}")
+                        lines.append("payload:")
+                        lines.append(self._tool_result_payload_text_for_prompt(
+                            raw_text=text,
+                            payload=payload,
+                            path=path,
+                            tool_id=tool_id,
+                        ))
                         text = "\n".join([l for l in lines if l]).strip()
                 elif isinstance(text, str):
                     # Non-JSON content blocks: render as artifact when path looks like an artifact.
@@ -5552,7 +5830,15 @@ class Timeline:
                         lines.append(header)
                         if path:
                             lines.append(f"logical_path: {path}")
-                        lines.append(text)
+                        if mime_val:
+                            lines.append(f"mime: {mime_val}")
+                        lines.append("payload:")
+                        lines.append(self._tool_result_payload_text_for_prompt(
+                            raw_text=text,
+                            payload=None,
+                            path=path,
+                            tool_id=tool_id,
+                        ))
                         text = "\n".join([l for l in lines if l]).strip()
             base64 = b.get("base64") or b.get("data")
             mime = (b.get("mime") or b.get("media_type") or "").strip() or None

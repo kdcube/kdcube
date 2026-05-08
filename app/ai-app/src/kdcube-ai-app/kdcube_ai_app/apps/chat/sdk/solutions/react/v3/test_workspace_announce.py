@@ -81,6 +81,31 @@ def test_build_announce_text_includes_git_workspace_summary(tmp_path):
     assert "last_published_turn: turn_122 (succeeded)" in announce_text
 
 
+def test_build_announce_text_includes_context_caps(tmp_path):
+    runtime = RuntimeCtx(
+        turn_id="turn_123",
+        outdir=str(tmp_path / "out"),
+    )
+
+    announce_text = build_announce_text(
+        iteration=1,
+        max_iterations=6,
+        started_at="2026-04-02T10:00:00Z",
+        timezone="UTC",
+        runtime_ctx=runtime,
+        timeline_blocks=[],
+        constraints=None,
+        feedback_updates=None,
+        feedback_incorporated=False,
+        mode="full",
+    )
+
+    assert "[CONTEXT CAPS]" in announce_text
+    assert "read text=48000 tok=12000 bytes=10MB" in announce_text
+    assert "tool_result_preview=12000" in announce_text
+    assert "exec_file_preview=8000" in announce_text
+
+
 def test_build_announce_text_includes_lineage_scopes_even_when_current_turn_is_sparse(tmp_path):
     outdir = tmp_path / "out"
     turn_root = outdir / "turn_123"
@@ -172,6 +197,43 @@ def test_build_announce_text_includes_current_turn_live_events(tmp_path):
     assert "• steer seq=8 explicit=True" in announce_text
     assert "text=(empty stop control)" in announce_text
     assert "old turn event should stay out of announce" not in announce_text
+
+
+def test_build_announce_text_shows_live_turn_event_tail_count(tmp_path):
+    runtime = RuntimeCtx(
+        turn_id="turn_123",
+        outdir=str(tmp_path / "out"),
+        workspace_implementation="custom",
+    )
+    timeline_blocks = [
+        {
+            "type": "user.followup",
+            "turn_id": "turn_123",
+            "path": f"ar:turn_123.external.followup.evt_{idx}",
+            "text": f"followup {idx}",
+            "meta": {"sequence": idx, "explicit": True},
+        }
+        for idx in range(1, 7)
+    ]
+
+    announce_text = build_announce_text(
+        iteration=2,
+        max_iterations=8,
+        started_at="2026-04-11T10:00:00Z",
+        timezone="UTC",
+        runtime_ctx=runtime,
+        timeline_blocks=timeline_blocks,
+        constraints=None,
+        feedback_updates=None,
+        feedback_incorporated=False,
+        mode="full",
+    )
+
+    assert "events: showing last 4 of 6" in announce_text
+    assert "followup 1" not in announce_text
+    assert "followup 2" not in announce_text
+    assert "followup 3" in announce_text
+    assert "followup 6" in announce_text
 
 
 def test_build_announce_text_explains_reactive_iteration_bonus(tmp_path):

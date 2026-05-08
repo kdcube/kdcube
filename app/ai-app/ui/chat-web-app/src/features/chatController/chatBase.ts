@@ -11,7 +11,7 @@ export interface ConversationInfo {
 }
 
 export interface BaseEnvelope extends ISOTimestamped {
-    type: "chat.start" | "chat.step" | "chat.delta" | "chat.complete" | "chat.error";
+    type: "chat.start" | "chat.step" | "chat.delta" | "chat.complete" | "chat.error" | "chat.compaction";
     service: {
         request_id: string;
         tenant?: string | null;
@@ -37,6 +37,25 @@ export interface ChatStartEnvelope extends BaseEnvelope {
 export interface ChatStepEnvelope extends BaseEnvelope {
     type: "chat.step";
     data: Record<string, unknown>;
+}
+
+export interface ChatCompactionEnvelope extends BaseEnvelope {
+    type: "chat.compaction";
+    data: {
+        compaction_id?: string;
+        status?: EventStatus;
+        kind?: string;
+        reason?: string;
+        before_tokens?: number;
+        after_tokens?: number;
+        compacted_tokens?: number;
+        compacted_blocks?: number;
+        inserted_blocks?: number;
+        split_turn?: boolean;
+        split_turn_id?: string;
+        current_turn?: boolean;
+        [k: string]: unknown;
+    };
 }
 
 export interface RNFile extends Timestamped {
@@ -171,6 +190,7 @@ export interface ChatEventHandlers {
     onChatStart?: (env: ChatStartEnvelope) => void;
     onChatDelta?: (env: ChatDeltaEnvelope) => void;
     onChatStep?: (env: ChatStepEnvelope) => void;
+    onChatCompaction?: (env: ChatCompactionEnvelope) => void;
     onChatComplete?: (env: ChatCompleteEnvelope) => void;
     onChatError?: (env: ChatErrorEnvelope) => void;
     onConvStatus?: (env: ConvStatusEnvelope) => void;

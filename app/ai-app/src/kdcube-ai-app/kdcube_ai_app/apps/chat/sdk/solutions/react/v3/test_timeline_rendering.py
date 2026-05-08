@@ -131,6 +131,79 @@ def test_timeline_rendering_with_attachment_and_tool_blocks():
     assert doc_blocks, "Expected a document block for the PDF attachment"
 
 
+def test_large_tool_result_is_rendered_as_preview_with_shape():
+    ctx = RuntimeCtx(
+        turn_id="turn_large",
+        started_at="2026-05-08T00:00:00Z",
+        tool_result_preview_max_text_symbols=600,
+    )
+    tl = Timeline(runtime=ctx)
+    payload = {
+        "ok": True,
+        "new_count": 50,
+        "messages": [
+            {
+                "message_id": "m1",
+                "from": "Sender <sender@example.com>",
+                "subject": "Large newsletter",
+                "date": "Fri, 08 May 2026 00:00:00 +0000",
+                "snippet": "hello",
+                "body_excerpt": "A" * 5000,
+            },
+            {
+                "message_id": "m2",
+                "from": "Other <other@example.com>",
+                "subject": "Second",
+                "date": "Fri, 08 May 2026 00:01:00 +0000",
+                "snippet": "hello",
+                "body_excerpt": "B" * 5000,
+            },
+        ],
+    }
+    raw_text = json.dumps(payload, ensure_ascii=False)
+
+    tl.blocks.extend([
+        tl._block(type="turn.header", author="system", turn_id=ctx.turn_id, ts=ctx.started_at, text=""),
+        tl._block(
+            type="react.tool.call",
+            author="agent",
+            turn_id=ctx.turn_id,
+            ts=ctx.started_at,
+            mime="application/json",
+            path="tc:turn_large.tc_email.call",
+            text=json.dumps({
+                "tool_id": "email.process_user_emails",
+                "tool_call_id": "tc_email",
+                "params": {"account": "lena@nestlogic.com", "limit": 50},
+            }),
+        ),
+        tl._block(
+            type="react.tool.result",
+            author="agent",
+            turn_id=ctx.turn_id,
+            ts=ctx.started_at,
+            mime="application/json",
+            path="tc:turn_large.tc_email.result",
+            text=raw_text,
+        ),
+    ])
+
+    rendered = _run(tl.render(cache_last=True))
+    joined = "\n".join(b.get("text", "") for b in rendered if b.get("type") == "text")
+
+    assert tl.blocks[-1]["text"] == raw_text
+    assert "[TOOL RESULT PREVIEW TRUNCATED]" in joined
+    assert "mime: application/json" in joined
+    assert "payload:" in joined
+    assert "full_text_chars:" in joined
+    assert "shape_depth: 4" in joined
+    assert '"messages":' in joined
+    assert '"type": "list[2]"' in joined
+    assert "ctx_tools.fetch_ctx(path=\"tc:turn_large.tc_email.result\")" in joined
+    assert len(joined) < len(raw_text)
+    assert "A" * 1000 not in joined
+
+
 def test_timeline_does_not_emit_non_pdf_binary_attachment_as_model_document():
     ctx = RuntimeCtx(turn_id="turn_123", started_at="2026-02-09T00:00:00Z")
     tl = Timeline(runtime=ctx)

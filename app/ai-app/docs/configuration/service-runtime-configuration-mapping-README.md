@@ -150,13 +150,15 @@ The proc service reads these non-secret ReAct limits from `assembly.yaml` throug
 | `AI_REACT_READ_VISIBLE_MAX_BYTES` | `ai.react.read_visible_max_bytes` | `assembly.yaml` | all modes | raw byte guard for every `react.read` payload |
 | `AI_REACT_READ_VISIBLE_CONTEXT_FRACTION` | `ai.react.read_visible_context_fraction` | `assembly.yaml` | all modes | additional clamp against the current ReAct context budget |
 | `AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS` | `ai.react.exec_text_preview_max_symbols` | `assembly.yaml` | all modes | text preview cap for each exec-produced text artifact |
+| `AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS` | `ai.react.tool_result_preview_max_text_symbols` | `assembly.yaml` | all modes | model-visible text preview cap for large initial tool results |
 
 Unit contract:
 
 - `*_TEXT_SYMBOLS` means text characters and only applies to text materialized
   into model-visible context. Oversized text reads return configured bounded
-  previews; per-call `max_text_symbols` only asks for a smaller explicit text
-  preview. Caps apply per requested path.
+  previews; oversized initial tool results render as a bounded preview plus
+  shape/recovery metadata. Per-call `max_text_symbols` only asks for a smaller
+  explicit `react.read` text preview. Read caps apply per requested path.
 - `*_TOKENS` is a model-context budget guard.
 - `*_BYTES` is a raw payload guard. PDF/image reads are either attached whole
   under the byte cap or represented by a recovery marker; they are not partially

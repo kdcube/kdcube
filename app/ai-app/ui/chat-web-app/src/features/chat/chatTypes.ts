@@ -137,6 +137,24 @@ export interface TimelineTextEvent extends TurnEvent<TimelineTextEventData> {
     eventType: "timeline_text";
 }
 
+export interface CompactionEventData {
+    status: string;
+    title?: string | null;
+    kind?: string | null;
+    reason?: string | null;
+    beforeTokens?: number | null;
+    afterTokens?: number | null;
+    compactedTokens?: number | null;
+    compactedBlocks?: number | null;
+    splitTurn?: boolean;
+    splitTurnId?: string | null;
+    currentTurn?: boolean;
+}
+
+export interface CompactionEvent extends TurnEvent<CompactionEventData> {
+    eventType: "compaction";
+}
+
 export interface SubsystemEventData {
     subtype: string;
     name: string;

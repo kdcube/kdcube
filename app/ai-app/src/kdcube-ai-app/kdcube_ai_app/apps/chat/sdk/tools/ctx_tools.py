@@ -535,15 +535,10 @@ class ContextTools:
             "• fi:<turn_id>.* (attachments/files) — use OUT_DIR/turn_<id>/attachments/... or OUT_DIR/turn_<id>/files/...\n"
             "• sk:<skill id> — skills cannot be read from code. Only with react.read (NOT FROM EXEC)\n"
             "\n"
-            "CANONICAL ARTIFACT SHAPE\n"
-            "{\n"
-            "  \"path\": \"...\",\n"
-            "  \"kind\": \"display\"|\"file\",\n"
-            "  \"mime\": \"text/plain\"|\"application/pdf\"|...,\n"
-            "  \"sources_used\": [sid, sid, ...],\n"
-            "  \"filepath\": \"...\"   # only for kind=file, relative to outdir\n"
-            "  \"text\" payload (base64 only if the underlying artifact stores base64)\n"
-            "}\n"
+            "RETURN VALUE FOR ARTIFACT PATHS\n"
+            "ret is an artifact dict with path, kind, mime, and payload.\n"
+            "For JSON mime, payload is parsed JSON. For text/base64 mime, payload is the body.\n"
+            "Compatibility fields text/base64 may also be present.\n"
             "\n"
             "NOTE: For so:sources_pool[...] fetch_ctx returns the raw list of source rows (not the\n"
             "canonical artifact shape). If a row includes base64, it will be returned as-is.\n"
@@ -563,6 +558,27 @@ class ContextTools:
                 e["details"] = details
             return e
 
+        def _with_payload(artifact: Dict[str, Any]) -> Dict[str, Any]:
+            if not isinstance(artifact, dict):
+                return artifact
+            if "payload" in artifact:
+                return artifact
+            out = dict(artifact)
+            mime = (out.get("mime") or "").strip().lower()
+            text = out.get("text")
+            if isinstance(text, str):
+                if mime == "application/json" or mime.endswith("+json") or mime.startswith("application/json;"):
+                    try:
+                        out["payload"] = json.loads(text)
+                    except Exception:
+                        out["payload"] = text
+                else:
+                    out["payload"] = text
+                return out
+            if out.get("base64") is not None:
+                out["payload"] = out.get("base64")
+            return out
+
         try:
             if not isinstance(path, str) or not path.strip():
                 return {"ret": None, "err": _err("invalid_path_empty", "path must be a non-empty string")}
@@ -575,7 +591,7 @@ class ContextTools:
             if p.startswith("sk:"):
                 return {"ret": None, "err": _err("invalid_path_skill", "fetch_ctx does not support sk: paths. Use react.read for skills before exec.")}
 
-            from kdcube_ai_app.apps.chat.sdk.solutions.react.timeline import resolve_artifact_from_timeline, _collect_blocks
+            from kdcube_ai_app.apps.chat.sdk.solutions.react.timeline import resolve_artifact_from_timeline
 
             timeline = _read_timeline() or {}
             # Strict path gating for exec use: only allow user/assistant or sources_pool or tc: call/result.
@@ -589,21 +605,6 @@ class ContextTools:
             elif p.startswith("tc:"):
                 if not (p.endswith(".call") or p.endswith(".result")):
                     return {"ret": None, "err": _err("invalid_path_tc", "fetch_ctx supports only tc:<turn>.<call>.call or tc:<turn>.<call>.result")}
-                # Merge all text blocks for this tc path (status + meta + notices).
-                blocks = _collect_blocks(timeline) or []
-                matching = [b for b in blocks if isinstance(b, dict) and (b.get("path") or "") == p]
-                if not matching:
-                    return {"ret": None, "err": _err("not_found", "Path not found", {"path": p})}
-                texts: List[str] = []
-                mime = ""
-                for b in matching:
-                    txt = b.get("text")
-                    if isinstance(txt, str) and txt.strip():
-                        texts.append(txt)
-                        if not mime:
-                            mime = (b.get("mime") or "").strip()
-                combined = "\n\n".join(texts)
-                return {"ret": {"path": p, "kind": "display", "mime": mime or "text/markdown", "text": combined}, "err": None}
             elif p.startswith("so:") or p.startswith("sources_pool["):
                 pass
             else:
@@ -615,7 +616,7 @@ class ContextTools:
             # sources_pool selector returns {kind: sources_pool, items: [...]}
             if art.get("kind") == "sources_pool":
                 return {"ret": art.get("items") or [], "err": None}
-            return {"ret": art, "err": None}
+            return {"ret": _with_payload(art), "err": None}
 
         except Exception as e:
             log.exception("fetch_ctx failed")

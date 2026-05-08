@@ -40,6 +40,8 @@ import {WebFetchArtifactType} from "./features/logExtensions/webFetch/types.ts";
 import WebFetchLogItem from "./features/logExtensions/webFetch/WebFetchLogItem.tsx";
 import ServiceErrorMessage from "./features/logExtensions/service/ServiceErrorMessage.tsx";
 import {ServiceErrorArtifactType} from "./features/logExtensions/service/types.ts";
+import CompactionLogItem from "./features/logExtensions/compaction/CompactionLogItem.tsx";
+import {CompactionArtifactType} from "./features/logExtensions/compaction/types.ts";
 
 //chat log extensions
 addChatLogExtension(CanvasArtifactType, CanvasLogItem)
@@ -48,6 +50,7 @@ addChatLogExtension(WebSearchArtifactType, WebSearchLogItem)
 addChatLogExtension(TimelineTextArtifactType, TimelineTextLogItem)
 addChatLogExtension(WebFetchArtifactType, WebFetchLogItem)
 addChatLogExtension(ServiceErrorArtifactType, ServiceErrorMessage)
+addChatLogExtension(CompactionArtifactType, CompactionLogItem)
 
 //canvas extension
 addCanvasItemExtension(CanvasArtifactType, {

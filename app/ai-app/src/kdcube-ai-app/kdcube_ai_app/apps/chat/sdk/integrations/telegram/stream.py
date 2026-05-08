@@ -243,6 +243,12 @@ class TelegramActivityStreamer:
                 data_sig = ",".join(TelegramActivityStreamer._event_item_signature(item, index) for index, item in enumerate(items[:20]))
             else:
                 data_sig = str(data.get("count") or "")
+        elif typ == "chat.compaction":
+            data = env.get("data") if isinstance(env.get("data"), Mapping) else {}
+            data_sig = "|".join(
+                str(data.get(key) or "")
+                for key in ("compaction_id", "kind", "reason", "before_tokens", "after_tokens", "compacted_tokens")
+            )
         return "|".join(
             str(part or "")
             for part in (
@@ -301,6 +307,9 @@ class TelegramActivityStreamer:
             return
         if typ == "chat.citations":
             await self._handle_citations_event(env)
+            return
+        if typ == "chat.compaction":
+            await self._handle_compaction_event(env)
             return
         if typ in {"chat.step", "chat.service"}:
             await self._handle_status(env)
@@ -396,6 +405,38 @@ class TelegramActivityStreamer:
             else:
                 key_parts.append(str(index))
         await self._send_once(key="citations:" + ",".join(key_parts), text="\n".join(lines), reason="chat.citations")
+
+    async def _handle_compaction_event(self, env: Mapping[str, Any]) -> None:
+        event = env.get("event") if isinstance(env.get("event"), Mapping) else {}
+        data = env.get("data") if isinstance(env.get("data"), Mapping) else {}
+        status = str(data.get("status") or event.get("status") or "").strip().lower()
+        compaction_id = str(data.get("compaction_id") or "").strip()
+        kind = str(data.get("kind") or "").replace("_", " ").strip()
+        reason = str(data.get("reason") or "").replace("_", " ").strip()
+        compacted_tokens = _format_int(data.get("compacted_tokens"))
+        before_tokens = _format_int(data.get("before_tokens"))
+        after_tokens = _format_int(data.get("after_tokens"))
+
+        if status == "started":
+            detail = f" ({kind})" if kind else ""
+            text = f"Context compaction started{detail}."
+        elif status == "completed":
+            details: list[str] = []
+            if compacted_tokens:
+                details.append(f"compacted ~{compacted_tokens} tokens")
+            elif before_tokens and after_tokens:
+                details.append(f"{before_tokens} -> {after_tokens} tokens")
+            if kind:
+                details.append(kind)
+            suffix = f" ({'; '.join(details)})" if details else ""
+            text = f"Context compaction completed{suffix}."
+        elif status == "skipped":
+            text = "Context compaction skipped" + (f": {reason}." if reason else ".")
+        else:
+            text = "Context compaction updated."
+
+        key = f"compaction:{compaction_id or status}:{status}:{reason}"
+        await self._send_once(key=key, text=text, reason="chat.compaction")
 
     @staticmethod
     def _file_item_from_event_item(item: Any) -> dict[str, Any]:
@@ -644,6 +685,16 @@ def _telegram_edit_not_modified(result: Mapping[str, Any] | None) -> bool:
         return False
     description = str(result.get("description") or result.get("error") or "").lower()
     return "message is not modified" in description
+
+
+def _format_int(value: Any) -> str:
+    try:
+        number = int(value)
+    except Exception:
+        return ""
+    if number <= 0:
+        return ""
+    return f"{number:,}"
 
 
 async def deliver_messages_preserving_progress_card(

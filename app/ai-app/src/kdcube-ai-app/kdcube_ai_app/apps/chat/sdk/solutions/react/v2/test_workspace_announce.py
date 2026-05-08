@@ -81,6 +81,31 @@ def test_build_announce_text_includes_git_workspace_summary(tmp_path):
     assert "last_published_turn: turn_122 (succeeded)" in announce_text
 
 
+def test_build_announce_text_includes_context_caps(tmp_path):
+    runtime = RuntimeCtx(
+        turn_id="turn_123",
+        outdir=str(tmp_path / "out"),
+    )
+
+    announce_text = build_announce_text(
+        iteration=1,
+        max_iterations=6,
+        started_at="2026-04-02T10:00:00Z",
+        timezone="UTC",
+        runtime_ctx=runtime,
+        timeline_blocks=[],
+        constraints=None,
+        feedback_updates=None,
+        feedback_incorporated=False,
+        mode="full",
+    )
+
+    assert "[CONTEXT CAPS]" in announce_text
+    assert "read text=48000 tok=12000 bytes=10MB" in announce_text
+    assert "tool_result_preview=12000" in announce_text
+    assert "exec_file_preview=8000" in announce_text
+
+
 def test_build_announce_text_includes_lineage_scopes_even_when_current_turn_is_sparse(tmp_path):
     outdir = tmp_path / "out"
     turn_root = outdir / "turn_123"

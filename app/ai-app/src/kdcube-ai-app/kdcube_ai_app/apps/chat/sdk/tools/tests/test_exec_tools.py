@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import zipfile
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -78,6 +79,70 @@ async def test_fetch_ctx_reads_timeline_from_runtime_outdir_in_split_runtime(tmp
     assert result["err"] is None
     assert result["ret"]["path"] == path
     assert result["ret"]["text"] == '{"ok": true}'
+    assert result["ret"]["payload"] == {"ok": True}
+
+
+@pytest.mark.asyncio
+async def test_fetch_ctx_exposes_payload_for_tc_result(tmp_path, monkeypatch):
+    runtime_out = tmp_path / "runtime-out"
+    artifact_out = runtime_out / "workdir"
+    runtime_out.mkdir()
+    artifact_out.mkdir()
+    path = "tc:turn_1.tc_email.result"
+    header = {
+        "artifact_path": path,
+        "kind": "display",
+        "tool_call_id": "tc_email",
+    }
+    payload = {
+        "account": "lena@nestlogic.com",
+        "mailbox": "INBOX",
+        "checked_count": 50,
+        "messages": [
+            {
+                "message_id": "m1",
+                "subject": "Hello",
+                "from": "sender@example.com",
+            }
+        ],
+    }
+    (runtime_out / "timeline.json").write_text(
+        json.dumps(
+            {
+                "blocks": [
+                    {
+                        "type": "react.tool.result",
+                        "path": path,
+                        "mime": "application/json",
+                        "text": json.dumps(header),
+                    },
+                    {
+                        "type": "react.tool.result",
+                        "path": path,
+                        "mime": "application/json",
+                        "text": json.dumps(payload),
+                    },
+                ],
+                "sources_pool": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    token = OUTDIR_CV.set(str(artifact_out))
+    monkeypatch.setenv("EXEC_CONTAINER_ROLE", "supervisor")
+    monkeypatch.setenv("KDCUBE_RUNTIME_OUTPUT_DIR", str(runtime_out))
+    try:
+        result = await ctx_tools_module.tools.fetch_ctx(path=path)
+    finally:
+        OUTDIR_CV.reset(token)
+
+    assert result["err"] is None
+    ret = result["ret"]
+    assert ret["path"] == path
+    assert ret["payload"]["messages"][0]["message_id"] == "m1"
+    assert ret["payload"]["checked_count"] == 50
+    assert ret["text"] == json.dumps(payload)
+    assert json.dumps(header) not in ret["text"]
 
 
 def test_build_exec_error_payload_uses_stderr_tail_when_summary_missing():

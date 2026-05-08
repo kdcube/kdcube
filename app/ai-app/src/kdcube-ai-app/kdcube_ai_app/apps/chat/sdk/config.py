@@ -678,6 +678,7 @@ class Settings(PLATFORM_CONFIG):
     AI_REACT_READ_VISIBLE_MAX_BYTES: int = Field(default=10 * 1024 * 1024)
     AI_REACT_READ_VISIBLE_CONTEXT_FRACTION: float = Field(default=0.15)
     AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS: int = Field(default=8000)
+    AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS: int = Field(default=12000)
     AI_REACT_CACHE_KEEP_RECENT_TURNS: int = Field(default=6)
     AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS: int = Field(default=1)
     AI_REACT_WORKING_SUMMARY_ENABLED: bool = Field(default=True)
@@ -1139,6 +1140,11 @@ class Settings(PLATFORM_CONFIG):
             "AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS",
             "ai.react.exec_text_preview_max_symbols",
             self.AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS,
+        )
+        self.AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS = self._resolve_int(
+            "AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS",
+            "ai.react.tool_result_preview_max_text_symbols",
+            self.AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS,
         )
         self.AI_REACT_CACHE_KEEP_RECENT_TURNS = self._resolve_int(
             "AI_REACT_CACHE_KEEP_RECENT_TURNS",

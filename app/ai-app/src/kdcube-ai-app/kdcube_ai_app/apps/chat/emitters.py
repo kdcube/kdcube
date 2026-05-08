@@ -29,6 +29,7 @@ _EVENT_MAP = {
     "chat.complete": "chat_complete",
     "chat.error": "chat_error",
     "chat.service": "chat_service",
+    "chat.compaction": "chat_compaction",
 }
 
 # inside chat/emitters.py (anywhere above ChatCommunicator)
@@ -762,6 +763,7 @@ class ChatCommunicator:
             "chat.delta": "chat_delta",
             "chat.complete": "chat_complete",
             "chat.error": "chat_error",
+            "chat.compaction": "chat_compaction",
         }.get(typ, "chat_step")
         await self.emit(route, env)
 
@@ -857,7 +859,7 @@ class ChatCommunicator:
                 import traceback
                 print(traceback.format_exc())
 
-        socket_event = _EVENT_MAP.get(route) or "chat_step"
+        socket_event = _EVENT_MAP.get(route) or _EVENT_MAP.get(type) or "chat_step"
         if route:
             env["route"] = route
         await self.emit(event=socket_event, data=env, broadcast=broadcast)

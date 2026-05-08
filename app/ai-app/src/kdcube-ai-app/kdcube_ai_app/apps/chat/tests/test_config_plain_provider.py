@@ -24,6 +24,7 @@ def test_get_plain_reads_assembly_by_default(monkeypatch, tmp_path):
         "AI_REACT_READ_VISIBLE_MAX_BYTES",
         "AI_REACT_READ_VISIBLE_CONTEXT_FRACTION",
         "AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS",
+        "AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS",
         "AI_REACT_CACHE_KEEP_RECENT_TURNS",
         "AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS",
         "AI_REACT_WORKING_SUMMARY_ENABLED",
@@ -53,6 +54,7 @@ def test_get_plain_reads_assembly_by_default(monkeypatch, tmp_path):
                         "read_visible_max_bytes": 123456,
                         "read_visible_context_fraction": 0.12,
                         "exec_text_preview_max_symbols": 6000,
+                        "tool_result_preview_max_text_symbols": 7000,
                         "cache_keep_recent_turns": 4,
                         "cache_keep_recent_intact_turns": 1,
                         "working_summary_enabled": True,
@@ -86,6 +88,7 @@ def test_get_plain_reads_assembly_by_default(monkeypatch, tmp_path):
     assert settings.AI_REACT_READ_VISIBLE_MAX_BYTES == 123456
     assert settings.AI_REACT_READ_VISIBLE_CONTEXT_FRACTION == 0.12
     assert settings.AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS == 6000
+    assert settings.AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS == 7000
     assert settings.AI_REACT_CACHE_KEEP_RECENT_TURNS == 4
     assert settings.AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS == 1
     assert settings.AI_REACT_WORKING_SUMMARY_ENABLED is True

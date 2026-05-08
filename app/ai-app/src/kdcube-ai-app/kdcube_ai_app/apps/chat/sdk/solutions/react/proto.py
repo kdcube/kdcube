@@ -103,6 +103,7 @@ class RuntimeCtx:
     read_visible_max_bytes: Optional[int] = None
     read_visible_context_fraction: Optional[float] = None
     exec_text_preview_max_symbols: Optional[int] = None
+    tool_result_preview_max_text_symbols: Optional[int] = None
     reactive_event_iteration_credit_enabled: bool = True
     reactive_event_iteration_credit_per_event: int = 1
     reactive_event_iteration_credit_cap: Optional[int] = None
@@ -163,6 +164,7 @@ class RuntimeCtx:
             "read_visible_max_bytes": self.read_visible_max_bytes,
             "read_visible_context_fraction": self.read_visible_context_fraction,
             "exec_text_preview_max_symbols": self.exec_text_preview_max_symbols,
+            "tool_result_preview_max_text_symbols": self.tool_result_preview_max_text_symbols,
             "reactive_event_iteration_credit_enabled": bool(self.reactive_event_iteration_credit_enabled),
             "reactive_event_iteration_credit_per_event": int(self.reactive_event_iteration_credit_per_event or 1),
             "reactive_event_iteration_credit_cap": self.reactive_event_iteration_credit_cap,

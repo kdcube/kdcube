@@ -2,6 +2,7 @@ import {createSlice, PayloadAction, WritableDraft} from "@reduxjs/toolkit";
 import {RootState} from "../../app/store.ts";
 import {
     ChatCompleteEnvelope,
+    ChatCompactionEnvelope,
     ChatDeltaEnvelope,
     ChatStartEnvelope,
     ChatStepEnvelope,
@@ -17,6 +18,7 @@ import {
     CanvasEvent,
     ChatTurn,
     ChatState,
+    CompactionEvent,
     CitationArtifact,
     ConversationState,
     FileArtifact,
@@ -72,6 +74,7 @@ import {
     WebFetchSubsystemEventDataSubtype
 } from "../logExtensions/webFetch/types.ts";
 import {ServiceErrorArtifactType} from "../logExtensions/service/types.ts";
+import {CompactionArtifact, CompactionArtifactType} from "../logExtensions/compaction/types.ts";
 import {exampleConversationData} from "./debug.ts";
 import {setCurrentBundle} from "../bundles/bundlesSlice.ts";
 
@@ -117,6 +120,15 @@ const reduceThinkingEvents = (events: ThinkingEvent[], prev?: ThinkingArtifact |
             endedAt: completedAt
         }
     }
+}
+
+const optionalNumber = (value: unknown): number | null => {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && value.trim()) {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
 }
 
 const reduceTimelineTextEvent = (events: TimelineTextEvent[], name: string) => {
@@ -957,6 +969,46 @@ const chatStateSlice = createSlice({
                 state.conversationTitle = env.data?.title as string || null;
             }
         },
+        chatCompaction: (state, action: PayloadAction<ChatCompactionEnvelope>) => {
+            const env = action.payload;
+            const turnId = env.conversation.turn_id;
+            const turn = state.turns[turnId]
+            if (!turn) {
+                console.warn("Received compaction event for an unknown turn", env);
+                return;
+            }
+
+            const data = env.data ?? {};
+            const timestamp = Date.parse(env.timestamp) || new Date().getTime();
+            const content = {
+                status: (data.status as string | undefined) || env.event.status,
+                title: env.event.title,
+                kind: data.kind as string | undefined,
+                reason: data.reason as string | undefined,
+                beforeTokens: optionalNumber(data.before_tokens),
+                afterTokens: optionalNumber(data.after_tokens),
+                compactedTokens: optionalNumber(data.compacted_tokens),
+                compactedBlocks: optionalNumber(data.compacted_blocks),
+                splitTurn: Boolean(data.split_turn),
+                splitTurnId: data.split_turn_id as string | undefined,
+                currentTurn: Boolean(data.current_turn),
+            };
+            const event: CompactionEvent = {
+                eventType: "compaction",
+                index: turn.events.filter(ev => ev.eventType === "compaction").length,
+                agent: env.event.agent ?? "context.compaction",
+                completed: content.status !== "started",
+                timestamp,
+                data: content,
+            };
+            turn.events.push(event)
+            const artifact: CompactionArtifact = {
+                artifactType: CompactionArtifactType,
+                timestamp,
+                content,
+            }
+            turn.artifacts.push(artifact)
+        },
         newConversation: (state) => {
             startNewConversation(state)
         },
@@ -1001,6 +1053,7 @@ export const {
     chatCompleted,
     newTurn,
     stepUpdate,
+    chatCompaction,
     chatDelta,
     turnError,
     setUserMessage,

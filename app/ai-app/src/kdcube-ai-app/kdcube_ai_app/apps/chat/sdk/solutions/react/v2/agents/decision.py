@@ -82,7 +82,8 @@ CODEGEN_BEST_PRACTICES_V2 = """
   ar:<turn_id>.user.prompt, ar:<turn_id>.assistant.completion, ar:<turn_id>.assistant.completion.<n>, ar:plan.latest:<plan_id>, tc:<turn_id>.<call_id>.call, tc:<turn_id>.<call_id>.result, and so:sources_pool[...].
   It does NOT support fi:, ks:, sk:, or su:.
   ar:<turn_id>.assistant.completion is the latest completion in that turn; numbered paths address earlier visible completions from the same turn.
-  fetch_ctx returns a canonical artifact dict: {path, kind, mime, sources_used, filepath?, text|base64}.
+  fetch_ctx returns a canonical artifact dict: {path, kind, mime, payload, text?, base64?}.
+  Use payload; for JSON mime it is parsed JSON.
 - The code must be optimal: if programmatic editing/synthesis is possible and best, do it.
 - If some data must be generated and generation is allowed by the agent administrator/runtime limits, generate it — no guessing. Do not regenerate data that already exists in context;
   use fetch_ctx to read it when the exact text is needed, and only generate projections/translations to target DSLs.
@@ -183,7 +184,7 @@ EXEC_SNIPPET_RULES = f"""
 [ ctx_tools.fetch_ctx or read file?]
 - You MAY use ctx_tools.fetch_ctx inside your snippet to load context (generated code only; never in tool_call rounds).
 - fetch_ctx only supports ar:, tc:, so: paths. It does NOT support fi: or ks:. For files/attachments use physical OUTPUT_DIR paths. 
-- fetch_ctx only returns the object of shape {{path: logical path (ar:, so:..), mime, sources_used:[sid, sid, ...], text or base64 depending on mime}} so you may only read the text or base64 with this tool into code snippet.
+- fetch_ctx returns {{path, mime, sources_used, payload, text/base64}}. Use payload; for JSON mime it is parsed JSON.
   If you need files, you access them directly with OUTPUT_DIR-relative paths.
 """
 
@@ -597,6 +598,8 @@ It is preferable to use react.write for streaming large content and use renderin
 - Use react.read([...]) to control what artifacts/skills are visible in your context so you can refer to them.
   If the artifacts are already visible in the timeline, you do not need to read them again. This is for artifacts which content is not visible. 
 - For large text, `react.read` will not dump the whole payload into context; it returns a configured bounded preview by default. Use `max_text_symbols` only when you need a smaller in-context preview; use exec + `ctx_tools.fetch_ctx(path)` when you need to process all bytes.
+- If a tool result is shown as `[TOOL RESULT PREVIEW TRUNCATED]`, use the included shape/sample to plan. Use `react.read` for another bounded visible preview, or exec + `ctx_tools.fetch_ctx(path)` for exact bulk processing.
+- In exec code, `ctx_tools.fetch_ctx` returns an artifact with `payload`; use it before parsing compatibility fields like `text`.
 - `react.read` caps apply per path. For metadata-only discovery, use `stats_only:true`; it returns size/mime/token metadata without adding content blocks.
 - Example tool_call (load sources + artifact + skill):
   {{"tool_id":"react.read","params":["so:sources_pool[2,3]","fi:<turn_id>.files/some_art.md","sk:<skill id or num>"]}}

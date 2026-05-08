@@ -285,6 +285,9 @@ See `runtime-configuration-README.md` for the full list of runtime fields.
 - `read_visible_context_fraction`: additional read cap relative to `max_tokens`.
 - `exec_text_preview_max_symbols`: max text characters embedded from each
   exec-produced text artifact.
+- `tool_result_preview_max_text_symbols`: max text characters embedded from a
+  large initial tool result before the rest is represented as shape/recovery
+  metadata.
 
 Runtime session fields:
 

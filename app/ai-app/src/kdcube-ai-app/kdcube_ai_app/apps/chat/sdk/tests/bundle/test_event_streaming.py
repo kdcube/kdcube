@@ -144,6 +144,27 @@ class TestEventStructure:
         assert envelope["event"]["status"] == "completed"
 
     @pytest.mark.anyio
+    async def test_compaction_event_uses_compaction_socket_route(self):
+        relay = _RecordingRelay()
+        comm = _make_comm(relay)
+
+        await comm.event(
+            agent="context.compaction",
+            type="chat.compaction",
+            route="chat.compaction",
+            step="context.compaction",
+            status="started",
+            title="Context Compaction Started",
+            data={"compaction_id": "c1"},
+        )
+
+        socket_event, envelope = relay.events[0]
+        assert socket_event == "chat_compaction"
+        assert envelope["type"] == "chat.compaction"
+        assert envelope["event"]["status"] == "started"
+        assert envelope["data"]["compaction_id"] == "c1"
+
+    @pytest.mark.anyio
     async def test_event_envelope_contains_service_fields(self):
         """Every envelope includes the service dict with tenant/project/user."""
         relay = _RecordingRelay()

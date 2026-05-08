@@ -30,6 +30,75 @@ def _blk(*, btype: str, text: str, turn_id: str, ts: str = "2026-02-09T00:00:00Z
     }
 
 
+def test_hidden_replacements_do_not_move_visible_working_summary_to_hidden_block():
+    runtime = RuntimeCtx(turn_id="turn_next")
+    tl = Timeline(runtime=runtime, svc=object())
+    blocks = [
+        _blk(btype="turn.header", text="[TURN turn_prev]", turn_id="turn_prev"),
+        _blk(btype="user.prompt", text="user request", turn_id="turn_prev"),
+        {
+            **_blk(btype="react.tool.result", text="large hidden result", turn_id="turn_prev"),
+            "path": "tc:turn_prev.tc_email.result",
+            "hidden": True,
+            "replacement_text": "[hidden large result]",
+        },
+        {
+            **_blk(
+                btype="react.current_turn.compaction_checkpoint",
+                text="[MID-TURN COMPACTION 1]",
+                turn_id="turn_prev",
+            ),
+            "path": "ar:turn_prev.react.mid_turn.compaction.1",
+        },
+        _blk(btype="assistant.completion", text="done", turn_id="turn_prev"),
+        {
+            **_blk(
+                btype="conv.working.summary",
+                text="Goal: recover emails\nOutcome: completed",
+                turn_id="turn_prev",
+            ),
+            "path": "ws:turn_prev.conv.working.summary.attempt.1",
+            "meta": {"kind": "working_summary", "summary_scope": "completion_attempt"},
+        },
+    ]
+
+    rendered = tl.apply_hidden_replacements(blocks)
+    summary_idx = next(i for i, b in enumerate(rendered) if b.get("type") == "conv.working.summary")
+    checkpoint_idx = next(i for i, b in enumerate(rendered) if b.get("type") == "react.current_turn.compaction_checkpoint")
+    completion_idx = next(i for i, b in enumerate(rendered) if b.get("type") == "assistant.completion")
+
+    assert checkpoint_idx < summary_idx
+    assert completion_idx < summary_idx
+
+
+@pytest.mark.asyncio
+async def test_render_restores_turn_header_when_compaction_slice_starts_mid_turn():
+    runtime = RuntimeCtx(turn_id="turn_current", max_tokens=10_000)
+    tl = Timeline(runtime=runtime, svc=object())
+    tl.blocks = [
+        {
+            "type": "conv.range.summary",
+            "author": "assistant",
+            "turn_id": "turn_current",
+            "path": "su:turn_current.conv.range.summary",
+            "text": "No prior history.",
+            "meta": {"covered_turn_ids": ["turn_current"]},
+        },
+        _blk(
+            btype="user.prompt",
+            text="continue this stress test",
+            turn_id="turn_current",
+            ts="2026-05-08T19:39:59Z",
+        ),
+    ]
+
+    rendered = await tl.render(cache_last=False, include_sources=False, include_announce=False)
+    text = "\n".join(str(b.get("text") or "") for b in rendered if isinstance(b, dict))
+
+    assert "TURN turn_current" in text
+    assert text.index("TURN turn_current") < text.index("[USER MESSAGE]")
+
+
 @pytest.mark.asyncio
 async def test_compaction_inserts_summary_and_keeps_cut_block(monkeypatch):
     async def _fake_summary(*args, **kwargs):
@@ -646,6 +715,60 @@ async def test_no_compaction_when_under_limit():
         force=False,
     )
     assert updated == blocks
+
+
+@pytest.mark.asyncio
+async def test_compaction_hooks_fire_only_for_actual_compaction(monkeypatch):
+    async def _fake_summary(*args, **kwargs):
+        return "SUMMARY"
+
+    import kdcube_ai_app.apps.chat.sdk.tools.backends.summary.conv_progressive_summary as summary_mod
+
+    monkeypatch.setattr(summary_mod, "summarize_context_blocks_progressive", _fake_summary)
+
+    events = []
+
+    async def _before(payload):
+        events.append(("before", payload))
+
+    async def _after(payload):
+        events.append(("after", payload))
+
+    runtime = RuntimeCtx(
+        turn_id="turn_2",
+        max_tokens=120,
+        on_before_compaction=_before,
+        on_after_compaction=_after,
+    )
+    tl = Timeline(runtime=runtime, svc=object())
+
+    short_blocks = [
+        _blk(btype="turn.header", text="[TURN turn_2]", turn_id="turn_2"),
+        _blk(btype="user.prompt", text="short", turn_id="turn_2"),
+    ]
+    await tl.sanitize_context_blocks(system_text="sys", blocks=short_blocks, max_tokens=1000, force=False)
+    assert events == []
+
+    large_blocks = [
+        _blk(btype="turn.header", text="[TURN turn_0]", turn_id="turn_0"),
+        _blk(btype="user.prompt", text="ask " * 200, turn_id="turn_0"),
+        _blk(btype="assistant.completion", text="reply " * 200, turn_id="turn_0"),
+        _blk(btype="turn.header", text="[TURN turn_2]", turn_id="turn_2"),
+        _blk(btype="user.prompt", text="new ask", turn_id="turn_2"),
+    ]
+    await tl.sanitize_context_blocks(
+        system_text="sys",
+        blocks=large_blocks,
+        max_tokens=80,
+        keep_recent_turns=0,
+        force=True,
+    )
+
+    assert [kind for kind, _payload in events] == ["before", "after"]
+    assert events[0][1]["status"] == "started"
+    assert events[0][1]["compaction_id"] == events[1][1]["compaction_id"]
+    assert events[1][1]["status"] == "completed"
+    assert events[1][1]["compacted_blocks"] > 0
 
 
 @pytest.mark.asyncio

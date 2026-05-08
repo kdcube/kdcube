@@ -661,6 +661,63 @@ async def test_telegram_activity_streamer_sends_citations_event():
 
 
 @pytest.mark.asyncio
+async def test_telegram_activity_streamer_sends_compaction_events():
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.stream import TelegramActivityStreamer
+
+    class _FakeComm:
+        def __init__(self):
+            self.listeners = []
+
+        def add_activity_listener(self, cb):
+            self.listeners.append(cb)
+
+        def remove_activity_listener(self, cb):
+            self.listeners.remove(cb)
+
+        async def emit(self, status, data):
+            for cb in list(self.listeners):
+                await cb(
+                    {
+                        "event": "chat_compaction",
+                        "data": {
+                            "type": "chat.compaction",
+                            "conversation": {"turn_id": "turn_1"},
+                            "event": {"step": "context.compaction", "status": status, "title": "Context Compaction"},
+                            "data": data,
+                        },
+                    }
+                )
+
+    sent = []
+
+    async def _send(messages):
+        sent.extend(messages)
+        return {"ok": True, "responses": [{"ok": True, "result": {"message_id": 88}}]}
+
+    async def _edit(message_id, text, parse_mode=""):
+        sent.append(type("Edit", (), {"text": text, "parse_mode": parse_mode})())
+        return {"ok": True}
+
+    comm = _FakeComm()
+    async with TelegramActivityStreamer(
+        comm=comm,
+        bot_token="token",
+        chat_id="chat",
+        turn_id="turn_1",
+        send_messages=_send,
+        edit_text_message=_edit,
+    ):
+        await comm.emit("started", {"status": "started", "compaction_id": "c1", "kind": "current_turn_prefix"})
+        await comm.emit("completed", {"status": "completed", "compaction_id": "c1", "kind": "current_turn_prefix", "compacted_tokens": 1200})
+
+    assert sent[0].text == "Context compaction started (current turn prefix)."
+    assert sent[1].text == (
+        "Context compaction started (current turn prefix).\n\n"
+        "Context compaction completed (compacted ~1,200 tokens; current turn prefix)."
+    )
+
+
+@pytest.mark.asyncio
 async def test_telegram_activity_streamer_edits_one_progress_message():
     from kdcube_ai_app.apps.chat.sdk.integrations.telegram.stream import TelegramActivityStreamer
 

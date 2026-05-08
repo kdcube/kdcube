@@ -111,6 +111,15 @@ Behavior
 - These caps apply per path. They are not divided across a multi-path
   `react.read` call.
 - All readable payloads are also bounded by `read_visible_max_bytes`.
+- Large normal tool results are bounded before the next decision prompt by
+  `tool_result_preview_max_text_symbols`. The rendered result keeps shape,
+  size metadata, a raw preview, and recovery instructions; the full `tc:` block
+  remains stored.
+- Rendered tool-result bodies are labeled as `payload` after the logical path
+  and mime, matching the `fetch_ctx` artifact shape.
+- Exec snippets that need exact JSON tool results should call
+  `ctx_tools.fetch_ctx(path="tc:<turn>.<call>.result")`. The returned artifact
+  has `path`, `mime`, and `payload`; for JSON mime, `payload` is parsed JSON.
 - `stats_only: true` emits only the status block with size/mime/token metadata
   and does not materialize text or base64 content blocks.
 - PDF/image reads are not partially sliced. Under the byte cap, the whole

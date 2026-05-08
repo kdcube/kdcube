@@ -33,6 +33,11 @@ import re
 
 MAX_VISIBLE_OPEN_PLANS = 4
 MAX_VISIBLE_LIVE_TURN_EVENTS = 4
+DEFAULT_READ_VISIBLE_MAX_TEXT_SYMBOLS = 48_000
+DEFAULT_READ_VISIBLE_MAX_TOKENS = 12_000
+DEFAULT_READ_VISIBLE_MAX_BYTES = 10 * 1024 * 1024
+DEFAULT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS = 8_000
+DEFAULT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS = 12_000
 
 
 def record_assistant_completion_attempt(
@@ -665,9 +670,14 @@ def build_announce_live_turn_event_lines(
     if not visible:
         return []
 
-    kept = visible[-max(1, int(max_visible or 1)) :]
+    total = len(visible)
+    limit = max(1, int(max_visible or 1))
+    kept = visible[-limit:]
     lines: List[str] = ["[LIVE TURN EVENTS]"]
-    lines.append(f"  - events: {len(kept)} visible")
+    if len(kept) < total:
+        lines.append(f"  - events: showing last {len(kept)} of {total}")
+    else:
+        lines.append(f"  - events: {total} total")
     for block in kept:
         btype = str(block.get("type") or "").strip()
         meta = block.get("meta") if isinstance(block.get("meta"), dict) else {}
@@ -683,6 +693,42 @@ def build_announce_live_turn_event_lines(
         elif kind == "steer":
             lines.append("      text=(empty stop control)")
     return lines
+
+
+def build_announce_context_cap_lines(*, runtime_ctx: Optional[RuntimeCtx]) -> List[str]:
+    if runtime_ctx is None:
+        return []
+
+    def _int_attr(name: str, default: int) -> int:
+        raw = getattr(runtime_ctx, name, None)
+        try:
+            value = int(raw)
+        except Exception:
+            value = default
+        return value if value > 0 else default
+
+    def _bytes_label(value: int) -> str:
+        if value >= 1024 * 1024:
+            return f"{value // (1024 * 1024)}MB"
+        if value >= 1024:
+            return f"{value // 1024}KB"
+        return f"{value}B"
+
+    read_text = _int_attr("read_visible_max_text_symbols", DEFAULT_READ_VISIBLE_MAX_TEXT_SYMBOLS)
+    read_tokens = _int_attr("read_visible_max_tokens", DEFAULT_READ_VISIBLE_MAX_TOKENS)
+    read_bytes = _int_attr("read_visible_max_bytes", DEFAULT_READ_VISIBLE_MAX_BYTES)
+    exec_preview = _int_attr("exec_text_preview_max_symbols", DEFAULT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS)
+    tool_preview = _int_attr(
+        "tool_result_preview_max_text_symbols",
+        DEFAULT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS,
+    )
+    return [
+        "[CONTEXT CAPS]",
+        (
+            f"  read text={read_text} tok={read_tokens} bytes={_bytes_label(read_bytes)}; "
+            f"tool_result_preview={tool_preview}; exec_file_preview={exec_preview}"
+        ),
+    ]
 
 
 def build_announce_text(
@@ -764,6 +810,11 @@ def build_announce_text(
             lines.append(f"  time_elapsed_in_turn   {_fmt_elapsed(elapsed)}")
         except Exception:
             pass
+
+    cap_lines = build_announce_context_cap_lines(runtime_ctx=runtime_ctx)
+    if cap_lines:
+        lines.append("")
+        lines.extend(cap_lines)
 
     if show_temporal:
         try:
