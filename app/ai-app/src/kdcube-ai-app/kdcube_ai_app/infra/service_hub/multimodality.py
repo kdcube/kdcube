@@ -6,6 +6,8 @@
 import base64
 import io
 import logging
+import math
+import re
 from typing import Dict, Any
 
 from PIL import Image
@@ -141,23 +143,29 @@ def normalize_image_base64_for_model(
 
 def estimate_image_tokens_from_base64(base64_data: str) -> int:
     """
-    Estimate Anthropic image tokens from base64 size.
-
-    Anthropic pricing tiers:
-    - <200KB: ~150 tokens
-    - <500KB: ~400 tokens
-    - <5MB: ~1600 tokens
+    Estimate Claude image tokens from dimensions.
 
     Args:
         base64_data: Base64-encoded image data
 
     Returns:
-        Estimated token cost (150-1600)
+        Estimated token cost. Most current Claude models process images up to
+        roughly 1.6k native image tokens; oversized images are downscaled by the
+        provider before vision tokenization.
     """
     if not base64_data:
         return 0
 
-    size_bytes = len(base64_data) * 3 / 4  # base64 → bytes
+    try:
+        raw = base64.b64decode(base64_data, validate=False)
+        with Image.open(io.BytesIO(raw)) as image:
+            width, height = image.size
+        if width > 0 and height > 0:
+            return max(1, min(1600, int(math.ceil((width * height) / 750.0))))
+    except Exception:
+        pass
+
+    size_bytes = len(base64_data) * 3 / 4  # base64 -> bytes
     kb = size_bytes / 1024
 
     if kb < 200:
@@ -174,21 +182,31 @@ def estimate_tokens(text: str, *, divisor: int = 4) -> int:
 
 def estimate_pdf_tokens_from_base64(base64_data: str) -> int:
     """
-    Estimate Anthropic PDF tokens from base64 size.
+    Estimate Claude PDF tokens from page count.
 
-    Anthropic renders PDFs as images: ~10k tokens per page.
-    Rough estimate: 50-100KB per page typical.
+    Claude processes PDFs as extracted page text plus page images. The exact
+    count is provider-side, but page count gives a better local estimate than
+    counting base64 bytes.
 
     Args:
         base64_data: Base64-encoded PDF data
 
     Returns:
-        Estimated token cost (pages × 10k)
+        Estimated token cost.
     """
     if not base64_data:
         return 0
 
-    size_bytes = len(base64_data) * 3 / 4
-    # Conservative estimate: 75KB per page
-    estimated_pages = max(1, int(size_bytes / 75_000))
-    return estimated_pages * 10_000
+    estimated_pages = 0
+    try:
+        raw = base64.b64decode(base64_data, validate=False)
+        estimated_pages = len(re.findall(rb"/Type\s*/Page(?!s)\b", raw))
+    except Exception:
+        raw = b""
+
+    if estimated_pages <= 0:
+        size_bytes = len(base64_data) * 3 / 4
+        # Fallback: 50-100KB per page is common for generated PDFs.
+        estimated_pages = max(1, int(math.ceil(size_bytes / 75_000.0)))
+
+    return max(1, estimated_pages) * 4100

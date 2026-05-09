@@ -151,6 +151,11 @@ PDF/image reads are not partially sliced. If the raw payload is under
 is over the cap, React emits a metadata/recovery marker instead of a partial
 image or partial PDF.
 
+`read_visible_max_bytes` is only the admission cap. Once admitted, image/PDF
+blocks are counted in prompt-size estimates as model tokens (image
+dimensions/PDF pages), because multimodal providers bill and limit them as
+tokens.
+
 ### Reactive external-event iteration credit
 
 These fields control how active-turn external events affect loop budget:

@@ -285,6 +285,8 @@ rules are separate from TTL pruning:
 - PDF/image content is all-or-marker: if under the byte cap it renders as a
   normal multimodal block; if over the cap, React renders a recovery marker
   with bytes/path metadata
+- admitted PDF/image blocks count toward prompt-size estimates as model tokens
+  (image dimensions/PDF pages), not as raw base64 bytes
 - unsupported binaries such as xlsx/pptx/docx/zip remain metadata-only
 
 Assistant completion blocks (`assistant.completion`) are rendered with an extra line when

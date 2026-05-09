@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.timeline import Timeline
@@ -17,6 +18,69 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.plan import (
 
 def _run(coro):
     return asyncio.get_event_loop().run_until_complete(coro)
+
+
+def test_multimodal_token_estimate_counts_model_message_data_blocks():
+    ctx = RuntimeCtx(turn_id="turn_mm", started_at="2026-02-09T00:00:00Z")
+    tl = Timeline(runtime=ctx)
+
+    image_b64 = (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8"
+        "/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+    )
+    pdf_b64 = base64.b64encode(
+        b"%PDF-1.4\n1 0 obj << /Type /Page >> endobj\n%%EOF"
+    ).decode("ascii")
+
+    tokens = tl._estimate_model_message_tokens([
+        {"type": "image", "data": image_b64, "media_type": "image/png"},
+        {
+            "type": "document",
+            "source": {
+                "type": "base64",
+                "media_type": "application/pdf",
+                "data": pdf_b64,
+            },
+        },
+    ])
+
+    assert tokens >= 4101
+
+
+def test_multimodal_token_estimate_counts_visible_timeline_blocks_only():
+    ctx = RuntimeCtx(turn_id="turn_mm", started_at="2026-02-09T00:00:00Z")
+    tl = Timeline(runtime=ctx)
+    pdf_b64 = base64.b64encode(
+        b"%PDF-1.4\n1 0 obj << /Type /Page >> endobj\n%%EOF"
+    ).decode("ascii")
+
+    visible = tl._estimate_block_tokens(
+        tl._block(
+            type="user.attachment",
+            author="user",
+            turn_id=ctx.turn_id,
+            ts=ctx.started_at,
+            mime="application/pdf",
+            path="fi:turn_mm.user.attachments/doc.pdf",
+            text="[USER ATTACHMENT] doc.pdf",
+            base64=pdf_b64,
+        )
+    )
+    hidden = tl._estimate_block_tokens(
+        tl._block(
+            type="user.attachment",
+            author="user",
+            turn_id=ctx.turn_id,
+            ts=ctx.started_at,
+            mime="application/pdf",
+            path="fi:turn_mm.user.attachments/doc.pdf",
+            base64=pdf_b64,
+            meta={"hidden": True, "replacement_text": "[HIDDEN] doc.pdf"},
+        )
+    )
+
+    assert visible >= 4100
+    assert hidden < visible
 
 
 def test_timeline_rendering_with_attachment_and_tool_blocks():

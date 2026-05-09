@@ -34,7 +34,12 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.plan import (
 from kdcube_ai_app.apps.chat.sdk.solutions.react.compaction_memory import (
     build_internal_note_compaction_result,
 )
-from kdcube_ai_app.infra.service_hub.multimodality import MODALITY_DOC_MIME, MODALITY_IMAGE_MIME
+from kdcube_ai_app.infra.service_hub.multimodality import (
+    MODALITY_DOC_MIME,
+    MODALITY_IMAGE_MIME,
+    estimate_image_tokens_from_base64,
+    estimate_pdf_tokens_from_base64,
+)
 
 TIMELINE_KIND = "conv.timeline.v1"
 SOURCES_POOL_KIND = "conv:sources_pool"
@@ -2012,29 +2017,53 @@ class Timeline:
                     total += token_count(text)
                 except Exception:
                     total += max(1, int(len(text) / 4))
-            base64 = b.get("base64")
-            if isinstance(base64, str) and base64:
-                total += max(1, int(len(base64) / 4))
+            base64_data = b.get("base64") or b.get("data")
+            media_type = b.get("mime") or b.get("media_type")
+            source = b.get("source") if isinstance(b.get("source"), dict) else {}
+            if not base64_data and source.get("type") == "base64":
+                base64_data = source.get("data")
+            if not media_type and source.get("type") == "base64":
+                media_type = source.get("media_type")
+            total += self._estimate_base64_model_tokens(base64_data, media_type)
         return total
 
     def _estimate_block_tokens(self, block: Dict[str, Any]) -> int:
         if not isinstance(block, dict):
             return 0
         text = block.get("text")
+        base64_data = block.get("base64") or block.get("data")
+        media_type = block.get("mime") or block.get("media_type")
         meta = block.get("meta") if isinstance(block.get("meta"), dict) else {}
         if block.get("hidden") or meta.get("hidden"):
+            base64_data = None
             try:
                 text = self._hidden_retrieval_stub(block)
             except Exception:
                 replacement = block.get("replacement_text") or meta.get("replacement_text")
                 if isinstance(replacement, str) and replacement.strip():
                     text = replacement
+        total = 0
         if isinstance(text, str) and text.strip():
             try:
-                return token_count(text)
+                total += token_count(text)
             except Exception:
-                return max(1, int(len(text) / 4))
-        return 0
+                total += max(1, int(len(text) / 4))
+        total += self._estimate_base64_model_tokens(base64_data, media_type)
+        return total
+
+    @staticmethod
+    def _estimate_base64_model_tokens(base64_data: Any, media_type: Any) -> int:
+        if not isinstance(base64_data, str) or not base64_data:
+            return 0
+        mime_norm = str(media_type or "").strip().lower()
+        try:
+            if mime_norm in MODALITY_IMAGE_MIME:
+                return max(1, int(estimate_image_tokens_from_base64(base64_data)))
+            if mime_norm in MODALITY_DOC_MIME:
+                return max(1, int(estimate_pdf_tokens_from_base64(base64_data)))
+        except Exception:
+            pass
+        return max(1, int(len(base64_data) / 4))
 
     def _is_compaction_summary_block(self, block: Dict[str, Any]) -> bool:
         if not isinstance(block, dict):
