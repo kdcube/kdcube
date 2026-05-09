@@ -84,6 +84,46 @@ def format_size_summary(
     return ", ".join(parts) if parts else "<empty>"
 
 
+def active_bundle_id_from_runtime_globals(runtime_globals: Mapping[str, Any] | None) -> Optional[str]:
+    rg = runtime_globals or {}
+    bundle_spec = rg.get("BUNDLE_SPEC")
+    candidates: list[Any] = []
+    if isinstance(bundle_spec, Mapping):
+        candidates.append(bundle_spec.get("id"))
+    exec_context = rg.get("EXEC_CONTEXT")
+    if isinstance(exec_context, Mapping):
+        candidates.append(exec_context.get("bundle_id"))
+    candidates.append(rg.get("BUNDLE_ID"))
+    for candidate in candidates:
+        text = str(candidate or "").strip()
+        if text:
+            return text
+    return None
+
+
+def descriptor_payload_scope_from_runtime_config(cfg: Mapping[str, Any] | None) -> Optional[str]:
+    data = cfg or {}
+    for key in (
+        "descriptor_payload_scope",
+        "descriptor_scope",
+        "bundle_descriptor_scope",
+        "runtime_descriptor_payload_scope",
+    ):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    for key in ("descriptor_payload", "descriptor_payloads", "descriptors"):
+        block = data.get(key)
+        if isinstance(block, Mapping):
+            value = block.get("scope") or block.get("payload_scope") or block.get("filter_scope")
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    for key in ("filter_bundle_descriptors", "filter_bundle_descriptor_payloads"):
+        if data.get(key) is True:
+            return "active_bundle"
+    return None
+
+
 def build_external_exec_env(
     *,
     base_env: Dict[str, Any],

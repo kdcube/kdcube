@@ -195,6 +195,7 @@ Descriptor-backed config behavior in supervised external runtimes:
 - Supervisor-side tools use the normal config APIs: `get_settings()`, `get_plain()`, and `get_secret()` / `get_secret_async()`.
 - Bundle props come from `bundles.yaml` bundle `config` (or legacy `props`) and are exposed to bundle tools through `bundle_props` / `ScopedBundleConfig`.
 - Bundle secrets come from `bundles.secrets.yaml` or the configured secrets provider. A bundle-scoped lookup such as `b:docs.api_key` resolves under the active bundle id.
+- By default, descriptor payloads preserve the full platform descriptor files for the trusted supervisor. To scope bundle descriptors to the caller bundle, set `execution.runtime.descriptor_payload_scope: active_bundle` in bundle runtime config. In that mode only `bundles.yaml` and `bundles.secrets.yaml` are filtered; `assembly.yaml`, `gateway.yaml`, and global `secrets.yaml` stay unchanged.
 - The executor child does not inherit descriptor payload env vars, descriptor path env vars, or secret-provider material.
 - The materialized descriptor files are created with root-only permissions and are not passed to generated code.
 

@@ -18,9 +18,14 @@ from dotenv import find_dotenv, load_dotenv
 
 from kdcube_ai_app.apps.chat.ids import new_exec_id
 from kdcube_ai_app.apps.chat.sdk.runtime.external.detect_aws_env import check_and_apply_cloud_environment
-from kdcube_ai_app.apps.chat.sdk.runtime.external.base import build_external_exec_env
+from kdcube_ai_app.apps.chat.sdk.runtime.external.base import (
+    active_bundle_id_from_runtime_globals,
+    build_external_exec_env,
+    descriptor_payload_scope_from_runtime_config,
+)
 from kdcube_ai_app.apps.chat.sdk.runtime.external.service_discovery import CONTAINER_BUNDLES_ROOT, _path, \
     _translate_container_path_to_host, _is_running_in_docker, _resolve_redis_url_for_container, get_host_mount_paths
+from kdcube_ai_app.apps.chat.sdk.runtime.exec_runtime_config import resolve_exec_runtime_profile
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
 from kdcube_ai_app.infra.config import (
     build_external_runtime_base_env,
@@ -979,7 +984,18 @@ async def run_py_in_docker(
     log = logger or AgentLogger("docker.exec")
     settings = get_settings()
 
-    base_env = build_external_runtime_base_env(os.environ, settings=settings)
+    exec_runtime_raw = runtime_globals.get("EXEC_RUNTIME_CONFIG") if isinstance(runtime_globals, dict) else {}
+    exec_runtime_cfg = resolve_exec_runtime_profile(
+        runtime=exec_runtime_raw if isinstance(exec_runtime_raw, dict) else {}
+    )
+    base_env = build_external_runtime_base_env(
+        os.environ,
+        settings=settings,
+        bundle_id=active_bundle_id_from_runtime_globals(runtime_globals),
+        descriptor_payload_scope=descriptor_payload_scope_from_runtime_config(
+            exec_runtime_cfg if isinstance(exec_runtime_cfg, dict) else {}
+        ),
+    )
     # Add any extra_env passed in
     if extra_env:
         base_env.update(extra_env)

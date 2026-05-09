@@ -350,6 +350,7 @@ Supported keys and defaults:
 | `max_file_bytes` | docker, fargate, local | `platform.services.proc.exec.max_file_bytes` -> `100m` | Max single generated file per run |
 | `max_workspace_bytes` | docker, fargate, local | `platform.services.proc.exec.max_workspace_bytes` -> `250m` | Max net-new workdir/outdir bytes per run |
 | `workspace_monitor_interval_s` | docker, fargate, local | `platform.services.proc.exec.workspace_monitor_interval_s` -> `0.5` | Workspace quota polling interval |
+| `descriptor_payload_scope` | docker, fargate | `all` | `active_bundle` filters only `bundles.yaml` and `bundles.secrets.yaml` to the caller bundle before packaging descriptor payloads for the trusted supervisor |
 | `enabled` | fargate | `FARGATE_EXEC_ENABLED` -> disabled | Enables distributed exec |
 | `region` | fargate | `AWS_REGION` / `AWS_DEFAULT_REGION` | ECS client region |
 | `cluster` | fargate | `FARGATE_CLUSTER` | ECS cluster ARN/name |
@@ -377,6 +378,10 @@ Fallback semantics:
 - missing ISO runtime limit keys fall back to proc settings from `assembly.yaml`
 - the isolated runtime receives those values as internal `EXEC_*` env transport;
   configure descriptors and bundle props, not those env names
+- descriptor payloads are full by default because the supervisor is platform
+  trusted; `descriptor_payload_scope: active_bundle` narrows only bundle
+  descriptor payloads to the active bundle and leaves `assembly.yaml`,
+  `gateway.yaml`, and global `secrets.yaml` unchanged
 
 Storage summary:
 

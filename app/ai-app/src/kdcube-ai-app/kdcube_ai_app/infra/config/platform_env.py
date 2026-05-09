@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import base64
+import copy
+import json
 from pathlib import Path
-from typing import Dict, Iterable, Mapping
+from typing import Any, Dict, Iterable, Mapping, Optional
 from urllib.parse import unquote, urlparse
 
 from kdcube_ai_app.apps.chat.sdk.runtime.isolated.environment import filter_host_environment
@@ -167,6 +169,7 @@ PLATFORM_ENV_GROUPS: dict[str, tuple[str, ...]] = {
         "MCP_SERVICES",
     ),
     "exec_runtime": (
+        "EXEC_DESCRIPTOR_PAYLOAD_SCOPE",
         "EXEC_RUNTIME_MODE",
         "EXEC_WORKSPACE_ROOT",
         "FARGATE_ASSIGN_PUBLIC_IP",
@@ -256,11 +259,121 @@ def _resolve_local_path(raw_value: object) -> Path | None:
     return Path(path_text).expanduser()
 
 
-def _read_descriptor_payload(path: Path | None) -> str | None:
+_BUNDLE_DESCRIPTOR_PAYLOAD_ENVS = {
+    "KDCUBE_RUNTIME_BUNDLES_YAML_B64",
+    "KDCUBE_RUNTIME_BUNDLES_SECRETS_YAML_B64",
+}
+
+
+def _normalize_descriptor_payload_scope(value: object | None) -> str:
+    text = str(value or "").strip().lower().replace("-", "_")
+    if text in {"active", "active_bundle", "bundle", "caller_bundle", "current_bundle"}:
+        return "active_bundle"
+    if text in {"all", "full", "none", "no_filter", "unfiltered", "platform"}:
+        return "all"
+    return ""
+
+
+def _load_descriptor_mapping(text: str, *, path: Path) -> Optional[Mapping[str, Any]]:
+    raw = str(text or "").strip()
+    if not raw:
+        return {}
+    try:
+        if path.suffix.lower() == ".json" or raw.startswith("{"):
+            parsed = json.loads(raw)
+        else:
+            import yaml  # type: ignore
+
+            parsed = yaml.safe_load(raw)
+    except Exception:
+        return None
+    return parsed if isinstance(parsed, Mapping) else None
+
+
+def _dump_descriptor_mapping(data: Mapping[str, Any]) -> Optional[str]:
+    try:
+        import yaml  # type: ignore
+
+        return yaml.safe_dump(dict(data), allow_unicode=True, sort_keys=False)
+    except Exception:
+        return None
+
+
+def _filter_bundle_item_list(items: Any, bundle_id: str) -> list[Any]:
+    if not isinstance(items, list):
+        return []
+    return [
+        copy.deepcopy(item)
+        for item in items
+        if isinstance(item, Mapping) and str(item.get("id") or "").strip() == bundle_id
+    ]
+
+
+def _filter_bundle_mapping_block(block: Mapping[str, Any], bundle_id: str) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for key, value in block.items():
+        key_text = str(key)
+        if key_text == "items":
+            out[key_text] = _filter_bundle_item_list(value, bundle_id)
+            continue
+        if key_text == "default_bundle_id":
+            out[key_text] = bundle_id
+            continue
+        if key_text == bundle_id:
+            out[key_text] = copy.deepcopy(value)
+            continue
+        if key_text in {"version", "schema_version", "kind"}:
+            out[key_text] = copy.deepcopy(value)
+    if "items" not in out and bundle_id in block:
+        out[bundle_id] = copy.deepcopy(block[bundle_id])
+    return out
+
+
+def _filter_bundle_descriptor_text(text: str, *, path: Path, bundle_id: str) -> Optional[str]:
+    data = _load_descriptor_mapping(text, path=path)
+    if data is None:
+        return None
+    scoped = copy.deepcopy(dict(data))
+    if isinstance(scoped.get("bundles"), Mapping):
+        scoped["bundles"] = _filter_bundle_mapping_block(scoped["bundles"], bundle_id)
+    elif isinstance(scoped.get("items"), list):
+        scoped["items"] = _filter_bundle_item_list(scoped.get("items"), bundle_id)
+        if "default_bundle_id" in scoped:
+            scoped["default_bundle_id"] = bundle_id
+    elif bundle_id in scoped:
+        scoped = {bundle_id: copy.deepcopy(scoped[bundle_id])}
+    else:
+        scoped = {}
+    return _dump_descriptor_mapping(scoped)
+
+
+def _read_descriptor_payload(
+    path: Path | None,
+    *,
+    env_name: str,
+    bundle_id: str | None = None,
+    descriptor_payload_scope: str | None = None,
+) -> str | None:
     if path is None or not path.exists() or not path.is_file():
         return None
     try:
-        return base64.b64encode(path.read_bytes()).decode("ascii")
+        raw_bytes = path.read_bytes()
+        if (
+            env_name in _BUNDLE_DESCRIPTOR_PAYLOAD_ENVS
+            and _normalize_descriptor_payload_scope(descriptor_payload_scope) == "active_bundle"
+        ):
+            scoped_bundle_id = str(bundle_id or "").strip()
+            if not scoped_bundle_id:
+                return None
+            filtered = _filter_bundle_descriptor_text(
+                raw_bytes.decode("utf-8"),
+                path=path,
+                bundle_id=scoped_bundle_id,
+            )
+            if filtered is None:
+                return None
+            raw_bytes = filtered.encode("utf-8")
+        return base64.b64encode(raw_bytes).decode("ascii")
     except Exception:
         return None
 
@@ -281,7 +394,12 @@ def _descriptor_source_path(
     return None
 
 
-def _collect_descriptor_payload_env(host_env: Mapping[str, object]) -> Dict[str, str]:
+def _collect_descriptor_payload_env(
+    host_env: Mapping[str, object],
+    *,
+    bundle_id: str | None = None,
+    descriptor_payload_scope: str | None = None,
+) -> Dict[str, str]:
     specs = (
         ("KDCUBE_RUNTIME_ASSEMBLY_YAML_B64", "assembly.yaml", ("ASSEMBLY_YAML_DESCRIPTOR_PATH",)),
         ("KDCUBE_RUNTIME_BUNDLES_YAML_B64", "bundles.yaml", ("BUNDLES_YAML_DESCRIPTOR_PATH",)),
@@ -296,7 +414,10 @@ def _collect_descriptor_payload_env(host_env: Mapping[str, object]) -> Dict[str,
                 host_env=host_env,
                 filename=filename,
                 env_keys=env_keys,
-            )
+            ),
+            env_name=env_name,
+            bundle_id=bundle_id,
+            descriptor_payload_scope=descriptor_payload_scope,
         )
         if payload:
             exported[env_name] = payload
@@ -306,6 +427,9 @@ def _collect_descriptor_payload_env(host_env: Mapping[str, object]) -> Dict[str,
 def collect_platform_env_groups(
     host_env: Mapping[str, object],
     groups: Iterable[str],
+    *,
+    bundle_id: str | None = None,
+    descriptor_payload_scope: str | None = None,
 ) -> Dict[str, str]:
     requested = tuple(groups)
     filtered_host_env = filter_host_environment(
@@ -332,7 +456,14 @@ def collect_platform_env_groups(
                     continue
                 collected[str(key)] = value
     if "descriptor_payload" in requested:
-        for key, value in _collect_descriptor_payload_env(host_env).items():
+        scope = _normalize_descriptor_payload_scope(
+            descriptor_payload_scope or host_env.get("EXEC_DESCRIPTOR_PAYLOAD_SCOPE")
+        )
+        for key, value in _collect_descriptor_payload_env(
+            host_env,
+            bundle_id=bundle_id,
+            descriptor_payload_scope=scope,
+        ).items():
             collected.setdefault(key, value)
     return collected
 
@@ -361,6 +492,8 @@ def build_external_runtime_base_env(
     host_env: Mapping[str, object],
     *,
     settings: object | None = None,
+    bundle_id: str | None = None,
+    descriptor_payload_scope: str | None = None,
 ) -> Dict[str, str]:
     requested_keys = EXTERNAL_RUNTIME_ENV_KEYS | _DESCRIPTOR_SOURCE_ENV_KEYS
     merged_env = _merge_host_and_managed_env(
@@ -368,7 +501,12 @@ def build_external_runtime_base_env(
         keys=requested_keys,
         settings=settings,
     )
-    return collect_platform_env_groups(merged_env, EXTERNAL_RUNTIME_ENV_GROUPS)
+    return collect_platform_env_groups(
+        merged_env,
+        EXTERNAL_RUNTIME_ENV_GROUPS,
+        bundle_id=bundle_id,
+        descriptor_payload_scope=descriptor_payload_scope,
+    )
 
 
 def build_external_runtime_inline_env(

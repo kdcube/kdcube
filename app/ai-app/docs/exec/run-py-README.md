@@ -97,6 +97,20 @@ Supervisor-side tools resolve platform config with `get_settings()` /
 `bundles.yaml`, and bundle secrets through `get_secret("b:...")` using the
 active bundle id.
 
+By default the trusted supervisor receives the full `bundles.yaml` and
+`bundles.secrets.yaml` descriptor payloads. To reduce supervisor-side descriptor
+surface for a bundle runtime, set:
+
+```yaml
+execution:
+  runtime:
+    descriptor_payload_scope: active_bundle
+```
+
+This filters only `bundles.yaml` and `bundles.secrets.yaml` to the active caller
+bundle before the payload is sent to Docker/Fargate. Platform descriptors remain
+full.
+
 If a bundle also depends on prepared local readonly data, the runtime passes a concrete absolute path in:
 
 ```

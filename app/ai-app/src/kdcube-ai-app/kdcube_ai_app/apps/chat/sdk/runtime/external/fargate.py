@@ -25,6 +25,8 @@ from typing import Any, Dict, List, Optional
 
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
 from kdcube_ai_app.apps.chat.sdk.runtime.external.base import (
+    active_bundle_id_from_runtime_globals,
+    descriptor_payload_scope_from_runtime_config,
     ExternalExecRequest,
     ExternalExecResult,
     ExternalRuntime,
@@ -162,13 +164,19 @@ class FargateRuntime(ExternalRuntime):
         settings = get_settings()
         runtime_globals = request.runtime_globals or {}
         exec_ctx = runtime_globals.get("EXEC_CONTEXT") or {}
+        exec_runtime_cfg = _resolve_exec_runtime_config(runtime_globals)
         exec_id = (
             (request.extra_env or {}).get("EXECUTION_ID")
             or runtime_globals.get("EXECUTION_ID")
             or runtime_globals.get("RESULT_FILENAME")
             or "run"
         )
-        payload_env = build_external_runtime_base_env(os.environ, settings=settings)
+        payload_env = build_external_runtime_base_env(
+            os.environ,
+            settings=settings,
+            bundle_id=active_bundle_id_from_runtime_globals(runtime_globals),
+            descriptor_payload_scope=descriptor_payload_scope_from_runtime_config(exec_runtime_cfg),
+        )
         inline_env = build_external_runtime_inline_env(os.environ, settings=settings)
         if request.extra_env:
             payload_env.update(request.extra_env)
@@ -262,7 +270,6 @@ class FargateRuntime(ExternalRuntime):
                 logger.log("[fargate] boto3 not installed; cannot run ECS task", level="ERROR")
             return ExternalExecResult(ok=False, returncode=1, error="boto3_missing")
 
-        exec_runtime_cfg = _resolve_exec_runtime_config(runtime_globals)
         enabled_override = _as_bool(_pick_cfg(exec_runtime_cfg, "enabled", "FARGATE_EXEC_ENABLED"))
         enabled = (
             enabled_override

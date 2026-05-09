@@ -243,6 +243,11 @@ its own run with `execution.runtime.max_file_bytes`,
 `execution.runtime.max_workspace_bytes`, and
 `execution.runtime.workspace_monitor_interval_s`.
 
+For Docker/Fargate exec supervisors, descriptor payloads are full by default.
+Set `execution.runtime.descriptor_payload_scope: active_bundle` to filter only
+`bundles.yaml` and `bundles.secrets.yaml` to the active bundle before transport.
+Platform/global descriptors and global secrets stay deployment-scoped.
+
 ## User-scoped bundle props and secrets
 
 These values belong to one user inside one bundle inside one deployment.

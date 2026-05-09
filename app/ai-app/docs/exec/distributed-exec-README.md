@@ -499,6 +499,12 @@ is remote. There are two different payload families:
    env vars, clears settings cache, and then supervisor-side tools use the same
    `get_settings()`, `get_plain()`, and `get_secret()` APIs as the host.
 
+   Default behavior is to ship the full descriptor files to the trusted
+   supervisor. Bundle runtime config may set
+   `descriptor_payload_scope: active_bundle` to filter only `bundles.yaml` and
+   `bundles.secrets.yaml` to the active caller bundle before packaging. The
+   global descriptors remain full because they are platform-scoped.
+
 2. **Exec launch payload** carries one execution's runtime globals, tool module
    list, contract, communicator spec, and snapshot metadata. The current
    Fargate path stores this JSON object in AWS Secrets Manager before
@@ -559,6 +565,7 @@ Injected via `containerOverrides.environment` at `run_task` call time:
 | `REDIS_CLIENT_NAME` | fargate.py | `exec` |
 | `AWS_REGION` etc. | task def + fargate.py | AWS SDK config |
 | `KDCUBE_RUNTIME_*_YAML_B64` | fargate.py | Descriptor payloads for assembly, bundles, gateway, global secrets, and bundle secrets |
+| `EXEC_DESCRIPTOR_PAYLOAD_SCOPE` | optional proc/runtime env | Default descriptor payload scope when no bundle runtime config overrides it; `active_bundle` filters bundle descriptors |
 
 These values are available to the remote task supervisor because approved tools
 need runtime services. The generated-code executor child receives a filtered

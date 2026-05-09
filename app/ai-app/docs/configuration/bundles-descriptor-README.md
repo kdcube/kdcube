@@ -86,11 +86,19 @@ bundles:
             max_file_bytes: "50m"       # overrides assembly default for this bundle run
             max_workspace_bytes: "100m" # overrides assembly default for this bundle run
             workspace_monitor_interval_s: 0.5
+            descriptor_payload_scope: active_bundle # optional: filter bundle descriptors sent to supervisor
 ```
 
 Platform defaults for these limits live in `assembly.yaml` under
 `platform.services.proc.exec`. Bundle overrides are applied only to the
 execution run that uses that bundle profile.
+
+By default, Docker/Fargate supervisors receive full descriptor payloads because
+the supervisor is platform trusted. Set
+`execution.runtime.descriptor_payload_scope: active_bundle` when you want
+`bundles.yaml` and `bundles.secrets.yaml` narrowed to the caller bundle before
+transport. Platform descriptors (`assembly.yaml`, `gateway.yaml`, global
+`secrets.yaml`) remain full.
 
 ## Two supported bundle styles
 

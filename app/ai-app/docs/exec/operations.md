@@ -623,6 +623,13 @@ descriptors to the runtime. If payloads are present but the supervisor still
 cannot resolve the secret, inspect the descriptor shape and active bundle id
 used by the relevant `get_secret(...)` lookup.
 
+If `execution.runtime.descriptor_payload_scope: active_bundle` or
+`EXEC_DESCRIPTOR_PAYLOAD_SCOPE=active_bundle` is enabled, `bundles.yaml` and
+`bundles.secrets.yaml` are intentionally filtered to the active caller bundle.
+Check that the isolated execution runtime globals contain `BUNDLE_SPEC.id` or
+`EXEC_CONTEXT.bundle_id`; otherwise bundle descriptor payloads are omitted
+rather than sent unfiltered.
+
 ### Issue: `docker: command not found` in chat container
 
 **Symptom:**

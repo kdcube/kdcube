@@ -11,7 +11,9 @@ import pytest
 
 from kdcube_ai_app.apps.chat.sdk import config as sdk_config
 from kdcube_ai_app.apps.chat.sdk.runtime.external.base import ExternalExecRequest
+from kdcube_ai_app.apps.chat.sdk.runtime.external.base import active_bundle_id_from_runtime_globals
 from kdcube_ai_app.apps.chat.sdk.runtime.external.base import build_external_exec_env
+from kdcube_ai_app.apps.chat.sdk.runtime.external.base import descriptor_payload_scope_from_runtime_config
 from kdcube_ai_app.apps.chat.sdk.runtime.external.base import format_size_summary
 from kdcube_ai_app.apps.chat.sdk.runtime.external.fargate import FargateRuntime
 from kdcube_ai_app.apps.chat.sdk.runtime.exec_runtime_config import (
@@ -170,6 +172,138 @@ def test_build_external_runtime_base_env_exports_descriptor_payloads_from_descri
     assert "KDCUBE_RUNTIME_BUNDLES_SECRETS_YAML_B64" in base_env
     assert "GLOBAL_SECRETS_YAML" not in base_env
     assert "BUNDLE_SECRETS_YAML" not in base_env
+
+
+def test_build_external_runtime_base_env_filters_bundle_descriptor_payloads_to_active_bundle(tmp_path):
+    import yaml  # type: ignore
+
+    descriptors_dir = tmp_path / "descriptors"
+    descriptors_dir.mkdir()
+    (descriptors_dir / "assembly.yaml").write_text("context:\n  tenant: demo\n", encoding="utf-8")
+    (descriptors_dir / "bundles.yaml").write_text(
+        """
+bundles:
+  version: "1"
+  default_bundle_id: other.bundle
+  items:
+    - id: active.bundle
+      name: Active
+      config:
+        enabled: true
+    - id: other.bundle
+      name: Other
+      config:
+        hidden: true
+""".lstrip(),
+        encoding="utf-8",
+    )
+    (descriptors_dir / "bundles.secrets.yaml").write_text(
+        """
+bundles:
+  version: "1"
+  items:
+    - id: active.bundle
+      secrets:
+        token: keep
+    - id: other.bundle
+      secrets:
+        token: drop
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    base_env = build_external_runtime_base_env(
+        {
+            "PLATFORM_DESCRIPTORS_DIR": str(descriptors_dir),
+            "SECRETS_PROVIDER": "secrets-file",
+            "BUNDLE_SECRETS_YAML": str(descriptors_dir / "bundles.secrets.yaml"),
+        },
+        bundle_id="active.bundle",
+        descriptor_payload_scope="active_bundle",
+    )
+
+    bundles_doc = yaml.safe_load(base64.b64decode(base_env["KDCUBE_RUNTIME_BUNDLES_YAML_B64"]).decode("utf-8"))
+    bundle_items = bundles_doc["bundles"]["items"]
+    assert [item["id"] for item in bundle_items] == ["active.bundle"]
+    assert bundles_doc["bundles"]["default_bundle_id"] == "active.bundle"
+
+    secrets_text = base64.b64decode(base_env["KDCUBE_RUNTIME_BUNDLES_SECRETS_YAML_B64"]).decode("utf-8")
+    secrets_doc = yaml.safe_load(secrets_text)
+    secret_items = secrets_doc["bundles"]["items"]
+    assert [item["id"] for item in secret_items] == ["active.bundle"]
+    assert secret_items[0]["secrets"]["token"] == "keep"
+    assert "drop" not in secrets_text
+
+
+def test_build_external_runtime_base_env_omits_bundle_payloads_when_active_scope_has_no_bundle_id(tmp_path):
+    descriptors_dir = tmp_path / "descriptors"
+    descriptors_dir.mkdir()
+    (descriptors_dir / "assembly.yaml").write_text("context:\n  tenant: demo\n", encoding="utf-8")
+    (descriptors_dir / "bundles.yaml").write_text("bundles:\n  items:\n    - id: active.bundle\n", encoding="utf-8")
+    (descriptors_dir / "bundles.secrets.yaml").write_text(
+        "bundles:\n  items:\n    - id: active.bundle\n      secrets:\n        token: hidden\n",
+        encoding="utf-8",
+    )
+
+    base_env = build_external_runtime_base_env(
+        {"PLATFORM_DESCRIPTORS_DIR": str(descriptors_dir)},
+        descriptor_payload_scope="active_bundle",
+    )
+
+    assert "KDCUBE_RUNTIME_ASSEMBLY_YAML_B64" in base_env
+    assert "KDCUBE_RUNTIME_BUNDLES_YAML_B64" not in base_env
+    assert "KDCUBE_RUNTIME_BUNDLES_SECRETS_YAML_B64" not in base_env
+
+
+def test_build_external_runtime_base_env_uses_env_scope_fallback_for_bundle_filter(tmp_path):
+    import yaml  # type: ignore
+
+    descriptors_dir = tmp_path / "descriptors"
+    descriptors_dir.mkdir()
+    (descriptors_dir / "bundles.yaml").write_text(
+        "bundles:\n"
+        "  items:\n"
+        "    - id: active.bundle\n"
+        "      config:\n"
+        "        keep: true\n"
+        "    - id: other.bundle\n"
+        "      config:\n"
+        "        drop: true\n",
+        encoding="utf-8",
+    )
+
+    base_env = build_external_runtime_base_env(
+        {
+            "PLATFORM_DESCRIPTORS_DIR": str(descriptors_dir),
+            "EXEC_DESCRIPTOR_PAYLOAD_SCOPE": "active_bundle",
+        },
+        bundle_id="active.bundle",
+    )
+
+    bundles_text = base64.b64decode(base_env["KDCUBE_RUNTIME_BUNDLES_YAML_B64"]).decode("utf-8")
+    bundles_doc = yaml.safe_load(bundles_text)
+    assert [item["id"] for item in bundles_doc["bundles"]["items"]] == ["active.bundle"]
+    assert "drop" not in bundles_text
+
+
+def test_active_bundle_id_from_runtime_globals_ignores_bundle_dir_fallback():
+    assert active_bundle_id_from_runtime_globals({"BUNDLE_DIR": "entrypoint"}) is None
+    assert active_bundle_id_from_runtime_globals({"BUNDLE_ID": "bundle@1", "BUNDLE_DIR": "entrypoint"}) == "bundle@1"
+
+
+def test_descriptor_payload_scope_from_runtime_config_supports_nested_shape():
+    assert (
+        descriptor_payload_scope_from_runtime_config(
+            {"descriptor_payload": {"scope": "active_bundle"}}
+        )
+        == "active_bundle"
+    )
+    assert (
+        descriptor_payload_scope_from_runtime_config(
+            {"filter_bundle_descriptor_payloads": True}
+        )
+        == "active_bundle"
+    )
 
 
 def test_build_external_runtime_base_env_exports_root_services_secret_descriptor(monkeypatch, tmp_path):
