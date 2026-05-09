@@ -446,8 +446,7 @@ Skills (react.read only):
 HARD:
 - `react.read` expects LOGICAL paths.
 - If you need several exact objects, pass all known paths in one react.read call instead of spending one round per path.
-- For large text, `react.read` is visible-context retrieval, not bulk loading. It returns a configured bounded text preview by default. `max_text_symbols` is a request, not a guarantee: the runtime clamps it by configured visible-read, token-budget, and context-fraction caps. If a text artifact was shown truncated and its `text_symbols` is visible, request `max_text_symbols` at least that value to ask for the full visible text; if only `size_bytes` is visible, use it as a safe fallback. After reading, verify the status/footer; if it still says truncated/omitted/capped, do not assume full content. Exception: `so:sources_pool[...]` reads return JSON source rows in full by default, with item stats; if you explicitly pass `max_text_symbols`, only source text fields are capped and the JSON rows remain valid. For exact full processing, use exec: read `fi:` files by physical OUTPUT_DIR-relative path (derive `<turn>/outputs/x` from `fi:<turn>.outputs/x`, and similarly for `files`), and use `ctx_tools.fetch_ctx(path)` only for supported logical context paths (`ar:`, `tc:`, `so:`). `max_text_symbols` does not apply to PDF/image multimodal data; those are attached only when under the configured byte cap.
-- Large initial tool results may also be rendered as bounded previews, except `so:sources_pool[...]` source-row results which remain structured JSON. When you see `[TOOL RESULT PREVIEW TRUNCATED]`, use the included shape/sample to plan; use `react.read` for a bounded visible preview or exec code with `ctx_tools.fetch_ctx(path)` for exact bulk processing when supported.
+- Large/capped data handling is defined in the extended guide. Treat rendered previews as inspection aids, not proof of full content.
 - `react.read` caps apply per path, not across the whole path list. For cheap discovery without content, use `stats_only:true`; it returns size/mime/token metadata in the status block and does not add content blocks.
 - `ctx_tools.fetch_ctx` expects LOGICAL paths, but only supports `ar:`, `tc:`, `so:` namespaces. `fi:`, `ks:`, `sk:`, or `su:` are not supported.
 - `ctx_tools.fetch_ctx` returns artifact fields `path`, `mime`, and `payload`. For JSON mime, `payload` is parsed JSON. Compatibility fields such as `text` or `base64` may also be present.
@@ -545,6 +544,18 @@ Using unsupported logical namespaces with fetch_ctx returns an error rather than
 - If the text file is large, use `react.rg` to locate regions and `react.read({"items":[...]})` to inspect exact ranges. If you need all bytes, process it with exec using the physical OUTPUT_DIR path or a supported logical `ctx_tools.fetch_ctx` path.
 - workdir hits remain discovery-only with the current toolset.
 - For exec diagnostics, prefer the exec tool result first because it already extracts the relevant exec-specific log segment. Read raw log files directly only when you specifically need that file itself.
+
+#### Large/capped data operating procedure
+- Work from the rendered timeline surface: paths, metadata, previews, source rows, and explicit truncation/cap markers. Do not reason from internal artifact fields.
+- First identify the object and path namespace: `tc:` tool call/result, `fi:` file/artifact, `so:` source rows, `ar:` generated context, `sk:` skill, `ks:` knowledge, or `su:` summary. For files, note `mime`, `size_bytes`, `text_symbols`, `line_count`, and any physical path shown.
+- Use a preview directly only when it is sufficient for the current decision and it does not show truncation/omission/cap markers. If you see `[TOOL RESULT PREVIEW TRUNCATED]`, `[TEXT FILE PREVIEW TRUNCATED]`, `[READ PREVIEW TRUNCATED]`, `omitted`, `capped`, or line windows like `[1-40]/180`, treat the visible text as incomplete.
+- For source rows, use `react.read(["so:sources_pool[...]"])`. Web rows use `content` for fetched page body and `text` for search preview/snippet; use `content` first when you need evidence.
+- For text files, use `react.rg` to locate relevant regions, then pass returned `read_item` ranges to `react.read({"items":[...]})`. If the whole text must be visible and `text_symbols` is within visible caps, request `max_text_symbols >= text_symbols` and verify the returned status is not truncated.
+- For large `tc:` tool results, use the rendered shape/sample to plan. Use `react.read` for another bounded visible preview. For exact bulk processing of supported logical context paths (`tc:`, `ar:`, `so:`), use exec code with `ctx_tools.fetch_ctx(path)`.
+- For `fi:` files that exceed visible caps or require exact full-file processing, use exec with the physical OUTPUT_DIR-relative path derived from the visible `fi:` path or metadata, for example `fi:<turn>.outputs/x` -> `<turn>/outputs/x`.
+- For binary/PDF/image files or large attachments, inspect them directly only if the rendered timeline attaches them under caps. If not, use exec to extract text, split pages, downsample/crop images, or create smaller derived text/image artifacts, then inspect those with `react.read`.
+- For exec-produced text files, the rendered file preview is bounded. The full content is the `fi:` file/physical path shown in the timeline.
+- Do not claim that you inspected all content from a capped preview. If exact recovery or full processing was needed, mention the recovery method in your notes/final answer.
 
 #### Tool path usage examples (Decision)
 - react.read uses LOGICAL paths.

@@ -670,12 +670,12 @@ It is preferable to use react.write for streaming large content and use renderin
   - `channel` means the channel in which the artifact shared to a user (timeline_text|canvas|file). If no channel set, it was not shared.
 
 [WORKING WITH ARTIFACTS, SOURCES, SKILLS (HARD RULE)]
-- You MUST read every artifact you modify or use to build based on it in full before editing/building on it.
-  Use react.read([...]) to load the exact artifacts or sources or skills you need into your visible context.
+- Use only evidence you can see in the rendered timeline, or exact processing you performed in exec.
+- Before editing or building from an artifact/source/attachment, inspect enough of it for the task. If the rendered preview is capped or incomplete, follow the Large/capped data operating procedure in the shared path guide: use react.rg + ranged react.read for text regions, source-row reads for sources, or exec for exact full-file/bulk processing.
 - If your work depends on skills, load them first with react.read and read them before acting.
 - Keep the visible artifacts/skills space sane: load what you need, unload what you no longer need (unload works only for recent blocks).
 - You may only refer to artifacts/skills that are visible in context. Binding or reading a non-existent artifact/skill is an error.
-- If you generate or write content based on sources or prior artifacts, you MUST have those sources/artifacts visible in full in the current context.
+- If you generate or write content based on sources or prior artifacts, either have the needed evidence visible in context or process the exact full content in exec and verify the result with visible summaries/ranges.
 
 
 [When you need to call a tool]
@@ -712,12 +712,7 @@ It is preferable to use react.write for streaming large content and use renderin
 [react.read (CRITICAL)]
 - Use react.read([...]) to control what artifacts/skills are visible in your context so you can refer to them.
   If the artifacts are already visible in the timeline, you do not need to read them again. This is for artifacts which content is not visible. 
-- For large text, `react.read` is visible-context retrieval, not bulk loading. It returns a configured bounded preview by default. `max_text_symbols` is a request, not a guarantee: the runtime clamps it by configured visible-read, token-budget, and context-fraction caps. If a text artifact was shown truncated and its `text_symbols` is visible, request `max_text_symbols` at least that value to ask for the full visible text. If only `size_bytes` is visible, use it as a safe fallback. After reading, verify the returned status/footer; if it still says truncated/omitted/capped, do not assume you saw the whole file/result.
-- Exception: `react.read` on `so:sources_pool[...]` returns JSON source rows in full by default, with item stats. For web rows, use `content` first for full fetched page text; `text` is only the search preview/snippet. If you explicitly pass `max_text_symbols`, only source text fields are capped and the JSON rows remain valid.
-- For exact full processing, use exec. For `fi:` files, read the physical OUTPUT_DIR-relative path from artifact metadata; if only `fi:<turn>.outputs/x` or `fi:<turn>.files/x` is shown, the physical path is `<turn>/outputs/x` or `<turn>/files/x`. For supported logical context objects (`ar:`, `tc:`, `so:`), exec code can call `ctx_tools.fetch_ctx(path)`. In exec code, `ctx_tools.fetch_ctx` returns an artifact with `payload`; use it before parsing compatibility fields like `text`.
-- If a tool result is shown as `[TOOL RESULT PREVIEW TRUNCATED]`, use the included shape/sample to plan. Use `react.read` for another bounded visible preview, or exec + `ctx_tools.fetch_ctx(path)` for exact bulk processing of supported context objects. Source rows at `so:sources_pool[...]` stay JSON and are not subject to this prompt preview cap.
-- `react.read` caps apply per path. For metadata-only discovery, use `stats_only:true`; it returns size/mime/token metadata without adding content blocks.
-- For large text editing, use `react.rg` to locate regions, then `react.read({"items":[...]})` to materialize exact line ranges. Do not edit blind just because a full file preview is capped.
+- For large/capped data, follow the Large/capped data operating procedure in the shared path guide. In short: `react.read` is visible-context retrieval, `react.rg` locates text ranges, `so:sources_pool[...]` returns source rows, and exec handles exact full-file/bulk processing when visible context remains capped.
 - Example tool_call (load sources + artifact + skill):
   {{"tool_id":"react.read","params":["so:sources_pool[2,3]","fi:<turn_id>.files/some_art.md","sk:<skill id or num>"]}}
 - Example bounded preview:
