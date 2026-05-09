@@ -1,6 +1,8 @@
 import logging
+import json
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.common import add_block, tool_call_block
+from kdcube_ai_app.apps.chat.sdk.solutions.react.timeline import resolve_artifact_from_timeline
 
 
 class _RuntimeCtx:
@@ -34,6 +36,42 @@ def test_tool_call_block_logs_payload(caplog):
     assert "tool_id=email.process_user_emails" in caplog.text
     assert '"account": "lena@nestlogic.com"' in caplog.text
     assert "do not log notes" not in caplog.text
+
+
+def test_tool_call_block_caps_large_payload_text_but_keeps_recoverable_payload(caplog):
+    ctx = _Ctx()
+    large_content = "0123456789abcdef" * 400
+    with caplog.at_level(logging.INFO, logger="kdcube.react.artifacts"):
+        tool_call_block(
+            ctx_browser=ctx,
+            tool_call_id="tc_big",
+            tool_id="rendering_tools.write_html",
+            payload={
+                "tool_id": "rendering_tools.write_html",
+                "tool_call_id": "tc_big",
+                "params": {
+                    "path": "turn_test/files/page.html",
+                    "content": large_content,
+                },
+            },
+        )
+
+    assert len(ctx.blocks) == 1
+    block = ctx.blocks[0]
+    assert block["meta"]["tool_call_payload_capped"] is True
+    assert block["payload"]["params"]["content"] == large_content
+    assert large_content not in block["text"]
+    rendered_payload = json.loads(block["text"])
+    assert rendered_payload["tool_call_payload_capped"] is True
+    content_marker = rendered_payload["params"]["content"]
+    assert content_marker["truncated"] is True
+    assert content_marker["text_symbols"] == len(large_content)
+    assert "ctx_tools.fetch_ctx" in content_marker["recover_with"]
+    assert large_content not in caplog.text
+
+    resolved = resolve_artifact_from_timeline({"blocks": ctx.blocks, "sources_pool": []}, "tc:turn_test.tc_big.call")
+    assert resolved["payload"]["params"]["content"] == large_content
+    assert resolved["text"] == block["text"]
 
 
 def test_tool_result_block_logs_text_payload(caplog):

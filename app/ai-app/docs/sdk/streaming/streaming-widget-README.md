@@ -208,6 +208,10 @@ Example configuration:
 In this mode, the widget parses JSON incrementally and emits only the string at that path, chunked as it arrives.
 
 The current ReAct decision integration uses the **code channel** instead of xpath streaming.
+That channel is raw executable text rather than markdown. Backticks in generated
+HTML/JavaScript/Python do not affect channel-boundary detection, and repeated
+declared channels after code are emitted separately instead of being appended to
+the exec snippet.
 
 ## UI Expectations
 

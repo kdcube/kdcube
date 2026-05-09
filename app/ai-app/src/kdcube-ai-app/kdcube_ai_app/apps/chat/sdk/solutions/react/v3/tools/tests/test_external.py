@@ -116,6 +116,59 @@ async def test_rendering_tool_accepts_generic_outdir_fi_path(monkeypatch, tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_external_tool_call_error_is_visible_on_result_block(monkeypatch, tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path))
+    ctx = FakeBrowser(runtime)
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "tool_id": "browser_tools.open_page",
+                "params": {"url": "fi:turn_exec.outputs/missing.html"},
+            }
+        },
+        "outdir": str(tmp_path),
+        "workdir": str(tmp_path),
+    }
+
+    async def _fake_runtime_execute_tool(**kwargs):
+        # This mocks runtime.execution.execute_tool(), not the raw browser tool.
+        # Raw tool callables return {ok,error,ret}; execute_tool unwraps that
+        # into ReAct's normalized {status,output,summary,error,call_error}.
+        return {
+            "status": "error",
+            "output": None,
+            "summary": "ERROR [FileNotFoundError] at browser_tools.open_page: missing.html",
+            "error": None,
+            "call_error": {
+                "code": "FileNotFoundError",
+                "message": "missing.html",
+                "where": "browser_tools.open_page",
+                "managed": False,
+            },
+        }
+
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v3.tools.external.execute_tool", _fake_runtime_execute_tool)
+
+    react = FakeReact()
+    react.tools_subsystem = None
+
+    out = await handle_external_tool(react=react, ctx_browser=ctx, state=state, tool_call_id="browser_err")
+
+    assert out["last_tool_result"][0]["error"]["code"] == "FileNotFoundError"
+    result_blocks = [
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result"
+        and b.get("path") == "tc:turn_exec.browser_err.result"
+        and (b.get("mime") or "").strip() == "application/json"
+    ]
+    assert result_blocks
+    text = result_blocks[-1].get("text") or ""
+    assert '"status": "error"' in text
+    assert '"code": "FileNotFoundError"' in text
+    assert '"message": "missing.html"' in text
+
+
+@pytest.mark.asyncio
 async def test_external_exec_internal_file_is_not_hosted_but_keeps_file_path(monkeypatch, tmp_path):
     runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path))
     ctx = FakeBrowser(runtime)
@@ -390,6 +443,141 @@ async def test_external_tool_self_hosted_declared_files_are_not_rehosted(monkeyp
     assert any(
         b.get("type") == "react.tool.result"
         and (b.get("meta") or {}).get("hosted_uri") == "s3://bucket/invoice.pdf"
+        for b in ctx.timeline.blocks
+    )
+
+
+@pytest.mark.asyncio
+async def test_external_tool_self_hosted_internal_image_is_not_emitted_but_is_multimodal(monkeypatch, tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path), conversation_id="conv1")
+    ctx = FakeBrowser(runtime)
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "tool_id": "browser_tools.status",
+                "params": {"screenshot": True},
+            }
+        },
+        "outdir": str(tmp_path),
+        "workdir": str(tmp_path),
+    }
+    target = tmp_path / "turn_exec" / "outputs" / "browser_screenshots" / "123_main.png"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+
+    async def _fake_execute_tool(**kwargs):
+        return {
+            "output": {
+                "ok": True,
+                "ret": {
+                    "artifact_type": "files",
+                    "screenshot": {
+                        "path": "fi:turn_exec.outputs/browser_screenshots/123_main.png",
+                        "logical_path": "fi:turn_exec.outputs/browser_screenshots/123_main.png",
+                        "artifact_path": "fi:turn_exec.outputs/browser_screenshots/123_main.png",
+                        "physical_path": "turn_exec/outputs/browser_screenshots/123_main.png",
+                        "filename": "123_main.png",
+                        "mime": "image/png",
+                        "visibility": "internal",
+                        "hosted": True,
+                        "emitted": False,
+                        "hosted_uri": "s3://bucket/123_main.png",
+                    },
+                    "files": [{
+                        "path": "fi:turn_exec.outputs/browser_screenshots/123_main.png",
+                        "logical_path": "fi:turn_exec.outputs/browser_screenshots/123_main.png",
+                        "artifact_path": "fi:turn_exec.outputs/browser_screenshots/123_main.png",
+                        "physical_path": "turn_exec/outputs/browser_screenshots/123_main.png",
+                        "filename": "123_main.png",
+                        "mime": "image/png",
+                        "visibility": "internal",
+                        "hosted": True,
+                        "emitted": False,
+                        "hosted_uri": "s3://bucket/123_main.png",
+                    }],
+                },
+            },
+            "summary": "",
+        }
+
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v3.tools.external.execute_tool", _fake_execute_tool)
+
+    hosting = _HostingRecorder()
+    react = FakeReact(hosting_service=hosting)
+    react.tools_subsystem = None
+
+    out = await handle_external_tool(react=react, ctx_browser=ctx, state=state, tool_call_id="browser_screen")
+
+    assert hosting.host_calls == []
+    assert hosting.emit_calls == []
+    assert len(out["last_tool_result"]) == 2
+    assert any(
+        b.get("type") == "react.tool.result"
+        and b.get("path") == "fi:turn_exec.outputs/browser_screenshots/123_main.png"
+        and b.get("mime") == "image/png"
+        and b.get("base64")
+        and (b.get("meta") or {}).get("visibility") == "internal"
+        for b in ctx.timeline.blocks
+    )
+
+
+@pytest.mark.asyncio
+async def test_external_tool_large_internal_image_is_metadata_only(monkeypatch, tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path), conversation_id="conv1")
+    ctx = FakeBrowser(runtime)
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "tool_id": "browser_tools.status",
+                "params": {"screenshot": True},
+            }
+        },
+        "outdir": str(tmp_path),
+        "workdir": str(tmp_path),
+    }
+    target = tmp_path / "turn_exec" / "outputs" / "browser_screenshots" / "large.png"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * 800_000)
+
+    async def _fake_execute_tool(**kwargs):
+        return {
+            "output": {
+                "ok": True,
+                "ret": {
+                    "artifact_type": "files",
+                    "files": [{
+                        "path": "fi:turn_exec.outputs/browser_screenshots/large.png",
+                        "logical_path": "fi:turn_exec.outputs/browser_screenshots/large.png",
+                        "artifact_path": "fi:turn_exec.outputs/browser_screenshots/large.png",
+                        "physical_path": "turn_exec/outputs/browser_screenshots/large.png",
+                        "filename": "large.png",
+                        "mime": "image/png",
+                        "visibility": "internal",
+                        "hosted": True,
+                        "emitted": False,
+                    }],
+                },
+            },
+            "summary": "",
+        }
+
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v3.tools.external.execute_tool", _fake_execute_tool)
+
+    react = FakeReact(hosting_service=_HostingRecorder())
+    react.tools_subsystem = None
+
+    await handle_external_tool(react=react, ctx_browser=ctx, state=state, tool_call_id="browser_large_screen")
+
+    assert not any(
+        b.get("type") == "react.tool.result"
+        and b.get("path") == "fi:turn_exec.outputs/browser_screenshots/large.png"
+        and b.get("base64")
+        for b in ctx.timeline.blocks
+    )
+    assert any(
+        b.get("type") == "react.tool.result"
+        and b.get("path") == "fi:turn_exec.outputs/browser_screenshots/large.png"
+        and (b.get("meta") or {}).get("multimodal_status") == "too_large_for_visible_context"
         for b in ctx.timeline.blocks
     )
 

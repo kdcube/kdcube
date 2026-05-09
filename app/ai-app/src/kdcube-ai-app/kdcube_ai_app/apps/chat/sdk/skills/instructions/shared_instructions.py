@@ -81,7 +81,8 @@ INTERNAL_AGENT_JOURNAL_GUARD = """
 INTERNAL_NOTES_PRODUCER = """
 [INTERNAL MEMORY BEACONS — react.write channel=internal]
 - This feature is called Internal Memory Beacons.
-- You may write user‑invisible notes using react.write with channel="internal".
+- You may write user-invisible internal files using react.write with channel="internal".
+- By default these are internal file artifacts, not inline notes. Set scratchpad=true only for short beacons that should also appear inline as react.note.
 - Use these beacons to persist:
   - [P] personal/preferences
   - [D] decisions/rationale
@@ -97,7 +98,8 @@ INTERNAL_NOTES_PRODUCER = """
 
 INTERNAL_NOTES_CONSUMER = """
 [INTERNAL MEMORY BEACONS — READ & USE]
-- The timeline may include Internal Memory Beacons (react.write channel="internal"). These are user‑invisible.
+- The timeline may include inline Internal Memory Beacons (react.write channel="internal", scratchpad=true). These are user-invisible.
+- Internal write artifacts may also appear as visibility=internal files; read their fi: path when their content matters.
 - Some older beacons may reappear after compaction as preserved note blocks.
 - Lines are tagged:
   - [P] personal/preferences
@@ -549,12 +551,14 @@ Using unsupported logical namespaces with fetch_ctx returns an error rather than
 - Work from the rendered timeline surface: paths, metadata, previews, source rows, and explicit truncation/cap markers. Do not reason from internal artifact fields.
 - First identify the object and path namespace: `tc:` tool call/result, `fi:` file/artifact, `so:` source rows, `ar:` generated context, `sk:` skill, `ks:` knowledge, or `su:` summary. For files, note `mime`, `size_bytes`, `text_symbols`, `line_count`, and any physical path shown.
 - Use a preview directly only when it is sufficient for the current decision and it does not show truncation/omission/cap markers. If you see `[TOOL RESULT PREVIEW TRUNCATED]`, `[TEXT FILE PREVIEW TRUNCATED]`, `[READ PREVIEW TRUNCATED]`, `omitted`, `capped`, or line windows like `[1-40]/180`, treat the visible text as incomplete.
+- For large text artifacts, do not edit or judge the whole file from the initial preview. Use this loop: `react.rg` to locate relevant anchors -> `react.read({"items":[read_item, ...]})` to inspect exact line ranges -> repeat for every affected region -> edit/process only after the needed regions are visible.
 - For source rows, use `react.read(["so:sources_pool[...]"])`. Web rows use `content` for fetched page body and `text` for search preview/snippet; use `content` first when you need evidence.
 - For text files, use `react.rg` to locate relevant regions, then pass returned `read_item` ranges to `react.read({"items":[...]})`. If the whole text must be visible and `text_symbols` is within visible caps, request `max_text_symbols >= text_symbols` and verify the returned status is not truncated.
 - For large `tc:` tool results, use the rendered shape/sample to plan. Use `react.read` for another bounded visible preview. For exact bulk processing of supported logical context paths (`tc:`, `ar:`, `so:`), use exec code with `ctx_tools.fetch_ctx(path)`.
 - For `fi:` files that exceed visible caps or require exact full-file processing, use exec with the physical OUTPUT_DIR-relative path derived from the visible `fi:` path or metadata, for example `fi:<turn>.outputs/x` -> `<turn>/outputs/x`.
 - For binary/PDF/image files or large attachments, inspect them directly only if the rendered timeline attaches them under caps. If an image is too large, call `react.read` on its `fi:` path; it will downscale a bounded multimodal preview when possible and report `image_view`. For PDFs and unsupported binaries over caps, use exec to extract text, split pages, crop/downsample, or create smaller derived artifacts, then inspect those with `react.read`.
 - For exec-produced text files, the rendered file preview is bounded. The full content is the `fi:` file/physical path shown in the timeline.
+- For interactive HTML/browser-facing artifacts, verify behavior with `browser_tools.open_page` and follow-up `browser_tools.click`/`fill`/`status`; check returned `page_errors`, `console_errors`, and controls before claiming the app works. Keep `screenshot:false` unless visual state, layout, canvas/SVG, or responsive rendering must be inspected; screenshots are internal image artifacts and add multimodal tokens.
 - Do not claim that you inspected all content from a capped preview. If exact recovery or full processing was needed, mention the recovery method in your notes/final answer.
 
 #### Tool path usage examples (Decision)

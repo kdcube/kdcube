@@ -139,14 +139,21 @@ Path handling
 
 ## react.write(...)
 
-`react.write` always produces a meta block plus content.  
+`react.write` always materializes a current-turn text artifact and produces a
+meta block. User-visible channels also produce a content block.
 If token accounting is available, it is stored in the **meta JSON** (`"tokens": <count>`).
 For write tools we also validate the output file and record:
 - `size_bytes` in meta
 - `write_warning` if the file is unusually small
 - `tool_result_error` + meta `error` if the file is missing/empty
 
-When `channel="internal"`, `react.write` is used to leave **Internal Memory Beacons**:
+When `channel="internal"`, `react.write` creates a user-invisible internal
+file artifact by default. This is the preferred shape for longer notes,
+working data, scratch reports, or any content that should be recoverable by
+`fi:` path without bloating the visible timeline.
+
+Set `scratchpad=true` only for short inline notes that should also appear as a
+`react.note` block. Those notes are **Internal Memory Beacons**:
 - user-invisible protocol notes for future turns
 - typically short `[P]` / `[D]` / `[S]` / `[A]` / `[K]` lines
 - usually written when there is something stable to carry forward, often near the end of the turn
@@ -165,17 +172,22 @@ When `channel="internal"`, `react.write` is used to leave **Internal Memory Beac
    - `[TOOL RESULT <id>].summary react.write` (status + artifact list)
    - `[TOOL RESULT <id>].artifact react.write` (logical path + optional physical path + content)
 
-### Internal Memory Beacon sequence
+### Internal channel sequence
 
-If `react.write(channel="internal")` is used, the timeline still records the normal tool call and meta result,
-but the content block becomes `react.note` instead of a user-facing `react.tool.result`.
-Later compaction may preserve that note as `react.note.preserved` after the summary block.
+If `react.write(channel="internal")` is used without `scratchpad=true`, the
+timeline records the normal tool call and an internal meta result, but it does
+not inline the content as `react.note`. The content is stored as a file and is
+recoverable through its `fi:` path.
+
+If `scratchpad=true` is provided, the same internal file is written and the
+short content is also emitted as `react.note`. Later compaction may preserve
+that note as `react.note.preserved` after the summary block.
 
 Typical sequence:
 1. `react.notes` (optional)
 2. `react.tool.call`
 3. `react.tool.result` (meta JSON, `visibility=internal`)
-4. `react.note`
+4. `react.note` only when `scratchpad=true`
 
 **Example (simplified)**
 ```json
@@ -196,7 +208,13 @@ Typical sequence:
 
 ```
 
-Internal beacon example:
+Internal file example:
+```json
+{ "type": "react.tool.result", "path": "tc:turn_1.mem1.result",
+  "text": "{ \"artifact_path\": \"fi:turn_1.files/memory/key-artifacts.md\", \"visibility\": \"internal\", \"kind\": \"file\" }" }
+```
+
+Internal scratchpad beacon example:
 ```json
 { "type": "react.tool.result", "path": "tc:turn_1.mem1.result",
   "text": "{ \"artifact_path\": \"fi:turn_1.files/memory/key-artifacts.md\", \"visibility\": \"internal\" }" }

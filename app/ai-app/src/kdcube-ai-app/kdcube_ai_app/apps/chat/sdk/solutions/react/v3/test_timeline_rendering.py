@@ -268,6 +268,108 @@ def test_large_tool_result_is_rendered_as_preview_with_shape():
     assert "A" * 1000 not in joined
 
 
+def test_large_text_artifact_is_rendered_as_bounded_preview():
+    ctx = RuntimeCtx(
+        turn_id="turn_artifact",
+        started_at="2026-05-08T00:00:00Z",
+        tool_result_preview_max_text_symbols=140,
+    )
+    tl = Timeline(runtime=ctx)
+    artifact_text = "\n".join(
+        f"line {idx}: " + ("X" * 40)
+        for idx in range(1, 30)
+    )
+
+    tl.blocks.extend([
+        tl._block(type="turn.header", author="system", turn_id=ctx.turn_id, ts=ctx.started_at, text=""),
+        tl._block(
+            type="react.tool.call",
+            author="agent",
+            turn_id=ctx.turn_id,
+            ts=ctx.started_at,
+            mime="application/json",
+            path="tc:turn_artifact.tc_write.call",
+            text=json.dumps({
+                "tool_id": "react.write",
+                "tool_call_id": "tc_write",
+                "params": {"path": "outputs/report.md", "channel": "canvas", "kind": "display"},
+            }),
+        ),
+        tl._block(
+            type="react.tool.result",
+            author="agent",
+            turn_id=ctx.turn_id,
+            ts=ctx.started_at,
+            mime="text/markdown",
+            path="fi:turn_artifact.outputs/report.md",
+            text=artifact_text,
+            meta={
+                "tool_call_id": "tc_write",
+                "text_symbols": len(artifact_text),
+                "size_bytes": len(artifact_text.encode("utf-8")),
+                "line_count": 29,
+                "physical_path": "turn_artifact/outputs/report.md",
+            },
+        ),
+    ])
+
+    rendered = _run(tl.render(cache_last=True))
+    joined = "\n".join(b.get("text", "") for b in rendered if b.get("type") == "text")
+
+    assert tl.blocks[-1]["text"] == artifact_text
+    assert "[ARTIFACT PREVIEW TRUNCATED]" in joined
+    assert "logical_path: fi:turn_artifact.outputs/report.md" in joined
+    assert "physical_path: turn_artifact/outputs/report.md" in joined
+    assert "preview_lines: [1-" in joined
+    assert "line_numbers: true" in joined
+    assert "Use react.rg on the file to find relevant regions before editing." in joined
+    assert "line 29:" not in joined
+    assert len(joined) < len(artifact_text)
+
+
+def test_large_internal_note_and_code_are_rendered_as_bounded_previews():
+    ctx = RuntimeCtx(
+        turn_id="turn_large_internal",
+        started_at="2026-05-08T00:00:00Z",
+        tool_result_preview_max_text_symbols=120,
+    )
+    tl = Timeline(runtime=ctx)
+    html_text = "<!doctype html>\n" + "\n".join(f"<button>Button {idx}</button>" for idx in range(80))
+    code_text = "html = '''\n" + html_text + "\n'''\nprint(len(html))"
+
+    tl.blocks.extend([
+        tl._block(type="turn.header", author="system", turn_id=ctx.turn_id, ts=ctx.started_at, text=""),
+        tl._block(
+            type="react.note",
+            author="agent",
+            turn_id=ctx.turn_id,
+            ts=ctx.started_at,
+            path="fi:turn_large_internal.outputs/app.html",
+            text=html_text,
+        ),
+        tl._block(
+            type="react.tool.code",
+            author="agent",
+            turn_id=ctx.turn_id,
+            ts=ctx.started_at,
+            path="fi:turn_large_internal.code.tc_exec",
+            text=code_text,
+            meta={"tool_call_id": "tc_exec"},
+        ),
+    ])
+
+    rendered = _run(tl.render(cache_last=True))
+    joined = "\n".join(b.get("text", "") for b in rendered if b.get("type") == "text")
+
+    assert tl.blocks[1]["text"] == html_text
+    assert tl.blocks[2]["text"] == code_text
+    assert "[INTERNAL NOTE PREVIEW TRUNCATED]" in joined
+    assert "[CODE PREVIEW TRUNCATED]" in joined
+    assert "Use react.rg on the file to find relevant regions before editing." in joined
+    assert "Button 79" not in joined
+    assert len(joined) < len(html_text) + len(code_text)
+
+
 def test_file_artifact_render_includes_size_bytes():
     ctx = RuntimeCtx(turn_id="turn_file", started_at="2026-05-08T00:00:00Z")
     tl = Timeline(runtime=ctx)

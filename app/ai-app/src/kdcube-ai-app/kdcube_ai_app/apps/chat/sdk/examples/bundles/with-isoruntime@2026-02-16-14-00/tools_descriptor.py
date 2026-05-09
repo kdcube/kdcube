@@ -57,6 +57,11 @@ TOOLS_SPECS: List[Dict[str, Any]] = [
         "alias": "rendering_tools",
         "use_sk": True,
     },
+    {
+        "module": "kdcube_ai_app.apps.chat.sdk.tools.browser_tools",  # Browser verification tools
+        "alias": "browser_tools",
+        "use_sk": True,
+    },
 
     # Bundle-local tool (relative path from this file's directory)
     # See tools/local_tools.py for implementation
@@ -87,4 +92,9 @@ MCP_TOOL_SPECS: List[Dict[str, Any]] = [
 TOOL_RUNTIME: Dict[str, str] = {
     "web_tools.web_search": "local",
     "web_tools.fetch_url_contents": "local",
+    "browser_tools.open_page": "none",
+    "browser_tools.click": "none",
+    "browser_tools.fill": "none",
+    "browser_tools.status": "none",
+    "browser_tools.close": "none",
 }

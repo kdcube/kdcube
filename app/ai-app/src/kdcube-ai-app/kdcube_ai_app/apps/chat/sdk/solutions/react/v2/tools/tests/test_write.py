@@ -34,7 +34,7 @@ async def test_write_rewrites_logical_path(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_write_internal_channel_creates_note_block(tmp_path):
+async def test_write_internal_channel_creates_internal_file_by_default(tmp_path):
     runtime = RuntimeCtx(turn_id="turn_cur", outdir=str(tmp_path), workdir=str(tmp_path))
     ctx = FakeBrowser(runtime)
     state = {"last_decision": {"tool_call": {"params": {"path": "turn_cur/files/note.md", "channel": "internal", "content": "keep this", "kind": "file"}}},
@@ -43,9 +43,25 @@ async def test_write_internal_channel_creates_note_block(tmp_path):
     await handle_react_write(react=FakeReact(), ctx_browser=ctx, state=state, tool_call_id="c2")
 
     note_blocks = [b for b in ctx.timeline.blocks if b.get("type") == "react.note"]
-    assert note_blocks, "internal channel should create react.note block"
-    assert any((b.get("meta") or {}).get("channel") == "internal" for b in note_blocks)
+    assert not note_blocks, "internal channel should not inline file content unless scratchpad=true"
+    assert (tmp_path / "turn_cur" / "files" / "note.md").read_text() == "keep this"
     assert any("\"visibility\": \"internal\"" in (b.get("text") or "") for b in ctx.timeline.blocks)
+    assert any("\"kind\": \"file\"" in (b.get("text") or "") for b in ctx.timeline.blocks)
+
+
+@pytest.mark.asyncio
+async def test_write_internal_scratchpad_creates_note_block(tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_cur", outdir=str(tmp_path), workdir=str(tmp_path))
+    ctx = FakeBrowser(runtime)
+    state = {"last_decision": {"tool_call": {"params": {"path": "turn_cur/files/note.md", "channel": "internal", "content": "keep this", "kind": "display", "scratchpad": True}}},
+             "outdir": str(tmp_path)}
+
+    await handle_react_write(react=FakeReact(), ctx_browser=ctx, state=state, tool_call_id="c2")
+
+    note_blocks = [b for b in ctx.timeline.blocks if b.get("type") == "react.note"]
+    assert note_blocks, "internal scratchpad writes should create react.note block"
+    assert any((b.get("meta") or {}).get("channel") == "internal" for b in note_blocks)
+    assert any((b.get("text") or "") == "keep this" for b in note_blocks)
 
 
 @pytest.mark.asyncio

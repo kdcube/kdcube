@@ -32,6 +32,11 @@ TOOLS_SPECS: List[Dict[str, Any]] = [
         "use_sk": True,
     },
     {
+        "module": "kdcube_ai_app.apps.chat.sdk.tools.browser_tools",
+        "alias": "browser_tools",
+        "use_sk": True,
+    },
+    {
         "ref": "tools/preference_tools.py",
         "alias": "preferences",
         "use_sk": True,
@@ -50,4 +55,9 @@ MCP_TOOL_SPECS: List[Dict[str, Any]] = [
 TOOL_RUNTIME: Dict[str, str] = {
     "web_tools.web_search": "local",
     "web_tools.fetch_url_contents": "local",
+    "browser_tools.open_page": "none",
+    "browser_tools.click": "none",
+    "browser_tools.fill": "none",
+    "browser_tools.status": "none",
+    "browser_tools.close": "none",
 }

@@ -15,6 +15,11 @@ BUILTIN_TOOLS = {
     "rendering_tools.write_html",
     "rendering_tools.write_png",
     "rendering_tools.write_xlsx",
+    "browser_tools.open_page",
+    "browser_tools.click",
+    "browser_tools.fill",
+    "browser_tools.status",
+    "browser_tools.close",
     "exec_tools.execute_code_python",
 }
 

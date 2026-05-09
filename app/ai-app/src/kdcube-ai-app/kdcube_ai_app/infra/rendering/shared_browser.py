@@ -138,7 +138,25 @@ class SharedBrowserService:
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE,
                     )
-                    await proc.communicate()
+                    try:
+                        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+                    except asyncio.TimeoutError as timeout_exc:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                        await proc.communicate()
+                        raise RuntimeError(
+                            "Timed out installing Chromium for Playwright after 120s. "
+                            "Install it before runtime startup with: python -m playwright install chromium"
+                        ) from timeout_exc
+                    if proc.returncode not in (0, None):
+                        err = (stderr or b"").decode("utf-8", errors="replace")[-2000:]
+                        out = (stdout or b"").decode("utf-8", errors="replace")[-2000:]
+                        raise RuntimeError(
+                            "Failed to install Chromium for Playwright. "
+                            f"stdout_tail={out!r} stderr_tail={err!r}"
+                        )
                     self._browser = await self._playwright.chromium.launch(
                         headless=self.headless
                     )

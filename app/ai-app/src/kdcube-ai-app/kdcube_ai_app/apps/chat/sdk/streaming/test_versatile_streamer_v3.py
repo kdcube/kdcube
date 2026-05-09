@@ -269,6 +269,82 @@ async def test_stream_with_channels_v3_drives_exec_widget_from_single_decision_a
 
 
 @pytest.mark.asyncio
+async def test_stream_with_channels_v3_code_channel_survives_trailing_repeated_thinking():
+    decision_payload = {
+        "action": "call_tool",
+        "tool_call": {
+            "tool_id": "exec_tools.execute_code_python",
+            "params": {
+                "prog_name": "html_writer",
+                "contract": [{"filename": "outputs/page.html", "description": "HTML output"}],
+            },
+        },
+    }
+    code_text = (
+        "from pathlib import Path\n"
+        "html = r\"\"\"<script>\n"
+        "const label = `template marker in generated HTML;\n"
+        "</script>\"\"\"\n"
+        "Path(OUTPUT_DIR, 'outputs/page.html').write_text(html)\n"
+    )
+    full = (
+        _text_channel("thinking", "Writing HTML.")
+        + _json_channel("ReactDecisionOutV2", decision_payload)
+        + _text_channel("code", code_text)
+        + _text_channel("thinking", "Extra diagnostic after code.")
+    )
+
+    for chunk_size in [7, 19, 64]:
+        svc = _FakeService(_chunk_text(full, size=chunk_size))
+        collector = _Collector()
+        widget = DecisionExecCodeStreamer(
+            emit_delta=collector.emit,
+            agent="test.exec",
+            artifact_name="react.exec.test",
+            execution_id="exec_demo",
+        )
+        subscribers = (
+            ChannelSubscribers()
+            .subscribe("ReactDecisionOutV2", widget.feed_json)
+            .subscribe("code", widget.feed_code)
+        )
+
+        results, meta = await stream_with_channels(
+            svc=svc,
+            messages=["sys", "user"],
+            role="answer.generator.regular",
+            channels=[
+                ChannelSpec(name="thinking", format="markdown", replace_citations=False, emit_marker="thinking"),
+                ChannelSpec(name="ReactDecisionOutV2", format="json", replace_citations=False, emit_marker="answer"),
+                ChannelSpec(name="code", format="text", replace_citations=False, emit_marker="subsystem"),
+            ],
+            emit=collector.emit,
+            agent="test.agent",
+            artifact_name="react.decision",
+            subscribers=subscribers,
+            max_tokens=800,
+            temperature=0.0,
+            return_full_raw=True,
+        )
+
+        assert meta.get("service_error") is None
+        assert results["ReactDecisionOutV2"].error is None
+        assert results["code"].raw == code_text
+        assert widget.get_code() == code_text
+        assert "</channel:code>" not in results["code"].raw
+        assert "Writing HTML." in results["thinking"].raw
+        assert "Extra diagnostic after code." in results["thinking"].raw
+
+        thinking_instances = [
+            e.get("channel_instance")
+            for e in collector.events_for_channel("thinking")
+            if e.get("text")
+        ]
+        assert 0 in thinking_instances
+        assert 1 in thinking_instances
+
+
+@pytest.mark.asyncio
 async def test_stream_with_channels_v3_uses_declared_rendering_format_for_pdf_stream():
     decision_payload = {
         "action": "call_tool",

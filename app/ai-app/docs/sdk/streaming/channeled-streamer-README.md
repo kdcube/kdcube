@@ -42,6 +42,18 @@ The model must wrap each channel in XML-like tags:
   `ChannelSpec.name` values.
 - Only tags defined in the protocol should be emitted by the model.
 - The streamer ignores any content outside a channel tag.
+- Repeated channel blocks are tolerated. In the legacy streamer their raw
+  bodies are concatenated into the same `ChannelResult`; in
+  `versatile_streamer_v3.py` each occurrence also carries a
+  `channel_instance` index so subscribers can isolate live UI widgets.
+- The `code` channel is parsed as raw executable text, not markdown. Backticks
+  inside generated Python/JavaScript/HTML do not hide `</channel:code>`, so
+  trailing channels such as a repeated `thinking` block are routed separately
+  instead of leaking into the exec snippet.
+- Exact channel tag literals remain protocol delimiters. If non-code prose
+  needs to mention a tag, put it in backticks. If generated code truly needs to
+  create the exact delimiter text, construct it indirectly rather than writing
+  the literal tag in the channel body.
 
 ### Recommended marker mapping
 

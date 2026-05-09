@@ -7,6 +7,7 @@ This note describes the `v3` implementation path for multi-action rounds and the
 | Area | Status in `v3` | Notes |
 |---|---|---|
 | Repeated `ReactDecisionOutV2` channel instances | Implemented | Parsed and routed as distinct channel instances |
+| Repeated non-decision channels | Implemented | Repeated `thinking` and other declared channels are tolerated and emitted again |
 | Per-instance subscriber factory | Implemented | Done in `versatile_streamer_v3.py` |
 | Per-instance record/timeline streamers | Implemented | Spawned on `ReactDecisionOutV2` channel-open |
 | Safe multi-action bundle execution | Implemented | Sequential only |
@@ -39,6 +40,13 @@ The new live routing model is:
    - per-instance decision timeline streamer
 5. Each action still executes as a normal tool round with its own `tool_call_id`.
 6. Execution remains sequential, so timeline grouping, compaction, caching points, and turn-log semantics remain stable.
+
+The channel parser is intentionally forgiving about repeated declared
+channels. If the model emits another `thinking` block after the code block, the
+streamer emits it as another thinking instance instead of appending it to the
+code payload. The `code` channel is treated as raw executable text rather than
+markdown, so backticks inside generated HTML/JavaScript/Python do not prevent
+the parser from recognizing `</channel:code>`.
 
 ## Important Code Rule
 
@@ -197,6 +205,7 @@ Rules:
   exactly one decision instance
   exactly one code stream
   no bundle fanout here
+  repeated thinking after code is tolerated, but does not become part of code
 
 Artifacts created:
   react.record.tc_r3.i0

@@ -88,6 +88,11 @@ The public tool is `exec_tools.execute_code_python(...)` in [exec_tools.py](../.
 Current public contract:
 
 - code is provided in the dedicated code channel, not in tool params
+- the code channel is raw executable text. The channel streamer recognizes the
+  `</channel:code>` protocol boundary even if the generated snippet contains
+  unmatched backticks from Python/JavaScript/HTML strings, and any later
+  declared channel is routed separately instead of becoming part of
+  `user_code.py`
 - `contract` is required
 - `contract` must be a non-empty list (or JSON string) of files to produce
 - each contract file must live under `turn_<id>/files/...`
