@@ -188,7 +188,7 @@ ai:
 |---|---|---|
 | `react_agent_version` | `AI_REACT_AGENT_VERSION` | React decision runtime version (`v2` or `v3`) |
 | `react_agent_multiaction` | `AI_REACT_AGENT_MULTI_ACTION` | Experimental multi-action decision mode (`on` or `off`) |
-| `context_max_tokens` | `AI_REACT_CONTEXT_MAX_TOKENS` | Default hard render budget before compaction when a bundle does not set `max_tokens`; default `80000` |
+| `context_max_tokens` | `AI_REACT_CONTEXT_MAX_TOKENS` | Default hard model-input budget before compaction when a bundle does not set `max_tokens`; includes system/instruction text plus rendered timeline; default `80000` |
 | `read_visible_max_text_symbols` | `AI_REACT_READ_VISIBLE_MAX_TEXT_SYMBOLS` | Default max visible text characters per `react.read` text path; default `48000` |
 | `read_visible_max_tokens` | `AI_REACT_READ_VISIBLE_MAX_TOKENS` | Default token guard per `react.read` text path; default `12000` |
 | `read_visible_max_bytes` | `AI_REACT_READ_VISIBLE_MAX_BYTES` | Raw byte guard for every `react.read` payload; PDF/image content is attached whole only when under this cap; default `10485760` |

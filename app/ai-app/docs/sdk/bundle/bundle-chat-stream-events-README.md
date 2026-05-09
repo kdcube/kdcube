@@ -252,7 +252,7 @@ Common payload fields:
 | `data.kind` | Compaction scope, for example `history`, `history_with_split_turn`, or `current_turn_prefix`. |
 | `data.compaction_id` | Stable identifier for pairing start/completion events from one compaction pass. |
 | `data.trigger_reason` | Why the pass started when known, for example `render_token_limit` or `forced`. |
-| `data.input_tokens_estimate` / `data.threshold_tokens` / `data.max_tokens` | Trigger-side token estimate and configured budget. Compaction normally wakes when the estimate crosses about 90% of `max_tokens`, so `threshold_tokens` is often lower than `max_tokens`. |
+| `data.input_tokens_estimate` / `data.threshold_tokens` / `data.max_tokens` | Trigger-side model input estimate and configured budget. The estimate includes system/instruction text and rendered timeline content; `threshold_tokens` is the configured `max_tokens` value. |
 | `data.before_tokens` / `data.after_tokens` | Estimated visible context before and after compaction when known. |
 | `data.compacted_tokens` | Estimated tokens hidden behind the compacted memory/checkpoint when known. |
 | `data.before_visible_blocks` / `data.after_visible_blocks` | Diagnostic visible timeline block count before and after compaction when known. Token pressure is the compaction trigger. |

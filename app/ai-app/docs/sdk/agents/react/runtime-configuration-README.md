@@ -36,7 +36,8 @@ React is selected before the runtime instance is built:
 - `turn_id`: current turn id.
 - `bundle_id`: bundle id for the agent run.
 - `timezone`: user timezone.
-- `max_tokens`: max model tokens used for compaction decisions.
+- `max_tokens`: max model input tokens used for compaction decisions; this
+  budget includes system/instruction text and the rendered timeline.
 - `read_visible_max_text_symbols`: max visible text characters per `react.read`
   text path.
 - `read_visible_max_tokens`: max model-visible tokens per `react.read` text

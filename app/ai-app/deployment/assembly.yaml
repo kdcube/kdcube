@@ -118,7 +118,7 @@ ai:
   react:
     react_agent_version: "v2"       # AI_REACT_AGENT_VERSION: v2 | v3
     react_agent_multiaction: "off"  # AI_REACT_AGENT_MULTI_ACTION: on | off
-    context_max_tokens: 80000       # AI_REACT_CONTEXT_MAX_TOKENS: hard render budget before compaction
+    context_max_tokens: 80000       # AI_REACT_CONTEXT_MAX_TOKENS: hard model-input budget before compaction
     read_visible_max_text_symbols: 48000 # AI_REACT_READ_VISIBLE_MAX_TEXT_SYMBOLS: max visible text characters per react.read text path
     read_visible_max_tokens: 12000  # AI_REACT_READ_VISIBLE_MAX_TOKENS: max visible tokens per react.read path
     read_visible_max_bytes: 10485760 # AI_REACT_READ_VISIBLE_MAX_BYTES: max raw bytes per react.read payload

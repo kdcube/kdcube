@@ -25,6 +25,29 @@ def _blk(*, btype: str, text: str, turn_id: str) -> dict:
 
 
 @pytest.mark.asyncio
+async def test_render_compaction_trigger_counts_system_plus_timeline(monkeypatch):
+    runtime = RuntimeCtx(turn_id="turn_current", max_tokens=100)
+    tl = Timeline(runtime=runtime, svc=object())
+    tl.blocks = [
+        _blk(btype="turn.header", text="[TURN turn_current]", turn_id="turn_current"),
+        _blk(btype="user.prompt", text="small request", turn_id="turn_current"),
+    ]
+    captured = {}
+
+    async def fake_sanitize_context_blocks(**kwargs):
+        captured.update(kwargs)
+        return kwargs["blocks"]
+
+    monkeypatch.setattr(tl, "sanitize_context_blocks", fake_sanitize_context_blocks)
+
+    await tl.render(system_text=("system instructions " * 80), cache_last=False)
+
+    assert captured["force"] is True
+    assert captured["trigger_tokens_estimate"] > runtime.max_tokens
+    assert captured["trigger_tokens_estimate"] > captured["max_tokens"]
+
+
+@pytest.mark.asyncio
 async def test_compaction_inserts_summary_and_keeps_cut_block(monkeypatch):
     async def _fake_summary(*args, **kwargs):
         return "SUMMARY"
@@ -789,7 +812,7 @@ async def test_render_compacts_when_pruned_skeleton_has_too_many_message_blocks(
     monkeypatch.setattr(summary_mod, "summarize_context_blocks_progressive", _fake_summary)
     monkeypatch.setattr(summary_mod, "summarize_turn_prefix_progressive", _fake_prefix)
 
-    runtime = RuntimeCtx(turn_id="turn_cur", max_tokens=80000)
+    runtime = RuntimeCtx(turn_id="turn_cur", max_tokens=400)
     tl = Timeline(runtime=runtime, svc=object())
     blocks = []
     for idx in range(760):
