@@ -2,6 +2,7 @@
 
 import pytest
 import json
+import random
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.proto import RuntimeCtx
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.read import handle_react_read
@@ -452,6 +453,47 @@ async def test_read_stats_only_returns_file_metadata_without_base64(tmp_path):
     assert status["paths"][0]["kind"] == "binary"
     assert status["paths"][0]["mime"] == "application/pdf"
     assert status["paths"][0]["bytes"] == len(payload)
+
+
+@pytest.mark.asyncio
+async def test_read_large_image_file_returns_downscaled_multimodal_preview(tmp_path):
+    Image = pytest.importorskip("PIL.Image")
+    runtime = RuntimeCtx(
+        turn_id="turn_read",
+        outdir=str(tmp_path),
+        workdir=str(tmp_path),
+        read_visible_max_bytes=90_000,
+    )
+    ctx = FakeBrowser(runtime)
+    out_file = tmp_path / "turn_read" / "outputs" / "large.png"
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    rng = random.Random(123)
+    width = height = 900
+    payload = rng.randbytes(width * height * 3)
+    Image.frombytes("RGB", (width, height), payload).save(out_file, "PNG")
+    assert out_file.stat().st_size > runtime.read_visible_max_bytes
+
+    source_path = "fi:turn_read.outputs/large.png"
+    state = {"last_decision": {"tool_call": {"params": {"paths": [source_path]}}}}
+    await handle_react_read(ctx_browser=ctx, state=state, tool_call_id="r_img")
+
+    read_blocks = [
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result" and b.get("call_id") == "r_img"
+    ]
+    image_block = next(b for b in read_blocks if b.get("path") == source_path and b.get("base64"))
+    assert image_block["mime"] == "image/png"
+    assert image_block["meta"]["image_view"]["view_kind"] == "image_downscaled"
+    assert image_block["meta"]["image_view"]["original_size_bytes"] == out_file.stat().st_size
+    assert image_block["meta"]["image_view"]["visible_size_bytes"] <= runtime.read_visible_max_bytes
+
+    status = json.loads(next(
+        b["text"]
+        for b in read_blocks
+        if b.get("path") == "tc:turn_read.r_img.result" and b.get("mime") == "application/json"
+    ))
+    assert status["paths"][0]["status"] == "image_downscaled_for_visible_context"
+    assert status["paths"][0]["image_view"]["visible_size_bytes"] <= runtime.read_visible_max_bytes
 
 
 @pytest.mark.asyncio

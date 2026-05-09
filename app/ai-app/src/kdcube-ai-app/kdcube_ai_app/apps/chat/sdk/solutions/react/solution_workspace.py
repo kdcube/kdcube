@@ -38,6 +38,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.workspace import (
     resolve_artifact_path,
     runtime_outdir_for_artifact_outdir,
 )
+from kdcube_ai_app.infra.service_hub.multimodality import normalize_image_base64_for_model
 
 logger = logging.getLogger(__name__)
 
@@ -144,12 +145,34 @@ def _read_local_file(
                     data = fh.read(read_limit + 1)
                 return data.decode("utf-8", errors="replace"), None, None, size_bytes, True, None
             return abs_path.read_text(encoding="utf-8", errors="replace"), None, None, size_bytes, False, None
-        if max_bytes and max_bytes > 0 and size_bytes > max_bytes:
-            return None, None, "file_too_large_for_visible_context", size_bytes, False, None
         if _is_base64_allowed_mime(mime or ""):
             data = abs_path.read_bytes()
             import base64 as _b64
-            return None, _b64.b64encode(data).decode("utf-8"), None, size_bytes, False, None
+            b64 = _b64.b64encode(data).decode("utf-8")
+            if max_bytes and max_bytes > 0 and size_bytes > max_bytes:
+                mime_norm = (mime or "").strip().lower()
+                if mime_norm.startswith("image/"):
+                    normalized = normalize_image_base64_for_model(
+                        b64,
+                        media_type=mime_norm,
+                        max_bytes=int(max_bytes),
+                    )
+                    normalized_b64 = normalized.get("base64")
+                    normalized_bytes = int(normalized.get("size_bytes") or 0)
+                    if normalized.get("changed") and isinstance(normalized_b64, str) and normalized_bytes <= int(max_bytes):
+                        view_meta = {
+                            "view_kind": "image_downscaled",
+                            "original_size_bytes": size_bytes,
+                            "visible_size_bytes": normalized_bytes,
+                            "visible_read_limit_bytes": int(max_bytes),
+                            "original_width": normalized.get("original_width"),
+                            "original_height": normalized.get("original_height"),
+                            "width": normalized.get("width"),
+                            "height": normalized.get("height"),
+                        }
+                        return None, normalized_b64, None, size_bytes, False, view_meta
+                return None, None, "file_too_large_for_visible_context", size_bytes, False, None
+            return None, b64, None, size_bytes, False, None
     except Exception:
         return None, None, None, None, False, None
     return None, None, None, None, False, None

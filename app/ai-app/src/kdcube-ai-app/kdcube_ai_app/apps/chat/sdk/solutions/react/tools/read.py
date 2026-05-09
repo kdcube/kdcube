@@ -95,12 +95,13 @@ TOOL_SPEC = {
     },
     "returns": (
         "ok for readable text/PDF/image paths; max_text_symbols applies only to text. "
-        "PDF/image payloads are not partially read; they are attached as multimodal content only when under the configured byte cap. "
+        "PDF payloads are attached as multimodal content only when under the configured byte cap. "
+        "Image payloads are attached when under the byte cap; oversized images are downscaled into a bounded multimodal preview when possible, with image_view metadata. "
         "For unsupported binary files react.read may only surface metadata/path presence. "
         "so:sources_pool[...] returns application/json source rows and item stats; source content is full unless max_text_symbols was explicitly supplied. "
         "Ranged item reads return exact labeled chunks when they fit configured visible caps. "
         "Oversized non-source text payloads return status=truncated_for_visible_context with a bounded preview. "
-        "Oversized PDF/image payloads return status=too_large_for_visible_context_bytes instead of partial content. "
+        "Oversized PDFs and images that cannot be downscaled return status=too_large_for_visible_context_bytes. "
         "Deeper inspection should be done with code and exec tool, using physical OUTPUT_DIR-relative paths for fi: files or ctx_tools.fetch_ctx for supported ar:/tc:/so: context paths."
     ),
 }
@@ -320,7 +321,7 @@ def _large_byte_marker_text(*, path: str, size_bytes: int, byte_cap: int) -> str
         f"bytes: {size_bytes}",
         f"visible_read_limit_bytes: {byte_cap}",
         "exact_content: recoverable by logical path",
-        "note: PDF/image and other binary payloads are not partially read into visible context",
+        "note: PDFs and unsupported binary payloads are not partially read into visible context; images are downscaled when possible",
         "bulk_processing: use exec_tools.execute_code_python with a physical file path, or ctx_tools.fetch_ctx(path=...) for supported logical paths",
     ])
 
@@ -960,26 +961,30 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
         if not meta_extra.get("physical_path") and artifact.get("local_path"):
             meta_extra["physical_path"] = artifact.get("local_path")
         view_meta = res.get("view") if isinstance(res.get("view"), dict) else None
-        if view_meta and res.get("line_count") is not None and view_meta.get("total_line_count") is None:
-            view_meta["total_line_count"] = int(res.get("line_count") or 0)
-        if view_meta:
-            meta_extra["read_range"] = view_meta
+        image_view_meta = view_meta if view_meta and view_meta.get("view_kind") == "image_downscaled" else None
+        text_view_meta = view_meta if view_meta and not image_view_meta else None
+        if text_view_meta and res.get("line_count") is not None and text_view_meta.get("total_line_count") is None:
+            text_view_meta["total_line_count"] = int(res.get("line_count") or 0)
+        if text_view_meta:
+            meta_extra["read_range"] = text_view_meta
+        if image_view_meta:
+            meta_extra["image_view"] = image_view_meta
 
         art_text = res.get("text")
         art_base64 = res.get("base64")
         tokens = 0
 
         added_any = False
-        if isinstance(art_text, str) and (art_text.strip() or view_meta):
-            if view_meta:
-                art_text = _range_header(path=ctx_path, view=view_meta) + art_text
+        if isinstance(art_text, str) and (art_text.strip() or text_view_meta):
+            if text_view_meta:
+                art_text = _range_header(path=ctx_path, view=text_view_meta) + art_text
             emitted = _materialize_text_block(
                 ctx_path=ctx_path,
                 text=art_text,
                 mime=art_mime if art_mime else "text/markdown",
                 meta_extra=meta_extra,
                 force_truncated=bool(res.get("source_truncated")),
-                source_bytes_override=None if view_meta else (int(res.get("size_bytes") or 0) or None),
+                source_bytes_override=None if text_view_meta else (int(res.get("size_bytes") or 0) or None),
                 source_line_count_override=res.get("line_count") if res.get("line_count") is not None else None,
             )
             tokens = int(emitted.get("tokens") or 0)
@@ -988,8 +993,8 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 added_any = True
             if emitted.get("truncated"):
                 entry = _truncated_text_status_entry(ctx_path, emitted)
-                if view_meta:
-                    entry["read_range"] = view_meta
+                if text_view_meta:
+                    entry["read_range"] = text_view_meta
                 per_path.append(entry)
                 return
         elif isinstance(art_base64, str) and art_base64:
@@ -1021,8 +1026,11 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 added_any = True
 
         per_path_entry = {"path": ctx_path}
-        if view_meta:
-            per_path_entry["read_range"] = view_meta
+        if text_view_meta:
+            per_path_entry["read_range"] = text_view_meta
+        if image_view_meta:
+            per_path_entry["status"] = "image_downscaled_for_visible_context"
+            per_path_entry["image_view"] = image_view_meta
         if res.get("size_bytes") is not None:
             per_path_entry["bytes"] = int(res.get("size_bytes") or 0)
         if not added_any:
