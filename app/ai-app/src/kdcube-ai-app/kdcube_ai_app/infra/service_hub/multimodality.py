@@ -8,7 +8,7 @@ import io
 import logging
 import math
 import re
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from PIL import Image
 
@@ -76,6 +76,7 @@ def normalize_image_base64_for_model(
     *,
     media_type: str = "image/png",
     max_dimension_px: int = MODALITY_MAX_IMAGE_DIMENSION_PX,
+    max_bytes: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Downscale oversized raster images before they are sent to multimodal models.
@@ -90,12 +91,18 @@ def normalize_image_base64_for_model(
         "original_height": None,
         "width": None,
         "height": None,
+        "original_size_bytes": None,
+        "size_bytes": None,
+        "max_bytes": max_bytes,
+        "byte_limited": False,
     }
     if not base64_data:
         return result
 
     try:
         raw = base64.b64decode(base64_data, validate=True)
+        result["original_size_bytes"] = len(raw)
+        result["size_bytes"] = len(raw)
     except Exception:
         return result
 
@@ -108,14 +115,42 @@ def normalize_image_base64_for_model(
             result["height"] = orig_height
 
             max_edge = max(orig_width, orig_height)
-            if max_edge <= max_dimension_px:
+            byte_cap = int(max_bytes or 0)
+            if max_edge <= max_dimension_px and (byte_cap <= 0 or len(raw) <= byte_cap):
                 return result
 
-            scale = float(max_dimension_px) / float(max_edge)
+            scale = 1.0
+            if max_edge > max_dimension_px:
+                scale = min(scale, float(max_dimension_px) / float(max_edge))
             new_width = max(1, int(round(orig_width * scale)))
             new_height = max(1, int(round(orig_height * scale)))
-            resized = image.copy().resize((new_width, new_height), _LANCZOS)
+            resized = image.copy()
+            if (new_width, new_height) != image.size:
+                resized = resized.resize((new_width, new_height), _LANCZOS)
             new_raw = _serialize_image(resized, media_type=media_type)
+
+            if byte_cap > 0 and len(new_raw) > byte_cap:
+                result["byte_limited"] = True
+                # Resize geometrically until the serialized payload fits the
+                # visible-context byte budget. This is intentionally lossy only
+                # for derived model previews; the original artifact is untouched.
+                for _ in range(14):
+                    current_edge = max(resized.width, resized.height)
+                    if current_edge <= 64:
+                        break
+                    shrink = max(0.25, min(0.85, math.sqrt(byte_cap / max(1, len(new_raw))) * 0.92))
+                    next_width = max(1, int(round(resized.width * shrink)))
+                    next_height = max(1, int(round(resized.height * shrink)))
+                    if (next_width, next_height) == resized.size:
+                        next_width = max(1, resized.width - 1)
+                        next_height = max(1, resized.height - 1)
+                    resized = resized.resize((next_width, next_height), _LANCZOS)
+                    new_raw = _serialize_image(resized, media_type=media_type)
+                    if len(new_raw) <= byte_cap:
+                        break
+
+                if len(new_raw) > byte_cap:
+                    return result
     except Exception as exc:
         logger.warning(
             "Failed to inspect/normalize multimodal image; leaving original payload untouched: %s",
@@ -129,6 +164,7 @@ def normalize_image_base64_for_model(
             "changed": True,
             "width": resized.width,
             "height": resized.height,
+            "size_bytes": len(new_raw),
         }
     )
     logger.info(
