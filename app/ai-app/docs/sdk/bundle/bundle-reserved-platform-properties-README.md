@@ -135,6 +135,43 @@ Behavior:
 - `bundles.yaml` can override or add role entries
 - runtime/admin props can override them again
 
+Bundle implementation rule:
+- if a bundle subclasses `BaseEntrypoint` and overrides `configuration_defaults()`,
+  it must merge its bundle-specific defaults over `super().configuration_defaults()`
+  instead of returning a replacement dict
+- base defaults include platform-owned roles used by shared SDK tools, such as
+  `tool.sources.filter.by.content` and
+  `tool.sources.filter.by.content.and.segment`
+- `bundles.yaml` and runtime/admin props are partial patches over the effective
+  code defaults; they should not need to restate every platform role
+
+Recommended pattern:
+
+```python
+def configuration_defaults(self) -> Dict[str, Any]:
+    bundle_defaults = {
+        "role_models": {
+            "solver.react.v2.decision.v2.strong": {
+                "provider": "anthropic",
+                "model": "claude-sonnet-4-6",
+            },
+        },
+        "my_bundle": {"enabled": True},
+    }
+    return self._deep_merge_props(super().configuration_defaults(), bundle_defaults)
+```
+
+Avoid:
+
+```python
+def configuration_defaults(self) -> Dict[str, Any]:
+    return {"role_models": {"solver.react.v2.decision.v2.strong": {...}}}
+```
+
+That replacement form drops platform defaults unless the bundle repeats them.
+The common failure mode is that shared tools fall back to generic model routing
+instead of their reserved roles.
+
 Storage summary:
 
 | Question | Answer |
