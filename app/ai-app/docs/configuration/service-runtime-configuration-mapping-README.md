@@ -144,7 +144,7 @@ The proc service reads these non-secret ReAct limits from `assembly.yaml` throug
 
 | Env var | Descriptor path | Descriptor file | Modes | Meaning |
 |---|---|---|---|---|
-| `AI_REACT_CONTEXT_MAX_TOKENS` | `ai.react.context_max_tokens` | `assembly.yaml` | all modes | hard render budget before compaction |
+| `AI_REACT_CONTEXT_MAX_TOKENS` | `ai.react.context_max_tokens` | `assembly.yaml` | all modes | hard model-input budget before compaction; includes system/instruction text plus rendered timeline |
 | `AI_REACT_READ_VISIBLE_MAX_TEXT_SYMBOLS` | `ai.react.read_visible_max_text_symbols` | `assembly.yaml` | all modes | max visible text characters per `react.read` text path |
 | `AI_REACT_READ_VISIBLE_MAX_TOKENS` | `ai.react.read_visible_max_tokens` | `assembly.yaml` | all modes | token guard per `react.read` text path |
 | `AI_REACT_READ_VISIBLE_MAX_BYTES` | `ai.react.read_visible_max_bytes` | `assembly.yaml` | all modes | raw byte guard for every `react.read` payload |

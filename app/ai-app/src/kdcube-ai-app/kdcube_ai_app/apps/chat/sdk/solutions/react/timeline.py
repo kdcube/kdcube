@@ -4013,16 +4013,16 @@ class Timeline:
             latest_current_plan_snapshot = None
             latest_plan_snapshot_by_id = None
         sys_est = max(1, int(len(system_text or "") / 4))
-        threshold_tokens = int(max_tokens * 0.9)
+        threshold_tokens = int(max_tokens)
         visible_estimate_blocks = self._slice_after_compaction_summary(blocks)
         before_visible_tokens = self._estimate_blocks_tokens(visible_estimate_blocks)
         before_visible_blocks = len(visible_estimate_blocks)
-        prompt_tokens_estimate = sys_est + before_visible_tokens
-        fallback_trigger_estimate = before_visible_tokens
+        fallback_trigger_estimate = sys_est + before_visible_tokens
         try:
-            total_est = int(trigger_tokens_estimate) if trigger_tokens_estimate is not None else fallback_trigger_estimate
+            input_tokens_estimate = int(trigger_tokens_estimate) if trigger_tokens_estimate is not None else fallback_trigger_estimate
         except Exception:
-            total_est = fallback_trigger_estimate
+            input_tokens_estimate = fallback_trigger_estimate
+        prompt_tokens_estimate = input_tokens_estimate
         try:
             trigger_block_count = int(trigger_visible_block_count) if trigger_visible_block_count is not None else before_visible_blocks
         except Exception:
@@ -4044,12 +4044,12 @@ class Timeline:
             except Exception:
                 logger.debug("[context.compaction:hook_failed] phase=after", exc_info=True)
 
-        if not force and total_est <= int(max_tokens * 0.9):
+        if not force and input_tokens_estimate <= threshold_tokens:
             logger.info(
-                "[context.compaction:skip] reason=within_budget force=%s visible_est=%s prompt_est=%s system_est=%s max_tokens=%s threshold=%s blocks=%s",
+                "[context.compaction:skip] reason=within_budget force=%s input_est=%s visible_est=%s system_est=%s max_tokens=%s threshold=%s blocks=%s",
                 force,
-                total_est,
-                prompt_tokens_estimate,
+                input_tokens_estimate,
+                before_visible_tokens,
                 sys_est,
                 max_tokens,
                 threshold_tokens,
@@ -4061,13 +4061,13 @@ class Timeline:
         boundary_end = len(blocks)
         if boundary_start >= boundary_end:
             logger.warning(
-                "[context.compaction:no_effect] reason=no_boundary_room boundary_start=%s boundary_end=%s blocks=%s force=%s visible_est=%s prompt_est=%s system_est=%s max_tokens=%s",
+                "[context.compaction:no_effect] reason=no_boundary_room boundary_start=%s boundary_end=%s blocks=%s force=%s input_est=%s visible_est=%s system_est=%s max_tokens=%s",
                 boundary_start,
                 boundary_end,
                 len(blocks),
                 force,
-                total_est,
-                prompt_tokens_estimate,
+                input_tokens_estimate,
+                before_visible_tokens,
                 sys_est,
                 max_tokens,
             )
@@ -4099,14 +4099,14 @@ class Timeline:
             is_split_turn = False
         if cut_index <= boundary_start:
             logger.warning(
-                "[context.compaction:no_effect] reason=no_cut_point boundary_start=%s cut_index=%s recent_start=%s keep_recent_tokens=%s force=%s visible_est=%s prompt_est=%s system_est=%s max_tokens=%s",
+                "[context.compaction:no_effect] reason=no_cut_point boundary_start=%s cut_index=%s recent_start=%s keep_recent_tokens=%s force=%s input_est=%s visible_est=%s system_est=%s max_tokens=%s",
                 boundary_start,
                 cut_index,
                 recent_start,
                 keep_recent_tokens,
                 force,
-                total_est,
-                prompt_tokens_estimate,
+                input_tokens_estimate,
+                before_visible_tokens,
                 sys_est,
                 max_tokens,
             )
@@ -4178,11 +4178,11 @@ class Timeline:
         history_blocks_estimated = max(0, (turn_start_index if is_split_turn else cut_index) - boundary_start)
 
         logger.info(
-            "[context.compaction:start] force=%s blocks=%s visible_est=%s prompt_est=%s system_est=%s max_tokens=%s boundary_start=%s cut_index=%s turn_start_index=%s split_turn=%s history_blocks_estimated=%s keep_recent_tokens=%s",
+            "[context.compaction:start] force=%s blocks=%s input_est=%s visible_est=%s system_est=%s max_tokens=%s boundary_start=%s cut_index=%s turn_start_index=%s split_turn=%s history_blocks_estimated=%s keep_recent_tokens=%s",
             force,
             len(blocks),
-            total_est,
-            prompt_tokens_estimate,
+            input_tokens_estimate,
+            before_visible_tokens,
             sys_est,
             max_tokens,
             boundary_start,
@@ -4200,7 +4200,7 @@ class Timeline:
             "trigger_reason": (trigger_reason or ("forced" if force else "token_budget")),
             "blocks": len(blocks),
             "before_tokens": before_visible_tokens,
-            "input_tokens_estimate": total_est,
+            "input_tokens_estimate": input_tokens_estimate,
             "visible_tokens_estimate": before_visible_tokens,
             "system_tokens_estimate": sys_est,
             "prompt_tokens_estimate": prompt_tokens_estimate,
@@ -4330,7 +4330,7 @@ class Timeline:
                 "before_tokens": before_visible_tokens,
                 "after_tokens": after_visible_tokens,
                 "compacted_tokens": reduced_tokens,
-                "input_tokens_estimate": total_est,
+                "input_tokens_estimate": input_tokens_estimate,
                 "visible_tokens_estimate": before_visible_tokens,
                 "system_tokens_estimate": sys_est,
                 "prompt_tokens_estimate": prompt_tokens_estimate,
@@ -4417,7 +4417,7 @@ class Timeline:
                         "before_tokens": before_visible_tokens,
                         "after_tokens": before_visible_tokens,
                         "compacted_tokens": 0,
-                        "input_tokens_estimate": total_est,
+                        "input_tokens_estimate": input_tokens_estimate,
                         "visible_tokens_estimate": before_visible_tokens,
                         "system_tokens_estimate": sys_est,
                         "prompt_tokens_estimate": prompt_tokens_estimate,
@@ -4449,7 +4449,7 @@ class Timeline:
                 "before_tokens": before_visible_tokens,
                 "after_tokens": before_visible_tokens,
                 "compacted_tokens": 0,
-                "input_tokens_estimate": total_est,
+                "input_tokens_estimate": input_tokens_estimate,
                 "visible_tokens_estimate": before_visible_tokens,
                 "system_tokens_estimate": sys_est,
                 "prompt_tokens_estimate": prompt_tokens_estimate,
@@ -4631,7 +4631,7 @@ class Timeline:
                 "before_tokens": before_visible_tokens,
                 "after_tokens": after_visible_tokens,
                 "compacted_tokens": 0,
-                "input_tokens_estimate": total_est,
+                "input_tokens_estimate": input_tokens_estimate,
                 "visible_tokens_estimate": before_visible_tokens,
                 "system_tokens_estimate": sys_est,
                 "prompt_tokens_estimate": prompt_tokens_estimate,
@@ -4698,7 +4698,7 @@ class Timeline:
             "before_tokens": before_visible_tokens,
             "after_tokens": after_visible_tokens,
             "compacted_tokens": compacted_tokens,
-            "input_tokens_estimate": total_est,
+            "input_tokens_estimate": input_tokens_estimate,
             "visible_tokens_estimate": before_visible_tokens,
             "system_tokens_estimate": sys_est,
             "prompt_tokens_estimate": prompt_tokens_estimate,
@@ -4795,8 +4795,8 @@ class Timeline:
                 rendered_tokens = self._estimate_model_message_tokens(msg_probe)
                 prompt_rendered_tokens = sys_probe_tokens + rendered_tokens
                 trigger_visible_block_count = len(msg_probe)
-                rendered_limit = int((self.runtime.max_tokens or 0) * 0.9)
-                if rendered_tokens > rendered_limit:
+                rendered_limit = int(self.runtime.max_tokens or 0)
+                if prompt_rendered_tokens > rendered_limit:
                     sanitize_trigger_reasons.append("render_token_limit")
                 if sanitize_trigger_reasons:
                     render_forces_sanitize = True
@@ -4821,7 +4821,7 @@ class Timeline:
                 keep_recent_turns=keep_recent_turns,
                 force=render_forces_sanitize,
                 trigger_reason=", ".join(dict.fromkeys(sanitize_trigger_reasons)) if render_forces_sanitize else None,
-                trigger_tokens_estimate=rendered_tokens,
+                trigger_tokens_estimate=prompt_rendered_tokens,
                 trigger_visible_block_count=trigger_visible_block_count,
             )
         visible_blocks = self._slice_after_compaction_summary(blocks)

@@ -23,8 +23,8 @@ It is separate from TTL pruning (which hides blocks with replacement text).
 Compaction runs in two situations:
 
 1) **Normal render path (pre‑send)**
-   - `Timeline.render(...)` estimates total tokens.
-   - If `system + blocks > 0.9 * max_tokens`, it compacts immediately.
+   - `Timeline.render(...)` estimates total model input tokens.
+   - If `system/instructions + rendered timeline > max_tokens`, it compacts immediately.
    - Chatbot workflows use `ai.react.context_max_tokens` /
      `AI_REACT_CONTEXT_MAX_TOKENS` as the default render budget when the bundle
      does not set `max_tokens` explicitly. The default is `80000`.

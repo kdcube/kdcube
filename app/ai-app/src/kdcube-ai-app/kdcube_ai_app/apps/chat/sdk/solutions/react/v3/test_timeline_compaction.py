@@ -30,6 +30,29 @@ def _blk(*, btype: str, text: str, turn_id: str, ts: str = "2026-02-09T00:00:00Z
     }
 
 
+@pytest.mark.asyncio
+async def test_render_compaction_trigger_counts_system_plus_timeline(monkeypatch):
+    runtime = RuntimeCtx(turn_id="turn_current", max_tokens=100)
+    tl = Timeline(runtime=runtime, svc=object())
+    tl.blocks = [
+        _blk(btype="turn.header", text="[TURN turn_current]", turn_id="turn_current"),
+        _blk(btype="user.prompt", text="small request", turn_id="turn_current"),
+    ]
+    captured = {}
+
+    async def fake_sanitize_context_blocks(**kwargs):
+        captured.update(kwargs)
+        return kwargs["blocks"]
+
+    monkeypatch.setattr(tl, "sanitize_context_blocks", fake_sanitize_context_blocks)
+
+    await tl.render(system_text=("system instructions " * 80), cache_last=False)
+
+    assert captured["force"] is True
+    assert captured["trigger_tokens_estimate"] > runtime.max_tokens
+    assert captured["trigger_tokens_estimate"] > captured["max_tokens"]
+
+
 def test_hidden_replacements_do_not_move_visible_working_summary_to_hidden_block():
     runtime = RuntimeCtx(turn_id="turn_next")
     tl = Timeline(runtime=runtime, svc=object())
@@ -821,13 +844,17 @@ async def test_compaction_skips_candidate_that_only_reduces_visible_blocks(monke
 
 
 @pytest.mark.asyncio
-async def test_render_probe_does_not_compact_only_because_system_prompt_is_large(monkeypatch):
-    async def _unexpected_summary(*args, **kwargs):
-        raise AssertionError("visible timeline is below budget; compaction should not run")
-
+async def test_render_probe_compacts_when_system_plus_timeline_exceeds_budget(monkeypatch):
     import kdcube_ai_app.apps.chat.sdk.tools.backends.summary.conv_progressive_summary as summary_mod
 
-    monkeypatch.setattr(summary_mod, "summarize_context_blocks_progressive", _unexpected_summary)
+    async def _fake_summary(*args, **kwargs):
+        return "SUMMARY"
+
+    async def _fake_prefix(*args, **kwargs):
+        return "PREFIX"
+
+    monkeypatch.setattr(summary_mod, "summarize_context_blocks_progressive", _fake_summary)
+    monkeypatch.setattr(summary_mod, "summarize_turn_prefix_progressive", _fake_prefix)
 
     events = []
 
@@ -852,15 +879,17 @@ async def test_render_probe_does_not_compact_only_because_system_prompt_is_large
         _blk(btype="user.prompt", text="new ask", turn_id="turn_1"),
     ]
 
-    rendered = await tl.render(
+    await tl.render(
         cache_last=False,
         system_text="large system prompt " * 200,
         include_sources=False,
         keep_recent_turns=0,
     )
 
-    assert events == []
-    assert any("TURN turn_1" in (block.get("text") or "") for block in rendered)
+    assert [kind for kind, _payload in events] == ["before", "after"]
+    assert events[0][1]["input_tokens_estimate"] > runtime.max_tokens
+    assert events[0][1]["threshold_tokens"] == runtime.max_tokens
+    assert events[0][1]["system_tokens_estimate"] > events[0][1]["visible_tokens_estimate"]
 
 
 @pytest.mark.asyncio
