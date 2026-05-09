@@ -9,6 +9,7 @@ import {
     useRef,
     useState
 } from "react";
+import {clamp} from "../utils/utils.ts";
 
 interface ResizableContainerProps {
     className?: string;
@@ -16,6 +17,7 @@ interface ResizableContainerProps {
     position?: "top" | "bottom" | "left" | "right";
     initialSize?: number;
     minSize?: number;
+    maxSize?: number;
     ref?: RefObject<HTMLDivElement | null>
     onResize?: (size: number) => void;
 }
@@ -27,12 +29,13 @@ const ResizableContainer = ({
                                 onResize,
                                 initialSize = 200,
                                 minSize = 100,
+                                maxSize,
                                 position = "right"
                             }: ResizableContainerProps) => {
     const contentContainerRef = useRef<HTMLDivElement | null>(null);
 
     const [isResizing, setIsResizing] = useState(false);
-    const [containerSize, setContainerSize] = useState<number>(Math.max(initialSize, minSize));
+    const [containerSize, setContainerSize] = useState<number>(maxSize === undefined ? Math.max(initialSize, minSize) : Math.min(Math.max(initialSize, minSize), maxSize));
 
     useEffect(() => {
         const resize = (e: globalThis.MouseEvent) => {
@@ -52,7 +55,7 @@ const ResizableContainer = ({
                     newSize = e.clientX - contentContainerRef.current.getBoundingClientRect().left;
                     break;
             }
-            newSize = Math.max(newSize, minSize);
+            newSize = clamp(newSize, minSize, maxSize)
             setContainerSize(newSize)
             onResize?.(newSize)
         }
@@ -70,7 +73,13 @@ const ResizableContainer = ({
             window.removeEventListener('mousemove', resize);
             window.removeEventListener('mouseup', stopResize);
         };
-    }, [isResizing, minSize, onResize, position]);
+    }, [isResizing, maxSize, minSize, onResize, position]);
+
+    useEffect(() => {
+        setContainerSize(prev => {
+            return clamp(prev, minSize, maxSize)
+        })
+    }, [maxSize, minSize]);
 
     const onMouseDown = useCallback((e: MouseEvent) => {
         e.preventDefault();

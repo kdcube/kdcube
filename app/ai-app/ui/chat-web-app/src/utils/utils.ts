@@ -69,3 +69,13 @@ export function sha(message: string) {
     const hashArray = Array.from(new Uint8Array(sha256(message).words));
     return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
 }
+
+export function clamp(val: number, min?: number, max?: number) {
+    if (min !== undefined) {
+        val = Math.max(min, val);
+    }
+    if (max !== undefined) {
+        val = Math.min(max, val);
+    }
+    return val;
+}

@@ -1,4 +1,4 @@
-import {ReactNode, useCallback, useMemo, useRef} from "react";
+import {ReactNode, useCallback, useEffect, useMemo, useRef, useState} from "react";
 import {
     ArrowLeftRight,
     Bot,
@@ -104,8 +104,19 @@ const ChatSidePanel = () => {
         })
     }, [currentBundleId, visiblePanel, widgets])
 
-    return useMemo(() => {
+    const [maxWidth, setMaxWidth] = useState<number>(window.innerWidth / 2)
 
+    useEffect(() => {
+        const observer = new ResizeObserver((entries) => {
+            entries.forEach(e => setMaxWidth(e.contentRect.width /2))
+        })
+        observer.observe(document.body)
+        return () => {
+            observer.disconnect()
+        }
+    }, []);
+
+    return useMemo(() => {
         const initialPanelWidth = readParam("sidePanelWidth", 400) as number
 
         return <div
@@ -187,7 +198,7 @@ const ChatSidePanel = () => {
                                   expanded={visiblePanel !== null}>
                     {/*<div className={"h-full"} ref={sidePanelContentRef} style={{width: `${panelWidth}px`}}>*/}
                     <ResizableContainer ref={sidePanelContentRef} onResize={onPanelResize}
-                                        initialSize={initialPanelWidth} minSize={300} className={"h-full"}>
+                                        initialSize={initialPanelWidth} minSize={300} maxSize={maxWidth} className={"h-full"}>
                         <ConversationsPanel visible={visiblePanel === "conversations"}
                                             className={"w-full h-full absolute left-0 top-0"}/>
                         <ArtifactsPanel visible={visiblePanel === "artifacts"}
@@ -212,7 +223,7 @@ const ChatSidePanel = () => {
                 </AnimatedExpander>
             </div>
         </div>
-    }, [bundlePanels, dispatch, onPanelButtonClick, onPanelResize, visiblePanel])
+    }, [bundlePanels, dispatch, maxWidth, onPanelButtonClick, onPanelResize, visiblePanel])
 }
 
 export default ChatSidePanel;
