@@ -54,6 +54,10 @@ const PanelContainer = ({children, className, reload, visible = true}: PanelCont
         sidePanelContext.setPanelId(null)
     }, [sidePanelContext])
 
+    useEffect(() => {
+        if (!visible) setFullScreen(false)
+    }, [visible]);
+
     return useMemo(() => {
         return <motion.div
             className={fullScreen ? "w-screen h-screen fixed z-40 top-0 left-0" : className}
