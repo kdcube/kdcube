@@ -821,6 +821,49 @@ async def test_compaction_skips_candidate_that_only_reduces_visible_blocks(monke
 
 
 @pytest.mark.asyncio
+async def test_render_probe_does_not_compact_only_because_system_prompt_is_large(monkeypatch):
+    async def _unexpected_summary(*args, **kwargs):
+        raise AssertionError("visible timeline is below budget; compaction should not run")
+
+    import kdcube_ai_app.apps.chat.sdk.tools.backends.summary.conv_progressive_summary as summary_mod
+
+    monkeypatch.setattr(summary_mod, "summarize_context_blocks_progressive", _unexpected_summary)
+
+    events = []
+
+    async def _before(payload):
+        events.append(("before", payload))
+
+    async def _after(payload):
+        events.append(("after", payload))
+
+    runtime = RuntimeCtx(
+        turn_id="turn_1",
+        max_tokens=120,
+        on_before_compaction=_before,
+        on_after_compaction=_after,
+    )
+    tl = Timeline(runtime=runtime, svc=object())
+    tl.blocks = [
+        _blk(btype="turn.header", text="[TURN turn_0]", turn_id="turn_0"),
+        _blk(btype="user.prompt", text="older ask", turn_id="turn_0"),
+        _blk(btype="assistant.completion", text="older answer", turn_id="turn_0"),
+        _blk(btype="turn.header", text="[TURN turn_1]", turn_id="turn_1"),
+        _blk(btype="user.prompt", text="new ask", turn_id="turn_1"),
+    ]
+
+    rendered = await tl.render(
+        cache_last=False,
+        system_text="large system prompt " * 200,
+        include_sources=False,
+        keep_recent_turns=0,
+    )
+
+    assert events == []
+    assert any("TURN turn_1" in (block.get("text") or "") for block in rendered)
+
+
+@pytest.mark.asyncio
 async def test_compaction_after_existing_summary(monkeypatch):
     async def _fake_summary(*args, **kwargs):
         return "SUMMARY"
