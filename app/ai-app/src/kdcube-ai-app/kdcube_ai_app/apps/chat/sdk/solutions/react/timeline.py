@@ -1259,6 +1259,8 @@ def resolve_artifact_from_timeline(timeline: Dict[str, Any], path: str) -> Optio
             if key in art or val is None:
                 continue
             art[key] = val
+    if isinstance(latest_block, dict) and latest_block.get("payload") is not None:
+        art["payload"] = latest_block.get("payload")
     if text_block and isinstance(text_block.get("text"), str):
         art["text"] = text_block.get("text")
     if bin_block and bin_block.get("base64"):
@@ -2317,6 +2319,8 @@ class Timeline:
         payload: Any,
         path: str,
         tool_id: str,
+        preview_label: str = "[TOOL RESULT PREVIEW TRUNCATED]",
+        recovery_lines: Optional[List[str]] = None,
     ) -> str:
         text = raw_text if isinstance(raw_text, str) else str(raw_text or "")
         if (tool_id or "").strip() == "react.read":
@@ -2346,7 +2350,7 @@ class Timeline:
             shape_payload = parsed if parsed is not None else text
 
         lines = [
-            "[TOOL RESULT PREVIEW TRUNCATED]",
+            preview_label,
             f"full_text_chars: {len(text)}",
             f"full_text_bytes: {byte_count}",
             f"tokens_estimate: {tokens_estimate}",
@@ -2368,12 +2372,28 @@ class Timeline:
         lines.append(numbered_preview if numbered_preview else preview)
         lines.append("...[truncated]")
         lines.append("recovery:")
-        if path:
+        if recovery_lines:
+            lines.extend(recovery_lines)
+        elif path:
             lines.append(f"- react.read([\"{path}\"]) returns a bounded visible preview.")
             lines.append(f"- exec code can use ctx_tools.fetch_ctx(path=\"{path}\") for exact bulk processing.")
         else:
             lines.append("- exact result remains stored in the timeline block; no logical path was supplied.")
         return "\n".join(lines).strip()
+
+    @staticmethod
+    def _large_text_recovery_lines(*, path: str, physical_path: str = "") -> List[str]:
+        lines: List[str] = []
+        if path.startswith("fi:"):
+            lines.append("- Use react.rg on the file to find relevant regions before editing.")
+            lines.append("- Pass react.rg read_item ranges to react.read({\"items\":[...]}) for exact visible regions.")
+            if physical_path:
+                lines.append("- Use exec with the shown physical_path for exact full-file processing.")
+        elif path.startswith("tc:"):
+            lines.append("- Use react.read for another bounded visible preview, or exec + ctx_tools.fetch_ctx(path) for exact processing.")
+        elif path:
+            lines.append("- Use react.read on this logical_path with bounded ranges/previews when supported.")
+        return lines
 
     @staticmethod
     def _format_sources_pool_selector_from_sids(sids: List[int]) -> str:
@@ -5755,7 +5775,14 @@ class Timeline:
                     lines.append(f"[AI Agent wrote code] {code_path}:")
                 else:
                     lines.append("[AI Agent wrote code]:")
-                lines.append(text)
+                lines.append(self._tool_result_payload_text_for_prompt(
+                    raw_text=text,
+                    payload=None,
+                    path=code_path,
+                    tool_id="",
+                    preview_label="[CODE PREVIEW TRUNCATED]",
+                    recovery_lines=self._large_text_recovery_lines(path=code_path),
+                ))
                 text = "\n".join([l for l in lines if l]).strip()
             elif btype == "react.tool.call" and isinstance(text, str):
                 payload = _maybe_parse_json(text) if (b.get("mime") or "").strip() == "application/json" else None
@@ -6017,12 +6044,22 @@ class Timeline:
                             if isinstance(meta, dict) and meta.get("size_bytes") is not None:
                                 logical_line += f" | size_bytes: {meta.get('size_bytes')}"
                             lines.append(logical_line)
-                        if meta and (meta.get("hosted_uri") or meta.get("rn") or meta.get("key")):
+                        if meta:
                             phys = (meta.get("physical_path") or "").strip()
                             if phys:
                                 lines.append(f"physical_path: {phys}")
                         header_text = "\n".join([l for l in lines if l]).strip()
-                        extra_text_blocks.append(text)
+                        physical_path = ""
+                        if isinstance(meta, dict):
+                            physical_path = str(meta.get("physical_path") or "").strip()
+                        extra_text_blocks.append(self._tool_result_payload_text_for_prompt(
+                            raw_text=text,
+                            payload=None,
+                            path=path,
+                            tool_id=tool_id,
+                            preview_label="[ARTIFACT PREVIEW TRUNCATED]",
+                            recovery_lines=self._large_text_recovery_lines(path=path, physical_path=physical_path),
+                        ))
                         text = header_text
                     else:
                         header = f"[TOOL RESULT {short_id}].result"
@@ -6044,7 +6081,14 @@ class Timeline:
             base64 = b.get("base64") or b.get("data")
             mime = (b.get("mime") or b.get("media_type") or "").strip() or None
             if btype in {"react.note", "react.note.preserved"} and isinstance(text, str):
-                text = "[INTERNAL NOTE]\n" + text
+                text = "[INTERNAL NOTE]\n" + self._tool_result_payload_text_for_prompt(
+                    raw_text=text,
+                    payload=None,
+                    path=path,
+                    tool_id="",
+                    preview_label="[INTERNAL NOTE PREVIEW TRUNCATED]",
+                    recovery_lines=self._large_text_recovery_lines(path=path),
+                )
 
             emitted: List[Dict[str, Any]] = []
             if text:

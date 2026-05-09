@@ -277,3 +277,77 @@ async def test_stream_with_channels_captures_realistic_exec_code_payload():
         assert results["ReactDecisionOutV2"].error is None
         assert code_text in results["code"].raw, chunk_size
         assert code_text in widget.get_code(), chunk_size
+
+
+@pytest.mark.asyncio
+async def test_stream_with_channels_code_channel_survives_trailing_repeated_thinking():
+    payload = {
+        "action": "call_tool",
+        "notes": "Run generated HTML writer.",
+        "tool_call": {
+            "tool_id": "exec_tools.execute_code_python",
+            "params": {
+                "prog_name": "html_writer",
+                "contract": [{"filename": "outputs/page.html", "description": "HTML output"}],
+            },
+        },
+    }
+    code_text = (
+        "from pathlib import Path\n"
+        "html = r\"\"\"<script>\n"
+        "const label = `template marker in generated HTML;\n"
+        "</script>\"\"\"\n"
+        "Path(OUTPUT_DIR, 'outputs/page.html').write_text(html)\n"
+    )
+    text = (
+        "<channel:thinking>Writing HTML.</channel:thinking>\n"
+        f"<channel:ReactDecisionOutV2>```json\n{json.dumps(payload)}\n```</channel:ReactDecisionOutV2>\n"
+        f"<channel:code>{code_text}</channel:code>\n"
+        "<channel:thinking>Extra diagnostic after code.</channel:thinking>"
+    )
+    from kdcube_ai_app.apps.chat.sdk.streaming.versatile_streamer import ChannelSubscribers
+
+    for chunk_size in [7, 19, 64]:
+        svc = _FakeService([text[i:i + chunk_size] for i in range(0, len(text), chunk_size)])
+        events = []
+
+        async def _emit(**kwargs):
+            events.append(kwargs)
+
+        widget = DecisionExecCodeStreamer(
+            emit_delta=_emit,
+            agent="test.exec",
+            artifact_name="react.exec.test",
+            execution_id="exec_demo",
+        )
+        subscribers = (
+            ChannelSubscribers()
+            .subscribe("ReactDecisionOutV2", widget.feed_json)
+            .subscribe("code", widget.feed_code)
+        )
+
+        results, meta = await stream_with_channels(
+            svc=svc,
+            messages=["sys", "user"],
+            role="answer.generator.regular",
+            channels=[
+                ChannelSpec(name="thinking", format="markdown", replace_citations=False, emit_marker="thinking"),
+                ChannelSpec(name="ReactDecisionOutV2", format="json", replace_citations=False, emit_marker="answer"),
+                ChannelSpec(name="code", format="text", replace_citations=False, emit_marker="subsystem"),
+            ],
+            emit=_emit,
+            agent="test.agent",
+            artifact_name="react.decision",
+            subscribers=subscribers,
+            max_tokens=800,
+            temperature=0.0,
+            return_full_raw=True,
+        )
+
+        assert meta.get("service_error") is None
+        assert results["ReactDecisionOutV2"].error is None
+        assert results["code"].raw == code_text
+        assert widget.get_code() == code_text
+        assert "</channel:code>" not in results["code"].raw
+        assert "Writing HTML." in results["thinking"].raw
+        assert "Extra diagnostic after code." in results["thinking"].raw

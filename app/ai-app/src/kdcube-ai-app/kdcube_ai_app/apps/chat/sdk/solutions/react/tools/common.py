@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import logging
 import os
+import hashlib
 from typing import Any, Dict, Optional, List
 
 import json
@@ -19,6 +20,10 @@ from kdcube_ai_app.tools.content_type import is_text_mime_type
 
 _LOG = logging.getLogger("kdcube.react.artifacts")
 _TOOL_LOG_DEFAULT_MAX_CHARS = 120_000
+_TOOL_CALL_INLINE_STRING_LIMIT = 2_000
+_TOOL_CALL_STRING_PREVIEW_CHARS = 600
+_TOOL_CALL_MAX_DICT_KEYS = 80
+_TOOL_CALL_MAX_LIST_ITEMS = 50
 
 
 def _tool_log_max_chars() -> int:
@@ -44,6 +49,90 @@ def _safe_json(value: Any) -> str:
             return str(value)
         except Exception:
             return "<unserializable>"
+
+
+def _hash_text(value: str) -> str:
+    try:
+        return hashlib.sha1(value.encode("utf-8", errors="ignore")).hexdigest()[:12]
+    except Exception:
+        return ""
+
+
+def _tool_call_omission_marker(*, value: str, key_path: str, call_path: str) -> Dict[str, Any]:
+    preview = value[:_TOOL_CALL_STRING_PREVIEW_CHARS]
+    return {
+        "preview": preview,
+        "truncated": True,
+        "omitted_text_symbols": max(0, len(value) - len(preview)),
+        "text_symbols": len(value),
+        "size_bytes": len(value.encode("utf-8", errors="ignore")),
+        "sha1": _hash_text(value),
+        "recover_with": f"ctx_tools.fetch_ctx(path={json.dumps(call_path)})['ret']['payload']" if call_path else "ctx_tools.fetch_ctx(tc:...call)['ret']['payload']",
+        "field": key_path,
+    }
+
+
+def _preview_tool_call_value(value: Any, *, key_path: str, call_path: str) -> tuple[Any, bool, List[Dict[str, Any]]]:
+    if isinstance(value, str):
+        if len(value) <= _TOOL_CALL_INLINE_STRING_LIMIT:
+            return value, False, []
+        marker = _tool_call_omission_marker(value=value, key_path=key_path, call_path=call_path)
+        return marker, True, [marker]
+
+    if isinstance(value, dict):
+        changed = False
+        omitted: List[Dict[str, Any]] = []
+        out: Dict[str, Any] = {}
+        items = list(value.items())
+        for idx, (k, v) in enumerate(items):
+            if idx >= _TOOL_CALL_MAX_DICT_KEYS:
+                changed = True
+                out["__omitted_keys__"] = len(items) - idx
+                break
+            child_path = f"{key_path}.{k}" if key_path else str(k)
+            child, child_changed, child_omitted = _preview_tool_call_value(v, key_path=child_path, call_path=call_path)
+            out[k] = child
+            changed = changed or child_changed
+            omitted.extend(child_omitted)
+        return out, changed, omitted
+
+    if isinstance(value, list):
+        changed = False
+        omitted: List[Dict[str, Any]] = []
+        out: List[Any] = []
+        for idx, item in enumerate(value):
+            if idx >= _TOOL_CALL_MAX_LIST_ITEMS:
+                changed = True
+                out.append({"__omitted_items__": len(value) - idx})
+                break
+            child_path = f"{key_path}[{idx}]"
+            child, child_changed, child_omitted = _preview_tool_call_value(item, key_path=child_path, call_path=call_path)
+            out.append(child)
+            changed = changed or child_changed
+            omitted.extend(child_omitted)
+        return out, changed, omitted
+
+    return value, False, []
+
+
+def _preview_tool_call_payload(payload: Dict[str, Any], *, call_path: str) -> tuple[Dict[str, Any], bool, List[Dict[str, Any]]]:
+    preview, changed, omitted = _preview_tool_call_value(payload, key_path="", call_path=call_path)
+    if not isinstance(preview, dict):
+        return payload, False, []
+    if changed:
+        preview = dict(preview)
+        preview["tool_call_payload_capped"] = True
+        preview["omitted_fields"] = [
+            {
+                "field": row.get("field"),
+                "text_symbols": row.get("text_symbols"),
+                "size_bytes": row.get("size_bytes"),
+                "sha1": row.get("sha1"),
+            }
+            for row in omitted
+            if isinstance(row, dict)
+        ]
+    return preview, changed, omitted
 
 
 def enrich_artifact_file_metadata(
@@ -183,17 +272,37 @@ def tool_call_block(*, ctx_browser, tool_call_id: str, tool_id: str, payload: Di
     payload = dict(payload or {})
     payload.pop("notes", None)
     payload.setdefault("ts", ts)
-    add_block(ctx_browser, {
+    call_path = tc_call_path(turn_id=turn_id, call_id=tool_call_id)
+    display_payload, capped, omitted = _preview_tool_call_payload(payload, call_path=call_path)
+    meta = {
+        "tool_call_id": tool_call_id,
+    }
+    if capped:
+        meta["tool_call_payload_capped"] = True
+        meta["omitted_fields"] = [
+            {
+                "field": row.get("field"),
+                "text_symbols": row.get("text_symbols"),
+                "size_bytes": row.get("size_bytes"),
+                "sha1": row.get("sha1"),
+            }
+            for row in omitted
+            if isinstance(row, dict)
+        ]
+    block = {
         "type": "react.tool.call",
         "call_id": tool_call_id,
         "tool_id": tool_id,
         "mime": "application/json",
-        "path": tc_call_path(turn_id=turn_id, call_id=tool_call_id),
-        "text": json.dumps(payload, ensure_ascii=False, indent=2),
+        "path": call_path,
+        "text": json.dumps(display_payload, ensure_ascii=False, indent=2),
         "ts": ts,
-        "meta": {
-            "tool_call_id": tool_call_id,
-        },
+        "meta": meta,
+    }
+    if capped:
+        block["payload"] = payload
+    add_block(ctx_browser, {
+        **block,
     })
 
 

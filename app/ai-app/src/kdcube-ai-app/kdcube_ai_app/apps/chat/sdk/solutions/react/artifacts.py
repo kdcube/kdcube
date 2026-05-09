@@ -331,6 +331,7 @@ def build_artifact_meta_block(
     if sources_used:
         meta_json["sources_used"] = sources_used
     if artifact.get("error"):
+        meta_json["status"] = "error"
         meta_json["error"] = artifact.get("error")
     if tokens is not None:
         try:
@@ -404,6 +405,7 @@ def build_tool_result_error_block(
     ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     payload = {
         "tool_call_id": tool_call_id,
+        "status": "error",
         "error": {
             "code": code,
             "message": message,

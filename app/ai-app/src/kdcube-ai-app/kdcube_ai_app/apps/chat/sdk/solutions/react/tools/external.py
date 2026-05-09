@@ -46,6 +46,64 @@ import kdcube_ai_app.apps.chat.sdk.tools.tools_insights as tools_insights
 from kdcube_ai_app.tools.content_type import is_text_mime_type
 from kdcube_ai_app.apps.chat.sdk.util import normalize_artifact_visibility
 
+DEFAULT_VISIBLE_BINARY_BYTES = 10 * 1024 * 1024
+
+
+def _positive_int(value: Any) -> int:
+    try:
+        out = int(value)
+    except Exception:
+        return 0
+    return out if out > 0 else 0
+
+
+def _auto_binary_visibility_limit(runtime_ctx: Any) -> Dict[str, Any]:
+    read_cap = _positive_int(getattr(runtime_ctx, "read_visible_max_bytes", None)) or DEFAULT_VISIBLE_BINARY_BYTES
+    session = getattr(runtime_ctx, "session", None)
+    keep_images = _positive_int(getattr(session, "cache_truncation_keep_recent_images", None))
+    if session is not None and getattr(session, "cache_truncation_keep_recent_images", None) == 0:
+        return {
+            "bytes": 0,
+            "source": "cache_truncation_keep_recent_images",
+            "read_visible_max_bytes": read_cap,
+            "cache_truncation_keep_recent_images": 0,
+        }
+    b64_sum = _positive_int(getattr(session, "cache_truncation_max_image_pdf_b64_sum", None))
+    b64_raw_cap = (b64_sum * 3) // 4 if b64_sum else 0
+    candidates = [read_cap]
+    if b64_raw_cap:
+        candidates.append(b64_raw_cap)
+    return {
+        "bytes": min(candidates),
+        "source": "min(read_visible_max_bytes, cache_truncation_max_image_pdf_b64_sum_as_bytes)" if b64_raw_cap else "read_visible_max_bytes",
+        "read_visible_max_bytes": read_cap,
+        "cache_truncation_max_image_pdf_b64_sum": b64_sum or None,
+        "cache_truncation_keep_recent_images": keep_images or None,
+    }
+
+
+def _should_attach_binary_to_prompt(*, runtime_ctx: Any, abs_path: pathlib.Path) -> tuple[bool, Dict[str, Any]]:
+    try:
+        size_bytes = abs_path.stat().st_size
+    except Exception:
+        return True, {}
+    limit = _auto_binary_visibility_limit(runtime_ctx)
+    cap = int(limit.get("bytes") or 0)
+    if cap <= 0 or size_bytes > cap:
+        return False, {
+            "multimodal_status": "too_large_for_visible_context",
+            "size_bytes": size_bytes,
+            "visible_image_limit_bytes": cap,
+            "visible_image_limit_source": limit.get("source"),
+            "read_visible_max_bytes": limit.get("read_visible_max_bytes"),
+            "cache_truncation_max_image_pdf_b64_sum": limit.get("cache_truncation_max_image_pdf_b64_sum"),
+            "recover_with": "request a smaller screenshot/viewport, downsample/crop with exec, or inspect with react.read only if under byte caps",
+        }
+    return True, {
+        "visible_image_limit_bytes": cap,
+        "visible_image_limit_source": limit.get("source"),
+    }
+
 
 def _format_sources_pool_path(sids: List[int]) -> str:
     sids = sorted({int(s) for s in (sids or []) if isinstance(s, int) and s > 0})
@@ -638,12 +696,19 @@ async def handle_external_tool(*,
         except Exception:
             pass
     if not is_exec:
+        item_error = tool_err or call_error
+        if item_error is None and isinstance(tool_response, dict) and tool_response.get("status") == "error":
+            item_error = {
+                "code": "tool_error",
+                "message": summary or "Tool execution failed",
+                "where": tool_id,
+            }
         items = [
             {
                 "artifact_id": tool_id,
                 "output": output,
                 "summary": summary or "",
-                "error": tool_err,
+                "error": item_error,
             }
         ]
     if call_error and not is_exec:
@@ -980,18 +1045,24 @@ async def handle_external_tool(*,
                 meta_extra["physical_path"] = legacy
 
         mime = (artifact_view.mime or (artifact_view.raw.get("value") or {}).get("mime") or "").strip().lower()
-        if visibility == "external" and (mime.startswith("image/") or mime == "application/pdf") and physical_path:
+        if visibility in {"external", "internal"} and (mime.startswith("image/") or mime == "application/pdf") and physical_path:
             abs_path = resolve_artifact_path(pathlib.Path(state["outdir"]), physical_path)
-            bin_block = build_artifact_binary_block(
-                turn_id=turn_id,
-                tool_call_id=tool_call_id,
-                artifact_path=artifact_path,
+            attach_binary, binary_meta = _should_attach_binary_to_prompt(
+                runtime_ctx=ctx_browser.runtime_ctx,
                 abs_path=abs_path,
-                mime=mime,
-                meta_extra=meta_extra,
             )
-            if bin_block:
-                add_block(ctx_browser, bin_block)
+            meta_extra.update({k: v for k, v in binary_meta.items() if v is not None})
+            if attach_binary:
+                bin_block = build_artifact_binary_block(
+                    turn_id=turn_id,
+                    tool_call_id=tool_call_id,
+                    artifact_path=artifact_path,
+                    abs_path=abs_path,
+                    mime=mime,
+                    meta_extra=meta_extra,
+                )
+                if bin_block:
+                    add_block(ctx_browser, bin_block)
         visible_text = ""
         if isinstance(value, dict):
             preview_text = value.get("text_preview")
@@ -1091,7 +1162,7 @@ async def handle_external_tool(*,
                 await emit_hosted_files(
                     hosting_service=react.hosting_service,
                     hosted=hosted,
-                    should_emit=bool(hosted and not tr.get("emitted")),
+                    should_emit=bool(hosted and visibility == "external" and not tr.get("emitted")),
                 )
             else:
                 hosted = await host_artifact_file(
@@ -1204,18 +1275,24 @@ async def handle_external_tool(*,
                 meta_extra["physical_path"] = legacy
 
         mime = (artifact_view.mime or (artifact_view.raw.get("value") or {}).get("mime") or "").strip().lower()
-        if visibility == "external" and (mime.startswith("image/") or mime == "application/pdf") and physical_path:
+        if visibility in {"external", "internal"} and (mime.startswith("image/") or mime == "application/pdf") and physical_path:
             abs_path = resolve_artifact_path(pathlib.Path(state["outdir"]), physical_path)
-            bin_block = build_artifact_binary_block(
-                turn_id=turn_id,
-                tool_call_id=tool_call_id,
-                artifact_path=artifact_path,
+            attach_binary, binary_meta = _should_attach_binary_to_prompt(
+                runtime_ctx=ctx_browser.runtime_ctx,
                 abs_path=abs_path,
-                mime=mime,
-                meta_extra=meta_extra,
             )
-            if bin_block:
-                add_block(ctx_browser, bin_block)
+            meta_extra.update({k: v for k, v in binary_meta.items() if v is not None})
+            if attach_binary:
+                bin_block = build_artifact_binary_block(
+                    turn_id=turn_id,
+                    tool_call_id=tool_call_id,
+                    artifact_path=artifact_path,
+                    abs_path=abs_path,
+                    mime=mime,
+                    meta_extra=meta_extra,
+                )
+                if bin_block:
+                    add_block(ctx_browser, bin_block)
         if meta_extra and artifact_path and (
             visibility == "external" or (visibility == "internal" and physical_path)
         ):

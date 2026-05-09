@@ -39,7 +39,8 @@ TOOL_SPEC = {
         "If kind='display', content is streamed only; if kind='file', content is streamed and also shared as a file. "
         "Use channel='timeline_text' ONLY for short markdown text (status/brief summary); "
         "use channel='canvas' for LARGE content (even markdown) or any non‑markdown. "
-        "Use channel='internal' to write user-invisible notes (they are stored in the timeline as react.note). "
+        "Use channel='internal' to write user-invisible internal file artifacts. "
+        "Set scratchpad=true only for short inline notes that should appear as react.note. "
         "The file extension MUST match the content format (e.g., HTML -> .html, Markdown -> .md). "
         "When channel='canvas', the file extension MUST match a supported canvas format: "
         ".md/.markdown, .html/.htm, .mermaid/.mmd, .json, .yaml/.yml, .txt, .xml. "
@@ -56,6 +57,7 @@ TOOL_SPEC = {
         "channel": "str (SECOND FIELD). 'canvas' (default) or 'timeline_text' or 'internal'.",
         "content": "str|object (THIRD FIELD). Content to record.",
         "kind": "str (FOURTH FIELD). 'display' or 'file'.",
+        "scratchpad": "bool. Optional. Only for channel='internal'; true also creates a short inline react.note.",
     },
     "returns": "content captured",
     "constraints": [
@@ -98,6 +100,9 @@ async def handle_react_write(*, react: Any, ctx_browser: Any, state: Dict[str, A
     kind = str(params.get("kind") or "display").strip().lower()
     channel = str(params.get("channel") or "canvas").strip().lower()
     visibility = "internal" if channel == "internal" else "external"
+    scratchpad = bool(params.get("scratchpad")) if channel == "internal" else False
+    if channel == "internal" and not scratchpad:
+        kind = "file"
 
     if not artifact_name:
         state["exit_reason"] = "error"
@@ -355,7 +360,7 @@ async def handle_react_write(*, react: Any, ctx_browser: Any, state: Dict[str, A
         legacy = (artifact.get("value") or {}).get("local_path") or artifact.get("local_path")
         if legacy:
             meta_extra["physical_path"] = legacy
-    if isinstance(text, str) and text.strip():
+    if isinstance(text, str) and text.strip() and (channel != "internal" or scratchpad):
         fmt_norm = (fmt or "").strip().lower()
         if fmt_norm in {"json"}:
             mime = "application/json"

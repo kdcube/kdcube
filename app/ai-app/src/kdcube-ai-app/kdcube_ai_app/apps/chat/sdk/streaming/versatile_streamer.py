@@ -419,6 +419,12 @@ async def stream_with_channels(
             return True, m_close.group(1)
         return False, None
 
+    def _honor_markup_escapes_for_channel(name: Optional[str]) -> bool:
+        # The code channel is raw executable text, not markdown. Python/JS/HTML
+        # snippets can contain arbitrary backticks, so using markdown inline/fence
+        # state to hide protocol tags can leak </channel:code> into user_code.py.
+        return (name or "") != "code"
+
     async def _emit_raw_slice(name: str, raw_slice: str) -> None:
         if not raw_slice:
             return
@@ -446,6 +452,8 @@ async def stream_with_channels(
 
             if current is None:
                 m_tag = TAG_RE.search(buf, cursor)
+            elif not _honor_markup_escapes_for_channel(current):
+                m_tag = TAG_RE.search(buf, cursor)
             else:
                 m_tag, _, _ = _find_next_tag_within_channel(
                     buf,
@@ -472,11 +480,12 @@ async def stream_with_channels(
                 )
                 if emit_now:
                     await _emit_raw_slice(current, emit_now)
-                    current_in_fence, current_in_inline = _advance_channel_markup_state(
-                        emit_now,
-                        in_fence=current_in_fence,
-                        in_inline=current_in_inline,
-                    )
+                    if _honor_markup_escapes_for_channel(current):
+                        current_in_fence, current_in_inline = _advance_channel_markup_state(
+                            emit_now,
+                            in_fence=current_in_fence,
+                            in_inline=current_in_inline,
+                        )
                     cursor += len(emit_now)
                 if needs_more and not final:
                     break
@@ -489,11 +498,12 @@ async def stream_with_channels(
                 raw_slice = buf[cursor:tag_start]
                 if raw_slice:
                     await _emit_raw_slice(current, raw_slice)
-                    current_in_fence, current_in_inline = _advance_channel_markup_state(
-                        raw_slice,
-                        in_fence=current_in_fence,
-                        in_inline=current_in_inline,
-                    )
+                    if _honor_markup_escapes_for_channel(current):
+                        current_in_fence, current_in_inline = _advance_channel_markup_state(
+                            raw_slice,
+                            in_fence=current_in_fence,
+                            in_inline=current_in_inline,
+                        )
                 cursor = tag_start
 
             is_close, tag_name = _parse_tag(m_tag.group(0))
