@@ -129,6 +129,8 @@ ai:
     cache_keep_recent_intact_turns: 1  # AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS: newest turns kept untrimmed
     working_summary_enabled: true   # AI_REACT_WORKING_SUMMARY_ENABLED: emit/embed channel:summary as conv.working.summary timeline events
     pruned_turn_summary_mode: "working_summary"  # AI_REACT_PRUNED_TURN_SUMMARY_MODE: collapse pruned old turns to conv.working.summary when available
+    # Browser-tool sessions are scoped to the current turn and cleaned by workflow/processor finalizers.
+    # Idle janitor settings are backend constants today, not assembly-backed operator settings.
 
 # ---------------------------------------------------------------------------
 # Services (LLM provider config, non-secret)
@@ -322,6 +324,7 @@ platform:
         chat_task_idle_timeout_sec: 600            # CHAT_TASK_IDLE_TIMEOUT_SEC
         chat_task_max_wall_time_sec: 2400          # CHAT_TASK_MAX_WALL_TIME_SEC
         chat_task_watchdog_poll_interval_sec: 1.0  # CHAT_TASK_WATCHDOG_POLL_INTERVAL_SEC
+        # Watchdog cancellation still runs per-turn cleanup hooks before dropping task state.
 
       exec:
         exec_workspace_root: ""                # EXEC_WORKSPACE_ROOT; proc runtime path. CLI compose normally uses /exec-workspace; direct host-run descriptors should use an absolute host path.

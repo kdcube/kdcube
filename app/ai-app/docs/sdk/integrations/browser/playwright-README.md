@@ -87,11 +87,13 @@ Browser tools must run in-process:
 "browser_tools.open_page": "none"
 ```
 
-Do not run browser tools in isolated exec or local subprocess mode. A subprocess would get its own module memory,
-so the BrowserContext and tabs would not persist between tool calls.
+Do not route `browser_tools.*` through isolated exec or local subprocess mode. A subprocess gets its own module
+memory, so the supervisor BrowserContext and named tabs would not persist between ReAct tool calls.
 
-Generated Python code inside `exec_tools.execute_code_python` should not directly control this browser session.
-The browser tools are supervisor-side tools for the agent decision loop.
+Generated Python code inside `exec_tools.execute_code_python` should not directly control the supervisor-side
+`browser_tools` session. It may still use Playwright/Chromium independently when the isolated runtime image supports
+that, and rendering tools can continue to use Chromium for one-shot PDF/PNG/HTML rendering. That browser state is
+separate from the ReAct decision-loop browser session.
 
 ## Browser Feedback
 
@@ -154,7 +156,7 @@ This is intentionally narrower than arbitrary host file access.
 
 ## Cleanup and Canceled Turns
 
-There are three cleanup mechanisms:
+There are four cleanup mechanisms:
 
 1. Explicit close:
 
@@ -162,17 +164,23 @@ There are three cleanup mechanisms:
    {"tool_id": "browser_tools.close", "params": {}}
    ```
 
-2. Opportunistic cleanup:
+2. Turn lifecycle cleanup:
+
+   The chatbot workflow and processor finalizer close the current turn browser session after normal completion,
+   managed turn errors, watchdog timeouts, and processor cancellation. This is the primary cleanup path for ReAct
+   turns.
+
+3. Opportunistic cleanup:
 
    Each new browser session access closes stale sessions first.
 
-3. Timer cleanup:
+4. Timer cleanup:
 
    When at least one browser session exists, the backend starts a lightweight janitor task. It wakes periodically
    and closes idle BrowserContexts. If all sessions are closed, the janitor exits.
 
-The timer path is important for canceled or timed-out turns. If a turn is killed before the agent can call
-`browser_tools.close`, its BrowserContext is still closed after it becomes idle.
+The timer path is a fallback for hard kills, process interruptions, or any path where the lifecycle/finalizer cleanup
+does not run. If a turn is killed before cleanup can run, its BrowserContext is still closed after it becomes idle.
 
 Current backend defaults:
 

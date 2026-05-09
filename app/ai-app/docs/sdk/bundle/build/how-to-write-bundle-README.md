@@ -224,6 +224,9 @@ When a bundle exists in a real environment, its lifecycle is:
 9. If effective bundle props changed:
    - `on_props_changed(...)` may reconcile long-lived side effects
    - internal sidecars may restart or reconfigure lazily on next use
+10. After a turn finishes, errors, or is cancelled:
+   - `on_turn_completed(...)` may release per-turn resources
+   - the hook is best-effort, timeout-bounded, and must be fast/idempotent
 
 Builder rule:
 
@@ -235,6 +238,8 @@ Practical hook rule:
 - `on_bundle_load(...)` = one-time per process per tenant/project setup
 - `on_props_changed(...)` = reconcile long-lived state after effective prop change
 - `pre_run_hook(...)` = request-time validation or lazy reconcile before execution
+- `on_turn_completed(...)` = fast per-turn cleanup after success, error, or
+  cancellation; do not perform expensive reporting or user-facing delivery there
 
 Async rule:
 
@@ -442,7 +447,7 @@ Current reusable blocks include:
   Mini App auth, widget operations, registry storage, and signed downloads;
 - Delivery Integration for email/Telegram report delivery and delivered-file
   metadata;
-- built-in web, rendering, exec, io, and context tools;
+- built-in web, browser, rendering, exec, io, and context tools;
 - storage/cache/git helpers, widgets, MCP, `@cron`, `@on_job`, `@venv`, and
   Node sidecar support.
 

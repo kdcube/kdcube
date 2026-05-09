@@ -175,6 +175,43 @@ class _ActivityTrackingCommunicator:
         return result
 
 
+async def _cleanup_turn_browser_sessions_for_payload(payload: ChatTaskPayload, *, reason: str) -> None:
+    try:
+        from types import SimpleNamespace
+
+        from kdcube_ai_app.apps.chat.sdk.tools.backends.browser_backend import (
+            close_browser_sessions_for_current_context,
+        )
+
+        actor = getattr(payload, "actor", None)
+        user = getattr(payload, "user", None)
+        routing = getattr(payload, "routing", None)
+        request = getattr(payload, "request", None)
+        bound_context = SimpleNamespace(
+            tenant=getattr(actor, "tenant_id", None),
+            project=getattr(actor, "project_id", None),
+            user_id=getattr(user, "user_id", None) or getattr(user, "fingerprint", None),
+            conversation_id=getattr(routing, "conversation_id", None) or getattr(routing, "session_id", None),
+            turn_id=getattr(routing, "turn_id", None),
+            request_id=getattr(request, "request_id", None),
+            bundle_id=getattr(routing, "bundle_id", None),
+        )
+        result = await close_browser_sessions_for_current_context(
+            bound_context=bound_context,
+            reason=reason,
+        )
+        closed_count = int(result.get("closed_count") or 0) if isinstance(result, dict) else 0
+        if closed_count:
+            logger.info(
+                "Cleaned up browser sessions after processor task finalization: task_id=%s count=%s reason=%s",
+                getattr(getattr(payload, "meta", None), "task_id", None),
+                closed_count,
+                reason,
+            )
+    except Exception:
+        logger.debug("Failed to cleanup browser sessions after processor task finalization", exc_info=True)
+
+
 async def prefetch_git_bundles(registry: Optional[Any] = None) -> dict[str, str]:
     """
     Resolve configured git-backed bundles into the local bundle store once.
@@ -2113,6 +2150,7 @@ class EnhancedChatRequestProcessor:
 
         success = False
         task_cancelled = False
+        finalization_reason = "task_completed"
         exec_started_at = None
         continuation_source = self._continuation_source_for(payload)
         try:
@@ -2158,16 +2196,19 @@ class EnhancedChatRequestProcessor:
 
                 result = result or {}
                 success = True
+                finalization_reason = "task_completed"
                 await tracked_comm.complete(data=result)
 
         except asyncio.CancelledError:
             task_cancelled = True
+            finalization_reason = "task_cancelled"
             logger.warning(
                 "Task %s was cancelled; keeping inflight claim for recovery",
                 task_id,
             )
             raise
         except _TaskExecutionWatchdogTimeout as exc:
+            finalization_reason = f"task_watchdog_timeout:{exc.timeout_kind}"
             tb = str(exc)
             await tracked_comm.error(
                 message=tb,
@@ -2184,6 +2225,7 @@ class EnhancedChatRequestProcessor:
             )
             success = False
         except Exception:
+            finalization_reason = "task_error"
             tb = traceback.format_exc()
             try:
                 await tracked_comm.error(message=tb, data={"task_id": task_id})
@@ -2198,6 +2240,10 @@ class EnhancedChatRequestProcessor:
                     exec_ms = int((time.monotonic() - exec_started_at) * 1000)
                 except Exception:
                     exec_ms = None
+            await _cleanup_turn_browser_sessions_for_payload(
+                payload,
+                reason=finalization_reason,
+            )
             try:
                 if not task_cancelled:
                     await self._ack_claimed_task(task_data)

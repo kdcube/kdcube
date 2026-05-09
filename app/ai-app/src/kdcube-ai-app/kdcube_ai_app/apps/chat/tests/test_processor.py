@@ -286,6 +286,36 @@ def test_comm_ctx_snapshots_bundle_call_context():
         set_current_bundle_call_context({})
 
 
+@pytest.mark.asyncio
+async def test_cleanup_turn_browser_sessions_for_payload_uses_payload_context(monkeypatch):
+    from kdcube_ai_app.apps.chat.sdk.tools.backends import browser_backend
+
+    calls = []
+
+    async def _fake_cleanup(*, bound_context=None, reason="turn_cleanup", session_id=None):
+        del session_id
+        calls.append((bound_context, reason))
+        return {"closed_count": 1}
+
+    monkeypatch.setattr(browser_backend, "close_browser_sessions_for_current_context", _fake_cleanup)
+    payload_dict = _build_task_payload("browser-cleanup-task")
+    payload_dict["request"]["request_id"] = "req-1"
+    payload = ChatTaskPayload.model_validate(payload_dict)
+
+    await processor_mod._cleanup_turn_browser_sessions_for_payload(payload, reason="task_cancelled")
+
+    assert calls
+    bound_context, reason = calls[0]
+    assert reason == "task_cancelled"
+    assert bound_context.tenant == "tenant-a"
+    assert bound_context.project == "project-a"
+    assert bound_context.user_id == "user-1"
+    assert bound_context.conversation_id == "conv-1"
+    assert bound_context.turn_id == "turn-1"
+    assert bound_context.request_id == "req-1"
+    assert bound_context.bundle_id == "bundle.demo"
+
+
 def _build_processor(
         redis_client,
         *,

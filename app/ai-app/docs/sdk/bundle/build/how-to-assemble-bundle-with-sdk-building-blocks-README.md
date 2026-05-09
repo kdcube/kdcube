@@ -13,6 +13,7 @@ see_also:
   - ks:docs/sdk/integrations/README.md
   - ks:docs/sdk/integrations/email/README.md
   - ks:docs/sdk/integrations/telegram/README.md
+  - ks:docs/sdk/integrations/browser/browser-tools-README.md
   - ks:docs/sdk/tools/sdk-tools-README.md
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
@@ -52,6 +53,7 @@ or solution package and update this page.
 | Telegram webhook, Bot API rendering, progress streaming, Mini App auth, widget operations, user registry, signed downloads | `kdcube_ai_app.apps.chat.sdk.integrations.telegram` | [Telegram Integration](../../integrations/telegram/README.md) |
 | Explicit report delivery to email/Telegram with delivered-file metadata | `kdcube_ai_app.apps.chat.sdk.integrations.delivery` | [Email Integration](../../integrations/email/email-README.md), [Telegram Integration](../../integrations/telegram/telegram-README.md) |
 | Web search and web fetch with source-pool provenance | `web_tools` | [SDK Tools](../../tools/sdk-tools-README.md) |
+| Real browser verification for generated HTML, widgets, and local browser flows | `browser_tools`, shared Playwright backend, per-turn BrowserContext | [Browser Tools](../../integrations/browser/browser-tools-README.md), [Playwright Backend](../../integrations/browser/playwright-README.md) |
 | PDF, DOCX, PPTX, PNG, HTML generation | `rendering_tools` plus public rendering skills | [SDK Tools](../../tools/sdk-tools-README.md) |
 | Isolated code execution and generated-code work | `exec_tools`, isolated runtime, tool bridge | [Bundle Agent Integration](../bundle-agent-integration-README.md), [SDK Tools](../../tools/sdk-tools-README.md) |
 | Context, attachments, hosted files, and conversation-scoped reads | `ctx_tools`, `io_tools`, hosting/runtime APIs | [Bundle Runtime](../bundle-runtime-README.md), [SDK Tools](../../tools/sdk-tools-README.md) |
@@ -84,6 +86,7 @@ or solution package and update this page.
 ```text
 React workflow
   -> web_tools for research
+  -> browser_tools for generated HTML/widget verification when needed
   -> rendering_tools for PDF/DOCX/PPTX/PNG/HTML
   -> delivery integration for email/Telegram delivery
   -> hosted file metadata in turn timeline

@@ -13,6 +13,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
   - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
   - ks:docs/sdk/bundle/bundle-widget-integration-README.md
+  - ks:docs/sdk/integrations/browser/browser-tools-README.md
   - ks:docs/sdk/bundle/bundle-delivery-and-update-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
 ---
@@ -844,6 +845,36 @@ If you see:
 
 the widget is not integrated correctly.
 
+### 5.2A Browser-tool verification
+
+When an agent needs to prove generated HTML or widget behavior in a real browser,
+use the ReAct `browser_tools` namespace rather than guessing from static code.
+
+Use it for:
+
+- generated standalone HTML apps
+- widget navigation and button/click behavior
+- form filling and operation-path smoke checks
+- screenshot-backed visual checks when DOM/text status is not enough
+
+Do not overuse screenshots. They are useful for visual state, layout, canvas, or
+image checks, but they add multimodal payload cost. Prefer DOM/text status after
+ordinary clicks and fills when that is enough.
+
+Important runtime boundary:
+
+- `browser_tools` runs in the ReAct tool runtime and keeps a per-turn browser
+  session
+- isolated exec code may use Playwright independently if the runtime image
+  supports it, but it does not share the ReAct `browser_tools` session
+- turn completion, managed errors, watchdog timeout, and cancellation attempt
+  browser-session cleanup through lifecycle finalizers
+
+Primary docs:
+
+- [Browser Tools](../../integrations/browser/browser-tools-README.md)
+- [Playwright Backend](../../integrations/browser/playwright-README.md)
+
 ### 5.2B Source-folder widget build contract
 
 For React/Vite widgets declared under `ui.web_app_widgets.<alias>`, test the
@@ -886,7 +917,7 @@ then the output directory leaked into Vite as a project/root argument. Fix the
 widget `package.json`/Vite `outDir` contract or update to a platform build
 runner that treats `<VI_BUILD_DEST_ABSOLUTE_PATH>` as an environment value.
 
-### 5.2A Custom main-view UI contract
+### 5.2C Custom main-view UI contract
 
 For bundles with `ui.main_view` / `ui-src`, test the iframe app as a runtime
 surface, not as a standalone website.
@@ -1178,6 +1209,8 @@ Before calling the bundle complete, verify all of these:
 - widget networking uses the correct runtime URL shape
 - custom main-view UI uses the host config bridge and selected runtime bundle id
 - generated custom main-view UI is refreshed by the loader, not by manual runtime-storage builds
+- generated HTML or widget click/form behavior is verified with browser tools
+  when static checks are not enough
 - widget respects auth/config handshake
 - runtime identity matches descriptor identity
 - local mutable state goes into bundle local storage

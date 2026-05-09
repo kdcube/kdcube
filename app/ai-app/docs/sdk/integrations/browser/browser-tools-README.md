@@ -42,8 +42,12 @@ TOOL_RUNTIME = {
 }
 ```
 
-Do not run these tools through isolated exec. Isolated subprocess execution would lose the page/session between
-actions and would not be able to share the supervisor-managed Playwright browser context.
+Do not route `browser_tools.*` through isolated exec. Isolated subprocess execution gets separate process memory,
+so it cannot share the supervisor-managed BrowserContext and named tabs across ReAct tool calls.
+
+This does not mean Playwright is unavailable in isolated runtime. One-shot rendering tools can use Chromium there,
+and generated code may use its own local browser flow when the runtime image supports it. That is separate from the
+ReAct `browser_tools` session used for cross-round verification.
 
 ## Tool Set
 
@@ -312,9 +316,12 @@ If `screenshot_path` is supplied, it must remain `OUTPUT_DIR`-relative.
 
 ## Cleanup
 
-There are two cleanup paths:
+There are three cleanup paths:
 
 - Explicit: `browser_tools.close`.
+- Turn lifecycle: the chatbot workflow and processor finalizer close the current turn browser session on normal
+  completion, managed errors, watchdog timeouts, and processor cancellation.
 - Automatic: a backend janitor task closes idle sessions after the configured backend TTL.
 
-This matters when a turn is canceled, killed, or times out before the agent can call `close`.
+The lifecycle/finalizer path is the normal cleanup path. The janitor remains a fallback for process interruption,
+hard kill, or paths that end before cleanup can run.

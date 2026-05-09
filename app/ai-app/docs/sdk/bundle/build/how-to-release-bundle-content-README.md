@@ -157,6 +157,10 @@ configuration, also validate the widget build contract from
 At minimum, run the widget build with an explicit temporary `OUTDIR` and confirm
 `index.html` is written there.
 
+If a release changes generated standalone HTML, browser-facing widget behavior,
+or agent browser verification instructions, also validate the relevant flow with
+the browser-tool checks from the test guide and the browser integration docs.
+
 If a release changes file-producing tools or attachment materialization, also
 validate the tool result contract from
 [how-to-test-bundle-README.md#1c-react-toolskill-checks](how-to-test-bundle-README.md#1c-react-toolskill-checks).

@@ -505,6 +505,14 @@ Multiple such bundles can run inside one `tenant/project` environment.
 - whether built-in example bundles are included in the effective runtime registry
 
 For local path bundles, `assembly.yaml` is where the host-side roots belong.
+It also carries platform-level ReAct caps and proc watchdog settings such as
+`ai.react.context_max_tokens`, `ai.react.read_visible_*`, and
+`platform.services.proc.service.chat_task_*`. Treat those as environment
+operator controls, not bundle props. Use
+[assembly-descriptor-README.md](../../../configuration/assembly-descriptor-README.md)
+and
+[service-runtime-configuration-mapping-README.md](../../../configuration/service-runtime-configuration-mapping-README.md)
+for the exact mapping.
 
 ### `bundles.yaml`
 

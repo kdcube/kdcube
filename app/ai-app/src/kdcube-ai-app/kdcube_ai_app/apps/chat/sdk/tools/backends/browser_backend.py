@@ -78,6 +78,12 @@ def _maybe(value: Any) -> str:
     return text if text and text.lower() != "none" else ""
 
 
+def _append_unique_part(parts: list[tuple[str, str]], name: str, value: Any) -> None:
+    text = _maybe(value)
+    if text and not any(k == name for k, _ in parts):
+        parts.append((name, text))
+
+
 def _ensure_janitor_task() -> None:
     global _JANITOR_TASK
     try:
@@ -156,6 +162,18 @@ def derive_session_identity(explicit_session_id: Optional[str] = None, *, bound_
         if bundle_id and not any(k == "bundle_id" for k, _ in parts):
             parts.append(("bundle_id", bundle_id))
 
+        if bound_context is not None:
+            for name in (
+                "tenant",
+                "project",
+                "user_id",
+                "conversation_id",
+                "turn_id",
+                "request_id",
+                "bundle_id",
+            ):
+                _append_unique_part(parts, name, getattr(bound_context, name, None))
+
         comm = getattr(bound_context, "communicator", None) if bound_context is not None else None
         if comm is not None:
             comm_conversation = getattr(comm, "conversation", None) or {}
@@ -169,9 +187,7 @@ def derive_session_identity(explicit_session_id: Optional[str] = None, *, bound_
                 ("session_id", comm_conversation.get("session_id") if isinstance(comm_conversation, dict) else None),
                 ("request_id", comm_service.get("request_id") if isinstance(comm_service, dict) else None),
             ):
-                text = _maybe(value)
-                if text and not any(k == name for k, _ in parts):
-                    parts.append((name, text))
+                _append_unique_part(parts, name, value)
 
         if not any(k == "turn_id" for k, _ in parts):
             # Last-resort fallback for ad hoc direct tool calls. It avoids
@@ -184,6 +200,20 @@ def derive_session_identity(explicit_session_id: Optional[str] = None, *, bound_
 
     digest = hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:24]
     return f"browser:{digest}", label
+
+
+def _session_matches_bound_context(session: BrowserSession, bound_context: Any) -> bool:
+    if bound_context is None:
+        return False
+    label = str(session.label or "")
+    required = []
+    for name in ("turn_id", "conversation_id", "user_id", "tenant", "project", "bundle_id"):
+        value = _maybe(getattr(bound_context, name, None))
+        if value:
+            required.append(f"{name}={_scrub_id(value)}")
+    if not required:
+        return False
+    return all(part in label for part in required)
 
 
 def _logical_fi_to_relative(path: str) -> Optional[pathlib.Path]:
@@ -565,6 +595,61 @@ class BrowserBackend:
                 "closed_tabs": sorted(session.pages.keys()),
             }
 
+    async def close_current_session(
+        self,
+        *,
+        session_id: Optional[str] = None,
+        reason: str = "turn_cleanup",
+    ) -> dict[str, Any]:
+        """
+        Close the browser session associated with the current runtime context.
+
+        The exact key path handles normal tool calls. The bounded-context scan is
+        a fallback for lifecycle cleanup paths where request contextvars may have
+        already been cleared but RuntimeCtx still identifies the turn.
+        """
+        key, label = derive_session_identity(session_id, bound_context=self.bound_context)
+        closed: list[dict[str, Any]] = []
+        async with _SESSIONS_LOCK:
+            candidate_keys = []
+            if key in _SESSIONS:
+                candidate_keys.append(key)
+            if session_id is None:
+                for item_key, session in list(_SESSIONS.items()):
+                    if item_key != key and _session_matches_bound_context(session, self.bound_context):
+                        candidate_keys.append(item_key)
+
+            for item_key in candidate_keys:
+                session = _SESSIONS.pop(item_key, None)
+                if session is None:
+                    continue
+                tabs = sorted(session.pages.keys())
+                try:
+                    await session.context.close()
+                    closed.append({
+                        "session_key": item_key,
+                        "session_label": session.label,
+                        "closed": True,
+                        "closed_tabs": tabs,
+                    })
+                except Exception as exc:
+                    closed.append({
+                        "session_key": item_key,
+                        "session_label": session.label,
+                        "closed": False,
+                        "closed_tabs": tabs,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    })
+
+        return {
+            "session_key": key,
+            "session_label": label,
+            "closed": bool(closed),
+            "closed_count": sum(1 for item in closed if item.get("closed")),
+            "reason": reason,
+            "sessions": closed,
+        }
+
     async def _state(
         self,
         *,
@@ -728,6 +813,18 @@ async def run_browser_action(action: str, params: dict[str, Any], *, bindings_so
     if action == "close":
         return await backend.close(**params)
     raise ValueError(f"Unknown browser action: {action}")
+
+
+async def close_browser_sessions_for_current_context(
+    *,
+    bound_context: Any = None,
+    session_id: Optional[str] = None,
+    reason: str = "turn_cleanup",
+) -> dict[str, Any]:
+    return await BrowserBackend(bound_context=bound_context).close_current_session(
+        session_id=session_id,
+        reason=reason,
+    )
 
 
 def data_url_for_html(html: str) -> str:

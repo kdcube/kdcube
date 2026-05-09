@@ -158,6 +158,29 @@ def _cleanup_turn_workspace(runtime_ctx: Any, logger: Any) -> None:
                 logger.log(f"[workflow] turn workspace root retained after partial cleanup: {parent}", level="WARNING")
 
 
+async def _cleanup_turn_browser_sessions(runtime_ctx: Any, logger: Any, *, reason: str) -> None:
+    try:
+        from kdcube_ai_app.apps.chat.sdk.tools.backends.browser_backend import (
+            close_browser_sessions_for_current_context,
+        )
+
+        result = await close_browser_sessions_for_current_context(
+            bound_context=runtime_ctx,
+            reason=reason,
+        )
+        closed_count = int(result.get("closed_count") or 0) if isinstance(result, dict) else 0
+        if closed_count:
+            logger.log(
+                f"[workflow] cleaned up browser sessions: count={closed_count} reason={reason}",
+                level="INFO",
+            )
+    except Exception:
+        try:
+            logger.log("[workflow] browser session cleanup failed\n" + traceback.format_exc(), level="ERROR")
+        except Exception:
+            pass
+
+
 def _ttl_for(user_type: str, requested: int) -> int:
     ttl_map = {
         "anonymous": 1,
@@ -2110,6 +2133,13 @@ class BaseWorkflow():
         except Exception:
             self.logger.log(traceback.format_exc(), "ERROR")
 
+        await _cleanup_turn_browser_sessions(
+            getattr(getattr(self, "ctx_browser", None), "runtime_ctx", None)
+            or getattr(self, "runtime_ctx", None),
+            self.logger,
+            reason="turn_completed",
+        )
+
         try:
             from kdcube_ai_app.apps.chat.sdk.config import get_settings
             if not get_settings().SOLUTION_RETAIN_TURN_WORKSPACE:
@@ -2286,6 +2316,12 @@ class BaseWorkflow():
 
         try:
             from kdcube_ai_app.apps.chat.sdk.config import get_settings
+            await _cleanup_turn_browser_sessions(
+                getattr(getattr(self, "ctx_browser", None), "runtime_ctx", None)
+                or getattr(self, "runtime_ctx", None),
+                self.logger,
+                reason="turn_error",
+            )
             if not get_settings().SOLUTION_RETAIN_TURN_WORKSPACE:
                 _cleanup_turn_workspace(getattr(self, "runtime_ctx", None), self.logger)
                 browser_ctx = getattr(getattr(self, "ctx_browser", None), "runtime_ctx", None)

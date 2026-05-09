@@ -608,11 +608,52 @@ async def lifespan(app: FastAPI):
             if inspect.isawaitable(maybe):
                 await maybe
 
+        async def _call_turn_completed_hook(
+                *,
+                status: str,
+                result: dict | None = None,
+                error: BaseException | None = None,
+                reason: str | None = None,
+        ) -> None:
+            hook = getattr(workflow, "on_turn_completed", None)
+            if not callable(hook):
+                return
+            kwargs = {
+                "state": state,
+                "result": result,
+                "error": error,
+                "status": status,
+                "reason": reason,
+                "comm_context": comm_context,
+                "command": command,
+            }
+            try:
+                sig = inspect.signature(hook)
+                params_sig = sig.parameters
+                accepts_kwargs = any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD
+                    for p in params_sig.values()
+                )
+                if not accepts_kwargs:
+                    kwargs = {k: v for k, v in kwargs.items() if k in params_sig}
+            except Exception:
+                pass
+            try:
+                maybe = hook(**kwargs)
+                if inspect.isawaitable(maybe):
+                    await asyncio.wait_for(maybe, timeout=10.0)
+            except Exception:
+                logger.warning("Bundle on_turn_completed hook failed", exc_info=True)
+
         params = dict(comm_context.request.payload or {})
         if "text" not in params and comm_context.request.message:
             params["text"] = comm_context.request.message
         command = comm_context.request.operation or params.pop("command", None)
 
+        result = None
+        hook_status = "completed"
+        hook_error = None
+        hook_reason = None
         try:
             if command == BACKGROUND_JOB_OPERATION:
                 manifest = discover_bundle_interface_manifest(workflow, bundle_id=bundle_id)
@@ -630,11 +671,28 @@ async def lifespan(app: FastAPI):
                     result = await asyncio.to_thread(fn, **params)
                     if inspect.isawaitable(result):
                         result = await result
+            hook_status = "completed"
             return result or {}
+        except asyncio.CancelledError as e:
+            hook_status = "cancelled"
+            hook_error = e
+            hook_reason = "task_cancelled"
+            raise
         except Exception as e:
+            hook_status = "error"
+            hook_error = e
+            hook_reason = type(e).__name__
             logger.error(traceback.format_exc())
             if not isinstance(e, EconomicsLimitException):
-                return {"error_message": str(e), "final_answer": "An error occurred."}
+                result = {"error_message": str(e), "final_answer": "An error occurred."}
+                return result
+        finally:
+            await _call_turn_completed_hook(
+                status=hook_status,
+                result=result if isinstance(result, dict) else None,
+                error=hook_error,
+                reason=hook_reason,
+            )
 
     try:
         redis_async = app.state.redis_async

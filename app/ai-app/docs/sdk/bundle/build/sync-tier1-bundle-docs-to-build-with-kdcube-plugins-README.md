@@ -13,6 +13,7 @@ see_also:
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-release-bundle-content-README.md
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
+  - ks:docs/sdk/integrations/browser/browser-tools-README.md
 ---
 # Tier 1 Bundle Pack For Build-With-KDCube Plugins
 
@@ -77,7 +78,7 @@ Recommended:
 - make [how-to-test-bundle-README.md#1a-working-environment-for-agents](how-to-test-bundle-README.md#1a-working-environment-for-agents) the preflight before code or test changes
 - keep [how-to-assemble-bundle-with-sdk-building-blocks-README.md](how-to-assemble-bundle-with-sdk-building-blocks-README.md)
   visible before implementation so agents reuse SDK Tasks, Email, Telegram,
-  Delivery, tools, storage, widgets, jobs, MCP, and Claude Code blocks when
+  Delivery, web/browser/rendering/exec tools, storage, widgets, jobs, MCP, and Claude Code blocks when
   they fit
 - keep the rest of the Tier 1 pack visible as the required baseline
 - keep [bundle-widget-integration-README.md](../bundle-widget-integration-README.md)
@@ -86,6 +87,8 @@ Recommended:
 - keep [bundle-agent-integration-README.md](../bundle-agent-integration-README.md)
   reachable for React descriptors, file-producing tool contracts, MCP
   connector/server wiring, and Claude Code subprocess agents
+- keep [browser-tools-README.md](../../integrations/browser/browser-tools-README.md)
+  reachable for ReAct-side browser verification of generated HTML and widgets
 - branch to deeper docs only after Tier 1
 - expose the release procedure as optional and user-approved, not automatic
 
@@ -135,6 +138,11 @@ The plugin should steer agents away from these recurring mistakes:
 - generated executor code gets files by calling a catalog tool through
   `agent_io_tools.tool_call(...)`; `host_files(...)` is for trusted
   bundle/catalog tools
+- use `browser_tools` for real browser verification when static checks are not
+  enough; keep screenshots optional and avoid routing `browser_tools.*` through
+  isolated exec
+- bundle finalizers such as `on_turn_completed(...)` are for fast cleanup after
+  success, error, or cancellation, not for expensive user-facing work
 - do not commit, tag, push, or update descriptor refs unless the user has
   explicitly agreed to the content release values
 
@@ -146,5 +154,6 @@ The plugin handoff is clean when:
 - the optional release lifecycle doc is available for user-approved releases
 - the working environment preflight is visible before any test command
 - the source-folder widget build contract is discoverable from Tier 1 routing
+- browser-tool verification is discoverable for generated HTML/widget behavior
 - the plugin can route to the best first page without hiding the rest of Tier 1
 - old hardcoded doc links are updated to current paths

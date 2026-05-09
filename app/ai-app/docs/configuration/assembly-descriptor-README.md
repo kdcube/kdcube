@@ -82,6 +82,8 @@ These env vars are the direct runtime surface for assembly-backed settings.
 | `AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS` | `ai.react.tool_result_preview_max_text_symbols` | `get_settings()` | all modes |
 | `AI_REACT_CACHE_KEEP_RECENT_TURNS` | `ai.react.cache_keep_recent_turns` | `get_settings()` | all modes |
 | `AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS` | `ai.react.cache_keep_recent_intact_turns` | `get_settings()` | all modes |
+| `AI_REACT_WORKING_SUMMARY_ENABLED` | `ai.react.working_summary_enabled` | `get_settings()` | all modes |
+| `AI_REACT_PRUNED_TURN_SUMMARY_MODE` | `ai.react.pruned_turn_summary_mode` | `get_settings()` | all modes |
 | `CLAUDE_CODE_SESSION_STORE_IMPLEMENTATION` | `storage.claude_code_session.type` | `get_settings()` | CLI local compose, direct local service run |
 | `CLAUDE_CODE_SESSION_GIT_REPO` | `storage.claude_code_session.repo` | `get_settings()` | CLI local compose, direct local service run |
 | `BUNDLE_SCHEDULER_RECONCILE_INTERVAL_SECONDS` | `platform.services.proc.bundles.bundle_scheduler_reconcile_interval_seconds` | `get_settings().PLATFORM.APPLICATIONS` | proc in all modes |
@@ -222,6 +224,40 @@ as the full historical conversation. Retrieval-index rows remain the fallback
 for historical turns without a working summary. Each retrieval row keeps the
 logical path and a small hint; the path is enough to retrieve the full block with
 `react.read([path])` when needed.
+
+Browser-tool sessions are lifecycle-managed by the ReAct workflow and proc
+processor finalizers. Normal completion, managed errors, watchdog timeout, and
+task cancellation all attempt per-turn browser cleanup. The idle janitor TTL,
+janitor interval, and max session count are backend constants today; they are
+not assembly-backed operator settings yet.
+
+### `platform.services.proc.service`
+
+`platform.services.proc.service` owns proc service runtime controls, including
+task watchdog settings used by long-running chat/job turns.
+
+Example:
+
+```yaml
+platform:
+  services:
+    proc:
+      service:
+        chat_task_timeout_sec: 600
+        chat_task_idle_timeout_sec: 600
+        chat_task_max_wall_time_sec: 2400
+        chat_task_watchdog_poll_interval_sec: 1.0
+```
+
+| Field | Env var | Meaning |
+|---|---|---|
+| `chat_task_timeout_sec` | `CHAT_TASK_TIMEOUT_SEC` | legacy overall chat task timeout in seconds |
+| `chat_task_idle_timeout_sec` | `CHAT_TASK_IDLE_TIMEOUT_SEC` | watchdog idle timeout in seconds; elapsed time since last task activity |
+| `chat_task_max_wall_time_sec` | `CHAT_TASK_MAX_WALL_TIME_SEC` | watchdog hard wall-clock limit for one task |
+| `chat_task_watchdog_poll_interval_sec` | `CHAT_TASK_WATCHDOG_POLL_INTERVAL_SEC` | watchdog polling interval in seconds |
+
+When the watchdog cancels a task, proc still runs the turn finalization path
+and attempts lifecycle cleanup such as turn-scoped browser-session cleanup.
 
 ### `platform.services.<component>.exec`
 

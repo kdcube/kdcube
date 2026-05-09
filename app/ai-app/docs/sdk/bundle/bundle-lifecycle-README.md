@@ -57,6 +57,7 @@ flowchart TD
     P --> E[execute_core]
     E --> V[@venv boundary optional]
     V --> O[post_run_hook]
+    O --> F[on_turn_completed finalizer]
 ```
 
 ## Main phases
@@ -71,7 +72,8 @@ flowchart TD
 | Background job invocation | When proc claims a jobs-stream item | Proc rebuilds bundle runtime context and invokes the async `@on_job(job=...)` method |
 | Execution | Every invocation | `execute_core(...)` handles the chat turn or bundle operation |
 | Decorated external execution | On demand inside an invocation | `@venv(...)` functions run in a cached per-bundle subprocess venv; the venv is rebuilt only when its `requirements.txt` hash changes |
-| Completion | Every invocation | `post_run_hook(...)` can finalize bookkeeping |
+| Success completion | Successful invocation | `post_run_hook(...)` can finalize success-only bookkeeping |
+| Turn finalization | Every invocation after completion, error, or cancellation | `on_turn_completed(...)` can release per-turn resources; it must be fast and idempotent |
 
 ## Instance lifetime
 
@@ -121,11 +123,13 @@ Important:
 | `pre_run_hook(state=...)` | every invocation | last-minute validation or reconciliation |
 | `execute_core(state=..., thread_id=..., params=...)` | every invocation | main bundle logic |
 | `@on_job` handler | each claimed background job | execute ready work from the jobs stream with explicit job metadata/payload |
-| `post_run_hook(state=..., result=...)` | every invocation | final bookkeeping |
+| `post_run_hook(state=..., result=...)` | successful invocation | final success-only bookkeeping |
+| `on_turn_completed(state=..., result=..., error=..., status=..., reason=...)` | after success, error, or cancellation | best-effort per-turn cleanup; called by the proc bundle runner, with a short timeout |
 | `rebind_request_context(...)` | singleton reuse only | refresh request-local handles on cached instance before the current call runs |
 
 Important:
 - `on_bundle_load(...)` is intended to be deterministic and idempotent
+- `on_turn_completed(...)` is for fast cleanup only; do not do expensive reporting or user-facing work there
 - do not store request-local state there
 - use storage for durable state, not instance fields
 

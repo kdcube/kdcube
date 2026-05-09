@@ -961,6 +961,25 @@ class BaseEntrypoint:
     async def post_run_hook(self, *, state: Dict[str, Any], result: Dict[str, Any]) -> None:
         return None
 
+    async def on_turn_completed(
+        self,
+        *,
+        state: Dict[str, Any],
+        result: Optional[Dict[str, Any]] = None,
+        error: Optional[BaseException] = None,
+        status: str = "completed",
+        reason: Optional[str] = None,
+        **kwargs,
+    ) -> None:
+        """
+        Optional per-turn finalization hook.
+
+        The proc runner calls this after the bundle handler exits, errors, or is
+        cancelled. Keep implementations fast and idempotent; platform cleanup
+        such as browser-session cleanup also runs independently.
+        """
+        return None
+
     async def report_turn_error(
         self,
         *,

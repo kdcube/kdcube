@@ -151,6 +151,10 @@ The proc service reads these non-secret ReAct limits from `assembly.yaml` throug
 | `AI_REACT_READ_VISIBLE_CONTEXT_FRACTION` | `ai.react.read_visible_context_fraction` | `assembly.yaml` | all modes | additional clamp against the current ReAct context budget |
 | `AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS` | `ai.react.exec_text_preview_max_symbols` | `assembly.yaml` | all modes | text preview cap for each exec-produced text artifact |
 | `AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS` | `ai.react.tool_result_preview_max_text_symbols` | `assembly.yaml` | all modes | model-visible text preview cap for large initial tool results |
+| `AI_REACT_CACHE_KEEP_RECENT_TURNS` | `ai.react.cache_keep_recent_turns` | `assembly.yaml` | all modes | recent turns kept visible after TTL pruning |
+| `AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS` | `ai.react.cache_keep_recent_intact_turns` | `assembly.yaml` | all modes | newest turns kept untrimmed during TTL pruning |
+| `AI_REACT_WORKING_SUMMARY_ENABLED` | `ai.react.working_summary_enabled` | `assembly.yaml` | all modes | emits and indexes React working-summary cards |
+| `AI_REACT_PRUNED_TURN_SUMMARY_MODE` | `ai.react.pruned_turn_summary_mode` | `assembly.yaml` | all modes | controls whether pruned historical turns prefer working-summary cards |
 
 Unit contract:
 
@@ -163,6 +167,28 @@ Unit contract:
 - `*_BYTES` is a raw payload guard. PDF/image reads are either attached whole
   under the byte cap or represented by a recovery marker; they are not partially
   sliced by `max_text_symbols`.
+
+Browser-tool sessions are not configured by assembly fields yet. They are scoped
+by tenant/project/user/conversation/turn/request and cleaned through ReAct/proc
+turn finalizers on normal completion, managed error, watchdog timeout, and task
+cancellation. The current idle janitor TTL, janitor interval, and max session
+count are backend constants.
+
+### Proc task watchdog and turn finalizers
+
+The proc service reads watchdog settings from `assembly.yaml` through
+`get_settings().PLATFORM.SERVICE`.
+
+| Env var | Descriptor path | Descriptor file | Modes | Meaning |
+|---|---|---|---|---|
+| `CHAT_TASK_TIMEOUT_SEC` | `platform.services.proc.service.chat_task_timeout_sec` | `assembly.yaml` | proc in all modes | legacy overall task timeout |
+| `CHAT_TASK_IDLE_TIMEOUT_SEC` | `platform.services.proc.service.chat_task_idle_timeout_sec` | `assembly.yaml` | proc in all modes | idle timeout measured from last task activity |
+| `CHAT_TASK_MAX_WALL_TIME_SEC` | `platform.services.proc.service.chat_task_max_wall_time_sec` | `assembly.yaml` | proc in all modes | hard wall-clock limit for one task |
+| `CHAT_TASK_WATCHDOG_POLL_INTERVAL_SEC` | `platform.services.proc.service.chat_task_watchdog_poll_interval_sec` | `assembly.yaml` | proc in all modes | watchdog polling interval |
+
+When a task is cancelled by the watchdog or by processor cancellation, proc
+still runs the per-turn finalizer path before dropping local task state. This is
+where lifecycle cleanup such as turn-scoped browser-session cleanup is invoked.
 
 ### Isolated execution defaults
 
