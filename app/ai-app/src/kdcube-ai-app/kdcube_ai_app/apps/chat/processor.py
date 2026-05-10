@@ -565,21 +565,22 @@ class EnhancedChatRequestProcessor:
                 oldest_active_task_wall_age_sec = max(oldest_active_task_wall_age_sec, float(wall_age))
             if idle_age is not None:
                 max_active_task_idle_age_sec = max(max_active_task_idle_age_sec, float(idle_age))
-            active_task_details.append(
-                {
-                    "task_id": info.get("task_id"),
-                    "queue_key": info.get("queue_key"),
-                    "inflight_queue_key": info.get("inflight_queue_key"),
-                    "started_execution": bool(info.get("started_execution")),
-                    "started_at": info.get("started_at"),
-                    "claimed_at": info.get("claimed_at"),
-                    "last_activity_at": info.get("last_activity_at"),
-                    "last_activity_kind": info.get("last_activity_kind"),
-                    "activity_count": int(info.get("activity_count") or 0),
-                    "wall_age_sec": wall_age,
-                    "idle_age_sec": idle_age,
-                }
-            )
+            detail = {
+                "task_id": info.get("task_id"),
+                "queue_key": info.get("queue_key"),
+                "inflight_queue_key": info.get("inflight_queue_key"),
+                "started_execution": bool(info.get("started_execution")),
+                "started_at": info.get("started_at"),
+                "claimed_at": info.get("claimed_at"),
+                "last_activity_at": info.get("last_activity_at"),
+                "last_activity_kind": info.get("last_activity_kind"),
+                "activity_count": int(info.get("activity_count") or 0),
+                "wall_age_sec": wall_age,
+                "idle_age_sec": idle_age,
+            }
+            if info.get("bundle_id"):
+                detail["bundle_id"] = info.get("bundle_id")
+            active_task_details.append(detail)
         active_task_details.sort(
             key=lambda row: (
                 float(row.get("idle_age_sec") or 0.0),
@@ -873,6 +874,13 @@ class EnhancedChatRequestProcessor:
     @staticmethod
     def _task_logical_id(task_dict: Dict[str, Any]) -> Optional[str]:
         return task_dict.get("meta", {}).get("task_id") or task_dict.get("task_id")
+
+    @staticmethod
+    def _task_bundle_id(task_dict: Dict[str, Any]) -> Optional[str]:
+        routing = task_dict.get("routing")
+        bundle_id = routing.get("bundle_id") if isinstance(routing, dict) else None
+        bundle_id = str(bundle_id or "").strip()
+        return bundle_id or None
 
     def _task_lock_key(self, logical_id: str) -> str:
         return f"{self.middleware.LOCK_PREFIX}:{logical_id}"
@@ -1372,6 +1380,7 @@ class EnhancedChatRequestProcessor:
                 claimed_monotonic = time.monotonic()
                 self._active_task_details[task] = {
                     "task_id": task_id,
+                    "bundle_id": self._task_bundle_id(task_data),
                     "queue_key": task_data.get("_ready_queue_key") or task_data.get("_queue_key"),
                     "inflight_queue_key": task_data.get("_inflight_queue_key"),
                     "claimed_at": claimed_at,
@@ -2113,6 +2122,7 @@ class EnhancedChatRequestProcessor:
                 claimed_monotonic = time.monotonic()
                 self._active_task_details[current_processor_task] = {
                     "task_id": payload.meta.task_id,
+                    "bundle_id": payload.routing.bundle_id,
                     "queue_key": task_data.get("_ready_queue_key") or task_data.get("_queue_key"),
                     "inflight_queue_key": task_data.get("_inflight_queue_key"),
                     "claimed_at": claimed_at,

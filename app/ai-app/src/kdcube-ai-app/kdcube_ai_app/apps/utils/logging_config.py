@@ -11,6 +11,9 @@ from pathlib import Path
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 
 
+DEFAULT_LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s%(bundle_segment)s - %(message)s"
+
+
 def _to_level(name: str, default: int) -> int:
     try:
         return getattr(logging, (name or "").upper())
@@ -31,6 +34,76 @@ def _env_int(name: str) -> int | None:
         return int(raw)
     except Exception:
         return None
+
+
+class BundleContextFilter(logging.Filter):
+    """Attach bundle/request fields to every log record.
+
+    The filter is intentionally best-effort: service-level logs outside a bundle
+    keep the normal log shape, while logs emitted inside a bound chat turn or
+    bundle route get a concrete bundle segment.
+    """
+
+    _MISSING = "-"
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        context = self._current_context()
+        bundle_id = context.get("bundle_id") or ""
+        if not getattr(record, "bundle_id", None):
+            setattr(record, "bundle_id", bundle_id)
+        if not getattr(record, "bundle_segment", None):
+            segment = f" - [bundle={bundle_id}]" if bundle_id else ""
+            setattr(record, "bundle_segment", segment)
+
+        for field in (
+            "tenant",
+            "project",
+            "conversation_id",
+            "turn_id",
+            "task_id",
+            "request_id",
+        ):
+            if not getattr(record, field, None):
+                setattr(record, field, context.get(field) or self._MISSING)
+        return True
+
+    @classmethod
+    def _current_context(cls) -> dict[str, str]:
+        context: dict[str, str] = {}
+
+        try:
+            from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import (  # noqa: WPS433
+                get_current_bundle_id,
+                get_current_request_context,
+            )
+
+            bundle_id = get_current_bundle_id()
+            if bundle_id:
+                context["bundle_id"] = str(bundle_id)
+
+            request_context = get_current_request_context()
+            if request_context is not None:
+                routing = getattr(request_context, "routing", None)
+                actor = getattr(request_context, "actor", None)
+                meta = getattr(request_context, "meta", None)
+                request = getattr(request_context, "request", None)
+                values = {
+                    "bundle_id": getattr(routing, "bundle_id", None),
+                    "tenant": getattr(actor, "tenant_id", None),
+                    "project": getattr(actor, "project_id", None),
+                    "conversation_id": getattr(routing, "conversation_id", None)
+                    or getattr(routing, "session_id", None),
+                    "turn_id": getattr(routing, "turn_id", None),
+                    "task_id": getattr(meta, "task_id", None),
+                    "request_id": getattr(request, "request_id", None),
+                }
+                for key, value in values.items():
+                    if value:
+                        context[key] = str(value)
+        except Exception:
+            pass
+
+        return context
 
 
 class SafeRotatingFileHandler(RotatingFileHandler):
@@ -59,12 +132,14 @@ def configure_logging():
     # --- Global settings from config ---
     _log = get_settings().PLATFORM.LOG
     log_level_name = (_env_text("LOG_LEVEL") or _log.LOG_LEVEL or "INFO").upper()
-    log_format = _env_text("LOG_FORMAT") or "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    log_format = _env_text("LOG_FORMAT") or DEFAULT_LOG_FORMAT
     level = _to_level(log_level_name, logging.INFO)
+    context_filter = BundleContextFilter()
 
     # ---- Console handler ----
     console_handler = logging.StreamHandler()
     console_handler.setLevel(level)
+    console_handler.addFilter(context_filter)
     console_handler.setFormatter(logging.Formatter(log_format))
 
     # ---- File handler with rotation ----
@@ -84,6 +159,7 @@ def configure_logging():
         encoding="utf-8",
     )
     file_handler.setLevel(level)
+    file_handler.addFilter(context_filter)
     file_handler.setFormatter(logging.Formatter(log_format))
 
     # ---- Root logger as single source of truth ----
