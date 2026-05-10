@@ -61,6 +61,7 @@ from kdcube_ai_app.infra.plugin.agentic_loader import (
     MCPEndpointSpec,
     UIWidgetSpec,
     apply_api_overrides,
+    apply_bundle_overrides,
     apply_mcp_overrides,
     apply_widget_overrides,
     cache_key_for_spec,
@@ -443,12 +444,20 @@ def _endpoint_visible(
     return _user_types_visible(required_user_types, session) and _raw_roles_visible(required_roles, session)
 
 
-def _bundle_allowed_for_session(manifest: "BundleInterfaceManifest | None", session: UserSession) -> bool:
+def _bundle_allowed_for_session(
+        manifest: "BundleInterfaceManifest | None",
+        session: UserSession,
+        props: Optional[Dict[str, Any]] = None,
+) -> bool:
     """Bundle-level access check based on allowed_roles declared on @agentic_workflow.
-    No allowed_roles (empty) means the bundle is visible to all authenticated users."""
-    if manifest is None or not manifest.allowed_roles:
+    No allowed_roles (empty) means the bundle is visible to all authenticated users.
+    When props are provided, allowed_roles_config overrides are applied first."""
+    if manifest is None:
         return True
-    return bool(_user_raw_roles(session) & set(manifest.allowed_roles))
+    effective = apply_bundle_overrides(manifest, props or {})
+    if not effective.allowed_roles:
+        return True
+    return bool(_user_raw_roles(session) & set(effective.allowed_roles))
 
 
 router = APIRouter()
@@ -1018,9 +1027,13 @@ def _manifest_to_descriptor(
     When ``props`` is provided, effective values reflect bundle-props overrides
     via ``*_config`` paths; otherwise effective == decorator defaults.
     """
+    effective = apply_bundle_overrides(manifest, props or {})
     return {
         "enabled_path": canonical_enabled_path("bundle"),
-        "allowed_roles": list(manifest.allowed_roles),
+        "allowed_roles": list(effective.allowed_roles),
+        "allowed_roles_default": list(manifest.allowed_roles),
+        "allowed_roles_config": manifest.allowed_roles_config,
+        "allowed_roles_overridden": tuple(effective.allowed_roles) != tuple(manifest.allowed_roles),
         "apis": [_api_spec_descriptor(s, props) for s in manifest.api_endpoints],
         "mcp_endpoints": [_mcp_spec_descriptor(s, props) for s in manifest.mcp_endpoints],
         "widgets": [_widget_spec_descriptor(s, props) for s in manifest.ui_widgets],
@@ -1040,9 +1053,10 @@ def _manifest_to_descriptor_filtered(
     Visibility is checked against the **effective** user_types/roles (after
     bundle-props overrides have been applied).
     """
+    effective_manifest = apply_bundle_overrides(manifest, props or {})
     return {
         "enabled_path": canonical_enabled_path("bundle"),
-        "allowed_roles": list(manifest.allowed_roles),
+        "allowed_roles": list(effective_manifest.allowed_roles),
         "apis": [
             _api_spec_descriptor(s, props)
             for s in manifest.api_endpoints
@@ -1154,13 +1168,13 @@ async def get_bundles(
             request=request,
             session=session,
         )
-        if not _bundle_allowed_for_session(manifest, session):
-            continue
         props: Optional[Dict[str, Any]] = None
         if manifest is not None:
             props = await store_get_bundle_props(redis, tenant=tenant_id, project=project_id, bundle_id=bid)
             if not is_bundle_enabled(props):
                 continue
+        if not _bundle_allowed_for_session(manifest, session, props=props):
+            continue
         descriptor: Dict[str, Any] = {
             "id": bid,
             "name": entry.name,

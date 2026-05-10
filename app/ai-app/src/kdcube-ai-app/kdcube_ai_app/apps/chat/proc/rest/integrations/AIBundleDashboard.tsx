@@ -103,6 +103,9 @@ interface BundleEntry {
     on_job?: string | null;
     enabled_path?: string | null;
     allowed_roles?: string[] | null;
+    allowed_roles_default?: string[] | null;
+    allowed_roles_config?: string | null;
+    allowed_roles_overridden?: boolean;
 }
 
 interface BundlesResponse {
@@ -1278,6 +1281,10 @@ const AIBundleDashboard: React.FC = () => {
     const [interfaceBundleId, setInterfaceBundleId] = useState<string>('');
     const [editorProps, setEditorProps] = useState<Record<string, any>>({});
     const [editorPropsLoading, setEditorPropsLoading] = useState<boolean>(false);
+    const [formBundleRoles, setFormBundleRoles] = useState<string>('');
+    const [bundleRolesSaving, setBundleRolesSaving] = useState<boolean>(false);
+    const [bundleRolesFlash, setBundleRolesFlash] = useState<string | null>(null);
+    const [bundleRolesError, setBundleRolesError] = useState<string | null>(null);
     const registryScope = useMemo(() => normalizeScope(scopeTenant, scopeProject), [scopeTenant, scopeProject]);
     const propsScope = useMemo(() => normalizeScope(scopeTenant, scopeProject), [scopeTenant, scopeProject]);
     const draftScope = useMemo(() => parseScopeValue(scopeInput), [scopeInput]);
@@ -1614,6 +1621,13 @@ const AIBundleDashboard: React.FC = () => {
     useEffect(() => {
         loadEditorProps(interfaceBundleId);
     }, [interfaceBundleId, scopeTenant, scopeProject]);
+
+    useEffect(() => {
+        const b = interfaceBundleId ? bundles[interfaceBundleId] : null;
+        setBundleRolesFlash(null);
+        setBundleRolesError(null);
+        setFormBundleRoles(b && Array.isArray(b.allowed_roles) ? b.allowed_roles.join(', ') : '');
+    }, [interfaceBundleId, bundles]);
 
     // Apply a merge-patch to the current bundle's props, then quietly refresh
     // both the bundles snapshot (for descriptors / pills) and editorProps
@@ -2264,18 +2278,6 @@ const AIBundleDashboard: React.FC = () => {
                             return (
                                 <div className="space-y-5">
                                     <div className="flex flex-wrap items-center gap-3 text-xs">
-                                        <span className="font-semibold text-gray-700">Bundle visibility:</span>
-                                        {allowedRoles.length === 0 ? (
-                                            <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800">
-                                                Visible to all authenticated users
-                                            </span>
-                                        ) : (
-                                            allowedRoles.map((r, i) => (
-                                                <span key={i} className="inline-flex items-center px-2.5 py-1 rounded-full bg-indigo-50 border border-indigo-200 font-mono text-indigo-800">
-                                                    {r}
-                                                </span>
-                                            ))
-                                        )}
                                         <span className="ml-auto inline-flex items-center gap-2">
                                             <span className="text-gray-700 font-semibold">enabled.bundle:</span>
                                             <label className="inline-flex items-center gap-1.5 cursor-pointer">
@@ -2296,6 +2298,61 @@ const AIBundleDashboard: React.FC = () => {
                                             </label>
                                         </span>
                                     </div>
+
+                                    <FieldRow
+                                        label="Allowed roles"
+                                        overridden={b.allowed_roles_overridden}
+                                        configurable={Boolean(b.allowed_roles_config)}
+                                        onResetToDefault={b.allowed_roles_config && b.allowed_roles_overridden ? async () => {
+                                            setBundleRolesError(null);
+                                            try {
+                                                setBundleRolesSaving(true);
+                                                await saveOverrideAndRefresh(nestedDotPathPatch(b.allowed_roles_config!, null));
+                                                setBundleRolesFlash('Reset ✓');
+                                                window.setTimeout(() => setBundleRolesFlash(null), 1800);
+                                            } catch (e: any) {
+                                                setBundleRolesError(e?.message || 'Reset failed');
+                                            } finally {
+                                                setBundleRolesSaving(false);
+                                            }
+                                        } : undefined}
+                                        hint={b.allowed_roles_config
+                                            ? <>Override path: <code>{b.allowed_roles_config}</code>. Comma-separated. Empty saves an explicit empty list (visible to all).</>
+                                            : <>No <code>allowed_roles_config</code> declared in the decorator — value is hard-coded.</>}
+                                    >
+                                        <div className="flex items-center gap-2">
+                                            <input
+                                                value={formBundleRoles}
+                                                onChange={e => setFormBundleRoles(e.target.value)}
+                                                disabled={!b.allowed_roles_config || bundleRolesSaving || editorPropsLoading}
+                                                placeholder="kdcube:role:editor, kdcube:role:viewer"
+                                                className="flex-1 px-3 py-2 border border-gray-200/80 rounded-xl bg-white text-sm font-mono disabled:bg-gray-50 disabled:text-gray-400"
+                                            />
+                                            {b.allowed_roles_config && (
+                                                <Button
+                                                    variant="primary"
+                                                    disabled={bundleRolesSaving || editorPropsLoading}
+                                                    onClick={async () => {
+                                                        setBundleRolesError(null);
+                                                        try {
+                                                            setBundleRolesSaving(true);
+                                                            await saveOverrideAndRefresh(nestedDotPathPatch(b.allowed_roles_config!, parseChips(formBundleRoles)));
+                                                            setBundleRolesFlash('Saved ✓');
+                                                            window.setTimeout(() => setBundleRolesFlash(null), 1800);
+                                                        } catch (e: any) {
+                                                            setBundleRolesError(e?.message || 'Save failed');
+                                                        } finally {
+                                                            setBundleRolesSaving(false);
+                                                        }
+                                                    }}
+                                                >
+                                                    {bundleRolesSaving ? 'Saving…' : 'Save'}
+                                                </Button>
+                                            )}
+                                            {bundleRolesFlash && <span className="text-xs text-emerald-700 font-semibold">{bundleRolesFlash}</span>}
+                                            {bundleRolesError && <span className="text-xs text-red-700">{bundleRolesError}</span>}
+                                        </div>
+                                    </FieldRow>
 
                                     {(b.on_message || b.on_job) && (
                                         <div className="flex flex-wrap gap-3 text-xs text-gray-600">
