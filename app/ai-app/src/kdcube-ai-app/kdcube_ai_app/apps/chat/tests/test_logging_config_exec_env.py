@@ -101,6 +101,101 @@ def test_configure_logging_uses_deterministic_default_rotation_names(monkeypatch
         root.setLevel(old_level)
 
 
+def test_configure_logging_includes_current_bundle_id(monkeypatch, tmp_path):
+    runtime_log_dir = tmp_path / "runtime-logs"
+    monkeypatch.setenv("LOG_DIR", str(runtime_log_dir))
+    monkeypatch.setenv("LOG_FILE_PREFIX", "chat-proc")
+    monkeypatch.setenv("LOG_LEVEL", "INFO")
+    monkeypatch.delenv("LOG_FORMAT", raising=False)
+
+    fake_settings = SimpleNamespace(
+        PLATFORM=SimpleNamespace(
+            LOG=SimpleNamespace(
+                LOG_LEVEL="WARNING",
+                LOG_MAX_MB=20,
+                LOG_BACKUP_COUNT=10,
+                LOG_DIR="/Users/elenaviter/.kdcube/host-log-dir",
+                LOG_FILE_PREFIX="host-service",
+            )
+        )
+    )
+    monkeypatch.setattr(logging_config, "get_settings", lambda: fake_settings)
+
+    from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_bundle_id
+
+    root = logging.getLogger()
+    old_handlers = list(root.handlers)
+    old_level = root.level
+
+    try:
+        logging_config.configure_logging()
+        with bind_current_bundle_id("task-and-memo-app@1-0"):
+            logging.getLogger("bundle.context.test").info("bundle scoped log")
+        for handler in root.handlers:
+            handler.flush()
+
+        content = (runtime_log_dir / "chat-proc.log").read_text(encoding="utf-8")
+        assert "[bundle=task-and-memo-app@1-0]" in content
+        assert "bundle scoped log" in content
+    finally:
+        for handler in list(root.handlers):
+            root.removeHandler(handler)
+            try:
+                handler.close()
+            except Exception:
+                pass
+        for handler in old_handlers:
+            root.addHandler(handler)
+        root.setLevel(old_level)
+
+
+def test_configure_logging_does_not_use_process_env_as_bundle_context(monkeypatch, tmp_path):
+    runtime_log_dir = tmp_path / "runtime-logs"
+    monkeypatch.setenv("LOG_DIR", str(runtime_log_dir))
+    monkeypatch.setenv("LOG_FILE_PREFIX", "chat-proc")
+    monkeypatch.setenv("LOG_LEVEL", "INFO")
+    monkeypatch.setenv("KDCUBE_BUNDLE_ID", "wrong-global-bundle")
+    monkeypatch.delenv("LOG_FORMAT", raising=False)
+
+    fake_settings = SimpleNamespace(
+        PLATFORM=SimpleNamespace(
+            LOG=SimpleNamespace(
+                LOG_LEVEL="WARNING",
+                LOG_MAX_MB=20,
+                LOG_BACKUP_COUNT=10,
+                LOG_DIR="/Users/elenaviter/.kdcube/host-log-dir",
+                LOG_FILE_PREFIX="host-service",
+            )
+        )
+    )
+    monkeypatch.setattr(logging_config, "get_settings", lambda: fake_settings)
+
+    root = logging.getLogger()
+    old_handlers = list(root.handlers)
+    old_level = root.level
+
+    try:
+        logging_config.configure_logging()
+        logging.getLogger("bundle.context.test").info("service scoped log")
+        for handler in root.handlers:
+            handler.flush()
+
+        content = (runtime_log_dir / "chat-proc.log").read_text(encoding="utf-8")
+        assert " - INFO - service scoped log" in content
+        assert "bundle=" not in content
+        assert "wrong-global-bundle" not in content
+    finally:
+        for handler in list(root.handlers):
+            root.removeHandler(handler)
+            try:
+                handler.close()
+            except Exception:
+                pass
+        for handler in old_handlers:
+            root.addHandler(handler)
+        root.setLevel(old_level)
+
+
 def test_safe_rotating_file_handler_tolerates_missing_file_rollover_race(monkeypatch, tmp_path):
     log_path = tmp_path / "service.log"
     handler = logging_config.SafeRotatingFileHandler(
