@@ -1648,7 +1648,12 @@ def _load_module_from_file(path: Path, name_hint: str) -> types.ModuleType:
         raise ImportError(f"Cannot create module spec from file: {path}")
     mod = importlib.util.module_from_spec(spec)
     sys.modules[mname] = mod
-    spec.loader.exec_module(mod)
+    try:
+        spec.loader.exec_module(mod)
+    except BaseException:
+        if sys.modules.get(mname) is mod:
+            sys.modules.pop(mname, None)
+        raise
     return mod
 
 def _ensure_virtual_package(root_name: str, path: Path) -> None:
@@ -1707,7 +1712,12 @@ def _load_module_from_dir_with_root(container_path: Path, module: str, *, root_p
     mod = importlib.util.module_from_spec(spec)
     mod.__package__ = f"{root_pkg}.{sub_pkg}" if sub_pkg else root_pkg
     sys.modules[full_name] = mod
-    spec.loader.exec_module(mod)
+    try:
+        spec.loader.exec_module(mod)
+    except BaseException:
+        if sys.modules.get(full_name) is mod:
+            sys.modules.pop(full_name, None)
+        raise
     return mod
 
 

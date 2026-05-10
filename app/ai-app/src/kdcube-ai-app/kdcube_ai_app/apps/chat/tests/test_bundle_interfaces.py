@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import hashlib
+import sys
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
@@ -98,6 +100,30 @@ def _request(
         },
         receive=_receive,
     )
+
+
+def test_direct_bundle_loader_removes_failed_partial_module(tmp_path):
+    entrypoint = tmp_path / "entrypoint.py"
+    entrypoint.write_text("raise RuntimeError('boom before workflow class')\n", encoding="utf-8")
+    root_name = "kdcube_bundle_" + hashlib.sha256(str(tmp_path.resolve()).encode("utf-8")).hexdigest()[:16]
+    module_name = f"{root_name}.entrypoint"
+
+    with pytest.raises(RuntimeError, match="boom before workflow class"):
+        _load_module_from_dir(tmp_path, "entrypoint")
+
+    assert module_name not in sys.modules
+
+    entrypoint.write_text(
+        "from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow\n\n"
+        "@agentic_workflow(name='good')\n"
+        "class GoodWorkflow:\n"
+        "    def __init__(self, config=None):\n"
+        "        self.config = config\n",
+        encoding="utf-8",
+    )
+
+    mod = _load_module_from_dir(tmp_path, "entrypoint")
+    assert getattr(mod.GoodWorkflow, "__agentic_role__", None) == "workflow_class"
 
 
 class _RecordingMCPProvider:
@@ -653,6 +679,44 @@ async def test_static_widget_payload_points_to_widget_app(monkeypatch):
     assert "<iframe" in html
     assert "CONFIG_REQUEST" in html
     assert "/api/integrations/bundles/tenant-a/project-a/bundle.demo/widgets/preferences/index.html" in html
+
+
+@pytest.mark.asyncio
+async def test_admin_bundle_props_survives_code_defaults_load_failure(monkeypatch):
+    async def _resolve_bundle_async(*args, **kwargs):
+        del args, kwargs
+        return SimpleNamespace(
+            id="bundle.bad",
+            path="/tmp/bundle.bad",
+            module="entrypoint",
+            singleton=False,
+        )
+
+    async def _store_get_bundle_props(*args, **kwargs):
+        del args, kwargs
+        return {"saved": True}
+
+    async def _get_workflow_instance_async(*args, **kwargs):
+        del args, kwargs
+        raise AttributeError("No decorated workflow found in module 'bundle.bad.entrypoint'")
+
+    monkeypatch.setattr(integrations, "_resolve_bundle_spec_from_runtime", _resolve_bundle_async)
+    monkeypatch.setattr(integrations, "store_get_bundle_props", _store_get_bundle_props)
+    monkeypatch.setattr(integrations, "get_workflow_instance_async", _get_workflow_instance_async)
+    monkeypatch.setattr(integrations, "_get_app_pg_pool", lambda request: object())
+
+    result = await integrations.get_bundle_props(
+        bundle_id="bundle.bad",
+        request=_request(),
+        tenant="tenant-a",
+        project="project-a",
+        session=_session(),
+    )
+
+    assert result["props"] == {"saved": True}
+    assert result["defaults"] == {}
+    assert result["defaults_error"]["code"] == "AttributeError"
+    assert "No decorated workflow found" in result["defaults_error"]["message"]
 
 
 @pytest.mark.asyncio

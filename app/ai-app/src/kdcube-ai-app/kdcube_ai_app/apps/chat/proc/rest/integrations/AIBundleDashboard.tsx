@@ -135,6 +135,14 @@ interface BundlePropsPayload {
     props: Record<string, unknown>;
 }
 
+interface BundleDefaultsError {
+    code?: string;
+    message?: string;
+    where?: string;
+    bundle_id?: string;
+    managed?: boolean;
+}
+
 interface BundleCleanupPayload {
     drop_sys_modules: boolean;
     tenant?: string;
@@ -1255,6 +1263,7 @@ const AIBundleDashboard: React.FC = () => {
     const [propsBundleId, setPropsBundleId] = useState<string>('');
     const [propsJson, setPropsJson] = useState<string>('{}');
     const [propsDefaultsJson, setPropsDefaultsJson] = useState<string>('{}');
+    const [propsDefaultsError, setPropsDefaultsError] = useState<BundleDefaultsError | null>(null);
     const [propsLoading, setPropsLoading] = useState<boolean>(false);
     const [propsKeyPath, setPropsKeyPath] = useState<string>('');
     const [propsValue, setPropsValue] = useState<string>('');
@@ -1412,7 +1421,9 @@ const AIBundleDashboard: React.FC = () => {
             const merged = deepMergeObjects(defaults, props);
             setPropsJson(JSON.stringify(merged, null, 2));
             setPropsDefaultsJson(JSON.stringify(defaults, null, 2));
+            setPropsDefaultsError(data.defaults_error || null);
         } catch (e: any) {
+            setPropsDefaultsError(null);
             setError(e.message || 'Failed to load bundle props');
         } finally {
             setPropsLoading(false);
@@ -2018,7 +2029,7 @@ const AIBundleDashboard: React.FC = () => {
                                 <Button variant="secondary" onClick={loadProps} disabled={!propsBundleId || propsLoading}>
                                     {propsLoading ? 'Loading…' : 'Refresh'}
                                 </Button>
-                                <Button variant="secondary" onClick={resetPropsFromCode} disabled={!propsBundleId}>
+                                <Button variant="secondary" onClick={resetPropsFromCode} disabled={!propsBundleId || !!propsDefaultsError}>
                                     Reset from code
                                 </Button>
                             </div>
@@ -2101,6 +2112,17 @@ const AIBundleDashboard: React.FC = () => {
 
                         <div>
                             <label className="block text-sm font-medium text-gray-800 mb-2">Code defaults (read-only)</label>
+                            {propsDefaultsError ? (
+                                <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                                    <div className="font-semibold">Code defaults could not be loaded for this bundle.</div>
+                                    <div className="mt-1">
+                                        Persisted props are still editable. Reset from code is disabled until the bundle loads.
+                                    </div>
+                                    <div className="mt-2 font-mono text-xs break-all">
+                                        {propsDefaultsError.code || 'BundleLoadError'}: {propsDefaultsError.message || 'Unknown error'}
+                                    </div>
+                                </div>
+                            ) : null}
                             <textarea
                                 className="w-full min-h-[180px] px-4 py-3 border border-gray-200/70 rounded-xl bg-gray-50 text-sm font-mono text-gray-600"
                                 value={propsDefaultsJson}

@@ -66,6 +66,7 @@ from kdcube_ai_app.infra.plugin.agentic_loader import (
     cache_key_for_spec,
     canonical_enabled_path,
     discover_bundle_interface_manifest,
+    evict_bundle_scope,
     get_cached_manifest,
     get_workflow_instance_async,
     is_static_bundle_entrypoint_path,
@@ -175,13 +176,6 @@ def _get_integrations_semaphore():
 def _get_app_redis(request: Request):
     redis = getattr(request.app.state, "redis_async", None)
     if redis is None:
-        # fallback to router state if wired via mount_integrations_routers
-        redis = getattr(router.state, "redis_async", None)
-    if redis is None:
-        redis = getattr(admin_router.state, "redis_async", None)
-    if redis is None:
-        redis = getattr(internal_router.state, "redis_async", None)
-    if redis is None:
         raise RuntimeError("redis_async is not initialized on app.state")
     return redis
 
@@ -189,11 +183,7 @@ def _get_app_redis(request: Request):
 def _get_app_pg_pool(request: Request):
     pg_pool = getattr(request.app.state, "pg_pool", None)
     if pg_pool is None:
-        pg_pool = getattr(router.state, "pg_pool", None)
-    if pg_pool is None:
-        pg_pool = getattr(admin_router.state, "pg_pool", None)
-    if pg_pool is None:
-        pg_pool = getattr(internal_router.state, "pg_pool", None)
+        raise RuntimeError("pg_pool is not initialized on app.state")
     return pg_pool
 
 
@@ -828,8 +818,7 @@ async def _load_bundle_props_defaults(
     )
     # Always reload bundle code for "code defaults" so UI reflects latest code.
     try:
-        from kdcube_ai_app.infra.plugin.agentic_loader import evict_spec
-        evict_spec(spec)
+        evict_bundle_scope(spec)
     except Exception:
         pass
     routing = _build_rest_bundle_routing(
@@ -884,6 +873,17 @@ async def _load_bundle_props_defaults(
     except Exception:
         pass
     return defaults
+
+
+def _bundle_defaults_error_payload(bundle_id: str, exc: Exception) -> Dict[str, Any]:
+    message = str(exc).strip() or exc.__class__.__name__
+    return {
+        "code": exc.__class__.__name__,
+        "message": message,
+        "where": "_load_bundle_props_defaults",
+        "bundle_id": bundle_id,
+        "managed": True,
+    }
 
 
 async def _get_bundle_manifest(
@@ -1200,24 +1200,41 @@ async def get_bundle_props(
         bundle_id=bundle_id,
     )
 
-    defaults = await _load_bundle_props_defaults(
-        bundle_id=bundle_id,
-        tenant=tenant_id,
-        project=project_id,
-        request=request,
-        session=session,
-    )
+    defaults_error: Optional[Dict[str, Any]] = None
+    try:
+        defaults = await _load_bundle_props_defaults(
+            bundle_id=bundle_id,
+            tenant=tenant_id,
+            project=project_id,
+            request=request,
+            session=session,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "[bundle_props] Failed to load code defaults for bundle=%s tenant=%s project=%s",
+            bundle_id,
+            tenant_id,
+            project_id,
+            exc_info=True,
+        )
+        defaults = {}
+        defaults_error = _bundle_defaults_error_payload(bundle_id, exc)
     if isinstance(defaults, dict) and "bundle_version" in defaults:
         props = dict(props)
         props["bundle_version"] = defaults.get("bundle_version")
 
-    return {
+    response = {
         "bundle_id": bundle_id,
         "tenant": tenant_id,
         "project": project_id,
         "props": props,
         "defaults": defaults,
     }
+    if defaults_error:
+        response["defaults_error"] = defaults_error
+    return response
 
 
 @admin_router.post("/admin/integrations/bundles/{bundle_id}/props", status_code=200)
@@ -1277,13 +1294,31 @@ async def reset_bundle_props_from_code(
     tenant_id = payload.tenant or settings.TENANT
     project_id = payload.project or settings.PROJECT
 
-    defaults = await _load_bundle_props_defaults(
-        bundle_id=bundle_id,
-        tenant=tenant_id,
-        project=project_id,
-        request=request,
-        session=session,
-    )
+    try:
+        defaults = await _load_bundle_props_defaults(
+            bundle_id=bundle_id,
+            tenant=tenant_id,
+            project=project_id,
+            request=request,
+            session=session,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "[bundle_props] Reset from code failed while loading defaults for bundle=%s tenant=%s project=%s",
+            bundle_id,
+            tenant_id,
+            project_id,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "Failed to load bundle code defaults; persisted props were not changed.",
+                "error": _bundle_defaults_error_payload(bundle_id, exc),
+            },
+        ) from exc
 
     redis = _get_app_redis(request)
     try:
