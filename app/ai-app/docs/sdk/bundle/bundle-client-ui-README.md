@@ -20,7 +20,7 @@ This section is the browser/UI entry point for bundle developers.
 Use it when your bundle ships:
 
 - widgets
-- a custom iframe main view
+- a custom main UI
 - a custom frontend calling `/api/integrations/*`
 - frontend code that must consume chat stream events correctly
 
@@ -109,7 +109,7 @@ Use these docs when you need to know:
 - how `stream_id` and `KDC-Stream-ID` affect peer-targeted delivery
 - which response headers and retry signals the client should honor
 
-This is no longer a separate top-level client namespace. These docs live under bundle because bundle code now owns widgets, iframe UIs, and custom frontend interactions.
+This is no longer a separate top-level client namespace. These docs live under bundle because bundle code now owns widgets, main UI apps, and custom frontend interactions.
 
 ## Server-Side References
 

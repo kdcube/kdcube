@@ -9,7 +9,7 @@ This folder contains versioned, runnable bundle examples.
 - [node-backend-sidecar-README.md](../../../../../../../../docs/sdk/node/node-backend-sidecar-README.md)
 
 ## Examples
-- [Versatile Reference Bundle](versatile%402026-03-31-13-36): the primary all-features bundle reference for bundle builders. Demonstrates React workflow, economics, custom tools, custom skills, shared local storage, storage-backend export, MCP connectors, a TSX widget, a custom iframe main view, and direct isolated-exec usage. Start here for bundle authoring.
+- [Versatile Reference Bundle](versatile%402026-03-31-13-36): the primary all-features bundle reference for bundle builders. Demonstrates React workflow, economics, custom tools, custom skills, shared local storage, storage-backend export, MCP connectors, a TSX widget, a custom main UI, and direct isolated-exec usage. Start here for bundle authoring.
 - [KDCube Copilot](kdcube.copilot%402026-04-03-19-05): specialized example for a **bundle-defined knowledge space** (`ks:`), `react.search_knowledge`, and internal docs/code reading.
 - [Iso Runtime Demo](with-isoruntime%402026-02-16-14-00): specialized example for direct isolated-exec/runtime diagnostics.
 - [Node Bridge + MCP](node.bridge.mcp%402026-04-24): runnable example for keeping the public bundle surface in Python while delegating selected backend logic to a bundle-local Node/TS sidecar and exposing it through APIs and MCP.

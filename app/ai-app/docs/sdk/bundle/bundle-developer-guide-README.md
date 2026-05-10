@@ -94,7 +94,7 @@ my_bundle/
   tools/
   skills/
   ui/                 # optional widget TSX
-  ui-src/             # optional iframe app
+  ui-src/             # optional main UI app source
   tests/              # optional bundle-local tests
 ```
 
@@ -149,7 +149,7 @@ For the exact decorator contract, route mapping, widget/public endpoints, `@cron
 | `@api(...)` | entrypoint method | bundle HTTP operations and public endpoints |
 | `@mcp(...)` | entrypoint method | bundle-served MCP endpoints |
 | `@ui_widget(...)` | entrypoint method | widget manifest entries |
-| `@ui_main` | entrypoint method | main iframe UI entrypoint |
+| `@ui_main` | entrypoint method | bundle main UI entrypoint |
 | `@on_message` | entrypoint method | message-handler metadata |
 | `@cron(...)` | entrypoint method | scheduled background jobs |
 | `@on_job` | entrypoint method | ready background jobs claimed by proc from the jobs stream |
@@ -430,7 +430,7 @@ It intentionally demonstrates:
 - bundle-local skills
 - props and secrets
 - widget operations
-- custom iframe main view
+- custom main UI
 - MCP connector descriptors
 - public endpoint example
 - direct isolated-exec operation
@@ -445,7 +445,7 @@ For those, use the dedicated docs:
 - [bundle-scheduled-jobs-README.md](bundle-scheduled-jobs-README.md)
 - [bundle-venv-README.md](bundle-venv-README.md)
 
-For bundle widgets and iframe app integration, use:
+For bundle widgets and main UI integration, use:
 
 - [bundle-widget-integration-README.md](bundle-widget-integration-README.md)
 

@@ -436,8 +436,8 @@ fall back to `index.html` for client-side routing.
   dependency installation during the build does not rotate the build cache unnecessarily.
 - The built UI typically communicates back to the backend through the bundle operations
   endpoint (`POST /api/integrations/bundles/{tenant}/{project}/{bundle_id}/operations/{operation}`)
-  and receives runtime config (base URL, auth tokens, tenant/project) via `postMessage`
-  from the host frame.
+  and receives runtime config (base URL, auth tokens, tenant/project) through the
+  runtime UI config bridge.
 - Legacy callers may still use
   `POST /api/integrations/bundles/{tenant}/{project}/operations/{operation}`.
   When `bundle_id` is omitted there, proc resolves the current default bundle id.
@@ -447,7 +447,7 @@ fall back to `index.html` for client-side routing.
 - Reference implementation:
   - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/entrypoint.py`
   - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui-src/src/App.tsx`
-  That example shows a lightweight chat main view with bundle-scoped conversation browsing on top of the standard iframe handshake plus chat REST/SSE endpoints.
+  That example shows a lightweight chat main view with bundle-scoped conversation browsing on top of the runtime UI config handshake plus chat REST/SSE endpoints.
 - See:
   [bundle-client-communication-README.md](bundle-client-communication-README.md)
   and [docs/sdk/bundle/bundle-runtime-README.md](bundle-runtime-README.md)

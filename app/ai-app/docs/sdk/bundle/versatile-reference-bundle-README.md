@@ -87,7 +87,7 @@ This bundle currently demonstrates:
 - authenticated operations endpoints via `@api(..., route="operations")`
 - widget discovery via `@ui_widget(...)`
 - a public endpoint via `@api(..., route="public", public_auth="none")`
-- a custom iframe main view
+- a custom main UI
 
 Use the exact decorator and route contract here:
 

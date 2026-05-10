@@ -258,7 +258,7 @@ Primary example:
 Use:
 
 - `@ui_widget(...)` for discoverable widgets
-- `@ui_main` for the bundle's full custom iframe app
+- `@ui_main` for the bundle's full custom static main UI app
 
 Primary examples:
 

@@ -14,7 +14,7 @@ One KDCube bundle can combine:
 - authenticated APIs via `@api(route="operations")`
 - public APIs via `@api(route="public", public_auth=...)`
 - widgets via `@ui_widget(...)`
-- a full custom iframe UI via `@ui_main`
+- a full custom main UI via `@ui_main`
 - storage
 - deploy-scoped props and secrets
 - user-scoped props and secrets
