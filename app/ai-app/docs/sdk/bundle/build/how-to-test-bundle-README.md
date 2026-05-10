@@ -855,11 +855,12 @@ Use it for:
 - generated standalone HTML apps
 - widget navigation and button/click behavior
 - form filling and operation-path smoke checks
+- below-the-fold content and scroll-dependent UI state
 - screenshot-backed visual checks when DOM/text status is not enough
 
 Do not overuse screenshots. They are useful for visual state, layout, canvas, or
 image checks, but they add multimodal payload cost. Prefer DOM/text status after
-ordinary clicks and fills when that is enough.
+ordinary clicks, fills, scrolls, and status checks when that is enough.
 
 Important runtime boundary:
 

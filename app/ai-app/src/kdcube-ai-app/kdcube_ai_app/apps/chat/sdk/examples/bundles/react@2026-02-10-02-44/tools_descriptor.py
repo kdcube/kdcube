@@ -86,6 +86,7 @@ TOOL_RUNTIME: Dict[str, str] = {
     "browser_tools.open_page": "none",
     "browser_tools.click": "none",
     "browser_tools.fill": "none",
+    "browser_tools.scroll": "none",
     "browser_tools.status": "none",
     "browser_tools.close": "none",
 }

@@ -540,6 +540,67 @@ class BrowserBackend:
             screenshot_path=screenshot_path,
         )
 
+    async def scroll(
+        self,
+        *,
+        tab_id: str = "main",
+        session_id: Optional[str] = None,
+        selector: Optional[str] = None,
+        delta_x: int = 0,
+        delta_y: int = 700,
+        to: Optional[str] = None,
+        timeout_ms: int = 5000,
+        settle_ms: int = 150,
+        text_limit: int = 2000,
+        screenshot: bool = False,
+        screenshot_full_page: bool = True,
+        screenshot_path: Optional[str] = None,
+    ) -> dict[str, Any]:
+        session = await self._get_session(session_id=session_id, width=1280, height=900)
+        page = await self._get_page(session, tab_id=tab_id, create=False)
+        target = str(to or "").strip().lower()
+        if selector:
+            locator = page.locator(selector).first
+            await locator.wait_for(state="attached", timeout=max(int(timeout_ms or 5000), 500))
+            if target in {"", "into_view", "visible"}:
+                await locator.scroll_into_view_if_needed(timeout=max(int(timeout_ms or 5000), 500))
+            elif target in {"top", "bottom"}:
+                await locator.evaluate(
+                    """(el, target) => {
+                      el.scrollTop = target === 'top' ? 0 : el.scrollHeight;
+                    }""",
+                    target,
+                )
+            else:
+                await locator.evaluate(
+                    """(el, arg) => {
+                      el.scrollBy({left: arg.deltaX, top: arg.deltaY, behavior: 'auto'});
+                    }""",
+                    {"deltaX": int(delta_x or 0), "deltaY": int(delta_y or 0)},
+                )
+        elif target == "top":
+            await page.evaluate("() => window.scrollTo({left: window.scrollX, top: 0, behavior: 'auto'})")
+        elif target == "bottom":
+            await page.evaluate(
+                "() => window.scrollTo({left: window.scrollX, top: document.documentElement.scrollHeight, behavior: 'auto'})"
+            )
+        else:
+            await page.evaluate(
+                """(arg) => window.scrollBy({left: arg.deltaX, top: arg.deltaY, behavior: 'auto'})""",
+                {"deltaX": int(delta_x or 0), "deltaY": int(delta_y or 0)},
+            )
+        if settle_ms and settle_ms > 0:
+            await page.wait_for_timeout(min(int(settle_ms), 5000))
+        return await self._state(
+            session=session,
+            page=page,
+            tab_id=tab_id,
+            text_limit=text_limit,
+            screenshot=screenshot,
+            screenshot_full_page=screenshot_full_page,
+            screenshot_path=screenshot_path,
+        )
+
     async def status(
         self,
         *,
@@ -667,6 +728,8 @@ class BrowserBackend:
         title = ""
         ready_state = ""
         text = ""
+        viewport_text = ""
+        scroll: dict[str, Any] = {}
         controls: list[dict[str, Any]] = []
         try:
             title = await page.title()
@@ -680,6 +743,64 @@ class BrowserBackend:
             text = await page.locator("body").inner_text(timeout=1000)
         except Exception:
             text = ""
+        try:
+            scroll = await page.evaluate(
+                """
+                () => {
+                  const doc = document.documentElement;
+                  const body = document.body || doc;
+                  const width = Math.max(doc.scrollWidth, body.scrollWidth || 0);
+                  const height = Math.max(doc.scrollHeight, body.scrollHeight || 0);
+                  return {
+                    x: Math.round(window.scrollX || 0),
+                    y: Math.round(window.scrollY || 0),
+                    max_x: Math.max(0, Math.round(width - window.innerWidth)),
+                    max_y: Math.max(0, Math.round(height - window.innerHeight)),
+                    viewport_width: Math.round(window.innerWidth),
+                    viewport_height: Math.round(window.innerHeight),
+                    document_width: Math.round(width),
+                    document_height: Math.round(height)
+                  };
+                }
+                """
+            )
+        except Exception:
+            scroll = {}
+        try:
+            viewport_text = await page.evaluate(
+                """
+                () => {
+                  const parts = [];
+                  const seen = new Set();
+                  const els = Array.from(document.querySelectorAll('body *'));
+                  for (const el of els) {
+                    const rect = el.getBoundingClientRect();
+                    if (!rect.width || !rect.height) continue;
+                    if (rect.bottom < 0 || rect.right < 0 || rect.top > window.innerHeight || rect.left > window.innerWidth) continue;
+                    const style = window.getComputedStyle(el);
+                    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) continue;
+                    let text = '';
+                    const tag = el.tagName.toLowerCase();
+                    if (tag === 'input' || tag === 'textarea') {
+                      text = el.value || el.getAttribute('placeholder') || el.getAttribute('aria-label') || '';
+                    } else {
+                      text = el.innerText || el.getAttribute('aria-label') || el.title || '';
+                    }
+                    text = String(text).replace(/\\s+/g, ' ').trim();
+                    if (!text) continue;
+                    if (text.length > 500 && el.children.length > 0) continue;
+                    const key = text.slice(0, 240);
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    parts.push(text);
+                    if (parts.join('\\n').length > 12000) break;
+                  }
+                  return parts.join('\\n');
+                }
+                """
+            )
+        except Exception:
+            viewport_text = ""
         try:
             controls = await page.evaluate(
                 """
@@ -696,6 +817,9 @@ class BrowserBackend:
                     type: el.getAttribute('type') || '',
                     href: el.getAttribute('href') || '',
                     visible: !!(rect.width || rect.height),
+                    in_viewport: !!(rect.width || rect.height) && rect.bottom >= 0 && rect.right >= 0 && rect.top <= window.innerHeight && rect.left <= window.innerWidth,
+                    rect_top: Math.round(rect.top),
+                    rect_left: Math.round(rect.left),
                     selector_hint: el.id ? `#${CSS.escape(el.id)}` : ''
                   };
                 })
@@ -705,6 +829,7 @@ class BrowserBackend:
             controls = []
 
         limited_text = text[: max(int(text_limit or 0), 0)] if text_limit else ""
+        limited_viewport_text = viewport_text[: max(int(text_limit or 0), 0)] if text_limit else ""
         screenshot_ret = None
         if screenshot:
             screenshot_ret = await self._capture_screenshot(
@@ -726,6 +851,10 @@ class BrowserBackend:
             "text_preview": limited_text,
             "text_symbols": len(text),
             "text_truncated": bool(text_limit and len(text) > int(text_limit)),
+            "viewport_text_preview": limited_viewport_text,
+            "viewport_text_symbols": len(viewport_text),
+            "viewport_text_truncated": bool(text_limit and len(viewport_text) > int(text_limit)),
+            "scroll": scroll,
             "screenshot": screenshot_ret,
             "controls": controls,
             "console_errors": [
@@ -808,6 +937,8 @@ async def run_browser_action(action: str, params: dict[str, Any], *, bindings_so
         return await backend.click(**params)
     if action == "fill":
         return await backend.fill(**params)
+    if action == "scroll":
+        return await backend.scroll(**params)
     if action == "status":
         return await backend.status(**params)
     if action == "close":

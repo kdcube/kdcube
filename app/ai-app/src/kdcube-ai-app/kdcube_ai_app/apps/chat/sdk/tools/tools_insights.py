@@ -18,6 +18,7 @@ BUILTIN_TOOLS = {
     "browser_tools.open_page",
     "browser_tools.click",
     "browser_tools.fill",
+    "browser_tools.scroll",
     "browser_tools.status",
     "browser_tools.close",
     "exec_tools.execute_code_python",

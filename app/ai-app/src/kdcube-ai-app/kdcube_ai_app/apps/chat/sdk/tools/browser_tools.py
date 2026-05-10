@@ -214,10 +214,58 @@ class BrowserTools:
             return _err(where="browser_tools.fill", exc=exc)
 
     @kernel_function(
+        name="scroll",
+        description=(
+            "Scroll an already-open turn-scoped Playwright tab or a scrollable element, then return updated page diagnostics. "
+            "Use this to inspect below-the-fold content without immediately taking screenshots. "
+            "Returns scroll metrics and viewport_text_preview in addition to normal status fields. "
+            "Screenshots are optional internal image artifacts; request them only when visual state/layout matters because they add multimodal tokens."
+        ),
+    )
+    async def scroll(
+        self,
+        tab_id: Annotated[str, "Named tab opened by browser_tools.open_page."] = "main",
+        selector: Annotated[Optional[str], "Optional CSS selector. If provided with no 'to', the element is scrolled into view; with to='delta', the element itself is scrolled by delta_x/delta_y."] = None,
+        delta_x: Annotated[int, "Horizontal scroll delta in CSS pixels. Positive scrolls right."] = 0,
+        delta_y: Annotated[int, "Vertical scroll delta in CSS pixels. Positive scrolls down."] = 700,
+        to: Annotated[Optional[str], "Optional target: 'top', 'bottom', 'into_view', or 'delta'. If selector is set, 'into_view' scrolls that element into view."] = None,
+        timeout_ms: Annotated[int, "Selector wait timeout in milliseconds when selector is used."] = 5000,
+        settle_ms: Annotated[int, "Extra wait after scroll before inspecting the page."] = 150,
+        text_limit: Annotated[int, "Visible page and viewport text preview size in characters."] = 2000,
+        screenshot: Annotated[bool, "If true, write a PNG screenshot under OUTPUT_DIR after the scroll as an internal file artifact. Use sparingly because screenshots add multimodal tokens."] = False,
+        screenshot_full_page: Annotated[bool, "If true, capture full page; otherwise capture viewport."] = True,
+        screenshot_path: Annotated[Optional[str], "Optional OUTPUT_DIR-relative screenshot path. Omit for an automatic turn outputs path."] = None,
+        session_id: Annotated[Optional[str], "Optional explicit session id. Omit for normal turn-scoped behavior."] = None,
+    ) -> Annotated[dict, "Envelope {ok,error,ret}. ret includes page state, scroll metrics, viewport text, and browser diagnostics."]:
+        try:
+            ret = await run_browser_action(
+                "scroll",
+                {
+                    "tab_id": tab_id,
+                    "selector": selector,
+                    "delta_x": delta_x,
+                    "delta_y": delta_y,
+                    "to": to,
+                    "timeout_ms": timeout_ms,
+                    "settle_ms": settle_ms,
+                    "text_limit": text_limit,
+                    "screenshot": screenshot,
+                    "screenshot_full_page": screenshot_full_page,
+                    "screenshot_path": screenshot_path,
+                    "session_id": session_id,
+                },
+                bindings_source=globals(),
+            )
+            ret = await _host_internal_files(ret)
+            return _ok(ret)
+        except Exception as exc:
+            return _err(where="browser_tools.scroll", exc=exc)
+
+    @kernel_function(
         name="status",
         description=(
             "Inspect an already-open turn-scoped Playwright tab without changing it. "
-            "Returns title/url, visible text preview, controls, console warnings/errors, page errors, and request failures. "
+            "Returns title/url, visible text preview, viewport text preview, scroll metrics, controls, console warnings/errors, page errors, and request failures. "
             "Screenshots are optional internal image artifacts; request them only when visual state/layout matters because they add multimodal tokens."
         ),
     )

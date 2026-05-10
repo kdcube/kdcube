@@ -1,8 +1,8 @@
 # Browser Tools
 
 `browser_tools` is the SDK Playwright-backed tool namespace for browser verification from ReAct-style agents.
-It is intentionally small: open a page, inspect state, click, fill, optionally take screenshots, and close tabs or
-the whole turn-scoped browser session.
+It is intentionally small: open a page, inspect state, click, fill, scroll, optionally take screenshots, and close
+tabs or the whole turn-scoped browser session.
 
 ## Purpose
 
@@ -37,6 +37,7 @@ TOOL_RUNTIME = {
     "browser_tools.open_page": "none",
     "browser_tools.click": "none",
     "browser_tools.fill": "none",
+    "browser_tools.scroll": "none",
     "browser_tools.status": "none",
     "browser_tools.close": "none",
 }
@@ -63,7 +64,7 @@ Important parameters:
 - `timeout_ms`: navigation timeout. Defaults to `10000`.
 - `settle_ms`: extra delay after navigation before inspection. Defaults to `150`.
 - `width`, `height`: viewport size.
-- `text_limit`: visible body text preview size.
+- `text_limit`: full-body and viewport text preview size.
 - `screenshot`: when true, writes a PNG screenshot artifact under `OUTPUT_DIR` and exposes it as an internal `fi:` file. Use sparingly because screenshots add multimodal tokens.
 - `screenshot_full_page`: capture full page when true, viewport only when false.
 - `screenshot_path`: optional `OUTPUT_DIR`-relative screenshot path.
@@ -91,11 +92,28 @@ Important parameters:
 - `tab_id`, `timeout_ms`, `settle_ms`, `text_limit`.
 - `screenshot`, `screenshot_full_page`, `screenshot_path`; keep `screenshot=false` unless visual state/layout matters.
 
+### `browser_tools.scroll`
+
+Scroll an already-open tab or a scrollable element and return updated diagnostics.
+
+Important parameters:
+
+- `tab_id`: tab to use. Defaults to `main`.
+- `selector`: optional CSS selector. If supplied without `to`, the element is scrolled into view. With `to: "delta"`, the selected element itself is scrolled by `delta_x` / `delta_y`.
+- `delta_x`, `delta_y`: scroll deltas in CSS pixels. Positive `delta_y` scrolls down. Defaults to `delta_y=700`.
+- `to`: optional target: `top`, `bottom`, `into_view`, or `delta`.
+- `timeout_ms`, `settle_ms`, `text_limit`.
+- `screenshot`, `screenshot_full_page`, `screenshot_path`; keep `screenshot=false` unless visual state/layout matters.
+
+Use `scroll` before reaching for screenshots when the problem is simply below-the-fold content. The result includes
+`scroll` metrics and `viewport_text_preview`, so the agent can tell what is currently in the viewport and whether
+more vertical scroll remains.
+
 ### `browser_tools.status`
 
 Inspect an already-open tab without changing it.
 
-Use this after delayed page updates, after multiple actions, or when a screenshot is needed without another click. Screenshots are internal image artifacts and should be requested only when DOM diagnostics are insufficient.
+Use this after delayed page updates, after scrolling, after multiple actions, or when a screenshot is needed without another click. Screenshots are internal image artifacts and should be requested only when DOM diagnostics are insufficient.
 
 ### `browser_tools.close`
 
@@ -156,9 +174,22 @@ The page-action payload includes:
     "path": "/absolute/runtime/path/app.html",
     "size_bytes": 52039
   },
-  "text_preview": "Visible body text...",
+  "text_preview": "Full body text preview...",
   "text_symbols": 1234,
   "text_truncated": false,
+  "viewport_text_preview": "Text currently intersecting the viewport...",
+  "viewport_text_symbols": 512,
+  "viewport_text_truncated": false,
+  "scroll": {
+    "x": 0,
+    "y": 700,
+    "max_x": 0,
+    "max_y": 2400,
+    "viewport_width": 1280,
+    "viewport_height": 900,
+    "document_width": 1280,
+    "document_height": 3300
+  },
   "screenshot": {
     "path": "fi:turn_x.outputs/browser_screenshots/123_main.png",
     "logical_path": "fi:turn_x.outputs/browser_screenshots/123_main.png",
@@ -197,6 +228,9 @@ The page-action payload includes:
       "type": "",
       "href": "",
       "visible": true,
+      "in_viewport": true,
+      "rect_top": 120,
+      "rect_left": 40,
       "selector_hint": "#run"
     }
   ],
@@ -217,6 +251,8 @@ A browser action is useful even without a screenshot. The agent receives:
 - `request_failures`: failed resource/API requests.
 - `controls`: clickable/fillable elements discovered from DOM.
 - `text_preview`: visible page text after the action.
+- `viewport_text_preview`: text from elements currently intersecting the viewport after the action.
+- `scroll`: current page scroll position, viewport size, document size, and remaining scroll range.
 - `ready_state`, `url`, and `title`: basic page state.
 
 Screenshots add visual feedback, but they add multimodal tokens. Prefer DOM diagnostics first and request screenshots only for:
@@ -262,8 +298,21 @@ For generated interactive HTML:
    ```
 
 6. Repeat for important controls and states.
-7. Use `browser_tools.status` when waiting/inspecting without another action; set `screenshot:true` only for visual state that needs multimodal inspection.
-8. Close the session when done:
+7. Use `browser_tools.scroll` to inspect below-the-fold content or bring a target selector into view; inspect `viewport_text_preview`, `scroll`, and each control's `in_viewport` before using screenshots.
+
+   ```json
+   {
+     "tool_id": "browser_tools.scroll",
+     "params": {
+       "tab_id": "main",
+       "delta_y": 700,
+       "screenshot": false
+     }
+   }
+   ```
+
+8. Use `browser_tools.status` when waiting/inspecting without another action; set `screenshot:true` only for visual state that needs multimodal inspection.
+9. Close the session when done:
 
    ```json
    {

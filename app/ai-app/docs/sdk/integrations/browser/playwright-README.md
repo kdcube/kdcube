@@ -85,6 +85,11 @@ Browser tools must run in-process:
 
 ```python
 "browser_tools.open_page": "none"
+"browser_tools.click": "none"
+"browser_tools.fill": "none"
+"browser_tools.scroll": "none"
+"browser_tools.status": "none"
+"browser_tools.close": "none"
 ```
 
 Do not route `browser_tools.*` through isolated exec or local subprocess mode. A subprocess gets its own module
@@ -108,7 +113,9 @@ Every browser action returns current page state:
 - URL
 - title
 - document ready state
-- visible body text preview
+- full-body text preview
+- visible viewport text preview
+- scroll metrics
 - DOM controls summary
 - recent diagnostics
 - optional screenshot artifact
