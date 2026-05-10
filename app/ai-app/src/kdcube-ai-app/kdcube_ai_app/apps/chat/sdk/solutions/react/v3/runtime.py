@@ -146,7 +146,7 @@ class ReactSolverV2:
             try:
                 self.ctx_browser.add_timeline_event_hook(self.on_timeline_event)
             except Exception:
-                self.log.log("[react.v2] failed to register timeline event hook\n" + traceback.format_exc(), level="ERROR")
+                self.log.log("[react.v3] failed to register timeline event hook\n" + traceback.format_exc(), level="ERROR")
         self.graph = self._build_graph()
         self._timeline_text_idx = {}
         self._outdir_cv_token = None
@@ -203,7 +203,7 @@ class ReactSolverV2:
         if type_norm in {"steer", "followup"} and not self._event_targets_current_turn(event):
             try:
                 self.log.log(
-                    f"[react.v2] timeline_event ignored: type={type_norm} current_turn={self._current_turn_id()} "
+                    f"[react.v3] timeline_event ignored: type={type_norm} current_turn={self._current_turn_id()} "
                     f"target_turn={getattr(event, 'target_turn_id', None) or ''} "
                     f"active_turn={getattr(event, 'active_turn_id_at_ingress', None) or ''} "
                     f"owner_turn={getattr(event, 'owner_turn_id', None) or ''}",
@@ -231,7 +231,7 @@ class ReactSolverV2:
             event_id = getattr(event, "message_id", None) or ""
             credit_awarded = self._award_reactive_iteration_credit(type=type_norm, event=event)
             self.log.log(
-                f"[react.v2] timeline_event accepted: type={type} event_id={event_id} seq={seq} "
+                f"[react.v3] timeline_event accepted: type={type} event_id={event_id} seq={seq} "
                 f"blocks={len(blocks or [])} credit_awarded={credit_awarded} "
                 f"total_credit={self._reactive_iteration_credit_total}/{self._reactive_iteration_credit_cap}",
                 level="INFO",
@@ -282,7 +282,7 @@ class ReactSolverV2:
         self._active_phase_cancel_requested_at = time.time()
         phase = str(self._active_phase_name or "").strip() or "phase"
         self.log.log(
-            f"[react.v2] steer cancelling active {phase} task turn_id={self.scratchpad.turn_id}",
+            f"[react.v3] steer cancelling active {phase} task turn_id={self.scratchpad.turn_id}",
             level="INFO",
         )
         task.cancel()
@@ -319,7 +319,7 @@ class ReactSolverV2:
             owner_listener_id = str(getattr(owner, "listener_id", "") or "").strip()
         except Exception:
             self.log.log(
-                f"[react.v2] phase={phase} failed to inspect external-event owner:\n{traceback.format_exc()}",
+                f"[react.v3] phase={phase} failed to inspect external-event owner:\n{traceback.format_exc()}",
                 level="ERROR",
             )
             return
@@ -327,7 +327,7 @@ class ReactSolverV2:
         if not owner_turn_id or owner_turn_id != current_turn_id or not listener_running:
             level = "WARNING"
         self.log.log(
-            f"[react.v2] phase={phase} external watch state turn_id={current_turn_id} "
+            f"[react.v3] phase={phase} external watch state turn_id={current_turn_id} "
             f"timeline_present={bool(timeline is not None)} listener_running={listener_running} "
             f"owner_turn={owner_turn_id or '-'} owner_listener={owner_listener_id or '-'}",
             level=level,
@@ -376,7 +376,7 @@ class ReactSolverV2:
                     await asyncio.sleep(poll_interval_s)
                     continue
                 self.log.log(
-                    f"[react.v2] phase={phase} direct external-event watch received count={len(events)} turn_id={self.scratchpad.turn_id}",
+                    f"[react.v3] phase={phase} direct external-event watch received count={len(events)} turn_id={self.scratchpad.turn_id}",
                     level="INFO",
                 )
                 apply_events = getattr(ctx_browser, "apply_external_events", None)
@@ -398,7 +398,7 @@ class ReactSolverV2:
                             changed += int(bool(handled))
                         except Exception:
                             self.log.log(
-                                f"[react.v2] direct external-event dispatch failure phase={phase}: {traceback.format_exc()}",
+                                f"[react.v3] direct external-event dispatch failure phase={phase}: {traceback.format_exc()}",
                                 level="ERROR",
                             )
                 if changed and self._steer_interrupt_requested:
@@ -407,7 +407,7 @@ class ReactSolverV2:
                 raise
             except Exception:
                 self.log.log(
-                    f"[react.v2] external-event phase watcher failure phase={phase}: {traceback.format_exc()}",
+                    f"[react.v3] external-event phase watcher failure phase={phase}: {traceback.format_exc()}",
                     level="ERROR",
                 )
                 await asyncio.sleep(0.2)
@@ -435,7 +435,7 @@ class ReactSolverV2:
         except asyncio.CancelledError:
             if self._active_phase_cancelled_by_steer or self._steer_interrupt_requested:
                 self.log.log(
-                    f"[react.v2] active {phase} cancelled by steer turn_id={self.scratchpad.turn_id}",
+                    f"[react.v3] active {phase} cancelled by steer turn_id={self.scratchpad.turn_id}",
                     level="INFO",
                 )
                 return True, None
@@ -490,13 +490,13 @@ class ReactSolverV2:
                 pass
             if changed:
                 self.log.log(
-                    f"[react.v2] drained external events turn_id={self.scratchpad.turn_id} "
+                    f"[react.v3] drained external events turn_id={self.scratchpad.turn_id} "
                     f"changed={changed} before_seq={before_seq} after_seq={current_seq}",
                     level="INFO",
                 )
             return int(changed or 0)
         except Exception:
-            self.log.log(f"[react.v2] external event drain failed: {traceback.format_exc()}", level="ERROR")
+            self.log.log(f"[react.v3] external event drain failed: {traceback.format_exc()}", level="ERROR")
             return 0
 
     async def _wait_and_drain_external_events(self, *, call_hooks: bool, block_ms: int) -> int:
@@ -518,13 +518,13 @@ class ReactSolverV2:
                 pass
             if changed:
                 self.log.log(
-                    f"[react.v2] waited/drained external events turn_id={self.scratchpad.turn_id} "
+                    f"[react.v3] waited/drained external events turn_id={self.scratchpad.turn_id} "
                     f"changed={changed} before_seq={before_seq} after_seq={current_seq} block_ms={block_ms}",
                     level="INFO",
                 )
             return int(changed or 0)
         except Exception:
-            self.log.log(f"[react.v2] external event wait/drain failed: {traceback.format_exc()}", level="ERROR")
+            self.log.log(f"[react.v3] external event wait/drain failed: {traceback.format_exc()}", level="ERROR")
             return 0
 
     def _visible_external_event_seq(self) -> int:
@@ -576,7 +576,7 @@ class ReactSolverV2:
                 int(max_sequence or 0),
             )
             self.log.log(
-                f"[react.v2] marked external events consumed turn_id={self.scratchpad.turn_id} "
+                f"[react.v3] marked external events consumed turn_id={self.scratchpad.turn_id} "
                 f"count={consumed} up_to_seq={max_sequence}",
                 level="INFO",
             )
@@ -670,7 +670,7 @@ class ReactSolverV2:
                 self.ctx_browser.contribute(blocks=blocks)
                 state["interrupted_generation_persisted"] = True
         except Exception:
-            self.log.log(f"[react.v2] failed to persist interrupted generation: {traceback.format_exc()}", level="ERROR")
+            self.log.log(f"[react.v3] failed to persist interrupted generation: {traceback.format_exc()}", level="ERROR")
 
     async def _enter_steer_finalize_mode(
         self,
@@ -684,7 +684,7 @@ class ReactSolverV2:
             if visible_seq > int(self._last_consumed_external_event_seq or 0):
                 await self._mark_external_events_consumed_up_to(max_sequence=visible_seq)
         except Exception:
-            self.log.log(f"[react.v2] failed to mark steer event consumed: {traceback.format_exc()}", level="ERROR")
+            self.log.log(f"[react.v3] failed to mark steer event consumed: {traceback.format_exc()}", level="ERROR")
         self._last_handled_steer_seq = max(int(self._last_handled_steer_seq or 0), int(self._latest_steer_seq_seen or 0), int(visible_seq or 0))
         self._steer_interrupt_requested = False
         steer_text = str(self._latest_steer_text or "").strip()
@@ -708,7 +708,7 @@ class ReactSolverV2:
             "cancelled_phase": cancelled_phase,
         }
         self.log.log(
-            f"[react.v2] steer finalize mode: turn_id={self.scratchpad.turn_id} "
+            f"[react.v3] steer finalize mode: turn_id={self.scratchpad.turn_id} "
             f"checkpoint={checkpoint} cancelled_phase={cancelled_phase or ''} "
             f"seq={self._latest_steer_seq_seen} text={steer_text!r}",
             level="INFO",
@@ -784,7 +784,7 @@ class ReactSolverV2:
             #         )
             # except Exception:
             #     try:
-            #         self.log.log("[react.v2] refresh_feedbacks failed: " + traceback.format_exc(), level="ERROR")
+            #         self.log.log("[react.v3] refresh_feedbacks failed: " + traceback.format_exc(), level="ERROR")
             #     except Exception:
             #         pass
             active_block = build_announce_text(
@@ -805,7 +805,7 @@ class ReactSolverV2:
             debug_sources = bool(getattr(runtime_ctx, "debug_log_sources_pool", False))
             if debug_announce:
                 try:
-                    self.log.log(f"[react.v2] announce:\n{active_block}", level="INFO")
+                    self.log.log(f"[react.v3] announce:\n{active_block}", level="INFO")
                 except Exception:
                     pass
             if debug_sources:
@@ -815,7 +815,7 @@ class ReactSolverV2:
                         sources_pool=list(self.ctx_browser.sources_pool or []),
                     )
                     if sources_text:
-                        self.log.log(f"[react.v2] sources_pool:\n{sources_text}", level="INFO")
+                        self.log.log(f"[react.v3] sources_pool:\n{sources_text}", level="INFO")
                 except Exception:
                     pass
             self.ctx_browser.announce(
@@ -832,7 +832,7 @@ class ReactSolverV2:
                 raise ValueError("PPTX file was not produced")
             except Exception as exc:
                 tb = traceback.format_exc()
-                raise RuntimeError(f"[react.v2] Error control {exc}/{tb}") from exc
+                raise RuntimeError(f"[react.v3] Error control {exc}/{tb}") from exc
 
         wf = StateGraph(dict)
         wf.add_node("decision", self._decision_node)
@@ -1571,9 +1571,9 @@ class ReactSolverV2:
         except Exception:
             pass
 
-        session_id = f"react-v2-{uuid.uuid4().hex[:8]}"
+        session_id = f"react-v3-{uuid.uuid4().hex[:8]}"
         turn_id = self.ctx_browser.runtime_ctx.turn_id
-        self.log.log(f"[react.v2] Start {session_id} in {workdir}")
+        self.log.log(f"[react.v3] Start {session_id} in {workdir}")
 
         adapters = await self.tools_subsystem.react_tools(
             allowed_plugins=allowed_plugins,
@@ -1648,10 +1648,10 @@ class ReactSolverV2:
         except Exception as exc:
             tb = traceback.format_exc()
             try:
-                self.log.log(f"[react.v2] Graph error: {exc}\n{tb}", level="ERROR")
+                self.log.log(f"[react.v3] Graph error: {exc}\n{tb}", level="ERROR")
             except Exception:
                 pass
-            raise RuntimeError(f"[react.v2] Graph error: {exc}\n{tb}") from exc
+            raise RuntimeError(f"[react.v3] Graph error: {exc}\n{tb}") from exc
         finally:
             # workspace is managed by ContextBrowser; no CV reset here
             self._outdir_cv_token = None
@@ -1745,7 +1745,7 @@ class ReactSolverV2:
             )
         except Exception as exc:
             try:
-                self.log.log(f"[react.v2] persist_workspace failed: {exc}", level="ERROR")
+                self.log.log(f"[react.v3] persist_workspace failed: {exc}", level="ERROR")
             except Exception:
                 pass
             return None
@@ -1753,13 +1753,13 @@ class ReactSolverV2:
     def _route_after_decision(self, state: Dict[str, Any]) -> str:
         if state.get("exit_reason"):
             try:
-                self.log.log(f"[react.v2] route=exit exit_reason={state.get('exit_reason')}", level="INFO")
+                self.log.log(f"[react.v3] route=exit exit_reason={state.get('exit_reason')}", level="INFO")
             except Exception:
                 pass
             return "exit"
         if state.get("retry_decision"):
             try:
-                self.log.log("[react.v2] retry_decision=True -> route=decision", level="INFO")
+                self.log.log("[react.v3] retry_decision=True -> route=decision", level="INFO")
             except Exception:
                 pass
             state["retry_decision"] = False
@@ -1768,12 +1768,12 @@ class ReactSolverV2:
         action = decision.get("action")
         if action == "call_tool":
             try:
-                self.log.log("[react.v2] route=tool_execution", level="INFO")
+                self.log.log("[react.v3] route=tool_execution", level="INFO")
             except Exception:
                 pass
             return "tool_execution"
         try:
-            self.log.log(f"[react.v2] route=exit action={action}", level="INFO")
+            self.log.log(f"[react.v3] route=exit action={action}", level="INFO")
         except Exception:
             pass
         return "exit"
@@ -1811,7 +1811,7 @@ class ReactSolverV2:
             import traceback
             tb = traceback.format_exc()
             try:
-                self.log.log(f"[react.v2] decision_node error: {exc}\n{tb}", level="ERROR")
+                self.log.log(f"[react.v3] decision_node error: {exc}\n{tb}", level="ERROR")
             except Exception:
                 pass
             raise
@@ -2076,7 +2076,7 @@ class ReactSolverV2:
                         self.scratchpad._latest_streamed_notes_started_at = notes_started_at
         except Exception:
             self.log.log(
-                f"[react.v2] failed to sync streamed final-answer index: {traceback.format_exc()}",
+                f"[react.v3] failed to sync streamed final-answer index: {traceback.format_exc()}",
                 level="ERROR",
             )
         await self._drain_external_events(call_hooks=True)
@@ -2090,7 +2090,7 @@ class ReactSolverV2:
             try:
                 await self._mark_external_events_consumed_up_to(max_sequence=visible_external_event_seq)
             except Exception:
-                self.log.log(f"[react.v2] failed to mark external events consumed: {traceback.format_exc()}", level="ERROR")
+                self.log.log(f"[react.v3] failed to mark external events consumed: {traceback.format_exc()}", level="ERROR")
         # Reset forced compaction once we have a decision attempt.
         state["force_compaction_next_decision"] = False
         state["last_decision_raw"] = decision
@@ -2149,7 +2149,7 @@ class ReactSolverV2:
                     decision_packet=decision,
                     reason="schema_error",
                 )
-                self.log.log(f"[react.v2] decision schema error: {error}", level="ERROR")
+                self.log.log(f"[react.v3] decision schema error: {error}", level="ERROR")
             except Exception:
                 pass
             retries = int(state.get("decision_retries") or 0)
@@ -2159,7 +2159,7 @@ class ReactSolverV2:
                 decision["notes"] = "ReactDecisionOutV2_schema_error; retry decision"
                 try:
                     self.log.log(
-                        f"[react.v2] retry decision after schema error (retries={state['decision_retries']})",
+                        f"[react.v3] retry decision after schema error (retries={state['decision_retries']})",
                         level="INFO",
                     )
                 except Exception:
@@ -2287,7 +2287,7 @@ class ReactSolverV2:
                         pass
                     try:
                         self.log.log(
-                            f"[react.v2] final_answer present with call_tool; coercing to complete",
+                            f"[react.v3] final_answer present with call_tool; coercing to complete",
                             level="ERROR",
                         )
                     except Exception:
@@ -2323,7 +2323,7 @@ class ReactSolverV2:
                         pass
                     try:
                         self.log.log(
-                            f"[react.v2] decision validation failed: {validation_error} | decision={self._short_json(decision)}",
+                            f"[react.v3] decision validation failed: {validation_error} | decision={self._short_json(decision)}",
                             level="ERROR",
                         )
                     except Exception:
@@ -2335,7 +2335,7 @@ class ReactSolverV2:
                         decision = {"action": "call_tool", "notes": f"{validation_error}; retry decision"}
                         try:
                             self.log.log(
-                                f"[react.v2] retry decision after validation error (retries={state['decision_retries']})",
+                                f"[react.v3] retry decision after validation error (retries={state['decision_retries']})",
                                 level="INFO",
                             )
                         except Exception:
@@ -2426,7 +2426,7 @@ class ReactSolverV2:
                     except Exception:
                         pass
                     try:
-                        self.log.log(f"[react.v2] tool_not_allowed_in_react: {tool_id}", level="ERROR")
+                        self.log.log(f"[react.v3] tool_not_allowed_in_react: {tool_id}", level="ERROR")
                     except Exception:
                         pass
                     retries = int(state.get("decision_retries") or 0)
@@ -2437,7 +2437,7 @@ class ReactSolverV2:
                         action = "call_tool"
                         try:
                             self.log.log(
-                                f"[react.v2] retry decision after tool_not_allowed (retries={state['decision_retries']})",
+                                f"[react.v3] retry decision after tool_not_allowed (retries={state['decision_retries']})",
                                 level="INFO",
                             )
                         except Exception:
@@ -2486,7 +2486,7 @@ class ReactSolverV2:
                             pass
                         try:
                             self.log.log(
-                                f"[react.v2] tool_call_invalid: {verdict.get('violations')} | decision={self._short_json(decision)}",
+                                f"[react.v3] tool_call_invalid: {verdict.get('violations')} | decision={self._short_json(decision)}",
                                 level="ERROR",
                             )
                         except Exception:
@@ -2499,7 +2499,7 @@ class ReactSolverV2:
                             decision["notes"] = "tool_call_invalid; retry decision"
                             try:
                                 self.log.log(
-                                    f"[react.v2] retry decision after tool_call_invalid (retries={state['decision_retries']})",
+                                    f"[react.v3] retry decision after tool_call_invalid (retries={state['decision_retries']})",
                                     level="INFO",
                                 )
                             except Exception:
@@ -2568,7 +2568,7 @@ class ReactSolverV2:
                         pass
                     try:
                         self.log.log(
-                            f"[react.v2] tool_signature_red: {sig_issues} | decision={self._short_json(decision)}",
+                            f"[react.v3] tool_signature_red: {sig_issues} | decision={self._short_json(decision)}",
                             level="ERROR",
                         )
                     except Exception:
@@ -2583,7 +2583,7 @@ class ReactSolverV2:
                         decision["notes"] = "tool_signature_red; retry decision"
                         try:
                             self.log.log(
-                                f"[react.v2] retry decision after tool_signature_red (retries={state['decision_retries']})",
+                                f"[react.v3] retry decision after tool_signature_red (retries={state['decision_retries']})",
                                 level="INFO",
                             )
                         except Exception:
@@ -2687,7 +2687,7 @@ class ReactSolverV2:
                 state["suggested_followups"] = []
                 try:
                     self.log.log(
-                        f"[react.v2] external event arrived during decision; forcing another round "
+                        f"[react.v3] external event arrived during decision; forcing another round "
                         f"(seen={latest_seen_after_decision} visible={visible_external_event_seq})",
                         level="INFO",
                     )
@@ -2707,7 +2707,7 @@ class ReactSolverV2:
                 try:
                     sf = state.get("suggested_followups") or []
                     self.log.log(
-                        f"[react.v2] decision followups: count={len(sf)}",
+                        f"[react.v3] decision followups: count={len(sf)}",
                         level="INFO",
                     )
                 except Exception:
@@ -2751,7 +2751,7 @@ class ReactSolverV2:
                 decision,
             )
         except Exception as exc:
-            self.log.log(f"[react.v2] register_agentic_response failed: {exc}", level="ERROR")
+            self.log.log(f"[react.v3] register_agentic_response failed: {exc}", level="ERROR")
 
         state["exec_code_streamer"] = exec_streamer_widget
         state["record_streamers"] = record_streamers
@@ -2775,7 +2775,7 @@ class ReactSolverV2:
                 return
             try:
                 self.log.log(
-                    f"[react.v2] merge_sources: pending_sources={len(pending_sources or [])}",
+                    f"[react.v3] merge_sources: pending_sources={len(pending_sources or [])}",
                     level="INFO",
                 )
                 await self._merge_with_pool(
@@ -2959,7 +2959,7 @@ class ReactSolverV2:
                         return out
                     runtime_ctx.on_after_completion_contribution = _hook_post
         except Exception as ex:
-            self.log.log(f"[react.v2] completion_hooks: {ex}", level="ERROR")
+            self.log.log(f"[react.v3] completion_hooks: {ex}", level="ERROR")
 
         # Emit citations used in this turn (files already emitted on host)
         try:
@@ -3008,18 +3008,18 @@ class ReactSolverV2:
                             self.log.log(traceback.format_exc())
                     if non_citable:
                         self.log.log(
-                            f"[react.v2] emit_citations: skipped non-citable sids={sorted(set(non_citable))}",
+                            f"[react.v3] emit_citations: skipped non-citable sids={sorted(set(non_citable))}",
                             level="INFO",
                         )
                     self.log.log(
-                        f"[react.v2] emit_citations: used_sids={sorted(sid_set)} "
+                        f"[react.v3] emit_citations: used_sids={sorted(sid_set)} "
                         f"pool={len(pool)} citations={len(citations)}",
                         level="INFO",
                     )
                     if citations:
                         await self.hosting_service.emit_solver_artifacts(files=[], citations=citations)
                 else:
-                    self.log.log("[react.v2] emit_citations: no used_sids detected", level="INFO")
+                    self.log.log("[react.v3] emit_citations: no used_sids detected", level="INFO")
         except Exception:
             self.log.log(traceback.format_exc())
         return state
@@ -3069,7 +3069,7 @@ class ReactSolverV2:
         }
         try:
             self.log.log(
-                f"[react.v2] merge_sources: existing={len(self.ctx_browser.sources_pool or [])} "
+                f"[react.v3] merge_sources: existing={len(self.ctx_browser.sources_pool or [])} "
                 f"collections={[len(c or []) for c in collections]}",
                 level="INFO",
             )
@@ -3108,7 +3108,7 @@ class ReactSolverV2:
             self.ctx_browser.set_sources_pool(sources_pool=merged)
             try:
                 self.log.log(
-                    f"[react.v2] merge_sources: merged={len(merged)}",
+                    f"[react.v3] merge_sources: merged={len(merged)}",
                     level="INFO",
                 )
             except Exception:

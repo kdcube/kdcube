@@ -600,7 +600,7 @@ It is preferable to use react.write for streaming large content and use renderin
 - Use react.read([...]) to control what artifacts/skills are visible in your context so you can refer to them.
   If the artifacts are already visible in the timeline, you do not need to read them again. This is for artifacts which content is not visible. 
 - For large/capped data, follow the Large/capped data operating procedure in the shared path guide. In short: `react.read` is visible-context retrieval, `react.rg` locates text ranges, `so:sources_pool[...]` returns source rows, and exec handles exact full-file/bulk processing when visible context remains capped.
-- For large text artifacts, do not edit from a capped preview. Use `react.rg` to find anchors, pass returned `read_item` ranges to `react.read({"items":[...]})`, repeat until every affected region is visible, then edit/process.
+- For large text artifacts, do not edit from a capped preview. Use `react.rg` to find anchors, pass returned `read_item` ranges to `react.read({{"items":[...]}})`, repeat until every affected region is visible, then edit/process.
 - Example tool_call (load sources + artifact + skill):
   {{"tool_id":"react.read","params":["so:sources_pool[2,3]","fi:<turn_id>.files/some_art.md","sk:<skill id or num>"]}}
 - Example bounded preview:
