@@ -141,6 +141,7 @@ class CronJobSpec:
 class BundleInterfaceManifest:
     bundle_id: str
     allowed_roles: tuple[str, ...] = ()
+    allowed_roles_config: str | None = None
     ui_widgets: tuple[UIWidgetSpec, ...] = ()
     api_endpoints: tuple[APIEndpointSpec, ...] = ()
     mcp_endpoints: tuple[MCPEndpointSpec, ...] = ()
@@ -271,6 +272,14 @@ def apply_widget_overrides(spec: UIWidgetSpec, props: dict[str, Any]) -> UIWidge
         user_types=user_types if user_types is not None else spec.user_types,
         roles=roles if roles is not None else spec.roles,
     )
+
+
+def apply_bundle_overrides(manifest: BundleInterfaceManifest, props: dict[str, Any]) -> BundleInterfaceManifest:
+    """Return a new BundleInterfaceManifest with allowed_roles overridden from props if configured."""
+    roles = _coerce_string_list_override(_resolve_override_value(manifest.allowed_roles_config, props))
+    if roles is None:
+        return manifest
+    return dataclasses.replace(manifest, allowed_roles=roles)
 
 
 def apply_mcp_overrides(spec: MCPEndpointSpec, props: dict[str, Any]) -> MCPEndpointSpec:
@@ -453,6 +462,7 @@ def agentic_workflow(
         version: str | None = None,
         priority: int = 100,
         allowed_roles: List[str] | Tuple[str, ...] | None = None,
+        allowed_roles_config: str | None = None,
 ):
     """
     Mark a CLASS as the bundle's workflow CLASS.
@@ -476,6 +486,7 @@ def agentic_workflow(
         setattr(cls, AGENTIC_META_ATTR, {
             "name": name, "version": version, "priority": priority,
             "allowed_roles": _tuple_str(allowed_roles),
+            "allowed_roles_config": str(allowed_roles_config).strip() if allowed_roles_config else None,
         })
         return cls
     return _wrap
@@ -2002,6 +2013,7 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
 
     meta = getattr(cls, AGENTIC_META_ATTR, {}) or {}
     allowed_roles: tuple[str, ...] = _tuple_str(meta.get("allowed_roles"))
+    allowed_roles_config: str | None = meta.get("allowed_roles_config") or None
 
     api_endpoints.sort(key=lambda item: (item.alias, item.route, item.http_method, item.method_name))
     mcp_endpoints.sort(key=lambda item: (item.alias, item.route, item.transport, item.method_name))
@@ -2010,6 +2022,7 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
     return BundleInterfaceManifest(
         bundle_id=resolved_bundle_id,
         allowed_roles=allowed_roles,
+        allowed_roles_config=allowed_roles_config,
         ui_widgets=tuple(ui_widgets),
         api_endpoints=tuple(api_endpoints),
         mcp_endpoints=tuple(mcp_endpoints),

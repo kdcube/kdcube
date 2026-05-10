@@ -127,14 +127,16 @@ Use it when the code should declare its own stable bundle identity.
 
 ### 1.3 `@agentic_workflow(...)` — bundle-level `allowed_roles`
 
-The `@agentic_workflow` decorator accepts an optional `allowed_roles` parameter
-that restricts which users can see the bundle in the bundle listing.
+The `@agentic_workflow` decorator accepts optional `allowed_roles` and
+`allowed_roles_config` parameters that restrict which users can see the bundle
+in the bundle listing.
 
 ```python
 @agentic_workflow(
     name="Finance Copilot",
     version="1.0.0",
     allowed_roles=("kdcube:role:finance-team", "kdcube:role:super-admin"),
+    allowed_roles_config="visibility.bundle.allowed_roles",
 )
 @bundle_id("finance.copilot@1.0.0")
 class FinanceCopilot:
@@ -149,6 +151,13 @@ Current fields relevant to access control:
   - do **not** use derived platform types here (`"registered"`, `"privileged"`)
   - empty or omitted means the bundle is visible to all authenticated users
   - OR semantics: user passes if at least one of their raw roles matches
+- `allowed_roles_config`
+  - optional dot-path into bundle props, e.g. `"visibility.bundle.allowed_roles"`
+  - when set and the path resolves to a list of strings, the resolved value
+    overrides the decorator default at listing time (per-request lookup)
+  - empty list `[]` is a valid intentional override meaning "visible to all"
+  - invalid types or a missing path fall back silently to the decorator default
+  - when declared, the field becomes editable in the Bundle Admin dashboard
 - bundle-level feature gate: `enabled.bundle` in bundle props
   - boolean (or string equivalent) that controls the whole bundle
   - if the resolved value is falsy, the bundle is treated as disabled:
@@ -161,12 +170,14 @@ Current fields relevant to access control:
 Current behavior:
 
 - `GET /api/integrations/bundles` (non-admin) filters out bundles whose
-  `allowed_roles` do not intersect with the calling user's raw roles
-  (entries in the session that start with `kdcube:role:`)
+  effective `allowed_roles` do not intersect with the calling user's raw roles
+  (entries in the session that start with `kdcube:role:`).
+  Bundle props are loaded before the check so `allowed_roles_config` overrides
+  are applied at listing time.
 - `GET /api/admin/integrations/bundles` is not filtered — admin always
   sees all bundles regardless of `allowed_roles`
-- A bundle with no `allowed_roles` is always included for any authenticated
-  user (backwards-compatible default)
+- A bundle with no effective `allowed_roles` is always included for any
+  authenticated user (backwards-compatible default)
 
 ### 1.3.1 Canonical `enabled.*` Contract
 
@@ -781,6 +792,7 @@ class CronJobSpec:
 class BundleInterfaceManifest:
     bundle_id: str
     allowed_roles: tuple[str, ...] = ()
+    allowed_roles_config: str | None = None
     ui_widgets: tuple[UIWidgetSpec, ...] = ()
     api_endpoints: tuple[APIEndpointSpec, ...] = ()
     mcp_endpoints: tuple[MCPEndpointSpec, ...] = ()
@@ -792,6 +804,13 @@ class BundleInterfaceManifest:
 
 `allowed_roles` is populated from the `allowed_roles` argument of
 `@agentic_workflow`. Empty tuple means no restriction.
+
+`allowed_roles_config` is the dot-path declared via `allowed_roles_config=` on
+`@agentic_workflow`. When set, `apply_bundle_overrides(manifest, props)` resolves
+the path against bundle props and returns a new manifest with the effective
+`allowed_roles`. The admin descriptor exposes `allowed_roles_default`,
+`allowed_roles_config`, and `allowed_roles_overridden` alongside the effective
+`allowed_roles`.
 
 `scheduled_jobs` is populated from all `@cron`-decorated methods on the
 entrypoint class, sorted by `alias`.
