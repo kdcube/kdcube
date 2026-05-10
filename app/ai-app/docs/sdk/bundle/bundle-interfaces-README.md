@@ -451,8 +451,8 @@ Legacy note:
 
 ```mermaid
 sequenceDiagram
-    participant Host as Parent app / host frame
-    participant Widget as Bundle widget iframe
+    participant Host as Display app
+    participant Widget as Bundle widget UI
     participant API as Integrations API
     participant Bundle as Bundle entrypoint
 
@@ -480,7 +480,7 @@ These endpoints expose the bundle's declared widget/API surface to the client.
 and each declared endpoint includes its `route` (`operations` or `public`).
 
 Concrete example:
-- parent-frame config handshake:
+- runtime config handshake:
   `src/kdcube-ai-app/kdcube_ai_app/journal/26/03/widgets/App.tsx`
 - platform widget with the same auth/config pattern:
   `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/rest/integrations/AIBundleDashboard.tsx`

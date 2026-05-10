@@ -736,7 +736,7 @@ Test the bundle’s concrete behavior, not just that functions exist.
 Widget testing has two layers:
 
 1. source/build or static/widget-generation correctness
-2. iframe integration correctness
+2. runtime display integration correctness
 
 ### 5.1 Widget source/build correctness
 
@@ -791,11 +791,11 @@ Example failure mode:
 
 Rule:
 
-- if Python renders a React/TSX widget into iframe HTML, directly evaluate the widget method before runtime testing
+- if Python renders a React/TSX widget into HTML, directly evaluate the widget method before runtime testing
 
-### 5.2 Widget iframe contract
+### 5.2 Widget UI runtime contract
 
-A widget is not tested until you verify the iframe host contract.
+A widget is not tested until you verify the runtime display contract.
 
 Check:
 
@@ -919,8 +919,8 @@ runner that treats `<VI_BUILD_DEST_ABSOLUTE_PATH>` as an environment value.
 
 ### 5.2C Custom main-view UI contract
 
-For bundles with `ui.main_view` / `ui-src`, test the iframe app as a runtime
-surface, not as a standalone website.
+For bundles with `ui.main_view` / `ui-src`, test the bundle main UI as a
+runtime surface, not as a standalone website.
 
 Local source checks:
 
@@ -935,14 +935,14 @@ Runtime checks:
 - do not run `OUTDIR=<bundle_storage_root>/ui npm run build` as the fix
 - request the custom UI HTML through `/api/integrations/static/{tenant}/{project}/{bundle_id}`
 - verify the bundle UI loader refreshes the built files when the source signature changed
-- verify the iframe receives `baseUrl`, tenant, project, auth headers, `streamId`, and `defaultAppBundleId` from the parent config bridge
+- verify the bundle UI receives `baseUrl`, tenant, project, auth headers, `streamId`, and `defaultAppBundleId` from the runtime config bridge
 - use `defaultAppBundleId` for `/sse/chat`, `/api`, `/mcp`, and widget calls
 - for a new `/sse/chat` conversation, omit `conversation_id`; bind the server-generated id from the ack or first SSE envelope
 
 Failure signals:
 
 - `sse/chat failed (404) {"detail":"Conversation not found"}` usually means the UI sent a local fake `conversation_id` for a new conversation
-- `Unknown bundle_id ...` usually means the iframe used a baked/source id or the runtime registry does not include the selected bundle
+- `Unknown bundle_id ...` usually means the bundle UI used a baked/source id or the runtime registry does not include the selected bundle
 - a stale hashed JS asset after source changes means the loader/static route path must be checked, not manually bypassed
 
 ### 5.3 Read-only load check
@@ -1123,9 +1123,9 @@ Symptoms:
 
 Symptoms:
 
-- iframe still runs an old hashed asset after `ui-src` changed
-- iframe sends a baked bundle id instead of the selected runtime bundle id
-- iframe sends a local fake conversation id for a new SSE chat
+- the browser still runs an old hashed asset after `ui-src` changed
+- the bundle UI sends a baked bundle id instead of the selected runtime bundle id
+- the bundle UI sends a local fake conversation id for a new SSE chat
 
 Test by requesting the HTML entrypoint through the integrations static route and
 checking browser networking for the actual `/sse/chat` payload.
@@ -1207,7 +1207,7 @@ Before calling the bundle complete, verify all of these:
 - bundle appears with correct APIs/widgets in integrations listing
 - expected operations are callable through real routes
 - widget networking uses the correct runtime URL shape
-- custom main-view UI uses the host config bridge and selected runtime bundle id
+- custom main-view UI uses the runtime config bridge and selected runtime bundle id
 - generated custom main-view UI is refreshed by the loader, not by manual runtime-storage builds
 - generated HTML or widget click/form behavior is verified with browser tools
   when static checks are not enough

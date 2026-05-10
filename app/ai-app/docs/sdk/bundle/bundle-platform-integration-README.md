@@ -51,7 +51,7 @@ Bundles currently support these decorators:
 | `@api(...)` | entrypoint method | Declares a remotely callable bundle HTTP operation. |
 | `@mcp(...)` | entrypoint method | Declares a remotely callable bundle MCP endpoint. |
 | `@ui_widget(...)` | entrypoint method | Declares a widget in the bundle interface manifest. |
-| `@ui_main` | entrypoint method | Declares the main iframe UI entrypoint. |
+| `@ui_main` | entrypoint method | Declares the bundle main UI entrypoint. |
 | `@on_message` | entrypoint method | Declares the bundle message handler metadata. |
 | `@cron(...)` | entrypoint method | Declares a scheduled background job managed by proc. |
 | `@on_job` | entrypoint method | Declares the bundle handler for ready background jobs claimed by proc. |
@@ -456,9 +456,9 @@ decorate it with both `@ui_widget(...)` and `@api(route="operations", ...)`.
 That is the current compatibility pattern for widgets that are still loaded
 through operation calls in existing clients.
 
-Iframe widget contract:
+Widget runtime config contract:
 
-- request runtime config from the parent frame with `CONFIG_REQUEST`
+- request runtime config from the display environment with `CONFIG_REQUEST`
 - accept both `CONN_RESPONSE` and `CONFIG_RESPONSE`
 - build operation URLs from `baseUrl`, `defaultTenant`, `defaultProject`, and `defaultAppBundleId`
 - do not hardcode tenant/project/bundle id from the source tree
@@ -469,7 +469,10 @@ Use the dedicated frontend contract doc for the exact pattern and example:
 
 ### 1.7 `@ui_main`
 
-Marks the method that declares the bundle's main iframe UI surface.
+Marks the method that declares the bundle's main UI surface. KDCube serves that
+UI as static assets, like it serves bundle APIs and MCP routes. A frontend may
+display it directly or embed it, but the bundle declares UI assets, not an
+iframe object.
 
 ```python
 @ui_main
@@ -1023,7 +1026,7 @@ Use these rules for new bundles:
 5. Decorate every widget method with `@ui_widget(...)`.
 6. If a widget method is also called through `/operations/...`, add
    `@api(route="operations", alias="<operation-alias>")` to the same method.
-6. Use `@ui_main` when the bundle has a main iframe application.
+6. Use `@ui_main` when the bundle has a main static UI application.
 7. Use `@on_message` on the bundle message handler. The base entrypoints already
    do this on `run()`.
 8. Use `@on_job` when the bundle receives ready background jobs from the

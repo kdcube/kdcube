@@ -341,7 +341,7 @@ operations API
 
 ## Custom main view UI
 
-This bundle also ships a standalone iframe main view configured through `ui.main_view`
+This bundle also ships a standalone main UI configured through `ui.main_view`
 in `entrypoint.py`.
 
 The source lives under `ui-src/`, and `ui-src/src/App.tsx` is the current lightweight
@@ -349,7 +349,7 @@ reference implementation for a custom bundle chat surface.
 
 It intentionally covers the minimal but real platform contract:
 
-- parent-frame config handshake via `CONFIG_REQUEST`
+- runtime config handshake via `CONFIG_REQUEST`
 - authenticated bootstrap via `GET /profile`
 - live streaming over `GET /sse/stream` and `POST /sse/chat`
 - bundle-scoped conversation list + historical conversation load via `/api/cb/conversations/...`

@@ -449,7 +449,7 @@ A bundle may include:
 - backend execution logic
 - authenticated or public APIs
 - widgets
-- iframe UI
+- main UI
 - scheduled jobs
 - bundle-scoped config
 - bundle-scoped secrets
@@ -972,12 +972,12 @@ Do not fix stale UI by manually building into:
 
 The supported path is:
 
-- the iframe requests the HTML entrypoint through `/api/integrations/static/{tenant}/{project}/{bundle_id}`
+- the bundle UI requests the HTML entrypoint through `/api/integrations/static/{tenant}/{project}/{bundle_id}`
 - the bundle UI loader checks the `ui-src` signature
 - the loader builds into bundle storage when needed
 - the static route serves the refreshed hashed assets
 
-After changing `ui-src`, reload or reselect the bundle so the iframe requests
+After changing `ui-src`, reload or reselect the bundle so the bundle UI requests
 the HTML entrypoint again. If the UI is still stale, inspect loader logs and the
 served hashed asset before changing runtime storage manually.
 

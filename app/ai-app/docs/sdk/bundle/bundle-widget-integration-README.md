@@ -1,9 +1,9 @@
 ---
 id: ks:docs/sdk/bundle/bundle-widget-integration-README.md
 title: "Bundle Widget Integration"
-summary: "Iframe widget contract for bundles: source-folder widget apps, host handshake, operation URL construction, auth propagation, and the recommended pattern when a capability is both widget and operation."
+summary: "Bundle widget UI contract: source-folder widget apps, runtime config handshake, operation URL construction, auth propagation, and the recommended pattern when a capability is both widget and operation."
 tags: ["sdk", "bundle", "widget", "iframe", "frontend", "integrations"]
-keywords: ["iframe widget contract", "widget source folder", "web app widget build", "host config handshake", "operation url construction", "auth propagation to widget", "widget and operation dual pattern", "bundle iframe integration"]
+keywords: ["bundle widget contract", "iframe widget contract", "widget source folder", "web app widget build", "runtime config handshake", "operation url construction", "auth propagation to widget", "widget and operation dual pattern", "bundle widget integration"]
 see_also:
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
@@ -12,15 +12,17 @@ see_also:
 ---
 # Bundle Widget Integration
 
-Use this doc when a bundle exposes a widget that runs inside the platform iframe shell and must call bundle operations correctly.
+Use this doc when a bundle exposes widget UI that KDCube serves and that must
+call bundle operations correctly.
 
 This is the rule:
 
 - new widget apps should be source folders, not Python-rendered TSX snippets
-- the widget app is rendered inside an iframe
-- the iframe must request runtime config from the parent frame
-- the iframe must build bundle operation URLs from that runtime config
-- the iframe must not hardcode tenant, project, or bundle id from the source tree
+- KDCube serves the widget UI; the control plane/prototyping frontend may show
+  it in an iframe, but that is a display choice
+- the widget must request runtime config from the display environment
+- the widget must build bundle operation URLs from that runtime config
+- the widget must not hardcode tenant, project, or bundle id from the source tree
 
 ## Source Folder Widget Apps
 
@@ -141,18 +143,18 @@ When the same widget app runs in KDCube control plane and Telegram, select the
 transport at runtime:
 
 - if `window.Telegram?.WebApp?.initData` exists, treat it as Telegram
-- otherwise, use the normal KDCube iframe parent config handshake
+- otherwise, use the normal KDCube runtime config handshake
 
 KDCube control-plane runtime:
 
 - wait for `CONFIG_RESPONSE` or `CONN_RESPONSE`
 - use `baseUrl`, `defaultTenant`, `defaultProject`, `defaultAppBundleId`
 - call `/operations/{alias}`
-- pass KDCube auth headers from the parent config
+- pass KDCube auth headers from runtime config
 
 Telegram Mini App runtime:
 
-- do not wait for the parent config handshake
+- do not wait for the KDCube runtime config handshake
 - call `window.Telegram.WebApp.ready()` and `expand()` when available
 - serve the app from `/public/widgets/{widget_alias}`
 - call bundle public aliases such as `/public/{telegram_alias}`
@@ -236,7 +238,7 @@ Both use the same loader/build/storage paradigm. They are different surfaces.
 
 ## Required Runtime Config
 
-The widget should request these fields from the parent frame:
+The widget should request these fields from the runtime display environment:
 
 - `baseUrl`
 - `accessToken`
@@ -291,7 +293,7 @@ For a source-folder widget, the method may return only a small compatibility
 fallback because the platform serves the built widget app from bundle storage
 when `ui.web_app_widgets.<alias>.src_folder/build_command` is configured.
 
-If the iframe itself needs a structured backend API, expose a separate alias such as:
+If the widget UI itself needs a structured backend API, expose a separate alias such as:
 
 ```python
 @api(method="POST", alias="task-tracker-api", route="operations", user_types=("registered",))
@@ -415,14 +417,14 @@ window.parent.postMessage(
 - Widget load should be read-only by default.
 - Use an explicit in-widget action such as `Refresh` if the widget needs to trigger a syncing bootstrap or other mutating backend operation.
 - If the widget can derive tenant/project/bundle defaults from its route, use those only as safe standalone fallbacks.
-- Still keep the parent-frame config handshake, because auth tokens and final runtime scope belong to the host.
-- For platform widgets and iframe clients, the preferred `POST /operations/{alias}` body shape is `{ "data": { ... } }`.
+- Still keep the runtime config handshake, because auth tokens and final runtime scope belong to KDCube.
+- For platform widgets and embedded browser clients, the preferred `POST /operations/{alias}` body shape is `{ "data": { ... } }`.
 - The integrations layer also accepts a raw JSON object body and treats it as `data`, so webhook-style service integrations do not need a platform-specific wrapper.
 - The integrations layer returns an envelope shaped like `{ status, tenant, project, bundle_id, [alias]: result }`; widgets should unwrap the `[alias]` field.
 
 ## Reference Examples
 
-Use these as reference implementations for the iframe config handshake and
+Use these as reference implementations for the runtime config handshake and
 operation-call shape:
 
 - [PreferencesBrowser.tsx](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/PreferencesBrowser.tsx)
@@ -434,7 +436,7 @@ Python-rendered widget responses.
 
 They show:
 
-- `CONFIG_REQUEST` to the parent frame
+- `CONFIG_REQUEST` to the runtime display environment
 - accept both `CONN_RESPONSE` and `CONFIG_RESPONSE`
 - build operation URLs from runtime scope
 - use the host-provided auth tokens and token-header name

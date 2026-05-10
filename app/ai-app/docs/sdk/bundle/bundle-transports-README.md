@@ -67,8 +67,8 @@ So:
 | background job | `@on_job` | Redis Stream + proc | no HTTP route; processor operation `__kdcube_on_job__` | producer/platform context | `@cron`, widget/API run-now, internal service |
 | authenticated bundle operation | `@api(route="operations")` | HTTP REST | `/api/integrations/bundles/{tenant}/{project}/{bundle_id}/operations/{alias}` | KDCube | widget, custom frontend, internal platform UI |
 | public bundle operation | `@api(route="public")` | HTTP REST | `/api/integrations/bundles/{tenant}/{project}/{bundle_id}/public/{alias}` | KDCube or bundle | webhook, external caller |
-| widget fetch | `@ui_widget(...)` | HTTP GET | `/api/integrations/bundles/{tenant}/{project}/{bundle_id}/widgets/{alias}` | KDCube | platform iframe/widget loader |
-| main bundle UI | `@ui_main` | static HTTP asset serving | `/api/integrations/static/{tenant}/{project}/{bundle_id}/...` | KDCube | browser iframe |
+| widget fetch | `@ui_widget(...)` | HTTP GET | `/api/integrations/bundles/{tenant}/{project}/{bundle_id}/widgets/{alias}` | KDCube | platform widget loader / browser client |
+| main bundle UI | `@ui_main` | static HTTP asset serving | `/api/integrations/static/{tenant}/{project}/{bundle_id}/...` | KDCube | platform UI / browser client |
 | bundle-authenticated MCP | `@mcp(route="operations")` | MCP over `streamable-http` | `/api/integrations/bundles/{tenant}/{project}/{bundle_id}/mcp/{alias}` | bundle MCP app | MCP client |
 | public MCP | `@mcp(route="public")` | MCP over `streamable-http` | `/api/integrations/bundles/{tenant}/{project}/{bundle_id}/public/mcp/{alias}` | nobody by default | MCP client |
 
@@ -495,7 +495,7 @@ Auth:
 
 ### 5.2 `@ui_main`
 
-`@ui_main` declares the main iframe/static UI entry.
+`@ui_main` declares the bundle main UI static entry.
 
 Route family:
 
@@ -505,7 +505,7 @@ Route family:
 
 Important rule:
 
-- widget and iframe code should call back into the real integrations routes
+- widget UI and main UI code should call back into the real integrations routes
 - do not invent a separate widget-private transport
 
 ## 6. Chat Turn Path
@@ -525,8 +525,8 @@ This path is separate from `@api(...)` and `@mcp(...)`.
 | Surface | Owned by | Transport | Target |
 | --- | --- | --- | --- |
 | communicator output | bundle runtime | SSE / Socket.IO through proc | active browser peer or session listeners |
-| widget/browser callback | widget or iframe code | HTTP REST to `/api/integrations/*` | proc bundle operations |
-| static asset delivery | platform static handler | HTTP | browser iframe |
+| widget/browser callback | widget or hosted UI code | HTTP REST to `/api/integrations/*` | proc bundle operations |
+| static asset delivery | platform static handler | HTTP | platform UI / browser client |
 
 ### 7.1 Communicator output
 

@@ -119,7 +119,7 @@ It may expose one or more of these surfaces:
 - authenticated operations APIs
 - public APIs
 - widgets
-- iframe apps
+- bundle main UI apps
 - MCP endpoints
 - scheduled jobs
 
@@ -540,7 +540,7 @@ Typical bundle surfaces:
 - chat-first workflow bundle
 - operations/API bundle
 - widget bundle
-- iframe app bundle
+- main UI bundle
 - MCP-serving bundle
 - scheduled-job bundle
 - mixed bundle with several surfaces
@@ -654,7 +654,7 @@ Usually present:
 - `skills_descriptor.py`
 - `requirements.txt` when bundle-local Python deps are installed through `@venv(...)`
 
-If the bundle ships a full iframe app:
+If the bundle ships a full main UI app:
 
 - put source in `ui-src`
 - declare `ui.main_view` with the source folder and build command in the bundle configuration
@@ -710,7 +710,7 @@ What `versatile` is good for:
 - bundle-local tools and skills
 - widget and operations integration
 - public endpoint example
-- iframe app example
+- bundle main UI example
 - bundle storage usage
 
 What `versatile` is not the reference for:
@@ -1625,7 +1625,7 @@ Do not hardcode:
 - localhost URLs
 - source-folder names in operation URLs
 
-For custom main-view iframe apps, use the same config bridge. The value sent as
+For custom main-view UI apps, use the same config bridge. The value sent as
 `defaultAppBundleId` is the runtime bundle id selected by the host. Use it for
 `/sse/chat`, `/api`, `/mcp`, and widget calls. A compiled bundle id is only a
 standalone fallback.
