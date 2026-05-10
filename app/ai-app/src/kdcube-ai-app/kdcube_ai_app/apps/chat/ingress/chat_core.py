@@ -15,7 +15,6 @@ from typing import Any, Dict, List, Optional, Literal
 from fastapi import HTTPException, Request  # only if you put this in a place where FastAPI is available
 
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
-from kdcube_ai_app.apps.chat.auth_relay import create_user_auth_relay
 from kdcube_ai_app.apps.chat.continuations import RedisConversationContinuationSource
 from kdcube_ai_app.apps.chat.external_events import build_conversation_external_event_source
 from kdcube_ai_app.apps.chat.sdk.util import _iso
@@ -455,7 +454,6 @@ async def process_chat_message(
 
     bundle_id = spec_resolved.id
     metadata = dict(ingress.metadata or {})
-    delegated_auth_cookie_header = metadata.pop("delegated_auth_cookie_header", None)
     acct_env = build_envelope_from_session(
         session=session,
         tenant_id=tenant_id,
@@ -517,23 +515,6 @@ async def process_chat_message(
             target_turn_id=target_turn_id,
         ),
     )
-    auth_relay = None
-    if ingress.transport == "socket":
-        auth_relay = await create_user_auth_relay(
-            redis=getattr(app.state, "redis_async", None),
-            request_context=request_context,
-            session=session,
-            tenant=tenant_id,
-            project=project_id,
-            bundle_id=bundle_id,
-            conversation_id=conversation_id,
-            turn_id=turn_id,
-            ingress_transport=ingress.transport,
-            delegated_auth_cookie_header=delegated_auth_cookie_header,
-        )
-    if auth_relay:
-        payload.bundle_call_context["ingress_auth"] = auth_relay
-
     async def _host_message_attachments(
         *,
         storage_turn_id: str,
