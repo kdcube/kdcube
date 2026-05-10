@@ -30,6 +30,7 @@ from kdcube_ai_app.apps.chat.sdk.protocol import (
 )
 from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator
 from kdcube_ai_app.apps.chat.ids import new_turn_id
+from kdcube_ai_app.apps.chat.auth_relay import delegated_auth_cookie_header_from_cookie_header
 
 from kdcube_ai_app.apps.chat.ingress.chat_core import (
     IngressConfig,
@@ -286,12 +287,21 @@ class SocketIOChatHandler:
         try:
             tenant = auth.get("tenant")
             project = auth.get("project")
+            client_role = str(auth.get("client_role") or "user").strip() or "user"
+            delegated_auth_cookie_header = delegated_auth_cookie_header_from_cookie_header(
+                environ.get("HTTP_COOKIE")
+            )
             socket_meta = {
                 "user_session": session.serialize_to_dict(),
                 "request_context": ctx.model_dump() if hasattr(ctx, "model_dump") else ctx.__dict__,  # safe bridge
                 "authenticated": session.user_type.value != "anonymous",
                 "project": project,
                 "tenant": tenant,
+                "client_role": client_role,
+                "conversation_id": auth.get("conversation_id"),
+                "turn_id": auth.get("turn_id"),
+                "bundle_id": auth.get("bundle_id"),
+                "delegated_auth_cookie_header": delegated_auth_cookie_header,
             }
 
             await self.sio.save_session(sid, socket_meta)
@@ -316,10 +326,11 @@ class SocketIOChatHandler:
                 "username": session.username,
                 "project": project,
                 "tenant": tenant,
+                "client_role": client_role,
                 "connected_at": datetime.utcnow().isoformat() + "Z"
             }, to=sid)
 
-            logger.info("WS connected: sid=%s -> room=%s", sid, session.session_id)
+            logger.info("WS connected: sid=%s -> room=%s role=%s", sid, session.session_id, client_role)
             return True
 
         except Exception as e:
@@ -505,7 +516,11 @@ class SocketIOChatHandler:
                 component="chat.socket",
                 instance_id=self.instance_id,
                 stream_id=sid,
-                metadata={"socket_id": sid, "entrypoint": "/socket.io/chat"},
+                metadata={
+                    "socket_id": sid,
+                    "entrypoint": "/socket.io/chat",
+                    "delegated_auth_cookie_header": (socket_session or {}).get("delegated_auth_cookie_header"),
+                },
             )
 
             result = await process_chat_message(

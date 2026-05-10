@@ -20,6 +20,7 @@ auth:
   id_token_header_name: "X-ID-Token"         # ID_TOKEN_HEADER_NAME
   auth_token_cookie_name: "__Secure-LATC"    # AUTH_TOKEN_COOKIE_NAME
   id_token_cookie_name: "__Secure-LITC"      # ID_TOKEN_COOKIE_NAME
+  masqueraded_token_cookie_name: "__Secure-LMTC" # MASQUERADED_TOKEN_COOKIE_NAME
   jwks_cache_ttl_seconds: 86400              # JWKS_CACHE_TTL_SECONDS
   turnstile_development_token: ""            # optional local/dev frontend Turnstile bypass token; leave empty outside development
 

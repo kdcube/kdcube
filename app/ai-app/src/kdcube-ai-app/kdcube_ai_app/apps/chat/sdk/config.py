@@ -1316,6 +1316,7 @@ class Settings(PLATFORM_CONFIG):
             ID_TOKEN_HEADER_NAME=self._resolve_str("ID_TOKEN_HEADER_NAME", "auth.id_token_header_name", "X-ID-Token"),
             AUTH_TOKEN_COOKIE_NAME=self._resolve_str("AUTH_TOKEN_COOKIE_NAME", "auth.auth_token_cookie_name", "__Secure-LATC"),
             ID_TOKEN_COOKIE_NAME=self._resolve_str("ID_TOKEN_COOKIE_NAME", "auth.id_token_cookie_name", "__Secure-LITC"),
+            MASQUERADED_TOKEN_COOKIE_NAME=self._resolve_str("MASQUERADED_TOKEN_COOKIE_NAME", "auth.masqueraded_token_cookie_name", "__Secure-LMTC"),
             JWKS_CACHE_TTL_SECONDS=self._resolve_int("JWKS_CACHE_TTL_SECONDS", "auth.jwks_cache_ttl_seconds", 86400),
             OIDC_SERVICE_USER_EMAIL=self._resolve_secret_str("OIDC_SERVICE_USER_EMAIL", "auth.oidc.admin_email"),
             OIDC_SERVICE_ADMIN_USERNAME=self._resolve_secret_str("OIDC_SERVICE_ADMIN_USERNAME", "auth.oidc.admin_username"),

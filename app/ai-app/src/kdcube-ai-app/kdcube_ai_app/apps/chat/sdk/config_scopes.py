@@ -450,6 +450,7 @@ class AuthConfig(BaseModel):
     ID_TOKEN_HEADER_NAME: str = "X-ID-Token"
     AUTH_TOKEN_COOKIE_NAME: str = "__Secure-LATC"
     ID_TOKEN_COOKIE_NAME: str = "__Secure-LITC"
+    MASQUERADED_TOKEN_COOKIE_NAME: str = "__Secure-LMTC"
     JWKS_CACHE_TTL_SECONDS: int = 86400
     OIDC_SERVICE_USER_EMAIL: str | None = None
     OIDC_SERVICE_ADMIN_USERNAME: str | None = None
