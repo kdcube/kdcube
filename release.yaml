@@ -1,90 +1,87 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.5.11.1250"
+  ref: "2026.5.11.2125"
   description: |
-    This release focuses on bundle administration and visibility controls,
-    ReAct large-artifact recovery, browser tooling, isolated-runtime descriptor
-    propagation, browser-session lifecycle cleanup, and bundle-aware logging.
+    This release focuses on ReAct workspace/materialization correctness,
+    safer text artifact previews and patching, configurable ReAct iteration
+    limits, built-in bundle compatibility, CLI descriptor initialization, and
+    browser-session cleanup consolidation.
 
     Highlights
 
-    - Added configurable bundle/resource visibility controls in bundle props:
-      bundle-level `allowed_roles`, API/widget user types, API/widget roles, and
-      dynamic `*_config` override paths for bundle decorators.
-    - Improved the Bundle Admin dashboard with in-place override editing,
-      per-resource cards, widget visibility editing, cron metadata display, and
-      clearer handling of inherited defaults versus hard-coded resource policy.
-    - Fixed bundle-admin default reload behavior so overriding one role model or
-      config subtree does not accidentally discard base bundle defaults.
-    - Added bundle-aware service logging context. Logs emitted inside a bound
-      bundle/request context include the bundle id, while ingress/service logs
-      outside a bundle keep the normal clean log shape. Processor heartbeat
-      metadata also carries active-task bundle ids when available.
-    - Added and documented browser tools for ReAct: page open/status/close,
-      click/fill actions, and scrolling, with turn-scoped browser sessions and
-      cleanup hooks.
-    - Removed the unfinished browser-handoff/auth-relay experiment, keeping the
-      browser tooling limited to the implemented server-side automation model.
-    - Improved ReAct artifact handling for large generated files: text previews
-      now carry size/line metadata, `react.read` supports range-style recovery,
-      and the agent instructions describe how to inspect large artifacts without
-      relying on blindly truncated previews.
-    - Added image downscale previews for large image reads so oversized images
-      can still be inspected safely under multimodal byte/token limits.
-    - Improved ReAct context accounting and compaction behavior by accounting
-      for multimodal attachments, using the full configured prompt budget, and
-      clarifying large-result handling.
-    - Propagated descriptor config/secrets into isolated exec runtimes and
-      scoped bundle descriptor payloads so runtime tools can resolve the same
-      bundle-defined props and secrets as host-side tools.
-    - Improved ReAct streaming and artifact tooling, including safer exec file
-      preview fields and less duplicate artifact preview payload.
-    - Updated bundle UI, React, browser-tool, configuration, and SDK bundle docs
-      to match the current runtime behavior.
+    - Added assembly/bundle configuration support for ReAct max rounds so the
+      default iteration budget can be configured globally and overridden per
+      bundle.
+    - Centralized browser-session cleanup at the processor/runtime level and
+      added cleanup logging so turn-completion cleanup is visible and auditable.
+    - Hardened built-in example bundles after SDK decorator/config changes so
+      older bundled workflows no longer break bundle loading or admin views.
+    - Fixed CLI descriptor initialization flows so `kdcube init --set-secret`
+      writes staged secrets correctly, and delegated-auth placeholders such as
+      tenant/project/domain values are concretized during descriptor generation.
+    - Clarified the ReAct rg/read/patch workspace contract: `react.rg` searches
+      materialized readable artifacts, returns reusable `read_item` ranges, and
+      works across `files`, `outputs`, and text attachments once those paths are
+      present locally.
+    - Improved ReAct workspace materialization signals. Pull/checkout results
+      are now compact and model-facing workspace announce text distinguishes the
+      current editable workspace from previous saved workspace paths.
+    - Added line-numbered text artifact previews in the rendered timeline,
+      including explicit guidance that preview line numbers are navigation aids
+      and not file content.
+    - Hardened `react.patch`: generated unified-diff hunk counts are normalized
+      before apply, and patch/full-replacement input copied from line-numbered
+      previews is rejected before it can corrupt files.
+    - Deduplicated and tightened ReAct v2/v3 instruction surfaces by moving
+      common workspace/tool behavior into shared instructions while preserving
+      the operational details the model needs.
 
     Runtime work in this release line:
 
-    - Bundle operators can change resource visibility from the Bundle Admin UI
-      through bundle props without modifying bundle code.
-    - ReAct agents can recover and inspect large generated artifacts through
-      explicit file reads/ranges instead of depending on capped timeline
-      previews.
-    - Browser automation is available as an SDK tool surface with scoped session
-      lifecycle management.
-    - Isolated execution runtimes receive the descriptor context needed by
-      bundle tools, reducing host/runtime configuration drift.
-    - Logs can be filtered by bundle id when emitted from bundle-scoped work,
-      while generic ingress and platform logs remain uncluttered.
+    - Agents get clearer continuation guidance after cross-turn work:
+      historical `files/...` refs should be pulled when needed and checked out
+      before editing, while `outputs/...` and attachments remain readable/fetchable
+      artifacts.
+    - Large or generated text artifacts are easier to inspect safely: line
+      windows and line-numbered previews support `react.rg -> react.read ranges
+      -> react.patch` without loading whole files into context.
+    - Patch failures caused by harmless generated hunk-count drift are reduced,
+      while dangerous preview-copy mistakes are blocked explicitly.
+    - Browser automation remains turn-scoped, with cleanup handled outside
+      bundle workflow code.
+    - CLI seed-descriptor workflows preserve explicitly supplied secrets and
+      resolve deployment placeholders more predictably.
 
     Validation and regression coverage:
 
-    - Added tests for bundle-aware logging context and the no-global-env bundle
-      attribution rule.
-    - Added and updated focused bundle-admin/visibility tests for configurable
-      roles/user types and defaults.
-    - Updated ReAct/tool tests covering artifact previews, ranged reads,
-      browser-tool behavior, and context/compaction paths during the individual
-      fixes in this release line.
+    - Added focused ReAct patch tests for normalized hunk counts and rejection
+      of copied line-numbered preview prefixes in both v2 and v3.
+    - Added timeline rendering tests proving small and large text artifacts are
+      rendered with line-number metadata while stored artifact content remains
+      unchanged.
+    - Added and updated ReAct pull/rg/workspace/write tests for compact
+      materialization output, readable artifact roots, and workspace announce
+      wording.
+    - Added runtime configuration tests for ReAct iteration limit overrides.
+    - Added CLI descriptor tests for set-secret and delegated placeholder flows.
     - Focused validation was run during the individual changes in this release
-      line.
+      line, including ReAct timeline rendering, patch, workspace announce/model
+      prompt, pull, rg, write, CLI descriptor, and py_compile checks.
 
     Changelog
 
-    - Added bundle-level allowed-role configuration.
-    - Added configurable API/widget user-type and role overrides.
-    - Improved Bundle Admin resource override editing and display.
-    - Fixed bundle-admin default reload and base-default merge behavior.
-    - Added browser tools and scroll support.
-    - Added browser session cleanup documentation and hooks.
-    - Removed unfinished browser handoff auth-relay code.
-    - Added ReAct ranged file reads and rg-style recovery.
-    - Added text artifact size/line preview metadata.
-    - Added image downscale previews for large images.
-    - Improved ReAct context caps, token accounting, and compaction guidance.
-    - Propagated descriptor config/secrets to isolated exec runtimes.
-    - Scoped bundle descriptor payloads for exec runtimes.
-    - Improved ReAct streaming and artifact tooling.
-    - Added bundle-aware logging context without noisy non-bundle markers.
-    - Updated React, browser, SDK bundle, and configuration documentation.
+    - Added configurable ReAct max rounds.
+    - Centralized browser-session cleanup in processor/runtime code.
+    - Fixed built-in bundle widget/workflow compatibility.
+    - Fixed CLI `--set-secret` descriptor initialization.
+    - Fixed CLI delegated-auth descriptor placeholder substitution.
+    - Clarified ReAct rg/search/read/edit workspace behavior.
+    - Compacted `react.pull` and `react.checkout` result payloads.
+    - Improved ReAct workspace announce text.
+    - Added line-numbered text artifact timeline previews.
+    - Added `react.patch` hunk-count normalization.
+    - Added `react.patch` guard against copied rendered line numbers.
+    - Updated ReAct workspace, tool, artifact discovery, runtime config, and CLI
+      documentation.
 config:
-    version: "2026.5.11.1250"
+    version: "2026.5.11.2125"
