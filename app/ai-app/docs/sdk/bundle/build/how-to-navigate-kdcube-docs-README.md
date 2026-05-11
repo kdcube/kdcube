@@ -164,7 +164,7 @@ Practical rule:
 - map the existing surface to the right decorator contract:
   - webhook -> `@api(route="public")`
   - admin/backend action -> `@api(route="operations")`
-  - iframe frontend -> `ui.main_view` or widget + operations
+  - bundle UI surface -> `ui.main_view` or widget + operations
   - file-producing assistant tool -> `ret.artifact_type == "files"` or
     trusted tool-side `host_files(...)`
   - MCP server -> `@mcp(...)`
@@ -268,6 +268,7 @@ Then jump only to the row that matches your question.
 | How should a bundle tool return files or hosted attachments? | [../bundle-agent-integration-README.md](../bundle-agent-integration-README.md) and [../../tools/custom-tools-README.md](../../tools/custom-tools-README.md) | Use the strict `ret.artifact_type == "files"` protocol or trusted tool-side `host_files(...)`; `host_files(...)` requires prepared tool context from `BaseWorkflow.build_react(...)` or isolated `bootstrap_bind_all(...)`; generated executor code should call a catalog tool through `agent_io_tools.tool_call(...)`. |
 | How do I talk to the browser correctly? | [../bundle-client-ui-README.md](../bundle-client-ui-README.md) | It routes you to widget, browser, and transport-facing docs. |
 | How can an agent verify generated HTML or a widget in a real browser? | [../../integrations/browser/browser-tools-README.md](../../integrations/browser/browser-tools-README.md) and [../../integrations/browser/playwright-README.md](../../integrations/browser/playwright-README.md) | Use `browser_tools` for ReAct-side browser actions with a per-turn Playwright session; screenshots are optional and should be used only when visual state is needed. |
+| How should an agent recover and edit files from prior turns? | [../../agents/react/react-turn-workspace-README.md](../../agents/react/react-turn-workspace-README.md) and [../../agents/react/runtime-configuration-README.md](../../agents/react/runtime-configuration-README.md) | Pull historical `fi:` refs before using them locally; checkout prior `files/...` paths only when they must become current-turn editable workspace files. Use `react.rg` -> `react.read` -> `react.patch` for precise text edits. |
 | How do I run local bundle QA? | [how-to-test-bundle-README.md](how-to-test-bundle-README.md) | It covers local test order, shared suite, and bundle-local tests. |
 | Which interpreter, cwd, env vars, and first smoke tests should an agent use? | [how-to-test-bundle-README.md#1a-working-environment-for-agents](how-to-test-bundle-README.md#1a-working-environment-for-agents) | It prevents false failures from the wrong Python, missing `pytest-asyncio`, missing `PYTHONPATH`, or incomplete request fixtures. |
 | How do I run bundle integration QA? | [how-to-test-bundle-README.md](how-to-test-bundle-README.md) | It also covers browser, API, MCP, reload, and cron/runtime validation. |

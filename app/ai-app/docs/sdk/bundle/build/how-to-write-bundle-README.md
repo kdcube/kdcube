@@ -1191,7 +1191,7 @@ So the practical rule is:
 - chat/SSE path: request-bound comm context exists
 - REST operations path: request-bound comm context also exists
 
-If a widget or iframe calls a bundle operation, do not treat it as a detached background job.
+If a widget or host-embedded UI calls a bundle operation, do not treat it as a detached background job.
 
 ### Cron / scheduled-job path
 
@@ -1597,8 +1597,12 @@ Mental model:
 Widget bundles fail most often because authors treat them like isolated frontends.
 They are not.
 
-KDCube widgets are React/TSX web apps rendered inside a platform iframe shell.
-Do not create ad hoc HTML fragments unless you are maintaining a legacy widget.
+KDCube widgets are bundle UI surfaces. They are usually React/TSX web apps that
+KDCube builds and serves next to the bundle APIs/MCP endpoints. A consuming
+frontend may embed the served UI in an iframe for isolation, and the KDCube
+control plane often does that, but there is no special "bundle iframe" object in
+the bundle contract. Do not create ad hoc HTML fragments unless you are
+maintaining a legacy widget.
 For a product with several panels, prefer one React widget with internal tabs or
 routes over several disconnected widgets.
 
@@ -1673,7 +1677,8 @@ The side panel fetches widgets through:
 ```
 
 That API returns a JSON envelope containing the rendered widget HTML for the
-platform iframe. The same route can serve direct HTML when requested by a
+host UI. A client may place that HTML in an iframe, but iframe embedding is a
+client display choice. The same route can serve direct HTML when requested by a
 browser, and subpaths are supported for single-web-app routing:
 
 ```text
@@ -1776,6 +1781,43 @@ If both `user_types` and `roles` are present:
 - both must pass
 
 For admin widgets and APIs, use the platform’s privileged pattern.
+
+When Bundle Admin should be able to change the default visibility without a code
+release, declare config paths in the decorators:
+
+```python
+@agentic_workflow(
+    name="My Bundle",
+    version="1.0.0",
+    allowed_roles=("kdcube:role:viewer",),
+    allowed_roles_config="visibility.bundle.allowed_roles",
+)
+class MyBundle(BaseEntrypoint):
+    @api(
+        alias="admin_data",
+        user_types=("privileged",),
+        user_types_config="visibility.api.admin_data.user_types",
+        roles_config="visibility.api.admin_data.roles",
+    )
+    async def admin_data(self, **kwargs):
+        ...
+
+    @ui_widget(
+        alias="admin",
+        icon={"type": "emoji", "value": "⚙️"},
+        user_types=("privileged",),
+        user_types_config="visibility.widget.admin.user_types",
+        roles_config="visibility.widget.admin.roles",
+    )
+    async def admin_widget(self, **kwargs):
+        ...
+```
+
+Use decorator values as sane defaults and config paths as deployment-time
+overrides. Do not pass removed `enabled_config` arguments to `@api` or `@mcp`;
+resource enabled state is controlled through bundle props/Admin resource
+overrides. `@mcp` does not use `user_types_config` or `roles_config`; the
+bundle-served MCP app owns request authentication and authorization.
 
 In entrypoints derived from `BaseEntrypoint`, prefer:
 
@@ -1987,7 +2029,7 @@ Before considering the bundle “implemented”, verify:
 - runtime identity does not depend on folder name
 - all mutable local state uses bundle storage helper
 - all deployment config uses bundle props/settings/secrets instead of raw env
-- widgets follow the iframe config handshake
+- widgets follow the host config handshake and do not assume a fixed iframe
 - widget URLs are built from runtime config
 - public load paths are read-only by default
 - admin surfaces are separated and privileged

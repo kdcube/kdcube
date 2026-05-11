@@ -575,7 +575,10 @@ kdcube init \
   --workdir ~/.kdcube/kdcube-runtime \
   --descriptors-location /abs/path/to/descriptors \
   --set-secret services.openai.api_key "sk-..." \
-  --set-secret services.anthropic.api_key "sk-ant-..."
+  --set-secret services.anthropic.api_key "sk-ant-..." \
+  --set-secret services.brave.api_key "..." \
+  --set-secret services.git.http_token "github_pat_..." \
+  --set-secret git.http_token "github_pat_..."
 ```
 
 For guided secret entry, use:
@@ -585,7 +588,28 @@ kdcube init --prompt-secrets
 ```
 
 These values are written to the active runtime `config/secrets.yaml`, not to
-`.env` files.
+`.env` files. They are applied to the staged runtime descriptor copy during
+`init`; rerunning `init` with `--set-secret` must preserve those explicit
+values instead of restaging a pristine `secrets.yaml` over them.
+
+For delegated/proxy-login or hosted descriptors, the CLI stages concrete
+runtime descriptors from seed descriptors. Placeholders such as tenant,
+project, and domain values must be resolved in the staged runtime config before
+the services start. After init, verify the active target with:
+
+```bash
+kdcube info --workdir ~/.kdcube/kdcube-runtime/<tenant>__<project>
+```
+
+ReAct round limits can be set globally or per bundle:
+
+- global runtime default: `ai.react.max_iterations` in `assembly.yaml`, or
+  `AI_REACT_MAX_ITERATIONS` in env
+- per-bundle override: `config.react.max_iterations` or
+  `react.max_iterations` in the bundle's deployment-scoped props
+
+The per-bundle prop wins over the assembly/env default. If neither is set, the
+runtime fallback is `15`.
 
 Then start the initialized runtime:
 

@@ -158,8 +158,14 @@ At minimum, run the widget build with an explicit temporary `OUTDIR` and confirm
 `index.html` is written there.
 
 If a release changes generated standalone HTML, browser-facing widget behavior,
-or agent browser verification instructions, also validate the relevant flow with
-the browser-tool checks from the test guide and the browser integration docs.
+or ReAct/browser-tool behavior, include the relevant browser-tool smoke test in
+the validation notes. Prefer DOM/status checks and reserve screenshots for
+visual assertions that cannot be proven from text/DOM state.
+
+If a release changes descriptor-selected bundle refs, update the active
+environment descriptor rather than only the bundle repo. For cloud deployment
+descriptors this usually means the git-backed `bundles.yaml` entry that contains
+the bundle repo, subdir/module, and released `ref`.
 
 If a release changes file-producing tools or attachment materialization, also
 validate the tool result contract from

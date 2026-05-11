@@ -870,11 +870,24 @@ Important runtime boundary:
   supports it, but it does not share the ReAct `browser_tools` session
 - turn completion, managed errors, watchdog timeout, and cancellation attempt
   browser-session cleanup through lifecycle finalizers
+- cleanup logs should make it clear when browser sessions existed and were
+  released, so operators can distinguish "nothing to clean" from "cleanup ran"
 
 Primary docs:
 
-- [Browser Tools](../../integrations/browser/browser-tools-README.md)
-- [Playwright Backend](../../integrations/browser/playwright-README.md)
+- [../../integrations/browser/browser-tools-README.md](../../integrations/browser/browser-tools-README.md)
+- [../../integrations/browser/playwright-README.md](../../integrations/browser/playwright-README.md)
+
+For generated HTML repair, prefer a precise ReAct loop:
+
+1. use `react.rg` to find files or suspicious text regions already materialized
+   on the worker
+2. use `react.read` ranges to inspect exact snippets; timeline previews may show
+   line numbers for reading
+3. use `react.patch` against current-turn editable text files; never include
+   rendered line-number prefixes in patch or replacement content
+4. use `browser_tools.open_page`, `click`, `fill`, `scroll`, and `status` to
+   prove the behavior, adding screenshots only when visual state matters
 
 ### 5.2B Source-folder widget build contract
 
@@ -1051,7 +1064,8 @@ If you are testing a locally mounted bundle, verify the actual reload path.
 Typical loop:
 
 ```bash
-kdcube --descriptors-location <dir> --build
+kdcube init --descriptors-location <dir> --workdir <base-workdir>
+kdcube start --workdir <runtime-workdir>
 ```
 
 Then after code/descriptor changes:

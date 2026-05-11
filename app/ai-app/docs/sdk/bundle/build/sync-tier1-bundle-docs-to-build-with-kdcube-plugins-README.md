@@ -141,6 +141,23 @@ The plugin should steer agents away from these recurring mistakes:
 - use `browser_tools` for real browser verification when static checks are not
   enough; keep screenshots optional and avoid routing `browser_tools.*` through
   isolated exec
+- use `react.pull` before relying on historical `fi:` files locally, and use
+  `react.checkout` only when a prior `files/...` path must become editable in
+  the current turn
+- use `react.rg` -> `react.read` -> `react.patch` for precise text artifact
+  repair; timeline line numbers are display-only and must never be emitted into
+  patch or replacement content
+- do not describe bundle UI as a special bundle iframe; bundles expose UI
+  surfaces that KDCube serves, and iframes are a host/client embedding choice
+- do not use removed resource-level `enabled_config` decorator arguments for
+  APIs or MCP; use bundle props/Admin resource overrides and configurable
+  role/user-type paths where supported
+- local CLI init must preserve `--set-secret` values in the staged active
+  `config/secrets.yaml`; use `kdcube info --workdir ...` to verify the concrete
+  initialized runtime
+- ReAct max rounds are configurable through `ai.react.max_iterations` /
+  `AI_REACT_MAX_ITERATIONS`, with per-bundle override through
+  `config.react.max_iterations` or `react.max_iterations`
 - bundle finalizers such as `on_turn_completed(...)` are for fast cleanup after
   success, error, or cancellation, not for expensive user-facing work
 - do not commit, tag, push, or update descriptor refs unless the user has
