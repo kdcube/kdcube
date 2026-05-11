@@ -1,87 +1,90 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.5.7.150"
+  ref: "2026.5.11.1250"
   description: |
-    This release focuses on the new CLI initialization/configuration flow,
-    runtime bundle management, React context recovery, service-facing chat
-    submission utilities, short-lived artifact links, deterministic runtime IDs,
-    and operational reliability fixes.
+    This release focuses on bundle administration and visibility controls,
+    ReAct large-artifact recovery, browser tooling, isolated-runtime descriptor
+    propagation, browser-session lifecycle cleanup, and bundle-aware logging.
 
     Highlights
 
-    - Added and documented the current KDCube CLI model: plain `kdcube init`,
-      descriptor-driven initialization, workdir scoping by tenant/project,
-      persistent defaults, start/stop/reload flows, and the one-running-stack
-      local guard.
-    - Added the `kdcube bundle` runtime patch command for source mode changes,
-      identity/config/secrets updates, upserts, deletion, and reload-oriented
-      bundle development.
-    - Fixed CLI descriptor handling so `frontend.config` alone remains runtime
-      metadata and no longer selects custom-UI managed-infra mode unless
-      `frontend.build` or `frontend.image` is configured.
-    - Fixed local source staging for git worktrees so descriptor-driven installs
-      can safely use worktree checkouts without copying `.git`, gitignored
-      runtime data, or ignored generated files.
-    - Added proc-local `ChatIngressSubmitter` so proc-hosted bundle webhooks and
-      service adapters can submit chat messages through the same shared ingress
-      core used by SSE and Socket.IO, including continuation handling for
-      followup and steer events.
-    - Added reusable short-lived signed link helpers for public artifact
-      downloads in clients that cannot reliably attach platform auth headers,
-      such as Telegram Web Apps.
-    - Added timestamp-shaped UTC turn and execution IDs, such as
-      `turn_20260506125243_ab12` and `exec_20260506125243_ab12`, while keeping
-      ordering anchored in stored timestamps.
-    - Expanded React memory recovery through temporal/search-aware
-      `react.memsearch`, turn-index recovery paths, and concise documentation
-      for retrieving earlier summaries and artifacts after pruning/compaction.
-    - Improved React context compaction and restored focused compaction tests,
-      including clearer handling of compacted prior conversation memory and
-      current-turn suffix retention.
-    - Added tool file hosting support and React harness hosting utilities for
-      recovering generated artifacts across turn/workspace cleanup boundaries.
-    - Added Claude skill materialization and accounting context support.
-    - Fixed logging rollover behavior for multi-worker services by using stable
-      default rotation names and tolerating missing-file rollover races.
+    - Added configurable bundle/resource visibility controls in bundle props:
+      bundle-level `allowed_roles`, API/widget user types, API/widget roles, and
+      dynamic `*_config` override paths for bundle decorators.
+    - Improved the Bundle Admin dashboard with in-place override editing,
+      per-resource cards, widget visibility editing, cron metadata display, and
+      clearer handling of inherited defaults versus hard-coded resource policy.
+    - Fixed bundle-admin default reload behavior so overriding one role model or
+      config subtree does not accidentally discard base bundle defaults.
+    - Added bundle-aware service logging context. Logs emitted inside a bound
+      bundle/request context include the bundle id, while ingress/service logs
+      outside a bundle keep the normal clean log shape. Processor heartbeat
+      metadata also carries active-task bundle ids when available.
+    - Added and documented browser tools for ReAct: page open/status/close,
+      click/fill actions, and scrolling, with turn-scoped browser sessions and
+      cleanup hooks.
+    - Removed the unfinished browser-handoff/auth-relay experiment, keeping the
+      browser tooling limited to the implemented server-side automation model.
+    - Improved ReAct artifact handling for large generated files: text previews
+      now carry size/line metadata, `react.read` supports range-style recovery,
+      and the agent instructions describe how to inspect large artifacts without
+      relying on blindly truncated previews.
+    - Added image downscale previews for large image reads so oversized images
+      can still be inspected safely under multimodal byte/token limits.
+    - Improved ReAct context accounting and compaction behavior by accounting
+      for multimodal attachments, using the full configured prompt budget, and
+      clarifying large-result handling.
+    - Propagated descriptor config/secrets into isolated exec runtimes and
+      scoped bundle descriptor payloads so runtime tools can resolve the same
+      bundle-defined props and secrets as host-side tools.
+    - Improved ReAct streaming and artifact tooling, including safer exec file
+      preview fields and less duplicate artifact preview payload.
+    - Updated bundle UI, React, browser-tool, configuration, and SDK bundle docs
+      to match the current runtime behavior.
 
     Runtime work in this release line:
 
-    - Bundle webhooks can now reuse platform chat submission instead of
-      duplicating SSE/socket ingestion logic in bundle code.
-    - Public widget/download flows can return short-lived direct URLs while the
-      server still verifies resource subject, expiry, user scope, and artifact
-      visibility.
-    - Long-running React conversations have a cleaner recovery path from
-      compacted summaries to turn indexes, message/tool refs, and hosted file
-      artifacts.
-    - Local installs and bundle development are more predictable: workdirs are
-      namespaced, source selection is explicit, local source staging respects
-      git ignore boundaries, and bundle topology can be patched at runtime.
+    - Bundle operators can change resource visibility from the Bundle Admin UI
+      through bundle props without modifying bundle code.
+    - ReAct agents can recover and inspect large generated artifacts through
+      explicit file reads/ranges instead of depending on capped timeline
+      previews.
+    - Browser automation is available as an SDK tool surface with scoped session
+      lifecycle management.
+    - Isolated execution runtimes receive the descriptor context needed by
+      bundle tools, reducing host/runtime configuration drift.
+    - Logs can be filtered by bundle id when emitted from bundle-scoped work,
+      while generic ingress and platform logs remain uncluttered.
 
     Validation and regression coverage:
 
-    - Added tests for timestamped turn/exec IDs.
-    - Added tests for signed link subject binding, tamper rejection, expiry, and
-      token query handling.
-    - Added tests for logging rollover naming and missing-file rollover races.
-    - Restored and updated React compaction tests.
-    - Focused platform tests were run during the individual fixes in this
-      release line.
+    - Added tests for bundle-aware logging context and the no-global-env bundle
+      attribution rule.
+    - Added and updated focused bundle-admin/visibility tests for configurable
+      roles/user types and defaults.
+    - Updated ReAct/tool tests covering artifact previews, ranged reads,
+      browser-tool behavior, and context/compaction paths during the individual
+      fixes in this release line.
+    - Focused validation was run during the individual changes in this release
+      line.
 
     Changelog
 
-    - Added plain CLI init and workdir scoping improvements.
-    - Added runtime `kdcube bundle` patch/upsert/delete command.
-    - Fixed custom-UI mode selection for frontend descriptors.
-    - Fixed local source staging for git worktrees.
-    - Added proc-local chat submitter for webhook/service ingestion.
-    - Added reusable signed short-lived link helpers.
-    - Added timestamp-shaped UTC turn and exec IDs.
-    - Expanded React memory recovery search and documentation.
-    - Improved React context compaction.
-    - Added tool file hosting and React harness hosting utilities.
-    - Added Claude skill materialization and accounting context.
-    - Updated CLI, bundle, React, and service-facing interface docs.
-    - Fixed multi-worker logging rollover races.
+    - Added bundle-level allowed-role configuration.
+    - Added configurable API/widget user-type and role overrides.
+    - Improved Bundle Admin resource override editing and display.
+    - Fixed bundle-admin default reload and base-default merge behavior.
+    - Added browser tools and scroll support.
+    - Added browser session cleanup documentation and hooks.
+    - Removed unfinished browser handoff auth-relay code.
+    - Added ReAct ranged file reads and rg-style recovery.
+    - Added text artifact size/line preview metadata.
+    - Added image downscale previews for large images.
+    - Improved ReAct context caps, token accounting, and compaction guidance.
+    - Propagated descriptor config/secrets to isolated exec runtimes.
+    - Scoped bundle descriptor payloads for exec runtimes.
+    - Improved ReAct streaming and artifact tooling.
+    - Added bundle-aware logging context without noisy non-bundle markers.
+    - Updated React, browser, SDK bundle, and configuration documentation.
 config:
-    version: "2026.5.7.150"
+    version: "2026.5.11.1250"
