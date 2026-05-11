@@ -47,9 +47,13 @@ Tool result blocks are emitted per artifact or per result type:
 - `react.read`: Load artifacts/files/sources/tool-call payloads by path.
 - `react.pull` / `react.checkout`: Materialize historical refs or define the current-turn workspace.
 - `react.write`: Create a text artifact for display, file delivery, or internal note keeping.
-- `react.patch`: Update an existing file. If `patch` starts with `---/+++/@@`, treat as unified diff; otherwise replace full file content.
+- `react.patch`: Update an existing file. If `patch` starts with `---/+++/@@`, treat as unified diff; generated hunk counts are normalized before apply. Otherwise replace full file content.
 - `react.memsearch`: Query conversation index for prior turns; returns snippets.
 - `react.hide`, `react.rg`, and `react.plan` provide cache-tail cleanup, safe file/region search, and in-loop planning.
+
+Text artifact previews in the rendered timeline are line-numbered for navigation.
+Those numbers are viewing prefixes only; do not include them in patch or full-file
+replacement content.
 
 ## Storage
 - Tool results are **not** persisted as files by default.

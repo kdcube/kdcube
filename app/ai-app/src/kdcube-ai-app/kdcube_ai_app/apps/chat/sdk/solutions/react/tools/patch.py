@@ -7,6 +7,7 @@ from typing import Any, Dict
 
 import json
 import pathlib
+import re
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
     ARTIFACT_NAMESPACE_FILES,
@@ -38,7 +39,8 @@ TOOL_SPEC = {
     "id": "react.patch",
     "purpose": (
         "Apply a text patch to an existing current-turn materialized text file under files/... or outputs/... and stream the patch to the user. "
-        "If patch starts with ---/+++/@@ it is treated as unified diff, otherwise replaces the whole file. "
+        "If patch starts with ---/+++/@@ it is treated as unified diff and generated hunk counts are normalized, otherwise replaces the whole file. "
+        "Line-number prefixes from rendered previews are rejected because they are not file content. "
         "The target does not have to be created by react.write; current-turn files produced by exec, checkout, "
         "or prior patch/write calls are patchable once they exist locally. "
         "If kind='file' the updated file is shared; if kind='display' it is streamed only."
@@ -57,6 +59,56 @@ TOOL_SPEC = {
         "`kind` must appear fourth in the params JSON object.",
     ],
 }
+
+_RENDERED_LINE_NUMBER_PREFIX_RE = re.compile(r"^\s+\d{1,9}\t")
+
+
+def _rendered_line_number_prefix_stats(text: str, *, is_unified: bool) -> tuple[int, int]:
+    suspicious = 0
+    inspected = 0
+    for raw_line in (text or "").splitlines():
+        if not raw_line.strip():
+            continue
+        line = raw_line
+        if is_unified:
+            if line.startswith(("---", "+++", "@@", "\\")):
+                continue
+            if line[:1] not in {" ", "+", "-"}:
+                continue
+            line = line[1:]
+        inspected += 1
+        if _RENDERED_LINE_NUMBER_PREFIX_RE.match(line):
+            suspicious += 1
+    return suspicious, inspected
+
+
+def _looks_like_copied_rendered_line_numbers(
+    *,
+    patch_text: str,
+    target_text: str,
+    is_unified: bool,
+) -> tuple[bool, Dict[str, Any]]:
+    suspicious, inspected = _rendered_line_number_prefix_stats(patch_text, is_unified=is_unified)
+    if suspicious <= 0:
+        return False, {}
+
+    target_suspicious, target_inspected = _rendered_line_number_prefix_stats(target_text, is_unified=False)
+    target_ratio = (target_suspicious / target_inspected) if target_inspected else 0.0
+    if target_suspicious >= 2 and target_ratio >= 0.35:
+        # The target itself appears to contain numbered TSV-like content. Do not
+        # block legitimate edits to files whose real content already has this shape.
+        return False, {}
+
+    ratio = suspicious / max(1, inspected)
+    has_preview_marker = "line_numbers: true" in patch_text or "content:\n" in patch_text
+    triggered = bool((suspicious >= 2 and ratio >= 0.35) or (suspicious >= 5) or (has_preview_marker and suspicious >= 1))
+    if not triggered:
+        return False, {}
+    return True, {
+        "line_numbered_prefix_lines": suspicious,
+        "inspected_lines": inspected,
+        "patch_format": "unified_diff" if is_unified else "full_replacement",
+    }
 
 
 def _mime_for_format(fmt: str) -> str:
@@ -220,6 +272,24 @@ async def handle_react_patch(*, react: Any, ctx_browser: Any, state: Dict[str, A
         return _fail("patch_target_missing", "react.patch target file does not exist.", extra={"path": artifact_name})
 
     is_unified = any(patch_text.lstrip().startswith(x) for x in ("---", "+++", "@@"))
+    try:
+        target_text = abs_path.read_text(encoding="utf-8")
+    except Exception as exc:
+        return _fail("patch_target_unreadable", f"react.patch target file is not readable as UTF-8 text: {exc}", extra={"path": artifact_name})
+    has_preview_line_numbers, preview_line_number_extra = _looks_like_copied_rendered_line_numbers(
+        patch_text=patch_text,
+        target_text=target_text,
+        is_unified=is_unified,
+    )
+    if has_preview_line_numbers:
+        return _fail(
+            "patch_contains_preview_line_numbers",
+            (
+                "react.patch input appears to include line-number prefixes copied from the rendered timeline preview. "
+                "Line numbers are viewing aids, not file content. Retry with raw file content or a unified diff whose lines do not include those prefixes."
+            ),
+            extra={"path": artifact_name, **preview_line_number_extra},
+        )
     display_patch_text = patch_text
     if is_unified:
         patched, display_patch_text, err = apply_unified_diff_to_file(

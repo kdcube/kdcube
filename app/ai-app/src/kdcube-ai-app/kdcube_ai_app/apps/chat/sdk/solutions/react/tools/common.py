@@ -10,6 +10,7 @@ import tempfile
 import logging
 import os
 import hashlib
+import re
 from typing import Any, Dict, Optional, List
 
 import json
@@ -341,6 +342,62 @@ def notice_block(
     })
 
 
+_UNIFIED_HUNK_RE = re.compile(r"^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@(.*)$")
+
+
+def normalize_unified_diff_hunk_counts(patch_text: str) -> str:
+    """
+    Recompute unified diff hunk line counts.
+
+    LLMs often produce a semantically correct hunk with an incorrect
+    ``@@ -a,b +c,d @@`` count. The system patch binary rejects that as
+    malformed even when the context and edits are otherwise valid.
+    """
+    lines = patch_text.splitlines(keepends=True)
+    out: List[str] = []
+    idx = 0
+    while idx < len(lines):
+        line = lines[idx]
+        line_body = line.rstrip("\r\n")
+        newline = line[len(line_body):]
+        match = _UNIFIED_HUNK_RE.match(line_body)
+        if not match:
+            out.append(line)
+            idx += 1
+            continue
+
+        old_start = int(match.group(1))
+        new_start = int(match.group(2))
+        section = match.group(3) or ""
+        hunk_lines: List[str] = []
+        idx += 1
+        while idx < len(lines):
+            candidate = lines[idx]
+            candidate_body = candidate.rstrip("\r\n")
+            if _UNIFIED_HUNK_RE.match(candidate_body):
+                break
+            hunk_lines.append(candidate)
+            idx += 1
+
+        old_count = 0
+        new_count = 0
+        for hunk_line in hunk_lines:
+            if hunk_line.startswith("\\"):
+                continue
+            if hunk_line.startswith("+"):
+                new_count += 1
+            elif hunk_line.startswith("-"):
+                old_count += 1
+            else:
+                old_count += 1
+                new_count += 1
+
+        hunk_newline = newline or "\n"
+        out.append(f"@@ -{old_start},{old_count} +{new_start},{new_count} @@{section}{hunk_newline}")
+        out.extend(hunk_lines)
+    return "".join(out)
+
+
 def apply_unified_diff(text: str, patch_text: str) -> tuple[Optional[str], Optional[str]]:
     """
     Apply a unified diff to text. Returns (new_text, error_message).
@@ -453,6 +510,7 @@ def apply_unified_diff_to_file(
         source_path=source_path or target_path,
         target_path=target_path,
     )
+    rewritten_patch = normalize_unified_diff_hunk_counts(rewritten_patch)
 
     patch_bin = shutil.which("patch")
     if patch_bin:
@@ -480,7 +538,14 @@ def apply_unified_diff_to_file(
                 if proc.returncode == 0:
                     return candidate_path.read_text(encoding="utf-8"), rewritten_patch, None
                 msg = (proc.stderr or proc.stdout or "").strip()
-                return None, rewritten_patch, msg or f"patch_failed:{proc.returncode}"
+                try:
+                    original = target_path.read_text(encoding="utf-8")
+                    patched, err = apply_unified_diff(original, rewritten_patch)
+                    if patched is not None:
+                        return patched, rewritten_patch, None
+                    return None, rewritten_patch, err or msg or f"patch_failed:{proc.returncode}"
+                except Exception:
+                    return None, rewritten_patch, msg or f"patch_failed:{proc.returncode}"
         except Exception as exc:
             return None, rewritten_patch, f"patch_exec_failed:{exc}"
 

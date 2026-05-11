@@ -59,6 +59,9 @@ Do not pass logical `fi:` paths to `react.write` or `react.patch`.
 
 Reads existing logical artifacts back into the visible timeline.
 
+- Text artifact previews shown on the timeline are line-numbered. The numbers
+  are model-facing viewing prefixes, not file bytes; use them for `react.read`
+  ranges and patch locations, but omit them from patch/full-file content.
 - input: `paths: list[str]`
 - optional input: `items: list[object]` — exact read specs with `path` plus
   optional `line_start`/`line_count` or `offset_text_symbols`/`max_text_symbols`.
@@ -188,11 +191,13 @@ Updates an existing current-turn materialized text file under `files/...` or `ou
 - input: `path`, `patch`
 - accepted paths: current-turn physical OUT_DIR-relative paths; prefer concise paths such as `files/<scope>/file.py` or `outputs/<scope>/page.html`, not logical `fi:` paths
 - patch format: unified diff or full replacement text
+- generated unified-diff hunk counts are normalized before apply; a wrong `@@ -a,b +c,d @@` count should not force a full-file rewrite when the hunk content is otherwise correct
+- rendered-preview line-number prefixes are rejected; remove the viewing prefixes and retry
 - output: updated local file plus normal tool call/result blocks
 - file origin does not matter: current-turn files produced by exec, `react.write`, `react.patch`, or `react.checkout` are patchable once they exist locally
 - older files are never patched in place; materialize with `react.pull` if needed, then use `react.checkout` for historical `files/...` refs you need to edit and patch the resulting current-turn path
 
-Use it when the file already exists and React wants a targeted edit instead of a full rewrite. Do not use `react.write` just to register an existing file for patching.
+Use it when the file already exists and React wants a targeted edit instead of a full rewrite. Prefer unified diff for targeted changes; use full replacement only for intentional whole-file rewrites or when a targeted diff still cannot match the file. Do not use `react.write` just to register an existing file for patching.
 
 ### `react.memsearch`
 

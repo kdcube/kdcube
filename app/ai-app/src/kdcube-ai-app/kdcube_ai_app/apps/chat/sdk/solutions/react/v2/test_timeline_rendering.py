@@ -327,6 +327,60 @@ def test_large_text_artifact_is_rendered_as_bounded_preview():
     assert len(joined) < len(artifact_text)
 
 
+def test_small_text_artifact_is_rendered_with_line_numbers():
+    ctx = RuntimeCtx(
+        turn_id="turn_small_artifact",
+        started_at="2026-05-08T00:00:00Z",
+        tool_result_preview_max_text_symbols=1000,
+    )
+    tl = Timeline(runtime=ctx)
+    artifact_text = "alpha\nbeta\ngamma\n"
+
+    tl.blocks.extend([
+        tl._block(type="turn.header", author="system", turn_id=ctx.turn_id, ts=ctx.started_at, text=""),
+        tl._block(
+            type="react.tool.call",
+            author="agent",
+            turn_id=ctx.turn_id,
+            ts=ctx.started_at,
+            mime="application/json",
+            path="tc:turn_small_artifact.tc_write.call",
+            text=json.dumps({
+                "tool_id": "react.write",
+                "tool_call_id": "tc_write",
+                "params": {"path": "files/demo/a.txt", "channel": "canvas", "kind": "display"},
+            }),
+        ),
+        tl._block(
+            type="react.tool.result",
+            author="agent",
+            turn_id=ctx.turn_id,
+            ts=ctx.started_at,
+            mime="text/plain",
+            path="fi:turn_small_artifact.files/demo/a.txt",
+            text=artifact_text,
+            meta={
+                "tool_call_id": "tc_write",
+                "text_symbols": len(artifact_text),
+                "size_bytes": len(artifact_text.encode("utf-8")),
+                "line_count": 3,
+                "physical_path": "turn_small_artifact/files/demo/a.txt",
+            },
+        ),
+    ])
+
+    rendered = _run(tl.render(cache_last=True))
+    joined = "\n".join(b.get("text", "") for b in rendered if b.get("type") == "text")
+
+    assert tl.blocks[-1]["text"] == artifact_text
+    assert "logical_path: fi:turn_small_artifact.files/demo/a.txt" in joined
+    assert "lines: [1-3]/3" in joined
+    assert "line_numbers: true" in joined
+    assert "     1\talpha" in joined
+    assert "     2\tbeta" in joined
+    assert "[ARTIFACT PREVIEW TRUNCATED]" not in joined
+
+
 def test_large_internal_note_and_code_are_rendered_as_bounded_previews():
     ctx = RuntimeCtx(
         turn_id="turn_large_internal",
