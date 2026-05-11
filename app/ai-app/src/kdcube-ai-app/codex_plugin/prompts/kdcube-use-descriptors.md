@@ -38,12 +38,12 @@ Do not ask the user for a local repo.
 the title and first section. Confirm it covers the specific field or problem you need.
 Then read the full content.
 
-- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/service/configuration/service-config-README.md` — workdir layout overview.
-- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/service/configuration/assembly-descriptor-README.md` — `assembly.yaml`.
-- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/service/configuration/bundles-descriptor-README.md` — `bundles.yaml` (registry, `path`, `module`, `config`, `role_models`).
-- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/service/configuration/bundles-secrets-descriptor-README.md` — `bundles.secrets.yaml`.
-- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/service/configuration/gateway-descriptor-README.md` — `gateway.yaml`.
-- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/service/configuration/secrets-descriptor-README.md` — `secrets.yaml`.
+- `repo:kdcube-ai-app/app/ai-app/docs/service/configuration/service-config-README.md` — workdir layout overview.
+- `repo:kdcube-ai-app/app/ai-app/docs/service/configuration/assembly-descriptor-README.md` — `assembly.yaml`.
+- `repo:kdcube-ai-app/app/ai-app/docs/service/configuration/bundles-descriptor-README.md` — `bundles.yaml` (registry, `path`, `module`, `config`, `role_models`).
+- `repo:kdcube-ai-app/app/ai-app/docs/service/configuration/bundles-secrets-descriptor-README.md` — `bundles.secrets.yaml`.
+- `repo:kdcube-ai-app/app/ai-app/docs/service/configuration/gateway-descriptor-README.md` — `gateway.yaml`.
+- `repo:kdcube-ai-app/app/ai-app/docs/service/configuration/secrets-descriptor-README.md` — `secrets.yaml`.
 
 For the operational flow (where to put descriptors, when to reload, props/secrets
-changes): `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md`.
+changes): `repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md`.

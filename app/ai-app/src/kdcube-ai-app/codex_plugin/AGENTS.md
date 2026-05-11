@@ -58,11 +58,11 @@ After success, offer to start.
 
 **Never guess descriptor shapes from memory — read the docs first, every time.**
 Docs are NOT on disk — fetch from GitHub (`KDCUBE_REPO_ROOT` fast path: strip
-`https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/` and read locally).
+`repo:kdcube-ai-app/` and read locally).
 
-1. `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md` — read in full
+1. `repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md` — read in full
 2. Matching descriptor doc with **header-first gate** (title + first section, then full if relevant).
-   Base: `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/configuration/<filename>`:
+   Base: `repo:kdcube-ai-app/app/ai-app/docs/configuration/<filename>`:
    `assembly-descriptor-README.md`, `bundles-descriptor-README.md`,
    `bundles-secrets-descriptor-README.md`, `gateway-descriptor-README.md`, `secrets-descriptor-README.md`
 3. On macOS after editing `$WORKDIR/config/bundles.yaml`: restart `chat-proc` (see Reload gotchas), then reload + verify-reload.

@@ -151,30 +151,32 @@ do not ask the user to point you at one. The only exception is the opt-in local 
 at the bottom of this section, which requires `CLAUDE_PLUGIN_OPTION_KDCUBE_REPO_ROOT` to
 already be set — if it is not set, go straight to `WebFetch`.
 
-All URLs below are complete — pass them to `WebFetch` verbatim. Base (for reference):
-`https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/`.
+Docs below are written as `repo:kdcube-ai-app/<path>` references. To resolve a reference,
+`WebFetch` `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/<path>`. For
+directory listings, `WebFetch`
+`https://api.github.com/repos/kdcube/kdcube-ai-app/contents/<path>`.
 
 ### Tier 1 — always read (operational canon)
 
-Fetch each with `WebFetch` **in this order** (navigate first, then the rest):
+Resolve each reference **in this order** (navigate first, then the rest):
 
-- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md` — routing entry point; read first
-- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/build/how-to-test-bundle-README.md` — testing / QA expectations
-- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/build/how-to-write-bundle-README.md` — authoring / implementation design
-- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md` — configuration ownership model (props, secrets, runtime config)
-- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md` — configuration + runtime (`assembly.yaml`, `bundles.yaml`, `bundles.secrets.yaml`, props/secrets, reload)
-- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/build/how-to-release-bundle-content-README.md` — optional Tier 1 lifecycle procedure: align bundle docs/config templates/release.yaml, validate, commit/tag/push, update descriptor ref
-- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/src/kdcube-ai-app/kdcube_cli/README.md` — KDCube CLI quickstart & full command table
-- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/src/kdcube-ai-app/kdcube_cli/additional_README.md` — `kdcube bundle` reference (source, identity, config/secrets patch, delete)
-- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/bundle-agent-integration-README.md` — **fetch when the task involves React agents with local tools, file-producing tools, MCP endpoints or client config, or Claude Code subprocess agents;** covers agent runtime comparison (React vs Claude Code), tool descriptors, skill descriptors, `@mcp(...)` endpoints, `ClaudeCodeAgentConfig`, SDK-managed skill materialization
+- `repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md` — routing entry point; read first
+- `repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-test-bundle-README.md` — testing / QA expectations
+- `repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-write-bundle-README.md` — authoring / implementation design
+- `repo:kdcube-ai-app/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md` — configuration ownership model (props, secrets, runtime config)
+- `repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md` — configuration + runtime (`assembly.yaml`, `bundles.yaml`, `bundles.secrets.yaml`, props/secrets, reload)
+- `repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-release-bundle-content-README.md` — optional Tier 1 lifecycle procedure: align bundle docs/config templates/release.yaml, validate, commit/tag/push, update descriptor ref
+- `repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_cli/README.md` — KDCube CLI quickstart & full command table
+- `repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_cli/additional_README.md` — `kdcube bundle` reference (source, identity, config/secrets patch, delete)
+- `repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-agent-integration-README.md` — **fetch when the task involves React agents with local tools, file-producing tools, MCP endpoints or client config, or Claude Code subprocess agents;** covers agent runtime comparison (React vs Claude Code), tool descriptors, skill descriptors, `@mcp(...)` endpoints, `ClaudeCodeAgentConfig`, SDK-managed skill materialization
 
 Reference bundle `versatile@2026-03-31-13-36` — read end-to-end. Directories are not
-WebFetch-able; fetch these files individually:
+fetchable as a single blob; resolve these files individually:
 
-- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/README.md`
-- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/entrypoint.py`
+- `repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/README.md`
+- `repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/entrypoint.py`
 - To discover the rest of the tree, fetch
-  `https://api.github.com/repos/kdcube/kdcube-ai-app/contents/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36`
+  `repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36`
   then fetch the individual files you need by name (e.g. `skills_descriptor.py`,
   `tools_descriptor.py`, anything under `agents/`, `skills/`, `tools/`).
 
@@ -285,7 +287,7 @@ does this doc specifically address what I am implementing right now? If yes — 
 If no — stop; you have confirmed it is not needed for this task.
 
 Pull these when the task specifically hits the topic. Do not preload. All under
-`https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/<filename>`:
+`repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/<filename>`:
 
 - `bundle-index-README.md` — SDK map
 - `bundle-reference-versatile-README.md` — annotated walkthrough of versatile
@@ -307,7 +309,7 @@ Pull these when the task specifically hits the topic. Do not preload. All under
 **Descriptor / service configuration** — read the matching file **only when editing that
 specific descriptor**. Apply the same header-first gate: fetch, read the title and first
 section, confirm it covers your specific field, then read in full. Base:
-`https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/configuration/<filename>`:
+`repo:kdcube-ai-app/app/ai-app/docs/configuration/<filename>`:
 
 - `assembly-descriptor-README.md` — when editing `assembly.yaml`
 - `bundles-descriptor-README.md` — when editing `bundles.yaml`
@@ -315,9 +317,9 @@ section, confirm it covers your specific field, then read in full. Base:
 - `gateway-descriptor-README.md` — when editing `gateway.yaml`
 - `secrets-descriptor-README.md` — when editing `secrets.yaml`
 
-**Specialized example bundles** — list via the GitHub contents API, then fetch
-individual files. Base:
-`https://api.github.com/repos/kdcube/kdcube-ai-app/contents/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/<dir>`:
+**Specialized example bundles** — resolve the directory reference (GitHub contents API),
+then fetch individual files. Base:
+`repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/<dir>`:
 
 - `kdcube.copilot@2026-04-03-19-05` — knowledge-space / extended resolver
 - `with-isoruntime@2026-02-16-14-00` — isolated exec
@@ -325,8 +327,8 @@ individual files. Base:
 
 **Suite tests** (read when writing or debugging bundle tests):
 
-- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle/test_bundle_state.py`
-- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle/test_run_bundle_suite.py`
+- `repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle/test_bundle_state.py`
+- `repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle/test_run_bundle_suite.py`
 
 ### Local fast path (opt-in — do not ask for it)
 
@@ -334,7 +336,7 @@ If — **and only if** — `CLAUDE_PLUGIN_OPTION_KDCUBE_REPO_ROOT` is already se
 environment, read the same paths from
 `$CLAUDE_PLUGIN_OPTION_KDCUBE_REPO_ROOT/<repo-relative-path>` with `Read` instead of
 `WebFetch`. Derive the repo-relative path by stripping the
-`https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/` prefix from any URL above.
+`repo:kdcube-ai-app/` prefix from any reference above.
 If the env var is not set, do not suggest setting it — just use `WebFetch`.
 
 ## Primary example

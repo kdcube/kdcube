@@ -9,11 +9,11 @@ Take the intent from the text after `/kdcube-cli` and map it to the right comman
 
 | Doc | URL |
 |---|---|
-| CLI quickstart & command table | https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/src/kdcube-ai-app/kdcube_cli/README.md |
-| `kdcube bundle` full reference (source, identity, config/secrets patch, delete) | https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/src/kdcube-ai-app/kdcube_cli/additional_README.md |
-| Current CLI contract (all commands, flags, env overrides) | https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/service/cicd/cli-README.md |
-| Bundle configure & run workflow | https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md |
-| CLI as control plane design (reload, init, defaults) | https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/service/cicd/design/cli--as-control-plane-README.md |
+| CLI quickstart & command table | repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_cli/README.md |
+| `kdcube bundle` full reference (source, identity, config/secrets patch, delete) | repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_cli/additional_README.md |
+| Current CLI contract (all commands, flags, env overrides) | repo:kdcube-ai-app/app/ai-app/docs/service/cicd/cli-README.md |
+| Bundle configure & run workflow | repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md |
+| CLI as control plane design (reload, init, defaults) | repo:kdcube-ai-app/app/ai-app/docs/service/cicd/design/cli--as-control-plane-README.md |
 | PyPI package reference | https://pypi.org/project/kdcube-cli/ |
 
 ## Doc cache

@@ -95,20 +95,21 @@ bundle, then `kdcube --workdir $WORKDIR --build --upstream`. The plugin's `boots
 helper with `--host-bundles-path` does the same thing in one call. Do not invent other
 workarounds — read the how-to first.
 
-**The plugin ships without docs — they are NOT on disk.** Always fetch via `WebFetch` from
-the raw GitHub URLs below. Only fall back to local `Read` if
-`CLAUDE_PLUGIN_OPTION_KDCUBE_REPO_ROOT` is already set — in that case strip the
-`https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/` prefix and read the repo-relative
-path. Do not ask the user for a local repo.
+**The plugin ships without docs — they are NOT on disk.** The `repo:kdcube-ai-app/<path>`
+references below resolve via `WebFetch` at
+`https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/<path>`. Only fall back to
+local `Read` if `CLAUDE_PLUGIN_OPTION_KDCUBE_REPO_ROOT` is already set — in that case
+strip the `repo:kdcube-ai-app/` prefix and read the repo-relative path. Do not ask the
+user for a local repo.
 
 1. Fetch the Tier 1 pack in order (navigate first, then the rest):
-   - `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md` — routing entry point
-   - `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md` — configuration ownership model
-   - `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md` — deployment wiring
+   - `repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md` — routing entry point
+   - `repo:kdcube-ai-app/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md` — configuration ownership model
+   - `repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md` — deployment wiring
 2. Fetch the matching descriptor doc (also with `WebFetch`). **Header-first gate:** read
    only the title and first section first, confirm it covers the specific field you need,
    then read the rest. Base:
-   `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/configuration/<filename>`
+   `repo:kdcube-ai-app/app/ai-app/docs/configuration/<filename>`
    — `assembly-descriptor-README.md`, `bundles-descriptor-README.md`,
    `bundles-secrets-descriptor-README.md`, `gateway-descriptor-README.md`,
    `secrets-descriptor-README.md`.

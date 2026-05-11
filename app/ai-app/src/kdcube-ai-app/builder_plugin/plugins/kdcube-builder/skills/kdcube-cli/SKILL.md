@@ -16,11 +16,11 @@ Direct wrapper around the `kdcube` CLI.
 
 | Doc | URL |
 |---|---|
-| CLI quickstart & command table | https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/src/kdcube-ai-app/kdcube_cli/README.md |
-| `kdcube bundle` full reference (source, identity, config/secrets patch, delete) | https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/src/kdcube-ai-app/kdcube_cli/additional_README.md |
-| Current CLI contract (all commands, flags, env overrides) | https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/service/cicd/cli-README.md |
-| Bundle configure & run workflow | https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md |
-| CLI as control plane design (reload, init, defaults) | https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/service/cicd/design/cli--as-control-plane-README.md |
+| CLI quickstart & command table | repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_cli/README.md |
+| `kdcube bundle` full reference (source, identity, config/secrets patch, delete) | repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_cli/additional_README.md |
+| Current CLI contract (all commands, flags, env overrides) | repo:kdcube-ai-app/app/ai-app/docs/service/cicd/cli-README.md |
+| Bundle configure & run workflow | repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md |
+| CLI as control plane design (reload, init, defaults) | repo:kdcube-ai-app/app/ai-app/docs/service/cicd/design/cli--as-control-plane-README.md |
 | PyPI package reference | https://pypi.org/project/kdcube-cli/ |
 
 ## Doc cache
@@ -82,22 +82,22 @@ Workdir resolution precedence when `--workdir` is omitted from a subcommand:
 
 ## Intent map
 
-| User says | Command |
-|---|---|
-| init workdir / setup descriptors | see **Init flow** |
-| start stack | `kdcube start --workdir <workdir>` |
-| stop stack | see **Stop flow** |
-| reload bundle via CLI | see **Reload flow** |
-| register / create / update / delete bundle entry | fetch `kdcube bundle` reference from **Reference docs** |
-| switch bundle source / change git repo | fetch `kdcube bundle` reference from **Reference docs** |
-| patch bundle config or secrets by dotted key | fetch `kdcube bundle` reference from **Reference docs** |
-| inject secrets / set API key | see **Secrets flow** |
-| clean docker / clean images | `kdcube --clean` |
-| reset config | `kdcube --reset` |
-| save operator defaults | see **Defaults flow** |
-| export bundles from AWS | see **Export flow** |
-| show active deployment / lock state | `kdcube --info` |
-| what CLI flags are there | read https://pypi.org/project/kdcube-cli/ |
+| User says | Command                                                                   |
+|---|---------------------------------------------------------------------------|
+| init workdir / setup descriptors | see **Init flow**                                                         |
+| start stack | `kdcube start --workdir <workdir>`                                        |
+| stop stack | see **Stop flow**                                                         |
+| reload bundle via CLI | see **Reload flow**                                                       |
+| register / create / update / delete bundle entry | fetch `kdcube bundle` reference from **Reference docs**                   |
+| switch bundle source / change git repo | fetch `kdcube bundle` reference from **Reference docs**                   |
+| patch bundle config or secrets by dotted key | fetch `kdcube bundle` reference from **Reference docs**                   |
+| inject secrets / set API key | see **Secrets flow**                                                      |
+| clean docker / clean images | `kdcube clean`                                                            |
+| reset config | `kdcube init --reset-config`                                              |
+| save operator defaults | see **Defaults flow**                                                     |
+| export bundles from AWS | see **Export flow**                                                       |
+| show active deployment / lock state | `kdcube --info`                                                           |
+| what CLI flags are there | read repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_cli/README.md |
 
 ## Init flow
 
@@ -175,7 +175,6 @@ Persist operator preferences so `--workdir` can be omitted from subsequent comma
 
 ```bash
 kdcube defaults \
-  --default-workdir ~/.kdcube/kdcube-runtime \
   --default-tenant acme \
   --default-project prod
 ```
@@ -184,48 +183,12 @@ Inspect configured defaults and verify the lock state of the active deployment:
 
 ```bash
 kdcube --info
-kdcube --info --workdir ~/.kdcube/kdcube-runtime/acme__prod
+kdcube --info --tenant acme --project prod
 ```
 
 ## Secrets flow
 
-Claude Code has no interactive terminal. Always use `--secrets-set` (non-interactive):
-
-```bash
-kdcube --secrets-set ANTHROPIC_API_KEY=<key> --workdir <workdir>
-kdcube --secrets-set OPENAI_API_KEY=<key> --workdir <workdir>
-kdcube --secrets-set GIT_HTTP_TOKEN=<token> --workdir <workdir>
-```
-
-Multiple keys in one call:
-
-```bash
-kdcube --secrets-set ANTHROPIC_API_KEY=<key> --secrets-set OPENAI_API_KEY=<key> --workdir <workdir>
-```
-
-`--secrets-prompt` requires an interactive terminal — only suggest it when the user will run
-the command themselves in their own shell, never run it from Claude Code.
-
-> After `--secrets-set` the CLI restarts `chat-proc` and `chat-ingress`. Reload active
-> bundles immediately after: `kdcube reload <bundle-id> --workdir <workdir>`
-
-## Export flow
-
-Export live `bundles.yaml` + `bundles.secrets.yaml` from AWS Secrets Manager:
-
-```bash
-kdcube export \
-  --tenant <tenant> --project <project> \
-  --aws-region <region> \
-  --out-dir /tmp/kdcube-export
-```
-
-Optional: `--aws-profile <profile>`, `--aws-sm-prefix <prefix>`.
-
-Operational rule for `aws-sm` deployments: export the current live bundle state **before**
-the next provision, reconcile into private descriptor source-of-truth files, then copy into
-GitHub Environment secrets. Skipping this step can cause a later provision to replay stale
-`BUNDLES_YAML` and overwrite runtime bundle changes.
+# TODO
 
 ## Single-deployment guard
 
@@ -240,7 +203,6 @@ when they belong to the same environment.
 
 ## General rules
 
-- If `kdcube` is not found in PATH, tell the user to install via `pip install --user kdcube-cli`
-  and add `~/Library/Python/3.x/bin` to PATH.
-- After `--clean`, warn that the next start will re-pull or rebuild images.
+- If `kdcube` is not found in PATH, tell the user to install via `pip install --user kdcube-cli`.
+- After `clean`, warn that the next start will re-pull or rebuild images.
 - Always confirm before running `stop --remove-volumes`.
