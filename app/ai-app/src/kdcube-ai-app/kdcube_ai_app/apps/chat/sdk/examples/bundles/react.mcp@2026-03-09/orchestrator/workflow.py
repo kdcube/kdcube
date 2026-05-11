@@ -82,7 +82,8 @@ class WithReactWorkflow(BaseWorkflow):
         # Enable verbose debug logging for this bundle
         self.runtime_ctx.debug_log_announce = True
         self.runtime_ctx.debug_log_sources_pool = True
-        self.runtime_ctx.max_iterations = 15       # ReAct loop iteration cap
+        if not getattr(self.runtime_ctx, "max_iterations", None):
+            self.runtime_ctx.max_iterations = 15
         self.runtime_ctx.debug_timeline = True
 
     async def construct_turn_and_scratchpad(self, payload: dict) -> CTurnScratchpad:

@@ -3,7 +3,7 @@ id: ks:docs/sdk/agents/react/runtime-configuration-README.md
 title: "Runtime Configuration"
 summary: "RuntimeCtx, version selection, and session configuration fields for the React runtime, including knowledge hooks and experimental multi-action mode."
 tags: ["sdk", "agents", "react", "configuration"]
-keywords: ["RuntimeCtx", "RuntimeSessionConfig", "cache config", "pruning settings", "knowledge_search_fn", "knowledge_read_fn", "bundle_storage", "AI_REACT_AGENT_VERSION", "AI_REACT_AGENT_MULTI_ACTION", "multi_action_mode"]
+keywords: ["RuntimeCtx", "RuntimeSessionConfig", "cache config", "pruning settings", "knowledge_search_fn", "knowledge_read_fn", "bundle_storage", "AI_REACT_AGENT_VERSION", "AI_REACT_AGENT_MULTI_ACTION", "AI_REACT_MAX_ITERATIONS", "multi_action_mode"]
 see_also:
   - ks:docs/sdk/agents/react/compaction-README.md
   - ks:docs/sdk/agents/react/context-caching-README.md
@@ -25,6 +25,16 @@ React is selected before the runtime instance is built:
   - passed through `RuntimeCtx.multi_action_mode`
   - currently relevant only for `v3`
   - `safe_fanout` allows repeated action-channel instances in one response, but accepted actions are still executed sequentially, not in parallel
+
+## Iteration budget selection
+
+The base ReAct decision/tool-use round cap is resolved before the runtime loop starts:
+
+1. Bundle props `config.react.max_iterations` / `react.max_iterations`
+2. Assembly/env `ai.react.max_iterations` / `AI_REACT_MAX_ITERATIONS`
+3. Runtime fallback `15`
+
+The resolved value is passed through `RuntimeCtx.max_iterations`. Reactive external-event credit, when enabled, can temporarily add bounded extra iterations during the active turn.
 
 ## RuntimeCtx
 
@@ -50,7 +60,7 @@ React is selected before the runtime instance is built:
 - `tool_result_preview_max_text_symbols`: max text characters embedded from a
   large initial tool result before the prompt renderer replaces the remainder
   with shape/recovery metadata.
-- `max_iterations`: max React iterations.
+- `max_iterations`: base max ReAct decision/tool-use iterations, resolved from bundle config, then assembly/env, then fallback `15`.
 - `reactive_event_iteration_credit_enabled`: enable live reactive-event iteration credit on the current turn. Default `true`.
 - `reactive_event_iteration_credit_per_event`: default iteration credit minted by one accepted live reactive event. Default `1`.
 - `reactive_event_iteration_credit_cap`: max extra iterations that one turn may accumulate from live reactive events. When unset, React defaults it to the configured `max_iterations`.

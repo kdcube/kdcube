@@ -672,6 +672,7 @@ class Settings(PLATFORM_CONFIG):
     REACT_WORKSPACE_GIT_REPO: str | None = None
     AI_REACT_AGENT_VERSION: str = Field(default="v2")
     AI_REACT_AGENT_MULTI_ACTION: str = Field(default="off")
+    AI_REACT_MAX_ITERATIONS: int = Field(default=15)
     AI_REACT_CONTEXT_MAX_TOKENS: int | None = Field(default=80000)
     AI_REACT_READ_VISIBLE_MAX_TEXT_SYMBOLS: int = Field(default=48000)
     AI_REACT_READ_VISIBLE_MAX_TOKENS: int = Field(default=12000)
@@ -1134,6 +1135,11 @@ class Settings(PLATFORM_CONFIG):
             self.AI_REACT_AGENT_VERSION = "v2"
         self.AI_REACT_AGENT_MULTI_ACTION = (
             self._resolve_str("AI_REACT_AGENT_MULTI_ACTION", "ai.react.react_agent_multiaction", "off") or "off"
+        )
+        self.AI_REACT_MAX_ITERATIONS = self._resolve_int(
+            "AI_REACT_MAX_ITERATIONS",
+            "ai.react.max_iterations",
+            self.AI_REACT_MAX_ITERATIONS,
         )
         self.AI_REACT_CONTEXT_MAX_TOKENS = self._resolve_int(
             "AI_REACT_CONTEXT_MAX_TOKENS",

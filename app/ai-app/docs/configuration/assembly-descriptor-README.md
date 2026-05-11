@@ -73,6 +73,7 @@ These env vars are the direct runtime surface for assembly-backed settings.
 | `REACT_WORKSPACE_GIT_REPO` | `storage.workspace.repo` | `get_settings()` | CLI local compose, direct local service run |
 | `AI_REACT_AGENT_VERSION` | `ai.react.react_agent_version` | `get_settings()` | all modes |
 | `AI_REACT_AGENT_MULTI_ACTION` | `ai.react.react_agent_multiaction` | `get_settings()` | all modes |
+| `AI_REACT_MAX_ITERATIONS` | `ai.react.max_iterations` | `get_settings()` / `RuntimeCtx.max_iterations` | all modes |
 | `AI_REACT_CONTEXT_MAX_TOKENS` | `ai.react.context_max_tokens` | `get_settings()` | all modes |
 | `AI_REACT_READ_VISIBLE_MAX_TEXT_SYMBOLS` | `ai.react.read_visible_max_text_symbols` | `get_settings()` | all modes |
 | `AI_REACT_READ_VISIBLE_MAX_TOKENS` | `ai.react.read_visible_max_tokens` | `get_settings()` | all modes |
@@ -173,6 +174,7 @@ ai:
   react:
     react_agent_version: "v3"          # AI_REACT_AGENT_VERSION
     react_agent_multiaction: "off"     # AI_REACT_AGENT_MULTI_ACTION
+    max_iterations: 15                 # AI_REACT_MAX_ITERATIONS
     context_max_tokens: 80000          # AI_REACT_CONTEXT_MAX_TOKENS
     read_visible_max_text_symbols: 48000 # AI_REACT_READ_VISIBLE_MAX_TEXT_SYMBOLS
     read_visible_max_tokens: 12000      # AI_REACT_READ_VISIBLE_MAX_TOKENS
@@ -190,6 +192,7 @@ ai:
 |---|---|---|
 | `react_agent_version` | `AI_REACT_AGENT_VERSION` | React decision runtime version (`v2` or `v3`) |
 | `react_agent_multiaction` | `AI_REACT_AGENT_MULTI_ACTION` | Experimental multi-action decision mode (`on` or `off`) |
+| `max_iterations` | `AI_REACT_MAX_ITERATIONS` | Base ReAct decision/tool-use round cap; bundle `config.react.max_iterations` overrides this default for that bundle; runtime fallback `15` |
 | `context_max_tokens` | `AI_REACT_CONTEXT_MAX_TOKENS` | Default hard model-input budget before compaction when a bundle does not set `max_tokens`; includes system/instruction text plus rendered timeline; default `80000` |
 | `read_visible_max_text_symbols` | `AI_REACT_READ_VISIBLE_MAX_TEXT_SYMBOLS` | Default max visible text characters per `react.read` text path; default `48000` |
 | `read_visible_max_tokens` | `AI_REACT_READ_VISIBLE_MAX_TOKENS` | Default token guard per `react.read` text path; default `12000` |

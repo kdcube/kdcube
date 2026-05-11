@@ -137,13 +137,14 @@ Operational guidance:
 - HTTPS + PAT is usually the simpler deployment/runtime choice
 - SSH is supported, but it additionally requires mounted key and host-verification material
 
-### ReAct visible read and exec preview limits
+### ReAct runtime limits
 
 The proc service reads these non-secret ReAct limits from `assembly.yaml` through
 `get_settings()` and passes them into `RuntimeCtx`.
 
 | Env var | Descriptor path | Descriptor file | Modes | Meaning |
 |---|---|---|---|---|
+| `AI_REACT_MAX_ITERATIONS` | `ai.react.max_iterations` | `assembly.yaml` | all modes | base ReAct decision/tool-use round cap; bundle `config.react.max_iterations` overrides this default for that bundle; runtime fallback `15` |
 | `AI_REACT_CONTEXT_MAX_TOKENS` | `ai.react.context_max_tokens` | `assembly.yaml` | all modes | hard model-input budget before compaction; includes system/instruction text plus rendered timeline |
 | `AI_REACT_READ_VISIBLE_MAX_TEXT_SYMBOLS` | `ai.react.read_visible_max_text_symbols` | `assembly.yaml` | all modes | max visible text characters per `react.read` text path |
 | `AI_REACT_READ_VISIBLE_MAX_TOKENS` | `ai.react.read_visible_max_tokens` | `assembly.yaml` | all modes | token guard per `react.read` text path |

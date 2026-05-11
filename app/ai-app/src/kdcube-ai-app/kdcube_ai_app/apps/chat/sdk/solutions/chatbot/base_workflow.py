@@ -84,11 +84,31 @@ def _nonnegative_int(value: Any) -> Optional[int]:
     return parsed if parsed >= 0 else None
 
 
+def _get_prop_path(data: Dict[str, Any], path: str, default: Any = None) -> Any:
+    if not path:
+        return default
+    cur: Any = data
+    for part in path.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return default
+        cur = cur[part]
+    return cur
+
+
 def _react_context_max_tokens(config: Any, settings: Any) -> Optional[int]:
     configured = _positive_int(getattr(config, "max_tokens", None))
     if configured is not None:
         return configured
     return _positive_int(getattr(settings, "AI_REACT_CONTEXT_MAX_TOKENS", None))
+
+
+def _react_max_iterations(bundle_props: Dict[str, Any], settings: Any) -> int:
+    configured = _positive_int(_get_prop_path(bundle_props or {}, "react.max_iterations"))
+    if configured is None:
+        configured = _positive_int(_get_prop_path(bundle_props or {}, "config.react.max_iterations"))
+    if configured is not None:
+        return configured
+    return _positive_int(getattr(settings, "AI_REACT_MAX_ITERATIONS", None)) or 15
 
 
 def _apply_react_session_settings(runtime_ctx: Any, settings: Any) -> None:
@@ -246,6 +266,7 @@ class BaseWorkflow():
         # Runtime context + context browser are constructed once per workflow instance
         settings = get_settings()
         runtime_max_tokens = _react_context_max_tokens(self.config, settings)
+        runtime_max_iterations = _react_max_iterations(self.bundle_props, settings)
         try:
             self.runtime_ctx = RuntimeCtx(
                 tenant=self.comm_context.actor.tenant_id,
@@ -257,6 +278,7 @@ class BaseWorkflow():
                 turn_id=self.comm_context.routing.turn_id,
                 bundle_id=self.config.ai_bundle_spec.id,
                 max_tokens=runtime_max_tokens,
+                max_iterations=runtime_max_iterations,
                 read_visible_max_text_symbols=_positive_int(getattr(settings, "AI_REACT_READ_VISIBLE_MAX_TEXT_SYMBOLS", None)),
                 read_visible_max_tokens=_positive_int(getattr(settings, "AI_REACT_READ_VISIBLE_MAX_TOKENS", None)),
                 read_visible_max_bytes=_positive_int(getattr(settings, "AI_REACT_READ_VISIBLE_MAX_BYTES", None)),
@@ -281,6 +303,7 @@ class BaseWorkflow():
         except Exception:
             self.runtime_ctx = RuntimeCtx(
                 max_tokens=runtime_max_tokens,
+                max_iterations=runtime_max_iterations,
                 read_visible_max_text_symbols=_positive_int(getattr(settings, "AI_REACT_READ_VISIBLE_MAX_TEXT_SYMBOLS", None)),
                 read_visible_max_tokens=_positive_int(getattr(settings, "AI_REACT_READ_VISIBLE_MAX_TOKENS", None)),
                 read_visible_max_bytes=_positive_int(getattr(settings, "AI_REACT_READ_VISIBLE_MAX_BYTES", None)),
