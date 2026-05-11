@@ -114,6 +114,167 @@ async def test_patch_applies_unified_diff_and_rewrites_headers(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_patch_normalizes_llm_generated_bad_hunk_counts(tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_new", outdir=str(tmp_path), workdir=str(tmp_path))
+    ctx = FakeBrowser(runtime)
+
+    target = tmp_path / "turn_new" / "files" / "demo" / "app.py"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        "# Main application entry point\n\n"
+        "from config import DATABASE_URL, DEBUG\n"
+        "from utils import format_response, authenticate_user\n\n"
+        "def main():\n"
+        "    print(\"Starting app...\")\n"
+        "    user = authenticate_user(\"admin\", \"secret\")\n"
+        "    if user:\n"
+        "        response = format_response(user)\n"
+        "        print(response)\n\n"
+        "def handle_request(request):\n"
+        "    # TODO: add input validation\n"
+        "    user = authenticate_user(request[\"username\"], request[\"password\"])\n"
+        "    if not user:\n"
+        "        return {\"error\": \"Unauthorized\"}\n"
+        "    return format_response(user)\n\n"
+        "if __name__ == \"__main__\":\n"
+        "    main()\n",
+        encoding="utf-8",
+    )
+
+    patch_text = "\n".join([
+        "--- a/files/demo/app.py",
+        "+++ b/files/demo/app.py",
+        "@@ -1,7 +1,7 @@",
+        " # Main application entry point",
+        " ",
+        " from config import DATABASE_URL, DEBUG",
+        "-from utils import format_response, authenticate_user",
+        "+from utils import format_response, authenticate_user, sanitize_input",
+        " ",
+        " def main():",
+        "     print(\"Starting app...\")",
+        "@@ -11,8 +11,13 @@",
+        "         print(response)",
+        " ",
+        " def handle_request(request):",
+        "-    # TODO: add input validation",
+        "-    user = authenticate_user(request[\"username\"], request[\"password\"])",
+        "+    # Validate and sanitize inputs before authenticating",
+        "+    username = sanitize_input(request.get(\"username\", \"\"))",
+        "+    password = request.get(\"password\", \"\")",
+        "+    if not username or not password:",
+        "+        return {\"error\": \"Missing credentials\"}",
+        "+    user = authenticate_user(username, password)",
+        "     if not user:",
+        "         return {\"error\": \"Unauthorized\"}",
+        "     return format_response(user)",
+        "",
+    ])
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "params": {
+                    "path": "files/demo/app.py",
+                    "channel": "canvas",
+                    "patch": patch_text,
+                    "kind": "display",
+                }
+            }
+        },
+        "outdir": str(tmp_path),
+    }
+
+    await handle_react_patch(react=FakeReact(), ctx_browser=ctx, state=state, tool_call_id="p_bad_count")
+
+    assert "sanitize_input" in target.read_text(encoding="utf-8")
+    assert "Missing credentials" in target.read_text(encoding="utf-8")
+    result_blocks = [b for b in ctx.timeline.blocks if b.get("type") == "react.tool.result" and b.get("mime") == "text/markdown"]
+    assert result_blocks
+    rendered_patch = result_blocks[-1].get("text") or ""
+    assert "@@ -11,8 +11,12 @@" in rendered_patch
+    assert not any(
+        b.get("type") == "react.tool.result" and '"ok": false' in (b.get("text") or "").lower()
+        for b in ctx.timeline.blocks
+    )
+
+
+@pytest.mark.asyncio
+async def test_patch_rejects_full_replacement_copied_from_line_numbered_preview(tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_new", outdir=str(tmp_path), workdir=str(tmp_path))
+    ctx = FakeBrowser(runtime)
+
+    target = tmp_path / "turn_new" / "files" / "demo" / "a.txt"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
+
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "params": {
+                    "path": "files/demo/a.txt",
+                    "channel": "canvas",
+                    "patch": "     1\talpha\n     2\tbeta edited\n     3\tgamma\n",
+                    "kind": "display",
+                }
+            }
+        },
+        "outdir": str(tmp_path),
+    }
+
+    await handle_react_patch(react=FakeReact(), ctx_browser=ctx, state=state, tool_call_id="p_numbered_full")
+
+    assert target.read_text(encoding="utf-8") == "alpha\nbeta\ngamma\n"
+    json_blocks = [b for b in ctx.timeline.blocks if b.get("type") == "react.tool.result" and b.get("mime") == "application/json"]
+    assert json_blocks
+    payload = json.loads(json_blocks[-1]["text"])
+    assert payload["ok"] is False
+    assert payload["error"] == "patch_contains_preview_line_numbers"
+
+
+@pytest.mark.asyncio
+async def test_patch_rejects_unified_diff_copied_from_line_numbered_preview(tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_new", outdir=str(tmp_path), workdir=str(tmp_path))
+    ctx = FakeBrowser(runtime)
+
+    target = tmp_path / "turn_new" / "files" / "demo" / "a.txt"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
+
+    patch_text = "\n".join([
+        "--- a/files/demo/a.txt",
+        "+++ b/files/demo/a.txt",
+        "@@ -1,3 +1,3 @@",
+        "      1\talpha",
+        "-     2\tbeta",
+        "+     2\tbeta edited",
+        "      3\tgamma",
+        "",
+    ])
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "params": {
+                    "path": "files/demo/a.txt",
+                    "channel": "canvas",
+                    "patch": patch_text,
+                    "kind": "display",
+                }
+            }
+        },
+        "outdir": str(tmp_path),
+    }
+
+    await handle_react_patch(react=FakeReact(), ctx_browser=ctx, state=state, tool_call_id="p_numbered_diff")
+
+    assert target.read_text(encoding="utf-8") == "alpha\nbeta\ngamma\n"
+    json_blocks = [b for b in ctx.timeline.blocks if b.get("type") == "react.tool.result" and b.get("mime") == "application/json"]
+    assert json_blocks
+    payload = json.loads(json_blocks[-1]["text"])
+    assert payload["ok"] is False
+    assert payload["error"] == "patch_contains_preview_line_numbers"
+
+
+@pytest.mark.asyncio
 async def test_patch_file_kind_hosts_and_emits_file(tmp_path):
     runtime = RuntimeCtx(turn_id="turn_new", outdir=str(tmp_path), workdir=str(tmp_path))
     ctx = FakeBrowser(runtime)

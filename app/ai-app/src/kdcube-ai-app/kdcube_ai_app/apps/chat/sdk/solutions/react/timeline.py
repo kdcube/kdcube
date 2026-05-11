@@ -2321,6 +2321,7 @@ class Timeline:
         tool_id: str,
         preview_label: str = "[TOOL RESULT PREVIEW TRUNCATED]",
         recovery_lines: Optional[List[str]] = None,
+        line_number_visible_text: bool = False,
     ) -> str:
         text = raw_text if isinstance(raw_text, str) else str(raw_text or "")
         if (tool_id or "").strip() == "react.read":
@@ -2329,6 +2330,21 @@ class Timeline:
             return text
         cap = self._tool_result_preview_max_text_symbols()
         if len(text) <= cap:
+            if line_number_visible_text:
+                total_lines = len(text.splitlines())
+                line_window = visible_line_window(
+                    text,
+                    source_truncated=False,
+                    total_line_count=total_lines,
+                )
+                numbered_text = line_number_text(text) if total_lines else text
+                lines = [
+                    f"lines: {format_visible_line_window(line_window)}",
+                    "line_numbers: true" if total_lines else "line_numbers: false",
+                    "content:",
+                    numbered_text,
+                ]
+                return "\n".join(lines).strip()
             return text
 
         preview = text[:cap].rstrip()
@@ -6059,6 +6075,7 @@ class Timeline:
                             tool_id=tool_id,
                             preview_label="[ARTIFACT PREVIEW TRUNCATED]",
                             recovery_lines=self._large_text_recovery_lines(path=path, physical_path=physical_path),
+                            line_number_visible_text=True,
                         ))
                         text = header_text
                     else:

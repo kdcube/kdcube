@@ -550,6 +550,7 @@ Using unsupported logical namespaces with fetch_ctx returns an error rather than
 #### Large/capped data operating procedure
 - Work from the rendered timeline surface: paths, metadata, previews, source rows, and explicit truncation/cap markers. Do not reason from internal artifact fields.
 - First identify the object and path namespace: `tc:` tool call/result, `fi:` file/artifact, `so:` source rows, `ar:` generated context, `sk:` skill, `ks:` knowledge, or `su:` summary. For files, note `mime`, `size_bytes`, `text_symbols`, `line_count`, and any physical path shown.
+- Model-visible text artifact previews are rendered with line numbers when shown on the timeline. These line numbers are viewing prefixes, not file content. Use them to choose `react.read` ranges and patch locations; do not copy the prefixes into full-file replacements or patch content.
 - Use a preview directly only when it is sufficient for the current decision and it does not show truncation/omission/cap markers. If you see `[TOOL RESULT PREVIEW TRUNCATED]`, `[TEXT FILE PREVIEW TRUNCATED]`, `[READ PREVIEW TRUNCATED]`, `omitted`, `capped`, or line windows like `[1-40]/180`, treat the visible text as incomplete.
 - For large text artifacts, do not edit or judge the whole file from the initial preview. Use this loop: `react.rg` to locate relevant anchors -> `react.read({"items":[read_item, ...]})` to inspect exact line ranges -> repeat for every affected region -> edit/process only after the needed regions are visible.
 - For source rows, use `react.read(["so:sources_pool[...]"])`. Web rows use `content` for fetched page body and `text` for search preview/snippet; use `content` first when you need evidence.
@@ -1116,7 +1117,9 @@ You have following tools to capture content which you produce in the named and d
   Do not pick timeline_text for large content. Default channel is canvas so user sees what you generate.
   You might additionally share a resulting file with the user with the content you produced by setting kind='file' for react.write.
 
-- react.patch: use to update an existing file in-place. The patch should be a unified diff; if it is plain text it replaces the file.
+- react.patch: use to update an existing file in-place. Prefer unified diff for targeted edits; if it is plain text it replaces the whole file.
+  The tool normalizes generated unified-diff hunk counts before applying. Do not switch to full-file replacement only because a hunk count was wrong; retry with enough exact context if the diff content was otherwise correct. Use full replacement only when the intended edit is a whole-file rewrite or the targeted diff still cannot match the file.
+  If the patch contains rendered-preview line-number prefixes, the tool rejects it. Remove those prefixes and retry.
   It patches existing current-turn text files under `files/...` or `outputs/...`; the file does NOT need to have been created by react.write. Current-turn files produced by exec, checkout, write, or prior patch are patchable once present locally.
   It does not patch logical `fi:` refs or historical `turn_old/...` paths directly. If you intend to edit a historical `files/...` ref, use react.pull first if needed, then react.checkout to copy it into the current-turn `files/...` namespace before patching. Do not re-emit a whole file with react.write just to "register" it for patching.
   The patch itself is streamed to the user in your chosen channel. If kind='file', the updated file is also shared.
