@@ -672,6 +672,7 @@ class BrowserBackend:
         key, label = derive_session_identity(session_id, bound_context=self.bound_context)
         closed: list[dict[str, Any]] = []
         async with _SESSIONS_LOCK:
+            total_sessions_before = len(_SESSIONS)
             candidate_keys = []
             if key in _SESSIONS:
                 candidate_keys.append(key)
@@ -679,6 +680,16 @@ class BrowserBackend:
                 for item_key, session in list(_SESSIONS.items()):
                     if item_key != key and _session_matches_bound_context(session, self.bound_context):
                         candidate_keys.append(item_key)
+            candidate_keys = list(dict.fromkeys(candidate_keys))
+            matched_sessions = [
+                {
+                    "session_key": item_key,
+                    "session_label": getattr(_SESSIONS.get(item_key), "label", ""),
+                    "tabs": sorted(getattr(_SESSIONS.get(item_key), "pages", {}).keys()),
+                }
+                for item_key in candidate_keys
+                if item_key in _SESSIONS
+            ]
 
             for item_key in candidate_keys:
                 session = _SESSIONS.pop(item_key, None)
@@ -707,7 +718,11 @@ class BrowserBackend:
             "session_label": label,
             "closed": bool(closed),
             "closed_count": sum(1 for item in closed if item.get("closed")),
+            "matched_count": len(matched_sessions),
+            "total_sessions_before": total_sessions_before,
+            "total_sessions_after": len(_SESSIONS),
             "reason": reason,
+            "matched_sessions": matched_sessions,
             "sessions": closed,
         }
 

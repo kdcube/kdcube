@@ -201,12 +201,43 @@ async def _cleanup_turn_browser_sessions_for_payload(payload: ChatTaskPayload, *
             reason=reason,
         )
         closed_count = int(result.get("closed_count") or 0) if isinstance(result, dict) else 0
-        if closed_count:
+        matched_count = int(result.get("matched_count") or 0) if isinstance(result, dict) else 0
+        total_before = int(result.get("total_sessions_before") or 0) if isinstance(result, dict) else 0
+        total_after = int(result.get("total_sessions_after") or 0) if isinstance(result, dict) else 0
+        task_id = getattr(getattr(payload, "meta", None), "task_id", None)
+        turn_id = getattr(routing, "turn_id", None)
+        session_labels = [
+            str(item.get("session_label") or "")
+            for item in (result.get("matched_sessions") or [])
+            if isinstance(item, dict)
+        ][:5] if isinstance(result, dict) else []
+        log_message = (
+            "Browser session cleanup after processor task finalization: "
+            "task_id=%s turn_id=%s reason=%s total_before=%s matched=%s closed=%s total_after=%s labels=%s"
+        )
+        if matched_count or closed_count:
             logger.info(
-                "Cleaned up browser sessions after processor task finalization: task_id=%s count=%s reason=%s",
-                getattr(getattr(payload, "meta", None), "task_id", None),
-                closed_count,
+                log_message,
+                task_id,
+                turn_id,
                 reason,
+                total_before,
+                matched_count,
+                closed_count,
+                total_after,
+                session_labels,
+            )
+        else:
+            logger.debug(
+                log_message,
+                task_id,
+                turn_id,
+                reason,
+                total_before,
+                matched_count,
+                closed_count,
+                total_after,
+                session_labels,
             )
     except Exception:
         logger.debug("Failed to cleanup browser sessions after processor task finalization", exc_info=True)
