@@ -263,7 +263,7 @@ def test_large_tool_result_is_rendered_as_preview_with_shape():
     assert "shape_depth: 4" in joined
     assert '"messages":' in joined
     assert '"type": "list[2]"' in joined
-    assert "ctx_tools.fetch_ctx(path=\"tc:turn_large.tc_email.result\")" in joined
+    assert "ranged react.read items" in joined
     assert len(joined) < len(raw_text)
     assert "A" * 1000 not in joined
 

@@ -3,6 +3,7 @@
 import pytest
 import json
 import random
+from types import SimpleNamespace
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.proto import RuntimeCtx
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.read import handle_react_read
@@ -151,6 +152,62 @@ async def test_read_tc_result_prefers_inline_payload_over_meta(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_read_tc_items_materializes_line_range(tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_read", outdir=str(tmp_path), workdir=str(tmp_path), max_tokens=80_000)
+    ctx = FakeBrowser(runtime)
+    source_path = "tc:turn_src.tc_big.call"
+    ctx.timeline.blocks.append({
+        "type": "react.tool.call",
+        "mime": "text/plain",
+        "path": source_path,
+        "text": "\n".join([
+            "line 1",
+            "line 2",
+            "line 3",
+            "line 4",
+            "line 5",
+        ]),
+        "turn_id": "turn_src",
+        "call_id": "tc_big",
+        "meta": {"tool_call_id": "tc_big"},
+    })
+
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "params": {
+                    "items": [
+                        {"path": source_path, "line_start": 2, "line_count": 2}
+                    ]
+                }
+            }
+        }
+    }
+
+    await handle_react_read(ctx_browser=ctx, state=state, tool_call_id="r_tc_range")
+
+    range_block = next(
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result"
+        and b.get("call_id") == "r_tc_range"
+        and b.get("path") == source_path
+        and "[READ RANGE]" in (b.get("text") or "")
+    )
+    assert "lines: [2-3]/5" in range_block["text"]
+    assert "     2\tline 2" in range_block["text"]
+    assert "     3\tline 3" in range_block["text"]
+    assert "line 4" not in range_block["text"]
+
+    status = next(
+        json.loads(b["text"])
+        for b in ctx.timeline.blocks
+        if b.get("path") == "tc:turn_read.r_tc_range.result" and b.get("mime") == "application/json"
+    )
+    assert status["paths"][0]["read_range"]["line_start"] == 2
+    assert status["paths"][0]["read_range"]["visible_lines"] == 2
+
+
+@pytest.mark.asyncio
 async def test_read_items_materializes_multiple_line_ranges(tmp_path):
     runtime = RuntimeCtx(turn_id="turn_read", outdir=str(tmp_path), workdir=str(tmp_path), max_tokens=80_000)
     ctx = FakeBrowser(runtime)
@@ -203,6 +260,265 @@ async def test_read_items_materializes_multiple_line_ranges(tmp_path):
     assert len(status["paths"]) == 2
     assert status["paths"][0]["read_range"]["line_start"] == 3
     assert status["paths"][1]["read_range"]["line_start"] == 5
+
+
+@pytest.mark.asyncio
+async def test_read_ks_items_materializes_line_range(tmp_path):
+    runtime = RuntimeCtx(
+        turn_id="turn_read",
+        outdir=str(tmp_path),
+        workdir=str(tmp_path),
+        bundle_storage=str(tmp_path / "bundle-storage"),
+        max_tokens=80_000,
+    )
+    text = "\n".join([
+        "# Knowledge Article",
+        "",
+        "alpha",
+        "beta",
+        "gamma",
+        "delta",
+    ])
+
+    def read_knowledge(*, path: str):
+        assert path == "ks:docs/article.md"
+        return {
+            "text": text,
+            "mime": "text/markdown",
+            "physical_path": str(tmp_path / "bundle-storage" / "docs" / "article.md"),
+        }
+
+    runtime.knowledge_read_fn = read_knowledge
+    ctx = FakeBrowser(runtime)
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "params": {
+                    "items": [
+                        {"path": "ks:docs/article.md", "line_start": 3, "line_count": 2}
+                    ]
+                }
+            }
+        }
+    }
+
+    await handle_react_read(ctx_browser=ctx, state=state, tool_call_id="r_ks_range")
+
+    range_block = next(
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result"
+        and b.get("call_id") == "r_ks_range"
+        and b.get("path") == "ks:docs/article.md"
+        and "[READ RANGE]" in (b.get("text") or "")
+    )
+    assert "lines: [3-4]/6" in range_block["text"]
+    assert "     3\talpha" in range_block["text"]
+    assert "     4\tbeta" in range_block["text"]
+    assert "gamma" not in range_block["text"]
+
+    status = json.loads(next(
+        b["text"]
+        for b in ctx.timeline.blocks
+        if b.get("path") == "tc:turn_read.r_ks_range.result" and b.get("mime") == "application/json"
+    ))
+    assert status["paths"][0]["read_range"]["line_start"] == 3
+    assert status["paths"][0]["read_range"]["line_end"] == 4
+
+
+@pytest.mark.asyncio
+async def test_read_ks_stats_includes_line_count(tmp_path):
+    runtime = RuntimeCtx(
+        turn_id="turn_read",
+        outdir=str(tmp_path),
+        workdir=str(tmp_path),
+        bundle_storage=str(tmp_path / "bundle-storage"),
+    )
+
+    def read_knowledge(*, path: str):
+        return {
+            "text": "one\ntwo\nthree\n",
+            "mime": "text/markdown",
+            "physical_path": str(tmp_path / "bundle-storage" / "docs" / "article.md"),
+        }
+
+    runtime.knowledge_read_fn = read_knowledge
+    ctx = FakeBrowser(runtime)
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "params": {
+                    "paths": ["ks:docs/article.md"],
+                    "stats_only": True,
+                }
+            }
+        }
+    }
+
+    await handle_react_read(ctx_browser=ctx, state=state, tool_call_id="r_ks_stats")
+
+    status = json.loads(next(
+        b["text"]
+        for b in ctx.timeline.blocks
+        if b.get("path") == "tc:turn_read.r_ks_stats.result" and b.get("mime") == "application/json"
+    ))
+    assert status["paths"][0]["status"] == "stats_only"
+    assert status["paths"][0]["kind"] == "text"
+    assert status["paths"][0]["line_count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_read_ks_text_is_uncapped_by_default(tmp_path):
+    runtime = RuntimeCtx(
+        turn_id="turn_read",
+        outdir=str(tmp_path),
+        workdir=str(tmp_path),
+        bundle_storage=str(tmp_path / "bundle-storage"),
+        read_visible_max_text_symbols=30,
+        read_visible_max_tokens=4,
+        read_visible_max_bytes=64,
+        max_tokens=100,
+    )
+    text = "alpha\n" + ("knowledge body line\n" * 20) + "omega"
+
+    def read_knowledge(*, path: str):
+        return {
+            "text": text,
+            "mime": "text/markdown",
+            "physical_path": str(tmp_path / "bundle-storage" / "docs" / "long.md"),
+        }
+
+    runtime.knowledge_read_fn = read_knowledge
+    ctx = FakeBrowser(runtime)
+    state = {"last_decision": {"tool_call": {"params": {"paths": ["ks:docs/long.md"]}}}}
+
+    await handle_react_read(ctx_browser=ctx, state=state, tool_call_id="r_ks_full")
+
+    ks_block = next(
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result"
+        and b.get("call_id") == "r_ks_full"
+        and b.get("path") == "ks:docs/long.md"
+    )
+    assert ks_block["text"].endswith("omega")
+    assert "[READ PREVIEW TRUNCATED]" not in ks_block["text"]
+
+
+@pytest.mark.asyncio
+async def test_read_ks_text_uses_explicit_knowledge_cap(tmp_path):
+    runtime = RuntimeCtx(
+        turn_id="turn_read",
+        outdir=str(tmp_path),
+        workdir=str(tmp_path),
+        bundle_storage=str(tmp_path / "bundle-storage"),
+        knowledge_read_visible_max_text_symbols=40,
+        max_tokens=100,
+    )
+    text = "alpha\n" + ("knowledge body line\n" * 20) + "omega"
+
+    def read_knowledge(*, path: str):
+        return {
+            "text": text,
+            "mime": "text/markdown",
+            "physical_path": str(tmp_path / "bundle-storage" / "docs" / "long.md"),
+        }
+
+    runtime.knowledge_read_fn = read_knowledge
+    ctx = FakeBrowser(runtime)
+    state = {"last_decision": {"tool_call": {"params": {"paths": ["ks:docs/long.md"]}}}}
+
+    await handle_react_read(ctx_browser=ctx, state=state, tool_call_id="r_ks_capped")
+
+    ks_block = next(
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result"
+        and b.get("call_id") == "r_ks_capped"
+        and b.get("path") == "ks:docs/long.md"
+    )
+    assert "[READ PREVIEW TRUNCATED]" in ks_block["text"]
+    assert "visible_text_symbols: 40" in ks_block["text"]
+    assert "omega" not in ks_block["text"]
+
+
+@pytest.mark.asyncio
+async def test_read_skill_is_not_read_capped(monkeypatch, tmp_path):
+    import kdcube_ai_app.apps.chat.sdk.skills.skills_registry as registry
+
+    runtime = RuntimeCtx(
+        turn_id="turn_read",
+        outdir=str(tmp_path),
+        workdir=str(tmp_path),
+        read_visible_max_text_symbols=20,
+        read_visible_max_tokens=4,
+        read_visible_max_bytes=64,
+        max_tokens=100,
+    )
+    long_instruction = "skill-start\n" + ("full skill instruction\n" * 30) + "skill-end"
+    spec = SimpleNamespace(
+        name="Big Skill",
+        namespace="public",
+        id="big",
+        instruction_text=long_instruction,
+        instruction_compact_text="",
+        instruction_paths=None,
+        sources=[],
+    )
+    monkeypatch.setattr(registry, "build_skill_short_id_map", lambda consumer: {})
+    monkeypatch.setattr(registry, "import_skillset", lambda items, short_id_map=None: ["public.big"])
+    monkeypatch.setattr(registry, "get_skill", lambda sid: spec if sid == "public.big" else None)
+
+    ctx = FakeBrowser(runtime)
+    state = {"last_decision": {"tool_call": {"params": {"paths": ["sk:public.big"]}}}}
+
+    await handle_react_read(ctx_browser=ctx, state=state, tool_call_id="r_skill")
+
+    skill_block = next(
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result"
+        and b.get("call_id") == "r_skill"
+        and b.get("path") == "sk:public.big"
+    )
+    assert "ACTIVE 💡" in skill_block["text"]
+    assert "skill-end" in skill_block["text"]
+    assert "[READ PREVIEW TRUNCATED]" not in skill_block["text"]
+
+
+@pytest.mark.asyncio
+async def test_read_range_materializes_even_when_full_path_visible(tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_read", outdir=str(tmp_path), workdir=str(tmp_path), max_tokens=80_000)
+    ctx = FakeBrowser(runtime)
+    out_file = tmp_path / "turn_read" / "outputs" / "visible.md"
+    out_file.parent.mkdir(parents=True, exist_ok=True)
+    out_file.write_text("line 1\nline 2\nline 3\nline 4\n", encoding="utf-8")
+    source_path = "fi:turn_read.outputs/visible.md"
+
+    await handle_react_read(
+        ctx_browser=ctx,
+        state={"last_decision": {"tool_call": {"params": {"paths": [source_path]}}}},
+        tool_call_id="r_full",
+    )
+    await handle_react_read(
+        ctx_browser=ctx,
+        state={
+            "last_decision": {
+                "tool_call": {
+                    "params": {
+                        "items": [{"path": source_path, "line_start": 2, "line_count": 2}]
+                    }
+                }
+            }
+        },
+        tool_call_id="r_range_after_full",
+    )
+
+    range_blocks = [
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result"
+        and b.get("call_id") == "r_range_after_full"
+        and b.get("path") == source_path
+        and "[READ RANGE]" in (b.get("text") or "")
+    ]
+    assert range_blocks
+    assert "lines: [2-3]/4" in range_blocks[-1]["text"]
 
 
 @pytest.mark.asyncio

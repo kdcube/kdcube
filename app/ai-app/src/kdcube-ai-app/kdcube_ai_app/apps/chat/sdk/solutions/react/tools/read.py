@@ -48,8 +48,9 @@ TOOL_SPEC = {
         "use it with react.memsearch hits when the summary does not name enough refs. "
         "Batch multiple known paths in one read call. "
         "react.rg read_items are directly readable here via params.items. "
-        "Each path you read becomes visible in the timeline; skills are shown with ACTIVE 💡 banner. "
+        "Each path you read becomes visible in the timeline; skills are shown with ACTIVE 💡 banner and are never read-capped. "
         "Use ks:<relpath> to read files from the knowledge space (read-only reference files prepared by the system). "
+        "Knowledge-space text is uncapped by default; operators can set ai.react.knowledge_read_visible_* caps if a deployment needs them. "
         "For fi: files, normal readable content is text, plus multimodal PDF/image payloads. "
         "For so:sources_pool[...] paths, react.read returns JSON source rows; web rows use content for full fetched text "
         "when available and text for the search preview/snippet. Source rows are materialized in full by default. "
@@ -58,12 +59,11 @@ TOOL_SPEC = {
         "Inspect those with code and exec tool against their physical OUTPUT_DIR path. "
         "If your own earlier tools produced the binary file, inspect the generating tool call/result (tc:) and any related text/code source artifacts (fi:) "
         "from that generating step; do not expect react.read on the binary fi: file itself to reveal its content. "
-        "Oversized text results are rematerialized as bounded visible previews using configured text/token/byte caps. "
+        "Oversized regular text results are rematerialized as bounded visible previews using configured text/token/byte caps. "
         "Caps apply independently per requested path. "
-        "For exact full processing, use exec_tools.execute_code_python. "
-        "Inside exec, read fi: files by their physical OUTPUT_DIR-relative path "
-        "(for example fi:<turn>.outputs/x maps to <turn>/outputs/x); "
-        "use ctx_tools.fetch_ctx(path=...) for supported logical context objects such as ar:, tc:, or so:."
+        "To recover large text into model-visible context, use stats_only to get size/line metadata, then read bounded ranges "
+        "with params.items line_start/line_count or offset_text_symbols/max_text_symbols. "
+        "Do not use exec output as an uncapped read channel; exec output is capped too."
     ),
     "args": {
         "paths": (
@@ -77,7 +77,8 @@ TOOL_SPEC = {
         ),
         "items": (
             "optional list of read specs, each with path plus optional line_start/line_count or "
-            "offset_text_symbols/max_text_symbols. Use read_items returned by react.rg to materialize exact regions."
+            "offset_text_symbols/max_text_symbols. Works for text-backed logical paths such as fi:, tc:/ar:, and ks:. "
+            "Use read_items returned by react.rg when available; otherwise create manual line ranges from stats_only metadata."
         ),
         "line_numbers": (
             "optional bool; when reading line ranges, include line numbers. Defaults true for ranged items."
@@ -102,7 +103,8 @@ TOOL_SPEC = {
         "Ranged item reads return exact labeled chunks when they fit configured visible caps. "
         "Oversized non-source text payloads return status=truncated_for_visible_context with a bounded preview. "
         "Oversized PDFs and images that cannot be downscaled return status=too_large_for_visible_context_bytes. "
-        "Deeper inspection should be done with code and exec tool, using physical OUTPUT_DIR-relative paths for fi: files or ctx_tools.fetch_ctx for supported ar:/tc:/so: context paths."
+        "For large text, recover the needed content through repeated react.read range items. "
+        "Exec can compute over files or create smaller derived artifacts, but it is not an uncapped way to put full content into model context."
     ),
 }
 
@@ -314,15 +316,31 @@ def _visible_read_limits(runtime_ctx: Any, *, params: Dict[str, Any]) -> Dict[st
     }
 
 
-def _large_byte_marker_text(*, path: str, size_bytes: int, byte_cap: int) -> str:
+def _knowledge_read_limits(runtime_ctx: Any, *, params: Dict[str, Any]) -> Dict[str, Optional[int]]:
+    configured_text_symbols = _positive_int(getattr(runtime_ctx, "knowledge_read_visible_max_text_symbols", None))
+    configured_tokens = _positive_int(getattr(runtime_ctx, "knowledge_read_visible_max_tokens", None))
+    configured_bytes = _positive_int(getattr(runtime_ctx, "knowledge_read_visible_max_bytes", None))
+    requested = _positive_int(params.get("max_text_symbols"))
+    max_text_symbols: Optional[int] = configured_text_symbols
+    if requested is not None:
+        max_text_symbols = min(requested, max_text_symbols) if max_text_symbols else requested
+    return {
+        "max_text_symbols": max_text_symbols,
+        "max_tokens": configured_tokens,
+        "max_bytes": configured_bytes,
+    }
+
+
+def _large_byte_marker_text(*, path: str, size_bytes: int, byte_cap: Optional[int]) -> str:
     return "\n".join([
         "[LARGE READ NOT MATERIALIZED]",
         f"path: {path}",
         f"bytes: {size_bytes}",
-        f"visible_read_limit_bytes: {byte_cap}",
+        f"visible_read_limit_bytes: {byte_cap if byte_cap is not None else 'none'}",
         "exact_content: recoverable by logical path",
         "note: PDFs and unsupported binary payloads are not partially read into visible context; images are downscaled when possible",
-        "bulk_processing: use exec_tools.execute_code_python with a physical file path, or ctx_tools.fetch_ctx(path=...) for supported logical paths",
+        "text_recovery: for text paths, use react.read stats_only then line_start/line_count or offset_text_symbols/max_text_symbols ranges",
+        "note: exec output is capped and is not an uncapped model-visible read channel",
     ])
 
 
@@ -335,7 +353,7 @@ def _truncated_read_text(
     source_bytes: int,
     source_line_count: Optional[int],
     limit_text_symbols: int,
-    byte_cap: int,
+    byte_cap: Optional[int],
 ) -> str:
     clipped = text[:max(0, limit_text_symbols)].rstrip()
     omitted_text_symbols = max(0, source_text_symbols - len(clipped))
@@ -362,9 +380,10 @@ def _truncated_read_text(
         f"omitted_text_symbols: {omitted_text_symbols}",
         f"source_tokens_estimate: {source_tokens}",
         f"bytes: {source_bytes}",
-        f"visible_read_limit_bytes: {byte_cap}",
+        f"visible_read_limit_bytes: {byte_cap if byte_cap is not None else 'none'}",
         "exact_content: recoverable by logical path",
-        "bulk_processing: use exec_tools.execute_code_python and call ctx_tools.fetch_ctx(path=...) inside the exec code",
+        "recovery: use react.read stats_only for line metadata, then read bounded ranges with params.items",
+        "example: {\"items\":[{\"path\":\"%s\",\"line_start\":1,\"line_count\":120}]}" % path,
     ]).strip()
 
 
@@ -517,27 +536,36 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             block["meta"].pop("replacement_text", None)
         block.pop("replacement_text", None)
         path = (block.get("path") or "").strip()
-        existing = _find_existing_block(block) if path.startswith(READ_DEDUP_PREFIXES) else None
+        meta = block.get("meta") if isinstance(block.get("meta"), dict) else {}
+        is_ranged_read = bool(meta.get("read_range"))
+        existing = _find_existing_block(block) if path.startswith(READ_DEDUP_PREFIXES) and not is_ranged_read else None
         if existing:
             _remember_visible_ref(path, existing)
             return False
         pending_blocks.append(block)
         return True
 
-    def _emit_large_byte_marker(*, ctx_path: str, size_bytes: int, meta_extra: Dict[str, Any]) -> bool:
+    def _emit_large_byte_marker(
+        *,
+        ctx_path: str,
+        size_bytes: int,
+        meta_extra: Dict[str, Any],
+        byte_cap: Optional[int] = None,
+    ) -> bool:
+        effective_byte_cap = visible_read_byte_cap if byte_cap is None else byte_cap
         large_info = {
             "path": ctx_path,
             "bytes": size_bytes,
-            "visible_read_limit_bytes": visible_read_byte_cap,
+            "visible_read_limit_bytes": effective_byte_cap,
             "status": "too_large_for_visible_context_bytes",
-            "recover_with": "exec_tools.execute_code_python or react.pull for exact file handling",
+            "recover_with": "react.read stats_only + range items for text; derive smaller artifacts for binary/media",
         }
         large_paths.append(large_info)
         marker_meta = dict(meta_extra or {})
         marker_meta.update({
             "large_read_guard": True,
             "source_bytes": size_bytes,
-            "visible_read_limit_bytes": visible_read_byte_cap,
+            "visible_read_limit_bytes": effective_byte_cap,
         })
         return _maybe_add_block({
             "turn": turn_id,
@@ -548,7 +576,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             "text": _large_byte_marker_text(
                 path=ctx_path,
                 size_bytes=size_bytes,
-                byte_cap=visible_read_byte_cap,
+                byte_cap=effective_byte_cap,
             ),
             "meta": marker_meta,
         })
@@ -699,6 +727,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             "kind": "text",
             "tokens": _count_tokens(text),
             "text_symbols": len(text),
+            "line_count": len(text.splitlines()),
             "bytes": int(bytes_override if bytes_override is not None else len(text.encode("utf-8", errors="ignore"))),
         }
         if mime:
@@ -731,9 +760,9 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             "path": path,
             "tokens": int(emitted.get("tokens") or 0),
             "status": "truncated_for_visible_context",
-            "visible_read_limit_tokens": visible_read_token_cap,
-            "visible_read_limit_text_symbols": visible_read_text_symbol_cap,
-            "visible_read_limit_bytes": visible_read_byte_cap,
+            "visible_read_limit_tokens": emitted.get("visible_read_limit_tokens", visible_read_token_cap),
+            "visible_read_limit_text_symbols": emitted.get("visible_read_limit_text_symbols", visible_read_text_symbol_cap),
+            "visible_read_limit_bytes": emitted.get("visible_read_limit_bytes", visible_read_byte_cap),
         }
         if emitted.get("text_symbols"):
             entry["text_symbols"] = int(emitted.get("text_symbols") or 0)
@@ -750,6 +779,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
         force_truncated: bool = False,
         source_bytes_override: Optional[int] = None,
         source_line_count_override: Optional[int] = None,
+        limits: Optional[Dict[str, Optional[int]]] = None,
     ) -> Dict[str, Any]:
         source_tokens = _count_tokens(text)
         source_text_symbols = len(text)
@@ -760,30 +790,48 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             total = source_tokens
         else:
             total = 0
-        limit_text_symbols = visible_read_text_symbol_cap
-        if requested_read_text_symbols is not None:
-            limit_text_symbols = min(requested_read_text_symbols, visible_read_text_symbol_cap)
+        if limits is None:
+            limit_text_symbols: Optional[int] = visible_read_text_symbol_cap
+            if requested_read_text_symbols is not None:
+                limit_text_symbols = min(requested_read_text_symbols, visible_read_text_symbol_cap)
+            limit_tokens: Optional[int] = visible_read_token_cap
+            limit_bytes: Optional[int] = visible_read_byte_cap
+        else:
+            limit_text_symbols = limits.get("max_text_symbols")
+            limit_tokens = limits.get("max_tokens")
+            limit_bytes = limits.get("max_bytes")
         must_truncate = (
             force_truncated
-            or source_text_symbols > limit_text_symbols
-            or source_tokens > visible_read_token_cap
-            or source_text_symbols > visible_read_text_symbol_cap
-            or source_bytes > visible_read_byte_cap
+            or (limit_text_symbols is not None and source_text_symbols > limit_text_symbols)
+            or (limit_tokens is not None and source_tokens > limit_tokens)
+            or (limit_bytes is not None and source_bytes > limit_bytes)
         )
 
         if must_truncate:
-            clipped = text[:limit_text_symbols]
+            clip_limit = limit_text_symbols
+            if clip_limit is None:
+                if limit_tokens is not None:
+                    clip_limit = max(1, limit_tokens * DEFAULT_SYMBOLS_PER_TOKEN_BUDGET)
+                elif limit_bytes is not None:
+                    clip_limit = max(1, limit_bytes)
+                else:
+                    clip_limit = source_text_symbols
+            clipped = text[:max(1, int(clip_limit))]
             clipped_tokens = _count_tokens(clipped)
             clipped_bytes = len(clipped.encode("utf-8", errors="ignore"))
-            while (clipped_tokens > visible_read_token_cap or clipped_bytes > visible_read_byte_cap) and len(clipped) > 1:
+            while (
+                ((limit_tokens is not None and clipped_tokens > limit_tokens)
+                 or (limit_bytes is not None and clipped_bytes > limit_bytes))
+                and len(clipped) > 1
+            ):
                 next_len = max(1, int(len(clipped) * 0.75))
                 if next_len >= len(clipped):
                     next_len = len(clipped) - 1
                 clipped = clipped[:next_len]
                 clipped_tokens = _count_tokens(clipped)
                 clipped_bytes = len(clipped.encode("utf-8", errors="ignore"))
-            if clipped_bytes > visible_read_byte_cap and visible_read_byte_cap > 0:
-                clipped = clipped.encode("utf-8", errors="ignore")[:visible_read_byte_cap].decode("utf-8", errors="ignore")
+            if limit_bytes is not None and clipped_bytes > limit_bytes and limit_bytes > 0:
+                clipped = clipped.encode("utf-8", errors="ignore")[:limit_bytes].decode("utf-8", errors="ignore")
                 clipped_tokens = _count_tokens(clipped)
                 clipped_bytes = len(clipped.encode("utf-8", errors="ignore"))
             source_text_symbols_for_footer = source_text_symbols
@@ -797,7 +845,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 source_bytes=source_bytes,
                 source_line_count=source_line_count,
                 limit_text_symbols=len(clipped),
-                byte_cap=visible_read_byte_cap,
+                byte_cap=limit_bytes,
             )
             marker_meta = dict(meta_extra or {})
             marker_meta.update({
@@ -806,11 +854,11 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 "source_text_symbols": source_text_symbols,
                 "source_bytes": source_bytes,
                 "visible_text_symbols": len(clipped),
-                "visible_read_limit_tokens": visible_read_token_cap,
-                "visible_read_limit_text_symbols": visible_read_text_symbol_cap,
-                "visible_read_limit_bytes": visible_read_byte_cap,
+                "visible_read_limit_tokens": limit_tokens,
+                "visible_read_limit_text_symbols": limit_text_symbols,
+                "visible_read_limit_bytes": limit_bytes,
                 "requested_text_symbols": requested_read_text_symbols,
-                "recover_with": "ctx_tools.fetch_ctx",
+                "recover_with": "react.read range items",
             })
             added = _maybe_add_block({
                 "turn": turn_id,
@@ -827,11 +875,11 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 "text_symbols": source_text_symbols,
                 "bytes": source_bytes,
                 "visible_text_symbols": len(clipped),
-                "visible_read_limit_tokens": visible_read_token_cap,
-                "visible_read_limit_text_symbols": visible_read_text_symbol_cap,
-                "visible_read_limit_bytes": visible_read_byte_cap,
+                "visible_read_limit_tokens": limit_tokens,
+                "visible_read_limit_text_symbols": limit_text_symbols,
+                "visible_read_limit_bytes": limit_bytes,
                 "status": "truncated_for_visible_context",
-                "recover_with": "exec_tools.execute_code_python + ctx_tools.fetch_ctx(path)",
+                "recover_with": "react.read stats_only + range items",
             })
             return {
                 "added": added,
@@ -840,6 +888,9 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 "bytes": source_bytes,
                 "status": "truncated_for_visible_context",
                 "truncated": True,
+                "visible_read_limit_tokens": limit_tokens,
+                "visible_read_limit_text_symbols": limit_text_symbols,
+                "visible_read_limit_bytes": limit_bytes,
             }
 
         added = _maybe_add_block({
@@ -905,7 +956,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 "bytes": size_bytes,
                 "status": "too_large_for_visible_context_bytes",
                 "visible_read_limit_bytes": visible_read_byte_cap,
-                "recover_with": "exec_tools.execute_code_python or react.pull for exact file handling",
+                "recover_with": "react.read stats_only + range items for text; react.pull for file materialization",
             })
             return
 
@@ -1010,7 +1061,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                     "bytes": estimated_bytes,
                     "status": "too_large_for_visible_context_bytes",
                     "visible_read_limit_bytes": visible_read_byte_cap,
-                    "recover_with": "exec_tools.execute_code_python or react.pull for exact file handling",
+                    "recover_with": "react.read stats_only + range items for text; react.pull for file materialization",
                 })
                 return
             blk = {
@@ -1040,9 +1091,12 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             per_path_entry["tokens"] = tokens
         per_path.append(per_path_entry)
 
-    async def _emit_ks_path(ctx_path: str) -> None:
+    async def _emit_ks_path(ctx_path: str, item_req: Optional[Dict[str, Any]] = None) -> None:
         nonlocal total_tokens
+        item_req = item_req or {}
+        item_has_range = _has_range_request(item_req)
         runtime_ctx = getattr(ctx_browser, "runtime_ctx", None)
+        knowledge_limits = _knowledge_read_limits(runtime_ctx, params=params)
         resolver_fn = getattr(runtime_ctx, "knowledge_read_fn", None)
         root_raw = getattr(runtime_ctx, "bundle_storage", None)
         if not root_raw:
@@ -1126,24 +1180,41 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             "physical_path": str(abs_path) if abs_path else "",
         }
         if isinstance(text, str) and text.strip():
+            text_view_meta = None
+            if item_has_range:
+                item_line_numbers = bool(item_req.get("line_numbers", default_line_numbers))
+                ranged_req = dict(item_req)
+                ranged_req["line_numbers"] = item_line_numbers
+                text, text_view_meta = _apply_text_range(text, ranged_req)
+                if text_view_meta:
+                    meta_extra["read_range"] = text_view_meta
+                    text = _range_header(path=ctx_path, view=text_view_meta) + text
             emitted = _materialize_text_block(
                 ctx_path=ctx_path,
                 text=text,
                 mime=mime or "text/markdown",
                 meta_extra=meta_extra,
+                limits=knowledge_limits,
             )
             tokens = int(emitted.get("tokens") or 0)
             total_tokens += tokens
             if emitted.get("truncated"):
-                per_path.append(_truncated_text_status_entry(ctx_path, emitted))
+                entry = _truncated_text_status_entry(ctx_path, emitted)
+                if text_view_meta:
+                    entry["read_range"] = text_view_meta
+                per_path.append(entry)
             elif emitted.get("added"):
                 entry = {"path": ctx_path}
+                if text_view_meta:
+                    entry["read_range"] = text_view_meta
                 if tokens:
                     entry["tokens"] = tokens
                 per_path.append(entry)
             else:
                 exists_paths.append(ctx_path)
                 entry = {"path": ctx_path, "status": "exists_in_visible_context"}
+                if text_view_meta:
+                    entry["read_range"] = text_view_meta
                 if tokens:
                     entry["tokens"] = tokens
                 per_path.append(entry)
@@ -1151,18 +1222,20 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             return
         if isinstance(base64, str) and base64:
             estimated_bytes = (len(base64) * 3) // 4
-            if estimated_bytes > visible_read_byte_cap:
+            knowledge_byte_cap = knowledge_limits.get("max_bytes")
+            if knowledge_byte_cap is not None and estimated_bytes > knowledge_byte_cap:
                 _emit_large_byte_marker(
                     ctx_path=ctx_path,
                     size_bytes=estimated_bytes,
                     meta_extra=meta_extra,
+                    byte_cap=knowledge_byte_cap,
                 )
                 per_path.append({
                     "path": ctx_path,
                     "bytes": estimated_bytes,
                     "status": "too_large_for_visible_context_bytes",
-                    "visible_read_limit_bytes": visible_read_byte_cap,
-                    "recover_with": "exec_tools.execute_code_python or react.pull for exact file handling",
+                    "visible_read_limit_bytes": knowledge_byte_cap,
+                    "recover_with": "react.read stats_only + range items for text; derive smaller artifacts for binary/media",
                 })
                 return
             blk = {
@@ -1280,6 +1353,9 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             continue
         if item_path.startswith("fi:"):
             await _emit_fi_path(item_path, item_req)
+            continue
+        if item_path.startswith("ks:"):
+            await _emit_ks_path(item_path, item_req)
             continue
 
     if turn_index_paths:
@@ -1462,7 +1538,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                     "bytes": estimated_bytes,
                     "status": "too_large_for_visible_context_bytes",
                     "visible_read_limit_bytes": visible_read_byte_cap,
-                    "recover_with": "exec_tools.execute_code_python or react.pull for exact file handling",
+                    "recover_with": "react.read stats_only + range items for text; derive smaller artifacts for binary/media",
                 })
                 continue
             blk = {

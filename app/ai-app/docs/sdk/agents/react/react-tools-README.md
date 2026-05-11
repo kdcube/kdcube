@@ -65,7 +65,9 @@ Reads existing logical artifacts back into the visible timeline.
 - input: `paths: list[str]`
 - optional input: `items: list[object]` — exact read specs with `path` plus
   optional `line_start`/`line_count` or `offset_text_symbols`/`max_text_symbols`.
-  `react.rg` returns ready-to-pass `read_item` entries for this field.
+  `react.rg` returns ready-to-pass `read_item` entries for this field. Text-backed
+  logical paths such as `fi:`, `tc:`, `ar:`, and `ks:` can also be read directly
+  by line or symbol ranges through this field.
 - optional input: `max_text_symbols` — maximum visible text characters per text
   path. This requests a smaller explicit preview than the configured default.
 - optional input: `line_numbers: true|false` — include line numbers for ranged
@@ -81,14 +83,16 @@ Reads existing logical artifacts back into the visible timeline.
   recovery marker.
 - accepted paths: `ar:`, `tc:`, `fi:`, `so:`, `su:`, `ws:`, `ks:`, `sk:`
 - emits: one JSON status/result block plus one visible content block per reopened path
-- deduplication: visible blocks are not duplicated
+- deduplication: full visible blocks are not duplicated; ranged reads are
+  emitted as distinct range blocks
 - hidden data: hidden/pruned blocks can be reopened by exact path
 - generated views: `ar:<turn_id>.react.turn.index` is reconstructed on demand from the persisted turn log
 - large text guard: oversized text payloads are copied back only as bounded
   visible previews. The status row uses
   `status=truncated_for_visible_context`, the preview names the exact path, and
-  the full payload remains recoverable by logical path. If the caller supplies
-  `max_text_symbols`, the preview is further clamped to that text-only limit.
+  the full payload remains recoverable by logical path and bounded range reads.
+  If the caller supplies `max_text_symbols`, the preview is further clamped to
+  that text-only limit.
 - cap distribution: caps are applied independently per requested path, not
   divided across the `paths` list. For broad batches, use `stats_only: true` or
   a smaller `max_text_symbols` before deciding what to materialize.
@@ -105,13 +109,21 @@ Reads existing logical artifacts back into the visible timeline.
 
 Use it when the path already exists and React needs to inspect the content again.
 
-For large `tc:`/`fi:` payloads, use `react.read` to inspect a bounded preview and
-confirm the path. Then process the exact content inside
-`exec_tools.execute_code_python` by calling `ctx_tools.fetch_ctx(path=...)` from
-the exec code. `fetch_ctx` returns `path`, `mime`, and `payload`; for JSON mime,
-`payload` is parsed JSON. Repeating `react.read` on the same large payload
-returns another bounded preview and should not be used as a bulk-data processing
-loop.
+Skills are not read-capped. `ks:` knowledge-space articles are uncapped only
+when no `ai.react.knowledge_read_visible_*` cap is configured. If a `ks:` cap is
+configured, or if a regular text-backed logical path (`fi:`, `tc:`, `ar:`) is
+too large, call `react.read` with `stats_only:true` to get line/count metadata,
+then recover the needed content through bounded `items` ranges:
+
+```json
+{"paths":["ks:docs/example.md"],"stats_only":true}
+{"items":[{"path":"ks:docs/example.md","line_start":1,"line_count":120}]}
+{"items":[{"path":"ks:docs/example.md","line_start":121,"line_count":120}]}
+```
+
+Do not use exec stdout as an uncapped read channel; exec output is capped too.
+Use exec for computation or to create smaller derived artifacts, then inspect
+those artifacts with `react.read`.
 
 For `so:sources_pool[...]`, `fetch_ctx` returns source rows. Web rows use `text`
 for the preview/snippet and `content` for the fetched page body when available;
@@ -128,6 +140,9 @@ Example bounded preview:
 ```json
 {"paths":["fi:turn_abc.outputs/report.md"],"max_text_symbols":4000}
 ```
+
+Ranged reads always materialize a new range block. They are not suppressed just
+because the same logical path already has a full or preview block visible.
 
 Example exact range read:
 

@@ -159,7 +159,7 @@ next:
 recovery_plan:
 - first: "Use this visible reminder and retained suffix before searching."
 - if_needed: "Use react.memsearch with the exact phrase/entity anchors above."
-- then_read: "Use react.read(read_refs) for exact old content; use ctx_tools.fetch_ctx(path=...) from exec only for large tc: results listed in read_refs."
+- then_read: "Use react.read(read_refs) for old content. Skills read in full. ks: reads in full only when no knowledge_read_visible_* cap is configured; capped text uses stats_only and line ranges. Exec stdout is not an uncapped read channel."
 
 <rest of model-generated summary text>
 [END COMPACTED PRIOR CONVERSATION MEMORY]
@@ -232,7 +232,7 @@ TURN <turn_id> (started at ...)
 turn_id: <turn_id>
 position: current-turn prefix compacted here; newer timeline blocks below are normal
 use: continue from the timeline below; this is not prior conversation memory
-recovery: exact source blocks remain in timeline.json; use react.read(path) or ctx_tools.fetch_ctx(path) from exec
+recovery: exact source blocks remain recoverable by logical path; use react.read(path). Skills read in full. ks: reads in full only when uncapped; capped text uses stats_only and line ranges.
 
 semantic_progress:
 active_request:
@@ -251,7 +251,7 @@ next:
 - <immediate next action>
 recovery_plan:
 - first: "Continue from the retained suffix and this reminder."
-- then_read: "Use ctx_tools.fetch_ctx(path=...) from exec for large tc: results."
+- then_read: "Use react.read(path) for large results. Skills read in full. ks: reads in full only when uncapped; capped text recovers by stats_only plus line ranges."
 original_request:
 - <full user ask that started the turn>
 early_progress:
@@ -437,8 +437,9 @@ What does not remain visible:
 Historical artifacts are not deleted from durable storage by compaction. Current
 turn artifacts are stronger: they are not moved behind the summary boundary at
 all, because before turn finalization the active timeline is their source of
-truth. Their logical paths remain directly reachable by `react.read` and by
-`ctx_tools.fetch_ctx(path=...)` from generated exec code.
+truth. Their logical paths remain directly reachable by `react.read`; large
+text should be recovered into model-visible context through bounded
+`react.read` ranges where the namespace supports ranges.
 
 ---
 

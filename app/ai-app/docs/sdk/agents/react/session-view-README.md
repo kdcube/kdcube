@@ -62,7 +62,11 @@ This document describes how the session view is derived from the timeline when c
   - Hidden blocks stay in the timeline with `hidden=true` and optional `replacement_text`.
   - `Timeline.render()` prefers working-summary cards for hidden turns. Without a working summary, it renders compact retrieval stubs derived from the block metadata.
   - Stored `replacement_text` is not guaranteed to be rendered verbatim.
-- If multiple blocks share the same path, only one carries the replacement text; the rest render empty.
+- If multiple hidden blocks share the same path, only one carries the TTL
+  replacement text; the rest render empty. This hidden-block replacement rule
+  does not suppress explicit ranged `react.read` blocks. A line/symbol range
+  read is a distinct visible evidence block even when a full or preview block
+  for the same logical path is already visible.
 
 ## Model-Facing Generations (new timelines)
 
@@ -316,12 +320,12 @@ reopen an older compacted plan in the same turn.
 are bounded by text-character and token caps, and every payload is bounded by a
 raw byte cap. If text is larger than the visible read caps, React emits a
 bounded preview with `status=truncated_for_visible_context`. The agent can
-request a smaller visible preview with `max_text_symbols`; for exact bulk
-processing it should use exec code and a supported logical fetch path or a
-physical file path. Caps apply independently per requested path. For discovery
-without visible content, call `react.read` with `stats_only: true`; it emits
-metadata in the status block only. PDF/image reads are all-or-marker under the
-raw byte cap.
+request a smaller visible preview with `max_text_symbols`; for large text that
+must be model-visible, it should use `stats_only:true` and bounded
+`react.read` ranges. Exec output is also capped and is not an uncapped read
+channel. Caps apply independently per requested path. For discovery without
+visible content, call `react.read` with `stats_only: true`; it emits metadata in
+the status block only. PDF/image reads are all-or-marker under the raw byte cap.
 
 ## Timeline Persistence (what is stored)
 

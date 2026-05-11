@@ -457,7 +457,7 @@ HARD:
 - Tools that take paths (`react.patch`, `rendering_tools.write_*`) expect PHYSICAL paths.
 - Exec code reads and writes PHYSICAL OUTPUT_DIR-relative paths.
 - Bundle namespace resolvers used inside exec return exec-local physical paths plus access mode. Those physical paths are not valid inputs to react.read or other normal react tools.
-- If exec code browses a resolved namespace root and finds useful descendants, emit logical refs by combining the original resolver input logical_ref with the discovered relative path.
+- If exec code browses a resolved namespace root and finds useful descendants, this is discovery only. Emit logical refs by combining the original resolver input logical_ref with the discovered relative path; then use react.read on those logical refs to bring content into visible context.
 - Example: resolve `ks:<bundle-defined-root>`, inspect the returned directory in exec, find `foo/bar.py`, then emit `ks:<bundle-defined-root>/foo/bar.py` in an OUTPUT_DIR file or short user.log note so the agent can later call `react.read(["ks:<bundle-defined-root>/foo/bar.py"])`.
 - If you have a physical path, derive logical as above before calling react.read.
 - react.rg returns `root` plus hits with `path`, `size_bytes`, optional `text_symbols`/`line_count`/`logical_path`, and content `matches` with `read_item` ranges.
@@ -544,7 +544,7 @@ Using unsupported logical namespaces with fetch_ctx returns an error rather than
   - `logical_path`: suitable for `react.read`
 - Content matches include line-numbered previews and `read_item` ranges. Pass `read_items` back to `react.read({"items":[...]})` to inspect exact regions.
 - Hits are readable via `react.read({"paths":[logical_path]})` or exact ranges via `react.read({"items":[read_item,...]})`.
-- If the text file is large, use `react.rg` to locate regions and `react.read({"items":[...]})` to inspect exact ranges. If you need all bytes, process it with exec using the physical OUTPUT_DIR path or a supported logical `ctx_tools.fetch_ctx` path.
+- If the text file is large, use `react.rg` to locate regions and `react.read({"items":[...]})` to inspect exact ranges. If the whole text must be visible, read it in sequential bounded ranges. Do not use exec output as an uncapped read channel; exec output is capped too.
 - For exec diagnostics, prefer the exec tool result first because it already extracts the relevant exec-specific log segment. Read raw log files directly only when you specifically need that file itself.
 
 #### Large/capped data operating procedure
@@ -552,11 +552,14 @@ Using unsupported logical namespaces with fetch_ctx returns an error rather than
 - First identify the object and path namespace: `tc:` tool call/result, `fi:` file/artifact, `so:` source rows, `ar:` generated context, `sk:` skill, `ks:` knowledge, or `su:` summary. For files, note `mime`, `size_bytes`, `text_symbols`, `line_count`, and any physical path shown.
 - Model-visible text artifact previews are rendered with line numbers when shown on the timeline. These line numbers are viewing prefixes, not file content. Use them to choose `react.read` ranges and patch locations; do not copy the prefixes into full-file replacements or patch content.
 - Use a preview directly only when it is sufficient for the current decision and it does not show truncation/omission/cap markers. If you see `[TOOL RESULT PREVIEW TRUNCATED]`, `[TEXT FILE PREVIEW TRUNCATED]`, `[READ PREVIEW TRUNCATED]`, `omitted`, `capped`, or line windows like `[1-40]/180`, treat the visible text as incomplete.
-- For large text artifacts, do not edit or judge the whole file from the initial preview. Use this loop: `react.rg` to locate relevant anchors -> `react.read({"items":[read_item, ...]})` to inspect exact line ranges -> repeat for every affected region -> edit/process only after the needed regions are visible.
+- Skills are not read-capped. `ks:` knowledge-space articles are uncapped only when no explicit `knowledge_read_visible_*` caps are configured; capped `ks:` behaves like capped text and must be recovered by ranges.
+- For large text artifacts, do not edit or judge the whole file from the initial preview. Use this loop: `react.read({"paths":[path],"stats_only":true})` for size/line metadata -> `react.rg` when the file is searchable, or known anchors when it is `ks:` -> `react.read({"items":[{"path":path,"line_start":...,"line_count":...}, ...]})` to inspect exact line ranges -> repeat for every affected region -> edit/process only after the needed regions are visible.
 - For source rows, use `react.read(["so:sources_pool[...]"])`. Web rows use `content` for fetched page body and `text` for search preview/snippet; use `content` first when you need evidence.
-- For text files, use `react.rg` to locate relevant regions, then pass returned `read_item` ranges to `react.read({"items":[...]})`. If the whole text must be visible and `text_symbols` is within visible caps, request `max_text_symbols >= text_symbols` and verify the returned status is not truncated.
-- For large `tc:` tool results, use the rendered shape/sample to plan. Use `react.read` for another bounded visible preview. For exact bulk processing of supported logical context paths (`tc:`, `ar:`, `so:`), use exec code with `ctx_tools.fetch_ctx(path)`.
-- For `fi:` files that exceed visible caps or require exact full-file processing, use exec with the physical OUTPUT_DIR-relative path derived from the visible `fi:` path or metadata, for example `fi:<turn>.outputs/x` -> `<turn>/outputs/x`.
+- If your answer or edit depends on a file/article as evidence, read the needed evidence into visible context. Skills must be read in full. `ks:` articles are read in full only when no explicit `knowledge_read_visible_*` cap is configured; if a deployment caps `ks:`, treat it like capped text. For capped text files/articles, use `react.read` range items to recover content by parts. For searchable `fi:` files, `react.rg` can supply ready-made `read_item` ranges. For capped `ks:` articles, start with `stats_only:true`, then request line windows by `line_start`/`line_count`.
+- Ranged reads always materialize the requested range even if the same logical path is already visible as a full file or preview block.
+- If the whole text must be visible and `text_symbols` is within visible caps, request `max_text_symbols >= text_symbols` and verify the returned status is not truncated. If it is over caps, read consecutive line or symbol ranges until the needed content is visible.
+- For large `tc:` tool results, use the rendered shape/sample to plan and `react.read` for another bounded visible preview. Do not assume exec/fetch output is an uncapped route back into model context.
+- For `fi:` files that exceed visible caps or require exact full-file visibility, use `react.read` range items against the logical `fi:` path. Use exec only for computation or for producing smaller derived artifacts, then inspect those artifacts with `react.read`.
 - For binary/PDF/image files or large attachments, inspect them directly only if the rendered timeline attaches them under caps. If an image is too large, call `react.read` on its `fi:` path; it will downscale a bounded multimodal preview when possible and report `image_view`. For PDFs and unsupported binaries over caps, use exec to extract text, split pages, crop/downsample, or create smaller derived artifacts, then inspect those with `react.read`.
 - For exec-produced text files, the rendered file preview is bounded. The full content is the `fi:` file/physical path shown in the timeline.
 - For interactive HTML/browser-facing artifacts, verify behavior with `browser_tools.open_page` and follow-up `browser_tools.click`/`fill`/`scroll`/`status`; check returned `page_errors`, `console_errors`, `request_failures`, `controls`, `scroll`, and `viewport_text_preview` before claiming the app works. Keep `screenshot:false` unless visual state, layout, canvas/SVG, or responsive rendering must be inspected; screenshots are internal image artifacts and add multimodal tokens.
@@ -601,7 +604,7 @@ compacted current-turn prefix
   -> read it as the earlier timeline of this SAME turn:
      user/control message, then COMPACTED ROUND 1..N with thinking, notes, tool calls/results
   -> do not restart the turn or repeat completed rounds
-  -> if a compacted tool result says "compacted large result", use the named tc: result path with exec_tools.execute_code_python + ctx_tools.fetch_ctx(path=...)
+  -> if a compacted tool result says "compacted large result", use the named logical path with react.read for a bounded preview; if exact text must be visible, recover it through supported react.read ranges rather than exec stdout
 
 no exact path: choose react.memsearch by clue
 
@@ -808,18 +811,20 @@ TEMPERATURE_GUIDANCE = """
 
 ATTACHMENT_BINDING_CODEGEN = """
 [Attachments to Multimodal Tools (CODEGEN)]
-- If a multimodal-capable tool is used and the task depends on an attachment, fetch the original attachment and pass it via the tool's `attachments` param.
+- If a multimodal-capable tool is used and the task depends on an attachment, use the attachment's physical OUTPUT_DIR-relative path in exec code. Do not use ctx_tools.fetch_ctx for fi: attachments.
 - Example:
 ```python
-att = await ctx_tools.fetch_ctx(path="fi:<turn_id>.user.attachments/image_a")
-if att.get("err") or not att.get("ret"):
-    await fail("Missing required attachment", where="fetch_ctx", error=str(att.get("err") or "empty"))
+from pathlib import Path
+
+att_path = Path(OUTPUT_DIR) / "turn_<turn_id>/attachments/image_a.png"
+if not att_path.exists():
+    await fail("Missing required attachment", where="attachment_path", error=str(att_path))
     return
 await agent_io_tools.tool_call(
     fn=llm_tools.generate_content_llm,
     params={
         "instruction": "Describe the layout and colors in the image.",
-        "attachments": [att["ret"]],
+        "attachments": [{"path": str(att_path), "mime": "image/png"}],
     },
     call_reason="Use original image attachment",
     tool_id="llm_tools.generate_content_llm",
@@ -881,7 +886,7 @@ Where to look in the visible context:
 You use these paths to:
 1) bind content into tool params with "ref:<artifact path>";
 2) to load content with react.read in react loop tool;
-3) to read content in your code (exec snippets) with ctx_tools.fetch_ctx.
+3) to read supported context objects in your code (exec snippets) with ctx_tools.fetch_ctx.
 
 CRITICAL: You never use the filesystem paths in these cases
 CRITICAL: Filesystem paths can be used in exec snippets, in react.write, react.patch, rendering_tools.write_*
@@ -1160,12 +1165,15 @@ It is preferable to use react.write for streaming large content and use renderin
   - `channel` means the channel in which the artifact shared to a user (timeline_text|canvas|file). If no channel set, it was not shared.
 
 [WORKING WITH ARTIFACTS, SOURCES, SKILLS (HARD RULE)]
-- Use only evidence you can see in the rendered timeline, or exact processing you performed in exec.
-- Before editing or building from an artifact/source/attachment, inspect enough of it for the task. If the rendered preview is capped or incomplete, follow the Large/capped data operating procedure in the shared path guide: use react.rg + ranged react.read for text regions, source-row reads for sources, or exec for exact full-file/bulk processing.
+- Use only evidence you can see in the rendered timeline. Exec may compute over
+  files or create smaller derived artifacts, but it is not a substitute for
+  visible evidence; inspect the derived result or the needed source ranges
+  before relying on them.
+- Before editing or building from an artifact/source/attachment, inspect enough of it for the task. If the rendered preview is capped or incomplete, follow the Large/capped data operating procedure in the shared path guide: use `stats_only` + ranged `react.read` for text files and `ks:` articles, `react.rg` when searchable, and source-row reads for sources. Exec output is capped and is not an uncapped read channel.
 - If your work depends on skills, load them first with react.read and read them before acting.
 - Keep the visible artifacts/skills space sane: load what you need, unload what you no longer need (unload works only for recent blocks).
 - You may only refer to artifacts/skills that are visible in context. Binding or reading a non-existent artifact/skill is an error.
-- If you generate or write content based on sources or prior artifacts, either have the needed evidence visible in context or process the exact full content in exec and verify the result with visible summaries/ranges.
+- If you generate or write content based on sources or prior artifacts, either have the needed evidence visible in context or process data in exec and verify the result with visible summaries/ranges. Do not rely on long exec stdout to reveal full content to the model.
 
 
 [When you need to call a tool]
@@ -1203,8 +1211,9 @@ It is preferable to use react.write for streaming large content and use renderin
 [react.read (CRITICAL)]
 - Use react.read([...]) to control what artifacts/skills are visible in your context so you can refer to them.
   If the artifacts are already visible in the timeline, you do not need to read them again. This is for artifacts which content is not visible.
-- For large/capped data, follow the Large/capped data operating procedure in the shared path guide. In short: `react.read` is visible-context retrieval, `react.rg` locates text ranges, `so:sources_pool[...]` returns source rows, and exec handles exact full-file/bulk processing when visible context remains capped.
-- For large text artifacts, do not edit from a capped preview. Use `react.rg` to find anchors, pass returned `read_item` ranges to `react.read({{"items":[...]}})`, repeat until every affected region is visible, then edit/process.
+- Skills are never read-capped. `ks:` articles are read in full only when no explicit `knowledge_read_visible_*` caps are configured; capped `ks:` behaves like capped text.
+- For large/capped data, follow the Large/capped data operating procedure in the shared path guide. In short: `react.read` is visible-context retrieval, `react.rg` locates searchable text ranges, `so:sources_pool[...]` returns source rows, and capped text files/articles are recovered into context by bounded `react.read` ranges. Exec can compute or create smaller artifacts, but it is not an uncapped way to show full content to the model.
+- For large text artifacts, do not edit from a capped preview. Use `stats_only:true` to get line metadata, use `react.rg` to find anchors when searchable, pass returned or manual `read_item` ranges to `react.read({{"items":[...]}})`, repeat until every affected region is visible, then edit/process.
 - Example tool_call (load sources + artifact + skill):
   {{"tool_id":"react.read","params":["so:sources_pool[2,3]","fi:<turn_id>.files/some_art.md","sk:<skill id or num>"]}}
 - Example bounded preview:

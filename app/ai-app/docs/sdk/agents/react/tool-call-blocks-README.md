@@ -104,8 +104,11 @@ Behavior
   and the active visible read caps.
 - Emits result blocks **after** the status block.
 - Re-exposes hidden artifacts (output blocks always have `hidden=false`).
-- Dedup: if the reconstructed block already exists in visible context (same path + hash),
-  it is not re-emitted and the status block records `exists_in_visible_context`.
+- Dedup: if the reconstructed full block already exists in visible context
+  (same path + hash), it is not re-emitted and the status block records
+  `exists_in_visible_context`. Ranged reads are exempt: a line/symbol range is
+  emitted as its own visible evidence block even when the same path already has
+  a full or preview block visible.
 - Text reads are bounded by `read_visible_max_text_symbols`,
   `read_visible_max_tokens`, and optional per-call `max_text_symbols`.
 - These caps apply per path. They are not divided across a multi-path
@@ -117,9 +120,11 @@ Behavior
   remains stored.
 - Rendered tool-result bodies are labeled as `payload` after the logical path
   and mime, matching the `fetch_ctx` artifact shape.
-- Exec snippets that need exact JSON tool results should call
-  `ctx_tools.fetch_ctx(path="tc:<turn>.<call>.result")`. The returned artifact
+- Exec snippets can use `ctx_tools.fetch_ctx(path="tc:<turn>.<call>.result")`
+  for computation or to create smaller derived artifacts. The returned artifact
   has `path`, `mime`, and `payload`; for JSON mime, `payload` is parsed JSON.
+  Exec stdout is capped and is not a way to put uncapped full content back into
+  the model context.
 - `stats_only: true` emits only the status block with size/mime/token metadata
   and does not materialize text or base64 content blocks.
 - PDF/image reads are not partially sliced. Under the byte cap, the whole

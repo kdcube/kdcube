@@ -125,6 +125,9 @@ ai:
     read_visible_max_tokens: 12000  # AI_REACT_READ_VISIBLE_MAX_TOKENS: max visible tokens per react.read path
     read_visible_max_bytes: 10485760 # AI_REACT_READ_VISIBLE_MAX_BYTES: max raw bytes per react.read payload
     read_visible_context_fraction: 0.15 # AI_REACT_READ_VISIBLE_CONTEXT_FRACTION: read cap as fraction of context budget
+    knowledge_read_visible_max_text_symbols: null # AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_TEXT_SYMBOLS: optional cap for ks: article text; null means uncapped
+    knowledge_read_visible_max_tokens: null # AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_TOKENS: optional token guard for ks: article text; null means uncapped
+    knowledge_read_visible_max_bytes: null # AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_BYTES: optional raw byte guard for ks: payloads; null means uncapped
     exec_text_preview_max_symbols: 8000 # AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS: text preview cap for exec-produced files
     tool_result_preview_max_text_symbols: 12000 # AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS: model-visible preview cap for large tool results
     cache_keep_recent_turns: 6      # AI_REACT_CACHE_KEEP_RECENT_TURNS: recent turns kept visible after TTL pruning

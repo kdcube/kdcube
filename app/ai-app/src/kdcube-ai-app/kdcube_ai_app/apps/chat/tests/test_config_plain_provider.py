@@ -23,6 +23,9 @@ def test_get_plain_reads_assembly_by_default(monkeypatch, tmp_path):
         "AI_REACT_READ_VISIBLE_MAX_TOKENS",
         "AI_REACT_READ_VISIBLE_MAX_BYTES",
         "AI_REACT_READ_VISIBLE_CONTEXT_FRACTION",
+        "AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_TEXT_SYMBOLS",
+        "AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_TOKENS",
+        "AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_BYTES",
         "AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS",
         "AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS",
         "AI_REACT_CACHE_KEEP_RECENT_TURNS",
@@ -53,6 +56,9 @@ def test_get_plain_reads_assembly_by_default(monkeypatch, tmp_path):
                         "read_visible_max_tokens": 9000,
                         "read_visible_max_bytes": 123456,
                         "read_visible_context_fraction": 0.12,
+                        "knowledge_read_visible_max_text_symbols": 64000,
+                        "knowledge_read_visible_max_tokens": 16000,
+                        "knowledge_read_visible_max_bytes": 234567,
                         "exec_text_preview_max_symbols": 6000,
                         "tool_result_preview_max_text_symbols": 7000,
                         "cache_keep_recent_turns": 4,
@@ -87,6 +93,9 @@ def test_get_plain_reads_assembly_by_default(monkeypatch, tmp_path):
     assert settings.AI_REACT_READ_VISIBLE_MAX_TOKENS == 9000
     assert settings.AI_REACT_READ_VISIBLE_MAX_BYTES == 123456
     assert settings.AI_REACT_READ_VISIBLE_CONTEXT_FRACTION == 0.12
+    assert settings.AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_TEXT_SYMBOLS == 64000
+    assert settings.AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_TOKENS == 16000
+    assert settings.AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_BYTES == 234567
     assert settings.AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS == 6000
     assert settings.AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS == 7000
     assert settings.AI_REACT_CACHE_KEEP_RECENT_TURNS == 4

@@ -304,8 +304,11 @@ Debugging:
 - `timeline.render(..., debug_print=True)` prints the rendered message stream,
   with cache points marked (e.g., `=>[1]`).
 - When inspecting `react.read` results, `exists_in_visible_context` means the
-  requested logical path is already visible in the current model view. A good
-  rendered result should identify that visible location, not force another read.
+  requested full logical path is already visible in the current model view. A
+  good rendered result should identify that visible location, not force another
+  full read. Ranged reads are not treated this way: line/symbol range requests
+  materialize new visible range blocks so the model can inspect a file by
+  portions.
 
 ## Storage location
 Timeline is stored as:

@@ -93,6 +93,14 @@ Workspace implementation (`RuntimeCtx.workspace_implementation`):
 ### Knowledge space and exec-time path resolution
 
 `ks:` is readable by logical path, for example `react.read(["ks:<bundle-defined-path>"])`.
+Knowledge-space articles are uncapped only when no
+`ai.react.knowledge_read_visible_*` cap is configured. When a cap is configured,
+large `ks:` articles are recoverable by parts with `react.read` range items:
+
+```json
+{"paths":["ks:<bundle-defined-path>"],"stats_only":true}
+{"items":[{"path":"ks:<bundle-defined-path>","line_start":1,"line_count":120}]}
+```
 
 Important constraints:
 - `react.rg` does not browse `ks:`.
@@ -103,8 +111,8 @@ When such a resolver exists, the generated code flow is:
 1. start from a logical ref such as `ks:<bundle-defined-root>`
 2. call the bundle/helper resolver inside exec
 3. receive an exec-local physical path
-4. browse descendants in code
-5. emit discovered logical refs like `ks:<bundle-defined-root>/foo/bar.py` back into OUT_DIR artifacts or logs so the agent can later call `react.read` on them
+4. browse descendants in code for discovery only
+5. emit discovered logical refs like `ks:<bundle-defined-root>/foo/bar.py` back into OUTPUT_DIR artifacts or short logs so the agent can later call `react.read` on them, including range reads when they are large
 
 If the bundle does **not** expose a resolver for directory-style browsing, then `ks:` remains readable only by exact logical path or by bundle-specific search tools. It is not a normal browseable filesystem from standard React tools.
 

@@ -110,7 +110,7 @@ next:
 recovery_plan:
 - first: "Use this visible reminder and retained suffix."
 - if_needed: "Use react.memsearch with exact phrase/entity anchors."
-- then_read: "Use react.read(read_refs), or ctx_tools.fetch_ctx(path=...) only for large tc: results listed in read_refs."
+- then_read: "Use react.read(read_refs). Skills read in full. ks: reads in full only when no knowledge_read_visible_* cap is configured; capped text uses stats_only and bounded line ranges. Exec stdout is not an uncapped read channel."
 
 <rest of model-generated summary text>
 [END COMPACTED PRIOR CONVERSATION MEMORY]
@@ -141,7 +141,7 @@ TURN <turn_id> (started at ...)
   [TOOL CALL ...].call ...
   [TOOL RESULT ...].result ...
   result: compacted large result; exact content is recoverable by logical_path
-  recover_with: exec_tools.execute_code_python + ctx_tools.fetch_ctx(path='tc:...')
+  recover_with: react.read(path); skills read in full; ks reads in full only when uncapped; capped text uses stats_only + line ranges
 └────────────────────────┘
 ```
 
@@ -169,12 +169,12 @@ react.read(["tc:<turn>.<call>.result"])
   -> status=truncated_for_visible_context
   -> preview is capped by ai.react.read_visible_* settings
   -> exact path remains recoverable
-  -> use exec_tools.execute_code_python
-     -> ctx_tools.fetch_ctx(path="tc:<turn>.<call>.result")
+  -> use react.read again only for bounded previews; skills read in full; ks reads in full only when uncapped; capped text uses stats_only + range items
 ```
 
-This is the preferred path for bulk JSON/email/search results: process the exact
-payload once inside exec code and write a smaller derived artifact.
+For bulk JSON/email/search results, use the preview and shape to plan. Exec may
+process data and write a smaller derived artifact, but its stdout is capped and
+must not be treated as a full-content recovery channel.
 
 When the agent first needs only shape/size metadata, it can avoid visible
 content entirely:

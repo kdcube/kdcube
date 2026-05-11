@@ -716,6 +716,14 @@ def build_announce_context_cap_lines(*, runtime_ctx: Optional[RuntimeCtx]) -> Li
             value = default
         return value if value > 0 else default
 
+    def _optional_int_attr(name: str) -> Optional[int]:
+        raw = getattr(runtime_ctx, name, None)
+        try:
+            value = int(raw)
+        except Exception:
+            return None
+        return value if value > 0 else None
+
     def _bytes_label(value: int) -> str:
         if value >= 1024 * 1024:
             return f"{value // (1024 * 1024)}MB"
@@ -723,9 +731,19 @@ def build_announce_context_cap_lines(*, runtime_ctx: Optional[RuntimeCtx]) -> Li
             return f"{value // 1024}KB"
         return f"{value}B"
 
+    def _optional_label(value: Optional[int], *, bytes_value: bool = False) -> str:
+        if value is None:
+            return "none"
+        if bytes_value:
+            return _bytes_label(value)
+        return str(value)
+
     read_text = _int_attr("read_visible_max_text_symbols", DEFAULT_READ_VISIBLE_MAX_TEXT_SYMBOLS)
     read_tokens = _int_attr("read_visible_max_tokens", DEFAULT_READ_VISIBLE_MAX_TOKENS)
     read_bytes = _int_attr("read_visible_max_bytes", DEFAULT_READ_VISIBLE_MAX_BYTES)
+    ks_read_text = _optional_int_attr("knowledge_read_visible_max_text_symbols")
+    ks_read_tokens = _optional_int_attr("knowledge_read_visible_max_tokens")
+    ks_read_bytes = _optional_int_attr("knowledge_read_visible_max_bytes")
     try:
         read_fraction = float(getattr(runtime_ctx, "read_visible_context_fraction", None))
     except Exception:
@@ -741,9 +759,10 @@ def build_announce_context_cap_lines(*, runtime_ctx: Optional[RuntimeCtx]) -> Li
         "[CONTEXT CAPS]",
         (
             f"  read text={read_text} tok={read_tokens} bytes={_bytes_label(read_bytes)} ctx_frac={read_fraction:g}; "
+            f"ks_read text={_optional_label(ks_read_text)} tok={_optional_label(ks_read_tokens)} bytes={_optional_label(ks_read_bytes, bytes_value=True)}; "
             f"tool_result_preview={tool_preview}; exec_file_preview={exec_preview}"
         ),
-        "  react.read max_text_symbols is clamped by these caps; use exec for exact full processing when still truncated.",
+        "  regular text is capped; skills are always uncapped; ks: is uncapped unless knowledge_read_visible_* caps are configured; use stats_only plus ranged react.read items for capped text; exec_stdout=capped",
     ]
 
 

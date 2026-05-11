@@ -150,6 +150,9 @@ The proc service reads these non-secret ReAct limits from `assembly.yaml` throug
 | `AI_REACT_READ_VISIBLE_MAX_TOKENS` | `ai.react.read_visible_max_tokens` | `assembly.yaml` | all modes | token guard per `react.read` text path |
 | `AI_REACT_READ_VISIBLE_MAX_BYTES` | `ai.react.read_visible_max_bytes` | `assembly.yaml` | all modes | raw byte guard for every `react.read` payload |
 | `AI_REACT_READ_VISIBLE_CONTEXT_FRACTION` | `ai.react.read_visible_context_fraction` | `assembly.yaml` | all modes | additional clamp against the current ReAct context budget |
+| `AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_TEXT_SYMBOLS` | `ai.react.knowledge_read_visible_max_text_symbols` | `assembly.yaml` | all modes | optional text cap for `ks:` article reads; default `null` means uncapped |
+| `AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_TOKENS` | `ai.react.knowledge_read_visible_max_tokens` | `assembly.yaml` | all modes | optional token guard for `ks:` article reads; default `null` means uncapped |
+| `AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_BYTES` | `ai.react.knowledge_read_visible_max_bytes` | `assembly.yaml` | all modes | optional byte guard for `ks:` payloads; default `null` means uncapped |
 | `AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS` | `ai.react.exec_text_preview_max_symbols` | `assembly.yaml` | all modes | text preview cap for each exec-produced text artifact |
 | `AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS` | `ai.react.tool_result_preview_max_text_symbols` | `assembly.yaml` | all modes | model-visible text preview cap for large initial tool results |
 | `AI_REACT_CACHE_KEEP_RECENT_TURNS` | `ai.react.cache_keep_recent_turns` | `assembly.yaml` | all modes | recent turns kept visible after TTL pruning |
@@ -164,6 +167,9 @@ Unit contract:
   previews; oversized initial tool results render as a bounded preview plus
   shape/recovery metadata. Per-call `max_text_symbols` only asks for a smaller
   explicit `react.read` text preview. Read caps apply per requested path.
+- Skills are not read-capped. `ks:` knowledge-space text reads are uncapped by
+  default; the optional `AI_REACT_KNOWLEDGE_READ_VISIBLE_*` limits exist only
+  for deployments that need to cap maintainer-authored articles.
 - `*_TOKENS` is a model-context budget guard.
 - `*_BYTES` is a raw payload guard. PDF/image reads are either attached whole
   under the byte cap or represented by a recovery marker; they are not partially

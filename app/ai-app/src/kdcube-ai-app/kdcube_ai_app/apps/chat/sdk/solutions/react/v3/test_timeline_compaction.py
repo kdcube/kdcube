@@ -448,7 +448,7 @@ async def test_split_turn_compaction_preserves_round_ledger(monkeypatch):
     assert email_result_path in text
     assert "result_tokens_estimate:" in text
     assert "position: current-turn prefix compacted here" in text
-    assert "exact source blocks remain in timeline.json" in text
+    assert "exact source blocks remain recoverable by logical path" in text
     assert text.index("[USER MESSAGE]") < text.index("[MID-TURN COMPACTION 1]")
     assert text.index("[MID-TURN COMPACTION 1]") < text.index("[ASSISTANT MESSAGE]")
 
@@ -719,7 +719,7 @@ def test_turn_prefix_serializer_caps_large_tool_result_without_hiding():
     assert "sample:" in text
     assert '"messages"' in text
     assert '"message_id": "msg_0"' in text
-    assert "ctx_tools.fetch_ctx(path=\"tc:turn_job.tc_email.result\")" in text
+    assert "ranged react.read items" in text
     assert "msg_7" not in text
 
 

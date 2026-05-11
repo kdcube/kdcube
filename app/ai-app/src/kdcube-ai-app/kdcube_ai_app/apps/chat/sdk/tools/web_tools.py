@@ -78,7 +78,7 @@ class WebTools:
                 "Returned items are added to sources_pool with their sid. "
                 "`text` is the search preview/snippet. `content` is full fetched page text when available. "
                 "Use react.read on so:sources_pool[...] to bring JSON source rows into visible context; use content before text. "
-                "Use ctx_tools.fetch_ctx on so:sources_pool[...] from exec code for bulk source processing.\n"
+                "If exec code processes source rows, it must write a smaller derived artifact; exec stdout is capped too.\n"
         )
     )
     async def web_search(
@@ -238,7 +238,8 @@ class WebTools:
                 "Returns an envelope: {ok, error, ret}.\n"
                 "Returned items are added to sources_pool with their sid. "
                 "`content` contains fetched page text and `text` is the preview/snippet. Use react.read on "
-                "so:sources_pool[...] to bring JSON source rows into visible context; use ctx_tools.fetch_ctx from exec code for bulk processing."
+                "so:sources_pool[...] to bring JSON source rows into visible context. If exec code processes source rows, "
+                "it must write a smaller derived artifact; exec stdout is capped too."
         )
     )
     async def web_fetch(

@@ -69,7 +69,11 @@ def _tool_call_omission_marker(*, value: str, key_path: str, call_path: str) -> 
         "text_symbols": len(value),
         "size_bytes": len(value.encode("utf-8", errors="ignore")),
         "sha1": _hash_text(value),
-        "recover_with": f"ctx_tools.fetch_ctx(path={json.dumps(call_path)})['ret']['payload']" if call_path else "ctx_tools.fetch_ctx(tc:...call)['ret']['payload']",
+        "recover_with": (
+            f"react.read(paths=[{json.dumps(call_path)}], stats_only=true), then ranged react.read items if text is large"
+            if call_path
+            else "react.read on the matching tc:<turn>.<call>.call path, with stats_only and ranged items if text is large"
+        ),
         "field": key_path,
     }
 

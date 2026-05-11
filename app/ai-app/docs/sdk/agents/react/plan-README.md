@@ -134,7 +134,9 @@ This returns the latest snapshot for that lineage, regardless of which turn last
 
 Dedup behavior:
 
-- if the current timeline already contains an equivalent visible block at the same alias path, `react.read` may report it under `exists_in_visible_context` instead of re-emitting the snapshot payload
+- if the current timeline already contains an equivalent visible full block at
+  the same alias path, `react.read` may report it under
+  `exists_in_visible_context` instead of re-emitting the snapshot payload
 - this is not based on “was read sometime earlier” in the abstract; it is based on the current timeline block set, compared by logical path plus normalized block content
 - hidden/pruned copies do not block reread emission, because `react.read` re-emits the alias block as visible content
 
@@ -436,7 +438,10 @@ react.plan(mode="close", plan_id="<plan_id>")
 react.read(["ar:plan.latest:<plan_id>"])
 ```
 
-If the alias-backed snapshot is already present as an equivalent visible block in the current timeline, `react.read` may only emit the status/result block and mark it as already present instead of repeating the full snapshot payload.
+If the alias-backed snapshot is already present as an equivalent visible full
+block in the current timeline, `react.read` may only emit the status/result
+block and mark it as already present instead of repeating the full snapshot
+payload.
 
 3. decide whether to:
    - activate it

@@ -221,7 +221,7 @@ async def test_read_large_tc_result_returns_configured_preview_not_full_payload(
     assert not any(b.get("text") == large_text for b in read_blocks)
     preview = next(b for b in read_blocks if b.get("path") == source_path)
     assert "READ PREVIEW TRUNCATED" in preview["text"]
-    assert "ctx_tools.fetch_ctx" in preview["text"]
+    assert "react.read stats_only" in preview["text"]
 
     status = next(
         json.loads(b["text"])

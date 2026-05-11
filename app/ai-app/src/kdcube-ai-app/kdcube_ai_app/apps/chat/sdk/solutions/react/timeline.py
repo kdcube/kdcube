@@ -2392,7 +2392,8 @@ class Timeline:
             lines.extend(recovery_lines)
         elif path:
             lines.append(f"- react.read([\"{path}\"]) returns a bounded visible preview.")
-            lines.append(f"- exec code can use ctx_tools.fetch_ctx(path=\"{path}\") for exact bulk processing.")
+            lines.append(f"- For large text, use react.read stats_only and then ranged react.read items against \"{path}\".")
+            lines.append("- Exec output is capped; use exec only to compute or create smaller derived artifacts.")
         else:
             lines.append("- exact result remains stored in the timeline block; no logical path was supplied.")
         return "\n".join(lines).strip()
@@ -2404,9 +2405,10 @@ class Timeline:
             lines.append("- Use react.rg on the file to find relevant regions before editing.")
             lines.append("- Pass react.rg read_item ranges to react.read({\"items\":[...]}) for exact visible regions.")
             if physical_path:
-                lines.append("- Use exec with the shown physical_path for exact full-file processing.")
+                lines.append("- Use exec with the shown physical_path only for computation or for producing smaller derived artifacts.")
         elif path.startswith("tc:"):
-            lines.append("- Use react.read for another bounded visible preview, or exec + ctx_tools.fetch_ctx(path) for exact processing.")
+            lines.append("- Use react.read for another bounded visible preview.")
+            lines.append("- For large text, use react.read stats_only and then ranged react.read items.")
         elif path:
             lines.append("- Use react.read on this logical_path with bounded ranges/previews when supported.")
         return lines
@@ -2882,7 +2884,7 @@ class Timeline:
             f"turn_id: {tid}",
             "position: current-turn prefix compacted here; newer timeline blocks below are normal",
             "use: continue from the timeline below; this is not prior conversation memory",
-            "recovery: exact source blocks remain in timeline.json; use react.read(path) or ctx_tools.fetch_ctx(path) from exec",
+            "recovery: exact source blocks remain recoverable by logical path; use react.read(path), stats_only, and ranged react.read items",
             "",
             "semantic_progress:",
         ]
@@ -3230,7 +3232,7 @@ class Timeline:
                 "read_paths": read_paths[:8],
             }
             if large_result and result_path:
-                row["recover_with"] = f"exec_tools.execute_code_python + ctx_tools.fetch_ctx(path='{result_path}')"
+                row["recover_with"] = f"react.read(paths=['{result_path}'], stats_only=true), then ranged react.read items if text is large"
             _remember(row)
 
         rows = [rows_by_key[key] for key in order if key in rows_by_key]

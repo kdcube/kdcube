@@ -155,9 +155,18 @@ the next decision prompt is built. The timeline keeps the full `tc:` result,
 but the model-visible view contains a truncated preview, a depth-limited shape,
 size metadata, and recovery instructions.
 
-ANNOUNCE includes a short `[CONTEXT CAPS]` line with the active read,
-tool-result-preview, and exec-file-preview caps so the model can choose between
-bounded `react.read` and exact bulk processing with `ctx_tools.fetch_ctx`.
+ANNOUNCE includes a short `[CONTEXT CAPS]` line with the active regular-read,
+`ks_read`, tool-result-preview, and exec-file-preview caps so the model can
+choose between bounded previews and ranged `react.read` recovery. `ks_read`
+prints `none` for each dimension when no `knowledge_read_visible_*` cap is
+configured. Exec output is also capped; it can compute over data or create
+smaller derived artifacts, but it is not an uncapped channel for putting full
+content into model-visible context.
+
+Skills are not read-capped. `ks:` knowledge-space article reads are uncapped
+only when the `ai.react.knowledge_read_visible_*` values are unset/null; if a
+deployment configures them, capped `ks:` content should be recovered by
+`stats_only` and ranged reads like any other capped text.
 
 PDF/image reads are not partially sliced. If the raw payload is under
 `read_visible_max_bytes`, React attaches it whole as multimodal content. If it

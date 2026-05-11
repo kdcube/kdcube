@@ -266,6 +266,9 @@ def test_runtime_ctx_uses_default_react_context_budget(monkeypatch, tmp_path):
     monkeypatch.setenv("AI_REACT_READ_VISIBLE_MAX_TOKENS", "6000")
     monkeypatch.setenv("AI_REACT_READ_VISIBLE_MAX_BYTES", "123456")
     monkeypatch.setenv("AI_REACT_READ_VISIBLE_CONTEXT_FRACTION", "0.10")
+    monkeypatch.setenv("AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_TEXT_SYMBOLS", "64000")
+    monkeypatch.setenv("AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_TOKENS", "16000")
+    monkeypatch.setenv("AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_BYTES", "234567")
     monkeypatch.setenv("AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS", "4000")
     monkeypatch.setenv("AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS", "5000")
     monkeypatch.setenv("AI_REACT_CACHE_KEEP_RECENT_TURNS", "5")
@@ -293,6 +296,9 @@ def test_runtime_ctx_uses_default_react_context_budget(monkeypatch, tmp_path):
         assert wf.runtime_ctx.read_visible_max_tokens == 6000
         assert wf.runtime_ctx.read_visible_max_bytes == 123456
         assert wf.runtime_ctx.read_visible_context_fraction == 0.10
+        assert wf.runtime_ctx.knowledge_read_visible_max_text_symbols == 64000
+        assert wf.runtime_ctx.knowledge_read_visible_max_tokens == 16000
+        assert wf.runtime_ctx.knowledge_read_visible_max_bytes == 234567
         assert wf.runtime_ctx.exec_text_preview_max_symbols == 4000
         assert wf.runtime_ctx.tool_result_preview_max_text_symbols == 5000
         assert wf.runtime_ctx.session.keep_recent_turns == 5

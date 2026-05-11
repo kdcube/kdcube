@@ -102,6 +102,9 @@ class RuntimeCtx:
     read_visible_max_tokens: Optional[int] = None
     read_visible_max_bytes: Optional[int] = None
     read_visible_context_fraction: Optional[float] = None
+    knowledge_read_visible_max_text_symbols: Optional[int] = None
+    knowledge_read_visible_max_tokens: Optional[int] = None
+    knowledge_read_visible_max_bytes: Optional[int] = None
     exec_text_preview_max_symbols: Optional[int] = None
     tool_result_preview_max_text_symbols: Optional[int] = None
     reactive_event_iteration_credit_enabled: bool = True
@@ -163,6 +166,9 @@ class RuntimeCtx:
             "read_visible_max_tokens": self.read_visible_max_tokens,
             "read_visible_max_bytes": self.read_visible_max_bytes,
             "read_visible_context_fraction": self.read_visible_context_fraction,
+            "knowledge_read_visible_max_text_symbols": self.knowledge_read_visible_max_text_symbols,
+            "knowledge_read_visible_max_tokens": self.knowledge_read_visible_max_tokens,
+            "knowledge_read_visible_max_bytes": self.knowledge_read_visible_max_bytes,
             "exec_text_preview_max_symbols": self.exec_text_preview_max_symbols,
             "tool_result_preview_max_text_symbols": self.tool_result_preview_max_text_symbols,
             "reactive_event_iteration_credit_enabled": bool(self.reactive_event_iteration_credit_enabled),

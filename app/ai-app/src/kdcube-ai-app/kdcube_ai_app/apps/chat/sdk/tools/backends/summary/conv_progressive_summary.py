@@ -56,7 +56,7 @@ next:
 recovery_plan:
 - first: "Use this visible reminder and the retained suffix before searching."
 - if_needed: "Use react.memsearch with the exact phrase/entity anchors above."
-- then_read: "Use react.read(read_refs) for exact old content; use ctx_tools.fetch_ctx(path=...) from exec only for large tc: results listed in read_refs."
+- then_read: "Use react.read(read_refs). For large text, first use stats_only, then ranged react.read items to recover the needed lines by parts."
 
 ## Goals
 [What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]
@@ -109,8 +109,9 @@ Treat both as high-priority user intent updates. Preserve them in Goals, Constra
 If exact tool-result or artifact content is large enough that it will not remain
 visible after compaction, do not say the exact data is still "loaded", "in
 memory", or "available" without naming the recovery path. Preserve the logical
-path and state that exact bulk processing should use exec code with
-`ctx_tools.fetch_ctx(path=...)` instead of repeated `react.read`.
+path and state that model-visible recovery should use `react.read`, `stats_only`,
+and bounded ranged `react.read` items. Exec output is capped too; mention exec
+only for computation or for producing smaller derived artifacts.
 
 The Active Work Reminder is the handoff and retrieval anchor for a future model
 that sees only compacted memory. Make it recognizable and searchable: include
@@ -212,8 +213,9 @@ Treat both as high-priority user intent updates. Preserve them in Goals, Constra
 If exact tool-result or artifact content is large enough that it will not remain
 visible after compaction, do not say the exact data is still "loaded", "in
 memory", or "available" without naming the recovery path. Preserve the logical
-path and state that exact bulk processing should use exec code with
-`ctx_tools.fetch_ctx(path=...)` instead of repeated `react.read`.
+path and state that model-visible recovery should use `react.read`, `stats_only`,
+and bounded ranged `react.read` items. Exec output is capped too; mention exec
+only for computation or for producing smaller derived artifacts.
 
 The Active Work Reminder is the handoff and retrieval anchor for a future model
 that sees only compacted memory. Keep it fresh, specific, and searchable:
@@ -258,7 +260,7 @@ next:
 recovery_plan:
 - first: "Continue from the retained suffix and this reminder."
 - if_needed: "Use react.memsearch with phrase/entity anchors."
-- then_read: "Use react.read(read_refs), or ctx_tools.fetch_ctx(path=...) only for large tc: results listed in read_refs."
+- then_read: "Use react.read(read_refs). For large text, first use stats_only, then ranged react.read items to recover the needed lines by parts."
 
 original_request:
 - [What did the user ask for in this turn?]
@@ -281,8 +283,9 @@ compacted_large_results:
   date/internal_date, snippet/body_excerpt, message/thread ids, and any flags
   present.
 - State the recommended recovery method, usually
-  `ctx_tools.fetch_ctx(path="<tc:...result>")` inside exec code for bulk
-  processing, or `react.read(["<tc:...result>"])` for small targeted inspection.
+  `react.read(["<tc:...result>"])`, then `stats_only` and ranged `react.read`
+  items if the result is large text. Exec output is capped too; mention exec
+  only for computation or for producing smaller derived artifacts.
 - If there are files or sources produced by the result, mention their logical
   paths or selector shape (`fi:...`, `so:sources_pool[...]`) and which tool call
   produced them.
@@ -298,10 +301,10 @@ Preserve their substance if they are relevant, especially when they explain why 
 If exact tool-result or artifact content is large enough that it will not remain
 visible after compaction, do not say the exact data is still "loaded", "in
 memory", or "available" without naming the recovery path. Preserve the logical
-path and state that exact bulk processing should use exec code with
-`ctx_tools.fetch_ctx(path=...)` instead of repeated `react.read`. Also preserve
-enough structure and a tiny sample for the next model to write correct recovery
-code without guessing the payload schema.
+path and state that model-visible recovery should use `react.read`, `stats_only`,
+and bounded ranged `react.read` items. Also preserve enough structure and a tiny
+sample for the next model to choose correct ranges or write correct derived
+artifact code without guessing the payload schema.
 `active_request` is the narrow resumable task inside this turn prefix.
 `original_request` is the full user ask that started the turn.
 
@@ -422,7 +425,7 @@ def _summarize_large_tool_result_text(
     ]
     if path:
         lines.append(f"logical_path: {path}")
-        lines.append(f"recover_with: ctx_tools.fetch_ctx(path={json.dumps(path)}) inside exec code for bulk processing")
+        lines.append(f"recover_with: react.read(paths=[{json.dumps(path)}], stats_only=true), then ranged react.read items if text is large")
     else:
         lines.append("recover_with: use the matching tc:<turn>.<call>.result path from the engineering ledger")
 
@@ -721,8 +724,8 @@ def _format_large_tool_result_recovery(rows: List[Dict[str, Any]]) -> str:
         if approx_tokens:
             parts.append(f"approx_tokens={approx_tokens}")
         parts.append("exact_content_compacted=true")
-        parts.append("use=exec_tools.execute_code_python + ctx_tools.fetch_ctx(path) for bulk processing")
-        parts.append("avoid=repeated react.read")
+        parts.append("use=react.read stats_only + ranged react.read items for model-visible recovery")
+        parts.append("exec=only for computation or smaller derived artifacts; stdout is capped")
         lines.append("- " + " ".join(parts))
     lines.append("</recoverable-tool-results>")
     return "\n\n" + "\n".join(lines)

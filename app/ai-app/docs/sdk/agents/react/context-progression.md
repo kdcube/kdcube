@@ -56,9 +56,12 @@ This describes how context is built and updated during a turn.
   - `[TOOL RESULT <id>].summary <tool_id>` (artifact tools)
   - `[TOOL RESULT <id>].result <tool_id>` (non‑artifact tools)
   - `[TOOL RESULT <id>].artifact <tool_id>` per artifact (logical_path + content)
-- `react.read` may skip re‑emitting blocks already visible (dedup) and records this in its status block.
-  When this happens, the tool result should say that the requested path already
-  exists in visible context and, when possible, point at the visible location.
+- `react.read` may skip re-emitting full blocks already visible (dedup) and
+  records this in its status block. When this happens, the tool result should
+  say that the requested path already exists in visible context and, when
+  possible, point at the visible location. Ranged `react.read` requests are
+  different: each requested line/symbol range is emitted as its own visible
+  evidence block, even if the same logical path is already visible elsewhere.
 - Agents can also set:
   - sources pool via `ContextBrowser.set_sources_pool(...)`
   - ephemeral announce blocks via `ContextBrowser.announce(...)`

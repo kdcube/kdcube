@@ -735,6 +735,8 @@ class ExecTools:
             "- If your snippet needs to load the text data for the artifact you see on timeline, you may call\n"
             "  ctx_tools.fetch_ctx inside the snippet using agent_io_tools.tool_call.\n"
             "- The paths allowed with this tool are only logical ar: so: tc:\n"
+            "- This is for computation or for producing smaller derived artifacts. It is not an uncapped way\n"
+            "  to put large content into model-visible context; exec stdout and previews are capped too.\n"
             "- Only execution-enabled runtime tool handles are available inside snippets. Orchestration/job tools\n"
             "  such as task_job.* must be called as direct ReAct tool calls, not from generated Python.\n"
             "- Do NOT rely on fetch_ctx unless you are the code author for this run.\n"
