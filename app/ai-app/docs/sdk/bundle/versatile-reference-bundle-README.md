@@ -32,7 +32,7 @@ This is the bundle to study first.
 | Bundle secrets; prefer `get_secret_async("b:...")` in new async code | `tools/preference_tools.py` |
 | Bundle storage backend usage | `preferences_store.py` |
 | Widget + widget operations | `entrypoint.py`, `ui/PreferencesBrowser.tsx` |
-| Iframe main view | `ui-src/src/App.tsx`, `entrypoint.py` |
+| Iframe main view | `ui/main/src/App.tsx`, `entrypoint.py` |
 | Public bundle endpoint | `entrypoint.py:preferences_public_info` |
 | Direct isolated exec from bundle code | `entrypoint.py:preferences_exec_report` |
 | MCP connector declarations | `tools_descriptor.py` |
@@ -60,7 +60,7 @@ Those are documented separately:
 5. `tools/preference_tools.py`
 6. `preferences_store.py`
 7. `ui/PreferencesBrowser.tsx`
-8. `ui-src/src/App.tsx`
+8. `ui/main/src/App.tsx`
 9. bundle-local tests under `tests/`
 
 ## Config Surfaces Used by This Bundle

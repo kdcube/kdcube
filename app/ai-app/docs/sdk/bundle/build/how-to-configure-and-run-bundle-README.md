@@ -1031,7 +1031,7 @@ Use a full reinstall only when code changes depend on wider runtime/platform cha
 
 ### If you changed a custom main-view UI source
 
-For `ui.main_view` bundles, source changes belong in the bundle `ui-src`
+For `ui.main_view` bundles, source changes belong in the bundle `ui/main`
 directory.
 
 Do not fix stale UI by manually building into:
@@ -1043,11 +1043,11 @@ Do not fix stale UI by manually building into:
 The supported path is:
 
 - the bundle UI requests the HTML entrypoint through `/api/integrations/static/{tenant}/{project}/{bundle_id}`
-- the bundle UI loader checks the `ui-src` signature
+- the bundle UI loader checks the `ui/main` signature
 - the loader builds into bundle storage when needed
 - the static route serves the refreshed hashed assets
 
-After changing `ui-src`, reload or reselect the bundle so the bundle UI requests
+After changing `ui/main`, reload or reselect the bundle so the bundle UI requests
 the HTML entrypoint again. If the UI is still stale, inspect loader logs and the
 served hashed asset before changing runtime storage manually.
 

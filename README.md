@@ -99,7 +99,8 @@ my.bundle@1-0/
   tools/
   skills/
   ui/
-  ui-src/
+    main/
+    widgets/
   resources/
   tests/
   requirements.txt

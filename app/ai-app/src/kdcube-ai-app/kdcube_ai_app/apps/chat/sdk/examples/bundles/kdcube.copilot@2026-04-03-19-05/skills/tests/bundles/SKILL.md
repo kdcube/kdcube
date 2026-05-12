@@ -88,7 +88,7 @@ Companion loading rule:
 - Bundle docs start point for authoring is `ks:docs/sdk/bundle/bundle-index-README.md`.
 - Primary full reference bundle doc is `ks:docs/sdk/bundle/bundle-reference-versatile-README.md`.
 - Normal reference bundle code root is `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36`.
-- For custom main-view UI work, also read `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui-src/src/App.tsx` and the custom UI section in the `versatile` README.
+- For custom main-view UI work, also read `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/main/src/App.tsx` and the custom UI section in the `versatile` README.
 - For bundle authoring/modification, do not start with `react.write` or `react.patch` after reading only skills.
   First read the actual current tests that define the contract.
 - If the bundle uses platform-integrated SDK/runtime/agent patterns, also read at least one current source/example/doc file that proves that pattern before writing code.
@@ -115,7 +115,7 @@ Normal docs start point before reading individual tests:
 - `ks:docs/sdk/bundle/bundle-index-README.md`
 - then `ks:docs/sdk/bundle/bundle-reference-versatile-README.md`
 - then `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/README.md`
-- when the task includes a custom bundle UI, also read `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui-src/src/App.tsx`
+- when the task includes a custom bundle UI, also read `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/main/src/App.tsx`
 
 Important distinction:
 - `ks:` is one common prepared knowledge root.
@@ -197,7 +197,7 @@ Interpretation rule:
    - `react.read(["ks:docs/sdk/bundle/bundle-index-README.md"])`
    - `react.read(["ks:docs/sdk/bundle/bundle-reference-versatile-README.md"])`
    - `react.read(["ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/README.md"])`
-   - when relevant, `react.read(["ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui-src/src/App.tsx"])`
+   - when relevant, `react.read(["ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/main/src/App.tsx"])`
 3. Read the actual current test files before writing bundle code:
    - start from `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle`
    - discover the relevant pytest files by browsing from generated exec code if the exact file is not already known

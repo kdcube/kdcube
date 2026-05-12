@@ -7,7 +7,7 @@ updated_at: 2026-05-12
 
 # Versatile Telegram WebApp Design
 
-The source-folder widget `widgets/versatile_webapp` is both a KDCube embedded
+The source-folder widget `ui/widgets/versatile_webapp` is both a KDCube embedded
 widget and a Telegram Mini App shell.
 
 ```text

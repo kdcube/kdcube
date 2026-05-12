@@ -126,10 +126,13 @@ my.bundle@1-0/
       my_skill/
         SKILL.md
   ui/
-    MyWidget.tsx
-  ui-src/
-    src/
-      App.tsx
+    main/
+      src/
+        App.tsx
+    widgets/
+      my_widget/
+        src/
+          App.tsx
   resources/
   tests/
   requirements.txt        # only when actually needed
@@ -148,8 +151,8 @@ Minimal bundles need much less than that. Real bundles often use most of it.
 | normal chat participation | `@on_message` + entrypoint/workflow | `ks:docs/sdk/bundle/bundle-developer-guide-README.md` | `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/orchestrator/workflow.py` |
 | authenticated bundle API | `@api(route="operations")` | `ks:docs/sdk/bundle/bundle-platform-integration-README.md` | `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/entrypoint.py` |
 | anonymous or externally authenticated endpoint | `@api(route="public", public_auth=...)` | `ks:docs/sdk/bundle/bundle-platform-integration-README.md` | `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/entrypoint.py` |
-| widget | `@ui_widget(...)` | `ks:docs/sdk/bundle/bundle-interfaces-README.md` | `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/PreferencesBrowser.tsx` |
-| full app UI | `@ui_main` + `ui-src/` | `ks:docs/sdk/bundle/bundle-interfaces-README.md` | `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui-src/src/App.tsx` |
+| widget | `@ui_widget(...)` + `ui/widgets/<alias>/` | `ks:docs/sdk/bundle/bundle-interfaces-README.md` | `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/widgets/versatile_webapp/src/App.tsx` |
+| full app UI | `@ui_main` + `ui/main/` | `ks:docs/sdk/bundle/bundle-interfaces-README.md` | `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/main/src/App.tsx` |
 | scheduled logic | `@cron(...)` | `ks:docs/sdk/bundle/bundle-scheduled-jobs-README.md` | `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/echo.ui@2026-03-30/entrypoint.py` |
 | dependency-heavy Python leaf work | `@venv(...)` | `ks:docs/sdk/bundle/bundle-lifecycle-README.md` | `ks:docs/sdk/bundle/design/bundle-custom-venv-README.md` |
 | direct code execution | isolated exec / `exec_tools.execute_code_python` | `ks:docs/sdk/agents/react/external-exec-README.md` | `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/with-isoruntime@2026-02-16-14-00/README.md` |
@@ -263,9 +266,9 @@ Use:
 Primary examples:
 
 - widget:
-  `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/PreferencesBrowser.tsx`
+  `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/widgets/versatile_webapp/src/App.tsx`
 - main UI:
-  `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui-src/src/App.tsx`
+  `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/main/src/App.tsx`
 
 ## Storage, props, and secrets
 

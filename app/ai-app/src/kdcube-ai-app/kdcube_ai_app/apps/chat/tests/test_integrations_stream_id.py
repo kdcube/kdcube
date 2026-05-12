@@ -358,7 +358,7 @@ def test_serve_static_asset_builds_ui_on_first_request(monkeypatch, tmp_path):
         ui_root = storage_root / "ui"
         ui_root.mkdir(parents=True, exist_ok=True)
         (ui_root / "index.html").write_text("<html><head></head><body>Echo UI</body></html>", encoding="utf-8")
-        return {"ui": {"main_view": {"src_folder": "ui-src"}}}
+        return {"ui": {"main_view": {"src_folder": "ui/main"}}}
 
     monkeypatch.setattr(
         integrations,
@@ -400,7 +400,7 @@ def test_serve_static_asset_refreshes_existing_ui_on_entrypoint_request(monkeypa
     async def _load_bundle_props_defaults(**kwargs):
         load_calls.append(kwargs["bundle_id"])
         (ui_root / "index.html").write_text("<html><head></head><body>Fresh UI</body></html>", encoding="utf-8")
-        return {"ui": {"main_view": {"src_folder": "ui-src"}}}
+        return {"ui": {"main_view": {"src_folder": "ui/main"}}}
 
     monkeypatch.setattr(
         integrations,

@@ -94,7 +94,7 @@ $B/
 Widget output under `ui/widgets/versatile_webapp/` is generated from:
 
 ```text
-widgets/versatile_webapp/
+ui/widgets/versatile_webapp/
 ```
 
 It is safe to rebuild from source. The shared build lock under `.kdcube.once/`
@@ -104,7 +104,7 @@ time.
 The custom main view is generated from:
 
 ```text
-ui-src/
+ui/main/
 ```
 
 The main view output is also rebuildable from source.
@@ -127,8 +127,8 @@ temporary execution workspaces are cleaned.
 | Preference event history | `$B/preferences/users/<user_id>/events.jsonl` | Yes | Append-only history for preference changes. |
 | Telegram user registry | `$B/admin/telegram-users.json` | Yes | Operator-managed mapping from Telegram users to KDCube users/roles/conversations. |
 | Telegram webhook update state | `$B/admin/telegram-updates/...` | Yes | Idempotency state for Bot API retries. |
-| Widget static output | `$B/ui/widgets/versatile_webapp/...` | No | Built from `widgets/versatile_webapp`. |
-| Main view static output | bundle UI build output | No | Built from `ui-src`. |
+| Widget static output | `$B/ui/widgets/versatile_webapp/...` | No | Built from `ui/widgets/versatile_webapp`. |
+| Main view static output | bundle UI build output | No | Built from `ui/main`. |
 | Exec report artifact | platform turn artifacts | No | Created by `preferences_exec_report` and hosted by the platform if needed. |
 | Chat timeline/files | platform conversation store | Yes, platform-owned | Normal KDCube conversation persistence. |
 

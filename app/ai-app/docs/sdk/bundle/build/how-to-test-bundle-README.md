@@ -756,14 +756,14 @@ ui:
   web_app_widgets:
     task_memo_webapp:
       enabled: true
-      src_folder: widgets/task_memo_webapp
+      src_folder: ui/widgets/task_memo_webapp
       build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
 ```
 
 Local source checks:
 
 ```bash
-cd /abs/path/to/bundle/widgets/task_memo_webapp
+cd /abs/path/to/bundle/ui/widgets/task_memo_webapp
 npx tsc --noEmit
 ```
 
@@ -919,7 +919,7 @@ Widget source requirements:
 Local source check:
 
 ```bash
-cd /abs/path/to/bundle/widgets/<widget_alias>
+cd /abs/path/to/bundle/ui/widgets/<widget_alias>
 OUTDIR=/tmp/kdcube-widget-build npm run build
 test -f /tmp/kdcube-widget-build/index.html
 ```
@@ -942,19 +942,19 @@ runner that treats `<VI_BUILD_DEST_ABSOLUTE_PATH>` as an environment value.
 
 ### 5.2C Custom main-view UI contract
 
-For bundles with `ui.main_view` / `ui-src`, test the bundle main UI as a
+For bundles with `ui.main_view` / `ui/main`, test the bundle main UI as a
 runtime surface, not as a standalone website.
 
 Local source checks:
 
 ```bash
-cd /abs/path/to/bundle/ui-src
+cd /abs/path/to/bundle/ui/main
 npx tsc --noEmit
 ```
 
 Runtime checks:
 
-- edit `ui-src`, not the built runtime storage directory
+- edit `ui/main`, not the built runtime storage directory
 - do not run `OUTDIR=<bundle_storage_root>/ui npm run build` as the fix
 - request the custom UI HTML through `/api/integrations/static/{tenant}/{project}/{bundle_id}`
 - verify the bundle UI loader refreshes the built files when the source signature changed
@@ -1093,7 +1093,7 @@ Use reload testing after changing:
 
 For generated custom main-view UI, also test the loader boundary:
 
-- source lives in the bundle `ui-src`
+- source lives in the bundle `ui/main`
 - runtime serves built files from bundle storage
 - the bundle UI loader owns freshness checks and builds
 - concurrent proc workers or shared EFS storage should result in one build and other workers seeing the completed signature/cache hit
@@ -1147,7 +1147,7 @@ Symptoms:
 
 Symptoms:
 
-- the browser still runs an old hashed asset after `ui-src` changed
+- the browser still runs an old hashed asset after `ui/main` changed
 - the bundle UI sends a baked bundle id instead of the selected runtime bundle id
 - the bundle UI sends a local fake conversation id for a new SSE chat
 

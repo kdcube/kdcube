@@ -141,7 +141,7 @@ The plugin should steer agents away from these recurring mistakes:
 - do not reimplement provider/runtime mechanics before checking the SDK
   building-block map
 - do not write `/bundles/...` into a seed/source descriptor that is also used by host-side IntelliJ/proc runs; first determine whether you are editing a seed descriptor or a staged runtime descriptor
-- do not manually build `ui-src` into runtime bundle storage as the fix for stale bundle UI
+- do not manually build `ui/main` into runtime bundle storage as the fix for stale bundle UI
 - do not use source folder names or compiled example ids when the host provides `defaultAppBundleId`
 - do not treat `bundles.yaml` example config as enabling built-in examples; `bundles_include_examples` owns that
 - do not treat `singleton` as cross-process exclusivity or shared-storage initialization

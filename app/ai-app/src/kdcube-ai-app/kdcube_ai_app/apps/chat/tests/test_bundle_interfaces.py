@@ -648,7 +648,7 @@ async def test_static_widget_payload_points_to_widget_app(monkeypatch):
                 "web_app_widgets": {
                     "preferences": {
                         "enabled": True,
-                        "src_folder": "ui-src/preferences",
+                        "src_folder": "ui/widgets/preferences",
                         "build_command": "true",
                     },
                 },
@@ -727,7 +727,7 @@ async def test_static_widget_config_is_per_alias_and_keeps_legacy_widgets(monkey
                 "web_app_widgets": {
                     "other_widget": {
                         "enabled": True,
-                        "src_folder": "widgets/other_widget",
+                        "src_folder": "ui/widgets/other_widget",
                         "build_command": "true",
                     },
                 },
@@ -765,7 +765,7 @@ async def test_static_widget_subpaths_fall_back_to_index_html(monkeypatch, tmp_p
                 "web_app_widgets": {
                     "preferences": {
                         "enabled": True,
-                        "src_folder": "ui-src/preferences",
+                        "src_folder": "ui/widgets/preferences",
                         "build_command": "true",
                     },
                 },

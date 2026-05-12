@@ -30,14 +30,14 @@ For new React/Vite widgets, keep widget app source under a widget-specific
 folder such as:
 
 ```text
-widgets/<widget_alias>/
+ui/widgets/<widget_alias>/
   package.json
   index.html
   vite.config.js
   src/
 ```
 
-Do not put widget source under `ui-src`. In KDCube docs and examples, `ui-src`
+Do not put widget source under `ui/main`. In KDCube docs and examples, `ui/main`
 is the convention for a bundle main view declared by `ui.main_view`.
 
 Declare the widget source in bundle configuration:
@@ -47,7 +47,7 @@ ui:
   web_app_widgets:
     task_memo_webapp:
       enabled: true
-      src_folder: widgets/task_memo_webapp
+      src_folder: ui/widgets/task_memo_webapp
       build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
 ```
 
@@ -186,11 +186,11 @@ ui:
   web_app_widgets:
     first_widget:
       enabled: true
-      src_folder: widgets/first_widget
+      src_folder: ui/widgets/first_widget
       build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
     second_widget:
       enabled: true
-      src_folder: widgets/second_widget
+      src_folder: ui/widgets/second_widget
       build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
 ```
 
@@ -213,7 +213,7 @@ ui:
   web_app_widgets:
     task_memo_webapp:
       enabled: true
-      src_folder: widgets/task_memo_webapp
+      src_folder: ui/widgets/task_memo_webapp
       build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
 ```
 
@@ -231,8 +231,8 @@ Do not confuse widget app source with main-view source.
 
 Use:
 
-- `ui.main_view.src_folder: ui-src` for the bundle main view
-- `ui.web_app_widgets.<alias>.src_folder: widgets/<alias>` for widget apps
+- `ui.main_view.src_folder: ui/main` for the bundle main view
+- `ui.web_app_widgets.<alias>.src_folder: ui/widgets/<alias>` for widget apps
 
 Both use the same loader/build/storage paradigm. They are different surfaces.
 

@@ -93,8 +93,9 @@ my_bundle/
   skills_descriptor.py
   tools/
   skills/
-  ui/                 # optional widget TSX
-  ui-src/             # optional main UI app source
+  ui/
+    main/             # optional main UI app source
+    widgets/          # optional widget app source
   tests/              # optional bundle-local tests
 ```
 

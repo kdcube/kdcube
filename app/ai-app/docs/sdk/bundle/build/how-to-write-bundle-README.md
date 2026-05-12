@@ -293,7 +293,8 @@ Add only the implementation folders the first milestone needs, for example:
   services/
   tools/
   ui/
-  ui-src/
+    main/
+    widgets/
   skills/
 ```
 
@@ -644,8 +645,9 @@ my_bundle/
   requirements.txt    # optional, but required when bundle-local venv code needs Python deps
   tools/
   skills/
-  ui-src/             # optional main-view React/Vite source folder
-  widgets/            # optional widget React/Vite source folders
+  ui/
+    main/              # optional main-view React/Vite source folder
+    widgets/           # optional widget React/Vite source folders
   tests/
 ```
 
@@ -664,7 +666,7 @@ Usually present:
 
 If the bundle ships a full main UI app:
 
-- put source in `ui-src`
+- put source in `ui/main`
 - declare `ui.main_view` with the source folder and build command in the bundle configuration
 - let the bundle UI loader build into bundle storage
 - use the loader-provided build destination such as `<VI_BUILD_DEST_ABSOLUTE_PATH>` when the build system needs the output path
@@ -673,7 +675,7 @@ If the bundle ships a full main UI app:
 
 If the bundle ships a React widget/web app:
 
-- put the widget app source under a stable widget folder such as `widgets/<widget-alias>`
+- put the widget app source under a stable widget folder such as `ui/widgets/<widget-alias>`
 - declare `ui.web_app_widgets.<alias>.src_folder` and `build_command`
 - use the standard build command shape:
   `npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build`
@@ -708,7 +710,7 @@ Study in this order:
 3. `tools_descriptor.py`
 4. `skills_descriptor.py`
 5. `ui/PreferencesBrowser.tsx`
-6. `ui-src/src/App.tsx`
+6. `ui/main/src/App.tsx`
 7. `tests/`
 
 What `versatile` is good for:
@@ -1665,7 +1667,7 @@ ui:
   web_app_widgets:
     task_memo_webapp:
       enabled: true
-      src_folder: widgets/task_memo_webapp
+      src_folder: ui/widgets/task_memo_webapp
       build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
 ```
 

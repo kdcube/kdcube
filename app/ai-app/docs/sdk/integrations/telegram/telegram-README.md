@@ -59,7 +59,7 @@ start with the bot transport path: `telegram_webhook` plus
 `user_admin.handle_webhook(...)` and
 `user_admin.run_with_queued_telegram_delivery(...)`. The versatile reference
 bundle demonstrates that bot transport and also includes a compact Mini App
-reference (`widgets/versatile_webapp`) for memory canvas, chat channel
+reference (`ui/widgets/versatile_webapp`) for memory canvas, chat channel
 selection, and Telegram admin. Add Mini App APIs only when the product also
 needs Telegram-hosted controls.
 
