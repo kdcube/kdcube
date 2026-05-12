@@ -32,10 +32,40 @@ It intentionally demonstrates the main SDK bundle surfaces together in one place
 | Bundle interface contract              | `interface/README.md`                                                                       |
 | Bundle config templates                | `config/bundles.template.yaml`, `config/bundles.secrets.template.yaml`                     |
 | Bundle release metadata                | `release.yaml`                                                                              |
+| Operational storage map                | `docs/storage/README.md`                                                                    |
+| Runtime scenarios                      | `docs/scenarios/README.md`                                                                  |
 | Authenticated `GET` bundle API         | `entrypoint.py:preferences_summary`                                                         |
 | Anonymous public bundle API            | `entrypoint.py:preferences_public_info`                                                     |
 | Telegram bot transport                 | `entrypoint.py:telegram_webhook`, `entrypoint.py:telegram_user_admin_*`                      |
 | Telegram WebApp / Mini App             | `widgets/versatile_webapp`, `entrypoint.py:telegram_versatile_webapp_data`                 |
+| Telegram operator setup                | `docs/integrations/telegram-setup.md`                                                       |
+
+## Operational docs
+
+The reference bundle now keeps the same kind of application-level operational
+documentation expected from real bundles:
+
+- `docs/storage/README.md`
+  - canonical bundle data
+  - rebuildable widget/main-view output
+  - Telegram registry and webhook idempotency state
+  - debugging paths and commands
+- `docs/integrations/telegram-setup.md`
+  - BotFather work
+  - public HTTPS/ngrok requirement
+  - `bundles.yaml` and `bundles.secrets.yaml` shape
+  - Telegram webhook registration
+  - Telegram user promotion from `anonymous` to `registered`/`admin`
+- `docs/scenarios/README.md`
+  - chat + preference capture
+  - KDCube widget
+  - Telegram bot chat
+  - Telegram Mini App
+  - bundle-authenticated MCP
+  - isolated exec report
+  - widget build/serve flow
+- `docs/design/telegram-webapp.md`
+  - frontend/backend contract for the dual KDCube iframe and Telegram Mini App widget
 
 ## Bundle behavior
 
@@ -71,6 +101,12 @@ It intentionally demonstrates the main SDK bundle surfaces together in one place
   - public `telegram_*` WebApp APIs are disabled by default and verify Telegram
     `initData` inside the bundle before reading or mutating data
 
+Telegram requires external operator setup. Hosting this bundle in KDCube is not
+enough by itself: an operator must create or choose a bot in BotFather, expose
+the KDCube deployment through public HTTPS, provision bot/webhook secrets,
+register the webhook with Telegram, and promote Telegram users in the widget
+admin screen. See `docs/integrations/telegram-setup.md`.
+
 ## Preference storage layout
 
 Inside the bundle storage backend root:
@@ -102,6 +138,9 @@ with a new timestamp and appends the corresponding history events in
 The same notebook can also be exported to Excel and imported back from Excel.
 The spreadsheet uses one row per preference line with columns like label, text,
 timestamp, author, source, origin, and evidence.
+
+The full storage map, including Telegram admin state and rebuildable UI output,
+lives in `docs/storage/README.md`.
 
 ## Bundle props and secrets
 
@@ -155,6 +194,11 @@ bundles:
                 transport: http
                 url: https://mcp.internal.example.com
 ```
+
+This snippet is intentionally sparse. Bundle config is an override over code
+defaults; do not enumerate every enabled resource in normal deployments. Add
+explicit values when the deployment changes behavior, for example enabling
+Telegram public APIs after BotFather/webhook setup is complete.
 
 ### Secrets
 
@@ -536,6 +580,10 @@ This runs:
 
 ## Related docs
 
+- `docs/storage/README.md`
+- `docs/integrations/telegram-setup.md`
+- `docs/scenarios/README.md`
+- `docs/design/telegram-webapp.md`
 - `docs/sdk/bundle/bundle-index-README.md`
 - `docs/sdk/bundle/bundle-dev-README.md`
 - `docs/sdk/bundle/bundle-reference-versatile-README.md`

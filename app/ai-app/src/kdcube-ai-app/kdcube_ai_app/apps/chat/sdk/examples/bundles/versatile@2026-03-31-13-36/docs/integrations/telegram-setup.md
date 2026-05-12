@@ -1,0 +1,251 @@
+---
+title: Versatile Telegram Setup
+kind: integration-setup
+bundle_id: versatile@2026-03-31-13-36
+updated_at: 2026-05-12
+---
+
+# Versatile Telegram Setup
+
+Telegram does not start working only because the bundle is hosted in KDCube.
+The operator must create or choose a Telegram bot, expose KDCube through a
+public HTTPS URL, provision secrets, register a webhook, and map Telegram users
+to bundle roles.
+
+This document describes the external work required for the reference bundle.
+
+## What The Bundle Provides
+
+Versatile exposes these Telegram-facing surfaces:
+
+```text
+POST public/telegram_webhook
+  Receives Telegram Bot API updates.
+  Auth: Telegram webhook secret header.
+
+GET/POST public/telegram_* Mini App APIs
+  Used by widgets/versatile_webapp when opened inside Telegram.
+  Auth: Telegram WebApp initData HMAC validation.
+
+POST operations/telegram_user_admin_*
+  Used by the KDCube control-plane widget for operator/admin mapping.
+  Auth: normal KDCube operations auth plus configured roles.
+```
+
+The source-folder widget:
+
+```text
+widgets/versatile_webapp
+```
+
+can run in two modes:
+
+- KDCube control-plane iframe, using KDCube auth and `operations/*` APIs.
+- Telegram Mini App, using Telegram `initData` and `public/telegram_*` APIs.
+
+## Human / Operator Checklist
+
+| Step | Where | Action | Output |
+| --- | --- | --- | --- |
+| 1 | Telegram `@BotFather` | Create or choose a bot. | Bot username and display name. |
+| 2 | Telegram `@BotFather` | Get the bot token. | `bot_token` deployment secret. |
+| 3 | KDCube deployment | Decide the public HTTPS base URL that Telegram can reach. For local dev, use ngrok or another tunnel. | Public host. |
+| 4 | Operator workstation or secret workflow | Generate a random webhook secret token. | `webhook_secret` deployment secret. |
+| 5 | `bundles.yaml` | Enable Telegram integration and public APIs that are needed. | Updated non-secret config. |
+| 6 | `bundles.secrets.yaml` or secrets provider | Store bot token and webhook secret. | Updated secrets. |
+| 7 | Telegram Bot API | Call `setWebhook` with the public webhook URL and secret token. | Successful webhook registration. |
+| 8 | Telegram chat | Send `/start` or any message to the bot. | Pending `anonymous` user row is recorded. |
+| 9 | KDCube widget | Open `versatile_webapp`, Admin tab, refresh users, and promote the row to `registered` or `admin`. | Telegram user can use bot/Mini App. |
+| 10 | Telegram `@BotFather` | Configure commands and optionally the Mini App/menu button URL. | Users can open the widget from Telegram. |
+
+## Local Public URL
+
+Telegram webhooks and Mini Apps require HTTPS reachable by Telegram. A local
+KDCube running only on `localhost` is not enough.
+
+For local development, follow:
+
+```text
+app/ai-app/docs/service/cicd/ngrok-README.md
+```
+
+The public URL is then used for both:
+
+- webhook registration
+- BotFather Mini App / menu button URL
+
+## Descriptor Config
+
+Non-secret config belongs in `bundles.yaml`. The reference template is:
+
+```text
+config/bundles.template.yaml
+```
+
+Minimal Telegram enablement looks like:
+
+```yaml
+bundles:
+  version: "1"
+  items:
+    - id: "versatile@2026-03-31-13-36"
+      config:
+        integrations:
+          telegram:
+            enabled: true
+            webhook_url: "https://<PUBLIC_HOST>/api/integrations/bundles/<TENANT>/<PROJECT>/versatile@2026-03-31-13-36/public/telegram_webhook"
+            send_responses: true
+            stream_activity: true
+            web_app_auth_max_age_seconds: 86400
+        enabled:
+          api:
+            telegram_webhook.POST: true
+            telegram_profile.GET: true
+            telegram_conversations_list.GET: true
+            telegram_conversations_create.POST: true
+            telegram_conversations_switch.POST: true
+            telegram_conversations_delete.POST: true
+            telegram_versatile_webapp_data.POST: true
+            telegram_memory_canvas_data.POST: true
+            telegram_memory_canvas_save.POST: true
+            telegram_memory_canvas_export_excel.POST: true
+            telegram_memory_canvas_import_excel.POST: true
+            telegram_webapp_user_admin_data.POST: true
+            telegram_webapp_user_admin_upsert.POST: true
+            telegram_webapp_user_admin_delete.POST: true
+```
+
+The `enabled` section is an override. Missing keys use code defaults. In this
+reference bundle, Telegram public APIs are disabled by default because exposing
+Telegram routes without a bot/webhook setup is usually accidental.
+
+## Secrets
+
+Deployment secrets belong in `bundles.secrets.yaml` or the configured secrets
+provider. The reference template is:
+
+```text
+config/bundles.secrets.template.yaml
+```
+
+```yaml
+bundles:
+  version: "1"
+  items:
+    - id: "versatile@2026-03-31-13-36"
+      secrets:
+        integrations:
+          telegram:
+            bot_token: "<TELEGRAM_BOT_TOKEN>"
+            webhook_secret: "<TELEGRAM_WEBHOOK_SECRET>"
+```
+
+The webhook secret is generated by the operator. It is not generated by
+Telegram and not generated by the bundle.
+
+Example:
+
+```bash
+printf '%s\n' "$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')"
+```
+
+Use the same value in:
+
+- bundle secret `integrations.telegram.webhook_secret`
+- Telegram `setWebhook` request `secret_token`
+
+## Register Webhook
+
+After the public route exists and the runtime has the bundle config/secrets,
+register the webhook:
+
+```bash
+curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
+  -d "url=https://<PUBLIC_HOST>/api/integrations/bundles/<TENANT>/<PROJECT>/versatile@2026-03-31-13-36/public/telegram_webhook" \
+  -d "secret_token=<TELEGRAM_WEBHOOK_SECRET>"
+```
+
+Telegram will send the secret back as:
+
+```text
+X-Telegram-Bot-Api-Secret-Token
+```
+
+The bundle rejects webhook updates when the header is missing or wrong.
+
+## BotFather Commands And Mini App
+
+Recommended commands:
+
+```text
+/start - start the versatile assistant
+/help - show available actions
+/settings - open the versatile Mini App
+```
+
+If using the Mini App, configure the bot menu button or web app URL in
+`@BotFather`.
+
+The Mini App URL should point to the KDCube-served widget route for
+`versatile_webapp`:
+
+```text
+https://<PUBLIC_HOST>/api/integrations/bundles/<TENANT>/<PROJECT>/versatile@2026-03-31-13-36/widgets/versatile_webapp
+```
+
+In many deployments the KDCube control plane can provide or copy the exact
+widget URL. The important part is that Telegram opens the same built widget and
+the widget calls the `public/telegram_*` APIs with signed Telegram `initData`.
+
+## User Mapping
+
+The webhook records new Telegram users as pending `anonymous` rows in:
+
+```text
+admin/telegram-users.json
+```
+
+Use the KDCube control-plane widget:
+
+```text
+versatile_webapp -> Admin
+```
+
+to promote a user.
+
+Fields:
+
+| Field | Meaning |
+| --- | --- |
+| Telegram user id | `message.from.id` from Telegram. Usually auto-recorded after `/start`. |
+| Telegram chat id | `message.chat.id`; used to send replies. Usually auto-recorded. |
+| Telegram username | Optional readable username. |
+| KDCube user id | Optional. If set, Telegram acts as that KDCube user scope. |
+| Role | `anonymous`, `registered`, or `admin`. `anonymous` is pending/not allowed. |
+| Conversation id | Stable KDCube conversation used for Telegram turns. Leave blank to let the bundle generate one. |
+| Notes | Operator note. |
+
+Generated conversation ids:
+
+```text
+if kdcube_user_id is set:
+  kdcube_user_<kdcube_user_id>
+else:
+  telegram_chat_<telegram_chat_id>
+```
+
+Use `registered` for normal users and `admin` only for operators who should see
+the Telegram admin panel inside the Mini App.
+
+## Runtime Checks
+
+If Telegram does not work:
+
+- Confirm `telegram_webhook.POST` is enabled.
+- Confirm `integrations.telegram.enabled=true`.
+- Confirm `bot_token` and `webhook_secret` exist in the active secrets provider.
+- Confirm Telegram `getWebhookInfo` points to the current public URL.
+- Confirm KDCube logs show webhook requests reaching `telegram_webhook`.
+- Confirm `admin/telegram-users.json` contains the Telegram user.
+- Confirm the user's role is `registered` or `admin`, not `anonymous`.
+- Confirm Mini App APIs are enabled if the widget is opened from Telegram.

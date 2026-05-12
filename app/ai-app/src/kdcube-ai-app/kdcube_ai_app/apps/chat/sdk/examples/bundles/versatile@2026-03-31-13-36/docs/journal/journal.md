@@ -16,3 +16,6 @@ updated_at: 2026-05-12
   and admin operations.
 - Added `config/`, `interface/`, and `release.yaml` maintainer artifacts so the
   reference bundle follows the bundle-maintainer contract.
+- Expanded bundle documentation with storage, Telegram operator setup, runtime
+  scenarios, and Telegram WebApp design notes so the reference bundle documents
+  the external work required beyond simply hosting the bundle in KDCube.
