@@ -1,5 +1,9 @@
 # KDCube — Platform and SDK for AI applications you control
 
+> **Docs MCP server:** KDCube documentation is available as a public,
+> read-only MCP endpoint for MCP-capable clients:
+> `https://dev.kdcube.tech/api/integrations/bundles/demo/demo-march/kdcube.copilot@2026-04-03-19-05/public/mcp/kdcube-doc`
+
 KDCube is a self-hosted platform, SDK, runtime, and control plane for AI
 applications. It is not a workflow loop wrapped around a model. It is built
 for building and hosting full AI applications with APIs, UI, agents, MCP

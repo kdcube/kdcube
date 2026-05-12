@@ -1,87 +1,64 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.5.11.2125"
+  ref: "2026.5.13.117"
   description: |
-    This release focuses on ReAct workspace/materialization correctness,
-    safer text artifact previews and patching, configurable ReAct iteration
-    limits, built-in bundle compatibility, CLI descriptor initialization, and
-    browser-session cleanup consolidation.
+    This release focuses on public documentation MCP access, route-aware bundle
+    Admin overrides, gateway reload configurability, reference bundle
+    maintenance, and operational documentation for building and exposing
+    KDCube bundles.
 
     Highlights
 
-    - Added assembly/bundle configuration support for ReAct max rounds so the
-      default iteration budget can be configured globally and overridden per
-      bundle.
-    - Centralized browser-session cleanup at the processor/runtime level and
-      added cleanup logging so turn-completion cleanup is visible and auditable.
-    - Hardened built-in example bundles after SDK decorator/config changes so
-      older bundled workflows no longer break bundle loading or admin views.
-    - Fixed CLI descriptor initialization flows so `kdcube init --set-secret`
-      writes staged secrets correctly, and delegated-auth placeholders such as
-      tenant/project/domain values are concretized during descriptor generation.
-    - Clarified the ReAct rg/read/patch workspace contract: `react.rg` searches
-      materialized readable artifacts, returns reusable `read_item` ranges, and
-      works across `files`, `outputs`, and text attachments once those paths are
-      present locally.
-    - Improved ReAct workspace materialization signals. Pull/checkout results
-      are now compact and model-facing workspace announce text distinguishes the
-      current editable workspace from previous saved workspace paths.
-    - Added line-numbered text artifact previews in the rendered timeline,
-      including explicit guidance that preview line numbers are navigation aids
-      and not file content.
-    - Hardened `react.patch`: generated unified-diff hunk counts are normalized
-      before apply, and patch/full-replacement input copied from line-numbered
-      previews is rejected before it can corrupt files.
-    - Deduplicated and tightened ReAct v2/v3 instruction surfaces by moving
-      common workspace/tool behavior into shared instructions while preserving
-      the operational details the model needs.
+    - Exposes the KDCube documentation knowledge space through the public
+      `kdcube-doc` MCP endpoint in the built-in copilot bundle, and documents
+      the hosted dev.kdcube.tech endpoint in the repository README.
+    - Fixes public MCP document reading so search results and subsequent
+      `ks:` reads resolve against the same knowledge root.
+    - Adds route-aware API enabled keys in Bundle Admin so public and
+      operations APIs may safely share the same alias/method without colliding
+      in bundle props.
+    - Keeps resource enabled configuration sparse: missing enabled overrides
+      now mean the code/decorator default applies, so descriptors do not need
+      to enumerate every enabled API, widget, MCP endpoint, or routine.
+    - Adds an assembly-level gateway startup override for loading
+      `gateway.yaml`, and documents the reload flag for CLI/local deployments.
+    - Updates the versatile reference bundle with Telegram hook/webapp
+      examples, attachment-to-artifact handling, UI layout under `ui/main` and
+      `ui/widgets`, and clearer setup/storage documentation.
+    - Updates bundle-builder and website documentation so coding agents can
+      discover Telegram, ngrok, UI layout, MCP, and Tier 1 bundle authoring
+      guidance without reverse engineering examples.
 
-    Runtime work in this release line:
+    Runtime and SDK work in this release line:
 
-    - Agents get clearer continuation guidance after cross-turn work:
-      historical `files/...` refs should be pulled when needed and checked out
-      before editing, while `outputs/...` and attachments remain readable/fetchable
-      artifacts.
-    - Large or generated text artifacts are easier to inspect safely: line
-      windows and line-numbered previews support `react.rg -> react.read ranges
-      -> react.patch` without loading whole files into context.
-    - Patch failures caused by harmless generated hunk-count drift are reduced,
-      while dangerous preview-copy mistakes are blocked explicitly.
-    - Browser automation remains turn-scoped, with cleanup handled outside
-      bundle workflow code.
-    - CLI seed-descriptor workflows preserve explicitly supplied secrets and
-      resolve deployment placeholders more predictably.
+    - Bundle Admin reads legacy `enabled.api.<alias>.<METHOD>` values for
+      compatibility but writes canonical route-aware keys.
+    - Built-in examples and the versatile reference bundle were aligned with
+      the current UI source layout and descriptor override semantics.
+    - Public MCP endpoints remain bundle-owned auth surfaces; the public
+      documentation MCP endpoint intentionally does not require credentials.
 
     Validation and regression coverage:
 
-    - Added focused ReAct patch tests for normalized hunk counts and rejection
-      of copied line-numbered preview prefixes in both v2 and v3.
-    - Added timeline rendering tests proving small and large text artifacts are
-      rendered with line-number metadata while stored artifact content remains
-      unchanged.
-    - Added and updated ReAct pull/rg/workspace/write tests for compact
-      materialization output, readable artifact roots, and workspace announce
-      wording.
-    - Added runtime configuration tests for ReAct iteration limit overrides.
-    - Added CLI descriptor tests for set-secret and delegated placeholder flows.
-    - Focused validation was run during the individual changes in this release
-      line, including ReAct timeline rendering, patch, workspace announce/model
-      prompt, pull, rg, write, CLI descriptor, and py_compile checks.
+    - Added focused regression coverage for route-aware enabled keys and
+      versatile public API behavior.
+    - Re-ran the focused versatile bundle test suite after the Admin/config
+      changes.
+    - Re-ran the task-and-memo Telegram webhook/public API regression suite
+      before releasing the bundle content.
 
     Changelog
 
-    - Added configurable ReAct max rounds.
-    - Centralized browser-session cleanup in processor/runtime code.
-    - Fixed built-in bundle widget/workflow compatibility.
-    - Fixed CLI `--set-secret` descriptor initialization.
-    - Fixed CLI delegated-auth descriptor placeholder substitution.
-    - Clarified ReAct rg/search/read/edit workspace behavior.
-    - Compacted `react.pull` and `react.checkout` result payloads.
-    - Improved ReAct workspace announce text.
-    - Added line-numbered text artifact timeline previews.
-    - Added `react.patch` hunk-count normalization.
-    - Added `react.patch` guard against copied rendered line numbers.
-    - Updated ReAct workspace, tool, artifact discovery, runtime config, and CLI
-      documentation.
+    - Added README banner for the public KDCube docs MCP endpoint.
+    - Renamed the built-in public documentation MCP alias to `kdcube-doc`.
+    - Fixed public MCP knowledge-space reads after MCP search.
+    - Added route-aware enabled-key handling for API resources.
+    - Removed explicit enabled-default clutter from reference bundle config.
+    - Exposed gateway startup reload-from-file configuration.
+    - Refactored reference bundle UI source layout to `ui/main` and
+      `ui/widgets`.
+    - Expanded versatile Telegram, storage, setup, and attachment docs.
+    - Updated website and Tier 1 bundle-builder documentation for recent SDK
+      and CLI flows.
 config:
-    version: "2026.5.11.2125"
+    version: "2026.5.13.117"
