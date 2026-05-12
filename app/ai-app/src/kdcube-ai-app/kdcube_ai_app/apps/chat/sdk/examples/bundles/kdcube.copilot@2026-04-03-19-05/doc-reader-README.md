@@ -257,7 +257,7 @@ the same app instance after its lifespan exits.
 Public URL example:
 
 ```text
-https://dev.kdcube.tech/api/integrations/bundles/demo-tenant/demo-project/kdcube.copilot@2026-04-03-19-05/public/mcp/kdcube-doc
+https://dev.kdcube.tech/api/integrations/bundles/demo/demo-march/kdcube.copilot@2026-04-03-19-05/public/mcp/kdcube-doc
 ```
 
 Use the registry bundle id from `bundles.yaml` in the URL. In the local OSS
