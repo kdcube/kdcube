@@ -98,8 +98,8 @@ documentation expected from real bundles:
     opened by Telegram as a Mini App
   - the widget shows the current preferences canvas, Telegram-linked chat
     channels, and Telegram user administration
-  - public `telegram_*` WebApp APIs are disabled by default and verify Telegram
-    `initData` inside the bundle before reading or mutating data
+  - public `telegram_*` WebApp APIs are normal public bundle APIs; they verify
+    Telegram `initData` inside the bundle before reading or mutating data
 
 Telegram requires external operator setup. Hosting this bundle in KDCube is not
 enough by itself: an operator must create or choose a bot in BotFather, expose

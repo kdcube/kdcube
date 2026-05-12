@@ -59,29 +59,6 @@ TELEGRAM_WEBHOOK_PUBLIC_AUTH = {
     "secret_key": "integrations.telegram.webhook_secret",
 }
 TELEGRAM_WEBAPP_PUBLIC_AUTH = "none"
-# Public Telegram-facing API methods are ordinary @api(route="public")
-# endpoints declared below. This list only keeps their default enabled flags in
-# one place; the runtime does not consume a separate "telegram webapp manifest".
-TELEGRAM_PUBLIC_API_METHODS = (
-    ("telegram_profile", "GET"),
-    ("telegram_conversations_list", "GET"),
-    ("telegram_conversations_create", "POST"),
-    ("telegram_conversations_switch", "POST"),
-    ("telegram_conversations_delete", "POST"),
-    ("telegram_versatile_webapp_data", "POST"),
-    ("telegram_memory_canvas_data", "POST"),
-    ("telegram_memory_canvas_save", "POST"),
-    ("telegram_memory_canvas_export_excel", "POST"),
-    ("telegram_memory_canvas_import_excel", "POST"),
-    ("telegram_webapp_user_admin_data", "POST"),
-    ("telegram_webapp_user_admin_upsert", "POST"),
-    ("telegram_webapp_user_admin_delete", "POST"),
-    ("telegram_webhook", "POST"),
-)
-TELEGRAM_PUBLIC_API_ENABLED_DEFAULTS = {
-    f"{alias}.{method}": False
-    for alias, method in TELEGRAM_PUBLIC_API_METHODS
-}
 OPERATION_API_VISIBILITY_ALIASES = (
     "versatile_webapp_widget",
     "versatile_webapp_data",
@@ -1402,23 +1379,6 @@ print(f"wrote {{report_path}}")
 
     def configuration_defaults(self) -> Dict[str, Any]:
         versatile_defaults = {
-            "enabled": {
-                "api": {
-                    "versatile_webapp_widget.POST": True,
-                    "versatile_webapp_data.POST": True,
-                    "conversations_list.GET": True,
-                    "conversations_create.POST": True,
-                    "conversations_switch.POST": True,
-                    "conversations_delete.POST": True,
-                    "telegram_user_admin_data.POST": True,
-                    "telegram_user_admin_upsert.POST": True,
-                    "telegram_user_admin_delete.POST": True,
-                    **TELEGRAM_PUBLIC_API_ENABLED_DEFAULTS,
-                },
-                "widget": {
-                    "versatile_webapp": True,
-                },
-            },
             "visibility": {
                 "bundle": {
                     "allowed_roles": [],
@@ -1444,7 +1404,6 @@ print(f"wrote {{report_path}}")
             "ui": {
                 "web_app_widgets": {
                     "versatile_webapp": {
-                        "enabled": True,
                         "src_folder": "ui/widgets/versatile_webapp",
                         "build_command": "npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build",
                     },

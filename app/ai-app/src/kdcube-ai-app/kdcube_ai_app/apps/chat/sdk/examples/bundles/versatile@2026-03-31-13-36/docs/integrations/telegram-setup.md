@@ -97,27 +97,12 @@ bundles:
             send_responses: true
             stream_activity: true
             web_app_auth_max_age_seconds: 86400
-        enabled:
-          api:
-            telegram_webhook.POST: true
-            telegram_profile.GET: true
-            telegram_conversations_list.GET: true
-            telegram_conversations_create.POST: true
-            telegram_conversations_switch.POST: true
-            telegram_conversations_delete.POST: true
-            telegram_versatile_webapp_data.POST: true
-            telegram_memory_canvas_data.POST: true
-            telegram_memory_canvas_save.POST: true
-            telegram_memory_canvas_export_excel.POST: true
-            telegram_memory_canvas_import_excel.POST: true
-            telegram_webapp_user_admin_data.POST: true
-            telegram_webapp_user_admin_upsert.POST: true
-            telegram_webapp_user_admin_delete.POST: true
 ```
 
-The `enabled` section is an override. Missing keys use code defaults. In this
-reference bundle, Telegram public APIs are disabled by default because exposing
-Telegram routes without a bot/webhook setup is usually accidental.
+The `enabled` section is an override surface, not a manifest. Missing keys use
+code/runtime defaults, and bundle resources are enabled by default. Do not list
+`enabled: true` for every Telegram API. Add `enabled.api.<alias>.<METHOD>:
+false` only for the rare case where a specific resource must be disabled.
 
 ## Secrets
 

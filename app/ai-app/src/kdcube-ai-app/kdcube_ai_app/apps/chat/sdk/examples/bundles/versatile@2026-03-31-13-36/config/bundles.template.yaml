@@ -17,33 +17,6 @@ bundles:
             send_responses: true
             stream_activity: true
             web_app_auth_max_age_seconds: 86400
-        enabled:
-          widget:
-            versatile_webapp: true
-          api:
-            versatile_webapp_widget.POST: true
-            versatile_webapp_data.POST: true
-            conversations_list.GET: true
-            conversations_create.POST: true
-            conversations_switch.POST: true
-            conversations_delete.POST: true
-            telegram_user_admin_data.POST: true
-            telegram_user_admin_upsert.POST: true
-            telegram_user_admin_delete.POST: true
-            telegram_webhook.POST: false
-            telegram_profile.GET: false
-            telegram_conversations_list.GET: false
-            telegram_conversations_create.POST: false
-            telegram_conversations_switch.POST: false
-            telegram_conversations_delete.POST: false
-            telegram_versatile_webapp_data.POST: false
-            telegram_memory_canvas_data.POST: false
-            telegram_memory_canvas_save.POST: false
-            telegram_memory_canvas_export_excel.POST: false
-            telegram_memory_canvas_import_excel.POST: false
-            telegram_webapp_user_admin_data.POST: false
-            telegram_webapp_user_admin_upsert.POST: false
-            telegram_webapp_user_admin_delete.POST: false
         visibility:
           bundle:
             allowed_roles: []
@@ -60,7 +33,6 @@ bundles:
         ui:
           web_app_widgets:
             versatile_webapp:
-              enabled: true
               src_folder: ui/widgets/versatile_webapp
               build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
         mcp:

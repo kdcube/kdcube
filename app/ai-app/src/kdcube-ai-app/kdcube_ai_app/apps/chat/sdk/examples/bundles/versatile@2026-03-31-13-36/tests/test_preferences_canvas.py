@@ -142,11 +142,13 @@ def test_telegram_bot_transport_manifest_and_defaults():
     assert admin_data.user_types_config == "visibility.api.telegram_user_admin_data.user_types"
 
     defaults = module.VersatileEntrypoint.configuration_defaults(workflow)
-    assert defaults["enabled"]["api"]["telegram_webhook.POST"] is False
-    assert defaults["enabled"]["api"]["telegram_versatile_webapp_data.POST"] is False
-    assert defaults["enabled"]["api"]["telegram_webapp_user_admin_data.POST"] is False
-    assert defaults["enabled"]["api"]["telegram_user_admin_data.POST"] is True
-    assert defaults["enabled"]["widget"]["versatile_webapp"] is True
+    enabled_api = defaults.get("enabled", {}).get("api", {})
+    assert "telegram_webhook.POST" not in enabled_api
+    assert "telegram_versatile_webapp_data.POST" not in enabled_api
+    assert "telegram_webapp_user_admin_data.POST" not in enabled_api
+    assert "telegram_user_admin_data.POST" not in enabled_api
+    assert "versatile_webapp_widget.POST" not in enabled_api
+    assert "widget" not in defaults.get("enabled", {})
     assert defaults["visibility"]["bundle"] == {"allowed_roles": []}
     assert defaults["visibility"]["api"]["telegram_user_admin_data"] == {
         "user_types": [],
@@ -164,6 +166,7 @@ def test_telegram_bot_transport_manifest_and_defaults():
         "web_app_auth_max_age_seconds": 86400,
     }
     assert defaults["ui"]["web_app_widgets"]["versatile_webapp"]["src_folder"] == "ui/widgets/versatile_webapp"
+    assert "enabled" not in defaults["ui"]["web_app_widgets"]["versatile_webapp"]
 
 
 def test_preferences_canvas_save_normalizes_document_and_appends_events(tmp_path):
