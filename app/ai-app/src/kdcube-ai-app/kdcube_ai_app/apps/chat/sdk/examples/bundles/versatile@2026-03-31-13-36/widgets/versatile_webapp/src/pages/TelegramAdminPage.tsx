@@ -70,31 +70,36 @@ export function TelegramAdminPage() {
   };
 
   return (
-    <section className="panel">
-      <div className="panel-head">
+    <section className="page page-wide">
+      <div className="page-header">
         <div>
-          <h2>Telegram Admin</h2>
+          <h1>Telegram Admin</h1>
           <p>{users.length} users</p>
         </div>
-        <button type="button" onClick={load} disabled={busy}>Refresh</button>
+        <button type="button" className="ghost-button" onClick={load} disabled={busy}>Refresh</button>
       </div>
-      {error && <div className="error">{error}</div>}
+      {error && <div className="notice error">{error}</div>}
       <div className="admin-layout">
-        <div className="grid-list">
+        <div className="content-card list-card">
           {users.map((user) => (
-            <article className="row-card" key={user.telegram_user_id}>
-              <strong>{user.telegram_username || user.telegram_user_id}</strong>
-              <span>{fmt(user.kdcube_user_id)} · {fmt(user.role)}</span>
+            <article className="list-row admin-row" key={user.telegram_user_id}>
+              <div className="row-main">
+                <div className="row-title">
+                  <strong>{user.telegram_username || user.telegram_user_id}</strong>
+                  <span className="pill neutral">{fmt(user.role)}</span>
+                </div>
+                <span>{fmt(user.kdcube_user_id)} · chat {fmt(user.telegram_chat_id)} · conversation {fmt(user.conversation_id)}</span>
+              </div>
               <div className="row-actions">
-                <button type="button" disabled={busy} onClick={() => setSelected(user)}>Edit</button>
-                <button type="button" disabled={busy} onClick={() => void remove(user.telegram_user_id)}>Delete</button>
+                <button type="button" className="link-button" disabled={busy} onClick={() => setSelected(user)}>Edit</button>
+                <button type="button" className="link-button danger" disabled={busy} onClick={() => void remove(user.telegram_user_id)}>Delete</button>
               </div>
             </article>
           ))}
-          {users.length === 0 && <div className="empty">No Telegram users.</div>}
+          {users.length === 0 && <div className="empty-state">No Telegram users.</div>}
         </div>
         <form
-          className="edit-form"
+          className="content-card edit-form"
           onSubmit={(event) => {
             event.preventDefault();
             void save();
@@ -134,8 +139,8 @@ export function TelegramAdminPage() {
             onChange={(event) => setSelected({ ...draft, notes: event.target.value })}
           />
           <div className="actions">
-            <button type="button" onClick={() => setSelected(null)}>Clear</button>
-            <button type="submit" className="primary" disabled={busy || !draft.telegram_user_id}>Save</button>
+            <button type="button" className="ghost-button" onClick={() => setSelected(null)}>Clear</button>
+            <button type="submit" className="primary-button" disabled={busy || !draft.telegram_user_id}>Save</button>
           </div>
         </form>
       </div>
