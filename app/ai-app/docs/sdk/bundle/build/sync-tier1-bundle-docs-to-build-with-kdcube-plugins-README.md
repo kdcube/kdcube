@@ -13,7 +13,10 @@ see_also:
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-release-bundle-content-README.md
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
+  - ks:docs/sdk/integrations/telegram/telegram-README.md
+  - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
   - ks:docs/sdk/integrations/browser/browser-tools-README.md
+  - ks:docs/service/cicd/ngrok-README.md
 ---
 # Tier 1 Bundle Pack For Build-With-KDCube Plugins
 
@@ -44,6 +47,15 @@ This conditional agent-integration doc should be available whenever the bundle
 uses React tools/skills, file-producing tools, MCP, or Claude Code:
 
 8. [../bundle-agent-integration-README.md](../bundle-agent-integration-README.md)
+
+This conditional local-public-runtime doc should be available whenever local
+KDCube must receive provider callbacks or remote calls:
+
+9. [../../../service/cicd/ngrok-README.md](../../../service/cicd/ngrok-README.md)
+
+It is used for Telegram webhooks, OAuth/Cognito callbacks, and other
+callback/remote-control flows that need public HTTPS while the runtime is still
+on localhost.
 
 Preferred reading order:
 
@@ -89,6 +101,14 @@ Recommended:
   connector/server wiring, and Claude Code subprocess agents
 - keep [browser-tools-README.md](../../integrations/browser/browser-tools-README.md)
   reachable for ReAct-side browser verification of generated HTML and widgets
+- keep [ngrok-README.md](../../../service/cicd/ngrok-README.md) reachable for
+  local public HTTPS runtime testing of Telegram webhooks, OAuth callbacks, and
+  remote callback/control flows
+- keep [Telegram SDK Integration](../../integrations/telegram/telegram-README.md)
+  and
+  [Telegram External Prerequisites](../../integrations/telegram/telegram-external-prereq-README.md)
+  reachable when the bundle needs a Telegram bot, webhook, Mini App, registry,
+  or Telegram delivery path
 - branch to deeper docs only after Tier 1
 - expose the release procedure as optional and user-approved, not automatic
 
@@ -141,6 +161,11 @@ The plugin should steer agents away from these recurring mistakes:
 - use `browser_tools` for real browser verification when static checks are not
   enough; keep screenshots optional and avoid routing `browser_tools.*` through
   isolated exec
+- use the ngrok local-public-runtime guide when localhost must receive external
+  provider callbacks; do not expose proc through a separate public URL
+- for Telegram integration, use the SDK bundle wiring checklist; do not
+  hand-roll user registry, webhook duplicate handling, Mini App `initData`
+  verification, or Telegram delivery if the SDK subsystem fits
 - use `react.pull` before relying on historical `fi:` files locally, and use
   `react.checkout` only when a prior `files/...` path must become editable in
   the current turn
@@ -172,5 +197,7 @@ The plugin handoff is clean when:
 - the working environment preflight is visible before any test command
 - the source-folder widget build contract is discoverable from Tier 1 routing
 - browser-tool verification is discoverable for generated HTML/widget behavior
+- local-public-runtime guidance is discoverable for Telegram webhooks,
+  OAuth/Cognito callbacks, and remote callback/control flows
 - the plugin can route to the best first page without hiding the rest of Tier 1
 - old hardcoded doc links are updated to current paths

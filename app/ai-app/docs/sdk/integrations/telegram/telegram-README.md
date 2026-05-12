@@ -6,6 +6,11 @@ tags: ["sdk", "integrations", "telegram", "webhooks", "mini-apps", "bundles"]
 keywords: ["telegram bot", "telegram webhook", "telegram mini app", "telegram web app", "telegram activity streamer", "chat submitter", "signed download"]
 see_also:
   - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
+  - ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
+  - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
+  - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
+  - ks:docs/sdk/bundle/bundle-widget-integration-README.md
+  - ks:docs/service/cicd/ngrok-README.md
   - ks:docs/service/servicing-interfaces-README.md
   - ks:docs/sdk/integrations/email/email-README.md
 ---
@@ -27,6 +32,210 @@ and which workflow handles the submitted message.
 External BotFather, webhook, public URL, and Mini App setup is documented
 separately in `telegram-external-prereq-README.md`. Keep this article focused
 on the SDK surface and bundle integration points.
+
+## Bundle Wiring Checklist
+
+Use this checklist when adding Telegram to a bundle. Do not start from a
+generic public webhook unless the bundle intentionally does not use the
+Telegram SDK.
+
+### 1. Decide Which Telegram Surfaces The Bundle Exposes
+
+Common combinations:
+
+| Surface | Bundle route | Auth boundary | SDK subsystem |
+| --- | --- | --- | --- |
+| Telegram chat webhook | `@api(route="public", alias="telegram_webhook", method="POST")` | `X-Telegram-Bot-Api-Secret-Token` header secret | `user_admin.handle_webhook(...)` |
+| Telegram Mini App data/actions | `@api(route="public", alias="telegram_*", method=...)` | Telegram WebApp `initData` verified inside each handler | `widget_auth`, `widget_ops`, `webapp` |
+| Telegram user registry/admin from KDCube UI | `@api(route="operations", alias="telegram_user_admin_*")` | KDCube-authenticated operations role policy | `user_admin.payload/upsert/delete(...)` |
+| Generated artifact downloads from Mini App | public download/action alias | signed link or Telegram `initData` | `widget_ops.download_execution_artifact(...)` |
+
+Keep business behavior in the main workflow/tools. Telegram routes should
+authorize, normalize, submit, and deliver; they should not duplicate task,
+memory, or product logic.
+
+### 2. Configure The Reusable SDK Subsystems In `entrypoint.py`
+
+The bundle imports and configures the SDK modules once at module load:
+
+```python
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram import TelegramUserAdminStorage
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram import user_admin as telegram_user_admin
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram import webapp
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram import widget_auth as telegram_widget_auth
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram import widget_ops as telegram_widget_ops
+
+BUNDLE_ID = "my.bundle@1-0"
+TELEGRAM_WEBHOOK_SECRET_HEADER = "X-Telegram-Bot-Api-Secret-Token"
+TELEGRAM_WEBHOOK_PUBLIC_AUTH = {
+    "mode": "header_secret",
+    "header": TELEGRAM_WEBHOOK_SECRET_HEADER,
+    "secret_key": "integrations.telegram.webhook_secret",
+}
+
+
+def _telegram_user_admin_storage(entrypoint):
+    return TelegramUserAdminStorage(storage_root_or_error(entrypoint))
+
+
+telegram_user_admin.configure_telegram_user_admin(
+    storage_factory=_telegram_user_admin_storage,
+    storage_root_or_error=storage_root_or_error,
+    migrate_telegram_user_to_kdcube_scope=migrate_telegram_user_to_kdcube_scope,
+    bundle_id=BUNDLE_ID,
+)
+telegram_widget_auth.configure_telegram_widget_auth(
+    storage_for=telegram_user_admin.storage,
+    bot_token=lambda: telegram_user_admin.bot_token(),
+)
+webapp.configure_telegram_webapp(
+    memory_widgets_module=memory_widgets,
+    settings_widgets_module=settings_widgets,
+    task_widgets_module=task_widgets,
+    telegram_user_admin_module=telegram_user_admin,
+    bundle_id=BUNDLE_ID,
+)
+telegram_widget_ops.configure_telegram_widget_ops(
+    task_operations_module=task_operations,
+    telegram_user_admin_module=telegram_user_admin,
+    telegram_widget_auth_module=telegram_widget_auth,
+    webapp_module=webapp,
+    bundle_id=BUNDLE_ID,
+)
+```
+
+The concrete modules passed into `webapp` and `widget_ops` depend on the
+bundle. A task-only bundle may pass task widget modules; a simpler chat-only
+bundle may expose fewer Mini App aliases.
+
+### 3. Add Descriptor-Backed Defaults
+
+The bundle should declare safe defaults in `configuration_defaults()`:
+
+```python
+def configuration_defaults(self):
+    return {
+        "enabled": {
+            "api": {
+                "telegram_webhook.POST": False,
+                "telegram_profile.GET": False,
+                "telegram_conversations_list.GET": False,
+            },
+        },
+        "integrations": {
+            "telegram": {
+                "enabled": False,
+                "webhook_url": "",
+                "send_responses": True,
+                "web_app_auth_max_age_seconds": 86400,
+            },
+        },
+    }
+```
+
+Keep Telegram disabled by default unless the reference bundle is explicitly a
+Telegram-first example. Deployment descriptors or Bundle Admin can enable the
+specific public APIs that are safe for that environment.
+
+### 4. Expose A Thin Webhook Handler
+
+The webhook handler should delegate to the SDK user-admin subsystem:
+
+```python
+@api(
+    method="POST",
+    alias="telegram_webhook",
+    route="public",
+    public_auth=TELEGRAM_WEBHOOK_PUBLIC_AUTH,
+)
+async def telegram_webhook(self, **update):
+    return await telegram_user_admin.handle_webhook(self, **update)
+```
+
+The configured `public_auth` checks Telegram's header secret before the handler
+runs. `handle_webhook(...)` owns duplicate update claims, registry lookup,
+conversation binding, chat-core submission, activity streaming, and final
+Telegram delivery through the configured helpers.
+
+### 5. Expose Mini App Operations Only Through `initData` Verification
+
+Telegram Mini App operation routes are platform-public, but each handler must
+delegate to SDK code that verifies raw Telegram `initData`:
+
+```python
+TELEGRAM_WEBAPP_PUBLIC_AUTH = "none"
+
+@api(method="GET", alias="telegram_profile", route="public", public_auth=TELEGRAM_WEBAPP_PUBLIC_AUTH)
+async def telegram_profile(self, request=None, telegram_init_data: str = "", **kwargs):
+    del kwargs
+    return await telegram_widget_ops.profile(
+        self,
+        request=request,
+        telegram_init_data=telegram_init_data,
+    )
+```
+
+The public route is not the trust boundary. The trust boundary is Telegram
+`initData` validation inside `widget_auth` / `widget_ops`, using the configured
+bot token and max-age policy. Do not trust caller-supplied `user_id`,
+conversation id, role, or fingerprint from a Telegram Mini App request.
+
+### 6. Keep Admin Operations Separate
+
+KDCube operations APIs that manage the Telegram registry should be separate
+from Telegram public APIs:
+
+```python
+@api(method="GET", alias="telegram_user_admin_data", route="operations", roles=("kdcube:role:super-admin",))
+async def telegram_user_admin_data(self, **kwargs):
+    return telegram_user_admin.payload(self)
+```
+
+Expose only the minimum admin operations needed by the bundle UI. If the bundle
+uses configurable roles/user types, declare the corresponding `roles_config`
+and `user_types_config` paths in the decorators.
+
+### 7. Configure Deployment Values And External Provider State
+
+Deployment config:
+
+```yaml
+integrations:
+  telegram:
+    enabled: true
+    webhook_url: "https://<PUBLIC_HOST>/api/integrations/bundles/<TENANT>/<PROJECT>/<BUNDLE_ID>/public/telegram_webhook"
+    send_responses: true
+    web_app_auth_max_age_seconds: 86400
+```
+
+Deployment secrets:
+
+```yaml
+integrations:
+  telegram:
+    bot_token: "<TELEGRAM_BOT_TOKEN>"
+    webhook_secret: "<TELEGRAM_WEBHOOK_SECRET>"
+```
+
+For local development where Telegram must call a localhost KDCube, use
+[Serving Local KDCube With Ngrok](../../../service/cicd/ngrok-README.md).
+Use one public HTTPS origin through the local reverse proxy; do not expose proc
+as a separate public URL.
+
+### 8. Test The Telegram Boundary
+
+Before calling the bundle done, prove:
+
+- `enabled.api.telegram_webhook.POST` and any `telegram_*` Mini App APIs are
+  explicitly enabled for the test deployment
+- the webhook rejects missing or wrong `X-Telegram-Bot-Api-Secret-Token`
+- `setWebhook` points at the active public URL
+- a Telegram user can be recorded, approved/mapped, and bound to a conversation
+- a chat update submits through the shared chat ingress and receives a final
+  Telegram delivery
+- Mini App APIs reject invalid or stale `initData`
+- generated downloads use signed links or verified `initData` and return
+  Telegram-compatible attachment headers
 
 ## Package Surface
 

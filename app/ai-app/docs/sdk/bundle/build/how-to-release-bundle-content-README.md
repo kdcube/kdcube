@@ -13,6 +13,9 @@ see_also:
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - ks:docs/configuration/bundles-descriptor-README.md
   - ks:docs/configuration/bundles-secrets-descriptor-README.md
+  - ks:docs/sdk/integrations/telegram/telegram-README.md
+  - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
+  - ks:docs/service/cicd/ngrok-README.md
   - ks:docs/sdk/bundle/bundle-delivery-and-update-README.md
 ---
 # How To Release Bundle Content
@@ -178,6 +181,12 @@ If user identity or external auth changed, validate both:
 - the KDCube-authenticated path
 - each public/external path, such as Telegram Mini App/webhook mapping to the
   resolved bundle user scope
+
+If the release changes Telegram webhook URLs, OAuth/Cognito callback handling,
+or another external provider callback while testing against a local KDCube,
+validate the path through
+[Serving Local KDCube With Ngrok](../../../service/cicd/ngrok-README.md) or
+record the equivalent deployed public URL validation in the release notes.
 
 If a validation cannot be run, record that explicitly in the release notes or
 journal. Do not silently treat skipped validation as passing validation.

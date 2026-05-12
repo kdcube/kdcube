@@ -16,6 +16,9 @@ see_also:
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
   - ks:docs/sdk/bundle/bundle-widget-integration-README.md
+  - ks:docs/sdk/integrations/telegram/telegram-README.md
+  - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
+  - ks:docs/service/cicd/ngrok-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
   - ks:docs/sdk/bundle/bundle-storage-and-cache-README.md
   - ks:docs/sdk/storage/cache-README.md
@@ -817,6 +820,10 @@ Channel rule:
 - transport adapters such as Telegram should trigger or route agent work, then
   derive transport-specific output from the turn result/timeline
 - do not duplicate task or memory business logic in the transport webhook
+- when adding Telegram, read
+  [Telegram SDK Integration](../../integrations/telegram/telegram-README.md)
+  and use its bundle wiring checklist instead of hand-rolling transport,
+  registry, delivery, or Mini App auth mechanics
 
 Stateful asset rule:
 
@@ -890,10 +897,10 @@ Reference:
 from fastapi import HTTPException, Request
 from kdcube_ai_app.apps.chat.sdk.config import get_secret_async
 
-@api(alias="telegram_webhook", route="public", method="POST", public_auth="bundle")
-async def telegram_webhook(self, request: Request, **kwargs):
-    header_name = self.bundle_prop("telegram.webhook.auth.header_name", "X-Telegram-Bot-Api-Secret-Token")
-    expected_token = await get_secret_async("b:telegram.webhook.auth.shared_token")
+@api(alias="incoming_webhook", route="public", method="POST", public_auth="bundle")
+async def incoming_webhook(self, request: Request, **kwargs):
+    header_name = self.bundle_prop("integrations.vendor.webhook_header", "X-Webhook-Secret")
+    expected_token = await get_secret_async("b:integrations.vendor.webhook_secret")
     if request.headers.get(header_name) != expected_token:
         raise HTTPException(status_code=401, detail="Unauthorized")
     return {"ok": True}
@@ -904,6 +911,32 @@ Reference:
 - [bundle-transports-README.md](../bundle-transports-README.md)
 - [bundle-runtime-configuration-and-secrets-README.md](../../../configuration/bundle-runtime-configuration-and-secrets-README.md)
 - [bundle-developer-guide-README.md](../bundle-developer-guide-README.md)
+
+### Telegram webhook with SDK integration
+
+For Telegram, prefer the SDK-owned webhook flow instead of a custom generic
+webhook handler:
+
+```python
+TELEGRAM_WEBHOOK_PUBLIC_AUTH = {
+    "mode": "header_secret",
+    "header": "X-Telegram-Bot-Api-Secret-Token",
+    "secret_key": "integrations.telegram.webhook_secret",
+}
+
+@api(
+    alias="telegram_webhook",
+    route="public",
+    method="POST",
+    public_auth=TELEGRAM_WEBHOOK_PUBLIC_AUTH,
+)
+async def telegram_webhook(self, **update):
+    return await telegram_user_admin.handle_webhook(self, **update)
+```
+
+Reference:
+- [Telegram SDK Integration](../../integrations/telegram/telegram-README.md)
+- [Telegram External Prerequisites](../../integrations/telegram/telegram-external-prereq-README.md)
 
 ### Widget plus structured API
 
@@ -1558,6 +1591,14 @@ Typical examples:
 - feature toggles
 - workspace repo/branch overrides
 - validation toggles
+- public callback/webhook base URLs used by external providers during
+  deployment or local-public testing
+
+When a bundle exposes a provider-facing public route that must be tested from
+localhost, design the route URL as descriptor-backed config and use
+[Serving Local KDCube With Ngrok](../../../service/cicd/ngrok-README.md) for
+the local public HTTPS origin. Do not hardcode `localhost` into bundle code for
+Telegram webhooks, OAuth callbacks, or remote callback/control integrations.
 
 ## 10. Local Storage Rules
 

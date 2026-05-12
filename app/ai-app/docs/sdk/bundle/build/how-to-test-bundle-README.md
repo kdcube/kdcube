@@ -13,7 +13,10 @@ see_also:
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
   - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
   - ks:docs/sdk/bundle/bundle-widget-integration-README.md
+  - ks:docs/sdk/integrations/telegram/telegram-README.md
+  - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
   - ks:docs/sdk/integrations/browser/browser-tools-README.md
+  - ks:docs/service/cicd/ngrok-README.md
   - ks:docs/sdk/bundle/bundle-delivery-and-update-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
 ---
@@ -74,6 +77,9 @@ This means:
 - browser/widget validation
 - API and MCP validation
 - cron/runtime-path validation inside the real environment
+- provider callback validation through public HTTPS when the provider cannot
+  call localhost directly, for example Telegram webhooks, OAuth callbacks, or
+  remote-control style callbacks
 
 Use the same document for both, but do not confuse them.
 Passing local tests is necessary and still not enough.
@@ -104,6 +110,9 @@ Runtime-shape rule:
 
 - if the runtime itself may be misconfigured, fix `assembly.yaml`, `bundles.yaml`, and `bundles.secrets.yaml` first
 - use [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md) for the exact local runtime contract before debugging widget/API behavior
+- if an external provider must call the local runtime, use
+  [Serving Local KDCube With Ngrok](../../../service/cicd/ngrok-README.md)
+  before interpreting webhook, OAuth callback, or remote-callback failures
 
 ## 1A. Working Environment For Agents
 
@@ -1226,6 +1235,9 @@ Before calling the bundle complete, verify all of these:
 - generated custom main-view UI is refreshed by the loader, not by manual runtime-storage builds
 - generated HTML or widget click/form behavior is verified with browser tools
   when static checks are not enough
+- external webhook/callback paths are verified through public HTTPS when the
+  local runtime must be reached by Telegram, OAuth/Cognito, or another remote
+  provider
 - widget respects auth/config handshake
 - runtime identity matches descriptor identity
 - local mutable state goes into bundle local storage

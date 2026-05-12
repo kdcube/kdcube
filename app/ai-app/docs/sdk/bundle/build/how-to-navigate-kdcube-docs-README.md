@@ -12,7 +12,10 @@ see_also:
   - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-release-bundle-content-README.md
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
+  - ks:docs/sdk/integrations/telegram/telegram-README.md
+  - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
   - ks:docs/sdk/integrations/browser/browser-tools-README.md
+  - ks:docs/service/cicd/ngrok-README.md
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
   - ks:docs/sdk/bundle/bundle-storage-and-cache-README.md
@@ -74,6 +77,14 @@ file-producing tools, MCP connectors, bundle-served MCP, or Claude Code
 subagents, add this focused page to the Tier 1 pack:
 
 - [../bundle-agent-integration-README.md](../bundle-agent-integration-README.md)
+
+When the local runtime must be reachable from the public internet for provider
+callbacks, add this service note:
+
+- [../../../service/cicd/ngrok-README.md](../../../service/cicd/ngrok-README.md)
+
+Use it for local Telegram webhooks, OAuth/Cognito callbacks, and other
+callback or remote-control flows that cannot call `localhost` directly.
 
 The order helps, but the important rule is:
 
@@ -254,10 +265,12 @@ Then jump only to the row that matches your question.
 | What is a bundle? | [how-to-write-bundle-README.md](how-to-write-bundle-README.md) | It defines bundle as the application unit and `tenant/project` as the environment boundary. |
 | What files do I create first for a new bundle? | [how-to-write-bundle-README.md#1b1-new-bundle-skeleton-checklist](how-to-write-bundle-README.md#1b1-new-bundle-skeleton-checklist) | It gives the first-pass README, release, config template, docs/design, docs/journal, entrypoint, and test layout. |
 | What SDK integrations, solutions, tools, storage, and runtime blocks can I reuse? | [how-to-assemble-bundle-with-sdk-building-blocks-README.md](how-to-assemble-bundle-with-sdk-building-blocks-README.md) | It maps product needs to reusable SDK/platform blocks such as Tasks, Email, Telegram, Delivery, web/browser/rendering/exec tools, widgets, storage, jobs, MCP, and Claude Code. |
+| How do I add Telegram bot/webhook/Mini App support to a bundle? | [../../integrations/telegram/telegram-README.md](../../integrations/telegram/telegram-README.md) and [../../integrations/telegram/telegram-external-prereq-README.md](../../integrations/telegram/telegram-external-prereq-README.md) | The SDK doc gives the bundle wiring checklist; the prerequisites doc covers BotFather, public URL, webhook registration, and Mini App setup. |
 | How do I turn a finished bundle into a release tag and descriptor ref? | [how-to-release-bundle-content-README.md](how-to-release-bundle-content-README.md) | It is the optional, user-approved lifecycle procedure for release notes, validation, commit/tag/push, and descriptor ref updates. |
 | I have existing code. How do I wrap it? | [how-to-write-bundle-README.md](how-to-write-bundle-README.md) | It contains the design matrix and process-boundary guidance. |
 | How do I map existing app settings into KDCube settings, bundle props, and user state? | [../../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../../configuration/bundle-runtime-configuration-and-secrets-README.md) | It is the Tier 1 configuration model and ownership map. |
 | How do I run a bundle locally? | [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md) | It documents the current local runtime contract and staged descriptor model. |
+| How do I expose local KDCube through public HTTPS for Telegram webhooks, OAuth callbacks, or remote callbacks? | [../../../service/cicd/ngrok-README.md](../../../service/cicd/ngrok-README.md) | It documents the one-ngrok-origin local reverse-proxy flow and the descriptor values that must be updated. |
 | Can I run multiple KDCubes on one machine? | [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md) | It explains the difference between many runtime snapshots on disk and one active local compose-backed deployment by default. |
 | Where do props and secrets belong? | [../../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../../configuration/bundle-runtime-configuration-and-secrets-README.md) | It is the canonical author-facing configuration page. |
 | What does user-scoped mean for Telegram, public APIs, or other external users? | [how-to-write-bundle-README.md#1e-sdk-configuration-and-secrets-cheat-sheet](how-to-write-bundle-README.md#1e-sdk-configuration-and-secrets-cheat-sheet) and [how-to-configure-and-run-bundle-README.md#config-and-secret-scopes-in-the-local-runtime](how-to-configure-and-run-bundle-README.md#config-and-secret-scopes-in-the-local-runtime) | User-scoped bundle state is keyed by bundle user scope, which may be a mapped external identity, not necessarily a KDCube login. |

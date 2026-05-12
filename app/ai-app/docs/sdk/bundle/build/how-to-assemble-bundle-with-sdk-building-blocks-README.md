@@ -13,7 +13,10 @@ see_also:
   - ks:docs/sdk/integrations/README.md
   - ks:docs/sdk/integrations/email/README.md
   - ks:docs/sdk/integrations/telegram/README.md
+  - ks:docs/sdk/integrations/telegram/telegram-README.md
+  - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
   - ks:docs/sdk/integrations/browser/browser-tools-README.md
+  - ks:docs/service/cicd/ngrok-README.md
   - ks:docs/sdk/tools/sdk-tools-README.md
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
@@ -51,6 +54,7 @@ or solution package and update this page.
 | Saved tasks, schedules, fresh executions, execution journals, output recovery | `kdcube_ai_app.apps.chat.sdk.solutions.tasks` | [Tasks SDK Solution](../../solutions/tasks-README.md) |
 | Gmail/iCloud accounts, OAuth/settings, email attachment materialization, Email MCP, Claude Code email processing | `kdcube_ai_app.apps.chat.sdk.integrations.email` | [Email Integration](../../integrations/email/README.md) |
 | Telegram webhook, Bot API rendering, progress streaming, Mini App auth, widget operations, user registry, signed downloads | `kdcube_ai_app.apps.chat.sdk.integrations.telegram` | [Telegram Integration](../../integrations/telegram/README.md) |
+| Local public HTTPS origin for provider callbacks, Telegram webhooks, OAuth callbacks, and remote-control style integrations while KDCube runs on localhost | one ngrok HTTPS URL through a local reverse proxy into frontend, ingress, and proc | [Serving Local KDCube With Ngrok](../../../service/cicd/ngrok-README.md) |
 | Explicit report delivery to email/Telegram with delivered-file metadata | `kdcube_ai_app.apps.chat.sdk.integrations.delivery` | [Email Integration](../../integrations/email/email-README.md), [Telegram Integration](../../integrations/telegram/telegram-README.md) |
 | Web search and web fetch with source-pool provenance | `web_tools` | [SDK Tools](../../tools/sdk-tools-README.md) |
 | Real browser verification for generated HTML, widgets, and local browser flows | `browser_tools`, shared Playwright backend, per-turn BrowserContext | [Browser Tools](../../integrations/browser/browser-tools-README.md), [Playwright Backend](../../integrations/browser/playwright-README.md) |
@@ -125,6 +129,19 @@ Telegram Integration
 
 Bundle code owns role policy, which conversations can be selected, which
 operations are public, and what workflow handles a message.
+
+Before implementing, read the Telegram SDK bundle wiring checklist:
+[Telegram SDK Integration](../../integrations/telegram/telegram-README.md).
+The expected shape is SDK-first: configure `user_admin`, `widget_auth`,
+`widget_ops`, and `webapp`; expose a thin `telegram_webhook` handler; keep
+Mini App public APIs behind Telegram `initData` validation; and keep registry
+admin operations on KDCube-authenticated operations routes.
+
+When local Telegram webhook or Mini App testing must be reachable from
+Telegram, use
+[Serving Local KDCube With Ngrok](../../../service/cicd/ngrok-README.md).
+That flow exposes one public HTTPS origin through the local reverse proxy; it
+does not expose proc as a separate public URL.
 
 ### Email-Enabled Assistant
 

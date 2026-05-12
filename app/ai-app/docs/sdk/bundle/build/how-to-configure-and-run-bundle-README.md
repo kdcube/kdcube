@@ -11,11 +11,14 @@ see_also:
   - ks:docs/configuration/assembly-descriptor-README.md
   - ks:docs/configuration/runtime-configuration-and-secrets-store-README.md
   - ks:docs/service/cicd/design/cli--as-control-plane-README.md
+  - ks:docs/service/cicd/ngrok-README.md
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
   - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-release-bundle-content-README.md
+  - ks:docs/sdk/integrations/telegram/telegram-README.md
+  - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-new-cli-README.md
   - ks:docs/sdk/bundle/bundle-developer-guide-README.md
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
@@ -41,6 +44,9 @@ Use it when you need to answer questions like:
 - how do I point a bundle at my local source tree
 - when should I rerun install vs `kdcube reload`
 - how do I avoid overwriting live bundle props/secrets with stale descriptor copies
+- how do I make a localhost KDCube reachable through public HTTPS for external
+  callbacks such as Telegram webhooks, OAuth callbacks, or remote-control style
+  integrations
 
 This page is not the primary source for bundle design or test strategy.
 It documents the supported local CLI/runtime workflow for descriptor-backed
@@ -102,6 +108,7 @@ For exact descriptor schemas, use:
 - [runtime-configuration-and-secrets-store-README.md](../../../configuration/runtime-configuration-and-secrets-store-README.md)
 - [how-to-configure-and-run-bundle-new-cli-README.md](how-to-configure-and-run-bundle-new-cli-README.md)
 - [cli--as-control-plane-README.md](../../../service/cicd/design/cli--as-control-plane-README.md)
+- [Serving Local KDCube With Ngrok](../../../service/cicd/ngrok-README.md)
 
 ## How This Page Fits In The Bundle Lifecycle
 
@@ -550,6 +557,45 @@ These still matter to a local runtime, but they are not the main bundle authorin
 - `gateway.yaml` holds gateway config
 
 For non-interactive local install, the descriptor set should be complete and internally consistent.
+
+## Public Local Runtime With Ngrok
+
+Use [Serving Local KDCube With Ngrok](../../../service/cicd/ngrok-README.md)
+when a local KDCube must be reachable by an external provider while it still
+runs on localhost.
+
+Typical cases:
+
+- Telegram webhook delivery to a local bundle
+- Telegram Mini App or other external browser callbacks
+- Cognito/OAuth callback testing against a local frontend
+- remote-control or callback-style integrations that need a public HTTPS URL
+
+For the bundle-side Telegram wiring, use
+[Telegram SDK Integration](../../integrations/telegram/telegram-README.md).
+For BotFather, `setWebhook`, and Mini App setup, use
+[Telegram External Prerequisites](../../integrations/telegram/telegram-external-prereq-README.md).
+
+The ngrok flow uses one public HTTPS origin through a local reverse proxy:
+
+```text
+https://<ngrok-domain>
+  -> local reverse proxy
+      /api/integrations/* -> proc
+      /sse/*, /api/*      -> ingress
+      /*                  -> frontend
+```
+
+Do not expose proc as a separate public URL. Keep this descriptor-driven:
+
+- `assembly.yaml` owns CORS, frontend browser config, auth, and ports
+- `bundles.yaml` owns bundle public integration URLs such as Telegram
+  `webhook_url`
+- `bundles.secrets.yaml` or the configured secrets provider owns bot tokens,
+  webhook secrets, OAuth client secrets, and related secret material
+
+Restart ingress after `assembly.yaml` changes. Restart or reload proc after
+bundle descriptor or bundle-secret changes.
 
 ## Recommended Local Workflow
 
