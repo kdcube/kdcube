@@ -742,8 +742,8 @@ class VersatileEntrypoint(BaseEntrypointWithEconomics):
             telegram_init_data=telegram_init_data,
         )
 
-    @api(method="GET", alias="telegram_conversations_list", route="public", public_auth=TELEGRAM_WEBAPP_PUBLIC_AUTH)
-    async def telegram_conversations_list(
+    @api(method="GET", alias="conversations_list", route="public", public_auth=TELEGRAM_WEBAPP_PUBLIC_AUTH)
+    async def telegram_public_conversations_list(
         self,
         request: Any = None,
         telegram_init_data: str = "",

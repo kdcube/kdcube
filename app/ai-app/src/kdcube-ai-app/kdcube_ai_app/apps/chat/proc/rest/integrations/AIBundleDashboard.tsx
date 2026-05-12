@@ -612,9 +612,19 @@ function readDotPath(obj: any, path: string | null | undefined): any {
     return cursor;
 }
 
-// enabled.api uses a flat key for "<alias>.<METHOD>" (literal dot in key).
-function buildEnabledApiPatch(alias: string, method: string, value: unknown): Record<string, any> {
-    return { enabled: { api: { [`${alias}.${method}`]: value } } };
+// enabled.api uses a flat route-aware key for "<route>.<alias>.<METHOD>".
+function apiEnabledKey(spec: { route?: string | null; alias: string; http_method: string }): string {
+    return `${spec.route || 'operations'}.${spec.alias}.${spec.http_method}`;
+}
+
+// Legacy API enable keys did not include route. Keep read fallback only; writes
+// always use route-aware keys so public and operations aliases can coexist.
+function legacyApiEnabledKey(spec: { alias: string; http_method: string }): string {
+    return `${spec.alias}.${spec.http_method}`;
+}
+
+function buildEnabledApiPatch(spec: { route?: string | null; alias: string; http_method: string }, value: unknown): Record<string, any> {
+    return { enabled: { api: { [apiEnabledKey(spec)]: value } } };
 }
 
 // enabled.<kind>.<alias> for non-api kinds — alias is a single map key.
@@ -931,7 +941,7 @@ const ResourceEditorCard: React.FC<ResourceEditorCardProps> = ({
     const resources: Array<{ key: string; label: string }> = useMemo(() => {
         if (kind === 'api') {
             return (bundle.apis || []).map(ep => ({
-                key: `${ep.alias}|${ep.http_method}`,
+                key: `${ep.route}|${ep.alias}|${ep.http_method}`,
                 label: `${ep.alias} [${ep.http_method}] ${ep.route}`,
             }));
         }
@@ -966,8 +976,8 @@ const ResourceEditorCard: React.FC<ResourceEditorCardProps> = ({
     const selectedSpec: any = useMemo(() => {
         if (!selectedKey) return null;
         if (kind === 'api') {
-            const [alias, method] = selectedKey.split('|');
-            return (bundle.apis || []).find(ep => ep.alias === alias && ep.http_method === method) || null;
+            const [route, alias, method] = selectedKey.split('|');
+            return (bundle.apis || []).find(ep => ep.route === route && ep.alias === alias && ep.http_method === method) || null;
         }
         if (kind === 'widget') {
             return (bundle.widgets || []).find(w => w.alias === selectedKey) || null;
@@ -984,7 +994,9 @@ const ResourceEditorCard: React.FC<ResourceEditorCardProps> = ({
         if (!selectedSpec) return undefined;
         const enabledRoot = (editorProps as any)?.enabled || {};
         if (kind === 'api') {
-            return enabledRoot?.api?.[`${selectedSpec.alias}.${selectedSpec.http_method}`];
+            const apiEnabled = enabledRoot?.api || {};
+            const routeAware = apiEnabled[apiEnabledKey(selectedSpec)];
+            return routeAware !== undefined ? routeAware : apiEnabled[legacyApiEnabledKey(selectedSpec)];
         }
         return enabledRoot?.[kind]?.[selectedSpec.alias];
     }, [kind, selectedSpec, editorProps]);
@@ -1058,7 +1070,7 @@ const ResourceEditorCard: React.FC<ResourceEditorCardProps> = ({
             if (formEnabled !== enabledEffective || enabledIsExplicitTruthy) {
                 const enabledValue = formEnabled ? null : false;
                 if (kind === 'api') {
-                    patch = deepMergeMaps(patch, buildEnabledApiPatch(selectedSpec.alias, selectedSpec.http_method, enabledValue));
+                    patch = deepMergeMaps(patch, buildEnabledApiPatch(selectedSpec, enabledValue));
                 } else {
                     patch = deepMergeMaps(patch, buildEnabledKindPatch(kind, selectedSpec.alias, enabledValue));
                 }
@@ -1114,7 +1126,7 @@ const ResourceEditorCard: React.FC<ResourceEditorCardProps> = ({
         try {
             setSaving(true);
             const patch = kind === 'api'
-                ? buildEnabledApiPatch(selectedSpec.alias, selectedSpec.http_method, null)
+                ? buildEnabledApiPatch(selectedSpec, null)
                 : buildEnabledKindPatch(kind, selectedSpec.alias, null);
             await onSave(patch);
             setFlash('Reset ✓');

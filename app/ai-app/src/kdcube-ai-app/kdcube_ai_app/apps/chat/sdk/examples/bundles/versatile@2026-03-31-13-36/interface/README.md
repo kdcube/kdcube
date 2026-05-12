@@ -139,7 +139,7 @@ function telegramAlias(alias: string): string {
   const map: Record<string, string> = {
     telegram_profile: "telegram_profile",
     versatile_webapp_data: "telegram_versatile_webapp_data",
-    conversations_list: "telegram_conversations_list",
+    conversations_list: "conversations_list",
     conversations_create: "telegram_conversations_create",
     conversations_switch: "telegram_conversations_switch",
     conversations_delete: "telegram_conversations_delete",

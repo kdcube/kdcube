@@ -176,12 +176,12 @@ paths:
         "200":
           $ref: "#/components/responses/ConversationsWrapped"
 
-  /public/telegram_conversations_list:
+  /public/conversations_list:
     get:
       tags: [Conversations]
       summary: List Telegram-authenticated chat conversations.
-      operationId: telegram_conversations_list
-      x-kdcube-result-alias: telegram_conversations_list
+      operationId: telegram_public_conversations_list
+      x-kdcube-result-alias: conversations_list
       security: []
       parameters:
         - $ref: "#/components/parameters/TelegramInitData"

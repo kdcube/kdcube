@@ -124,10 +124,18 @@ def is_bundle_enabled(props: Optional[Dict[str, Any]]) -> bool:
 
 
 def is_api_enabled(props: Optional[Dict[str, Any]], spec: APIEndpointSpec) -> bool:
-    """Resolve ``enabled.api["<alias>.<METHOD>"]`` (flat key with literal dot)."""
+    """Resolve API enabled overrides.
+
+    Canonical keys are route-aware: ``enabled.api["<route>.<alias>.<METHOD>"]``.
+    The legacy ``enabled.api["<alias>.<METHOD>"]`` key remains as a fallback for
+    already persisted descriptors.
+    """
     sub = _enabled_section(props, "api")
     if sub is None:
         return True
+    route_key = f"{spec.route}.{spec.alias}.{spec.http_method}"
+    if route_key in sub:
+        return _is_truthy_enabled(sub.get(route_key))
     return _is_truthy_enabled(sub.get(f"{spec.alias}.{spec.http_method}"))
 
 
@@ -946,7 +954,12 @@ def _api_spec_descriptor(spec: APIEndpointSpec, props: Optional[Dict[str, Any]])
         "roles_default": list(spec.roles),
         "roles_config": spec.roles_config,
         "roles_overridden": tuple(effective.roles) != tuple(spec.roles),
-        "enabled_path": canonical_enabled_path("api", alias=spec.alias, http_method=spec.http_method),
+        "enabled_path": canonical_enabled_path(
+            "api",
+            alias=spec.alias,
+            http_method=spec.http_method,
+            route=spec.route,
+        ),
     }
 
 

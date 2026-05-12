@@ -159,15 +159,16 @@ def canonical_enabled_path(
         *,
         alias: str | None = None,
         http_method: str | None = None,
+        route: str | None = None,
 ) -> str:
     """Return the canonical bundle-props dot-path for a feature switch.
 
     Mapping:
       - kind="bundle"           -> "enabled.bundle"
-      - kind="api"              -> "enabled.api.<alias>.<METHOD>"
+      - kind="api"              -> "enabled.api.<route>.<alias>.<METHOD>"
         (flat key under ``enabled.api`` whose name is the literal string
-        ``<alias>.<METHOD>``; if ``<alias>`` itself contains dots they remain
-        part of the same flat key)
+        ``<route>.<alias>.<METHOD>``; if ``<alias>`` itself contains dots they
+        remain part of the same flat key)
       - kind in {mcp, widget, cron} -> "enabled.<kind>.<alias>"
         (alias is a single map key under ``enabled.<kind>``, dots in the alias
         are part of that key)
@@ -188,7 +189,8 @@ def canonical_enabled_path(
         norm_method = str(http_method or "").strip().upper()
         if not norm_method:
             raise ValueError("http_method is required for enabled kind 'api'")
-        return f"enabled.api.{norm_alias}.{norm_method}"
+        norm_route = _normalize_api_route(route or "operations")
+        return f"enabled.api.{norm_route}.{norm_alias}.{norm_method}"
     return f"enabled.{norm_kind}.{norm_alias}"
 
 

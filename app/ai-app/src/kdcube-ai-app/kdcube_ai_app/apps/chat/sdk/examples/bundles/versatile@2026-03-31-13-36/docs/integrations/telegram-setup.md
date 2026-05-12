@@ -101,8 +101,9 @@ bundles:
 
 The `enabled` section is an override surface, not a manifest. Missing keys use
 code/runtime defaults, and bundle resources are enabled by default. Do not list
-`enabled: true` for every Telegram API. Add `enabled.api.<alias>.<METHOD>:
-false` only for the rare case where a specific resource must be disabled.
+`enabled: true` for every Telegram API. Add
+`enabled.api.<route>.<alias>.<METHOD>: false` only for the rare case where a
+specific resource must be disabled.
 
 ## Secrets
 

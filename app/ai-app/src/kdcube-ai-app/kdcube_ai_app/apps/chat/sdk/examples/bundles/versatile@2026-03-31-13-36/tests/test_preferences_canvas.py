@@ -126,11 +126,27 @@ def test_telegram_bot_transport_manifest_and_defaults():
         "api",
         alias=webhook.alias,
         http_method=webhook.http_method,
-    ) == "enabled.api.telegram_webhook.POST"
+        route=webhook.route,
+    ) == "enabled.api.public.telegram_webhook.POST"
     assert webhook.public_auth is not None
     assert webhook.public_auth.mode == "header_secret"
     assert webhook.public_auth.header == "X-Telegram-Bot-Api-Secret-Token"
     assert webhook.public_auth.secret_key == "integrations.telegram.webhook_secret"
+
+    conversation_list_enabled_paths = {
+        item.route: agentic_loader.canonical_enabled_path(
+            "api",
+            alias=item.alias,
+            http_method=item.http_method,
+            route=item.route,
+        )
+        for item in manifest.api_endpoints
+        if item.alias == "conversations_list" and item.http_method == "GET"
+    }
+    assert conversation_list_enabled_paths == {
+        "operations": "enabled.api.operations.conversations_list.GET",
+        "public": "enabled.api.public.conversations_list.GET",
+    }
 
     admin_data = next(
         item
