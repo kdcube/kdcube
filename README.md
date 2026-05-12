@@ -1,8 +1,6 @@
 <p align="center">
-  <img src="assets/social_preview_logo.png" alt="KDCube" width="620">
+  <img src="assets/logo.png" alt="KDCube" width="240">
 </p>
-
-<h1 align="center">KDCube</h1>
 
 <p align="center">
   <strong>Platform and SDK for AI applications you control.</strong>
