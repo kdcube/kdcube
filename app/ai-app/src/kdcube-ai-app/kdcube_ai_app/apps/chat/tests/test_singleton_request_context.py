@@ -251,7 +251,7 @@ async def test_base_entrypoint_reconciles_ui_builds_on_ui_props_changed(monkeypa
                 "web_app_widgets": {
                     "task_webapp": {
                         "enabled": True,
-                        "src_folder": "widgets/task_webapp",
+                        "src_folder": "ui/widgets/task_webapp",
                         "build_command": "true",
                     }
                 }
@@ -309,7 +309,7 @@ async def test_base_entrypoint_ui_build_uses_clean_temp_source_and_outdir_env(mo
             return {}
 
     bundle_root = tmp_path / "bundle"
-    src = bundle_root / "widgets" / "probe"
+    src = bundle_root / "ui" / "widgets" / "probe"
     src.mkdir(parents=True)
     (src / "index.html").write_text("<html></html>", encoding="utf-8")
     stale = src / "node_modules"
@@ -328,7 +328,7 @@ async def test_base_entrypoint_ui_build_uses_clean_temp_source_and_outdir_env(mo
     await ep._ensure_static_ui_app_build(
         kind="widget:probe",
         cfg={
-            "src_folder": "widgets/probe",
+            "src_folder": "ui/widgets/probe",
             "build_command": "test ! -e node_modules/stale.txt && mkdir -p \"$OUTDIR\" && printf '<html></html>' > \"$OUTDIR/index.html\"",
         },
         build_dest=build_dest,
@@ -355,7 +355,7 @@ async def test_base_entrypoint_standard_npm_build_runs_package_script_directly(m
             return {}
 
     bundle_root = tmp_path / "bundle"
-    src = bundle_root / "widgets" / "probe"
+    src = bundle_root / "ui" / "widgets" / "probe"
     src.mkdir(parents=True)
     (src / "package.json").write_text(
         json.dumps(
@@ -380,7 +380,7 @@ async def test_base_entrypoint_standard_npm_build_runs_package_script_directly(m
     await ep._ensure_static_ui_app_build(
         kind="widget:probe",
         cfg={
-            "src_folder": "widgets/probe",
+            "src_folder": "ui/widgets/probe",
             "build_command": "npm install && npm run build --outDir <VI_BUILD_DEST_ABSOLUTE_PATH>",
         },
         build_dest=build_dest,

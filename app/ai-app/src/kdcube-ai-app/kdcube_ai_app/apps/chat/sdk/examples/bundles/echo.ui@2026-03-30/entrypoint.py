@@ -10,7 +10,7 @@
 #   3. Declares `ui.main_view` in configuration_defaults so that
 #      BaseEntrypoint.on_bundle_load() builds the custom frontend via npm
 #
-# The UI source lives in ui-src/ (Vite + React).
+# The UI source lives in ui/main/ (Vite + React).
 # After build, static files are served at:
 #   GET /api/integrations/static/{tenant}/{project}/echo.ui/{path}
 
@@ -34,7 +34,7 @@ class EchoUIBundle(BaseEntrypoint):
     """
     Minimal echo bundle that reflects the user's message back unchanged.
     Demonstrates the bundle UI build pipeline — the custom React frontend
-    in ui-src/ is built by on_bundle_load() and served as static assets.
+    in ui/main/ is built by on_bundle_load() and served as static assets.
     """
 
     def __init__(
@@ -57,7 +57,7 @@ class EchoUIBundle(BaseEntrypoint):
             "ui": {
                 "main_view": {
                     # Path to the React source, relative to this bundle's directory.
-                    "src_folder": "ui-src",
+                    "src_folder": "ui/main",
                     # npm build command; <VI_BUILD_DEST_ABSOLUTE_PATH> is replaced
                     # by BaseEntrypoint._ensure_ui_build() with the actual output path
                     # inside bundle local storage. The resolved delivery id is

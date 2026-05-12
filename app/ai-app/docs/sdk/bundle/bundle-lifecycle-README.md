@@ -405,7 +405,7 @@ def configuration(self):
     return {
         "ui": {
             "main_view": {
-                "src_folder": "ui-src",          # relative to bundle root
+                "src_folder": "ui/main",          # relative to bundle root
                 "build_command": "npm install && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build",
             }
         }
@@ -446,7 +446,7 @@ fall back to `index.html` for client-side routing.
   communication contract and propagate the connected peer id on REST requests.
 - Reference implementation:
   - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/entrypoint.py`
-  - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui-src/src/App.tsx`
+  - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/main/src/App.tsx`
   That example shows a lightweight chat main view with bundle-scoped conversation browsing on top of the runtime UI config handshake plus chat REST/SSE endpoints.
 - See:
   [bundle-client-communication-README.md](bundle-client-communication-README.md)

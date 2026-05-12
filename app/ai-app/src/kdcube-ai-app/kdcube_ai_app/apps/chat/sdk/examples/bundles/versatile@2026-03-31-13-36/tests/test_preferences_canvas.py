@@ -163,7 +163,7 @@ def test_telegram_bot_transport_manifest_and_defaults():
         "stream_activity": True,
         "web_app_auth_max_age_seconds": 86400,
     }
-    assert defaults["ui"]["web_app_widgets"]["versatile_webapp"]["src_folder"] == "widgets/versatile_webapp"
+    assert defaults["ui"]["web_app_widgets"]["versatile_webapp"]["src_folder"] == "ui/widgets/versatile_webapp"
 
 
 def test_preferences_canvas_save_normalizes_document_and_appends_events(tmp_path):

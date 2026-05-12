@@ -1442,7 +1442,7 @@ print(f"wrote {{report_path}}")
                 "web_app_widgets": {
                     "versatile_webapp": {
                         "enabled": True,
-                        "src_folder": "widgets/versatile_webapp",
+                        "src_folder": "ui/widgets/versatile_webapp",
                         "build_command": "npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build",
                     },
                 },
@@ -1488,7 +1488,7 @@ print(f"wrote {{report_path}}")
 
         ui_cfg = dict(config.get("ui") or {})
         main_view_cfg = dict(ui_cfg.get("main_view") or {})
-        main_view_cfg.setdefault("src_folder", "ui-src")
+        main_view_cfg.setdefault("src_folder", "ui/main")
         main_view_cfg.setdefault(
             "build_command",
             "npm install && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build",

@@ -43,7 +43,7 @@ it is a reference pattern for storage/tool/widget integration.
 KDCube control plane
   |
   v
-iframe loads widgets/versatile_webapp
+iframe loads ui/widgets/versatile_webapp
   |
   v
 parent CONFIG_REQUEST handshake
@@ -189,7 +189,7 @@ static widget served from bundle storage
 The widget source is:
 
 ```text
-widgets/versatile_webapp
+ui/widgets/versatile_webapp
 ```
 
 The generated output is rebuildable and should not be treated as source.

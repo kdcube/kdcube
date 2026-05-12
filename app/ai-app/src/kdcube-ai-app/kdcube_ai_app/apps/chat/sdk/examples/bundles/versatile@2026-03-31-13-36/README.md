@@ -27,8 +27,8 @@ It intentionally demonstrates the main SDK bundle surfaces together in one place
 | Bundle-authenticated MCP endpoint      | `entrypoint.py:preferences_tools_mcp`, `tools/preference_tools.py:build_preferences_mcp_app` |
 | Direct isolated exec from bundle code  | `entrypoint.py:preferences_exec_report`                                                    |
 | Custom TSX widget                      | `ui/PreferencesBrowser.tsx`, `entrypoint.py:preferences_widget`                            |
-| Source-folder webapp widget            | `widgets/versatile_webapp`, `entrypoint.py:versatile_webapp_widget`                        |
-| Custom iframe main view                | `ui-src/src/App.tsx`, `ui-src/src/settings.ts`, `entrypoint.py`                            |
+| Source-folder webapp widget            | `ui/widgets/versatile_webapp`, `entrypoint.py:versatile_webapp_widget`                     |
+| Custom iframe main view                | `ui/main/src/App.tsx`, `ui/main/src/settings.ts`, `entrypoint.py`                            |
 | Bundle interface contract              | `interface/README.md`                                                                       |
 | Bundle config templates                | `config/bundles.template.yaml`, `config/bundles.secrets.template.yaml`                     |
 | Bundle release metadata                | `release.yaml`                                                                              |
@@ -37,7 +37,7 @@ It intentionally demonstrates the main SDK bundle surfaces together in one place
 | Authenticated `GET` bundle API         | `entrypoint.py:preferences_summary`                                                         |
 | Anonymous public bundle API            | `entrypoint.py:preferences_public_info`                                                     |
 | Telegram bot transport                 | `entrypoint.py:telegram_webhook`, `entrypoint.py:telegram_user_admin_*`                      |
-| Telegram WebApp / Mini App             | `widgets/versatile_webapp`, `entrypoint.py:telegram_versatile_webapp_data`                 |
+| Telegram WebApp / Mini App             | `ui/widgets/versatile_webapp`, `entrypoint.py:telegram_versatile_webapp_data`              |
 | Telegram operator setup                | `docs/integrations/telegram-setup.md`                                                       |
 
 ## Operational docs
@@ -429,7 +429,7 @@ operations API
 This bundle also ships a standalone main UI configured through `ui.main_view`
 in `entrypoint.py`.
 
-The source lives under `ui-src/`, and `ui-src/src/App.tsx` is the current lightweight
+The source lives under `ui/main/`, and `ui/main/src/App.tsx` is the current lightweight
 reference implementation for a custom bundle chat surface.
 
 It intentionally covers the minimal but real platform contract:

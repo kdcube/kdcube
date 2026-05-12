@@ -13,12 +13,12 @@ class _EntrypointForPropsTest(BaseEntrypoint):
                 "web_app_widgets": {
                     "alpha": {
                         "enabled": True,
-                        "src_folder": "widgets/alpha",
+                        "src_folder": "ui/widgets/alpha",
                         "build_command": "npm run build",
                     },
                     "beta": {
                         "enabled": True,
-                        "src_folder": "widgets/beta",
+                        "src_folder": "ui/widgets/beta",
                         "build_command": "npm run build",
                     },
                 },
@@ -74,6 +74,6 @@ async def test_on_bundle_load_refreshes_effective_props_before_ui_build(monkeypa
 
     widgets = entrypoint.props_seen_by_ui_build["ui"]["web_app_widgets"]
     assert widgets["alpha"]["enabled"] is False
-    assert widgets["alpha"]["src_folder"] == "widgets/alpha"
+    assert widgets["alpha"]["src_folder"] == "ui/widgets/alpha"
     assert widgets["beta"]["enabled"] is True
-    assert widgets["beta"]["src_folder"] == "widgets/beta"
+    assert widgets["beta"]["src_folder"] == "ui/widgets/beta"

@@ -24,7 +24,7 @@ POST public/telegram_webhook
   Auth: Telegram webhook secret header.
 
 GET/POST public/telegram_* Mini App APIs
-  Used by widgets/versatile_webapp when opened inside Telegram.
+  Used by ui/widgets/versatile_webapp when opened inside Telegram.
   Auth: Telegram WebApp initData HMAC validation.
 
 POST operations/telegram_user_admin_*
@@ -35,7 +35,7 @@ POST operations/telegram_user_admin_*
 The source-folder widget:
 
 ```text
-widgets/versatile_webapp
+ui/widgets/versatile_webapp
 ```
 
 can run in two modes:

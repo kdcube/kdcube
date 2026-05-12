@@ -3,7 +3,7 @@ id: ks:docs/sdk/bundle/bundle-client-ui-README.md
 title: "Bundle Client UI"
 summary: "Entry page for bundle-facing frontend integration: source layout for main UI vs widgets, browser transport, auth, chat stream lifecycle, multi-tab behavior, and widget or operation interoperability."
 tags: ["sdk", "bundle", "frontend", "transport", "auth", "sse", "socketio", "rest", "ui"]
-keywords: ["frontend integration entrypoint", "bundle ui contract", "main view ui-src", "widget source folder", "widget and operation interoperability", "browser auth and transport", "chat stream lifecycle guidance", "multi tab coordination", "client side bundle behavior"]
+keywords: ["frontend integration entrypoint", "bundle ui contract", "main view ui/main", "widget source folder", "widget and operation interoperability", "browser auth and transport", "chat stream lifecycle guidance", "multi tab coordination", "client side bundle behavior"]
 see_also:
   - ks:docs/sdk/bundle/bundle-widget-integration-README.md
   - ks:docs/sdk/bundle/bundle-client-communication-README.md
@@ -38,14 +38,14 @@ Use it when your bundle ships:
 ## Source Layout
 
 KDCube has two browser-facing bundle UI surfaces with the same build paradigm
-but different source conventions.
+and separate source subtrees.
 
-Use `ui-src` for the bundle main view:
+Use `ui/main` for the bundle main view:
 
 ```yaml
 ui:
   main_view:
-    src_folder: ui-src
+    src_folder: ui/main
     build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
 ```
 
@@ -56,18 +56,19 @@ ui:
   web_app_widgets:
     task_memo_webapp:
       enabled: true
-      src_folder: widgets/task_memo_webapp
+      src_folder: ui/widgets/task_memo_webapp
       build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
 ```
 
-Do not put widget app source under `ui-src`. That name is reserved by
+Do not put widget app source under `ui/main`. That name is reserved by
 convention for main-view source. A bundle may have both:
 
 ```text
 my_bundle/
-  ui-src/                    # main view
-  widgets/
-    task_memo_webapp/        # widget app
+  ui/
+    main/                    # main view
+    widgets/
+      task_memo_webapp/      # widget app
 ```
 
 Both source folders are built by bundle-loader infrastructure into shared

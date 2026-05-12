@@ -61,7 +61,7 @@ bundles:
           web_app_widgets:
             versatile_webapp:
               enabled: true
-              src_folder: widgets/versatile_webapp
+              src_folder: ui/widgets/versatile_webapp
               build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
         mcp:
           preferences:

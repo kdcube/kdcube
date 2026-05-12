@@ -138,7 +138,7 @@ Bundle-authoring rule:
 - For SDK-integrated bundle work, current tests and current source/examples outrank skill prose.
 - For bundle authoring in this repo, the normal docs start point is `ks:docs/sdk/bundle/bundle-index-README.md`.
 - The normal full reference bundle is `ks:docs/sdk/bundle/bundle-reference-versatile-README.md` and the actual code root `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36`.
-- For bundle UI work, the normal source anchor is `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui-src/src/App.tsx` plus `entrypoint.py` for the `ui.main_view` config.
+- For bundle UI work, the normal source anchor is `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/main/src/App.tsx` plus `entrypoint.py` for the `ui.main_view` config.
 - For bundle authoring, the normal paired validation root is `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle`.
 
 ## Default copilot workflow for bundle work
@@ -248,7 +248,7 @@ Advertised roots for this bundle:
 
 Primary reference bundle for bundle authoring in this repo:
 - `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36`
-- `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui-src/src/App.tsx` for the lightweight custom main-view chat UI
+- `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/main/src/App.tsx` for the lightweight custom main-view chat UI
 - pair it with the validation root:
   `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle`
 
@@ -262,8 +262,10 @@ When reasoning about a bundle, keep these common anchors in mind:
   - declares custom skill registrations when the bundle exposes skills
 - `skills/<namespace>/<skill_id>/SKILL.md`
   - optional skill prompts shipped by the bundle
-- `ui-src/`
+- `ui/main/`
   - optional Vite/React source tree for a built custom main-view SPA when the bundle configures `ui.main_view`
+- `ui/widgets/<alias>/`
+  - optional Vite/React source tree for a built widget app when the bundle configures `ui.web_app_widgets.<alias>`
 
 These are common bundle structure anchors, not proof of exact implementation details.
 For exact base classes, imports, decorators, and runtime symbols, confirm them from current docs/examples/source before coding.

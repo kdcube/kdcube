@@ -295,9 +295,9 @@ For normal bundle authoring, the primary source example remains `versatile`.
 Important cross-links:
 - `ks:docs/sdk/bundle/bundle-reference-versatile-README.md`
 - `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/README.md`
-- `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui-src/src/App.tsx`
+- `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/main/src/App.tsx`
 
-That `ui-src/src/App.tsx` file is the current lightweight reference for a bundle-defined
+That `ui/main/src/App.tsx` file is the current lightweight reference for a bundle-defined
 custom main view built through `ui.main_view`. It shows the iframe config handshake,
 SSE + REST chat flow, bundle-scoped chat list loading, downloads, followups, and
 separate timeline/steps/downloads presentation.
