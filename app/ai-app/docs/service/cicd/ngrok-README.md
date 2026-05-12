@@ -11,9 +11,32 @@ see_also:
 ---
 # Serving Local KDCube With Ngrok
 
-This is the current manual local flow. Later this should move into the CLI.
+Use this when a local KDCube runtime must be reachable through a public HTTPS
+origin, for example for Telegram webhooks, Telegram Mini Apps, or Cognito
+callback testing.
 
-Use one ngrok HTTPS URL for the whole local stack:
+There are two local shapes:
+
+- **CLI-started runtime**: `kdcube start` runs Docker Compose and already puts
+  the KDCube web proxy in front of frontend, ingress, and proc. This is the
+  normal user path.
+- **Manual split services**: frontend, ingress, and proc are started by hand.
+  In that case use a local Caddy proxy first, then point ngrok at Caddy.
+
+Use one ngrok HTTPS URL for the whole local stack. Do not expose proc as a
+separate public ngrok URL.
+
+CLI-started runtime:
+
+```text
+https://<ngrok-domain>
+  -> KDCube web proxy :<proxy-http-port>
+      /api/integrations/* -> proc
+      /sse/*, /api/*      -> ingress
+      /*                  -> frontend
+```
+
+Manual split services:
 
 ```text
 https://<ngrok-domain>
@@ -22,8 +45,6 @@ https://<ngrok-domain>
       /sse/*, /api/*      -> ingress :8010
       /*                  -> frontend :<frontend-port>
 ```
-
-Do not expose proc as a separate public ngrok URL.
 
 ## Descriptor Rule
 
@@ -35,15 +56,70 @@ active descriptor set used by the running local stack:
 - `bundles.yaml` controls bundle config, including public integration URLs
 - `bundles.secrets.yaml` or the configured secrets provider controls secrets
 
-Do not configure this flow by editing frontend-local config files or generated
-environment files. The frontend must receive its browser config from ingress.
+When using the CLI, `kdcube init --descriptors-location ... --workdir ...`
+stages the active descriptor set under:
+
+```text
+<runtime-workdir>/config/
+```
+
+That staged copy is the runtime authority for `kdcube start`. Do not configure
+this flow by editing frontend-local config files or generated environment files.
+The frontend must receive its browser config from ingress.
 
 ## What To Configure
 
+### CLI-Started Runtime
+
+This is the main path for local users.
+
+Initialize and start the runtime:
+
+```bash
+kdcube init \
+  --workdir ~/.kdcube/kdcube-runtime \
+  --descriptors-location /path/to/descriptors \
+  --set-secret services.openai.api_key "<openai-key>" \
+  --set-secret services.anthropic.api_key "<anthropic-key>" \
+  --set-secret services.git.http_token "<github-token>" \
+  --set-secret git.http_token "<github-token>"
+
+kdcube start --workdir ~/.kdcube/kdcube-runtime/<tenant>__<project>
+```
+
+`kdcube start` prints the local UI URL. Use the port from that URL as the ngrok
+target.
+
+The port comes from the staged runtime config:
+
+- `ports.proxy_http` / `KDCUBE_PROXY_HTTP_PORT` when explicitly configured
+- otherwise `ports.ui` / `KDCUBE_UI_PORT`
+
+For the common local descriptor shape, `ports.ui: "5173"` means:
+
+```text
+http://localhost:5173/platform/chat
+```
+
+Start ngrok against that same port:
+
+```bash
+ngrok http --host-header=rewrite 5173
+```
+
+If `kdcube start` printed another port, use that port instead:
+
+```bash
+ngrok http --host-header=rewrite <proxy-http-port>
+```
+
+You do not need Caddy for the CLI-started runtime. Docker Compose already starts
+the KDCube web proxy, and that proxy already routes frontend, ingress, and proc.
+
 ### Caddy
 
-Caddy is a local reverse proxy. It only routes one local port to frontend,
-ingress, and proc.
+Caddy is only needed for the manual split-services flow. It routes one local
+port to separately started frontend, ingress, and proc processes.
 
 Install once:
 
@@ -75,9 +151,7 @@ Put this file at:
 }
 ```
 
-Use the actual port where the frontend process listens. Keep it aligned with
-`ports.ui` in the active `assembly.yaml` when that descriptor is used to launch
-the local stack.
+Use the actual port where the frontend process listens.
 
 ### Frontend / Cognito
 
@@ -145,9 +219,104 @@ bundles:
             webhook_secret: "<TELEGRAM_WEBHOOK_SECRET>"
 ```
 
-## Run Steps
+## Run Steps: CLI-Started Runtime
 
-1. Start local services:
+1. Initialize/start with the CLI:
+
+```bash
+kdcube init \
+  --workdir ~/.kdcube/kdcube-runtime \
+  --descriptors-location /path/to/descriptors
+
+kdcube start --workdir ~/.kdcube/kdcube-runtime/<tenant>__<project>
+```
+
+2. Copy the local UI/proxy port printed by `kdcube start`.
+
+Example:
+
+```text
+Open the UI:
+  http://localhost:5173/platform/chat
+```
+
+The ngrok target port is `5173`.
+
+3. Start ngrok:
+
+```bash
+ngrok http --host-header=rewrite 5173
+```
+
+4. Copy the ngrok HTTPS URL.
+
+Example:
+
+```text
+https://a692-84-62-187-246.ngrok-free.app
+```
+
+5. Update the staged runtime descriptors under
+   `~/.kdcube/kdcube-runtime/<tenant>__<project>/config/` or rerun the relevant
+   `kdcube bundle ... --set-config/--set-secret ...` commands so Cognito,
+   CORS, and Telegram URLs use the ngrok origin.
+
+6. Restart after `assembly.yaml` changes:
+
+```bash
+kdcube stop --workdir ~/.kdcube/kdcube-runtime/<tenant>__<project>
+kdcube start --workdir ~/.kdcube/kdcube-runtime/<tenant>__<project>
+```
+
+7. Reload after bundle descriptor/config changes:
+
+```bash
+kdcube reload <bundle_id> --workdir ~/.kdcube/kdcube-runtime/<tenant>__<project>
+```
+
+8. Check local proxy first:
+
+```bash
+curl -i http://127.0.0.1:<proxy-http-port>/api/cp-frontend-config
+```
+
+For the common local shape:
+
+```bash
+curl -i http://127.0.0.1:5173/api/cp-frontend-config
+```
+
+If this fails with `502`, the Docker Compose stack is not healthy or the wrong
+port was used.
+
+9. Check ngrok:
+
+```bash
+curl -i https://<ngrok-domain>/api/cp-frontend-config
+```
+
+Expected: JSON with the configured auth block and `routesPrefix: "/platform"`.
+
+10. Register Telegram webhook:
+
+```bash
+export TELEGRAM_BOT_TOKEN='...'
+export TELEGRAM_WEBHOOK_SECRET='...'
+
+curl -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
+  -d "url=https://<ngrok-domain>/api/integrations/bundles/demo-tenant/demo-project/task-and-memo-app@1-0/public/telegram_webhook" \
+  -d "secret_token=${TELEGRAM_WEBHOOK_SECRET}"
+```
+
+11. Open the app:
+
+```text
+https://<ngrok-domain>/platform/chat
+```
+
+## Run Steps: Manual Split Services
+
+1. Start local services by hand:
 
 ```text
 frontend :<frontend-port>
@@ -226,10 +395,19 @@ https://<ngrok-domain>/platform/chat
 
 ## Known Failure
 
-`502 Bad Gateway` from ngrok usually means ngrok reached Caddy, but Caddy could
-not reach the local service.
+`502 Bad Gateway` from ngrok usually means ngrok reached the local proxy target,
+but that proxy could not reach the downstream service.
 
-Check:
+For the CLI-started runtime, first check the KDCube web proxy port:
+
+```bash
+curl -i http://127.0.0.1:<proxy-http-port>/api/cp-frontend-config
+curl -i http://127.0.0.1:<proxy-http-port>/platform/chat
+```
+
+If those fail, check Docker Compose status and logs for the runtime workdir.
+
+For manual split services, check:
 
 ```bash
 curl -i http://127.0.0.1:8010/api/cp-frontend-config
@@ -247,9 +425,13 @@ Use `127.0.0.1` in the Caddyfile, not `localhost`.
 
 `redirect_mismatch` from Cognito means the `redirect_uri` in the browser's
 Cognito `authorize` request is not listed exactly in the Cognito app client's
-callback URLs. For this setup the expected values are:
+callback URLs. For the CLI-started runtime the expected values are:
 
 ```text
-http://localhost:<frontend-port>/platform/callback
+http://localhost:<proxy-http-port>/platform/callback
 https://<ngrok-domain>/platform/callback
 ```
+
+For manual split services, use the local URL that the browser actually opens
+for that setup, for example `http://localhost:<frontend-port>/platform/callback`
+when the frontend is opened directly.
