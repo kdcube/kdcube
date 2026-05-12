@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.png" alt="KDCube" width="104">
+  <img src="assets/social_preview_logo.png" alt="KDCube" width="620">
 </p>
 
 <h1 align="center">KDCube</h1>
@@ -9,19 +9,27 @@
 </p>
 
 <p align="center">
-  <img alt="self-hosted" src="https://img.shields.io/badge/self--hosted-platform-111827">
-  <img alt="bundle runtime" src="https://img.shields.io/badge/runtime-bundles-2563eb">
-  <img alt="docs mcp" src="https://img.shields.io/badge/docs%20MCP-public-16a34a">
+  <a href="https://opensource.org/license/MIT">
+    <img alt="MIT license" src="https://img.shields.io/badge/license-MIT-16a34a">
+  </a>
+  <a href="https://pypi.org/project/kdcube-cli/">
+    <img alt="PyPI package" src="https://img.shields.io/pypi/v/kdcube-cli?label=kdcube-cli">
+  </a>
+  <a href="https://pypistats.org/packages/kdcube-cli">
+    <img alt="PyPI downloads" src="https://img.shields.io/pypi/dm/kdcube-cli?label=downloads">
+  </a>
+  <a href="https://dev.kdcube.tech/api/integrations/bundles/demo/demo-march/kdcube.copilot@2026-04-03-19-05/public/mcp/kdcube-doc">
+    <img alt="Public docs MCP endpoint" src="https://img.shields.io/badge/docs%20MCP-public-2563eb">
+  </a>
 </p>
 
 <p align="center">
-  KDCube documentation is available as a public, read-only MCP endpoint for
-  MCP-capable clients.
+  Public, read-only documentation MCP endpoint for MCP-capable clients:
+  <br>
+  <a href="https://dev.kdcube.tech/api/integrations/bundles/demo/demo-march/kdcube.copilot@2026-04-03-19-05/public/mcp/kdcube-doc">
+    <code>dev.kdcube.tech/.../public/mcp/kdcube-doc</code>
+  </a>
 </p>
-
-```text
-https://dev.kdcube.tech/api/integrations/bundles/demo/demo-march/kdcube.copilot@2026-04-03-19-05/public/mcp/kdcube-doc
-```
 
 KDCube is a self-hosted platform, SDK, runtime, and control plane for AI
 applications. It is not a workflow loop wrapped around a model. It is built
