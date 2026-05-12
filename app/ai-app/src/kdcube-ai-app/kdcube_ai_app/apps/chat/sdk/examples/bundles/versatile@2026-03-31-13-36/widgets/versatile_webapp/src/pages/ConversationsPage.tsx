@@ -29,21 +29,21 @@ export function ConversationsPage({ conversations, reload }: ConversationsPagePr
   }
 
   return (
-    <section className="panel">
-      <div className="panel-head">
+    <section className="page">
+      <div className="page-header">
         <div>
-          <h2>Chats</h2>
+          <h1>Chats</h1>
           <p>{fmt(conversations?.telegram_user_id || conversations?.kdcube_user_id)} · {items.length} channels</p>
         </div>
-        <button type="button" onClick={reload} disabled={busy}>Refresh</button>
+        <button type="button" className="ghost-button" onClick={reload} disabled={busy}>Refresh</button>
       </div>
-      {conversations?.error?.message && <div className="error">{conversations.error.message}</div>}
-      {error && <div className="error">{error}</div>}
-      <div className="inline-form">
+      {conversations?.error?.message && <div className="notice error">{conversations.error.message}</div>}
+      {error && <div className="notice error">{error}</div>}
+      <div className="new-row">
         <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="New chat title" />
         <button
           type="button"
-          className="primary"
+          className="primary-button"
           disabled={busy}
           onClick={() => {
             void mutate('conversations_create', { title });
@@ -53,25 +53,32 @@ export function ConversationsPage({ conversations, reload }: ConversationsPagePr
           Create
         </button>
       </div>
-      <div className="grid-list">
+      <div className="content-card list-card">
         {items.map((item) => {
           const active = item.conversation_id === conversations?.active_conversation_id;
           return (
-            <article className={`row-card ${active ? 'selected' : ''}`} key={item.conversation_id}>
-              <strong>{item.title || item.conversation_id}</strong>
-              <span>{item.conversation_id}</span>
+            <article className={`list-row conversation-row ${active ? 'active' : ''}`} key={item.conversation_id}>
+              <div className="row-main">
+                <div className="row-title">
+                  <strong>{item.title || item.conversation_id}</strong>
+                  {active && <span className="pill">active</span>}
+                </div>
+                <span>{item.conversation_id}</span>
+              </div>
               <div className="row-actions">
-                <button type="button" disabled={busy || active} onClick={() => void mutate('conversations_switch', { conversation_id: item.conversation_id })}>
-                  Use
-                </button>
-                <button type="button" disabled={busy} onClick={() => void mutate('conversations_delete', { conversation_id: item.conversation_id })}>
+                {!active && (
+                  <button type="button" className="link-button" disabled={busy} onClick={() => void mutate('conversations_switch', { conversation_id: item.conversation_id })}>
+                    Use
+                  </button>
+                )}
+                <button type="button" className="link-button danger" disabled={busy} onClick={() => void mutate('conversations_delete', { conversation_id: item.conversation_id })}>
                   Delete
                 </button>
               </div>
             </article>
           );
         })}
-        {items.length === 0 && <div className="empty">No connected chats.</div>}
+        {items.length === 0 && <div className="empty-state">No connected chats.</div>}
       </div>
     </section>
   );

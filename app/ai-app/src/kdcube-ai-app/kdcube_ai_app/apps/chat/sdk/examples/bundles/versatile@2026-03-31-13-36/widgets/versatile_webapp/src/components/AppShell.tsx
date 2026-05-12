@@ -13,13 +13,13 @@ interface AppShellProps {
 
 export function AppShell({ activeTab, showAdmin, loading, error, onTabChange, children }: AppShellProps) {
   return (
-    <main className="app">
-      <header className="topbar">
-        <div>
-          <h1>Versatile</h1>
-          <p>{isTelegramWebApp() ? 'Telegram WebApp' : 'KDCube widget'}</p>
+    <main className="app-shell">
+      <header className="app-nav">
+        <div className="app-mark">
+          <span className="app-name">Versatile</span>
+          <span className="app-context">{isTelegramWebApp() ? 'Telegram WebApp' : 'KDCube widget'}</span>
         </div>
-        <nav className="tabs" aria-label="Views">
+        <nav className="page-tabs" aria-label="Views">
           <button type="button" className={activeTab === 'memory' ? 'active' : ''} onClick={() => onTabChange('memory')}>Memory</button>
           <button type="button" className={activeTab === 'conversations' ? 'active' : ''} onClick={() => onTabChange('conversations')}>Chats</button>
           {showAdmin && (
@@ -27,8 +27,8 @@ export function AppShell({ activeTab, showAdmin, loading, error, onTabChange, ch
           )}
         </nav>
       </header>
-      {error && <div className="error app-error">{error}</div>}
-      {loading ? <div className="loading">Loading</div> : children}
+      {error && <div className="notice error app-error">{error}</div>}
+      {loading ? <div className="loading-state">Loading</div> : children}
     </main>
   );
 }

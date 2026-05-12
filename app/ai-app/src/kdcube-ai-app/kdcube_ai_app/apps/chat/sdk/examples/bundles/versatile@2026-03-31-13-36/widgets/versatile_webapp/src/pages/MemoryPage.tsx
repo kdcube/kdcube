@@ -68,17 +68,17 @@ export function MemoryPage({ memory, reload }: MemoryPageProps) {
   }
 
   return (
-    <section className="panel">
-      <div className="panel-head">
+    <section className="page page-wide">
+      <div className="page-header">
         <div>
-          <h2>Memory</h2>
+          <h1>Memory</h1>
           <p>{fmt(memory?.user_id)} · {entries.length} entries</p>
         </div>
-        <div className="actions">
-          <button type="button" onClick={reload} disabled={busy}>Refresh</button>
-          <button type="button" onClick={exportExcel} disabled={busy}>Export</button>
-          <button type="button" onClick={() => fileRef.current?.click()} disabled={busy}>Import</button>
-          <button type="button" className="primary" onClick={save} disabled={busy}>Save</button>
+        <div className="toolbar-actions">
+          <button type="button" className="ghost-button" onClick={reload} disabled={busy}>Refresh</button>
+          <button type="button" className="ghost-button" onClick={exportExcel} disabled={busy}>Export</button>
+          <button type="button" className="ghost-button" onClick={() => fileRef.current?.click()} disabled={busy}>Import</button>
+          <button type="button" className="primary-button" onClick={save} disabled={busy}>Save</button>
           <input
             ref={fileRef}
             type="file"
@@ -92,23 +92,25 @@ export function MemoryPage({ memory, reload }: MemoryPageProps) {
           />
         </div>
       </div>
-      {error && <div className="error">{error}</div>}
-      {status && <div className="status">{status}</div>}
+      {error && <div className="notice error">{error}</div>}
+      {status && <div className="notice success">{status}</div>}
       <textarea
         className="memory-editor"
         value={documentText}
         onChange={(event) => setDocumentText(event.target.value)}
         spellCheck={false}
       />
-      <div className="grid-list">
+      <div className="content-card list-card">
         {entries.map((entry, index) => (
-          <article className="row-card" key={`${entry.key || 'entry'}-${index}`}>
-            <strong>{entry.key || '(unnamed)'}</strong>
-            <span>{String(entry.value ?? '')}</span>
+          <article className="list-row memory-row" key={`${entry.key || 'entry'}-${index}`}>
+            <div className="row-main">
+              <strong>{entry.key || '(unnamed)'}</strong>
+              <span>{String(entry.value ?? '')}</span>
+            </div>
             <small>{fmt(entry.origin || entry.updated_at || entry.captured_at)}</small>
           </article>
         ))}
-        {entries.length === 0 && <div className="empty">No memory entries.</div>}
+        {entries.length === 0 && <div className="empty-state">No memory entries.</div>}
       </div>
     </section>
   );
