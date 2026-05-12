@@ -185,8 +185,6 @@ class ReactWorkflow(BaseEntrypoint):
         )
         # Signature-based cache key — avoids rebuilding the knowledge index on every turn
         self._knowledge_signature: str | None = None
-        self._doc_reader_mcp_public_app: Any = None
-        self._doc_reader_mcp_authenticated_app: Any = None
         # Graph is built once at init and reused across invocations
         self.graph = self._build_graph()
 
@@ -317,13 +315,9 @@ class ReactWorkflow(BaseEntrypoint):
                 detail=f"Missing or invalid {header_name}",
             )
 
-    @mcp(alias="doc_reader_public", route="public")
-    def doc_reader_public_mcp(self, **kwargs):
-        if self._doc_reader_mcp_public_app is None:
-            self._doc_reader_mcp_public_app = self._build_doc_reader_mcp_app(
-                name_suffix="doc_reader_public",
-            )
-        return self._doc_reader_mcp_public_app
+    @mcp(alias="kdcube-doc", route="public")
+    def kdcube_doc_mcp(self, **kwargs):
+        return self._build_doc_reader_mcp_app(name_suffix="kdcube-doc")
 
     @mcp(alias="doc_reader", route="operations")
     def doc_reader_mcp(self, request: Request, **kwargs):
@@ -352,11 +346,7 @@ class ReactWorkflow(BaseEntrypoint):
         # - the header name from bundle props
         # - the token provisioned in bundle secrets
         self._require_doc_reader_mcp_auth(request)
-        if self._doc_reader_mcp_authenticated_app is None:
-            self._doc_reader_mcp_authenticated_app = self._build_doc_reader_mcp_app(
-                name_suffix="doc_reader",
-            )
-        return self._doc_reader_mcp_authenticated_app
+        return self._build_doc_reader_mcp_app(name_suffix="doc_reader")
 
     def _resolve_knowledge_paths(
         self,

@@ -127,7 +127,7 @@ def build_doc_reader_mcp_app(
     except Exception as e:  # pragma: no cover - runtime dependency
         raise ImportError("mcp server SDK is not installed") from e
 
-    mcp = FastMCP(name)
+    mcp = FastMCP(name, stateless_http=True)
 
     def _prepare() -> pathlib.Path | None:
         if refresh_knowledge_space is not None:

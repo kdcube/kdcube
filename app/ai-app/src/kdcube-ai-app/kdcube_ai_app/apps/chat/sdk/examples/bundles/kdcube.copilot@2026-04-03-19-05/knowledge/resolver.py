@@ -359,10 +359,19 @@ def read_knowledge(*, path: str, **kwargs: Any) -> Dict[str, Any]:
     if not abs_path.exists() or not abs_path.is_file():
         return {"missing": True}
     mime = _guess_mime_from_path(str(abs_path))
-    text, base64 = _read_local_file(abs_path, mime)
+    text, base64, read_error, size_bytes, source_truncated, view_meta = _read_local_file(abs_path, mime)
+    if read_error:
+        return {
+            "missing": True,
+            "error": read_error,
+            "physical_path": str(abs_path),
+        }
     return {
         "text": text,
         "base64": base64,
         "mime": mime,
         "physical_path": str(abs_path),
+        "size_bytes": size_bytes,
+        "source_truncated": source_truncated,
+        "view_meta": view_meta,
     }

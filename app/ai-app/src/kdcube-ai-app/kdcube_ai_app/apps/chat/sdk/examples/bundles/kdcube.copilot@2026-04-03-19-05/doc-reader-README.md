@@ -237,11 +237,37 @@ This bundle also serves the documentation reader over bundle MCP using the
 bundle-owned `@mcp(...)` surface.
 
 Route:
-- authenticated operations endpoint:
+- public endpoint, no KDCube credentials or bundle token:
+  `/api/integrations/bundles/{tenant}/{project}/{bundle_id}/public/mcp/kdcube-doc`
+- authenticated operations endpoint, for controlled/internal clients:
   `/api/integrations/bundles/{tenant}/{project}/{bundle_id}/mcp/doc_reader`
 
 Transport:
-- streamable HTTP
+- streamable HTTP, stateless
+
+The doc reader MCP server is stateless because every tool call is an
+independent documentation search/read operation. This avoids sticky-session
+requirements when the public endpoint is reached through ingress, ngrok, or a
+load-balanced processor deployment.
+
+The bundle returns a fresh FastMCP app for each proxied request. That is
+intentional: the Python streamable HTTP session manager cannot be restarted on
+the same app instance after its lifespan exits.
+
+Public URL example:
+
+```text
+https://dev.kdcube.tech/api/integrations/bundles/demo-tenant/demo-project/kdcube.copilot@2026-04-03-19-05/public/mcp/kdcube-doc
+```
+
+Use the registry bundle id from `bundles.yaml` in the URL. In the local OSS
+descriptor this is `kdcube.copilot@2026-04-03-19-05`, even though the workflow
+decorator name is `kdcube.copilot`.
+
+Use the `kdcube-doc` alias for anonymous external MCP clients. The MCP
+client must speak streamable HTTP and accept `text/event-stream`. Use the
+`doc_reader` alias only when the caller can send the configured bundle token
+header.
 
 Exposed MCP tools:
 - `search_knowledge(query, root="ks:docs", keywords=None, top_k=20)`
@@ -259,6 +285,8 @@ Boundary:
   MCP
 - the MCP endpoint is for documentation search/read, not physical filesystem
   browsing inside isolated execution
+- the public MCP endpoint exposes documentation search/read only; it does not
+  grant KDCube user identity or access to operations APIs
 
 Important:
 - `bundle_data.resolve_namespace(...)` is **not** a normal planning-time browsing tool.

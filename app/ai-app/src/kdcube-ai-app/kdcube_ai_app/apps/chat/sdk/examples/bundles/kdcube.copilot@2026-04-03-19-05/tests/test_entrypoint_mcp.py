@@ -8,6 +8,8 @@ import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
+from kdcube_ai_app.infra.plugin.agentic_loader import discover_bundle_interface_manifest
+
 
 def _bundle_root() -> Path:
     return Path(__file__).resolve().parents[1]
@@ -96,3 +98,47 @@ def test_doc_reader_mcp_auth_rejects_invalid_header(monkeypatch):
 
     assert exc.value.status_code == 401
     assert exc.value.detail == "Missing or invalid X-Test-MCP-Token"
+
+
+def test_doc_reader_mcp_exposes_public_and_authenticated_routes():
+    mod = _load_entrypoint_module()
+    manifest = discover_bundle_interface_manifest(mod.ReactWorkflow, bundle_id=mod.BUNDLE_ID)
+
+    endpoints = {(spec.alias, spec.route): spec for spec in manifest.mcp_endpoints}
+
+    public = endpoints[("kdcube-doc", "public")]
+    assert public.method_name == "kdcube_doc_mcp"
+    assert public.transport == "streamable-http"
+
+    authenticated = endpoints[("doc_reader", "operations")]
+    assert authenticated.method_name == "doc_reader_mcp"
+    assert authenticated.transport == "streamable-http"
+
+
+def test_kdcube_doc_mcp_does_not_require_credentials():
+    mod = _load_entrypoint_module()
+    workflow = object.__new__(mod.ReactWorkflow)
+    sentinel_app = object()
+    workflow._build_doc_reader_mcp_app = lambda *, name_suffix: sentinel_app
+
+    assert workflow.kdcube_doc_mcp() is sentinel_app
+
+
+def test_kdcube_doc_mcp_builds_fresh_stateless_app_per_request():
+    mod = _load_entrypoint_module()
+    workflow = object.__new__(mod.ReactWorkflow)
+
+    built = []
+
+    def _build(*, name_suffix: str):
+        app = object()
+        built.append((name_suffix, app))
+        return app
+
+    workflow._build_doc_reader_mcp_app = _build
+
+    first = workflow.kdcube_doc_mcp()
+    second = workflow.kdcube_doc_mcp()
+
+    assert first is not second
+    assert [name for name, _app in built] == ["kdcube-doc", "kdcube-doc"]
