@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -87,6 +88,52 @@ def test_doc_reader_helpers_delegate_to_knowledge_resolver(tmp_path, monkeypatch
     assert mod.knowledge_resolver.KNOWLEDGE_ROOT == tmp_path.resolve()
 
 
+def test_doc_reader_can_read_path_returned_by_search(tmp_path):
+    mod = _load_react_tools_module()
+    mod.knowledge_resolver.KNOWLEDGE_ROOT = None
+
+    doc_path = tmp_path / "docs" / "sdk" / "bundle" / "example.md"
+    doc_path.parent.mkdir(parents=True)
+    doc_path.write_text("# Example Bundle Doc\n\nReadable content.\n", encoding="utf-8")
+    (tmp_path / "index.json").write_text(
+        json.dumps(
+            {
+                "knowledge_root": "ks:",
+                "items": [
+                    {
+                        "path": "ks:docs/sdk/bundle/example.md",
+                        "title": "Example Bundle Doc",
+                        "summary": "Readable bundle overview",
+                        "tags": ["bundle"],
+                        "keywords": ["bundle overview"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    hits = asyncio.run(
+        mod.search_knowledge_docs(
+            query="bundle overview",
+            storage_root=tmp_path,
+        )
+    )
+    assert hits
+    assert hits[0]["path"] == "ks:docs/sdk/bundle/example.md"
+
+    doc = asyncio.run(
+        mod.read_knowledge_doc(
+            path=hits[0]["path"],
+            storage_root=tmp_path,
+        )
+    )
+
+    assert doc.get("missing") is not True
+    assert doc["mime"] == "text/markdown"
+    assert "Readable content." in doc["text"]
+
+
 def test_build_doc_reader_mcp_app_returns_streamable_http_app(tmp_path):
     mod = _load_react_tools_module()
     app = mod.build_doc_reader_mcp_app(
@@ -95,6 +142,7 @@ def test_build_doc_reader_mcp_app_returns_streamable_http_app(tmp_path):
         refresh_knowledge_space=lambda: None,
     )
 
+    assert app.settings.stateless_http is True
     assert hasattr(app, "streamable_http_app")
     assert callable(app.streamable_http_app)
     assert app.streamable_http_app() is not None
