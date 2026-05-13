@@ -561,30 +561,16 @@ async def lifespan(app: FastAPI):
                 redis=app.state.redis_async,
             )
         except Exception as e:
-            try:
-                admin_spec = await resolve_bundle_spec_from_store(
-                    app.state.redis_async,
-                    tenant=tenant_id,
-                    project=project_id,
-                    bundle_id="kdcube.admin",
-                )
-                if not admin_spec:
-                    raise e
-                wf_config.ai_bundle_spec = admin_spec
-                admin = AgenticBundleSpec(
-                    path=admin_spec.path,
-                    module=admin_spec.module,
-                    singleton=bool(admin_spec.singleton),
-                )
-                workflow, _ = await get_workflow_instance_async(
-                    spec=admin,
-                    config=wf_config,
-                    comm_context=comm_context,
-                    pg_pool=app.state.pg_pool,
-                    redis=app.state.redis_async,
-                )
-            except Exception:
-                raise
+            logger.exception(
+                "Failed to load requested bundle: bundle=%s tenant=%s project=%s",
+                getattr(spec_resolved, "id", bundle_id),
+                tenant_id,
+                project_id,
+            )
+            raise RuntimeError(
+                f"Bundle {getattr(spec_resolved, 'id', bundle_id)} failed to load: "
+                f"{type(e).__name__}: {e}"
+            ) from e
 
         state = {
             "request_id": comm_context.request.request_id,
