@@ -1750,11 +1750,30 @@ class EnhancedChatRequestProcessor:
                 current.default_bundle_id,
                 source=reason,
             )
+            normalized_changed_bundle_ids = sorted(
+                str(bid).strip() for bid in (changed_bundle_ids or set()) if str(bid).strip()
+            )
+            logger.info(
+                "Bundle runtime catch-up started: reason=%s tenant=%s project=%s pid=%s changed_bundles=%s",
+                reason,
+                tenant,
+                project,
+                os.getpid(),
+                normalized_changed_bundle_ids,
+            )
             evictions: dict[str, dict[str, int]] = {}
-            if changed_bundle_ids:
-                for bundle_id in sorted(str(bid).strip() for bid in changed_bundle_ids if str(bid).strip()):
+            if normalized_changed_bundle_ids:
+                for bundle_id in normalized_changed_bundle_ids:
                     entry = (current.bundles or {}).get(bundle_id)
                     if entry is None:
+                        logger.warning(
+                            "Bundle runtime catch-up skipped missing changed bundle: reason=%s tenant=%s project=%s pid=%s bundle=%s",
+                            reason,
+                            tenant,
+                            project,
+                            os.getpid(),
+                            bundle_id,
+                        )
                         continue
                     try:
                         spec = AgenticBundleSpec(
@@ -1782,16 +1801,19 @@ class EnhancedChatRequestProcessor:
                     pass
             if evictions:
                 logger.info(
-                    "Evicted changed bundle code during runtime catch-up: reason=%s bundles=%s",
+                    "Evicted changed bundle code during runtime catch-up: reason=%s tenant=%s project=%s pid=%s bundles=%s",
                     reason,
+                    tenant,
+                    project,
+                    os.getpid(),
                     evictions,
                 )
-            if changed_bundle_ids:
+            if normalized_changed_bundle_ids:
                 try:
                     from kdcube_ai_app.apps.chat.sdk.runtime.local_sidecars import stop_local_sidecars_for_bundle_ids
 
                     stopped_sidecars = stop_local_sidecars_for_bundle_ids(
-                        bundle_ids={str(bid).strip() for bid in changed_bundle_ids if str(bid).strip()},
+                        bundle_ids=set(normalized_changed_bundle_ids),
                         tenant=tenant,
                         project=project,
                         terminate_timeout_sec=2.0,
@@ -1803,7 +1825,7 @@ class EnhancedChatRequestProcessor:
                             tenant,
                             project,
                             stopped_sidecars,
-                            sorted(str(bid).strip() for bid in changed_bundle_ids if str(bid).strip()),
+                            normalized_changed_bundle_ids,
                         )
                 except Exception:
                     logger.warning("Failed to stop local sidecars after bundle runtime catch-up", exc_info=True)
@@ -1829,10 +1851,15 @@ class EnhancedChatRequestProcessor:
             if self._scheduler is not None:
                 await self._scheduler.reconcile(current)
             logger.info(
-                "Bundle runtime catch-up complete: reason=%s bundles=%s default=%s",
+                "Bundle runtime catch-up complete: reason=%s tenant=%s project=%s pid=%s bundles=%s default=%s changed_bundles=%s evicted_bundles=%s",
                 reason,
+                tenant,
+                project,
+                os.getpid(),
                 len(current.bundles or {}),
                 current.default_bundle_id,
+                normalized_changed_bundle_ids,
+                sorted(evictions.keys()),
             )
 
         backoff = 0.5
@@ -1916,11 +1943,29 @@ class EnhancedChatRequestProcessor:
 
                     if evt.get("type") == "bundles.update":
                         bundles_patch = evt.get("bundles") or {}
-                        changed_bundle_ids = {
-                            str(bid).strip()
-                            for bid in ((bundles_patch or {}).keys() if isinstance(bundles_patch, dict) else [])
-                            if str(bid).strip()
-                        }
+                        changed_raw = evt.get("changed_bundle_ids")
+                        if isinstance(changed_raw, list):
+                            changed_bundle_ids = {
+                                str(bid).strip()
+                                for bid in changed_raw
+                                if str(bid).strip()
+                            }
+                        else:
+                            changed_bundle_ids = {
+                                str(bid).strip()
+                                for bid in ((bundles_patch or {}).keys() if isinstance(bundles_patch, dict) else [])
+                                if str(bid).strip()
+                            }
+                        logger.info(
+                            "Received bundles.update broadcast: tenant=%s project=%s pid=%s changed_bundles=%s default=%s updated_by=%s ts=%s",
+                            tenant,
+                            project,
+                            os.getpid(),
+                            sorted(changed_bundle_ids),
+                            evt.get("default_bundle_id"),
+                            evt.get("updated_by"),
+                            evt.get("ts"),
+                        )
                         try:
                             await _catch_up_runtime_snapshot("bundles.update", changed_bundle_ids=changed_bundle_ids)
                         except Exception:

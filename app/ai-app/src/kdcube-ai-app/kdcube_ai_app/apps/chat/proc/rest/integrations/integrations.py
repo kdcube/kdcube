@@ -10,6 +10,7 @@ import hmac
 import inspect
 import json
 import logging
+import os
 import uuid
 from dataclasses import asdict
 from datetime import datetime
@@ -1746,6 +1747,16 @@ async def _do_reload_bundles_from_authority(
     project_id = (payload.project if payload else None) or settings.PROJECT
     requested_bundle_id = str((payload.bundle_id if payload else "") or "").strip() or None
     redis = _get_app_redis(request)
+    authority = describe_authoritative_bundle_store(tenant_id, project_id)
+    logger.info(
+        "[bundle.reload] requested: tenant=%s project=%s bundle=%s authority=%s pid=%s user=%s",
+        tenant_id,
+        project_id,
+        requested_bundle_id or "<all>",
+        authority,
+        os.getpid(),
+        session.username or session.user_id or "unknown",
+    )
 
     try:
         reg = await reload_registry_from_authority(redis, tenant_id, project_id)
@@ -1760,6 +1771,16 @@ async def _do_reload_bundles_from_authority(
                 status_code=400,
                 detail=f"Bundle '{requested_bundle_id}' is not present in the active descriptor",
             )
+        logger.info(
+            "[bundle.reload] target resolved: tenant=%s project=%s bundle=%s path=%s module=%s singleton=%s pid=%s",
+            tenant_id,
+            project_id,
+            requested_bundle_id,
+            target_entry.path,
+            target_entry.module,
+            bool(target_entry.singleton),
+            os.getpid(),
+        )
 
     bundles_dict = {bid: entry.model_dump() for bid, entry in reg.bundles.items()}
     eviction_result: dict[str, int] | None = None
@@ -1798,22 +1819,53 @@ async def _do_reload_bundles_from_authority(
                 tenant=tenant_id,
                 project=project_id,
             )
+            logger.info(
+                "[bundle.reload] local bundle eviction complete: tenant=%s project=%s bundle=%s pid=%s eviction=%s",
+                tenant_id,
+                project_id,
+                requested_bundle_id,
+                os.getpid(),
+                eviction_result,
+            )
         else:
             clear_agentic_caches()
+            logger.info(
+                "[bundle.reload] local cache clear complete: tenant=%s project=%s bundle=<all> pid=%s",
+                tenant_id,
+                project_id,
+                os.getpid(),
+            )
+
+    changed_bundle_ids = (
+        [requested_bundle_id]
+        if requested_bundle_id
+        else sorted(str(bid).strip() for bid in bundles_dict.keys() if str(bid).strip())
+    )
 
     msg = {
         "type": "bundles.update",
         "op": "replace",
         "bundles": bundles_dict,
+        "changed_bundle_ids": changed_bundle_ids,
         "default_bundle_id": reg.default_bundle_id,
         "tenant": tenant_id,
         "project": project_id,
         "updated_by": session.username or session.user_id or "unknown",
         "ts": datetime.utcnow().isoformat() + "Z",
     }
-    await redis.publish(
-        _bundles_channel(namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL, tenant=tenant_id, project=project_id),
+    reload_channel = _bundles_channel(namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL, tenant=tenant_id, project=project_id)
+    receivers = await redis.publish(
+        reload_channel,
         json.dumps(msg, ensure_ascii=False),
+    )
+    logger.info(
+        "[bundle.reload] broadcast sent: tenant=%s project=%s changed_bundles=%s channel=%s receivers=%s pid=%s",
+        tenant_id,
+        project_id,
+        changed_bundle_ids,
+        reload_channel,
+        receivers,
+        os.getpid(),
     )
 
     return {
@@ -1822,8 +1874,10 @@ async def _do_reload_bundles_from_authority(
         "default_bundle_id": reg.default_bundle_id,
         "count": len(reg.bundles),
         "bundle_id": requested_bundle_id,
-        "authority": describe_authoritative_bundle_store(tenant_id, project_id),
+        "authority": authority,
         "eviction": eviction_result,
+        "changed_bundle_ids": changed_bundle_ids,
+        "broadcast_receivers": receivers,
     }
 
 
