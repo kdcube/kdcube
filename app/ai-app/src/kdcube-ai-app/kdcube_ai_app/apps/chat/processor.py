@@ -1725,7 +1725,12 @@ class EnhancedChatRequestProcessor:
         import kdcube_ai_app.infra.namespaces as namespaces
         from kdcube_ai_app.apps.chat.sdk.config import get_settings
         from kdcube_ai_app.infra.plugin.bundle_registry import set_registry_async
-        from kdcube_ai_app.infra.plugin.agentic_loader import clear_agentic_caches
+        from kdcube_ai_app.infra.plugin.agentic_loader import (
+            AgenticBundleSpec,
+            clear_agentic_caches,
+            evict_bundle_scope,
+            invalidate_static_bundle_entrypoint_loads,
+        )
         from kdcube_ai_app.infra.plugin.bundle_store import (
             load_registry as store_load,
             BundlesRegistry
@@ -1745,10 +1750,42 @@ class EnhancedChatRequestProcessor:
                 current.default_bundle_id,
                 source=reason,
             )
-            try:
-                clear_agentic_caches()
-            except Exception:
-                pass
+            evictions: dict[str, dict[str, int]] = {}
+            if changed_bundle_ids:
+                for bundle_id in sorted(str(bid).strip() for bid in changed_bundle_ids if str(bid).strip()):
+                    entry = (current.bundles or {}).get(bundle_id)
+                    if entry is None:
+                        continue
+                    try:
+                        spec = AgenticBundleSpec(
+                            path=entry.path,
+                            module=entry.module,
+                            singleton=bool(getattr(entry, "singleton", False)),
+                        )
+                        evictions[bundle_id] = evict_bundle_scope(spec, drop_sys_modules=True)
+                        invalidate_static_bundle_entrypoint_loads(
+                            bundle_id=bundle_id,
+                            tenant=tenant,
+                            project=project,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Failed to evict changed bundle code during runtime catch-up: bundle=%s reason=%s",
+                            bundle_id,
+                            reason,
+                            exc_info=True,
+                        )
+            else:
+                try:
+                    clear_agentic_caches()
+                except Exception:
+                    pass
+            if evictions:
+                logger.info(
+                    "Evicted changed bundle code during runtime catch-up: reason=%s bundles=%s",
+                    reason,
+                    evictions,
+                )
             if changed_bundle_ids:
                 try:
                     from kdcube_ai_app.apps.chat.sdk.runtime.local_sidecars import stop_local_sidecars_for_bundle_ids
