@@ -15,6 +15,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-runtime-README.md
   - ks:docs/sdk/bundle/bundle-delivery-and-update-README.md
   - ks:docs/service/jobs/jobs-stream-README.md
+  - ks:docs/service/fs/file-lock-README.md
 ---
 # Bundle Developer Guide
 
@@ -400,6 +401,43 @@ Use this for:
 This is separate from:
 - `AIBundleStorage`
 - descriptor-backed props/secrets
+
+## Guarded Shared Build Rule
+
+If that local storage contains a derived object that may be created by several
+requests or workers, protect it with the platform guarded-build helpers. Common
+examples are:
+
+- an indexed knowledge registry behind an MCP endpoint
+- a local mirror derived from a git repo or remote API
+- a generated search index
+- a prepared model/resource bundle
+
+Do not rely on "this usually runs once" assumptions. A local CLI/docker-compose
+runtime and a cloud runtime can both have concurrent workers touching the same
+mounted bundle-storage path.
+
+Use:
+
+- `kdcube_ai_app.storage.observed_file_locks.observed_file_lock(...)` when the
+  bundle owns the signature and readiness checks
+- `observed_file_lock_async(...)` in async code that must not block while
+  waiting
+- the platform UI build configuration for main UI and widgets; `BaseEntrypoint`
+  already uses the higher-level `bundle_once.py` helper for UI outputs
+
+Pattern:
+
+1. check `signature + ready` before taking the lock
+2. acquire the lock with a bounded wait
+3. check `signature + ready` again under the lock
+4. build the object
+5. verify readiness
+6. write the signature last
+
+Detailed helper usage:
+
+- [../../service/fs/file-lock-README.md](../../service/fs/file-lock-README.md)
 
 ## Local Development Loop
 

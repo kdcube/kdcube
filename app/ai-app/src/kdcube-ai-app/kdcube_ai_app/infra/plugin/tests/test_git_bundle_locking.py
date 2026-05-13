@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import json
 import subprocess
 from types import SimpleNamespace
 
@@ -31,6 +32,10 @@ def _settings_for_roots(*, host_bundles=None, host_managed=None, managed_root="/
                     BUNDLE_GIT_FAIL_BACKOFF_SECONDS=60,
                     BUNDLE_GIT_FAIL_MAX_BACKOFF_SECONDS=300,
                     BUNDLE_GIT_ALWAYS_PULL=always_pull,
+                    BUNDLE_GIT_COMMAND_TIMEOUT_SECONDS=120,
+                    BUNDLE_GIT_REDIS_LOCK=False,
+                    BUNDLE_GIT_REDIS_LOCK_TTL_SECONDS=300,
+                    BUNDLE_GIT_REDIS_LOCK_WAIT_SECONDS=60,
                 ),
             )
         ),
@@ -205,8 +210,8 @@ def test_ensure_git_bundle_skips_pull_for_detached_ref(monkeypatch, tmp_path):
         del logger, env
         calls.append(list(args))
 
-    def _fake_subprocess_run(args, check=False, capture_output=False, text=False, env=None):
-        del check, capture_output, text, env
+    def _fake_subprocess_run(args, check=False, capture_output=False, text=False, env=None, timeout=None):
+        del check, capture_output, text, env, timeout
         cmd = list(args)
         if cmd[-4:] == ["config", "--get", "remote.origin.url"]:
             return subprocess.CompletedProcess(cmd, 0, stdout="https://example.com/repo.git\n", stderr="")
@@ -262,8 +267,8 @@ def test_ensure_git_bundle_pulls_for_attached_branch(monkeypatch, tmp_path):
         del logger, env
         calls.append(list(args))
 
-    def _fake_subprocess_run(args, check=False, capture_output=False, text=False, env=None):
-        del check, capture_output, text, env
+    def _fake_subprocess_run(args, check=False, capture_output=False, text=False, env=None, timeout=None):
+        del check, capture_output, text, env, timeout
         cmd = list(args)
         if cmd[-4:] == ["config", "--get", "remote.origin.url"]:
             return subprocess.CompletedProcess(cmd, 0, stdout="https://example.com/repo.git\n", stderr="")
@@ -318,8 +323,8 @@ def test_ensure_git_bundle_raises_when_branch_reset_fails(monkeypatch, tmp_path)
         if cmd[-3:] == ["reset", "--hard", "origin/release-2026.4.02.115"]:
             raise RuntimeError("reset failed")
 
-    def _fake_subprocess_run(args, check=False, capture_output=False, text=False, env=None):
-        del check, capture_output, text, env
+    def _fake_subprocess_run(args, check=False, capture_output=False, text=False, env=None, timeout=None):
+        del check, capture_output, text, env, timeout
         cmd = list(args)
         if cmd[-4:] == ["config", "--get", "remote.origin.url"]:
             return subprocess.CompletedProcess(cmd, 0, stdout="https://example.com/repo.git\n", stderr="")
@@ -372,8 +377,8 @@ def test_ensure_git_bundle_raises_when_fetch_fails(monkeypatch, tmp_path):
         if cmd[-4:] == ["fetch", "--all", "--tags", "--prune"] or cmd[-5:] == ["fetch", "--all", "--tags", "--prune", "--force"]:
             raise RuntimeError("fetch failed")
 
-    def _fake_subprocess_run(args, check=False, capture_output=False, text=False, env=None):
-        del check, capture_output, text, env
+    def _fake_subprocess_run(args, check=False, capture_output=False, text=False, env=None, timeout=None):
+        del check, capture_output, text, env, timeout
         cmd = list(args)
         if cmd[-4:] == ["config", "--get", "remote.origin.url"]:
             return subprocess.CompletedProcess(cmd, 0, stdout="https://example.com/repo.git\n", stderr="")
@@ -403,3 +408,37 @@ def test_ensure_git_bundle_raises_when_fetch_fails(monkeypatch, tmp_path):
             git_ref="release-2026.4.02.115",
             bundles_root=tmp_path,
         )
+
+
+def test_redis_lock_key_uses_shared_scope_not_instance(monkeypatch):
+    settings = _settings_for_roots()
+    settings.TENANT = "demo"
+    settings.PROJECT = "demo-march"
+    settings.INSTANCE_ID = "proc-a"
+    monkeypatch.setattr(git_bundle, "get_settings", lambda: settings)
+    monkeypatch.setenv("INSTANCE_ID", "proc-b")
+
+    key = git_bundle._redis_lock_key("bundle@1-0", "2026.5.13")
+
+    assert key == "kdcube:bundles:git-lock:demo:demo-march:shared:bundle@1-0:2026.5.13"
+    assert "proc-a" not in key
+    assert "proc-b" not in key
+
+
+def test_bundle_file_lock_writes_observable_metadata(monkeypatch, tmp_path):
+    settings = _settings_for_roots()
+    settings.INSTANCE_ID = "proc-test"
+    monkeypatch.setattr(git_bundle, "get_settings", lambda: settings)
+
+    with git_bundle._bundle_lock(bundle_id="demo", git_ref="v1", bundles_root=tmp_path):
+        lock_files = list((tmp_path / ".bundle-locks").glob("*.lock"))
+        assert len(lock_files) == 1
+        metadata = json.loads(lock_files[0].read_text(encoding="utf-8"))
+        assert metadata["resource_id"] == "git-bundle:demo:v1"
+        assert metadata["operation"] == "git.bundle.materialize"
+        assert metadata["instance_id"] == "proc-test"
+        assert metadata["created_ts"] > 0
+
+    lock_files = list((tmp_path / ".bundle-locks").glob("*.lock"))
+    assert len(lock_files) == 1
+    assert lock_files[0].read_text(encoding="utf-8") == ""

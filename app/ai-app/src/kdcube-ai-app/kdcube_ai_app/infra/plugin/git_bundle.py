@@ -8,11 +8,9 @@ import os
 import pathlib
 import subprocess
 from dataclasses import dataclass
-from typing import Optional, Dict, Iterator, Any
+from typing import Optional, Dict, Iterator, Any, AsyncIterator, Iterable
 import time
-from contextlib import contextmanager
-import uuid
-import fcntl
+from contextlib import contextmanager, asynccontextmanager
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 
 from kdcube_ai_app.infra.git.auth import (
@@ -21,6 +19,13 @@ from kdcube_ai_app.infra.git.auth import (
     ssh_url_to_https_url as _https_url_for_ssh,
 )
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
+from kdcube_ai_app.storage.observed_file_locks import (
+    lock_owner_summary,
+    make_lock_metadata,
+    observed_file_lock,
+    observed_file_lock_async,
+)
+from kdcube_ai_app.storage.observed_redis_locks import observed_redis_lock, observed_redis_lock_async
 
 
 @dataclass
@@ -180,19 +185,52 @@ def _lock_file_name(bundle_id: str, git_ref: Optional[str]) -> str:
     safe = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "-" for ch in base)
     return f"{safe}.lock"
 
+def _instance_id_for_metadata() -> str:
+    try:
+        instance_id = str(get_settings().INSTANCE_ID or "").strip()
+        if instance_id:
+            return instance_id
+    except Exception:
+        pass
+    return os.environ.get("INSTANCE_ID") or os.environ.get("HOSTNAME") or "unknown"
+
+def _bundle_lock_resource_id(bundle_id: str, git_ref: Optional[str]) -> str:
+    return f"git-bundle:{bundle_id}:{_sanitize_ref(git_ref or 'head')}"
+
+def _log_bundle_lock_wait(
+    lock_path: pathlib.Path,
+    metadata: Optional[Dict[str, Any]],
+    age: Optional[float],
+    *,
+    bundle_id: str,
+    git_ref: Optional[str],
+) -> None:
+    owner = lock_owner_summary(metadata)
+    age_text = f"{age:.1f}s" if age is not None else "unknown"
+    AgentLogger("git.bundle").log(
+        f"[git.bundle] waiting for bundle lock bundle={bundle_id} ref={git_ref or 'head'} "
+        f"age={age_text} lock={lock_path}{owner}",
+        level="WARNING",
+    )
+
 @contextmanager
 def _bundle_lock(*, bundle_id: str, git_ref: Optional[str], bundles_root: pathlib.Path) -> Iterator[None]:
-    """
-    Cross-process lock for git operations on the same bundle_id/git_ref.
-    Scope: local host/container (advisory file lock).
-    """
     lock_path = _lock_dir(bundles_root) / _lock_file_name(bundle_id, git_ref)
-    with open(lock_path, "w") as fh:
-        fcntl.flock(fh, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
+    with observed_file_lock(
+        lock_path=lock_path,
+        resource_id=_bundle_lock_resource_id(bundle_id, git_ref),
+        operation="git.bundle.materialize",
+        instance_id=_instance_id_for_metadata(),
+        on_wait=lambda path, metadata, age: _log_bundle_lock_wait(
+            path,
+            metadata,
+            age,
+            bundle_id=bundle_id,
+            git_ref=git_ref,
+        ),
+        wait_seconds=max(_redis_lock_wait(), _git_command_timeout() + 30),
+    ):
+        yield
 
 def _redis_lock_enabled() -> bool:
     return get_settings().PLATFORM.APPLICATIONS.GIT.BUNDLE_GIT_REDIS_LOCK
@@ -208,6 +246,20 @@ def _redis_lock_wait() -> int:
         return get_settings().PLATFORM.APPLICATIONS.GIT.BUNDLE_GIT_REDIS_LOCK_WAIT_SECONDS
     except Exception:
         return 60
+
+def _git_command_timeout() -> int:
+    raw = os.environ.get("BUNDLE_GIT_COMMAND_TIMEOUT_SECONDS")
+    if raw:
+        try:
+            value = int(raw)
+            return value if value > 0 else 120
+        except Exception:
+            return 120
+    try:
+        value = int(get_settings().PLATFORM.APPLICATIONS.GIT.BUNDLE_GIT_COMMAND_TIMEOUT_SECONDS)
+        return value if value > 0 else 120
+    except Exception:
+        return 120
 
 def _redis_client():
     if not _redis_lock_enabled():
@@ -227,18 +279,32 @@ def _redis_client():
 def _redis_lock_key(bundle_id: str, git_ref: Optional[str]) -> str:
     tenant = "default"
     project = "default"
-    instance_id = os.environ.get("INSTANCE_ID") or os.environ.get("HOSTNAME") or "unknown"
     try:
-        from kdcube_ai_app.apps.chat.sdk.config import get_settings
         settings = get_settings()
         tenant = settings.TENANT
         project = settings.PROJECT
-        if settings.INSTANCE_ID:
-            instance_id = settings.INSTANCE_ID
     except Exception:
         pass
     ref = _sanitize_ref(git_ref or "head")
-    return f"kdcube:bundles:git-lock:{tenant}:{project}:{instance_id}:{bundle_id}:{ref}"
+    # This segment is intentionally constant. The owner identity belongs in the
+    # value/metadata, not in the key; otherwise ECS tasks do not coordinate.
+    return f"kdcube:bundles:git-lock:{tenant}:{project}:shared:{bundle_id}:{ref}"
+
+def _redis_lock_metadata(bundle_id: str, git_ref: Optional[str], owner_token: str) -> Dict[str, Any]:
+    return make_lock_metadata(
+        resource_id=_bundle_lock_resource_id(bundle_id, git_ref),
+        owner_token=owner_token,
+        operation="git.bundle.redis-lock",
+        instance_id=_instance_id_for_metadata(),
+        extra={"bundle_id": bundle_id, "git_ref": git_ref or "head"},
+    )
+
+def _log_redis_lock_wait(key: str, metadata: Optional[Dict[str, Any]], age: Optional[float]) -> None:
+    age_text = f"{age:.1f}s" if age is not None else "unknown"
+    AgentLogger("git.bundle").log(
+        f"[git.bundle] waiting for redis bundle lock key={key} age={age_text}{lock_owner_summary(metadata)}",
+        level="WARNING",
+    )
 
 @contextmanager
 def _redis_bundle_lock(*, bundle_id: str, git_ref: Optional[str]) -> Iterator[None]:
@@ -247,31 +313,75 @@ def _redis_bundle_lock(*, bundle_id: str, git_ref: Optional[str]) -> Iterator[No
         yield
         return
     key = _redis_lock_key(bundle_id, git_ref)
-    token = uuid.uuid4().hex
-    ttl = _redis_lock_ttl()
-    wait_seconds = _redis_lock_wait()
-    acquired = False
-    start = time.time()
-    while time.time() - start < wait_seconds:
-        try:
-            acquired = bool(client.set(key, token, nx=True, ex=ttl))
-        except Exception:
-            acquired = False
-        if acquired:
-            break
-        time.sleep(0.5)
-    try:
+    token = os.urandom(16).hex()
+    with observed_redis_lock(
+        client=client,
+        key=key,
+        metadata=_redis_lock_metadata(bundle_id, git_ref, token),
+        ttl_seconds=_redis_lock_ttl(),
+        wait_seconds=_redis_lock_wait(),
+        on_wait=_log_redis_lock_wait,
+    ):
         yield
+
+
+@asynccontextmanager
+async def _async_bundle_lock(
+    *,
+    bundle_id: str,
+    git_ref: Optional[str],
+    bundles_root: pathlib.Path,
+) -> AsyncIterator[None]:
+    lock_path = _lock_dir(bundles_root) / _lock_file_name(bundle_id, git_ref)
+    async with observed_file_lock_async(
+        lock_path=lock_path,
+        resource_id=_bundle_lock_resource_id(bundle_id, git_ref),
+        operation="git.bundle.materialize",
+        instance_id=_instance_id_for_metadata(),
+        on_wait=lambda path, metadata, age: _log_bundle_lock_wait(
+            path,
+            metadata,
+            age,
+            bundle_id=bundle_id,
+            git_ref=git_ref,
+        ),
+        wait_seconds=max(_redis_lock_wait(), _git_command_timeout() + 30),
+    ):
+        yield
+
+
+@asynccontextmanager
+async def _async_redis_bundle_lock(*, bundle_id: str, git_ref: Optional[str]) -> AsyncIterator[None]:
+    if not _redis_lock_enabled():
+        yield
+        return
+    try:
+        from redis import asyncio as aioredis  # type: ignore
+    except Exception:
+        yield
+        return
+    redis_url = str(getattr(get_settings(), "REDIS_URL", None) or os.environ.get("REDIS_URL") or "").strip()
+    if not redis_url:
+        yield
+        return
+    client = None
+    key = _redis_lock_key(bundle_id, git_ref)
+    token = os.urandom(16).hex()
+    try:
+        client = aioredis.Redis.from_url(redis_url, decode_responses=True)
+        async with observed_redis_lock_async(
+            client=client,
+            key=key,
+            metadata=_redis_lock_metadata(bundle_id, git_ref, token),
+            ttl_seconds=_redis_lock_ttl(),
+            wait_seconds=_redis_lock_wait(),
+            on_wait=_log_redis_lock_wait,
+        ):
+            yield
     finally:
-        if acquired:
-            # best-effort compare-and-del
+        if client is not None:
             try:
-                client.eval(
-                    "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
-                    1,
-                    key,
-                    token,
-                )
+                await client.aclose()
             except Exception:
                 pass
 
@@ -337,15 +447,96 @@ def _git_depth() -> Optional[int]:
 def _run_git(args: list[str], *, logger: Optional[AgentLogger] = None, env: Optional[Dict[str, str]] = None) -> None:
     log = logger or AgentLogger("git.bundle")
     try:
-        proc = subprocess.run(args, check=True, capture_output=True, text=True, env=env)
+        proc = subprocess.run(
+            args,
+            check=True,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=_git_command_timeout(),
+        )
         if proc.stdout:
             log.log(proc.stdout.strip(), level="INFO")
         if proc.stderr:
             log.log(proc.stderr.strip(), level="WARNING")
+    except subprocess.TimeoutExpired as e:
+        log.log(
+            f"[git.bundle] command timed out after {_git_command_timeout()}s: {' '.join(args)}",
+            level="ERROR",
+        )
+        raise TimeoutError(str(e)) from e
     except subprocess.CalledProcessError as e:
         msg = (e.stderr or e.stdout or str(e)).strip()
         log.log(f"[git.bundle] command failed: {' '.join(args)} :: {msg}", level="ERROR")
         raise
+
+
+async def _run_git_async(
+    args: list[str],
+    *,
+    logger: Optional[AgentLogger] = None,
+    env: Optional[Dict[str, str]] = None,
+) -> None:
+    log = logger or AgentLogger("git.bundle")
+    timeout = _git_command_timeout()
+    proc = await asyncio.create_subprocess_exec(
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+    try:
+        stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError as e:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        await proc.wait()
+        log.log(
+            f"[git.bundle] command timed out after {timeout}s: {' '.join(args)}",
+            level="ERROR",
+        )
+        raise TimeoutError(f"git command timed out after {timeout}s: {' '.join(args)}") from e
+    stdout = stdout_b.decode("utf-8", errors="replace").strip() if stdout_b else ""
+    stderr = stderr_b.decode("utf-8", errors="replace").strip() if stderr_b else ""
+    if proc.returncode != 0:
+        msg = stderr or stdout or f"exit {proc.returncode}"
+        log.log(f"[git.bundle] command failed: {' '.join(args)} :: {msg}", level="ERROR")
+        raise subprocess.CalledProcessError(proc.returncode or 1, args, output=stdout, stderr=stderr)
+    if stdout:
+        log.log(stdout, level="INFO")
+    if stderr:
+        log.log(stderr, level="WARNING")
+
+
+async def _run_git_capture_async(
+    args: list[str],
+    *,
+    env: Optional[Dict[str, str]] = None,
+    check: bool = True,
+) -> subprocess.CompletedProcess:
+    timeout = _git_command_timeout()
+    proc = await asyncio.create_subprocess_exec(
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+    try:
+        stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.TimeoutError as e:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        await proc.wait()
+        raise TimeoutError(f"git command timed out after {timeout}s: {' '.join(args)}") from e
+    stdout = stdout_b.decode("utf-8", errors="replace") if stdout_b else ""
+    stderr = stderr_b.decode("utf-8", errors="replace") if stderr_b else ""
+    if check and proc.returncode != 0:
+        raise subprocess.CalledProcessError(proc.returncode or 1, args, output=stdout, stderr=stderr)
+    return subprocess.CompletedProcess(args, proc.returncode or 0, stdout=stdout, stderr=stderr)
 
 
 def _current_branch_name(repo_root: pathlib.Path, *, env: Optional[Dict[str, str]] = None) -> Optional[str]:
@@ -355,6 +546,20 @@ def _current_branch_name(repo_root: pathlib.Path, *, env: Optional[Dict[str, str
             check=True,
             capture_output=True,
             text=True,
+            env=env,
+            timeout=_git_command_timeout(),
+        )
+    except subprocess.CalledProcessError:
+        return None
+    branch = (proc.stdout or "").strip()
+    return branch or None
+
+
+async def _current_branch_name_async(repo_root: pathlib.Path, *, env: Optional[Dict[str, str]] = None) -> Optional[str]:
+    try:
+        proc = await _run_git_capture_async(
+            ["git", "-C", str(repo_root), "symbolic-ref", "--quiet", "--short", "HEAD"],
+            check=True,
             env=env,
         )
     except subprocess.CalledProcessError:
@@ -443,6 +648,7 @@ def ensure_git_bundle(
                         proc = subprocess.run(
                             ["git", "-C", str(repo_root), "config", "--get", "remote.origin.url"],
                             check=True, capture_output=True, text=True,
+                            timeout=_git_command_timeout(),
                         )
                         remote_url = (proc.stdout or "").strip()
                         if remote_url and remote_url != git_url:
@@ -450,12 +656,11 @@ def ensure_git_bundle(
                                 f"[git.bundle] remote mismatch for {repo_root}: {remote_url} != {git_url}",
                                 level="WARNING",
                             )
-                            if http_token:
-                                _run_git(
-                                    ["git", "-C", str(repo_root), "remote", "set-url", "origin", git_url],
-                                    logger=log,
-                                    env=env,
-                                )
+                            _run_git(
+                                ["git", "-C", str(repo_root), "remote", "set-url", "origin", git_url],
+                                logger=log,
+                                env=env,
+                            )
                     except Exception:
                         pass
                     log.log(f"[git.bundle] fetching updates in {repo_root}", level="INFO")
@@ -489,7 +694,7 @@ def ensure_git_bundle(
                 try:
                     proc = subprocess.run(
                         ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
-                        check=True, capture_output=True, text=True, env=env,
+                        check=True, capture_output=True, text=True, env=env, timeout=_git_command_timeout(),
                     )
                     commit = (proc.stdout or "").strip()
                     if commit:
@@ -605,18 +810,136 @@ async def ensure_git_bundle_async(
     atomic: bool = False,
 ) -> GitBundlePaths:
     """
-    Async wrapper around ensure_git_bundle (runs in thread pool).
+    Async git bundle materializer.
+
+    Git subprocesses use asyncio.create_subprocess_exec() with bounded timeouts.
+    Filesystem operations are still local/EFS operations, but the network/process
+    waits do not block the event loop.
     """
-    return await asyncio.to_thread(
-        ensure_git_bundle,
-        bundle_id=bundle_id,
-        git_url=git_url,
-        git_ref=git_ref,
-        git_subdir=git_subdir,
-        bundles_root=bundles_root,
-        logger=logger,
-        atomic=atomic,
-    )
+    log = logger or AgentLogger("git.bundle")
+    bundle_id = (bundle_id or "").strip() or _repo_name_from_url(git_url)
+    normalized_git_url = normalize_git_remote_url(git_url)
+    if normalized_git_url != git_url:
+        log.log(f"[git.bundle] using HTTPS for {git_url}", level="INFO")
+        git_url = normalized_git_url
+    root = bundles_root or resolve_managed_bundles_root()
+    fail_key = _fail_key(git_url=git_url, bundle_id=bundle_id, git_ref=git_ref)
+    _check_fail_cooldown(fail_key)
+    force_pull = get_settings().PLATFORM.APPLICATIONS.GIT.BUNDLE_GIT_ALWAYS_PULL
+    async with _async_redis_bundle_lock(bundle_id=bundle_id, git_ref=git_ref):
+        async with _async_bundle_lock(bundle_id=bundle_id, git_ref=git_ref, bundles_root=root):
+            try:
+                paths = compute_git_bundle_paths(
+                    bundle_id=bundle_id,
+                    git_url=git_url,
+                    git_ref=git_ref,
+                    git_subdir=git_subdir,
+                    bundles_root=root,
+                )
+                repo_root = paths.repo_root
+                repo_root.parent.mkdir(parents=True, exist_ok=True)
+                env = _build_git_env()
+                depth = _git_depth()
+
+                git_dir = repo_root / ".git"
+                if git_dir.exists() and not force_pull:
+                    if not paths.bundle_root.exists():
+                        raise FileNotFoundError(f"Bundle subdir not found: {paths.bundle_root}")
+                    _clear_fail(fail_key)
+                    return paths
+                if not git_dir.exists():
+                    if atomic:
+                        tmp_root = repo_root.parent / _atomic_dir_name(repo_root.name)
+                        log.log(f"[git.bundle] cloning {git_url} -> {tmp_root}", level="INFO")
+                        clone_args = ["git", "clone"]
+                        if depth:
+                            clone_args += ["--depth", str(depth)]
+                        clone_args += [git_url, str(tmp_root)]
+                        await _run_git_async(clone_args, logger=log, env=env)
+                        try:
+                            tmp_root.rename(repo_root)
+                        except Exception:
+                            repo_root = tmp_root
+                            paths = compute_git_bundle_paths(
+                                bundle_id=repo_root.name,
+                                git_url=git_url,
+                                git_ref=git_ref,
+                                git_subdir=git_subdir,
+                                bundles_root=repo_root.parent,
+                            )
+                    else:
+                        log.log(f"[git.bundle] cloning {git_url} -> {repo_root}", level="INFO")
+                        clone_args = ["git", "clone"]
+                        if depth:
+                            clone_args += ["--depth", str(depth)]
+                        clone_args += [git_url, str(repo_root)]
+                        await _run_git_async(clone_args, logger=log, env=env)
+                else:
+                    try:
+                        proc = await _run_git_capture_async(
+                            ["git", "-C", str(repo_root), "config", "--get", "remote.origin.url"],
+                            check=True,
+                        )
+                        remote_url = (proc.stdout or "").strip()
+                        if remote_url and remote_url != git_url:
+                            log.log(
+                                f"[git.bundle] remote mismatch for {repo_root}: {remote_url} != {git_url}",
+                                level="WARNING",
+                            )
+                            await _run_git_async(
+                                ["git", "-C", str(repo_root), "remote", "set-url", "origin", git_url],
+                                logger=log,
+                                env=env,
+                            )
+                    except Exception:
+                        pass
+                    log.log(f"[git.bundle] fetching updates in {repo_root}", level="INFO")
+                    fetch_args = ["git", "-C", str(repo_root), "fetch", "--all", "--tags", "--prune", "--force"]
+                    if depth:
+                        fetch_args += ["--depth", str(depth)]
+                    await _run_git_async(fetch_args, logger=log, env=env)
+
+                if git_ref:
+                    log.log(f"[git.bundle] checkout {git_ref}", level="INFO")
+                    try:
+                        await _run_git_async(["git", "-C", str(repo_root), "checkout", "--force", git_ref], logger=log, env=env)
+                    except Exception:
+                        if depth:
+                            try:
+                                await _run_git_async(["git", "-C", str(repo_root), "fetch", "--unshallow"], logger=log, env=env)
+                                await _run_git_async(["git", "-C", str(repo_root), "checkout", "--force", git_ref], logger=log, env=env)
+                            except Exception:
+                                raise
+                        else:
+                            raise
+                    branch_name = await _current_branch_name_async(repo_root, env=env)
+                    if branch_name:
+                        await _run_git_async(
+                            ["git", "-C", str(repo_root), "reset", "--hard", f"origin/{branch_name}"],
+                            logger=log,
+                            env=env,
+                        )
+
+                try:
+                    proc = await _run_git_capture_async(
+                        ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+                        check=True,
+                        env=env,
+                    )
+                    commit = (proc.stdout or "").strip()
+                    if commit:
+                        log.log(f"[git.bundle] HEAD={commit}", level="INFO")
+                except Exception:
+                    pass
+
+                if not paths.bundle_root.exists():
+                    raise FileNotFoundError(f"Bundle subdir not found: {paths.bundle_root}")
+
+                _clear_fail(fail_key)
+                return paths
+            except Exception as e:
+                _record_fail(fail_key, e)
+                raise
 
 
 async def cleanup_old_git_bundles_async(

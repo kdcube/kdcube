@@ -21,6 +21,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
+  - ks:docs/sdk/bundle/bundle-widget-integration-README.md
 ---
 # How To Assemble A Bundle With SDK Building Blocks
 
@@ -46,6 +47,17 @@ or the bundle needs domain-specific storage and prompts.
 
 When a feature becomes reusable across bundles, move it into an SDK integration
 or solution package and update this page.
+
+Critical widget/browser rule:
+
+- widgets and generated static HTML must call KDCube through the KDCube
+  frame/runtime origin
+- use runtime `baseUrl` from `CONFIG_REQUEST` / `CONN_RESPONSE`, with
+  `window.location.origin` of the widget frame as the fallback
+- do not use the embedding host page origin, `window.top.location`, or
+  `document.referrer` as an API base
+- see [Bundle Widget Integration](../bundle-widget-integration-README.md#frame-origin-and-api-base-url)
+  before implementing any browser-facing API client
 
 ## Current Reusable Blocks
 

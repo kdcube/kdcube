@@ -22,6 +22,7 @@ see_also:
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-new-cli-README.md
   - ks:docs/sdk/bundle/bundle-developer-guide-README.md
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
+  - ks:docs/sdk/bundle/bundle-widget-integration-README.md
 ---
 # How To Configure And Run A Bundle
 
@@ -51,6 +52,18 @@ Use it when you need to answer questions like:
 This page is not the primary source for bundle design or test strategy.
 It documents the supported local CLI/runtime workflow for descriptor-backed
 bundle development.
+
+Critical widget/browser runtime rule:
+
+- opening KDCube inside another app does not make widget APIs call the outer
+  app's origin
+- widget API base must be the KDCube frame/runtime origin from `baseUrl`, or the
+  widget frame's own `window.location.origin` as fallback
+- if a deployment intentionally serves KDCube under the host app origin through
+  a reverse proxy, that proxy must route `/platform`, `/api`, streaming paths,
+  and `/api/integrations/...`
+- do not fix widget networking by hardcoding local ports or external host
+  application URLs
 
 Important:
 

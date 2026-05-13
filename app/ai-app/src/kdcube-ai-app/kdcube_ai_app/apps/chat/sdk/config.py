@@ -1072,6 +1072,7 @@ class Settings(PLATFORM_CONFIG):
                     BUNDLE_GIT_FAIL_MAX_BACKOFF_SECONDS=self._resolve_int("BUNDLE_GIT_FAIL_MAX_BACKOFF_SECONDS", f"{git_p}.bundle_git_fail_max_backoff_seconds", 300),
                     BUNDLE_GIT_KEEP=self._resolve_int("BUNDLE_GIT_KEEP", f"{git_p}.bundle_git_keep", 3),
                     BUNDLE_GIT_TTL_HOURS=self._resolve_int("BUNDLE_GIT_TTL_HOURS", f"{git_p}.bundle_git_ttl_hours", 0),
+                    BUNDLE_GIT_COMMAND_TIMEOUT_SECONDS=self._resolve_int("BUNDLE_GIT_COMMAND_TIMEOUT_SECONDS", f"{git_p}.bundle_git_command_timeout_seconds", 120),
                     GIT_SSH_KEY_PATH=self._resolve_str("GIT_SSH_KEY_PATH", f"{git_p}.git_ssh_key_path"),
                     GIT_SSH_KNOWN_HOSTS=self._resolve_str("GIT_SSH_KNOWN_HOSTS", f"{git_p}.git_ssh_known_hosts"),
                     GIT_SSH_STRICT_HOST_KEY_CHECKING=self._resolve_str("GIT_SSH_STRICT_HOST_KEY_CHECKING", f"{git_p}.git_ssh_strict_host_key_checking", "yes"),

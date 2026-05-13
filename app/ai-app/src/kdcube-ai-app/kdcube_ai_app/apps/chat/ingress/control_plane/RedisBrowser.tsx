@@ -54,16 +54,17 @@ class SettingsManager {
 
     getBaseUrl(): string {
         if (this.settings.baseUrl === this.PLACEHOLDER_BASE_URL) {
-            return 'http://localhost:8010';
+            return window.location.origin;
         }
         try {
             const url = new URL(this.settings.baseUrl);
             if (url.port === 'None' || url.hostname.includes('None')) {
-                return 'http://localhost:8010';
+                return window.location.origin;
             }
-            return this.settings.baseUrl;
+            const trimmed = this.settings.baseUrl.replace(/\/+$/, '');
+            return trimmed.endsWith('/api') ? trimmed.slice(0, -4) : trimmed;
         } catch (e) {
-            return 'http://localhost:8010';
+            return window.location.origin;
         }
     }
 

@@ -99,3 +99,56 @@ def test_kdcube_copilot_shared_signature_skips_rebuild(tmp_path, monkeypatch):
 
     assert len(build_calls) == 1
     assert any("shared signature cache hit" in message for _, message in wf2.logger.records)
+
+
+def test_kdcube_copilot_reconcile_uses_shared_signature_without_build_lock(tmp_path, monkeypatch):
+    entrypoint_mod = _load_entrypoint_module()
+
+    ws_root = tmp_path / "bundle-storage"
+    bundle_root = tmp_path / "bundle"
+    source_root = tmp_path / "repo" / "app" / "ai-app"
+    for path in (
+        ws_root / "docs",
+        ws_root / "src",
+        ws_root / "deployment",
+        source_root / "docs",
+        source_root / "src",
+        source_root / "deployment",
+    ):
+        path.mkdir(parents=True)
+    (ws_root / "index.json").write_text("{}", encoding="utf-8")
+    (ws_root / "index.md").write_text("# Index\n", encoding="utf-8")
+    signature = f"repo|main|{source_root}|True"
+    (ws_root / ".knowledge.signature").write_text(f"{signature}\n", encoding="utf-8")
+
+    setup = (
+        ws_root,
+        bundle_root,
+        source_root,
+        True,
+        "repo",
+        "main",
+        signature,
+    )
+
+    def fail_prepare_knowledge_space(**_kwargs):
+        raise AssertionError("fresh shared knowledge should not rebuild")
+
+    def fail_build_lock(_storage_root):
+        raise AssertionError("fresh shared knowledge should not take the build lock")
+
+    monkeypatch.setattr(entrypoint_mod.knowledge_resolver, "prepare_knowledge_space", fail_prepare_knowledge_space)
+    monkeypatch.setattr(entrypoint_mod, "_knowledge_build_lock", fail_build_lock)
+
+    wf = entrypoint_mod.ReactWorkflow.__new__(entrypoint_mod.ReactWorkflow)
+    wf.logger = _Logger()
+    wf._knowledge_signature = None
+    wf._expected_knowledge_setup = lambda: setup
+    wf._resolve_knowledge_setup = lambda: (_ for _ in ()).throw(
+        AssertionError("fresh shared knowledge should not materialize git")
+    )
+
+    wf._reconcile_knowledge_space(reason="kdcube-doc")
+
+    assert wf._knowledge_signature == signature
+    assert entrypoint_mod.knowledge_resolver.KNOWLEDGE_ROOT == ws_root

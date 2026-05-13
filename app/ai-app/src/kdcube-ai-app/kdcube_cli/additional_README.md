@@ -258,6 +258,84 @@ Choose exactly one source selector:
   staging
 - otherwise `assembly.yaml -> platform.ref`
 
+## Local public HTTPS origin with ngrok
+
+For Telegram webhooks, Telegram Mini Apps, OAuth redirects, or Cognito callback
+testing, expose the local CLI runtime through one stable ngrok HTTPS origin.
+
+Full operational recipe:
+
+```text
+app/ai-app/docs/service/cicd/ngrok-README.md
+```
+
+Short CLI procedure:
+
+```bash
+kdcube init \
+  --path /path/to/kdcube-ai-app \
+  --descriptors-location /path/to/descriptors \
+  --workdir ~/.kdcube/kdcube-runtime \
+  --cors-origin https://<stable-ngrok-domain> \
+  --build
+
+kdcube start --workdir ~/.kdcube/kdcube-runtime/<tenant>__<project>
+```
+
+Use the local proxy port printed by `kdcube start`, then start ngrok with the
+stable assigned domain:
+
+```bash
+ngrok http 5173 --url https://<stable-ngrok-domain> --host-header=rewrite
+```
+
+If `kdcube start` prints another proxy port, replace `5173` with that port.
+
+For ngrok, keep the local proxy HTTP-only:
+
+```yaml
+domain: ""
+proxy:
+  ssl: false
+  route_prefix: "/platform"
+```
+
+Ngrok terminates public HTTPS and forwards plain HTTP to the local KDCube web
+proxy. Do not use `domain` as the local ngrok public origin. Put the stable
+HTTPS origin in the descriptor fields that actually consume it.
+
+For CORS, pass the origin during init:
+
+```bash
+kdcube init \
+  --workdir ~/.kdcube/kdcube-runtime \
+  --cors-origin https://<stable-ngrok-domain>
+```
+
+That appends to the staged assembly descriptor:
+
+```yaml
+cors:
+  allow_origins:
+    - "https://<stable-ngrok-domain>"
+```
+
+For bundle integrations, configure public URLs in `bundles.yaml` or in the
+staged bundle config under the runtime workdir. Telegram webhooks and any OAuth
+integration with redirect/public-base URLs follow this pattern. Example:
+
+```yaml
+integrations:
+  telegram:
+    webhook_url: "https://<stable-ngrok-domain>/api/integrations/bundles/<tenant>/<project>/<bundle_id>/public/telegram_webhook"
+  email:
+    oauth:
+      public_base_url: "https://<stable-ngrok-domain>"
+```
+
+After changing `assembly.yaml`, restart the runtime. After changing only bundle
+config, reload the bundle.
+
 For `aws-sm` deployments, you can also export the current effective live
 deployment-scoped bundle descriptors directly from AWS Secrets Manager:
 
@@ -322,7 +400,7 @@ what is incomplete.
 
 | Subcommand | Purpose |
 |---|---|
-| `kdcube init [--workdir <path>] [--path <repo>] [--descriptors-location <dir>] [--latest\|--upstream\|--release <ref>] [--build] [-i] [--reset-config] [--prompt-secrets] [--set-secret KEY VALUE]...` | Initialize a workdir (stage descriptors, generate env files). Explicit `--path` stages that local source tree unless a version selector is used. With `--build`, also build images **without** starting containers. |
+| `kdcube init [--workdir <path>] [--path <repo>] [--descriptors-location <dir>] [--latest\|--upstream\|--release <ref>] [--build] [-i] [--reset-config] [--prompt-secrets] [--set-secret KEY VALUE]... [--cors-origin ORIGIN]...` | Initialize a workdir (stage descriptors, generate env files). Explicit `--path` stages that local source tree unless a version selector is used. With `--build`, also build images **without** starting containers. `--cors-origin` appends an allowed origin to staged `config/assembly.yaml`. |
 | `kdcube start [--workdir <path>] [--build]` | Start the Docker Compose stack for an already-initialized workdir. `--build` is a convenience rebuild before start, not required if `init --build` was already run. |
 | `kdcube stop [--workdir <path>] [--remove-volumes]` | Stop the local Docker Compose stack. |
 | `kdcube reload <bundle_id> [--workdir <path>]` | Reapply `bundles.yaml` from the active runtime and clear proc bundle caches. |

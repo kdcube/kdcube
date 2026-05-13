@@ -17,6 +17,7 @@ see_also:
   - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
   - ks:docs/sdk/integrations/browser/browser-tools-README.md
   - ks:docs/service/cicd/ngrok-README.md
+  - ks:docs/sdk/bundle/bundle-widget-integration-README.md
 ---
 # Tier 1 Bundle Pack For Build-With-KDCube Plugins
 
@@ -56,6 +57,17 @@ KDCube must receive provider callbacks or remote calls:
 It is used for Telegram webhooks, OAuth/Cognito callbacks, and other
 callback/remote-control flows that need public HTTPS while the runtime is still
 on localhost.
+
+Widget/API origin rule that plugins must surface early:
+
+- browser-facing bundle code must call KDCube APIs through the KDCube
+  frame/runtime origin
+- use `baseUrl` from the KDCube runtime config bridge first, then the widget
+  frame's own `window.location.origin` as fallback
+- do not use `window.top.location`, `document.referrer`, or the embedding host
+  page URL as the API base
+- route agents to [bundle-widget-integration-README.md#frame-origin-and-api-base-url](../bundle-widget-integration-README.md#frame-origin-and-api-base-url)
+  before they write widget or generated-static HTML networking code
 
 Preferred reading order:
 

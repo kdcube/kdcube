@@ -143,14 +143,15 @@ class SettingsManager {
 
     getBaseUrl(): string {
         if (this.settings.baseUrl === this.PLACEHOLDER_BASE_URL) {
-            return 'http://localhost:8010';
+            return window.location.origin;
         }
         try {
             const url = new URL(this.settings.baseUrl);
-            if (url.port === 'None' || url.hostname.includes('None')) return 'http://localhost:8010';
-            return this.settings.baseUrl;
+            if (url.port === 'None' || url.hostname.includes('None')) return window.location.origin;
+            const trimmed = this.settings.baseUrl.replace(/\/+$/, '');
+            return trimmed.endsWith('/api') ? trimmed.slice(0, -4) : trimmed;
         } catch (e) {
-            return 'http://localhost:8010';
+            return window.location.origin;
         }
     }
 
@@ -297,7 +298,7 @@ class BillingAPI {
     }
 
     async openCustomerPortal(): Promise<{ portal_url: string }> {
-        const returnUrl = window.parent !== window ? window.parent.location.href : window.location.href;
+        const returnUrl = currentFrameReturnUrl();
         const response = await this.fetchWithAuth(
             `${this.getMeUrl('/stripe/customer-portal')}?return_url=${encodeURIComponent(returnUrl)}`,
             { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }
@@ -391,6 +392,22 @@ function formatDateTime(value: string | null | undefined): string {
     return new Date(value).toLocaleString();
 }
 
+function currentFrameReturnUrl(): string {
+    try {
+        return window.parent !== window ? window.parent.location.href : window.location.href;
+    } catch {
+        return window.location.href;
+    }
+}
+
+function navigateTopLevel(url: string): void {
+    try {
+        window.top!.location.href = url;
+    } catch {
+        window.location.href = url;
+    }
+}
+
 const MetricRow: React.FC<{
     label: string;
     used: number;
@@ -469,9 +486,9 @@ const UserBillingDashboard: React.FC = () => {
         }
         try {
             setLoading(true);
-            const returnUrl = window.parent !== window ? window.parent.location.href : window.location.href;
+            const returnUrl = currentFrameReturnUrl();
             const res = await api.createCheckoutTopup(amt, returnUrl, returnUrl);
-            if (res.checkout_url) window.top!.location.href = res.checkout_url;
+            if (res.checkout_url) navigateTopLevel(res.checkout_url);
         } catch (err: any) {
             setError(err.message);
             setLoading(false);
@@ -481,9 +498,9 @@ const UserBillingDashboard: React.FC = () => {
     const handleSubscribe = async (planId: string) => {
         try {
             setLoading(true);
-            const returnUrl = window.parent !== window ? window.parent.location.href : window.location.href;
+            const returnUrl = currentFrameReturnUrl();
             const res = await api.createCheckoutSubscription(planId, returnUrl, returnUrl);
-            if (res.checkout_url) window.top!.location.href = res.checkout_url;
+            if (res.checkout_url) navigateTopLevel(res.checkout_url);
         } catch (err: any) {
             setError(err.message);
             setLoading(false);
@@ -494,7 +511,7 @@ const UserBillingDashboard: React.FC = () => {
         try {
             setLoading(true);
             const res = await api.openCustomerPortal();
-            if (res.portal_url) window.top!.location.href = res.portal_url;
+            if (res.portal_url) navigateTopLevel(res.portal_url);
         } catch (err: any) {
             setError(err.message);
         } finally {

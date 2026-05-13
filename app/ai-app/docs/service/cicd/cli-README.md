@@ -259,6 +259,16 @@ To stage common local service secrets without editing YAML:
 kdcube init --prompt-secrets
 ```
 
+To add a public HTTPS origin, for example an ngrok origin, to
+`assembly.yaml -> cors.allow_origins` during init:
+
+```bash
+kdcube init --cors-origin https://<stable-ngrok-domain>
+```
+
+`--cors-origin` is repeatable and accepts either a full origin or a hostname.
+If the scheme is omitted, the CLI assumes `https://`.
+
 To provide known secret values non-interactively, use dotted descriptor keys:
 
 ```bash
@@ -324,6 +334,7 @@ kdcube init \
   --descriptors-location /path/to/descriptors \
   --workdir ~/.kdcube/kdcube-runtime \
   --path /path/to/kdcube-ai-app \
+  --cors-origin https://<stable-ngrok-domain> \
   --build
 ```
 
@@ -858,6 +869,7 @@ kdcube init
 kdcube init --latest
 kdcube init --tenant acme --project prod --latest
 kdcube init --prompt-secrets
+kdcube init --cors-origin https://<stable-ngrok-domain>
 ```
 
 Initialize from a prepared descriptor folder:
@@ -866,6 +878,7 @@ Initialize from a prepared descriptor folder:
 kdcube init \
   --workdir ~/.kdcube/kdcube-runtime \
   --descriptors-location /path/to/descriptors \
+  --cors-origin https://<stable-ngrok-domain> \
   --latest
 ```
 
@@ -886,6 +899,7 @@ kdcube init \
   --workdir ~/.kdcube/kdcube-runtime \
   --descriptors-location /path/to/descriptors \
   --path /path/to/kdcube-ai-app \
+  --cors-origin https://<stable-ngrok-domain> \
   --build
 ```
 

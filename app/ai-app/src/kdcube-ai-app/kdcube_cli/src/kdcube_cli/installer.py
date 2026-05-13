@@ -461,6 +461,29 @@ def descriptor_context_from_assembly(assembly: Dict[str, object] | None) -> Tupl
     )
 
 
+def descriptor_uses_host_managed_infra(assembly: Dict[str, object] | None) -> bool:
+    if not isinstance(assembly, dict):
+        return False
+
+    def _is_external_host(value: object, internal_hosts: set[str]) -> bool:
+        if value is None:
+            return False
+        host = str(value).strip().strip("'\"").lower()
+        if not host or is_placeholder(host):
+            return False
+        return host not in internal_hosts
+
+    postgres_external = _is_external_host(
+        _get_nested(assembly, "infra", "postgres", "host"),
+        {"postgres-db"},
+    )
+    redis_external = _is_external_host(
+        _get_nested(assembly, "infra", "redis", "host"),
+        {"redis"},
+    )
+    return postgres_external or redis_external
+
+
 def _iter_bundle_specs(payload: Dict[str, object] | None) -> list[Dict[str, object]]:
     if not isinstance(payload, dict):
         return []
@@ -3946,21 +3969,25 @@ def run_setup(
     if env_gateway_descriptor:
         gateway_descriptor_path = str(Path(env_gateway_descriptor).expanduser().resolve())
 
+    descriptor_host_managed_infra = False
     if release_descriptor_path:
         descriptor_path = Path(release_descriptor_path).expanduser()
         if descriptor_path.exists():
             release_descriptor = load_release_descriptor(descriptor_path)
+            descriptor_host_managed_infra = descriptor_uses_host_managed_infra(release_descriptor)
             if use_descriptor_frontend is True:
                 compose_mode = "custom-ui-managed-infra"
             elif use_descriptor_frontend is False:
-                if not compose_mode_env:
+                if descriptor_host_managed_infra and not compose_mode_env:
+                    compose_mode = "custom-ui-managed-infra"
+                elif not compose_mode_env:
                     compose_mode = "all-in-one"
             elif isinstance(release_descriptor, dict):
                 _fd = release_descriptor.get("frontend")
                 _has_ui_source = isinstance(_fd, dict) and bool(
                     _get_nested(_fd, "build", "repo") or _fd.get("image")
                 )
-                if _has_ui_source:
+                if _has_ui_source or (descriptor_host_managed_infra and not compose_mode_env):
                     compose_mode = "custom-ui-managed-infra"
                 elif not compose_mode_env:
                     compose_mode = "all-in-one"
@@ -3971,9 +3998,13 @@ def run_setup(
                 _has_ui_source = isinstance(_fd, dict) and bool(
                     _get_nested(_fd, "build", "repo") or _fd.get("image")
                 )
-                if not _has_ui_source:
+                if not _has_ui_source and not (descriptor_host_managed_infra and not compose_mode_env):
                     compose_mode = "all-in-one"
-    if env_use_frontend is False and not compose_mode_env:
+            if descriptor_host_managed_infra and compose_mode == "custom-ui-managed-infra" and not compose_mode_env:
+                console.print(
+                    "[dim]Assembly uses host-managed Postgres/Redis; selecting custom-ui-managed-infra compose mode.[/dim]"
+                )
+    if env_use_frontend is False and not compose_mode_env and not descriptor_host_managed_infra:
         compose_mode = "all-in-one"
 
     if bundles_descriptor_path:

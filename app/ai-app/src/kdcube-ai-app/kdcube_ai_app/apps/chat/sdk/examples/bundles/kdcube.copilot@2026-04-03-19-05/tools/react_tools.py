@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import pathlib
 from typing import Annotated, Callable, Optional, Any
 
@@ -148,7 +149,7 @@ def build_doc_reader_mcp_app(
         keywords: Optional[list[str]] = None,
         top_k: int = 20,
     ) -> list[dict]:
-        _prepare()
+        await asyncio.to_thread(_prepare)
         return await search_knowledge_docs(
             query=query,
             root=root,
@@ -164,7 +165,7 @@ def build_doc_reader_mcp_app(
         ),
     )
     async def _read_knowledge(path: str) -> dict:
-        _prepare()
+        await asyncio.to_thread(_prepare)
         return await read_knowledge_doc(path=path)
 
     return mcp

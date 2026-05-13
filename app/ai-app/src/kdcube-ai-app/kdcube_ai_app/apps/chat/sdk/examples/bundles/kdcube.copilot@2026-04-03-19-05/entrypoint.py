@@ -36,7 +36,6 @@ import pathlib
 import os
 import shutil
 import traceback
-import fcntl
 import json
 import uuid
 from contextlib import contextmanager
@@ -67,6 +66,7 @@ from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
 from kdcube_ai_app.infra.service_hub.inventory import Config, BundleState
 from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow, api, mcp, ui_widget
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint import BaseEntrypoint
+from kdcube_ai_app.storage.observed_file_locks import observed_file_lock, lock_owner_summary
 
 from .orchestrator.workflow import WithReactWorkflow
 from .event_filter import BundleEventFilter
@@ -106,6 +106,13 @@ def _knowledge_signature_path(storage_root: pathlib.Path) -> pathlib.Path:
     return storage_root / ".knowledge.signature"
 
 
+def _knowledge_lock_wait_seconds() -> int:
+    try:
+        return max(1, int(os.environ.get("KDCUBE_COPILOT_KNOWLEDGE_LOCK_WAIT_SECONDS", "300") or "300"))
+    except Exception:
+        return 300
+
+
 def _find_ai_app_root(candidate: pathlib.Path | None) -> pathlib.Path | None:
     if not candidate:
         return None
@@ -120,15 +127,30 @@ def _find_ai_app_root(candidate: pathlib.Path | None) -> pathlib.Path | None:
 
 
 @contextmanager
-def _knowledge_build_lock(storage_root: pathlib.Path):
+def _knowledge_build_lock(storage_root: pathlib.Path, *, logger: Any = None):
     storage_root.mkdir(parents=True, exist_ok=True)
     lock_path = _knowledge_lock_path(storage_root)
-    with open(lock_path, "w") as fh:
-        fcntl.flock(fh, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
+
+    def _on_wait(path: pathlib.Path, metadata: dict[str, Any] | None, age: float | None) -> None:
+        age_text = f"{age:.1f}s" if age is not None else "unknown"
+        msg = (
+            f"[kdcube.copilot] waiting for knowledge build lock "
+            f"storage={storage_root} age={age_text} lock={path}{lock_owner_summary(metadata)}"
+        )
+        log_fn = getattr(logger, "log", None)
+        if callable(log_fn):
+            log_fn(msg, "WARNING")
+        else:
+            print(msg)
+
+    with observed_file_lock(
+        lock_path=lock_path,
+        resource_id=f"knowledge-space:{storage_root}",
+        operation="kdcube.copilot.knowledge.build",
+        on_wait=_on_wait,
+        wait_seconds=_knowledge_lock_wait_seconds(),
+    ):
+        yield
 
 
 def _read_shared_knowledge_signature(storage_root: pathlib.Path) -> str | None:
@@ -150,6 +172,8 @@ def _knowledge_outputs_ready(
     storage_root: pathlib.Path,
     source_root: pathlib.Path | None,
 ) -> bool:
+    if not (storage_root / "docs").exists():
+        return False
     if not (storage_root / "index.json").exists():
         return False
     if not (storage_root / "index.md").exists():
@@ -453,6 +477,62 @@ class ReactWorkflow(BaseEntrypoint):
             )
         return source_root, validate_refs, repo, ref or None
 
+    def _expected_knowledge_paths(
+        self,
+        *,
+        bundle_root: pathlib.Path,
+        storage_root: pathlib.Path,
+    ) -> tuple[pathlib.Path | None, bool, str | None, str | None]:
+        """
+        Resolve the expected knowledge paths without cloning/fetching git.
+        Hot MCP reads use this to trust an already-built shared knowledge space
+        before touching network-backed git materialization.
+        """
+        props = dict(self.bundle_props or {})
+        knowledge_def = props.get("knowledge") or {}
+        repo = (knowledge_def.get("repo") or "").strip()
+        ref = (knowledge_def.get("ref") or "").strip()
+        root_raw = (knowledge_def.get("root") or "").strip()
+        validate = knowledge_def.get("validate_refs")
+        validate_refs = True if validate is None else bool(validate)
+
+        if not repo and not root_raw:
+            for parent in bundle_root.resolve().parents:
+                if (parent / "docs").is_dir() and (parent / "src").is_dir():
+                    root_raw = str(parent.resolve())
+                    break
+            if not root_raw:
+                repo = (os.getenv("KDCUBE_KNOWLEDGE_REPO") or "https://github.com/kdcube/kdcube-ai-app.git").strip()
+                if not ref:
+                    ref = (os.getenv("KDCUBE_KNOWLEDGE_REF") or "").strip()
+                root_raw = "app/ai-app"
+
+        base_root = bundle_root
+        if repo:
+            try:
+                from kdcube_ai_app.infra.git.auth import normalize_git_remote_url
+                from kdcube_ai_app.infra.plugin.git_bundle import compute_git_bundle_paths
+
+                repo_url = normalize_git_remote_url(repo)
+                paths = compute_git_bundle_paths(
+                    bundle_id=f"{BUNDLE_ID}.knowledge",
+                    git_url=repo_url,
+                    git_ref=ref or None,
+                    git_subdir=None,
+                    bundles_root=(storage_root / "repos").resolve(),
+                )
+                base_root = paths.repo_root
+            except Exception:
+                base_root = storage_root / "repos"
+
+        source_root = None
+        if root_raw:
+            source_root = pathlib.Path(root_raw)
+            if not source_root.is_absolute():
+                source_root = (base_root / source_root).resolve()
+
+        return source_root, validate_refs, repo, ref or None
+
     def _resolve_knowledge_setup(
         self,
     ) -> tuple[
@@ -501,12 +581,81 @@ class ReactWorkflow(BaseEntrypoint):
             signature,
         )
 
+    def _expected_knowledge_setup(
+        self,
+    ) -> tuple[
+        pathlib.Path | None,
+        pathlib.Path,
+        pathlib.Path | None,
+        bool,
+        str | None,
+        str | None,
+        str | None,
+    ]:
+        ws_root = self.bundle_storage_root()
+        bundle_root = None
+        try:
+            spec = getattr(self.config, "ai_bundle_spec", None)
+            if spec and getattr(spec, "path", None):
+                bundle_root = pathlib.Path(spec.path).resolve()
+        except Exception:
+            bundle_root = None
+        if not bundle_root:
+            bundle_root = pathlib.Path(__file__).resolve().parent
+
+        if not ws_root:
+            return (
+                None,
+                bundle_root,
+                None,
+                True,
+                None,
+                None,
+                None,
+            )
+
+        source_root, validate_refs, repo, ref = self._expected_knowledge_paths(
+            bundle_root=bundle_root,
+            storage_root=ws_root,
+        )
+        signature = f"{repo}|{ref}|{source_root}|{validate_refs}"
+        return (
+            ws_root,
+            bundle_root,
+            source_root,
+            validate_refs,
+            repo,
+            ref,
+            signature,
+        )
+
     def _ensure_knowledge_space(self, *, reason: str) -> None:
         """
         Build or refresh the knowledge index under bundle storage.
         Uses a signature (repo|ref|root) to skip rebuilding when nothing changed.
         """
         try:
+            (
+                expected_ws_root,
+                _expected_bundle_root,
+                expected_source_root,
+                _expected_validate_refs,
+                _expected_repo,
+                _expected_ref,
+                expected_signature,
+            ) = self._expected_knowledge_setup()
+            if (
+                expected_ws_root
+                and _read_shared_knowledge_signature(expected_ws_root) == expected_signature
+                and _knowledge_outputs_ready(storage_root=expected_ws_root, source_root=expected_source_root)
+            ):
+                knowledge_resolver.KNOWLEDGE_ROOT = expected_ws_root
+                self._knowledge_signature = expected_signature
+                self.logger.log(
+                    f"[kdcube.copilot] knowledge build skipped ({reason}): shared signature cache hit for storage={expected_ws_root}",
+                    "INFO",
+                )
+                return None
             (
                 ws_root,
                 bundle_root,
@@ -535,7 +684,7 @@ class ReactWorkflow(BaseEntrypoint):
                 ),
                 "INFO",
             )
-            with _knowledge_build_lock(ws_root):
+            with _knowledge_build_lock(ws_root, logger=self.logger):
                 # Always register the root so search_knowledge() works even on cache hits.
                 knowledge_resolver.KNOWLEDGE_ROOT = ws_root
                 outputs_ready = _knowledge_outputs_ready(
@@ -566,6 +715,8 @@ class ReactWorkflow(BaseEntrypoint):
                     validate_refs=validate_refs,
                     logger=self.logger,
                 )
+                if not _knowledge_outputs_ready(storage_root=ws_root, source_root=source_root):
+                    raise RuntimeError(f"knowledge build completed but outputs are not ready: storage={ws_root}")
                 _write_shared_knowledge_signature(ws_root, signature)
                 self._knowledge_signature = signature
             self.logger.log(
@@ -600,12 +751,19 @@ class ReactWorkflow(BaseEntrypoint):
                 repo,
                 ref,
                 signature,
-            ) = self._resolve_knowledge_setup()
+            ) = self._expected_knowledge_setup()
             if not ws_root:
                 self.logger.log(
                     f"[kdcube.copilot] knowledge reconcile skipped ({reason}): bundle storage root is unavailable.",
                     "WARNING",
                 )
+                return None
+            knowledge_resolver.KNOWLEDGE_ROOT = ws_root
+            if _read_shared_knowledge_signature(ws_root) == signature and _knowledge_outputs_ready(
+                storage_root=ws_root,
+                source_root=source_root,
+            ):
+                self._knowledge_signature = signature
                 return None
             if self._knowledge_signature is None:
                 self.logger.log(
