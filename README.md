@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>Platform and SDK for AI applications you control.</strong>
+  <strong><span style="color:#16a34a;font-size:1.15em;">Platform and SDK for AI applications you control.</span></strong>
 </p>
 
 <p align="center">
@@ -21,13 +21,14 @@
   </a>
 </p>
 
-<p align="center">
-  Public, read-only documentation MCP endpoint for MCP-capable clients:
+<div style="background:#fff7cc;border:1px solid #fde68a;border-radius:8px;padding:12px 16px;margin:16px 0;">
+  <strong>Documentation MCP server</strong><br>
+  Public, read-only endpoint for MCP-capable clients:
   <br>
   <a href="https://dev.kdcube.tech/api/integrations/bundles/demo/demo-march/kdcube.copilot@2026-04-03-19-05/public/mcp/kdcube-doc">
-    <code>dev.kdcube.tech/.../public/mcp/kdcube-doc</code>
+    <code>https://dev.kdcube.tech/api/integrations/bundles/demo/demo-march/kdcube.copilot@2026-04-03-19-05/public/mcp/kdcube-doc</code>
   </a>
-</p>
+</div>
 
 KDCube is a self-hosted platform, SDK, runtime, and control plane for AI
 applications. It is not a workflow loop wrapped around a model. It is built
@@ -120,6 +121,9 @@ Typical bundle structure:
 
 ```text
 my.bundle@1-0/
+  README.md
+  AGENTS.md
+  release.yaml
   entrypoint.py
   orchestrator/
     workflow.py
@@ -127,6 +131,14 @@ my.bundle@1-0/
   skills_descriptor.py
   tools/
   skills/
+  config/
+    bundles.template.yaml
+    bundles.secrets.template.yaml
+  interface/
+    README.md
+    my.bundle.openapi.yaml
+  docs/
+    design/
   ui/
     main/
     widgets/
