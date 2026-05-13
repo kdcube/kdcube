@@ -82,6 +82,8 @@ class SettingsManager {
   private callback: (() => void) | null = null;
 
   getBaseUrl(): string {
+    // Fallback to this widget frame's own origin. Do not use window.top or a
+    // parent page origin; embedded host pages may live on another domain.
     if (isPlaceholder(this.settings.baseUrl)) return window.location.origin;
     const trimmed = this.settings.baseUrl.replace(/\/+$/, '');
     return trimmed.endsWith('/api') ? trimmed.slice(0, -4) : trimmed;

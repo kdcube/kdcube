@@ -15,6 +15,7 @@ see_also:
   - ks:docs/sdk/tools/tool-subsystem-README.md
   - ks:docs/sdk/bundle/bundle-client-communication-README.md
   - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
+  - ks:docs/service/fs/file-lock-README.md
 ---
 # Bundle Runtime
 
@@ -163,6 +164,75 @@ Use cases for the local helper root:
 Do not confuse this with `AIBundleStorage`:
 - local helper root = shared instance-local filesystem
 - `AIBundleStorage` = backend storage API for bundle artifacts
+
+## Guarded shared filesystem objects
+
+If a bundle prepares a shared local object under `bundle_storage_root()` and
+multiple requests/workers may try to build it at the same time, guard the build.
+This applies in cloud deployments and in local `kdcube start` / docker-compose
+runtimes because both can run multiple workers against the same mounted runtime
+storage.
+
+Use the low-level observed lock when the bundle owns the signature and readiness
+rules:
+
+```python
+from kdcube_ai_app.storage.observed_file_locks import observed_file_lock
+
+
+def ensure_local_registry(self) -> pathlib.Path:
+    storage_root = self.bundle_storage_root()
+    registry_root = storage_root / "registry"
+    signature = self.bundle_prop("registry.version", default="local")
+    signature_path = storage_root / ".registry.signature"
+
+    def current() -> bool:
+        try:
+            return (
+                signature_path.read_text(encoding="utf-8").strip() == signature
+                and (registry_root / "index.json").exists()
+            )
+        except Exception:
+            return False
+
+    if current():
+        return registry_root
+
+    with observed_file_lock(
+        lock_path=storage_root / ".registry.lock",
+        resource_id=f"{self.config.ai_bundle_spec.id}:registry",
+        operation="my.bundle.registry.build",
+        wait_seconds=300,
+    ):
+        if current():
+            return registry_root
+
+        build_registry(registry_root)
+        if not (registry_root / "index.json").exists():
+            raise RuntimeError("registry build completed but index.json is missing")
+        signature_path.write_text(f"{signature}\n", encoding="utf-8")
+
+    return registry_root
+```
+
+Rules:
+
+- check `signature + ready` before the lock so normal reads stay fast
+- re-check after acquiring the lock because another worker may have finished
+- write the signature only after the output is ready
+- use `observed_file_lock_async(...)` from async code that must not block the
+  event loop while waiting for the lock
+- use a bounded `wait_seconds` so a stuck owner becomes a visible failure
+
+For UI main apps and widgets, use the platform UI build path instead of writing
+bundle-local lock code. `BaseEntrypoint` already uses
+`run_once_for_shared_bundle_storage(...)` from
+`kdcube_ai_app.infra.plugin.bundle_once` so each UI output has one builder,
+waiters, a source signature, and an output readiness check.
+
+Detailed runtime lifecycle:
+
+- [Observed File Locks](../../service/fs/file-lock-README.md)
 
 ## Async props and secrets access
 

@@ -92,6 +92,18 @@ Configuration/runtime rule:
 - use this page for how to structure the bundle code
 - use [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md) for `assembly.yaml`, `bundles.yaml`, `bundles.secrets.yaml`, `kdcube --build --upstream`, and `kdcube --info`
 
+Critical widget/browser rule:
+
+- widget and generated HTML API clients must be frame-origin aware
+- request runtime `baseUrl` from the KDCube config bridge and use it to build
+  `/api/integrations/...` operation URLs
+- if runtime config is unavailable, fall back only to that frame's own
+  `window.location.origin`
+- do not use `window.top.location`, `document.referrer`, or an embedding host
+  page URL as the API base
+- read [bundle-widget-integration-README.md#frame-origin-and-api-base-url](../bundle-widget-integration-README.md#frame-origin-and-api-base-url)
+  before writing widget networking code
+
 Tier 1 role of this page:
 
 - use it first when you are creating a new bundle

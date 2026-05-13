@@ -255,6 +255,65 @@ The widget must accept both response event types:
 
 Both are used in the platform today. Do not listen only for `CONFIG_RESPONSE`.
 
+## Frame Origin And API Base URL
+
+Widget API calls must be anchored to the KDCube-hosted frame origin, not to the
+top-level page that may be embedding KDCube.
+
+Browser URL resolution is frame-local:
+
+```text
+https://host-app.example.net
+  iframe src="https://kdcube.example.com/platform/chat"
+    KDCube frontend frame:
+      window.location.origin == "https://kdcube.example.com"
+      fetch("/api/...")     -> "https://kdcube.example.com/api/..."
+
+      nested bundle widget frame:
+        baseUrl from CONFIG_REQUEST == "https://kdcube.example.com"
+        operation call              -> "https://kdcube.example.com/api/..."
+```
+
+This means a normal embedded deployment works when the host application frames
+the KDCube frontend by URL:
+
+```html
+<iframe src="https://kdcube.example.com/platform/chat"></iframe>
+```
+
+The widget must never use `window.top.location`, `document.referrer`, or a
+caller-provided host-page URL as its API base. Those values can point to the
+embedding application, for example `https://host-app.example.net`, and would
+make the widget call `https://host-app.example.net/api/...` by mistake.
+
+Correct base URL selection:
+
+- first use `baseUrl` received from the KDCube runtime config handshake
+- if no runtime config is available, fall back to `window.location.origin` from
+  the widget frame itself
+- if the widget route contains tenant/project/bundle, use that route only as a
+  scope fallback, not as proof that the host-page origin is the API origin
+
+The KDCube control-plane runtime sends `baseUrl` from its own frame origin. A
+widget rendered by `srcDoc` still runs under the KDCube frontend frame origin;
+a widget loaded by `src` from `/api/integrations/.../widgets/...` also runs
+under the KDCube origin. In both cases, root-relative URLs and
+runtime-provided `baseUrl` must resolve to the hosted KDCube domain.
+
+There is one valid exception: a same-origin reverse-proxy deployment may serve
+the host application and KDCube under one public origin:
+
+```text
+https://app.example.com/app/*       -> host application
+https://app.example.com/platform/*  -> KDCube frontend
+https://app.example.com/api/*       -> KDCube API
+```
+
+In that topology, `window.location.origin` is intentionally
+`https://app.example.com`, and the proxy must route all KDCube paths used by
+the frontend and widgets, including `/platform`, `/api`, streaming endpoints,
+and `/api/integrations/...`.
+
 ## Required URL Shape
 
 Bundle operations must be called as:
@@ -338,6 +397,8 @@ function makeHeaders(): Headers {
 
 function operationUrl(alias: string): string {
   if (!hasConfig()) throw new Error('Widget configuration is incomplete.')
+  // baseUrl is the KDCube frame origin from runtime config, or this widget
+  // frame's own origin as a fallback. It must not come from window.top.
   const baseUrl = state.baseUrl.replace(/\/+$/, '')
   const tenant = encodeURIComponent(state.tenant)
   const project = encodeURIComponent(state.project)

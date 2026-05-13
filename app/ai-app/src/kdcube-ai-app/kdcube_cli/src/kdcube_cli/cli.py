@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import yaml
 from rich.console import Console
@@ -1149,6 +1150,41 @@ def _has_value(value: object | None) -> bool:
     return bool(text) and not installer_mod.is_placeholder(text)
 
 
+def _normalize_cors_origin(raw: str) -> str:
+    value = str(raw or "").strip().rstrip("/")
+    if not value:
+        return ""
+    if "://" not in value:
+        value = f"https://{value}"
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise SystemExit(f"Invalid CORS origin: {raw!r}. Use an origin like https://example.ngrok-free.dev")
+    return urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
+
+
+def _apply_cors_origins(assembly: dict, origins: list[str]) -> list[str]:
+    if not origins:
+        return []
+    cors = assembly.get("cors")
+    if not isinstance(cors, dict):
+        cors = {}
+        assembly["cors"] = cors
+    allow_origins = cors.get("allow_origins")
+    if not isinstance(allow_origins, list):
+        allow_origins = []
+        cors["allow_origins"] = allow_origins
+
+    existing = {str(item).strip().rstrip("/") for item in allow_origins if str(item).strip()}
+    added: list[str] = []
+    for raw in origins:
+        origin = _normalize_cors_origin(raw)
+        if origin and origin not in existing:
+            allow_origins.append(origin)
+            existing.add(origin)
+            added.append(origin)
+    return added
+
+
 def _iter_bundle_specs(payload: dict | None):
     if not isinstance(payload, dict):
         return
@@ -1994,6 +2030,13 @@ def main() -> None:
         help="Stage one dotted secret key into config/secrets.yaml (repeatable)",
     )
     _sp.add_argument(
+        "--cors-origin",
+        action="append",
+        metavar="ORIGIN",
+        default=[],
+        help="Append an allowed CORS origin to staged config/assembly.yaml (repeatable)",
+    )
+    _sp.add_argument(
         "-i",
         "--interactive",
         action="store_true",
@@ -2462,6 +2505,19 @@ def main() -> None:
                 workdir=_init_resolved,
                 descriptors_location=_init_descriptors_location,
             )
+            _added_cors_origins = _apply_cors_origins(
+                _descriptor_bootstrap["assembly"],
+                list(args.cors_origin or []),
+            )
+            if _added_cors_origins:
+                installer_mod.save_release_descriptor(
+                    _descriptor_bootstrap["assembly_path"],
+                    _descriptor_bootstrap["assembly"],
+                )
+                console.print(
+                    "[dim]Added CORS origins to config/assembly.yaml:[/dim] "
+                    + ", ".join(_added_cors_origins)
+                )
             _init_runtime_secrets = _parse_init_secret_pairs(args.set_secret)
             if args.prompt_secrets and not args.interactive:
                 _init_runtime_secrets = _prompt_init_standard_secrets(console, _init_runtime_secrets)

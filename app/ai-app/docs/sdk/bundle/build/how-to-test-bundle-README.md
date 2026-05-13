@@ -36,6 +36,17 @@ Tier 1 rule:
 The goal is not “run something once”.
 The goal is to prove that the bundle works in the supported KDCube runtime contract.
 
+Critical widget/browser test:
+
+- verify widget network requests call the KDCube hosted origin, not the
+  embedding host page origin
+- in browser devtools, a control-plane iframe opened from
+  `https://kdcube.example.com/platform/chat` should make widget/API calls to
+  `https://kdcube.example.com/api/...`
+- treat calls to `localhost`, `window.top`'s origin, or a host app domain as a
+  widget integration bug unless the deployment intentionally reverse-proxies all
+  KDCube paths under that same origin
+
 Use this together with:
 
 - [how-to-navigate-kdcube-docs-README.md](how-to-navigate-kdcube-docs-README.md)

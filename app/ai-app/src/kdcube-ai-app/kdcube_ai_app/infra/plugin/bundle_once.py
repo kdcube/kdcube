@@ -167,6 +167,7 @@ async def run_once_for_shared_bundle_storage(
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     deadline = time.time() + max(0.0, float(lock_wait_seconds))
     lock_acquired = False
+    last_wait_log_at = 0.0
 
     while True:
         if _signature_current(signature_path=sig_path, signature=signature, ready=ready):
@@ -219,6 +220,16 @@ async def run_once_for_shared_bundle_storage(
                     )
                     return SharedStorageOnceResult("lock_timeout_existing", root, op, lock_path, sig_path, ran=False)
                 raise SharedStorageOnceTimeout(f"{op} lock wait timed out for storage={root}")
+            now = time.time()
+            if last_wait_log_at <= 0.0 or (now - last_wait_log_at) >= 5.0:
+                age = _lock_age_seconds(lock_path)
+                age_part = f" lock_age_sec={age:.1f}" if age is not None else ""
+                _logger_log(
+                    logger,
+                    f"{log_prefix} waiting for lock op={op} storage={root}{age_part} {owner_summary}",
+                    "WARNING",
+                )
+                last_wait_log_at = now
             await asyncio.sleep(max(0.01, float(poll_interval_seconds)))
 
     try:

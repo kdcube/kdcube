@@ -17,6 +17,7 @@ see_also:
   - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
   - ks:docs/service/cicd/ngrok-README.md
   - ks:docs/sdk/bundle/bundle-delivery-and-update-README.md
+  - ks:docs/sdk/bundle/bundle-widget-integration-README.md
 ---
 # How To Release Bundle Content
 
@@ -36,6 +37,16 @@ It is also the recommended way to work when building a bundle from scratch:
 
 Do not rely on another release procedure when using this page.
 This page is the self-contained public bundle-builder procedure.
+
+Critical release check for browser surfaces:
+
+- if the release changes widgets, generated HTML apps, Mini Apps, or
+  browser-facing operation clients, verify they use the KDCube runtime/frame
+  origin for API calls
+- release notes should not bless hardcoded `localhost`, host-app domains,
+  `window.top.location`, or `document.referrer` as API base sources
+- use [bundle-widget-integration-README.md#frame-origin-and-api-base-url](../bundle-widget-integration-README.md#frame-origin-and-api-base-url)
+  as the release-time contract
 
 ## 1. Release Decision With The User
 

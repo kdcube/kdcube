@@ -12,6 +12,7 @@ see_also:
   - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-release-bundle-content-README.md
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
+  - ks:docs/sdk/bundle/bundle-widget-integration-README.md
   - ks:docs/sdk/integrations/telegram/telegram-README.md
   - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
   - ks:docs/sdk/integrations/browser/browser-tools-README.md
@@ -63,6 +64,18 @@ Start with these six Tier 1 baseline pages in this order:
 6. [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md)
 
 Read those six together as one bundle-authoring baseline.
+
+Critical widget/browser rule:
+
+- any widget, generated HTML app, or bundle UI that calls KDCube APIs must use
+  the KDCube frame/runtime origin, not the top-level page that may be embedding
+  KDCube
+- use `baseUrl` from the KDCube runtime config bridge first; if missing, fall
+  back to that frame's own `window.location.origin`
+- never use `window.top.location`, `document.referrer`, or a host-page URL as
+  the API base
+- read [bundle-widget-integration-README.md#frame-origin-and-api-base-url](../bundle-widget-integration-README.md#frame-origin-and-api-base-url)
+  before writing widget networking code
 
 There is also one optional Tier 1 lifecycle procedure:
 

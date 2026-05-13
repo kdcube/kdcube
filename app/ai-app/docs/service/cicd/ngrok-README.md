@@ -26,6 +26,30 @@ There are two local shapes:
 Use one ngrok HTTPS URL for the whole local stack. Do not expose proc as a
 separate public ngrok URL.
 
+## Stable Ngrok Domain
+
+Do not run ngrok without an explicit URL when Telegram, Cognito, or bundle
+descriptors depend on the public origin. A plain command such as
+`ngrok http 5173` can produce a different hostname, which then forces updates
+to webhooks, callback URLs, CORS, and bundle config.
+
+Use a Domain assigned to your ngrok account, then pass it every time:
+
+```bash
+ngrok http 5173 --url https://<stable-ngrok-domain> --host-header=rewrite
+```
+
+For manual split services through Caddy:
+
+```bash
+ngrok http 18080 --url https://<stable-ngrok-domain> --host-header=rewrite
+```
+
+On a free ngrok account, use the automatically assigned Dev Domain. On a paid
+account, create the desired ngrok-managed or custom domain in the ngrok
+dashboard. In both cases, the important runtime rule is the same: pass the URL
+explicitly with `--url`.
+
 CLI-started runtime:
 
 ```text
@@ -79,6 +103,7 @@ Initialize and start the runtime:
 kdcube init \
   --workdir ~/.kdcube/kdcube-runtime \
   --descriptors-location /path/to/descriptors \
+  --cors-origin https://<stable-ngrok-domain> \
   --set-secret services.openai.api_key "<openai-key>" \
   --set-secret services.anthropic.api_key "<anthropic-key>" \
   --set-secret services.git.http_token "<github-token>" \
@@ -104,13 +129,13 @@ http://localhost:5173/platform/chat
 Start ngrok against that same port:
 
 ```bash
-ngrok http --host-header=rewrite 5173
+ngrok http 5173 --url https://<stable-ngrok-domain> --host-header=rewrite
 ```
 
 If `kdcube start` printed another port, use that port instead:
 
 ```bash
-ngrok http --host-header=rewrite <proxy-http-port>
+ngrok http <proxy-http-port> --url https://<stable-ngrok-domain> --host-header=rewrite
 ```
 
 You do not need Caddy for the CLI-started runtime. Docker Compose already starts
@@ -226,7 +251,8 @@ bundles:
 ```bash
 kdcube init \
   --workdir ~/.kdcube/kdcube-runtime \
-  --descriptors-location /path/to/descriptors
+  --descriptors-location /path/to/descriptors \
+  --cors-origin https://<stable-ngrok-domain>
 
 kdcube start --workdir ~/.kdcube/kdcube-runtime/<tenant>__<project>
 ```
@@ -245,21 +271,21 @@ The ngrok target port is `5173`.
 3. Start ngrok:
 
 ```bash
-ngrok http --host-header=rewrite 5173
+ngrok http 5173 --url https://<stable-ngrok-domain> --host-header=rewrite
 ```
 
-4. Copy the ngrok HTTPS URL.
+4. Confirm the ngrok HTTPS URL is the stable domain you configured.
 
 Example:
 
 ```text
-https://a692-84-62-187-246.ngrok-free.app
+https://<stable-ngrok-domain>
 ```
 
-5. Update the staged runtime descriptors under
-   `~/.kdcube/kdcube-runtime/<tenant>__<project>/config/` or rerun the relevant
-   `kdcube bundle ... --set-config/--set-secret ...` commands so Cognito,
-   CORS, and Telegram URLs use the ngrok origin.
+5. CORS is handled by `--cors-origin` during init. Configure bundle public URLs
+   with the relevant `kdcube bundle ... --set-config/--set-secret ...`
+   commands so Telegram webhooks and any OAuth redirect/public-base URLs use
+   the ngrok origin.
 
 6. Restart after `assembly.yaml` changes:
 
@@ -333,15 +359,15 @@ caddy run --config ~/.kdcube/ngrok/Caddyfile
 3. Start ngrok:
 
 ```bash
-ngrok http --host-header=rewrite 18080
+ngrok http 18080 --url https://<stable-ngrok-domain> --host-header=rewrite
 ```
 
-4. Copy the ngrok HTTPS URL.
+4. Confirm the ngrok HTTPS URL is the stable domain you configured.
 
 Example:
 
 ```text
-https://a692-84-62-187-246.ngrok-free.app
+https://<stable-ngrok-domain>
 ```
 
 5. Restart ingress after `assembly.yaml` changes.

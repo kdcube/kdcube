@@ -26,6 +26,9 @@ const useSharedConfigProvider = () => {
                 if (!requestedFields || !Array.isArray(requestedFields)) {
                     return;
                 }
+                // This code runs inside the KDCube frontend frame. Use this
+                // frame's origin, not the top-level embedding page origin, so
+                // nested widgets keep calling the hosted KDCube API.
                 const baseUrl = window.location.origin + chatAPIBasePath
                 const configMap: Record<string, () => unknown> = {
                     'baseUrl': () => baseUrl,

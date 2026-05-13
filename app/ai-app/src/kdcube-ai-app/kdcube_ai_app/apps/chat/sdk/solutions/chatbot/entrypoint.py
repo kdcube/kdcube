@@ -582,8 +582,8 @@ class BaseEntrypoint:
                 },
                 lock_wait_seconds=max(1, int(os.environ.get("BUNDLE_UI_BUILD_LOCK_WAIT_SECONDS", "600") or "600")),
                 lock_ttl_seconds=max(30, int(os.environ.get("BUNDLE_UI_BUILD_LOCK_TTL_SECONDS", "900") or "900")),
-                allow_existing_on_timeout=True,
-                allow_existing_while_locked=True,
+                allow_existing_on_timeout=False,
+                allow_existing_while_locked=False,
                 log_prefix="[bundle.ui]",
             )
         except TimeoutError:

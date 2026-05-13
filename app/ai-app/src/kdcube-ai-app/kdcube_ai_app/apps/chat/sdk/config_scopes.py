@@ -390,6 +390,7 @@ class GitBundlesConfig(BaseModel):
     BUNDLE_GIT_FAIL_MAX_BACKOFF_SECONDS: int = 300
     BUNDLE_GIT_KEEP: int = 3
     BUNDLE_GIT_TTL_HOURS: int = 0
+    BUNDLE_GIT_COMMAND_TIMEOUT_SECONDS: int = 120
     GIT_SSH_KEY_PATH: str | None = None
     GIT_SSH_KNOWN_HOSTS: str | None = None
     GIT_SSH_STRICT_HOST_KEY_CHECKING: str = "yes"

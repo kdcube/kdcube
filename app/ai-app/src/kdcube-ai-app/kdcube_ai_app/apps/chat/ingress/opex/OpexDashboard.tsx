@@ -38,7 +38,7 @@ class SettingsManager {
 
     getBaseUrl(): string {
         if (this.settings.baseUrl === this.PLACEHOLDER_BASE_URL) {
-            return 'http://localhost:8010';
+            return window.location.origin;
         }
 
         // Validate URL
@@ -46,12 +46,13 @@ class SettingsManager {
             const url = new URL(this.settings.baseUrl);
             if (url.port === 'None' || url.hostname.includes('None')) {
                 console.warn('[SettingsManager] Invalid baseUrl detected, using fallback');
-                return 'http://localhost:8010';
+                return window.location.origin;
             }
-            return this.settings.baseUrl;
+            const trimmed = this.settings.baseUrl.replace(/\/+$/, '');
+            return trimmed.endsWith('/api') ? trimmed.slice(0, -4) : trimmed;
         } catch (e) {
             console.warn('[SettingsManager] Invalid baseUrl, using fallback:', this.settings.baseUrl);
-            return 'http://localhost:8010';
+            return window.location.origin;
         }
     }
 
