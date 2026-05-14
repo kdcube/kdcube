@@ -1,9 +1,9 @@
 ---
 id: ks:docs/configuration/secrets-descriptor-README.md
 title: "Platform Secrets Descriptor"
-summary: "Platform-level secret configuration in secrets.yaml: model provider credentials, git and auth secrets, and other global deployment secrets across local file mode and AWS."
+summary: "Platform-level secret configuration in secrets.yaml: model provider credentials, git and auth secrets, and other global deployment secrets across local file mode and AWS. Service keys under services.* can be overridden per bundle via bundles.secrets.yaml."
 tags: ["service", "configuration", "platform", "secrets", "deployment", "descriptor"]
-keywords: ["platform global secrets", "model provider credentials", "git transport credentials", "identity provider secrets", "cloud credentials", "email credentials", "local secrets file mode", "aws secrets manager global secrets", "canonical secret keys", "deployment secret inventory"]
+keywords: ["platform global secrets", "model provider credentials", "git transport credentials", "identity provider secrets", "cloud credentials", "email credentials", "local secrets file mode", "aws secrets manager global secrets", "canonical secret keys", "deployment secret inventory", "bundle service key override", "per-bundle api key"]
 see_also:
   - ks:docs/service/cicd/descriptors-README.md
   - ks:docs/configuration/bundles-secrets-descriptor-README.md
@@ -70,6 +70,13 @@ Typical keys:
 Do not put bundle-scoped secrets here if they belong to a specific bundle.
 
 Use `bundles.secrets.yaml` for bundle secrets.
+
+The `services.*` keys listed above can be overridden per bundle via
+`bundles.secrets.yaml` using the same key path.
+When bundle code reads a service key through `get_service_secret`, the bundle
+value takes precedence over this file.
+See [bundles-secrets-descriptor-README.md](bundles-secrets-descriptor-README.md)
+for the override mechanism and the list of overridable keys.
 
 ## Authority by mode
 

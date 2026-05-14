@@ -19,7 +19,7 @@ from kdcube_ai_app.infra.accounting.usage import quote_tokens_for_usd
 from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription_budget import SubscriptionBudgetLimiter
 from kdcube_ai_app.apps.chat.sdk.infra.economics.project_budget import ProjectBudgetLimiter
 from kdcube_ai_app.infra.channel.email import send_admin_email
-from kdcube_ai_app.apps.chat.sdk.config import get_secret
+from kdcube_ai_app.apps.chat.sdk.config import get_service_secret
 from kdcube_ai_app.ops.deployment.sql.db_deployment import project_schema as _project_schema
 
 logger = logging.getLogger(__name__)
@@ -104,7 +104,7 @@ class StripeSubscriptionService:
         self.subscription_mgr = subscription_mgr
         self.default_tenant = default_tenant
         self.default_project = default_project
-        self.stripe_api_key = stripe_api_key or get_secret("services.stripe.secret_key")
+        self.stripe_api_key = stripe_api_key or get_service_secret("stripe.secret_key")
 
     def _stripe(self):
         import stripe
@@ -354,8 +354,8 @@ class StripeEconomicsWebhookHandler:
         self.default_tenant = default_tenant
         self.default_project = default_project
 
-        self.webhook_secret = stripe_webhook_secret or get_secret("services.stripe.webhook_secret")
-        self.stripe_api_key = get_secret("services.stripe.secret_key")
+        self.webhook_secret = stripe_webhook_secret or get_service_secret("stripe.webhook_secret")
+        self.stripe_api_key = get_service_secret("stripe.secret_key")
         self.ref_provider = ref_provider
         self.ref_model = ref_model
 
@@ -1241,7 +1241,7 @@ class StripeEconomicsAdminService:
         self.pg_pool = pg_pool
         self.user_credits_mgr = user_credits_mgr
         self.subscription_mgr = subscription_mgr
-        self.stripe_api_key = stripe_api_key or get_secret("services.stripe.secret_key")
+        self.stripe_api_key = stripe_api_key or get_service_secret("stripe.secret_key")
         self.ref_provider = ref_provider
         self.ref_model = ref_model
 

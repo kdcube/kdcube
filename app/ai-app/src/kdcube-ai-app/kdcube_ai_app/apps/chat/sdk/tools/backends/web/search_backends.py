@@ -46,7 +46,7 @@ import aiohttp
 from kdcube_ai_app.apps.chat.sdk.tools.backends.web.inventory import compose_search_results_html, SearchRequest, \
     make_hit, clamp_max_results, SearchBackendError, _claim_sid_block, _normalize_url, dedup_round_robin_ranked, \
     PROVIDERS_AUTHORITY_RANK
-from kdcube_ai_app.apps.chat.sdk.config import get_settings, get_plain
+from kdcube_ai_app.apps.chat.sdk.config import get_settings, get_plain, get_service_secret
 from kdcube_ai_app.apps.chat.sdk.tools.web.favicon_cache import enrich_sources_pool_with_favicons
 from kdcube_ai_app.apps.chat.sdk.tools.web.with_llm import sources_reconciler, \
     filter_search_results_by_content
@@ -317,7 +317,7 @@ class BraveSearchBackend(SearchBackend):
     }
 
     def __init__(self, api_key: Optional[str] = None):
-        self.api_key = (api_key or get_settings().BRAVE_API_KEY or "").strip()
+        self.api_key = (api_key or get_service_secret("brave.api_key") or "").strip()
         if not self.api_key:
             raise SearchBackendError("BRAVE_API_KEY not set")
 

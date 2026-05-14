@@ -221,6 +221,14 @@ def build_portable_spec(*, svc: ModelServiceBase, chat_comm: ChatCommunicator, i
         "comm_ctx": _comm_ctx.snapshot_ctxvars(),
         "accounting": _acct.snapshot_ctxvars(),
     }
+
+    # Hardening fallback: if comm_ctx restoration fails in bootstrap for any
+    # reason, _resolve_current_bundle_id() can still find the bundle ID via
+    # os.getenv("KDCUBE_BUNDLE_ID") — the last resort in its lookup chain.
+    bundle_id = contextvars["comm_ctx"].get("BUNDLE_ID")
+    if bundle_id:
+        env_passthrough["KDCUBE_BUNDLE_ID"] = bundle_id
+
     _settings = get_settings()
     # accounting_storage = { "storage_path": os.environ.get("KDCUBE_STORAGE_PATH") }
     accounting_storage = { "storage_path": _settings.STORAGE_PATH }

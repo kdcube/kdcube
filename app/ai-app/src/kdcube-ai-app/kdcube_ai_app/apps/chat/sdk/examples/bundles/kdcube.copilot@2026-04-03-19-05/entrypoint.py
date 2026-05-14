@@ -49,6 +49,7 @@ from kdcube_ai_app.apps.chat.sdk.context.vector.conv_ticket_store import ConvTic
 from kdcube_ai_app.apps.chat.sdk.config import (
     delete_user_secret,
     get_secret,
+    get_service_secret,
     get_user_secret,
     set_user_secret,
 )
@@ -836,15 +837,15 @@ class ReactWorkflow(BaseEntrypoint):
         return {
             "has_git_pat": bool(
                 get_user_secret("git.http_token", user_id=user_id, bundle_id=bundle_id)
-                or get_secret("services.git.http_token")
+                or get_service_secret("git.http_token")
             ),
             "has_anthropic_api_key": bool(
                 get_user_secret("anthropic.api_key", user_id=user_id, bundle_id=bundle_id)
-                or get_secret("services.anthropic.api_key")
+                or get_service_secret("anthropic.api_key")
             ),
             "has_claude_code_key": bool(
                 get_user_secret("anthropic.claude_code_key", user_id=user_id, bundle_id=bundle_id)
-                or get_secret("services.anthropic.claude_code_key")
+                or get_service_secret("anthropic.claude_code_key")
             ),
         }
 
@@ -900,15 +901,15 @@ class ReactWorkflow(BaseEntrypoint):
         env: dict[str, str] = {}
         api_key = (
             get_user_secret("anthropic.api_key", user_id=user_id, bundle_id=bundle_id)
-            or get_secret("services.anthropic.api_key")
+            or get_service_secret("anthropic.api_key")
         )
         auth_token = (
             get_user_secret("anthropic.auth_token", user_id=user_id, bundle_id=bundle_id)
-            or get_secret("services.anthropic.auth_token")
+            or get_service_secret("anthropic.auth_token")
         )
         claude_code_key = (
             get_user_secret("anthropic.claude_code_key", user_id=user_id, bundle_id=bundle_id)
-            or get_secret("services.anthropic.claude_code_key")
+            or get_service_secret("anthropic.claude_code_key")
         )
         if api_key:
             env["ANTHROPIC_API_KEY"] = api_key
@@ -922,11 +923,11 @@ class ReactWorkflow(BaseEntrypoint):
         bundle_id = getattr(getattr(self.config, "ai_bundle_spec", None), "id", None) or BUNDLE_ID
         token = (
             get_user_secret("git.http_token", user_id=user_id, bundle_id=bundle_id)
-            or get_secret("services.git.http_token")
+            or get_service_secret("git.http_token")
         )
         http_user = (
             get_user_secret("git.http_user", user_id=user_id, bundle_id=bundle_id)
-            or get_secret("services.git.http_user")
+            or get_service_secret("git.http_user")
             or "x-access-token"
         )
         return token, http_user

@@ -7,7 +7,7 @@ import pathlib
 import subprocess
 from typing import Mapping
 
-from kdcube_ai_app.apps.chat.sdk.config import get_secret, get_settings
+from kdcube_ai_app.apps.chat.sdk.config import get_service_secret, get_settings
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
 
 
@@ -20,9 +20,9 @@ def _clean(value: str | None) -> str | None:
     return text or None
 
 
-def _safe_get_secret(key: str) -> str | None:
+def _safe_get_service_secret(key: str) -> str | None:
     try:
-        return get_secret(key)
+        return get_service_secret(key)
     except Exception:
         return None
 
@@ -53,14 +53,12 @@ def _resolved_http_credentials(
     settings = get_settings()
     token = (
         _clean(git_http_token)
-        or _clean(getattr(settings, "GIT_HTTP_TOKEN", None))
-        or _clean(_safe_get_secret("services.git.http_token"))
+        or _clean(_safe_get_service_secret("git.http_token"))
         or _clean(base_env.get("GIT_HTTP_TOKEN"))
     )
     user = (
         _clean(git_http_user)
-        or _clean(getattr(settings, "GIT_HTTP_USER", None))
-        or _clean(_safe_get_secret("services.git.http_user"))
+        or _clean(_safe_get_service_secret("git.http_user"))
         or _clean(base_env.get("GIT_HTTP_USER"))
         or DEFAULT_GIT_HTTP_USER
     )

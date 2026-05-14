@@ -371,6 +371,13 @@ def bootstrap_bind_all(spec_json: str, *,
     except Exception:
         print("accounting restore failed", file=sys.stderr)
 
+    try:
+        from kdcube_ai_app.apps.chat.sdk.runtime import comm_ctx as _comm_ctx
+        if spec.contextvars and spec.contextvars.get("comm_ctx"):
+            _comm_ctx.restore_ctxvars(spec.contextvars["comm_ctx"])
+    except Exception:
+        print("comm_ctx restore failed", file=sys.stderr)
+
     # 3) generic CV snapshot (best-effort)
     if spec.cv_snapshot:
         try:
@@ -500,6 +507,15 @@ def bootstrap_from_spec(spec_json: str, *, tool_module, bootstrap_env: bool = Fa
         print(f"acct restore done")
     except Exception:
         print(f"accounting restore failed {traceback.format_exc()}", file=sys.stderr)
+
+    #    2.3 comm_ctx: restore BUNDLE_ID_CV so get_secret("b:...") resolves bundle-level keys
+    try:
+        from kdcube_ai_app.apps.chat.sdk.runtime import comm_ctx as _comm_ctx
+        if spec.contextvars and spec.contextvars.get("comm_ctx"):
+            _comm_ctx.restore_ctxvars(spec.contextvars["comm_ctx"])
+            print(f"comm_ctx restore done")
+    except Exception:
+        print(f"comm_ctx restore failed {traceback.format_exc()}", file=sys.stderr)
 
     # 3) Best-effort generic CV snapshot restore (for any other ContextVars)
     if spec.cv_snapshot:

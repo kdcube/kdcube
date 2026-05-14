@@ -160,6 +160,22 @@ async def get_secret_async(key: str, default: str | None = None) -> str | None:
     return default
 
 
+def get_service_secret(key: str, default: str | None = None) -> str | None:
+    canonical = f"services.{key.lstrip('.')}"
+    bundle_val = get_secret(f"b:{canonical}")
+    if bundle_val:
+        return bundle_val
+    return get_secret(canonical, default=default)
+
+
+async def get_service_secret_async(key: str, default: str | None = None) -> str | None:
+    canonical = f"services.{key.lstrip('.')}"
+    bundle_val = await get_secret_async(f"b:{canonical}")
+    if bundle_val:
+        return bundle_val
+    return await get_secret_async(canonical, default=default)
+
+
 def read_secret(key: str, default: str | None = None) -> str | None:
     return get_secret(key, default=default)
 
