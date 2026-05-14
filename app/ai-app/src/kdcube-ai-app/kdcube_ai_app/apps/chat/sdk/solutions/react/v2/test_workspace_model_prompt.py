@@ -78,20 +78,21 @@ def test_build_decision_system_text_explains_one_response_is_one_round():
     assert text.lstrip().startswith("CRITICAL: you are the agent which must")
     assert "Never emit legacy <thinking>...</thinking> tags." in text
     assert "Output protocol (strict): you must produce content which represents one round" in text
-    assert "In a single round, include exactly one <channel:thinking>, one <channel:code>, and one or more <channel:ReactDecisionOutV2> channel instances." in text
+    assert "In a single round, include exactly one <channel:thinking>, one or more <channel:ReactDecisionOutV2> channel instances" in text
     assert "The optional <channel:summary> may appear exactly once, and only when the response contains a single complete/exit action and no tool-call actions." in text
     assert "Do NOT emit <channel:summary> in code execution rounds." in text
     assert "For call_tool-only rounds, omit <channel:summary> entirely" in text
     assert "For complete/exit rounds, include exactly one <channel:summary>" in text
-    assert "If you need multiple actions in one round, repeat only <channel:ReactDecisionOutV2>." in text
+    assert "put its <channel:code> immediately after that exec decision" in text
     assert "If action B needs an artifact, source path, search result, or output created by action A, split them into separate rounds." in text
     assert "Never put > 1 JSON objects, > 1 fenced JSON blocks, or prose after the JSON inside one <channel:ReactDecisionOutV2> instance." in text
     assert "Final answer shape only when action is complete or exit" in text
     assert "Goal, Outcome, Key facts, Refs" in text
     assert "If you emit multiple tool-call actions, each action must be in its own separate <channel:ReactDecisionOutV2>...</channel:ReactDecisionOutV2> instance." in text
-    assert "Use <channel:code> only when this round contains exactly one exec_tools.execute_code_python action" in text
+    assert "Use non-empty <channel:code> only immediately after an exec_tools.execute_code_python decision" in text
     assert "Exec in multi-action: you may include exactly one exec_tools.execute_code_python action together with other actions" in text
-    assert "complete params.contract and complete Python in <channel:code>" in text
+    assert "Exec binding: an exec_tools.execute_code_python decision must be followed immediately by <channel:code>" in text
+    assert "immediately followed by complete Python in <channel:code>" in text
 
 
 def test_build_decision_system_text_has_no_stale_single_tool_limit_hint():

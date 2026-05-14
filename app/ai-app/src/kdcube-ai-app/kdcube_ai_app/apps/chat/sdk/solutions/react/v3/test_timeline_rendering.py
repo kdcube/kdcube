@@ -73,6 +73,42 @@ def test_bind_params_assumes_fi_for_visible_bare_artifact_ref():
     assert params["content"] == "<html>bare</html>"
 
 
+def test_bind_params_normalizes_current_turn_outputs_ref_when_visible():
+    ctx = RuntimeCtx(turn_id="turn_cur", started_at="2026-02-09T00:00:00Z")
+    tl = Timeline(runtime=ctx)
+    tl.blocks.append({
+        "type": "react.tool.result",
+        "turn_id": "turn_cur",
+        "path": "fi:turn_cur.outputs/ai_security_news/slides.html",
+        "mime": "text/html",
+        "text": "<html>slides</html>",
+        "meta": {
+            "artifact_path": "fi:turn_cur.outputs/ai_security_news/slides.html",
+            "physical_path": "turn_cur/outputs/ai_security_news/slides.html",
+            "visibility": "external",
+        },
+    })
+
+    params, _lineage, violations = tl.bind_params_with_refs(
+        base_params={"content": "ref:outputs/ai_security_news/slides.html"},
+        tool_id="rendering_tools.write_pptx",
+        visible_paths=tl.visible_paths(),
+    )
+
+    assert params["content"] == "<html>slides</html>"
+    assert violations == [{
+        "code": "ref_path_normalized",
+        "severity": "warning",
+        "path": "outputs/ai_security_news/slides.html",
+        "param": "content",
+        "resolved_ref": "fi:turn_cur.outputs/ai_security_news/slides.html",
+        "message": (
+            "Accepted shorthand `ref:outputs/ai_security_news/slides.html` because it matched visible artifact "
+            "`ref:fi:turn_cur.outputs/ai_security_news/slides.html`. Prefer the canonical ref next time."
+        ),
+    }]
+
+
 def test_bind_params_reports_logical_ref_hint_for_unresolved_physical_ref():
     ctx = RuntimeCtx(turn_id="turn_cur", started_at="2026-02-09T00:00:00Z")
     tl = Timeline(runtime=ctx)

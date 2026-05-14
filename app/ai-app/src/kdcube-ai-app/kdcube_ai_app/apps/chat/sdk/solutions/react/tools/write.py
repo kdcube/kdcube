@@ -91,6 +91,22 @@ async def handle_react_write(*, react: Any, ctx_browser: Any, state: Dict[str, A
         tool_id=tool_id,
         visible_paths=visible_paths,
     )
+    ref_warnings = [
+        violation for violation in (violations or [])
+        if isinstance(violation, dict) and violation.get("severity") == "warning"
+    ]
+    violations = [
+        violation for violation in (violations or [])
+        if not (isinstance(violation, dict) and violation.get("severity") == "warning")
+    ]
+    for warning in ref_warnings:
+        notice_block(
+            ctx_browser=ctx_browser,
+            tool_call_id=tool_call_id,
+            code="protocol_warning.ref_path_normalized",
+            message=str(warning.get("message") or "A ref: binding was normalized to a visible artifact path."),
+            extra={"warning": warning, "tool_id": tool_id},
+        )
     if violations:
         details: list[str] = []
         for violation in violations:

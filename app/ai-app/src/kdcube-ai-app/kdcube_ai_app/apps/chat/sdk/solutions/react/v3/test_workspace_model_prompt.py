@@ -91,7 +91,7 @@ def test_build_decision_system_text_single_action_mode_uses_action_channel_wordi
     assert "Final answer shape only when action is complete or exit" in text
     assert "Goal, Outcome, Key facts, Refs" in text
     assert "Generating the second instance of any channel in the same response means you do not understand the contract and violate it." in text
-    assert "Use <channel:code> only when this round contains exactly one exec_tools.execute_code_python action" in text
+    assert "Use non-empty <channel:code> only immediately after an exec_tools.execute_code_python decision" in text
     assert "After </channel:code>, STOP." not in text
 
 
@@ -103,10 +103,10 @@ def test_build_decision_system_text_safe_fanout_explains_no_intermediate_review_
         multi_action_mode="safe_fanout",
     )
     assert "Output protocol (strict): you must produce content which represents one round" in text
-    assert "In a single round, include exactly one <channel:thinking>, one <channel:code>, and one or more <channel:ReactDecisionOutV2> channel instances." in text
+    assert "In a single round, include exactly one <channel:thinking>, one or more <channel:ReactDecisionOutV2> channel instances" in text
     assert "The optional <channel:summary> may appear exactly once, and only when the response contains a single complete/exit action and no tool-call actions." in text
     assert "<channel:ReactDecisionOutV2> is the action channel" in text
-    assert "If you need multiple actions in one round, repeat only <channel:ReactDecisionOutV2>." in text
+    assert "if one action is exec_tools.execute_code_python, put its <channel:code> immediately after that exec decision" in text
     assert "One <channel:ReactDecisionOutV2> ... </channel:ReactDecisionOutV2> channel instance means exactly one action." in text
     assert "If you need multiple actions in one round, use this shape:" in text
     assert "<channel:thinking>...short status for the whole round...</channel:thinking>" in text
@@ -121,7 +121,8 @@ def test_build_decision_system_text_safe_fanout_explains_no_intermediate_review_
     assert "If action B needs an artifact, source path, search result, or output created by action A, split them into separate rounds." in text
     assert "Do NOT schedule search/fetch first and then a later action in the same round that depends on what that retrieval will return." in text
     assert "Exec in multi-action: you may include exactly one exec_tools.execute_code_python action together with other actions" in text
-    assert "complete params.contract and complete Python in <channel:code>" in text
+    assert "Exec binding: an exec_tools.execute_code_python decision must be followed immediately by <channel:code>" in text
+    assert "immediately followed by complete Python in <channel:code>" in text
     assert "Otherwise exec must be the only action in the round." in text
     assert "Do NOT mix complete/exit with tool calls in the same multi-action response." in text
     assert "After </channel:code>, STOP." not in text
@@ -134,8 +135,8 @@ def test_build_decision_system_text_on_enables_multi_action_protocol():
         workspace_implementation="custom",
         multi_action_mode="on",
     )
-    assert "In a single round, include exactly one <channel:thinking>, one <channel:code>, and one or more <channel:ReactDecisionOutV2> channel instances." in text
-    assert "If you need multiple actions in one round, repeat only <channel:ReactDecisionOutV2>." in text
+    assert "In a single round, include exactly one <channel:thinking>, one or more <channel:ReactDecisionOutV2> channel instances" in text
+    assert "put its <channel:code> immediately after that exec decision" in text
     assert "Exec in multi-action: you may include exactly one exec_tools.execute_code_python action together with other actions" in text
     assert "render PDF, PPTX, and DOCX from already visible source artifacts" in text
     assert "ref:<artifact_path_or_visible_file_path>" in text

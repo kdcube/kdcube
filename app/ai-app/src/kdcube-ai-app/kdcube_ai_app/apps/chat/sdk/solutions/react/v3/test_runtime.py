@@ -243,6 +243,222 @@ async def test_decision_node_feeds_exec_contract_when_decision_channel_closes(mo
     assert out["last_decision"]["tool_call"]["tool_id"] == "exec_tools.execute_code_python"
 
 
+@pytest.mark.asyncio
+async def test_decision_node_binds_code_to_immediately_preceding_exec_decision(monkeypatch):
+    solver = _solver_stub()
+    exec_events = []
+
+    class _Timeline:
+        last_external_event_seq = 0
+        blocks = []
+
+    class _Browser:
+        def __init__(self):
+            self.timeline = _Timeline()
+            self.runtime_ctx = SimpleNamespace(
+                bundle_id="bundle.test",
+                workspace_implementation="custom",
+                turn_id="turn-1",
+            )
+            self.sources_pool = []
+
+        async def wait_and_drain_external_events(self, *, call_hooks, block_ms, limit):
+            del call_hooks, block_ms, limit
+            return 0
+
+        async def drain_external_events(self, *, call_hooks):
+            del call_hooks
+            return 0
+
+        def announce(self, *, blocks):
+            del blocks
+
+        def contribute_notice(self, *args, **kwargs):
+            del args, kwargs
+
+        def contribute(self, *args, **kwargs):
+            del args, kwargs
+
+        @property
+        def feedback_updates(self):
+            return []
+
+        @property
+        def feedback_updates_integrated(self):
+            return False
+
+        @property
+        def timeline_visible_paths(self):
+            return []
+
+    class _ExecWidget:
+        def __init__(self):
+            self.code = ""
+            self.json_seen = False
+
+        async def feed_json(self, text="", completed=False, **kwargs):
+            self.json_seen = True
+            exec_events.append(("json", completed, kwargs.get("channel_instance"), text))
+
+        async def feed_code(self, text="", completed=False, **kwargs):
+            self.code += text or ""
+            exec_events.append(("code", completed, kwargs.get("channel_instance"), text))
+
+        def is_complete(self):
+            return self.json_seen and bool(self.code.strip())
+
+        def has_contract(self):
+            return self.json_seen
+
+        def get_code(self):
+            return self.code
+
+        async def emit_reasoning(self, notes):
+            exec_events.append(("reasoning", False, None, notes))
+
+    exec_widget = _ExecWidget()
+    solver.ctx_browser = _Browser()
+    solver.comm = SimpleNamespace(delta=_noop_async, service_event=_noop_async)
+    solver._drain_external_events = _noop_async
+    solver._update_announce = _noop_async
+    solver._mk_mainstream = lambda phase: _noop_async
+    solver._mk_exec_code_streamer = lambda phase, idx, execution_id=None: (_noop_async, exec_widget)
+    solver._mk_content_streamers = lambda phase, sources_list=None, artifact_name=None: ([], [])
+
+    class _TimelineStreamer:
+        def has_started(self, name: str) -> bool:
+            del name
+            return False
+
+        def started_at(self, name: str):
+            del name
+            return None
+
+        def next_index(self, name: str) -> int:
+            del name
+            return 0
+
+    solver._mk_timeline_streamer = lambda *args, **kwargs: (_noop_async, _TimelineStreamer())
+    solver._append_react_timing = lambda **kwargs: None
+    solver._adapters_index = lambda adapters: {a["id"]: a for a in adapters}
+    solver._short_json = lambda obj, max_len=800: str(obj)
+    solver._protocol_violation_message = lambda **kwargs: "protocol"
+    solver._record_dropped_multi_action_items = lambda **kwargs: None
+    solver.scratchpad = SimpleNamespace(
+        turn_id="turn-1",
+        register_agentic_response=lambda *args, **kwargs: None,
+    )
+
+    async def _validate_tool_params(*, tool_id, params):
+        del tool_id
+        return {"status": "green", "issues": [], "params": params}
+
+    solver.tools_subsystem = SimpleNamespace(validate_tool_params=_validate_tool_params)
+
+    async def _fake_retry_with_compaction(**kwargs):
+        agent_fn = kwargs.get("agent_fn")
+        assert agent_fn is not None
+        return await agent_fn(blocks=[])
+
+    async def _fake_emit_event(**kwargs):
+        del kwargs
+
+    monkeypatch.setattr(
+        "kdcube_ai_app.apps.chat.sdk.solutions.chatbot.agent_retry.retry_with_compaction",
+        _fake_retry_with_compaction,
+    )
+    monkeypatch.setattr(
+        "kdcube_ai_app.apps.chat.sdk.solutions.react.v3.runtime.emit_event",
+        _fake_emit_event,
+    )
+
+    write_decision = {
+        "action": "call_tool",
+        "notes": "write",
+        "tool_call": {
+            "tool_id": "react.write",
+            "params": {"path": "outputs/a.md", "channel": "canvas", "content": "a", "kind": "display"},
+        },
+    }
+    exec_decision = {
+        "action": "call_tool",
+        "notes": "exec",
+        "tool_call": {
+            "tool_id": "exec_tools.execute_code_python",
+            "params": {
+                "contract": [{"filename": "outputs/out.txt", "description": "output"}],
+                "prog_name": "build_file",
+            },
+        },
+    }
+    read_decision = {
+        "action": "call_tool",
+        "notes": "read",
+        "tool_call": {"tool_id": "react.read", "params": {"items": ["fi:turn-1.outputs/a.md"]}},
+    }
+    decisions = [write_decision, exec_decision, read_decision]
+    payloads = [json.dumps(item) for item in decisions]
+    code_text = "print('ok')\n"
+
+    async def _fake_react_decision_stream_v2(**kwargs):
+        subs = kwargs.get("subscribers")
+        if subs is not None:
+            for fn in subs.get("ReactDecisionOutV2", channel_instance=0):
+                await fn(text=payloads[0], completed=False, channel="ReactDecisionOutV2", channel_instance=0)
+                await fn(text="", completed=True, channel="ReactDecisionOutV2", channel_instance=0)
+            for fn in subs.get("ReactDecisionOutV2", channel_instance=1):
+                await fn(text=payloads[1], completed=False, channel="ReactDecisionOutV2", channel_instance=1)
+                await fn(text="", completed=True, channel="ReactDecisionOutV2", channel_instance=1)
+            for fn in subs.get("code"):
+                await fn(text=code_text, completed=True, channel="code")
+            for fn in subs.get("ReactDecisionOutV2", channel_instance=2):
+                await fn(text=payloads[2], completed=False, channel="ReactDecisionOutV2", channel_instance=2)
+                await fn(text="", completed=True, channel="ReactDecisionOutV2", channel_instance=2)
+        return {
+            "agent_response": write_decision,
+            "agent_response_bundle": decisions,
+            "log": {"error": None},
+            "channels": {
+                "ReactDecisionOutV2": {"text": "".join(payloads)},
+                "code": {"text": code_text},
+            },
+        }
+
+    monkeypatch.setattr(
+        "kdcube_ai_app.apps.chat.sdk.solutions.react.v3.runtime.react_decision_stream_v2",
+        _fake_react_decision_stream_v2,
+    )
+
+    state = {
+        "iteration": 0,
+        "max_iterations": 15,
+        "adapters": [
+            {
+                "id": "exec_tools.execute_code_python",
+                "doc": {"args": {"contract": {}, "prog_name": {}}},
+            }
+        ],
+        "outdir": "/tmp/out",
+        "workdir": "/tmp/work",
+        "turn_id": "turn-1",
+        "decision_retries": 0,
+        "max_decision_retries": 2,
+        "session_log": [],
+        "round_timings": [],
+    }
+
+    out = await solver._decision_node_impl(state, 0)
+
+    assert any(event[0] == "json" and event[2] == 1 for event in exec_events)
+    assert any(event[0] == "code" and event[2] == 1 and code_text in (event[3] or "") for event in exec_events)
+    assert out.get("retry_decision") is False
+    assert [item["decision"]["tool_call"]["tool_id"] for item in out["pending_tool_bundle"]] == [
+        "react.write",
+        "exec_tools.execute_code_python",
+        "react.read",
+    ]
+
+
 def test_route_after_decision_exits_when_exit_reason_is_set():
     solver = _solver_stub()
     state = {

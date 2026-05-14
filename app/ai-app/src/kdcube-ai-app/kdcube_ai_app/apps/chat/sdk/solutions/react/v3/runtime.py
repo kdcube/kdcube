@@ -874,11 +874,23 @@ class ReactSolverV2:
         execution_id: Optional[str] = None,
     ) -> tuple[Callable[[str], Awaitable[None]], DecisionExecCodeStreamer]:
         artifact_suffix = execution_id or str(idx)
+        turn_id = ""
+        try:
+            runtime_ctx = getattr(self.ctx_browser, "runtime_ctx", None)
+            turn_id = str(getattr(runtime_ctx, "turn_id", "") or "")
+        except Exception:
+            turn_id = ""
+        if not turn_id:
+            try:
+                turn_id = str(getattr(self.scratchpad, "turn_id", "") or "")
+            except Exception:
+                turn_id = ""
         streamer = DecisionExecCodeStreamer(
             emit_delta=self.comm.delta,
             agent=f"{self.MODULE_AGENT_NAME}.{phase}",
             artifact_name=f"react.exec.{artifact_suffix}",
             execution_id=execution_id,
+            turn_id=turn_id,
         )
         return self._wrap_raw_streamer(streamer), streamer
 
@@ -2133,11 +2145,16 @@ class ReactSolverV2:
             "json_attached": False,
             "blocked": False,
             "exec_instance_idx": None,
+            "pending_exec_instance": None,
+            "bound_exec_instance": None,
+            "code_started": False,
         }
 
         async def _attach_exec_json_if_ready(instance_state: Dict[str, Any]) -> bool:
-            if exec_streamer_widget is None or code_stream_state["blocked"] or code_stream_state["json_attached"]:
+            if exec_streamer_widget is None or code_stream_state["blocked"]:
                 return False
+            if code_stream_state["json_attached"]:
+                return code_stream_state.get("exec_instance_idx") == (instance_state.get("instance_idx") or 0)
             parsed_decision = instance_state.get("parsed_decision")
             if not isinstance(parsed_decision, dict):
                 return False
@@ -2204,7 +2221,26 @@ class ReactSolverV2:
                     instance_state["parsed_decision"] = parsed_decision
                     instance_state["parse_error"] = parse_error
                     instance_state["completed"] = True
-                    await _attach_exec_json_if_ready(instance_state)
+                    tool_call = parsed_decision.get("tool_call") if isinstance(parsed_decision, dict) else {}
+                    tool_id = (tool_call.get("tool_id") or "").strip() if isinstance(tool_call, dict) else ""
+                    is_exec = (
+                        isinstance(parsed_decision, dict)
+                        and (parsed_decision.get("action") or "").strip() == "call_tool"
+                        and tools_insights.is_exec_tool(tool_id)
+                    )
+                    if is_exec:
+                        if not code_stream_state["code_started"] and code_stream_state.get("bound_exec_instance") is None:
+                            code_stream_state["pending_exec_instance"] = instance_state
+                        await _attach_exec_json_if_ready(instance_state)
+                    elif (
+                        code_stream_state.get("pending_exec_instance") is not None
+                        and not code_stream_state["code_started"]
+                        and code_stream_state.get("bound_exec_instance") is None
+                    ):
+                        # Positional binding: an exec decision consumes only the
+                        # immediately following code channel. Another decision
+                        # before code means the exec/code pair is incomplete.
+                        code_stream_state["pending_exec_instance"] = None
 
             instance_state["emit_json"] = _emit_instance_json
             decision_stream_instances[safe_idx] = instance_state
@@ -2219,9 +2255,14 @@ class ReactSolverV2:
             return [instance_state["emit_json"]]
 
         def _resolve_exec_code_stream_target() -> tuple[Optional[bool], Optional[Dict[str, Any]]]:
+            bound_exec = code_stream_state.get("bound_exec_instance")
+            if isinstance(bound_exec, dict):
+                return True, bound_exec
+            pending_exec = code_stream_state.get("pending_exec_instance")
+            if isinstance(pending_exec, dict):
+                return True, pending_exec
             if not decision_stream_instances:
                 return None, None
-            exec_states: List[Dict[str, Any]] = []
             unresolved = False
             for instance_state in decision_stream_instances.values():
                 if instance_state.get("parsed_decision") is None and instance_state.get("parse_error") is None:
@@ -2235,14 +2276,6 @@ class ReactSolverV2:
                     if not instance_state.get("completed"):
                         unresolved = True
                     continue
-                tool_call = parsed_decision.get("tool_call") or {}
-                tool_id = (tool_call.get("tool_id") or "").strip()
-                if (parsed_decision.get("action") or "").strip() == "call_tool" and tools_insights.is_exec_tool(tool_id):
-                    exec_states.append(instance_state)
-            if len(exec_states) == 1:
-                return True, exec_states[0]
-            if len(exec_states) > 1:
-                return False, None
             if unresolved:
                 return None, None
             return False, None
@@ -2263,6 +2296,9 @@ class ReactSolverV2:
                 return
             if not code_stream_state["json_attached"]:
                 await _attach_exec_json_if_ready(instance_state)
+            code_stream_state["code_started"] = True
+            code_stream_state["bound_exec_instance"] = instance_state
+            code_stream_state["pending_exec_instance"] = None
             if code_stream_state["buffer"]:
                 buffered = "".join(code_stream_state["buffer"])
                 code_stream_state["buffer"].clear()
@@ -2277,6 +2313,10 @@ class ReactSolverV2:
                 completed=completed,
                 channel_instance=instance_state.get("instance_idx") or 0,
             )
+            if completed:
+                code_stream_state["bound_exec_instance"] = None
+                code_stream_state["pending_exec_instance"] = None
+                code_stream_state["code_started"] = False
 
         t0 = time.perf_counter()
         from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.agent_retry import retry_with_compaction

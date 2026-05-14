@@ -116,6 +116,60 @@ async def test_rendering_tool_accepts_generic_outdir_fi_path(monkeypatch, tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_rendering_tool_normalizes_visible_current_turn_shorthand_ref(monkeypatch, tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path))
+    ctx = FakeBrowser(runtime)
+    ctx.timeline.blocks.append({
+        "type": "react.tool.result",
+        "turn_id": "turn_exec",
+        "path": "fi:turn_exec.outputs/report.html",
+        "mime": "text/html",
+        "text": "<html><body>source</body></html>",
+        "meta": {
+            "artifact_path": "fi:turn_exec.outputs/report.html",
+            "physical_path": "turn_exec/outputs/report.html",
+            "visibility": "external",
+        },
+    })
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "tool_id": "rendering_tools.write_pdf",
+                "params": {
+                    "path": "outputs/report.pdf",
+                    "content": "ref:outputs/report.html",
+                    "format": "html",
+                },
+            }
+        },
+        "outdir": str(tmp_path),
+        "workdir": str(tmp_path),
+    }
+    captured = {}
+
+    async def _fake_execute_tool(**kwargs):
+        captured["params"] = kwargs["tool_execution_context"]["params"]
+        outdir = kwargs["outdir"]
+        target = outdir / "turn_exec/outputs/report.pdf"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"%PDF-1.4\n")
+        return {"output": "turn_exec/outputs/report.pdf", "summary": ""}
+
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v3.tools.external.execute_tool", _fake_execute_tool)
+
+    react = FakeReact()
+    react.tools_subsystem = None
+
+    await handle_external_tool(react=react, ctx_browser=ctx, state=state, tool_call_id="e_ref")
+
+    assert captured["params"]["content"] == "<html><body>source</body></html>"
+    assert not state.get("retry_decision")
+    notices = [b for b in ctx.timeline.blocks if b.get("type") == "react.notice"]
+    assert any("protocol_warning.ref_path_normalized" in (b.get("text") or "") for b in notices)
+    assert any("ref:fi:turn_exec.outputs/report.html" in (b.get("text") or "") for b in notices)
+
+
+@pytest.mark.asyncio
 async def test_rendering_tool_stats_resolve_split_artifact_outdir(monkeypatch, tmp_path):
     runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path))
     ctx = FakeBrowser(runtime)

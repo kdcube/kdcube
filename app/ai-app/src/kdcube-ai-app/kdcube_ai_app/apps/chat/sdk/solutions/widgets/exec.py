@@ -31,11 +31,13 @@ class CodegenChanneledStreamingWidget:
         subsystem_title: str = "Generated Code",
         subsystem_language: Optional[str] = "python",
         fence_language: Optional[str] = None,
+        turn_id: Optional[str] = None,
     ):
         self.emit_delta = emit_delta
         self.agent = agent
         self.artifact_name = artifact_name
         self.execution_id = execution_id
+        self.turn_id = (turn_id or "").strip()
         self.subsystem_marker = subsystem_marker
         self.subsystem_sub_type = subsystem_sub_type
         self.subsystem_format = subsystem_format
@@ -149,6 +151,41 @@ class CodegenChanneledStreamingWidget:
     def is_complete(self) -> bool:
         return bool((self.captured_code or "").strip()) and self.has_contract()
 
+    @staticmethod
+    def _fallback_contract_from_spec(contract_spec: object) -> Optional[dict]:
+        artifacts = contract_spec
+        if isinstance(artifacts, str):
+            try:
+                artifacts = json.loads(artifacts)
+            except Exception:
+                return None
+        if not isinstance(artifacts, list) or not artifacts:
+            return None
+        contract = {}
+        seen = {}
+        for idx, item in enumerate(artifacts):
+            if not isinstance(item, dict):
+                continue
+            filename = (item.get("filename") or "").strip()
+            description = (item.get("description") or "").strip()
+            if not filename or not description:
+                continue
+            leaf = pathlib.Path(filename).name
+            name = pathlib.Path(leaf).stem or leaf or f"artifact_{idx + 1}"
+            if name in seen:
+                seen[name] += 1
+                name = f"{name}_{seen[name]}"
+            else:
+                seen[name] = 1
+            contract[name] = {
+                "type": "file",
+                "filename": filename,
+                "mime": mimetypes.guess_type(leaf)[0] or "",
+                "description": description,
+                "visibility": item.get("visibility") or "external",
+            }
+        return contract or None
+
     async def capture_params(self, params: dict) -> None:
         if not isinstance(params, dict):
             return
@@ -159,15 +196,33 @@ class CodegenChanneledStreamingWidget:
                 await self.emit_program_name(prog_name)
         contract_spec = params.get("contract")
         if contract_spec:
+            contract = None
             try:
-                from kdcube_ai_app.apps.chat.sdk.tools.exec_tools import build_exec_output_contract
-                contract, _, err = build_exec_output_contract(contract_spec)
-                if contract and not err:
-                    self.pending_contract = contract
-                    if self.activated and not self.contract_emitted:
-                        await self.emit_contract(contract)
+                from kdcube_ai_app.apps.chat.sdk.tools.exec_tools import (
+                    build_exec_output_contract,
+                    normalize_exec_contract_for_turn,
+                )
+                normalized = None
+                if self.turn_id:
+                    normalized, _, err = normalize_exec_contract_for_turn(contract_spec, turn_id=self.turn_id)
+                    if err:
+                        normalized = None
+                if normalized:
+                    contract, _, err = build_exec_output_contract(normalized)
+                    if err:
+                        contract = None
+                if not contract:
+                    contract, _, err = build_exec_output_contract(contract_spec)
+                    if err:
+                        contract = None
             except Exception:
-                return
+                contract = None
+            if not contract:
+                contract = self._fallback_contract_from_spec(contract_spec)
+            if contract:
+                self.pending_contract = contract
+                if self.activated and not self.contract_emitted:
+                    await self.emit_contract(contract)
 
     async def feed_json(
         self,
@@ -336,20 +391,19 @@ class CodegenChanneledStreamingWidget:
 
     async def feed_code(
         self,
-            text: Optional[str] = None,
+        text: Optional[str] = None,
         *,
         completed: bool = False,
         **_kwargs,
     ) -> None:
-        if completed:
-            await self.finish()
-            return
         chunk = text
         if chunk is None:
             chunk = text or ""
-        if not chunk:
+        if chunk:
+            await self.feed_raw(chunk)
+        if completed:
+            await self.finish()
             return
-        await self.feed_raw(chunk)
 
     async def feed(self, chunk: str) -> None:
         if not chunk:
@@ -599,12 +653,14 @@ class DecisionExecCodeStreamer(CodegenChanneledStreamingWidget):
         agent: str,
         artifact_name: str,
         execution_id: Optional[str] = None,
+        turn_id: Optional[str] = None,
     ):
         super().__init__(
             emit_delta=emit_delta,
             agent=agent,
             artifact_name=artifact_name,
             execution_id=execution_id,
+            turn_id=turn_id,
             stream_xpath="",
             tool_id_xpath="",
             tool_id_value="exec_tools.execute_code_python",

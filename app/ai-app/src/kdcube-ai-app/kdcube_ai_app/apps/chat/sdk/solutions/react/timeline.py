@@ -1789,6 +1789,49 @@ class Timeline:
             except Exception:
                 return None
 
+        def _current_turn_logical_ref(ref_value: str) -> str:
+            raw = (ref_value or "").strip().lstrip("/")
+            if raw.startswith("fi:"):
+                raw = raw[len("fi:"):].strip().lstrip("/")
+            turn_id = (self.runtime.turn_id or "").strip()
+            if not turn_id:
+                return ""
+            for namespace in ("outputs", "files", "attachments"):
+                prefix = f"{namespace}/"
+                if raw.startswith(prefix):
+                    rel = raw[len(prefix):].strip().lstrip("/")
+                    if rel:
+                        if namespace == "outputs":
+                            return f"fi:{turn_id}.outputs/{rel}"
+                        if namespace == "files":
+                            return f"fi:{turn_id}.files/{rel}"
+                        return f"fi:{turn_id}.user.attachments/{rel}"
+            return ""
+
+        def _visible_ref_exists(ref_value: str) -> bool:
+            if not ref_value:
+                return False
+            if visible_paths is not None and ref_value not in visible_paths:
+                return False
+            return self.resolve_artifact(ref_value) is not None or (
+                visible_paths is not None and ref_value in visible_paths
+            )
+
+        def _record_ref_rewrite_warning(*, original: str, resolved: str, param_name: Optional[str]) -> None:
+            if not original or not resolved or original == resolved:
+                return
+            violations.append({
+                "code": "ref_path_normalized",
+                "severity": "warning",
+                "path": original,
+                "param": param_name,
+                "resolved_ref": resolved,
+                "message": (
+                    f"Accepted shorthand `ref:{original}` because it matched visible artifact "
+                    f"`ref:{resolved}`. Prefer the canonical ref next time."
+                ),
+            })
+
         def _resolve_ref(val: Any, param_name: Optional[str] = None):
             if not isinstance(val, str) or not val.startswith("ref:"):
                 return val
@@ -1798,13 +1841,34 @@ class Timeline:
                 ref
                 and not ref.startswith(("fi:", "ar:", "tc:", "so:", "su:", "ks:", "sk:", "sources_pool["))
             ):
+                current_turn_ref = _current_turn_logical_ref(ref)
+                if current_turn_ref and _visible_ref_exists(current_turn_ref):
+                    _record_ref_rewrite_warning(
+                        original=original_ref,
+                        resolved=current_turn_ref,
+                        param_name=param_name,
+                    )
+                    ref = current_turn_ref
+                else:
+                    logical_ref = physical_path_to_logical_path(ref)
+                    if logical_ref:
+                        ref = logical_ref
+            if visible_paths is not None and ref not in visible_paths:
                 logical_ref = physical_path_to_logical_path(ref)
                 if logical_ref:
                     ref = logical_ref
             if visible_paths is not None and ref not in visible_paths:
                 logical_ref = physical_path_to_logical_path(ref)
+                current_turn_ref = _current_turn_logical_ref(original_ref)
                 if logical_ref and logical_ref in visible_paths:
                     ref = logical_ref
+                elif current_turn_ref and _visible_ref_exists(current_turn_ref):
+                    _record_ref_rewrite_warning(
+                        original=original_ref,
+                        resolved=current_turn_ref,
+                        param_name=param_name,
+                    )
+                    ref = current_turn_ref
             if visible_paths is not None and ref not in visible_paths:
                 resolved = self.resolve_artifact(ref)
                 visibility = ""
