@@ -886,10 +886,10 @@ def test_gather_configuration_accepts_descriptor_secret_paths(monkeypatch, tmp_p
     docker_dir = ai_app_root / "deployment" / "docker" / "all_in_one_kdcube"
     docker_dir.mkdir(parents=True)
 
-    assembly_path = tmp_path / "assembly.yaml"
-    secrets_path = tmp_path / "secrets.yaml"
-    bundles_path = tmp_path / "bundles.yaml"
-    bundles_secrets_path = tmp_path / "bundles.secrets.yaml"
+    assembly_path = config_dir / "assembly.yaml"
+    secrets_path = config_dir / "secrets.yaml"
+    bundles_path = config_dir / "bundles.yaml"
+    bundles_secrets_path = config_dir / "bundles.secrets.yaml"
     gateway_path = tmp_path / "gateway.yaml"
     for p in (assembly_path, secrets_path, bundles_path, bundles_secrets_path, gateway_path):
         p.write_text("x: 1\n")
@@ -995,10 +995,14 @@ def test_gather_configuration_treats_null_redis_secret_as_unset(monkeypatch, tmp
     docker_dir = ai_app_root / "deployment" / "docker" / "all_in_one_kdcube"
     docker_dir.mkdir(parents=True)
 
-    assembly_path = tmp_path / "assembly.yaml"
+    assembly_path = config_dir / "assembly.yaml"
     assembly_path.write_text("x: 1\n")
-    secrets_path = tmp_path / "secrets.yaml"
+    secrets_path = config_dir / "secrets.yaml"
     secrets_path.write_text("x: 1\n")
+    bundles_path = config_dir / "bundles.yaml"
+    bundles_path.write_text("bundles:\n  items: []\n")
+    bundles_secrets_path = config_dir / "bundles.secrets.yaml"
+    bundles_secrets_path.write_text("bundles:\n  items: []\n")
 
     monkeypatch.setattr(
         "kdcube_cli.installer.compute_paths",
@@ -1092,7 +1096,7 @@ def test_gather_configuration_treats_null_redis_secret_as_unset(monkeypatch, tmp
     assert "redis://:redispass@" not in env_ingress
 
 
-def test_gather_configuration_applies_platform_service_env_from_assembly(monkeypatch, tmp_path: Path):
+def test_gather_configuration_keeps_service_env_minimal_with_platform_descriptors(monkeypatch, tmp_path: Path):
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     for name in (
@@ -1112,10 +1116,14 @@ def test_gather_configuration_applies_platform_service_env_from_assembly(monkeyp
     docker_dir = ai_app_root / "deployment" / "docker" / "all_in_one_kdcube"
     docker_dir.mkdir(parents=True)
 
-    assembly_path = tmp_path / "assembly.yaml"
+    assembly_path = config_dir / "assembly.yaml"
     assembly_path.write_text("x: 1\n")
-    secrets_path = tmp_path / "secrets.yaml"
+    secrets_path = config_dir / "secrets.yaml"
     secrets_path.write_text("x: 1\n")
+    bundles_path = config_dir / "bundles.yaml"
+    bundles_path.write_text("bundles:\n  items: []\n")
+    bundles_secrets_path = config_dir / "bundles.secrets.yaml"
+    bundles_secrets_path.write_text("bundles:\n  items: []\n")
 
     monkeypatch.setattr(
         "kdcube_cli.installer.compute_paths",
@@ -1189,6 +1197,21 @@ def test_gather_configuration_applies_platform_service_env_from_assembly(monkeyp
                             "chat_task_idle_timeout_sec": 900,
                             "chat_task_max_wall_time_sec": 3600,
                             "chat_task_watchdog_poll_interval_sec": 0.5,
+                        },
+                        "tools": {
+                            "web_search": {
+                                "tools_web_search_fetch_content": True,
+                                "web_search_primary_backend": "brave",
+                                "web_search_backend": "hybrid",
+                                "web_search_hybrid_mode": "sequential",
+                                "web_search_segmenter": "fast",
+                                "web_favicon_enrich_enabled": False,
+                                "web_favicon_enrich_timeout_s": 2.5,
+                            },
+                            "web_fetch": {
+                                "web_fetch_resources_medium": '{"cookies": {"sid": "abc"}}',
+                            },
+                            "mcp_cache_ttl_seconds": 120,
                         }
                     },
                     "metrics": {
@@ -1205,23 +1228,36 @@ def test_gather_configuration_applies_platform_service_env_from_assembly(monkeyp
         },
         secrets_descriptor_path=str(secrets_path),
         secrets_descriptor={"services": {}},
-        gateway_descriptor={},
+        bundles_descriptor_path=str(bundles_path),
+        bundles_descriptor={"bundles": {"items": []}},
+        bundles_secrets_path=str(bundles_secrets_path),
+        bundles_secrets_descriptor={"bundles": {"items": []}},
+        gateway_descriptor={"gateway": {"tenant": "demo-tenant", "project": "demo-project"}},
+        use_bundles_descriptor=True,
+        use_bundles_secrets=True,
     )
 
     env_ingress = (config_dir / ".env.ingress").read_text()
     env_proc = (config_dir / ".env.proc").read_text()
     env_metrics = (config_dir / ".env.metrics").read_text()
+    assembly_data = yaml.safe_load(assembly_path.read_text())
 
-    assert "UVICORN_RELOAD=1" in env_ingress
-    assert "CB_RELAY_IDENTITY=relay.ingress" in env_ingress
-    assert "CB_RELAY_IDENTITY=relay.proc" in env_proc
-    assert "GATEWAY_CONFIG_FORCE_ENV_ON_STARTUP=1" in env_proc
-    assert "CHAT_SCHEDULER_BACKEND=legacy_lists" in env_proc
-    assert "CHAT_TASK_TIMEOUT_SEC=600" in env_proc
-    assert "CHAT_TASK_IDLE_TIMEOUT_SEC=900" in env_proc
-    assert "CHAT_TASK_MAX_WALL_TIME_SEC=3600" in env_proc
-    assert "CHAT_TASK_WATCHDOG_POLL_INTERVAL_SEC=0.5" in env_proc
-    assert "UVICORN_RELOAD=0" in env_metrics
+    assert env_ingress.strip().splitlines() == [
+        "GATEWAY_COMPONENT=ingress",
+        "PLATFORM_DESCRIPTORS_DIR=/config",
+    ]
+    assert env_proc.strip().splitlines() == [
+        "GATEWAY_COMPONENT=proc",
+        "PLATFORM_DESCRIPTORS_DIR=/config",
+    ]
+    assert env_metrics.strip().splitlines() == [
+        "GATEWAY_COMPONENT=proc",
+        "PLATFORM_DESCRIPTORS_DIR=/config",
+    ]
+    assert assembly_data["platform"]["services"]["ingress"]["service"]["cb_relay_identity"] == "relay.ingress"
+    assert assembly_data["platform"]["services"]["proc"]["service"]["cb_relay_identity"] == "relay.proc"
+    assert assembly_data["platform"]["services"]["proc"]["tools"]["web_search"]["web_favicon_enrich_enabled"] is False
+    assert assembly_data["platform"]["services"]["proc"]["tools"]["web_search"]["web_favicon_enrich_timeout_s"] == 2.5
 
 
 def test_gather_configuration_supports_explicit_proxy_host_ports(monkeypatch, tmp_path: Path):

@@ -33,6 +33,27 @@ async def test_enrich_sources_pool_with_favicons_can_be_disabled(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_enrich_sources_pool_with_favicons_reads_descriptor(monkeypatch, tmp_path):
+    monkeypatch.setenv("PLATFORM_DESCRIPTORS_DIR", str(tmp_path))
+    monkeypatch.setenv("GATEWAY_COMPONENT", "proc")
+    monkeypatch.setenv("WEB_FAVICON_ENRICH_ENABLED", "1")
+    (tmp_path / "assembly.yaml").write_text(
+        "platform:\n"
+        "  services:\n"
+        "    proc:\n"
+        "      tools:\n"
+        "        web_search:\n"
+        "          web_favicon_enrich_enabled: false\n"
+    )
+
+    rows = [{"url": "https://example.com/article", "title": "Example"}]
+    count = await enrich_sources_pool_with_favicons(rows, log=_Log())
+
+    assert count == 0
+    assert "favicon" not in rows[0]
+
+
+@pytest.mark.asyncio
 async def test_enrich_sources_pool_with_favicons_does_not_start_shared_browser(monkeypatch):
     monkeypatch.setenv("WEB_FAVICON_ENRICH_ENABLED", "1")
 

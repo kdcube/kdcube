@@ -57,19 +57,6 @@ CANONICAL_DESCRIPTOR_FILENAMES = (
     "gateway.yaml",
 )
 
-SERVICE_ENV_KEY_MAP: dict[str, str] = {
-    "uvicorn_reload": "UVICORN_RELOAD",
-    "heartbeat_interval": "HEARTBEAT_INTERVAL",
-    "cb_relay_identity": "CB_RELAY_IDENTITY",
-    "gateway_config_force_env_on_startup": "GATEWAY_CONFIG_FORCE_ENV_ON_STARTUP",
-    "chat_scheduler_backend": "CHAT_SCHEDULER_BACKEND",
-    "chat_task_timeout_sec": "CHAT_TASK_TIMEOUT_SEC",
-    "chat_task_idle_timeout_sec": "CHAT_TASK_IDLE_TIMEOUT_SEC",
-    "chat_task_max_wall_time_sec": "CHAT_TASK_MAX_WALL_TIME_SEC",
-    "chat_task_watchdog_poll_interval_sec": "CHAT_TASK_WATCHDOG_POLL_INTERVAL_SEC",
-}
-
-
 @dataclass
 class EnvFile:
     path: Path
@@ -264,31 +251,6 @@ def _runtime_storage_env_value(value: object, *, default_container_path: str) ->
     if path is not None and _is_container_storage_path(path):
         return str(path)
     return str(value).strip().strip("'\"")
-
-
-def _env_scalar(value: object) -> Optional[str]:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return "1" if value else "0"
-    if isinstance(value, (int, float)):
-        return str(value)
-    if isinstance(value, str):
-        text = value.strip()
-        return text or None
-    return None
-
-
-def _apply_service_descriptor_env(env_file: EnvFile, service_cfg: object) -> None:
-    if not isinstance(service_cfg, dict):
-        return
-    for attr_name, env_key in SERVICE_ENV_KEY_MAP.items():
-        if attr_name not in service_cfg:
-            continue
-        rendered = _env_scalar(service_cfg.get(attr_name))
-        if rendered is None:
-            continue
-        update_env_value(env_file, env_key, rendered)
 
 
 def _resolve_descriptor_path(
@@ -3306,19 +3268,6 @@ def gather_configuration(
         ports_block["proxy_https"] = str(proxy_https_port)
 
     _set_nested(assembly_data, ["ports"], ports_block)
-
-    platform_services = _get_nested(assembly_data, "platform", "services")
-    if isinstance(platform_services, dict):
-        service_env_files = {
-            "ingress": env_ingress,
-            "proc": env_proc,
-            "metrics": env_metrics,
-        }
-        for service_name, env_file in service_env_files.items():
-            service_block = platform_services.get(service_name)
-            if not isinstance(service_block, dict):
-                continue
-            _apply_service_descriptor_env(env_file, service_block.get("service"))
 
     _autosave()
 

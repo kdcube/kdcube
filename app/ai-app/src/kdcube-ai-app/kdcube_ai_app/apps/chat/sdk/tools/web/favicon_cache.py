@@ -10,9 +10,9 @@ import asyncio
 import os
 from typing import Any, Dict, List, Optional
 
+from kdcube_ai_app.apps.chat.sdk.config_scopes import _load_assembly_plain
 from kdcube_ai_app.infra.service_hub.cache import ensure_namespaced_cache
 from kdcube_ai_app.infra.namespaces import REDIS
-from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 _UTM_PARAMS = {"utm_source", "utm_medium", "utm_campaign","utm_term","utm_content","utm_id","gclid","fbclid"}
@@ -44,6 +44,39 @@ def _favicon_cache_key(url: str) -> str:
     return f"favicon:{digest}"
 
 
+def _component_name() -> str:
+    return (os.environ.get("GATEWAY_COMPONENT") or "proc").strip().lower() or "proc"
+
+
+def _web_search_setting(name: str) -> Any:
+    component = _component_name()
+    value = _load_assembly_plain(f"platform.services.{component}.tools.web_search.{name}")
+    if value is None and component != "proc":
+        value = _load_assembly_plain(f"platform.services.proc.tools.web_search.{name}")
+    return value
+
+
+def _setting_bool(*, descriptor_name: str, env_name: str, default: bool) -> bool:
+    value = _web_search_setting(descriptor_name)
+    if value is None:
+        value = os.environ.get(env_name)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
+
+def _setting_float(*, descriptor_name: str, env_name: str, default: float) -> float:
+    value = _web_search_setting(descriptor_name)
+    if value is None:
+        value = os.environ.get(env_name)
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
 async def enrich_sources_pool_with_favicons(
         sources_pool: List[Dict[str, Any]],
         log,
@@ -66,9 +99,13 @@ async def enrich_sources_pool_with_favicons(
     if not sources_pool:
         return 0
 
-    enabled = os.environ.get("WEB_FAVICON_ENRICH_ENABLED", "1").strip().lower()
-    if enabled in {"0", "false", "no", "off", "disabled"}:
-        log.info("enrich_favicons: disabled by WEB_FAVICON_ENRICH_ENABLED")
+    enabled = _setting_bool(
+        descriptor_name="web_favicon_enrich_enabled",
+        env_name="WEB_FAVICON_ENRICH_ENABLED",
+        default=True,
+    )
+    if not enabled:
+        log.info("enrich_favicons: disabled")
         return 0
 
     # Find sources that need enrichment
@@ -137,10 +174,11 @@ async def enrich_sources_pool_with_favicons(
 
     log.info(f"enrich_favicons: batch enriching {len(to_enrich)}/{len(sources_pool)} sources")
     if timeout_seconds is None:
-        try:
-            timeout_seconds = float(os.environ.get("WEB_FAVICON_ENRICH_TIMEOUT_S") or "3")
-        except Exception:
-            timeout_seconds = 3.0
+        timeout_seconds = _setting_float(
+            descriptor_name="web_favicon_enrich_timeout_s",
+            env_name="WEB_FAVICON_ENRICH_TIMEOUT_S",
+            default=3.0,
+        )
 
     # Import the preview implementation directly. Favicon enrichment is
     # decorative and uses only minimal HTTP metadata. It must not initialize

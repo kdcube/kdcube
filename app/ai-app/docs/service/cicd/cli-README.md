@@ -639,11 +639,13 @@ Current proc behavior:
 
 Local bundle root contract:
 
+- service env files stay bootstrap-minimal: `.env.ingress`, `.env.proc`, and `.env.metrics` contain only `GATEWAY_COMPONENT` and `PLATFORM_DESCRIPTORS_DIR`; runtime settings under `assembly.platform.services.*` are read from the mounted descriptor, not copied into service env files
 - `assembly.paths.host_kdcube_storage_path` becomes `HOST_KDCUBE_STORAGE_PATH`; if it is `null` or omitted, init uses `<workdir>/data/kdcube-storage`
 - `assembly.paths.host_bundle_storage_path` becomes `HOST_BUNDLE_STORAGE_PATH`; if it is `null` or omitted, init uses `<workdir>/data/bundle-storage`
 - `assembly.paths.host_exec_workspace_path` becomes `HOST_EXEC_WORKSPACE_PATH`; if it is `null` or omitted, init uses `<workdir>/data/exec-workspace`
 - `assembly.paths.host_react_debug_path` becomes `HOST_REACT_DEBUG_PATH`; if it is `null` or omitted, init uses `<workdir>/data/react-debug`; proc mounts it as `/react-debug` and keeps only the latest `REACT_DEBUG_KEEP_FILES` timeline render dumps
 - `assembly.ai.react.debug_timeline: false` mutes rendered ReAct prompt snapshots for normal runs; set it to `true` only while diagnosing prompt rendering
+- `assembly.platform.services.proc.tools.web_search.web_favicon_enrich_enabled: false` disables favicon enrichment for web search/fetch results; `web_favicon_enrich_timeout_s` caps favicon lookup time and keeps partial successes
 - if `assembly.storage.kdcube` is `null` or omitted, init uses the CLI-managed tenant/project local storage root and rewrites the staged runtime descriptor to `file:///kdcube-storage`
 - if `assembly.storage.bundles` is `null` or omitted, init uses the CLI-managed tenant/project local bundle storage root and rewrites the staged runtime descriptor to `file:///bundle-storage`
 - if `assembly.storage.kdcube` is a local host `file://...` URI, init uses that host path as `HOST_KDCUBE_STORAGE_PATH` and rewrites the staged runtime descriptor to `file:///kdcube-storage`
