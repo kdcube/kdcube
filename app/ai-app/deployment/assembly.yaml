@@ -84,13 +84,17 @@ infra:
 
 # ---------------------------------------------------------------------------
 # Storage
-# Runtime storage URIs. In CLI compose, these are normally container-visible
-# paths mounted from paths.host_* below. In direct host-run descriptors, use
-# file:///host/path values when the process must write directly to the host.
+# Runtime storage URIs. In CLI seed descriptors, null or omitted means the CLI
+# creates tenant/project-scoped local defaults under:
+#   ~/.kdcube/kdcube-runtime/<tenant>__<project>/data/{kdcube-storage,bundle-storage}
+# During init, those local defaults are mounted into the compose runtime as
+# /kdcube-storage and /bundle-storage. Explicit file:///host/path values select
+# a custom local host path; explicit s3://... values are preserved as remote
+# storage URIs.
 # ---------------------------------------------------------------------------
 storage:
-  kdcube: "/kdcube-storage"    # KDCUBE_STORAGE_PATH; local-first default for CLI compose
-  bundles: "/bundle-storage"   # CB_BUNDLE_STORAGE_URL; local-first default for CLI compose
+  kdcube: null            # KDCUBE_STORAGE_PATH; null/omitted => CLI tenant/project local default
+  bundles: null           # CB_BUNDLE_STORAGE_URL; null/omitted => CLI tenant/project local default
   workspace:
     type: local           # REACT_WORKSPACE_IMPLEMENTATION: local | git
     repo: ""              # REACT_WORKSPACE_GIT_REPO; used only when type=git
@@ -138,6 +142,7 @@ ai:
     working_summary_enabled: true   # AI_REACT_WORKING_SUMMARY_ENABLED: emit/embed channel:summary as conv.working.summary timeline events
     pruned_turn_summary_mode: "working_summary"  # AI_REACT_PRUNED_TURN_SUMMARY_MODE: collapse pruned old turns to conv.working.summary when available
     render_thinking: true           # AI_REACT_RENDER_THINKING: render live model thinking blocks; bundle config react.render_thinking overrides
+    debug_timeline: false           # AI_REACT_DEBUG_TIMELINE: write rendered model-context snapshots to REACT_DEBUG_ROOT; keep false unless diagnosing prompt/timeline issues
     # Browser-tool sessions are scoped to the current turn and cleaned by workflow/processor finalizers.
     # Idle janitor settings are backend constants today, not assembly-backed operator settings.
 
@@ -209,19 +214,21 @@ secrets:
 
 # ---------------------------------------------------------------------------
 # Host paths (deployment topology hints promoted into managed settings)
-# These are host mount-source paths for local/compose deployments. They are not
-# always the runtime paths read by proc. Runtime paths live under
+# These are host mount-source paths for local/compose deployments. Null or
+# omitted means the CLI picks tenant/project workdir defaults under:
+#   ~/.kdcube/kdcube-runtime/<tenant>__<project>/data/
+# They are not always the runtime paths read by proc. Runtime paths live under
 # platform.services.* below.
 # ---------------------------------------------------------------------------
 paths:
-  host_kdcube_storage_path: "/YOUR/HOST/PATH/.kdcube/kdcube-storage"     # HOST_KDCUBE_STORAGE_PATH; host folder mounted into /kdcube-storage
-  host_bundles_path: "/YOUR/HOST/PATH/src"                               # HOST_BUNDLES_PATH; required for descriptor-driven local bundle installs; host folder mounted into /bundles
-  host_managed_bundles_path: "/YOUR/HOST/PATH/.kdcube/managed-bundles"   # HOST_MANAGED_BUNDLES_PATH; host folder for platform-managed bundles (git-resolved + examples); mounted into /managed-bundles
+  host_kdcube_storage_path: null                                         # HOST_KDCUBE_STORAGE_PATH; null/omitted => <workdir>/data/kdcube-storage; mounted into /kdcube-storage
+  host_bundles_path: null                                                # HOST_BUNDLES_PATH; null/omitted => <workdir>/data/bundles; host folder mounted into /bundles
+  host_managed_bundles_path: null                                        # HOST_MANAGED_BUNDLES_PATH; null/omitted => <workdir>/data/managed-bundles; mounted into /managed-bundles
   host_git_ssh_key_path: ""                                              # HOST_GIT_SSH_KEY_PATH; optional host SSH private key mounted to platform.applications.bundles.git.git_ssh_key_path
   host_git_ssh_known_hosts_path: ""                                      # HOST_GIT_KNOWN_HOSTS_PATH; optional host known_hosts mounted to platform.applications.bundles.git.git_ssh_known_hosts
-  host_bundle_storage_path: "/YOUR/HOST/PATH/.kdcube/bundle-storage"     # HOST_BUNDLE_STORAGE_PATH; host mount source for /bundle-storage; direct host-run proc uses platform.services.proc.bundles.bundle_storage_root
-  host_exec_workspace_path: "/YOUR/HOST/PATH/.kdcube/exec-workspace"     # HOST_EXEC_WORKSPACE_PATH; host mount source for /exec-workspace; direct host-run proc uses platform.services.proc.exec.exec_workspace_root
-  host_react_debug_path: "/YOUR/HOST/PATH/.kdcube/react-debug"           # HOST_REACT_DEBUG_PATH; host mount source for /react-debug timeline render dumps
+  host_bundle_storage_path: null                                         # HOST_BUNDLE_STORAGE_PATH; null/omitted => <workdir>/data/bundle-storage; mounted into /bundle-storage
+  host_exec_workspace_path: null                                         # HOST_EXEC_WORKSPACE_PATH; null/omitted => <workdir>/data/exec-workspace; mounted into /exec-workspace
+  host_react_debug_path: null                                            # HOST_REACT_DEBUG_PATH; null/omitted => <workdir>/data/react-debug; mounted into /react-debug
 
 # ---------------------------------------------------------------------------
 # Frontend runtime config
@@ -358,6 +365,8 @@ platform:
           web_search_backend: "hybrid"             # WEB_SEARCH_BACKEND: duckduckgo | brave | hybrid
           web_search_hybrid_mode: "sequential"     # WEB_SEARCH_HYBRID_MODE: sequential | parallel
           web_search_segmenter: "fast"             # WEB_SEARCH_SEGMENTER
+          web_favicon_enrich_enabled: true          # WEB_FAVICON_ENRICH_ENABLED; set false to skip favicon enrichment
+          web_favicon_enrich_timeout_s: 3           # WEB_FAVICON_ENRICH_TIMEOUT_S; favicon enrichment budget, partial successes are kept
         web_fetch:
           web_fetch_resources_medium: ""  # WEB_FETCH_RESOURCES_MEDIUM; JSON: {"cookies": {"uid": "...", "sid": "..."}}
         mcp_cache_ttl_seconds: 36000      # MCP_CACHE_TTL_SECONDS
