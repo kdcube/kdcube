@@ -106,3 +106,71 @@ def test_ensure_git_commit_identity_updates_existing_repo_local_identity(tmp_pat
 
     assert name == "New Name"
     assert email == "new@local.invalid"
+
+
+# ---------------------------------------------------------------------------
+# Service-secret resolution path (bundle-first, global-fallback)
+# ---------------------------------------------------------------------------
+
+def test_build_git_env_token_from_service_secret_when_no_explicit_token(monkeypatch, tmp_path):
+    """When no token is passed explicitly, get_service_secret is consulted."""
+    monkeypatch.setattr(git_auth, "get_service_secret",
+                        lambda k, default=None: "gh-bundle-token" if k == "git.http_token" else None)
+    askpass = tmp_path / "askpass.sh"
+
+    env = git_auth.build_git_env(askpass_script_path=askpass, base_env={})
+
+    assert env["GIT_HTTP_TOKEN"] == "gh-bundle-token"
+    assert env.get("GIT_ASKPASS") == str(askpass)
+
+
+def test_build_git_env_user_from_service_secret_when_no_explicit_user(monkeypatch, tmp_path):
+    """Custom git.http_user from service secret is picked up."""
+    def _secrets(k, default=None):
+        return {"git.http_token": "gh-token", "git.http_user": "custom-user"}.get(k)
+
+    monkeypatch.setattr(git_auth, "get_service_secret", _secrets)
+    askpass = tmp_path / "askpass.sh"
+
+    env = git_auth.build_git_env(askpass_script_path=askpass, base_env={})
+
+    assert env["GIT_HTTP_USER"] == "custom-user"
+
+
+def test_build_git_env_explicit_token_beats_service_secret(monkeypatch, tmp_path):
+    """Explicit git_http_token= parameter has priority over service-secret value."""
+    monkeypatch.setattr(git_auth, "get_service_secret",
+                        lambda k, default=None: "gh-should-not-use")
+    askpass = tmp_path / "askpass.sh"
+
+    env = git_auth.build_git_env(
+        git_http_token="gh-explicit",
+        askpass_script_path=askpass,
+        base_env={},
+    )
+
+    assert env["GIT_HTTP_TOKEN"] == "gh-explicit"
+
+
+def test_build_git_env_no_token_falls_back_to_base_env(monkeypatch, tmp_path):
+    """When service secret returns nothing, GIT_HTTP_TOKEN from base_env is used."""
+    monkeypatch.setattr(git_auth, "get_service_secret", lambda k, default=None: None)
+    askpass = tmp_path / "askpass.sh"
+
+    env = git_auth.build_git_env(
+        askpass_script_path=askpass,
+        base_env={"GIT_HTTP_TOKEN": "gh-env-token"},
+    )
+
+    assert env["GIT_HTTP_TOKEN"] == "gh-env-token"
+
+
+def test_build_git_env_default_user_when_no_user_secret(monkeypatch, tmp_path):
+    """Falls back to DEFAULT_GIT_HTTP_USER when no http_user in service secrets or base_env."""
+    monkeypatch.setattr(git_auth, "get_service_secret",
+                        lambda k, default=None: "gh-token" if k == "git.http_token" else None)
+    askpass = tmp_path / "askpass.sh"
+
+    env = git_auth.build_git_env(askpass_script_path=askpass, base_env={})
+
+    assert env["GIT_HTTP_USER"] == git_auth.DEFAULT_GIT_HTTP_USER

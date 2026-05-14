@@ -3144,15 +3144,9 @@ async def _load_bundle_workflow(
         request: Request,
         session: UserSession,
 ) -> tuple[Any, Any, str, str, ChatTaskPayload]:
-    settings = get_settings()
     cfg_req = payload.config_request or ConfigRequest()
     tenant_id, project_id = _resolve_path_scope(tenant=tenant, project=project)
     _bind_route_scope_to_config_request(cfg_req, tenant=tenant_id, project=project_id)
-
-    if not cfg_req.openai_api_key:
-        cfg_req.openai_api_key = settings.OPENAI_API_KEY
-    if not cfg_req.claude_api_key:
-        cfg_req.claude_api_key = settings.ANTHROPIC_API_KEY
 
     requested_bundle_id = await _resolve_requested_bundle_id(
         path_bundle_id=bundle_id,

@@ -573,11 +573,9 @@ class Config:
                  embedding_model: Optional[str] = None,
                  default_llm_model: Optional[str] = None,
                  role_models: Optional[Dict[str, Dict[str, str]]] = None):
-        # keys (prefer Settings/sidecar, fall back to env)
-        settings = get_settings()
-        self.openai_api_key = openai_api_key or settings.OPENAI_API_KEY or ""
-        self.claude_api_key = claude_api_key or settings.ANTHROPIC_API_KEY or ""
-        self.google_api_key = google_api_key or settings.GOOGLE_API_KEY or ""
+        self.openai_api_key = openai_api_key or ""
+        self.claude_api_key = claude_api_key or ""
+        self.google_api_key = google_api_key or ""
 
         # Gemini cache options
         self.gemini_cache_enabled: bool = bool(get_plain("a:services.llm.gemini.gemini_cache_enabled", False))
@@ -830,9 +828,10 @@ class ModelRouter:
         self._anthropic_async = None
 
     def _mk_openai(self, model: str, temperature: float) -> ChatOpenAI:
+        from kdcube_ai_app.apps.chat.sdk.config import get_service_secret
         return make_chat_openai(
             model=model,                      # e.g., "o3-mini" or "gpt-4o"
-            api_key=self.config.openai_api_key,
+            api_key=self.config.openai_api_key or get_service_secret("openai.api_key"),
             temperature=temperature,          # user knob (may be ignored for reasoning models)
             stream_usage=True
         )
@@ -847,9 +846,12 @@ class ModelRouter:
     def _mk_anthropic(self):
         if self._anthropic_client:
             return self._anthropic_client
+        from kdcube_ai_app.apps.chat.sdk.config import get_service_secret
         try:
             import anthropic
-            self._anthropic_client = anthropic.Anthropic(api_key=self.config.claude_api_key)
+            self._anthropic_client = anthropic.Anthropic(
+                api_key=self.config.claude_api_key or get_service_secret("anthropic.api_key")
+            )
             return self._anthropic_client
         except ImportError:
             raise RuntimeError("anthropic package not available")
@@ -857,17 +859,22 @@ class ModelRouter:
     def _mk_anthropic_async(self):
         if self._anthropic_async:
             return self._anthropic_async
+        from kdcube_ai_app.apps.chat.sdk.config import get_service_secret
         import anthropic
-        self._anthropic_async = anthropic.AsyncAnthropic(api_key=self.config.claude_api_key)
+        self._anthropic_async = anthropic.AsyncAnthropic(
+            api_key=self.config.claude_api_key or get_service_secret("anthropic.api_key")
+        )
         return self._anthropic_async
 
     def _mk_gemini(self, model: str, temperature: float) -> "GeminiModelClient":
-        if not self.config.google_api_key:
+        from kdcube_ai_app.apps.chat.sdk.config import get_service_secret
+        google_api_key = self.config.google_api_key or get_service_secret("google.api_key")
+        if not google_api_key:
             raise ValueError("Gemini provider requires GEMINI_API_KEY or google_api_key in ConfigRequest")
 
         from kdcube_ai_app.infra.service_hub.gemini import GeminiModelClient
         return GeminiModelClient(
-            api_key=self.config.google_api_key,
+            api_key=google_api_key,
             model_name=model,
             temperature=temperature,
             cache_enabled=self.config.gemini_cache_enabled,

@@ -3,7 +3,7 @@ id: ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
 title: "Bundle Runtime Settings, Configuration, and Secrets"
 summary: "Canonical author-facing configuration model for bundle code: how platform settings, bundle props and secrets, and user-scoped state are read, written, owned, stored, and exported."
 tags: ["sdk", "configuration", "bundle", "props", "secrets"]
-keywords: ["programmatic configuration access", "platform settings and secrets", "bundle scoped props and secrets", "user scoped props and secrets", "helper api selection", "ownership boundary", "live authority and export rules", "get_settings and get_secret", "bundle_prop and set_bundle_prop", "user prop and user secret CRUD"]
+keywords: ["programmatic configuration access", "platform settings and secrets", "bundle scoped props and secrets", "user scoped props and secrets", "helper api selection", "ownership boundary", "live authority and export rules", "get_settings and get_secret", "bundle_prop and set_bundle_prop", "user prop and user secret CRUD", "get_service_secret", "service key override", "per-bundle provider key"]
 see_also:
   - ks:docs/sdk/bundle/bundle-developer-guide-README.md
   - ks:docs/sdk/bundle/bundle-reserved-platform-properties-README.md
@@ -110,7 +110,8 @@ login.
 
 Examples:
 
-- OpenAI API key for the deployment -> platform/global secret
+- OpenAI API key shared by all bundles in the deployment -> platform/global secret
+- OpenAI API key for one specific bundle -> deployment-scoped bundle secret (`services.openai.api_key`)
 - auth client id -> platform/global prop
 - bundle feature flag or cron expression -> deployment-scoped bundle prop
 - bundle webhook token shared by the deployment -> deployment-scoped bundle secret
@@ -137,6 +138,10 @@ Use:
 
 - `await get_secret_async("canonical.key")` for platform/global secrets
 - `await get_secret_async("b:group.key")` for current-bundle deployment secrets
+- `get_service_secret("service.key")` / `await get_service_secret_async("service.key")`
+  for provider service keys with automatic bundle-first, platform-fallback resolution
+  (see [bundles-secrets-descriptor-README.md](bundles-secrets-descriptor-README.md)
+  for the list of overridable `services.*` keys)
 - `await get_user_secret_async("group.key")` for current-user bundle secrets
 - `await set_user_secret_async("group.key", value)` for user secret writes
 - `await delete_user_secret_async("group.key")` for user secret deletes
