@@ -327,6 +327,41 @@ def build_assistant_completion_blocks(
     return blocks
 
 
+def build_assistant_completion_attempt_blocks(
+    *,
+    runtime: RuntimeCtx,
+    entry: Dict[str, Any],
+    attempt_index: int,
+    block_factory,
+) -> List[Dict[str, Any]]:
+    tid = (getattr(runtime, "turn_id", None) or "").strip()
+    text = str((entry or {}).get("text") or "").strip() if isinstance(entry, dict) else ""
+    if not tid or not text:
+        return []
+    try:
+        idx = max(1, int(attempt_index))
+    except Exception:
+        idx = 1
+    meta: Dict[str, Any] = {
+        "completion_attempt_index": idx,
+        "provisional": True,
+    }
+    sources_used = entry.get("sources_used") if isinstance(entry.get("sources_used"), list) else []
+    if sources_used:
+        meta["sources_used"] = list(sources_used)
+    if entry.get("iteration") is not None:
+        meta["iteration"] = entry.get("iteration")
+    return [block_factory(
+        type="assistant.completion.attempt",
+        author="assistant",
+        turn_id=tid,
+        ts=str(entry.get("ts") or "").strip(),
+        path=f"ar:{tid}.assistant.completion.attempt.{idx}",
+        text=text,
+        meta=meta,
+    )]
+
+
 def build_working_summary_blocks(
     *,
     runtime: RuntimeCtx,

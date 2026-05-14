@@ -127,7 +127,9 @@ def _preview_tool_call_payload(payload: Dict[str, Any], *, call_path: str) -> tu
         return payload, False, []
     if changed:
         preview = dict(preview)
+        preview["tool_call_preview_capped"] = True
         preview["tool_call_payload_capped"] = True
+        preview["full_payload_preserved"] = True
         preview["omitted_fields"] = [
             {
                 "field": row.get("field"),
@@ -253,6 +255,23 @@ def _log_tool_block(block: Dict[str, Any]) -> None:
 
 
 def add_block(ctx_browser, block: Dict[str, Any]) -> None:
+    try:
+        runtime_ctx = getattr(ctx_browser, "runtime_ctx", None)
+        iteration = getattr(runtime_ctx, "_current_react_iteration", None) if runtime_ctx is not None else None
+        if iteration is not None and (block.get("type") or "").strip() in {
+            "react.tool.call",
+            "react.tool.result",
+            "react.tool.code",
+            "react.notice",
+        }:
+            meta = block.get("meta") if isinstance(block.get("meta"), dict) else {}
+            if "iteration" not in meta:
+                block = dict(block)
+                meta = dict(meta)
+                meta["iteration"] = int(iteration)
+                block["meta"] = meta
+    except Exception:
+        pass
     _log_tool_block(block)
     try:
         ctx_browser.contribute(blocks=[block])
@@ -284,7 +303,9 @@ def tool_call_block(*, ctx_browser, tool_call_id: str, tool_id: str, payload: Di
         "tool_call_id": tool_call_id,
     }
     if capped:
+        meta["tool_call_preview_capped"] = True
         meta["tool_call_payload_capped"] = True
+        meta["full_payload_preserved"] = True
         meta["omitted_fields"] = [
             {
                 "field": row.get("field"),

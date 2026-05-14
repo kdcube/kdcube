@@ -94,6 +94,18 @@ separate namespaces for separate customers, products, or lifecycle stages
 
 Each scope is fully isolated — its own config, data, logs, and running stack.
 
+For local seed descriptors, storage and host path fields may be left `null` or
+omitted to use the tenant/project workdir defaults. For example,
+`storage.kdcube: null` and `storage.bundles: null` resolve to:
+
+```
+~/.kdcube/kdcube-runtime/<tenant>__<project>/data/kdcube-storage
+~/.kdcube/kdcube-runtime/<tenant>__<project>/data/bundle-storage
+```
+
+Explicit `file:///...` values select a custom local host path. Explicit
+`s3://...` values are preserved as remote storage URIs.
+
 ### One machine, one running stack
 
 A machine can hold **many workdirs** on disk, but only **one stack can run at

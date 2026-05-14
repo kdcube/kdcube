@@ -195,6 +195,14 @@ The plugin should steer agents away from these recurring mistakes:
 - ReAct max rounds are configurable through `ai.react.max_iterations` /
   `AI_REACT_MAX_ITERATIONS`, with per-bundle override through
   `config.react.max_iterations` or `react.max_iterations`
+- ReAct live thinking rendering is configurable through
+  `ai.react.render_thinking` / `AI_REACT_RENDER_THINKING`, with per-bundle
+  override through `config.react.render_thinking` or `react.render_thinking`;
+  pruned/compacted historical thinking is not rendered
+- ReAct rendered prompt snapshot debugging is controlled separately by
+  `ai.react.debug_timeline` / `AI_REACT_DEBUG_TIMELINE`, with per-bundle
+  override through `config.react.debug_timeline` or `react.debug_timeline`;
+  keep it off unless diagnosing the exact rendered model context
 - bundle finalizers such as `on_turn_completed(...)` are for fast cleanup after
   success, error, or cancellation, not for expensive user-facing work
 - do not commit, tag, push, or update descriptor refs unless the user has

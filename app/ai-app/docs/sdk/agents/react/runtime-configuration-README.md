@@ -3,7 +3,7 @@ id: ks:docs/sdk/agents/react/runtime-configuration-README.md
 title: "Runtime Configuration"
 summary: "RuntimeCtx, version selection, and session configuration fields for the React runtime, including knowledge hooks and experimental multi-action mode."
 tags: ["sdk", "agents", "react", "configuration"]
-keywords: ["RuntimeCtx", "RuntimeSessionConfig", "cache config", "pruning settings", "knowledge_search_fn", "knowledge_read_fn", "bundle_storage", "AI_REACT_AGENT_VERSION", "AI_REACT_AGENT_MULTI_ACTION", "AI_REACT_MAX_ITERATIONS", "multi_action_mode"]
+keywords: ["RuntimeCtx", "RuntimeSessionConfig", "cache config", "pruning settings", "knowledge_search_fn", "knowledge_read_fn", "bundle_storage", "AI_REACT_AGENT_VERSION", "AI_REACT_AGENT_MULTI_ACTION", "AI_REACT_MAX_ITERATIONS", "AI_REACT_RENDER_THINKING", "multi_action_mode"]
 see_also:
   - ks:docs/sdk/agents/react/compaction-README.md
   - ks:docs/sdk/agents/react/context-caching-README.md
@@ -35,6 +35,29 @@ The base ReAct decision/tool-use round cap is resolved before the runtime loop s
 3. Runtime fallback `15`
 
 The resolved value is passed through `RuntimeCtx.max_iterations`. Reactive external-event credit, when enabled, can temporarily add bounded extra iterations during the active turn.
+
+## Thinking rendering
+
+Live model thinking blocks are persisted as `react.thinking` timeline blocks. Rendering them into the active ReAct context is controlled by:
+
+1. Bundle props `config.react.render_thinking` / `react.render_thinking`
+2. Assembly/env `ai.react.render_thinking` / `AI_REACT_RENDER_THINKING`
+3. Runtime fallback `true`
+
+This switch only controls rendering. It does not change channel parsing or persistence. Thinking from pruned/compacted historical rounds is not rendered.
+
+## Timeline Render Debug
+
+Rendered prompt snapshots are controlled separately from thinking visibility:
+
+1. Bundle props `config.react.debug_timeline` / `react.debug_timeline`
+2. Assembly/env `ai.react.debug_timeline` / `AI_REACT_DEBUG_TIMELINE`
+3. Bundle code default, usually `false` for normal bundles and `true` for
+   diagnostic/reference bundles
+
+When enabled, snapshots are written under `REACT_DEBUG_ROOT`, normally
+`/react-debug` in CLI and ECS deployments, with retention controlled by
+`REACT_DEBUG_KEEP_FILES`.
 
 ## RuntimeCtx
 
@@ -79,7 +102,10 @@ The resolved value is passed through `RuntimeCtx.max_iterations`. Reactive exter
 - `started_at`: run start time in ISO format.
 - `debug_log_announce`: emit announce blocks in debug logs.
 - `debug_log_sources_pool`: emit sources pool in debug logs.
-- `debug_timeline`: when `true`, write the fully rendered model context to `debug/rendering/` (one file per render).
+- `debug_timeline`: when `true`, write the fully rendered model context to the configured render-debug root. The runtime no longer writes into the package directory by default.
+- `debug_timeline_root`: process-visible directory for render-debug files. It is normally populated from `REACT_DEBUG_ROOT`; CLI and ECS deployments mount it as `/react-debug`.
+- `debug_timeline_keep_files`: rolling retention for `rendered-*.txt` files. The platform default is `100`.
+- `render_thinking`: when `true`, render live `react.thinking` blocks as `[thinking]` timeline sections. When `false`, hide those blocks from the rendered model context.
 - `session`: session-level configuration (see below).
 - `cache`: cache-related limits (see below).
 

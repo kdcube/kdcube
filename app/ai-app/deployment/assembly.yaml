@@ -137,6 +137,7 @@ ai:
     cache_keep_recent_intact_turns: 1  # AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS: newest turns kept untrimmed
     working_summary_enabled: true   # AI_REACT_WORKING_SUMMARY_ENABLED: emit/embed channel:summary as conv.working.summary timeline events
     pruned_turn_summary_mode: "working_summary"  # AI_REACT_PRUNED_TURN_SUMMARY_MODE: collapse pruned old turns to conv.working.summary when available
+    render_thinking: true           # AI_REACT_RENDER_THINKING: render live model thinking blocks; bundle config react.render_thinking overrides
     # Browser-tool sessions are scoped to the current turn and cleaned by workflow/processor finalizers.
     # Idle janitor settings are backend constants today, not assembly-backed operator settings.
 
@@ -220,6 +221,7 @@ paths:
   host_git_ssh_known_hosts_path: ""                                      # HOST_GIT_KNOWN_HOSTS_PATH; optional host known_hosts mounted to platform.applications.bundles.git.git_ssh_known_hosts
   host_bundle_storage_path: "/YOUR/HOST/PATH/.kdcube/bundle-storage"     # HOST_BUNDLE_STORAGE_PATH; host mount source for /bundle-storage; direct host-run proc uses platform.services.proc.bundles.bundle_storage_root
   host_exec_workspace_path: "/YOUR/HOST/PATH/.kdcube/exec-workspace"     # HOST_EXEC_WORKSPACE_PATH; host mount source for /exec-workspace; direct host-run proc uses platform.services.proc.exec.exec_workspace_root
+  host_react_debug_path: "/YOUR/HOST/PATH/.kdcube/react-debug"           # HOST_REACT_DEBUG_PATH; host mount source for /react-debug timeline render dumps
 
 # ---------------------------------------------------------------------------
 # Frontend runtime config
@@ -343,6 +345,10 @@ platform:
         max_file_bytes: "100m"                 # Max single file the ISO runtime may create per run; "0"/"unlimited" disables
         max_workspace_bytes: "250m"            # Max net-new workspace/output bytes the ISO runtime may create per run
         workspace_monitor_interval_s: 0.5      # ISO runtime workspace quota polling interval
+
+      react_debug:
+        debug_root: ""                         # REACT_DEBUG_ROOT; proc runtime path for timeline render debug dumps. CLI/ECS normally use /react-debug.
+        keep_files: 100                        # REACT_DEBUG_KEEP_FILES; rolling retention for rendered-*.txt files
 
       tools:
         web_search:

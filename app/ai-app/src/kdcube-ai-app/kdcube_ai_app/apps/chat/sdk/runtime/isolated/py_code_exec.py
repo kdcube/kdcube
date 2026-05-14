@@ -147,8 +147,10 @@ async def run_py_code(
     workdir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    _prepare_workspace_for_executor(workdir, executor_uid=1001, executor_gid=None, logger=log, include_logs=False)
-    _prepare_workspace_for_executor(output_dir, executor_uid=1001, executor_gid=None, logger=log, include_logs=False)
+    executor_uid = int(os.environ.get("EXECUTOR_UID", "1001"))
+    executor_gid = int(os.environ.get("EXECUTOR_GID", "1000"))
+    _prepare_workspace_for_executor(workdir, executor_uid=executor_uid, executor_gid=executor_gid, logger=log, include_logs=False)
+    _prepare_workspace_for_executor(output_dir, executor_uid=executor_uid, executor_gid=executor_gid, logger=log, include_logs=False)
 
     main_path = workdir / "main.py"
     if not main_path.exists():
@@ -235,18 +237,33 @@ async def run_py_code(
     child_env["OUTPUT_DIR"] = str(output_dir)
     child_env["WORKDIR"] = str(workdir)
     child_env["AGENT_IO_CONTEXT"] = "limited"
-    executor_private_root = pathlib.Path(child_env.get("EXECUTOR_PRIVATE_ROOT") or "/tmp/kdcube-executor")
+    executor_private_root = pathlib.Path(
+        child_env.get("EXECUTOR_PRIVATE_ROOT")
+        or (output_dir / "_runtime_tmp" / "executor")
+    )
+    executor_tmp_dir = executor_private_root / "tmp"
     executor_log_dir = pathlib.Path(child_env.get("EXECUTOR_LOG_DIR") or child_env.get("LOG_DIR") or (output_dir / "logs"))
     executor_home = pathlib.Path(child_env.get("HOME") or (executor_private_root / "home"))
     executor_cache = executor_private_root / "cache"
     executor_config = executor_private_root / "config"
     mpl_cache_dir = executor_private_root / "mplconfig"
     font_cache_dir = executor_private_root / "fontconfig"
-    for private_dir in (executor_log_dir, executor_home, executor_cache, executor_config, mpl_cache_dir, font_cache_dir):
+    for private_dir in (executor_log_dir, executor_tmp_dir, executor_home, executor_cache, executor_config, mpl_cache_dir, font_cache_dir):
         private_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chown(private_dir, executor_uid, executor_gid)
+        except Exception:
+            pass
+        try:
+            os.chmod(private_dir, 0o777)
+        except Exception:
+            pass
     child_env["HOME"] = str(executor_home)
     child_env["LOG_DIR"] = str(executor_log_dir)
     child_env["LOG_FILE_PREFIX"] = "executor"
+    child_env["TMPDIR"] = str(executor_tmp_dir)
+    child_env["TMP"] = str(executor_tmp_dir)
+    child_env["TEMP"] = str(executor_tmp_dir)
     child_env["MPLCONFIGDIR"] = str(mpl_cache_dir)
     child_env["XDG_CACHE_HOME"] = str(executor_cache)
     child_env["XDG_CONFIG_HOME"] = str(executor_config)

@@ -202,6 +202,44 @@ async def test_stream_with_channels_ignores_literal_channel_mentions_inside_cont
 
 
 @pytest.mark.asyncio
+async def test_stream_with_channels_ignores_literal_channel_mentions_inside_legacy_thinking():
+    chunks = [
+        "<thinking>The literal `",
+        "<channel:code>` marker is not code.</thinking>\n",
+        "<channel:answer>Done.</channel:answer>\n",
+        "<channel:code></channel:code>",
+    ]
+    svc = _FakeService(chunks)
+    events = []
+
+    async def _emit(**kwargs):
+        events.append(kwargs)
+
+    channels = [
+        ChannelSpec(name="thinking", format="markdown", replace_citations=False, emit_marker="thinking"),
+        ChannelSpec(name="answer", format="markdown", replace_citations=False, emit_marker="answer"),
+        ChannelSpec(name="code", format="text", replace_citations=False, emit_marker="subsystem"),
+    ]
+
+    results, meta = await stream_with_channels(
+        svc=svc,
+        messages=["sys", "user"],
+        role="answer.generator.regular",
+        channels=channels,
+        emit=_emit,
+        agent="test.agent",
+        artifact_name="demo",
+        max_tokens=200,
+        temperature=0.0,
+        return_full_raw=True,
+    )
+
+    assert meta.get("service_error") is None
+    assert "Done." in results["answer"].raw
+    assert results["code"].raw == ""
+
+
+@pytest.mark.asyncio
 async def test_stream_with_channels_captures_realistic_exec_code_payload():
     output_file = "turn_demo_exec_001/outputs/monthly_priorities.xlsx"
     payload = {

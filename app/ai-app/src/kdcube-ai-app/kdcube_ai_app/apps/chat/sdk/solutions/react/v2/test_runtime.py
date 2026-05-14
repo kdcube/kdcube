@@ -397,9 +397,10 @@ def test_record_failed_decision_attempt_emits_round_scoped_blocks():
         tool_call_id="tc_fail_1",
         code="ReactDecisionOutV2_schema_error",
         notice_code="protocol_violation.ReactDecisionOutV2_schema_error",
-        notice_message="Bad Protocol. The agent output in <channel:ReactDecisionOutV2> could not be parsed, so no action was executed for this round.",
+        notice_message="Malformed action JSON. <channel:ReactDecisionOutV2> could not be parsed, so no action was executed for this round. Parser reported: JSON parse error",
         decision_packet={"raw": "```json\n{\"action\":\"call_tool\"}\n```"},
         reason="schema_error",
+        notice_extra={"parser_error": "JSON parse error"},
     )
 
     assert [b["type"] for b in captured] == ["react.notes", "react.decision.raw", "react.notice"]
@@ -407,6 +408,8 @@ def test_record_failed_decision_attempt_emits_round_scoped_blocks():
     assert captured[1]["call_id"] == "tc_fail_1"
     assert captured[1]["meta"]["reason"] == "schema_error"
     assert captured[2]["call_id"] == "tc_fail_1"
+    notice_payload = json.loads(captured[2]["text"])
+    assert notice_payload["parser_error"] == "JSON parse error"
 
 
 def test_react_round_start_emits_round_open_block():

@@ -88,6 +88,7 @@ These env vars are the direct runtime surface for assembly-backed settings.
 | `AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS` | `ai.react.cache_keep_recent_intact_turns` | `get_settings()` | all modes |
 | `AI_REACT_WORKING_SUMMARY_ENABLED` | `ai.react.working_summary_enabled` | `get_settings()` | all modes |
 | `AI_REACT_PRUNED_TURN_SUMMARY_MODE` | `ai.react.pruned_turn_summary_mode` | `get_settings()` | all modes |
+| `AI_REACT_RENDER_THINKING` | `ai.react.render_thinking` | `get_settings()` / `RuntimeCtx.render_thinking` | all modes |
 | `CLAUDE_CODE_SESSION_STORE_IMPLEMENTATION` | `storage.claude_code_session.type` | `get_settings()` | CLI local compose, direct local service run |
 | `CLAUDE_CODE_SESSION_GIT_REPO` | `storage.claude_code_session.repo` | `get_settings()` | CLI local compose, direct local service run |
 | `BUNDLE_SCHEDULER_RECONCILE_INTERVAL_SECONDS` | `platform.services.proc.bundles.bundle_scheduler_reconcile_interval_seconds` | `get_settings().PLATFORM.APPLICATIONS` | proc in all modes |
@@ -232,6 +233,8 @@ ai:
     cache_keep_recent_intact_turns: 1  # AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS
     working_summary_enabled: true      # AI_REACT_WORKING_SUMMARY_ENABLED
     pruned_turn_summary_mode: "working_summary"  # AI_REACT_PRUNED_TURN_SUMMARY_MODE
+    render_thinking: true              # AI_REACT_RENDER_THINKING
+    debug_timeline: false              # AI_REACT_DEBUG_TIMELINE
 ```
 
 | Field | Env var | Meaning |
@@ -253,6 +256,8 @@ ai:
 | `cache_keep_recent_intact_turns` | `AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS` | Newest turns kept untrimmed during TTL pruning; default `1` |
 | `working_summary_enabled` | `AI_REACT_WORKING_SUMMARY_ENABLED` | Capture React `channel:summary` on complete/exit, emit it as `conv.working.summary`, and embed it for memory search; default `true` |
 | `pruned_turn_summary_mode` | `AI_REACT_PRUNED_TURN_SUMMARY_MODE` | Prefer working-summary cards when rendering pruned historical turns; multiple same-turn summaries are preserved; set to `working_summary` by default |
+| `render_thinking` | `AI_REACT_RENDER_THINKING` | Render live model thinking blocks in the active ReAct timeline; bundle `config.react.render_thinking` / `react.render_thinking` overrides this default; pruned thinking is never rendered |
+| `debug_timeline` | `AI_REACT_DEBUG_TIMELINE` | Enable rendered prompt snapshot files for ReAct timelines; bundle `config.react.debug_timeline` / `react.debug_timeline` overrides this default; keep `false` for normal deployments |
 
 Visible read limits use separate units:
 
@@ -421,6 +426,7 @@ env keys:
 - `HOST_MANAGED_BUNDLES_PATH`
 - `HOST_BUNDLE_STORAGE_PATH`
 - `HOST_EXEC_WORKSPACE_PATH`
+- `HOST_REACT_DEBUG_PATH`
 
 ### `paths.*` -> runtime env mapping
 
@@ -431,6 +437,9 @@ env keys:
 | `HOST_MANAGED_BUNDLES_PATH` | `paths.host_managed_bundles_path` | CLI local compose |
 | `HOST_BUNDLE_STORAGE_PATH` | `paths.host_bundle_storage_path` | CLI local compose |
 | `HOST_EXEC_WORKSPACE_PATH` | `paths.host_exec_workspace_path` | CLI local compose |
+| `HOST_REACT_DEBUG_PATH` | `paths.host_react_debug_path` | CLI local compose and ECS EC2 host mount |
+| `REACT_DEBUG_ROOT` | `platform.services.proc.react_debug.debug_root` | proc runtime path for timeline render debug |
+| `REACT_DEBUG_KEEP_FILES` | `platform.services.proc.react_debug.keep_files` | rolling retention for timeline render debug |
 
 Those host directories are then mounted into the containers at stable
 container-visible paths such as:
@@ -440,6 +449,7 @@ container-visible paths such as:
 - `/managed-bundles`
 - `/bundle-storage`
 - `/exec-workspace`
+- `/react-debug`
 
 So in `bundles.yaml`:
 
@@ -515,6 +525,14 @@ paths:
   host_bundles_path: "/Users/you/src"
   host_bundle_storage_path: "/Users/you/.kdcube/runtime/data/bundle-storage"
   host_exec_workspace_path: "/Users/you/.kdcube/runtime/data/exec-workspace"
+  host_react_debug_path: "/Users/you/.kdcube/runtime/data/react-debug"
+
+platform:
+  services:
+    proc:
+      react_debug:
+        debug_root: "/react-debug"
+        keep_files: 100
 ```
 
 ### Direct local proc debug

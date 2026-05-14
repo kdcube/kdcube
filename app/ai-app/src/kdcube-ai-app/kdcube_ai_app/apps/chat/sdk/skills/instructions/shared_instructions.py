@@ -638,25 +638,59 @@ ISO_TOOL_EXECUTION_INSTRUCTION = """
 - Only execution-enabled runtime tool handles are available inside generated code. Orchestration/job tools such
   as `task_job.*` are not Python globals inside exec snippets; call them as normal top-level ReAct tool calls,
   not from `exec_tools.execute_code_python`.
-- Minimal pattern:
+- Do not use this pattern to call document renderers for ordinary PDF/PPTX/DOCX
+  deliverables. Prefer source content from `react.write channel=canvas`, then call
+  `rendering_tools.write_*` as top-level ReAct render tools.
+- This is not a content-generation path. For user-visible generated text, call
+  `react.write` as a top-level ReAct tool.
+- Minimal pattern for a rare execution-enabled tool that must run from generated code:
 ```python
 resp = await agent_io_tools.tool_call(
-    fn=rendering_tools.write_pdf,
-    params={"path": "report.pdf", "content": html, "format": "html"},
-    call_reason="Render PDF",
-    tool_id="rendering_tools.write_pdf",
+    fn=some_execution_tool,
+    params={"required_arg": "value"},
+    call_reason="Run the execution-only helper",
+    tool_id="namespace.some_execution_tool",
 )
 ```
 - The tool function handle (`fn=...`) must already be available in the exec runtime; execution must go through tool_call.
 """
 
 WORK_WITH_DOCUMENTS_AND_IMAGES = """
-[WORK WITH DOCUMENTS & IMAGES (PLANNING EXAMPLE)]:
-- If multiple derived artifacts are needed, consolidate work into fewer rounds.
-- Example: round 1 generates 4 diagrams in one exec round (write 4 .mmd + render 4 PNGs) so they can be reviewed.
-- Round 2 synthesizes the final HTML and renders PDF; both are files via exec.
-  Ensure the pdf-press skill is loaded for the HTML+PDF round.
-- This keeps artifacts reviewable (per-file) without over-fragmenting the work.
+[WORK WITH DOCUMENTS & IMAGES (HARD)]:
+- Prefer generating source content with `react.write`.
+- Render final PDF/PPTX/DOCX/PNG deliverables with `rendering_tools.write_*`.
+- Do not use exec as a workaround for ordinary document rendering.
+- If generated content is meant for the user to see, download, approve, or use
+  as a renderer source, make it external: `react.write channel=canvas` or exec
+  `visibility=external`. Use `channel=internal` only for private scratch that
+  will not be presented or rendered for the user.
+- Reports, briefs, HTML, Markdown, slide source, DOCX/PDF/PPTX source, and
+  anything under `outputs/` that may become a deliverable should be written with
+  `react.write channel=canvas`, not `channel=internal`.
+- Load the relevant authoring skill when needed (`sk:public.pdf-press`,
+  `sk:public.pptx-press`, `sk:public.docx-press`) before writing substantial content.
+- For user document deliverables, first create an external source artifact:
+  prefer `react.write(..., channel=canvas, ...)` with an output path such as
+  `outputs/<scope>/report.html` or `outputs/<scope>/report.md`; exec output with
+  `visibility=external` is also valid. This keeps the draft visible so the user
+  can react before rendering if the shape is wrong.
+- Use the input type documented by the target rendering tool. Do not reuse one
+  source across different output formats unless that tool explicitly supports it.
+- Preferred: then call the renderer with `content="ref:<external artifact path>"`.
+  The path after `ref:` may be the artifact_path/logical_path (`fi:...`) or the
+  visible physical path (`turn_<id>/outputs/...`); missing `fi:` is assumed for
+  ordinary artifact paths.
+  Inline renderer content is accepted when needed, but do not bind internal
+  artifacts into rendering_tools.write_*.
+- Internal text artifacts are still valid for private notes, intermediate
+  analysis, machine-readable scratch data, and other agent/runtime-only files
+  that are not meant to be rendered or shared as user deliverables.
+- If the source artifacts are already visible, independent renderer calls can be
+  safe multi-action siblings. If the source artifacts are not visible yet, write
+  them first, then render in a later round.
+- If a renderer fails, fix the renderer content or layout and retry the renderer.
+  Do not switch to exec unless the requested artifact genuinely needs custom
+  programmatic generation beyond the renderer contract.
 """
 
 CODEGEN_BEST_PRACTICES_V2 = """
@@ -770,6 +804,12 @@ EXEC_SNIPPET_RULES = f"""
 - For filesystem/list/search tasks, write structured files such as `listing.json`, `matches.json`, or `summary.txt` instead of dumping everything to stdout.
 - For patch/edit tasks, write a `.diff` or `.patch` artifact and, if useful, a small JSON/text summary artifact.
 - `io_tools.tool_call` is ONLY for generated code to invoke catalog tools. Do NOT call it directly in decision.
+- Do not use exec to call `rendering_tools.write_pdf`, `write_pptx`, or `write_docx`
+  for ordinary document deliverables. Generate source content with `react.write`,
+  then call those rendering tools directly as top-level ReAct render tool calls.
+- If an exec attempt failed because code was missing or non-code leaked into
+  `channel:code`, do not keep retrying exec for the same document task. Switch to
+  direct renderer tool calls or complete with the artifacts already produced.
 [ ctx_tools.fetch_ctx or read file?]
 - You MAY use ctx_tools.fetch_ctx inside your snippet to load context (generated code only; never in tool_call rounds).
 - fetch_ctx only supports ar:, tc:, so: paths. It does NOT support fi: or ks:. For files/attachments use physical OUTPUT_DIR paths.
@@ -780,13 +820,15 @@ EXEC_SNIPPET_RULES = f"""
 
 SOURCES_AND_CITATIONS_V2 = """
 [SOURCES & CITATIONS (HARD)]:
-When you produce the content with react.write(content) or if you directly write the content param value for rendering.write_* tools,
- or generate final_answer, you must cite the sources of the information you used to produce that content if you synthesized this information from those sources.
+When you produce source content with react.write(content), render that source
+content with rendering_tools.write_*, or generate final_answer, you must cite the
+sources of the information you used to produce that content if you synthesized
+this information from those sources.
 Citations allow users to verify the claims and explore further.
 - When citing, ONLY use SIDs that exist in the current sources_pool which compact version you always see in the bottom of the context.
 Do not invent sources or SIDs since they will appear as a broken citation markers in the user facing data.
 - For final answers, cite ONLY web sources (http/https). Do NOT cite file/attachment sources as evidence.
-- For rendering tool content (HTML/Markdown passed to rendering.write_* tools),
+- For renderer source content later passed to rendering.write_* tools,
   you MAY include image SIDs from sources_pool to embed assets. These image SIDs are for
   rendering only and should not be treated as evidence citations.
 - Citation format depends on output format:
@@ -803,16 +845,24 @@ Do not invent sources or SIDs since they will appear as a broken citation marker
 """
 
 TEMPERATURE_GUIDANCE = """
-[Sampling Temperature (LLM gen)]
-- The `generate_content_llm` tool supports `temperature` (default 0.2).
-- Use lower values for extraction, faithful reproduction, or layout-sensitive tasks.
-- Use higher values only when creative variation is explicitly desired.
+[GENERATED CONTENT]
+- For generated text/HTML/Markdown/JSON/YAML/XML artifacts, use `react.write`
+  as a top-level ReAct tool.
+- Document source artifacts such as HTML and Markdown should be user-visible
+  (`channel=canvas`), not internal, when they will be renderer `ref:` inputs, so
+  the user can react before rendering if the draft shape is wrong.
+- Use the input type documented by the target rendering tool.
+- For rendered binary/file deliverables, use `rendering_tools.write_*` as
+  top-level ReAct render tools.
 """
 
 ATTACHMENT_BINDING_CODEGEN = """
 [Attachments to Multimodal Tools (CODEGEN)]
-- If a multimodal-capable tool is used and the task depends on an attachment, use the attachment's physical OUTPUT_DIR-relative path in exec code. Do not use ctx_tools.fetch_ctx for fi: attachments.
-- Example:
+- If a multimodal-capable execution-only tool is explicitly available and the
+  task depends on an attachment, use the attachment's physical OUTPUT_DIR-relative
+  path in exec code. Do not use ctx_tools.fetch_ctx for fi: attachments.
+- Do not use exec to generate ordinary user-facing prose; use `react.write`.
+- Path guard example:
 ```python
 from pathlib import Path
 
@@ -820,15 +870,6 @@ att_path = Path(OUTPUT_DIR) / "turn_<turn_id>/attachments/image_a.png"
 if not att_path.exists():
     await fail("Missing required attachment", where="attachment_path", error=str(att_path))
     return
-await agent_io_tools.tool_call(
-    fn=llm_tools.generate_content_llm,
-    params={
-        "instruction": "Describe the layout and colors in the image.",
-        "attachments": [{"path": str(att_path), "mime": "image/png"}],
-    },
-    call_reason="Use original image attachment",
-    tool_id="llm_tools.generate_content_llm",
-)
 ```
 """
 
@@ -970,6 +1011,10 @@ REACT_SKILL_SELECTION_GUIDE = """
   before retrying or switching strategy.
 - If several skills match, load the smallest useful set. If no catalog entry
   matches, proceed with the best available tool plan.
+- Do not load a product/domain skill merely because the topic is adjacent to that
+  product. For "who are you?", use the visible bundle identity/admin context. For
+  recent news or current external facts, use web/search sources first and load
+  only the output-format skills needed to package the result.
 """
 
 REACT_DECISION_SHARED_OPERATING_GUIDE = f"""
@@ -1105,7 +1150,8 @@ You have following tools to capture content which you produce in the named and d
   - Protocol violation: streaming long content in timeline_text. Use canvas instead.
     When channel=canvas, the filename extension MUST match a supported canvas format:
     .md/.markdown, .html/.htm, .mermaid/.mmd, .json, .yaml/.yml, .txt, .xml.
-  - react.write only writes text-based files. For PDFs/PPTX/DOCX/PNG, use rendering_tools.write_* or exec tools.
+  - react.write only writes text-based files. For PDFs/PPTX/DOCX/PNG, use rendering_tools.write_*.
+    Use exec only for custom file generation that is outside the renderer contracts.
   - Internal means this artifact will only be stored as a file artifact and won't be shared to a user in any channel.
   Use internal channel for internal notes/artifacts. By default they are files; add scratchpad=true only for short Internal Memory Beacons that should also appear inline as react.note.
   Write them when you have something stable and reusable to carry forward, often close to the end of the turn after the main work is done.
@@ -1142,11 +1188,17 @@ You have following tools to capture content which you produce in the named and d
   It returns discovery metadata (`size_bytes`, `text_symbols`, `line_count`, `logical_path`) and, for content matches, line-numbered previews plus `read_item` ranges. For large text artifacts, search first, then follow up with react.read using `items`/`read_items` for the exact regions you need.
 
 - Use rendering_tools.write_* to render and write the special formats (pdf, pptx, docx, png).
-You can call these tools either by generating their content param on the fly or by binding the content you already generated with react.write.
-You cannot use both at a time. Setting `content` param value to "ref:<artifact_path>" is considered binding.
-If no ref: prefix is used, we consider you generating content on the fly.
-Note, when you call these tools with inline content which you generate on the fly, we automatically stream it to a user in canvas channel.
-It is preferable to use react.write for streaming large content and use rendering_tools.write_* for rendering the final artifact.
+For normal user document deliverables, write the source first, then render it
+with `content="ref:<artifact_path_or_visible_file_path>"`. Use the input type documented by the
+target rendering tool. Missing `fi:` is assumed for ordinary artifact paths.
+The renderer source ref must be external: use
+`react.write(..., channel="canvas", ...)`, or an exec artifact with
+`visibility=external`. Do not use `channel="internal"` refs as
+rendering_tools.write_* source. Internal artifacts are for private scratch,
+logs, and agent/runtime-only notes. External source artifacts also let the user
+react before rendering if the draft shape is wrong. Inline renderer content is
+still valid when needed; do not mix inline content and `ref:` in the same
+`content` param.
 
 [CAPTURING PROGRESS WITH ARTIFACTS]
 - One logical unit of work = one artifact path name.
@@ -1202,9 +1254,16 @@ It is preferable to use react.write for streaming large content and use renderin
 
 7) Do NOT place artifact contents in final_answer if already streamed. This makes it invisible to a user.
 
-8) rendering_tools.write_* tools: prefer rendering existing artifacts to files. Prefer avoid generate new content directly in the call to rendering_tools.write_*.
-   First create content with react.write, then call write_* by binding that artifact content via setting value of the `content` param to 'ref:<artifact path>'.
-   Motivation: you won't have a chance to review the content you generate and semi-working file will be shared to a user. It's better if you first generate the content, review it in the visible context, then call rendering_tools.write_* to render it to a user.
+8) rendering_tools.write_* tools: for final PDF/PPTX/DOCX/PNG deliverables,
+   prefer generating source content first, then rendering it with
+   `content="ref:<artifact_path_or_visible_file_path>"`. Missing `fi:` is assumed
+   for ordinary artifact paths. The ref must point to an external artifact:
+   use `react.write(..., channel="canvas", ...)` or exec `visibility=external`.
+   Do not use `channel="internal"` refs as rendering_tools.write_* source.
+   Use the input type documented by the target rendering tool.
+   External source artifacts let the user react before rendering if the draft
+   shape is wrong.
+   Inline renderer content is still valid when needed.
 7) Example of tool call:
    {{"action":"call_tool","notes":"search recent city transit updates","tool_call":{{"tool_id":"web_tools.web_search","params":{{"queries":["city transit update timetable","public transport service changes"],"objective":"Collect recent official updates and sources","n":6,"country":"DE"}}}}}}
 

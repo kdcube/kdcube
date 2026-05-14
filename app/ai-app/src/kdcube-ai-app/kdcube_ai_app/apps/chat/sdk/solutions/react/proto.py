@@ -128,10 +128,13 @@ class RuntimeCtx:
     debug_log_announce: bool = True
     debug_log_sources_pool: bool = False
     debug_timeline: bool = False
+    debug_timeline_root: Optional[str] = None
+    debug_timeline_keep_files: int = 100
     announce_mode: str = "full"  # "full" or "budget"
     render_decision_raw: bool = False
     render_react_state: bool = False
     render_react_exit: bool = False
+    render_thinking: bool = True
     session: RuntimeSessionConfig = field(default_factory=RuntimeSessionConfig)
     cache: RuntimeCacheConfig = field(default_factory=RuntimeCacheConfig)
     # Legacy cache fields (prefer RuntimeCtx.session).
@@ -183,10 +186,14 @@ class RuntimeCtx:
             "started_at": self.started_at,
             "debug_log_announce": bool(self.debug_log_announce),
             "debug_log_sources_pool": bool(self.debug_log_sources_pool),
+            "debug_timeline": bool(self.debug_timeline),
+            "debug_timeline_root": self.debug_timeline_root,
+            "debug_timeline_keep_files": int(self.debug_timeline_keep_files or 100),
             "announce_mode": self.announce_mode,
             "render_decision_raw": bool(self.render_decision_raw),
             "render_react_state": bool(self.render_react_state),
             "render_react_exit": bool(self.render_react_exit),
+            "render_thinking": bool(self.render_thinking),
             "session": self.session.to_dict() if self.session else {},
             "cache": self.cache.to_dict() if self.cache else {},
             "cache_ttl_seconds": self.cache_ttl_seconds,

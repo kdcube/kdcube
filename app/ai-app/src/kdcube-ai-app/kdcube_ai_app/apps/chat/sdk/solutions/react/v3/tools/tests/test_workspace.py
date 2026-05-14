@@ -629,6 +629,29 @@ def test_stage_current_turn_text_workspace_surfaces_git_stderr(tmp_path, monkeyp
     assert "fatal: not a git repository" in msg
 
 
+def test_stage_current_turn_text_workspace_ignores_empty_sparse_pathspec(tmp_path, monkeypatch):
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.v2 import git_workspace as mod
+
+    turn_root = tmp_path / "turn_root"
+    turn_root.mkdir(parents=True, exist_ok=True)
+
+    real_run = mod.subprocess.run
+
+    def _fake_run(cmd, *args, **kwargs):
+        if cmd and cmd[0] == "git" and str(turn_root) in cmd and cmd[-5:] == ["add", "--sparse", "-u", "--", "."]:
+            return subprocess.CompletedProcess(
+                cmd,
+                128,
+                stdout="",
+                stderr="error: pathspec '.' did not match any file(s) known to git",
+            )
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(mod.subprocess, "run", _fake_run)
+
+    mod._stage_current_turn_text_workspace(turn_root=turn_root)
+
+
 @pytest.mark.asyncio
 async def test_react_checkout_rejects_nonempty_current_workspace(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_HTTP_TOKEN", "test-token")

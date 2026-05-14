@@ -76,6 +76,8 @@ def test_build_decision_system_text_single_action_mode_uses_action_channel_wordi
         workspace_implementation="custom",
         multi_action_mode="off",
     )
+    assert text.lstrip().startswith("CRITICAL: you are the agent which must")
+    assert "Never emit legacy <thinking>...</thinking> tags." in text
     assert text.index("CRITICAL: you have 4 channel types") < text.index("[CORE RESPONSIBILITIES]")
     assert "CRITICAL: you are the agent which must for in custom protocol which you must obey." in text
     assert "Output protocol (strict): you must produce content which represents one round" in text
@@ -89,11 +91,11 @@ def test_build_decision_system_text_single_action_mode_uses_action_channel_wordi
     assert "Final answer shape only when action is complete or exit" in text
     assert "Goal, Outcome, Key facts, Refs" in text
     assert "Generating the second instance of any channel in the same response means you do not understand the contract and violate it." in text
-    assert "Use <channel:code> only when the single action is exec_tools.execute_code_python" in text
+    assert "Use <channel:code> only when this round contains exactly one exec_tools.execute_code_python action" in text
     assert "After </channel:code>, STOP." not in text
 
 
-def test_build_decision_system_text_safe_fanout_explains_no_intermediate_review_and_no_exec_bundle():
+def test_build_decision_system_text_safe_fanout_explains_no_intermediate_review_and_exec_completion_rule():
     text = build_decision_system_text(
         adapters=[],
         infra_adapters=[],
@@ -115,9 +117,12 @@ def test_build_decision_system_text_safe_fanout_explains_no_intermediate_review_
     assert "Never put > 1 actions into one ReactDecisionOutV2 channel instance." in text
     assert "The runtime executes the actions sequentially and you do NOT review intermediate results in the middle" in text
     assert "action B must not depend on action A's result." in text
+    assert "If you need to inspect or assess the first result before deciding the next action, split the work into separate rounds." in text
+    assert "If action B needs an artifact, source path, search result, or output created by action A, split them into separate rounds." in text
     assert "Do NOT schedule search/fetch first and then a later action in the same round that depends on what that retrieval will return." in text
-    assert "Do NOT use exec_tools.execute_code_python in a multi-action round" in text
-    assert "If you need exec, it must be the only action in the round." in text
+    assert "Exec in multi-action: you may include exactly one exec_tools.execute_code_python action together with other actions" in text
+    assert "complete params.contract and complete Python in <channel:code>" in text
+    assert "Otherwise exec must be the only action in the round." in text
     assert "Do NOT mix complete/exit with tool calls in the same multi-action response." in text
     assert "After </channel:code>, STOP." not in text
 
@@ -131,4 +136,31 @@ def test_build_decision_system_text_on_enables_multi_action_protocol():
     )
     assert "In a single round, include exactly one <channel:thinking>, one <channel:code>, and one or more <channel:ReactDecisionOutV2> channel instances." in text
     assert "If you need multiple actions in one round, repeat only <channel:ReactDecisionOutV2>." in text
-    assert "Do NOT use exec_tools.execute_code_python in a multi-action round" in text
+    assert "Exec in multi-action: you may include exactly one exec_tools.execute_code_python action together with other actions" in text
+    assert "render PDF, PPTX, and DOCX from already visible source artifacts" in text
+    assert "ref:<artifact_path_or_visible_file_path>" in text
+    assert "ref:<bound artifact path>" not in text
+    assert "Default write rule: reports, briefs, HTML, Markdown, slide source" in text
+    assert "must be written with react.write channel=canvas" in text
+
+
+def test_build_decision_system_text_prefers_direct_document_renderers():
+    text = build_decision_system_text(
+        adapters=[],
+        infra_adapters=[],
+        workspace_implementation="custom",
+        multi_action_mode="on",
+    )
+    assert "Prefer generating source content with `react.write`." in text
+    assert "Render final PDF/PPTX/DOCX/PNG deliverables with `rendering_tools.write_*`." in text
+    assert "Preferred: then call the renderer with `content=\"ref:<external artifact path>\"`." in text
+    assert "Inline renderer content is still valid when needed." in text
+    assert "internal\n  artifacts into rendering_tools.write_*" in text
+    assert "exec output with" in text and "visibility=external" in text
+    assert "if generated content is meant for the user to see, download, approve, or use as a renderer source, make it external" in text
+    assert "Do not use `channel=\"internal\"` refs as rendering_tools.write_* source." in text
+    assert "draft shape is wrong" in text
+    assert "Use the input type documented by the target rendering tool." in text
+    assert "Use HTML source for PDF" not in text
+    assert "Do not use exec to call `rendering_tools.write_pdf`, `write_pptx`, or `write_docx`" in text
+    assert "Do not load a product/domain skill merely because the topic is adjacent" in text

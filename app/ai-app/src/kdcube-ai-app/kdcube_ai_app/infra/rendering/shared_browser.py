@@ -20,6 +20,16 @@ except ImportError:
     async_playwright = None
     Browser = None
 
+def _looks_like_missing_browser_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return (
+        "executable doesn't exist" in text
+        or "executable doesn’t exist" in text
+        or "browser was not found" in text
+        or "please run the following command" in text
+        or "playwright install" in text
+    )
+
 # ============================================================================
 # Module-level shared instance (lazy-initialized)
 # ============================================================================
@@ -131,6 +141,12 @@ class SharedBrowserService:
                     args=launch_args,
                 )
             except Exception as e:
+                if self.auto_install_browser and not _looks_like_missing_browser_error(e):
+                    raise RuntimeError(
+                        "Failed to launch Chromium for Playwright. "
+                        "The browser appears to be installed, so runtime auto-install was skipped. "
+                        f"launch_error={e}"
+                    ) from e
                 if self.auto_install_browser:
                     # Try to install chromium on the fly
                     proc = await asyncio.create_subprocess_exec(

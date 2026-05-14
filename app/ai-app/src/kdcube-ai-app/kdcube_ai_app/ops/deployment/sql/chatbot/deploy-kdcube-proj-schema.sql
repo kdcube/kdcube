@@ -157,6 +157,102 @@ CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_um_fact_tsv       ON <SCHEMA>.user_memor
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_um_tags_gin       ON <SCHEMA>.user_memory USING gin (tags);
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_um_emb_ivf        ON <SCHEMA>.user_memory USING ivfflat (embedding vector_cosine_ops) WITH (lists=50);
 
+-- ---------- Cross-conversation user memory v1 ----------
+-- Current aggregate row. Evidence lives in user_memory_events.
+CREATE TABLE IF NOT EXISTS <SCHEMA>.user_memory_entries (
+    id                  TEXT PRIMARY KEY,
+    tenant              TEXT NOT NULL,
+    project             TEXT NOT NULL,
+    user_id             TEXT NOT NULL,
+    bundle_id           TEXT NOT NULL DEFAULT '',
+    canonical_key       TEXT NOT NULL,
+    memory              TEXT NOT NULL,
+    context             TEXT NOT NULL DEFAULT '',
+    kind                TEXT NOT NULL DEFAULT 'fact',
+    status              TEXT NOT NULL DEFAULT 'active',
+    visibility          TEXT NOT NULL DEFAULT 'user',
+    visible_to_user     BOOLEAN NOT NULL DEFAULT TRUE,
+    labels              TEXT[] NOT NULL DEFAULT '{}',
+    keywords            TEXT[] NOT NULL DEFAULT '{}',
+    search_text         TEXT NOT NULL DEFAULT '',
+    search_tsv          TSVECTOR GENERATED ALWAYS AS (to_tsvector('simple', coalesce(search_text, ''))) STORED,
+    embedding           VECTOR(1536),
+    embedding_model     TEXT NOT NULL DEFAULT '',
+    evidence_count      INTEGER NOT NULL DEFAULT 0,
+    update_count        INTEGER NOT NULL DEFAULT 0,
+    confirmation_count  INTEGER NOT NULL DEFAULT 0,
+    contradiction_count INTEGER NOT NULL DEFAULT 0,
+    positive_weight     DOUBLE PRECISION NOT NULL DEFAULT 0,
+    negative_weight     DOUBLE PRECISION NOT NULL DEFAULT 0,
+    confidence_score    DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    importance_score    DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    freshness_score     DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+    salience_score      DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    confirmation_rate   DOUBLE PRECISION NOT NULL DEFAULT 0,
+    tier                INTEGER NOT NULL DEFAULT 3,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_event_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_confirmed_at   TIMESTAMPTZ,
+    source              JSONB NOT NULL DEFAULT '{}'::jsonb,
+    metadata            JSONB NOT NULL DEFAULT '{}'::jsonb,
+    revision            INTEGER NOT NULL DEFAULT 1,
+    merged_into_id      TEXT REFERENCES <SCHEMA>.user_memory_entries(id)
+);
+
+CREATE TABLE IF NOT EXISTS <SCHEMA>.user_memory_events (
+    id              TEXT PRIMARY KEY,
+    memory_id       TEXT NOT NULL REFERENCES <SCHEMA>.user_memory_entries(id) ON DELETE CASCADE,
+    tenant          TEXT NOT NULL,
+    project         TEXT NOT NULL,
+    user_id         TEXT NOT NULL,
+    bundle_id       TEXT NOT NULL DEFAULT '',
+    conversation_id TEXT NOT NULL DEFAULT '',
+    turn_id         TEXT NOT NULL DEFAULT '',
+    event_type      TEXT NOT NULL,
+    signal_text     TEXT NOT NULL DEFAULT '',
+    context         TEXT NOT NULL DEFAULT '',
+    originator      TEXT NOT NULL DEFAULT 'agent',
+    confidence      DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    importance      DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    labels          TEXT[] NOT NULL DEFAULT '{}',
+    keywords        TEXT[] NOT NULL DEFAULT '{}',
+    source          JSONB NOT NULL DEFAULT '{}'::jsonb,
+    metadata        JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS <SCHEMA>.user_memory_aliases (
+    memory_id  TEXT NOT NULL REFERENCES <SCHEMA>.user_memory_entries(id) ON DELETE CASCADE,
+    alias_type TEXT NOT NULL,
+    value      TEXT NOT NULL,
+    weight     DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (memory_id, alias_type, value)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_<SCHEMA>_user_memory_entries_canonical
+  ON <SCHEMA>.user_memory_entries (tenant, project, user_id, canonical_key)
+  WHERE merged_into_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_user_memory_entries_scope
+  ON <SCHEMA>.user_memory_entries (tenant, project, user_id, status, tier, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_user_memory_entries_visible
+  ON <SCHEMA>.user_memory_entries (tenant, project, user_id, visible_to_user, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_user_memory_entries_labels
+  ON <SCHEMA>.user_memory_entries USING GIN (labels);
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_user_memory_entries_keywords
+  ON <SCHEMA>.user_memory_entries USING GIN (keywords);
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_user_memory_entries_tsv
+  ON <SCHEMA>.user_memory_entries USING GIN (search_tsv);
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_user_memory_entries_embedding
+  ON <SCHEMA>.user_memory_entries USING ivfflat (embedding vector_cosine_ops) WITH (lists=50);
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_user_memory_events_scope
+  ON <SCHEMA>.user_memory_events (tenant, project, user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_user_memory_events_memory
+  ON <SCHEMA>.user_memory_events (memory_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_user_memory_aliases_value
+  ON <SCHEMA>.user_memory_aliases (alias_type, value);
+
 -- ---------- Turn-level preferences extracted from NL (assertions + exceptions) ----------
 CREATE TABLE IF NOT EXISTS <SCHEMA>.conv_prefs (
                                                    id               BIGSERIAL PRIMARY KEY,

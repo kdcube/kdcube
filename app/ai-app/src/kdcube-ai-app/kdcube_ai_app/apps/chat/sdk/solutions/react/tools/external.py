@@ -13,6 +13,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
     build_artifact_meta_block,
     build_artifact_binary_block,
     build_artifact_view,
+    build_tool_result_error_block,
     normalize_physical_path,
     physical_path_to_logical_path,
     detect_edit,
@@ -47,8 +48,6 @@ from kdcube_ai_app.tools.content_type import is_text_mime_type
 from kdcube_ai_app.apps.chat.sdk.util import normalize_artifact_visibility
 
 DEFAULT_VISIBLE_BINARY_BYTES = 10 * 1024 * 1024
-
-
 def _positive_int(value: Any) -> int:
     try:
         out = int(value)
@@ -394,6 +393,48 @@ def _extract_exec_code_from_state(state: Dict[str, Any]) -> str:
     return ""
 
 
+def _exec_code_contamination(code: str) -> Dict[str, Any] | None:
+    text = code or ""
+    if not text.strip():
+        return None
+    markers = [
+        "<channel:",
+        "</channel:",
+        "<thinking>",
+        "</thinking>",
+        "<channel:thinking>",
+        "</channel:thinking>",
+        "<channel:ReactDecisionOutV2>",
+        "</channel:ReactDecisionOutV2>",
+    ]
+    lower = text.lower()
+    marker = next((m for m in markers if m.lower() in lower), "")
+    first_nonempty = ""
+    for line in text.splitlines():
+        if line.strip():
+            first_nonempty = line.strip()
+            break
+    if not marker and not first_nonempty.startswith(("```", "`")):
+        return None
+    line_no = 0
+    offending = first_nonempty
+    if marker:
+        marker_l = marker.lower()
+        for idx, line in enumerate(text.splitlines(), start=1):
+            if marker_l in line.lower():
+                line_no = idx
+                offending = line.strip()
+                break
+    return {
+        "code": "exec_code_contaminated",
+        "message": "Exec code channel contained non-code text or channel tags; no code was executed.",
+        "where": "react.exec_code_validation",
+        "marker": marker or "markdown_fence_or_backtick",
+        "line": line_no or 1,
+        "excerpt": offending[:500],
+    }
+
+
 async def handle_external_tool(*,
                                react: Any,
                                ctx_browser: Any,
@@ -415,11 +456,26 @@ async def handle_external_tool(*,
         visible_paths=visible_paths,
     )
     if violations:
+        details: List[str] = []
+        for violation in violations:
+            if not isinstance(violation, dict):
+                continue
+            msg = str(violation.get("message") or "").strip()
+            if msg:
+                details.append(msg)
+            suggested = str(violation.get("suggested_ref") or "").strip()
+            bad_path = str(violation.get("path") or "").strip()
+            if suggested and bad_path:
+                details.append(f"Use `ref:{suggested}` instead of `ref:{bad_path}`.")
         notice_block(
             ctx_browser=ctx_browser,
             tool_call_id=tool_call_id,
             code="protocol_violation.param_ref_not_visible",
-            message="One or more ref: bindings are not visible",
+            message=" ".join(dict.fromkeys(details)) or (
+                "One or more ref: bindings are not visible to this tool call. channel=internal artifacts are private. "
+                "For rendering_tools.write_* source refs, write the source as an external artifact first "
+                "(react.write channel=canvas, or exec visibility=external)."
+            ),
             extra={"violations": violations, "tool_id": tool_id, "protocol_violation": True},
         )
         state["retry_decision"] = True
@@ -478,7 +534,61 @@ async def handle_external_tool(*,
                 )
             except Exception:
                 pass
+            try:
+                error_payload = {
+                    "tool_id": tool_id,
+                    "reason": "missing_channel.code",
+                    "recovery": (
+                        "Use exec only when raw Python is emitted in channel:code. "
+                        "For ordinary PDF/PPTX/DOCX rendering, call rendering_tools.write_* directly."
+                    ),
+                }
+                add_block(ctx_browser, build_tool_result_error_block(
+                    turn_id=ctx_browser.runtime_ctx.turn_id,
+                    tool_call_id=tool_call_id,
+                    code="exec_missing_code",
+                    message="Exec tool requires raw Python in channel:code; no code was received.",
+                    details=error_payload,
+                ))
+                state["last_tool_result"] = [{
+                    "artifact_id": tool_id,
+                    "output": None,
+                    "summary": "",
+                    "error": {
+                        "code": "exec_missing_code",
+                        "message": "Exec tool requires raw Python in channel:code; no code was received.",
+                        "details": error_payload,
+                    },
+                }]
+                state["last_tool_id"] = tool_id
+            except Exception:
+                pass
             state["retry_decision"] = True
+            return state
+        contamination = _exec_code_contamination(code_txt)
+        if contamination:
+            notice_block(
+                ctx_browser=ctx_browser,
+                tool_call_id=tool_call_id,
+                code="protocol_violation.exec_code_contaminated",
+                message=contamination["message"],
+                extra={**contamination, "tool_id": tool_id},
+            )
+            add_block(ctx_browser, build_tool_result_error_block(
+                turn_id=ctx_browser.runtime_ctx.turn_id,
+                tool_call_id=tool_call_id,
+                code=contamination["code"],
+                message=contamination["message"],
+                details=contamination,
+            ))
+            state["retry_decision"] = True
+            state["last_tool_result"] = [{
+                "artifact_id": tool_id,
+                "output": None,
+                "summary": "",
+                "error": contamination,
+            }]
+            state["last_tool_id"] = tool_id
             return state
         code_rewrites = []
         if isinstance(code_txt, str):
@@ -568,7 +678,6 @@ async def handle_external_tool(*,
                         "tool_id": tool_id,
                     },
                 )
-                from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import build_tool_result_error_block
                 add_block(ctx_browser, build_tool_result_error_block(
                     turn_id=ctx_browser.runtime_ctx.turn_id,
                     tool_call_id=tool_call_id,
@@ -838,10 +947,18 @@ async def handle_external_tool(*,
                     )
                     file_for_stats = phys_hint or file_hint
                 try:
+                    output_root = pathlib.Path(state["outdir"])
+                    stats_path = pathlib.Path(file_for_stats)
+                    stats_output_dir = artifact_outdir_for(output_root)
+                    if not stats_path.is_absolute():
+                        resolved_stats_path = resolve_artifact_path(output_root, file_for_stats)
+                        if resolved_stats_path.exists():
+                            file_for_stats = str(resolved_stats_path)
+                            stats_output_dir = None
                     artifact_stats = analyze_write_tool_output(
                         file_path=file_for_stats,
                         mime=tools_insights.default_mime_for_write_tool(tool_id),
-                        output_dir=artifact_outdir_for(pathlib.Path(state["outdir"])),
+                        output_dir=stats_output_dir,
                         artifact_id=artifact_id,
                     )
                 except Exception:

@@ -535,6 +535,48 @@ def _module_parent_dirs(tool_modules: List[Tuple[str, object]]) -> List[str]:
             uniq.append(d); seen.add(d)
     return uniq
 
+def _uses_overlay_tmp(value: Optional[str]) -> bool:
+    if not value:
+        return True
+    try:
+        return pathlib.Path(value).as_posix().startswith("/tmp")
+    except Exception:
+        return True
+
+def _ensure_subprocess_temp_env(env: dict, *, outdir: pathlib.Path) -> None:
+    """
+    Tool subprocesses must not rely on the container overlay /tmp.
+    Playwright, matplotlib, fontconfig, and Python tempfile all need writable
+    scratch space; use the mounted execution output tree so a full overlay does
+    not turn browser/PDF tools into long hangs.
+    """
+    root = pathlib.Path(env.get("KDCUBE_EXEC_TEMP_ROOT") or (outdir / "_runtime_tmp")).resolve()
+    tmp_dir = root / "tmp"
+    cache_dir = root / "cache"
+    config_dir = root / "config"
+    mpl_dir = root / "mplconfig"
+    font_dir = root / "fontconfig"
+    for p in (tmp_dir, cache_dir, config_dir, mpl_dir, font_dir):
+        p.mkdir(parents=True, exist_ok=True)
+        try:
+            p.chmod(0o777)
+        except Exception:
+            pass
+
+    for key in ("TMPDIR", "TMP", "TEMP"):
+        if _uses_overlay_tmp(env.get(key)):
+            env[key] = str(tmp_dir)
+    if _uses_overlay_tmp(env.get("XDG_CACHE_HOME")):
+        env["XDG_CACHE_HOME"] = str(cache_dir)
+    if _uses_overlay_tmp(env.get("XDG_CONFIG_HOME")):
+        env["XDG_CONFIG_HOME"] = str(config_dir)
+    if _uses_overlay_tmp(env.get("MPLCONFIGDIR")):
+        env["MPLCONFIGDIR"] = str(mpl_dir)
+    if _uses_overlay_tmp(env.get("FONTCONFIG_PATH")):
+        env["FONTCONFIG_PATH"] = str(font_dir)
+    if not env.get("PLAYWRIGHT_BROWSERS_PATH") and pathlib.Path("/opt/ms-playwright").exists():
+        env["PLAYWRIGHT_BROWSERS_PATH"] = "/opt/ms-playwright"
+
 async def _run_subprocess(entry_path: pathlib.Path, *,
                           cwd: pathlib.Path,
                           env: dict,
@@ -556,6 +598,7 @@ async def _run_subprocess(entry_path: pathlib.Path, *,
     EXECUTOR_UID = int(os.environ.get("EXECUTOR_UID", "1001"))
     # Use chat's GID so executor-created files are group-writable by appuser (UID/GID 1000)
     EXECUTOR_GID = int(os.environ.get("EXECUTOR_GID", "1000"))
+    _ensure_subprocess_temp_env(env, outdir=outdir)
     max_file_bytes = _exec_limit_bytes(env, "EXEC_MAX_FILE_BYTES", default=_DEFAULT_EXEC_MAX_FILE_BYTES)
     max_workspace_bytes = _exec_limit_bytes(
         env,
@@ -782,6 +825,7 @@ async def _run_subprocess(entry_path: pathlib.Path, *,
 
     if timed_out:
         return {
+            "ok": False,
             "error": "timeout",
             "seconds": timeout_s,
             "stderr_tail": stderr_tail,

@@ -8,6 +8,7 @@ import pytest
 from kdcube_ai_app.apps.chat.sdk.runtime.external import docker as docker_runtime
 from kdcube_ai_app.apps.chat.sdk.runtime import iso_runtime
 from kdcube_ai_app.apps.chat.sdk.runtime.diagnose import merge_infra_logs
+from kdcube_ai_app.infra.rendering import shared_browser
 
 
 def test_exec_limit_bytes_supports_units_and_disable():
@@ -613,3 +614,51 @@ async def test_iso_runtime_failure_tail_includes_stdout_diagnostics(tmp_path, mo
     assert result["ok"] is False
     assert "diagnostic before crash" in result["stderr_tail"]
     assert result["error_summary"] == "ValueError: bad input"
+
+
+@pytest.mark.asyncio
+async def test_iso_runtime_subprocess_temp_dirs_use_output_workspace(tmp_path, monkeypatch):
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    captured_env = {}
+
+    async def _fake_create_subprocess_exec(*_args, **kwargs):
+        captured_env.update(kwargs.get("env") or {})
+        return _FakeCompletedProc(returncode=0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(iso_runtime.asyncio, "create_subprocess_exec", _fake_create_subprocess_exec)
+
+    env = {
+        "EXECUTION_ID": "exec-temp",
+        "TMPDIR": "/tmp/full-overlay",
+        "XDG_CACHE_HOME": "/tmp/cache",
+        "MPLCONFIGDIR": "/tmp/mpl",
+        "FONTCONFIG_PATH": "/tmp/fontconfig",
+    }
+    result = await iso_runtime._run_subprocess(
+        entry_path=tmp_path / "entry.py",
+        cwd=outdir,
+        env=env,
+        timeout_s=60,
+        outdir=outdir,
+        allow_network=True,
+        exec_id="exec-temp",
+    )
+
+    assert result["ok"] is True
+    runtime_tmp = outdir / "_runtime_tmp"
+    assert pathlib.Path(captured_env["TMPDIR"]) == runtime_tmp / "tmp"
+    assert pathlib.Path(captured_env["TMP"]).samefile(runtime_tmp / "tmp")
+    assert pathlib.Path(captured_env["TEMP"]).samefile(runtime_tmp / "tmp")
+    assert pathlib.Path(captured_env["XDG_CACHE_HOME"]) == runtime_tmp / "cache"
+    assert pathlib.Path(captured_env["MPLCONFIGDIR"]) == runtime_tmp / "mplconfig"
+    assert pathlib.Path(captured_env["FONTCONFIG_PATH"]) == runtime_tmp / "fontconfig"
+
+
+def test_shared_browser_auto_install_is_only_for_missing_browser_errors():
+    assert shared_browser._looks_like_missing_browser_error(
+        RuntimeError("Executable doesn't exist at /opt/ms-playwright/chromium/headless_shell")
+    )
+    assert not shared_browser._looks_like_missing_browser_error(
+        RuntimeError("BrowserType.launch: ENOSPC: no space left on device, mkdtemp '/tmp/playwright-artifacts-abc'")
+    )

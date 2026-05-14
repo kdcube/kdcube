@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import hashlib
+import asyncio
+import os
 from typing import Any, Dict, List, Optional
 
 from kdcube_ai_app.infra.service_hub.cache import ensure_namespaced_cache
@@ -48,6 +50,7 @@ async def enrich_sources_pool_with_favicons(
         *,
         cache: Any = None,
         cache_ttl_seconds: Optional[int] = None,
+        timeout_seconds: Optional[float] = None,
 ) -> int:
     """
     Enrich sources_pool with favicons in-place (FAST batch operation).
@@ -61,6 +64,11 @@ async def enrich_sources_pool_with_favicons(
     - Returns count of newly enriched sources
     """
     if not sources_pool:
+        return 0
+
+    enabled = os.environ.get("WEB_FAVICON_ENRICH_ENABLED", "1").strip().lower()
+    if enabled in {"0", "false", "no", "off", "disabled"}:
+        log.info("enrich_favicons: disabled by WEB_FAVICON_ENRICH_ENABLED")
         return 0
 
     # Find sources that need enrichment
@@ -128,23 +136,69 @@ async def enrich_sources_pool_with_favicons(
             return len(cached_results)
 
     log.info(f"enrich_favicons: batch enriching {len(to_enrich)}/{len(sources_pool)} sources")
+    if timeout_seconds is None:
+        try:
+            timeout_seconds = float(os.environ.get("WEB_FAVICON_ENRICH_TIMEOUT_S") or "3")
+        except Exception:
+            timeout_seconds = 3.0
 
-    # Import and get shared instance
+    # Import the preview implementation directly. Favicon enrichment is
+    # decorative and uses only minimal HTTP metadata. It must not initialize
+    # shared browser/Playwright infrastructure in short-lived tool subprocesses.
     try:
-        from kdcube_ai_app.infra.rendering.link_preview import get_shared_link_preview
+        from kdcube_ai_app.infra.rendering.link_preview import AsyncLinkPreview
     except ImportError:
         log.warning("enrich_favicons: link_preview module not available, skipping")
         return 0
 
     try:
-        # Get the shared instance (lazy-initialized on first call)
-        preview = await get_shared_link_preview()
+        preview = AsyncLinkPreview(timeout=max(1, int((timeout_seconds or 3.0) * 1000)))
 
-        # BATCH FETCH - single HTTP session for all URLs (FAST!)
-        results_map = await preview.generate_preview_batch(
-            urls=to_enrich,
-            mode="minimal"
-        )
+        # Launch per-URL HTTP-only metadata fetches and keep partial successes.
+        # Do not call generate_preview()/get_shared_link_preview(): those can
+        # fall back to Playwright/browser startup, which is unnecessary here.
+        unique_urls = list(dict.fromkeys(to_enrich))
+
+        async def _fetch_one(url: str) -> tuple[str, Optional[dict], Optional[str]]:
+            try:
+                result = await asyncio.wait_for(preview._fetch_minimal(url), timeout=timeout_seconds)
+                if not isinstance(result, dict):
+                    return url, None, "failed"
+                return url, result, None
+            except asyncio.TimeoutError:
+                return url, None, "timeout"
+            except Exception as exc:
+                return url, None, str(exc) or "failed"
+
+        tasks = [asyncio.create_task(_fetch_one(url)) for url in unique_urls]
+        done, pending = await asyncio.wait(tasks, timeout=timeout_seconds)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        results_map: Dict[str, dict] = {}
+        failed_count = 0
+        timeout_count = len(pending)
+        for task in done:
+            try:
+                url, result, error = task.result()
+            except asyncio.CancelledError:
+                timeout_count += 1
+                continue
+            except Exception:
+                failed_count += 1
+                continue
+            if error == "timeout":
+                timeout_count += 1
+                continue
+            if error or not isinstance(result, dict):
+                failed_count += 1
+                continue
+            if result.get("success") and result.get("favicon"):
+                results_map[url] = result
+            else:
+                failed_count += 1
 
         # Update sources in-place
         enriched_count = 0
@@ -154,34 +208,41 @@ async def enrich_sources_pool_with_favicons(
             if not sources:
                 continue
 
-            success = bool(result.get("success"))
             for src in sources:
-                if success:
-                    src["favicon"] = result.get("favicon")
-                    src["favicon_status"] = "success"
-                    # Optionally improve title
-                    if not src.get("title") and result.get("title"):
-                        src["title"] = result["title"]
-                    enriched_count += 1
-                else:
-                    src["favicon"] = None
-                    src["favicon_status"] = result.get("error", "failed")
+                src["favicon"] = result.get("favicon")
+                src["favicon_status"] = "success"
+                # Optionally improve title
+                if not src.get("title") and result.get("title"):
+                    src["title"] = result["title"]
+                enriched_count += 1
 
             cache_key = _favicon_cache_key(url)
             if cache_key:
                 cache_payload[cache_key] = {
-                    "success": success,
+                    "success": True,
                     "favicon": result.get("favicon"),
                     "title": result.get("title"),
-                    "error": result.get("error"),
+                    "error": None,
                 }
 
         if cache is not None and cache_payload:
             await cache.set_many_json(cache_payload, ttl_seconds=cache_ttl_seconds)
 
-        log.info(f"enrich_favicons: completed {enriched_count}/{len(to_enrich)} successful")
+        log.info(
+            "enrich_favicons: completed %s/%s successful; failed=%s timeout=%s",
+            enriched_count,
+            len(to_enrich),
+            failed_count,
+            timeout_count,
+        )
         return enriched_count
 
+    except asyncio.TimeoutError:
+        log.warning(
+            "enrich_favicons: timed out after %.1fs; continuing with fetched favicons only",
+            timeout_seconds or 0,
+        )
+        return 0
     except Exception:
         log.exception("enrich_favicons: failed")
         return 0

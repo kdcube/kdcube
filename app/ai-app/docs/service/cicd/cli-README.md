@@ -138,6 +138,7 @@ kdcube env init \
 - `deployment/docker/local-infra-stack/data/bundles`
 - `deployment/docker/local-infra-stack/data/bundle-local-storage`
 - `deployment/docker/local-infra-stack/data/exec-workspace`
+- `deployment/docker/local-infra-stack/data/react-debug`
 - `deployment/docker/local-infra-stack/logs`
 
 ### 2.2 `kdcube env init` (compose)
@@ -638,11 +639,16 @@ Current proc behavior:
 
 Local bundle root contract:
 
-- `assembly.paths.host_kdcube_storage_path` becomes `HOST_KDCUBE_STORAGE_PATH`
-- `assembly.paths.host_bundle_storage_path` becomes `HOST_BUNDLE_STORAGE_PATH`
-- `assembly.paths.host_exec_workspace_path` becomes `HOST_EXEC_WORKSPACE_PATH`
+- `assembly.paths.host_kdcube_storage_path` becomes `HOST_KDCUBE_STORAGE_PATH`; if it is `null` or omitted, init uses `<workdir>/data/kdcube-storage`
+- `assembly.paths.host_bundle_storage_path` becomes `HOST_BUNDLE_STORAGE_PATH`; if it is `null` or omitted, init uses `<workdir>/data/bundle-storage`
+- `assembly.paths.host_exec_workspace_path` becomes `HOST_EXEC_WORKSPACE_PATH`; if it is `null` or omitted, init uses `<workdir>/data/exec-workspace`
+- `assembly.paths.host_react_debug_path` becomes `HOST_REACT_DEBUG_PATH`; if it is `null` or omitted, init uses `<workdir>/data/react-debug`; proc mounts it as `/react-debug` and keeps only the latest `REACT_DEBUG_KEEP_FILES` timeline render dumps
+- `assembly.ai.react.debug_timeline: false` mutes rendered ReAct prompt snapshots for normal runs; set it to `true` only while diagnosing prompt rendering
+- if `assembly.storage.kdcube` is `null` or omitted, init uses the CLI-managed tenant/project local storage root and rewrites the staged runtime descriptor to `file:///kdcube-storage`
+- if `assembly.storage.bundles` is `null` or omitted, init uses the CLI-managed tenant/project local bundle storage root and rewrites the staged runtime descriptor to `file:///bundle-storage`
 - if `assembly.storage.kdcube` is a local host `file://...` URI, init uses that host path as `HOST_KDCUBE_STORAGE_PATH` and rewrites the staged runtime descriptor to `file:///kdcube-storage`
 - if `assembly.storage.bundles` is a local host `file://...` URI, init uses that host path as `HOST_BUNDLE_STORAGE_PATH` and rewrites the staged runtime descriptor to `file:///bundle-storage`
+- if `assembly.storage.kdcube` or `assembly.storage.bundles` is an explicit `s3://...` URI, init preserves that URI in the staged runtime descriptor instead of rewriting it to a local mount
 - compose mounts `HOST_KDCUBE_STORAGE_PATH` into proc/ingress/metrics as `/kdcube-storage`
 - `assembly.paths.host_bundles_path` is installer-facing config for non-managed local path bundles and is written to `HOST_BUNDLES_PATH`
 - compose mounts `HOST_BUNDLES_PATH` into proc as `BUNDLES_ROOT` (normally `/bundles`)

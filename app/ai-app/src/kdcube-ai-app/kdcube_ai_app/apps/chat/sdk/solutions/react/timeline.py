@@ -8,6 +8,7 @@ import logging
 import hashlib
 import traceback
 import copy
+import os
 
 import time
 import datetime as _dt
@@ -37,6 +38,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.layout import (
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.plan import (
     latest_plan_block_by_id,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
+    physical_path_to_logical_path,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.compaction_memory import (
     build_internal_note_compaction_result,
@@ -941,6 +945,7 @@ def _build_turn_view(
     turn_id: str,
     blocks: List[Dict[str, Any]],
     sources_pool: Optional[List[Dict[str, Any]]] = None,
+    render_thinking: bool = True,
 ) -> Dict[str, Any]:
     sources_pool = list(sources_pool or [])
     user_block = extract_user_prompt_block(blocks)
@@ -953,7 +958,7 @@ def _build_turn_view(
     clarifications = extract_clarification_questions_from_blocks(blocks)
     used_sources = materialize_sources_by_sids(sources_pool, used_sids)
     timeline_text_items = _extract_timeline_text_items(blocks, turn_id)
-    thinking_items = _extract_thinking_items(blocks, turn_id)
+    thinking_items = _extract_thinking_items(blocks, turn_id) if render_thinking else []
     return {
         "turn_id": turn_id,
         "user": {
@@ -1788,8 +1793,47 @@ class Timeline:
             if not isinstance(val, str) or not val.startswith("ref:"):
                 return val
             ref = val[len("ref:"):].strip()
+            original_ref = ref
+            if (
+                ref
+                and not ref.startswith(("fi:", "ar:", "tc:", "so:", "su:", "ks:", "sk:", "sources_pool["))
+            ):
+                logical_ref = physical_path_to_logical_path(ref)
+                if logical_ref:
+                    ref = logical_ref
             if visible_paths is not None and ref not in visible_paths:
-                violations.append({"code": "ref_not_visible", "path": ref, "param": param_name})
+                logical_ref = physical_path_to_logical_path(ref)
+                if logical_ref and logical_ref in visible_paths:
+                    ref = logical_ref
+            if visible_paths is not None and ref not in visible_paths:
+                resolved = self.resolve_artifact(ref)
+                visibility = ""
+                if isinstance(resolved, dict):
+                    visibility = (resolved.get("visibility") or "").strip()
+                logical_ref = physical_path_to_logical_path(original_ref)
+                if not logical_ref and original_ref and not original_ref.startswith(("fi:", "ar:", "tc:", "so:", "su:", "ks:", "sk:", "sources_pool[")):
+                    logical_ref = f"fi:{original_ref.lstrip('/')}"
+                if visibility == "internal":
+                    violations.append({
+                        "code": "ref_internal_not_visible",
+                        "path": original_ref,
+                        "param": param_name,
+                        "visibility": visibility,
+                        **({"suggested_ref": logical_ref} if logical_ref else {}),
+                        "message": (
+                            "channel=internal artifacts are private and are not visible to this tool call. "
+                            "For rendering_tools.write_* source refs, recreate the source as an external artifact "
+                            "with react.write channel=canvas or exec visibility=external."
+                        ),
+                    })
+                else:
+                    violations.append({
+                        "code": "ref_not_visible",
+                        "path": original_ref,
+                        "param": param_name,
+                        **({"suggested_ref": logical_ref} if logical_ref else {}),
+                        **({"message": "ref: bindings use logical artifact paths such as fi:<turn>.outputs/<file>, not physical turn/<namespace>/<file> paths."} if logical_ref else {}),
+                    })
                 return None
             if param_name == "sources_list" and not (ref.startswith("so:") or ref.startswith("sources_pool[")):
                 violations.append({"code": "sources_list_requires_sources_pool", "path": ref, "param": param_name})
@@ -1949,6 +1993,7 @@ class Timeline:
             turn_id=turn_id or (self.runtime.turn_id or ""),
             blocks=blocks if blocks is not None else list(self.blocks or []),
             sources_pool=sources_pool if sources_pool is not None else list(self.sources_pool or []),
+            render_thinking=getattr(self.runtime, "render_thinking", True),
         )
 
     def _block(
@@ -2094,7 +2139,7 @@ class Timeline:
         btype = (block.get("type") or "").strip()
         if btype in {"react.tool.result", "conv.range.summary"}:
             return False
-        if btype in {"user.prompt", "assistant.completion", "react.tool.call", "turn.header"}:
+        if btype in {"user.prompt", "assistant.completion", "assistant.completion.attempt", "react.tool.call", "turn.header"}:
             return True
         author = (block.get("author") or block.get("role") or "").strip().lower()
         if author in {"user", "assistant"}:
@@ -2387,14 +2432,17 @@ class Timeline:
         lines.append("preview:")
         lines.append(numbered_preview if numbered_preview else preview)
         lines.append("...[truncated]")
-        lines.append("recovery:")
-        if recovery_lines:
-            lines.extend(recovery_lines)
+        if recovery_lines is not None:
+            if recovery_lines:
+                lines.append("recovery:")
+                lines.extend(recovery_lines)
         elif path:
+            lines.append("recovery:")
             lines.append(f"- react.read([\"{path}\"]) returns a bounded visible preview.")
             lines.append(f"- For large text, use react.read stats_only and then ranged react.read items against \"{path}\".")
             lines.append("- Exec output is capped; use exec only to compute or create smaller derived artifacts.")
         else:
+            lines.append("recovery:")
             lines.append("- exact result remains stored in the timeline block; no logical path was supplied.")
         return "\n".join(lines).strip()
 
@@ -2789,6 +2837,7 @@ class Timeline:
             "react.decision.raw",
             "react.current_turn.compaction_checkpoint",
             "assistant.completion",
+            "assistant.completion.attempt",
             "react.tool.call",
             "react.tool.result",
             "react.tool.code",
@@ -3276,7 +3325,9 @@ class Timeline:
             if btype == "turn.header":
                 continue
             if btype == "react.thinking":
-                events.append({"kind": "thinking", "path": path, "ts": ts, "text": text})
+                # Current-turn compaction is a recovery summary, not the live
+                # round trace. Keep concise actions/results there and render
+                # thinking only from the original live blocks.
                 continue
             if btype == "react.notes":
                 events.append({"kind": "notes", "path": path, "ts": ts, "text": text, "tool_call_id": call_id})
@@ -3322,6 +3373,9 @@ class Timeline:
                 continue
             if btype == "assistant.completion":
                 events.append({"kind": "assistant", "path": path, "ts": ts, "text": text})
+                continue
+            if btype == "assistant.completion.attempt":
+                events.append({"kind": "assistant_attempt", "path": path, "ts": ts, "text": text})
 
         if not rows and not messages and not events:
             return []
@@ -3496,7 +3550,7 @@ class Timeline:
 
         if btype == "user.prompt":
             kind = "user"
-        elif btype == "assistant.completion":
+        elif btype in {"assistant.completion", "assistant.completion.attempt"}:
             kind = "assistant"
         elif btype == "react.tool.call":
             kind = "tool_call"
@@ -3537,7 +3591,7 @@ class Timeline:
                 payload = _maybe_parse_json(block.get("text") or "") if isinstance(block.get("text"), str) else None
             if payload is not None:
                 hint = self._tool_result_hint_for_stub(payload)
-        elif btype in {"user.prompt", "assistant.completion"} or path.startswith(("sk:", "so:", "fi:")):
+        elif btype in {"user.prompt", "assistant.completion", "assistant.completion.attempt"} or path.startswith(("sk:", "so:", "fi:")):
             hint = self._one_line_preview(block.get("text"), limit=180)
         else:
             hint = self._one_line_preview(block.get("text"), limit=140)
@@ -4925,17 +4979,67 @@ class Timeline:
         include_sources: bool,
         include_announce: bool,
     ) -> None:
-        turn_id = (self.runtime.turn_id or "turn").strip() or "turn"
+        root = self._render_debug_root()
+        if root is None:
+            return
+        turn_id = self._render_debug_name_part((self.runtime.turn_id or "turn").strip() or "turn")
         ts = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+        unique = time.time_ns()
         flags = []
         flags.append("src" if include_sources else "nosrc")
         flags.append("ann" if include_announce else "noann")
-        name = f"rendered-{ts}-{turn_id}-{'-'.join(flags)}.txt"
-        root = pathlib.Path(__file__).resolve().parent / "debug" / "rendering"
+        name = f"rendered-{ts}-{unique}-{turn_id}-{'-'.join(flags)}.txt"
         root.mkdir(parents=True, exist_ok=True)
         path = root / name
         text = self._format_message_blocks_disk(msg_blocks)
         path.write_text(text, encoding="utf-8")
+        self._prune_render_debug(root)
+
+    def _render_debug_root(self) -> Optional[pathlib.Path]:
+        raw = getattr(self.runtime, "debug_timeline_root", None) or os.environ.get("REACT_DEBUG_ROOT")
+        if not raw:
+            host_root = os.environ.get("HOST_REACT_DEBUG_PATH")
+            host_text = str(host_root or "").strip()
+            if host_text and pathlib.Path(host_text).expanduser().exists():
+                raw = host_text
+        text = str(raw).strip()
+        if not text:
+            return None
+        return pathlib.Path(text).expanduser()
+
+    def _render_debug_keep_files(self) -> int:
+        raw = getattr(self.runtime, "debug_timeline_keep_files", None)
+        if raw is None:
+            raw = os.environ.get("REACT_DEBUG_KEEP_FILES")
+        try:
+            keep = int(raw)
+        except Exception:
+            keep = 100
+        return keep if keep > 0 else 100
+
+    @staticmethod
+    def _render_debug_name_part(value: str) -> str:
+        text = str(value or "").strip() or "value"
+        safe = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in text)
+        return safe[:120] or "value"
+
+    def _prune_render_debug(self, root: pathlib.Path) -> None:
+        keep = self._render_debug_keep_files()
+        files = [p for p in root.glob("rendered-*.txt") if p.is_file()]
+        if len(files) <= keep:
+            return
+        def _sort_key(path: pathlib.Path) -> Tuple[int, str]:
+            try:
+                return path.stat().st_mtime_ns, path.name
+            except FileNotFoundError:
+                return 0, path.name
+
+        files.sort(key=_sort_key)
+        for path in files[: max(0, len(files) - keep)]:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
 
     def _format_message_blocks_disk(self, msg_blocks: List[Dict[str, Any]]) -> str:
         lines: List[str] = []
@@ -5228,6 +5332,7 @@ class Timeline:
         current_round_accepts_external = False
         round_idx = 0
         call_id_to_tool_id: Dict[str, str] = {}
+        call_id_to_iteration: Dict[str, int] = {}
 
         def _round_header(idx: int) -> str:
             return f"┌──────── ROUND {idx} ────────┐"
@@ -5239,6 +5344,20 @@ class Timeline:
             if not val:
                 return val
             return "\n".join(("  " + line) if line else "  " for line in val.splitlines())
+
+        def _close_current_round() -> None:
+            nonlocal current_round_id, current_round_accepts_external
+            if not current_round_id:
+                return
+            out.append({"type": "text", "text": _round_footer()})
+            current_round_id = None
+            current_round_accepts_external = False
+
+        def _open_round(round_id: str, *, idx: int) -> None:
+            nonlocal current_round_id, current_round_accepts_external
+            out.append({"type": "text", "text": _round_header(idx)})
+            current_round_id = round_id
+            current_round_accepts_external = True
 
         def _format_compacted_turns(value: Any) -> str:
             if not isinstance(value, list):
@@ -5292,20 +5411,70 @@ class Timeline:
             lines.append("reason: direct model attachments support images and PDFs only")
             emitted.append({"type": "text", "text": "\n".join(lines)})
 
+        def _coerce_iteration(value: Any) -> Optional[int]:
+            try:
+                iteration = int(value)
+            except Exception:
+                return None
+            return iteration if iteration >= 0 else None
+
+        def _block_call_id(blk: Dict[str, Any]) -> str:
+            meta_local = blk.get("meta") if isinstance(blk.get("meta"), dict) else {}
+            rid = (blk.get("call_id") or meta_local.get("tool_call_id") or meta_local.get("call_id") or "").strip()
+            if not rid:
+                rid = _call_id_from_path((blk.get("path") or "").strip())
+            return rid
+
+        def _block_iteration(blk: Dict[str, Any]) -> Optional[int]:
+            meta_local = blk.get("meta") if isinstance(blk.get("meta"), dict) else {}
+            iteration = _coerce_iteration(meta_local.get("iteration"))
+            if iteration is not None:
+                return iteration
+            rid = _block_call_id(blk)
+            if rid:
+                return call_id_to_iteration.get(rid)
+            return None
+
         def _extract_round_id(blk: Dict[str, Any]) -> Optional[str]:
             btype_local = (blk.get("type") or "")
-            meta_local = blk.get("meta") if isinstance(blk.get("meta"), dict) else {}
+            round_types = {
+                "react.round.start",
+                "react.thinking",
+                "react.notes",
+                "react.tool.call",
+                "react.tool.result",
+                "react.notice",
+                "react.tool.code",
+                "react.decision.raw",
+                "assistant.completion.attempt",
+            }
+            if btype_local not in round_types:
+                return None
             if btype_local == "react.notes":
-                if (meta_local.get("action") or "").strip() == "call_tool":
-                    rid = (meta_local.get("tool_call_id") or meta_local.get("call_id") or "").strip()
-                    if rid:
-                        return rid
-            if btype_local in {"react.round.start", "react.tool.call", "react.tool.result", "react.notice", "react.tool.code", "react.decision.raw"}:
-                rid = (blk.get("call_id") or meta_local.get("tool_call_id") or "").strip()
-                if not rid:
-                    rid = _call_id_from_path((blk.get("path") or "").strip())
-                if rid:
-                    return rid
+                meta_local = blk.get("meta") if isinstance(blk.get("meta"), dict) else {}
+                if (meta_local.get("action") or "").strip() != "call_tool":
+                    return None
+            iteration = _block_iteration(blk)
+            if iteration is not None:
+                return f"iteration:{iteration}"
+            rid = _block_call_id(blk)
+            if rid:
+                return rid
+            return None
+
+        def _round_display_index(round_id: str) -> Optional[int]:
+            if not round_id.startswith("iteration:"):
+                return None
+            iteration = _coerce_iteration(round_id.split(":", 1)[1])
+            if iteration is None:
+                return None
+            return iteration + 1
+
+        def _tool_call_payload_info(blk: Dict[str, Any]) -> Tuple[str, str]:
+            payload = _maybe_parse_json(blk.get("text") or "") if (blk.get("mime") or "").strip() == "application/json" else None
+            if not isinstance(payload, dict):
+                return "", ""
+            return (payload.get("tool_id") or "").strip(), (payload.get("tool_call_id") or "").strip()
             return None
 
         def _is_round_passthrough_block(blk: Dict[str, Any]) -> bool:
@@ -5321,26 +5490,46 @@ class Timeline:
             if btype_local in {"user.attachment.meta", "user.attachment", "user.attachment.text"}:
                 continuation_kind = str(meta_local.get("continuation_kind") or "").strip().lower()
                 return continuation_kind in {"followup", "steer"}
+            if btype_local == "react.thinking":
+                return True
             return False
 
         def _is_round_terminal_block(blk: Dict[str, Any]) -> bool:
-            return (blk.get("type") or "").strip() in {"react.notice", "react.tool.result"}
+            return (blk.get("type") or "").strip() in {
+                "react.notice",
+                "react.tool.result",
+                "assistant.completion.attempt",
+            }
+        for b in (blocks or []):
+            if not isinstance(b, dict):
+                continue
+            call_id = _block_call_id(b)
+            iteration = _block_iteration(b)
+            if call_id and iteration is not None:
+                call_id_to_iteration.setdefault(call_id, iteration)
+            if (b.get("type") or "") == "react.tool.call":
+                _, payload_call_id = _tool_call_payload_info(b)
+                if payload_call_id and iteration is not None:
+                    call_id_to_iteration.setdefault(payload_call_id, iteration)
+
+        committed_assistant_turns = {
+            str(b.get("turn_id") or "").strip()
+            for b in (blocks or [])
+            if isinstance(b, dict)
+            and (b.get("type") or "").strip() == "assistant.completion"
+            and str(b.get("turn_id") or "").strip()
+        }
+
         for b in (blocks or []):
             if not isinstance(b, dict):
                 continue
             if (b.get("type") or "") != "react.tool.call":
                 continue
-            payload = _maybe_parse_json(b.get("text") or "") if (b.get("mime") or "").strip() == "application/json" else None
             tool_id = ""
             tool_call_id = ""
-            if isinstance(payload, dict):
-                tool_id = (payload.get("tool_id") or "").strip()
-                tool_call_id = (payload.get("tool_call_id") or "").strip()
-            meta_local = b.get("meta") if isinstance(b.get("meta"), dict) else {}
+            tool_id, tool_call_id = _tool_call_payload_info(b)
             if not tool_call_id:
-                tool_call_id = (meta_local.get("tool_call_id") or b.get("call_id") or "").strip()
-            if not tool_call_id:
-                tool_call_id = _call_id_from_path((b.get("path") or "").strip())
+                tool_call_id = _block_call_id(b)
             if tool_call_id and tool_id:
                 call_id_to_tool_id[tool_call_id] = tool_id
 
@@ -5353,6 +5542,8 @@ class Timeline:
             ts = _block_ts(b)
             path = (b.get("path") or "").strip()
             meta = b.get("meta") if isinstance(b.get("meta"), dict) else {}
+            if btype == "assistant.completion.attempt" and str(b.get("turn_id") or "").strip() in committed_assistant_turns:
+                continue
             extra_text_blocks: List[str] = []
             directive = build_timeline_render_directive(
                 block=b,
@@ -5365,16 +5556,16 @@ class Timeline:
             # Round boundaries (open/close)
             round_id = _extract_round_id(b)
             if round_id and round_id != current_round_id:
-                if current_round_id:
-                    out.append({"type": "text", "text": _round_footer()})
-                round_idx += 1
-                out.append({"type": "text", "text": _round_header(round_idx)})
-                current_round_id = round_id
-                current_round_accepts_external = True
+                _close_current_round()
+                display_idx = _round_display_index(round_id)
+                if display_idx is None:
+                    round_idx += 1
+                    display_idx = round_idx
+                else:
+                    round_idx = max(round_idx, display_idx)
+                _open_round(round_id, idx=display_idx)
             elif current_round_id and not round_id and not (current_round_accepts_external and _is_round_passthrough_block(b)):
-                out.append({"type": "text", "text": _round_footer()})
-                current_round_id = None
-                current_round_accepts_external = False
+                _close_current_round()
 
             if meta.get("render_as") == "raw":
                 base64 = b.get("base64") or b.get("data")
@@ -5396,9 +5587,7 @@ class Timeline:
 
             if btype == "turn.header":
                 # Close any open round at turn boundary.
-                if current_round_id:
-                    out.append({"type": "text", "text": _round_footer()})
-                    current_round_id = None
+                _close_current_round()
                 round_idx = 0
                 turn_id = b.get("turn_id") or ""
                 started_at = ts
@@ -5434,14 +5623,25 @@ class Timeline:
                 if text:
                     lines.append(text)
                 text = "\n".join(lines).strip()
-            elif btype == "assistant.completion":
-                lines = ["[ASSISTANT MESSAGE]"]
+            elif btype in {"assistant.completion", "assistant.completion.attempt"}:
+                is_attempt = btype == "assistant.completion.attempt"
+                lines = ["[ASSISTANT MESSAGE ATTEMPT]" if is_attempt else "[ASSISTANT MESSAGE]"]
                 if ts:
                     lines.append(f"[ts: {ts}]")
                 if path:
                     lines.append(f"[path: {path}]")
                 sources_used = []
                 if isinstance(meta, dict):
+                    if is_attempt:
+                        attempt_index = meta.get("completion_attempt_index")
+                        if attempt_index is not None:
+                            lines.append(f"[attempt: {attempt_index}]")
+                        lines.append("[status: provisional; supersede if later tool work or user input changes the outcome]")
+                    else:
+                        completion_index = meta.get("completion_index")
+                        completion_count = meta.get("completion_count")
+                        if completion_index is not None and completion_count is not None:
+                            lines.append(f"[completion: {completion_index}/{completion_count}]")
                     try:
                         sources_used = citations_module.extract_source_sids(meta.get("sources_used"))
                     except Exception:
@@ -5528,12 +5728,8 @@ class Timeline:
                     kind = str(event.get("kind") or "").strip()
                     ets_line = _event_ts_line(event)
                     if kind == "thinking":
-                        if ets_line:
-                            round_lines.append(ets_line)
-                        round_lines.append("[AI Agent thinking...]")
-                        etext = str(event.get("text") or "").strip()
-                        if etext:
-                            round_lines.append(etext)
+                        # Backward compatibility for old compacted payloads:
+                        # do not render thinking from pruned/compacted sections.
                         return
                     if kind == "notes":
                         if ets_line:
@@ -5691,11 +5887,17 @@ class Timeline:
                     else:
                         text = f"[AI Agent say]: {text}".strip()
             elif btype == "react.round.start":
+                text = ""
+            elif btype == "react.thinking":
+                if not getattr(self.runtime, "render_thinking", True):
+                    continue
                 lines = []
                 ts_line = _ts_line(ts)
                 if ts_line:
                     lines.append(ts_line)
-                lines.append("[AI Agent thinking...]")
+                lines.append("[thinking]")
+                if text:
+                    lines.append(str(text).strip())
                 text = "\n".join(lines).strip()
             elif btype == "react.decision.raw":
                 interrupted = bool(isinstance(meta, dict) and meta.get("interrupted"))
@@ -5799,7 +6001,7 @@ class Timeline:
                     path=code_path,
                     tool_id="",
                     preview_label="[CODE PREVIEW TRUNCATED]",
-                    recovery_lines=self._large_text_recovery_lines(path=code_path),
+                    recovery_lines=[],
                 ))
                 text = "\n".join([l for l in lines if l]).strip()
             elif btype == "react.tool.call" and isinstance(text, str):
@@ -6133,8 +6335,7 @@ class Timeline:
             out.extend(emitted)
             if current_round_id and _is_round_terminal_block(b):
                 current_round_accepts_external = False
-        if current_round_id:
-            out.append({"type": "text", "text": _round_footer()})
+        _close_current_round()
         return out
 
     def _format_message_blocks_debug(self, msg_blocks: List[Dict[str, Any]]) -> str:

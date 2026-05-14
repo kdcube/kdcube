@@ -88,6 +88,14 @@ def _run_git_checked(
     return _run_checked(_git_cmd(repo_root, args), op=op, env=env)
 
 
+def _is_empty_workspace_pathspec_error(exc: GitWorkspaceCommandError) -> bool:
+    detail = f"{exc.stderr}\n{exc.stdout}".lower()
+    return (
+        exc.op == "stage tracked workspace updates"
+        and "pathspec '.' did not match any file(s) known to git" in detail
+    )
+
+
 def _workspace_cache_root(*, runtime_ctx: Any, outdir: pathlib.Path) -> pathlib.Path:
     root = runtime_outdir_for_artifact_outdir(pathlib.Path(outdir)).parent / ".react_workspace_git"
     segs = workspace_lineage_segments(runtime_ctx)
@@ -503,11 +511,15 @@ def _git_path_is_ignored(*, repo_root: pathlib.Path, rel_path: str) -> bool:
 
 
 def _stage_current_turn_text_workspace(*, turn_root: pathlib.Path) -> None:
-    _run_git_checked(
-        turn_root,
-        ["add", "--sparse", "-u", "--", "."],
-        op="stage tracked workspace updates",
-    )
+    try:
+        _run_git_checked(
+            turn_root,
+            ["add", "--sparse", "-u", "--", "."],
+            op="stage tracked workspace updates",
+        )
+    except GitWorkspaceCommandError as exc:
+        if not _is_empty_workspace_pathspec_error(exc):
+            raise
     files_root = turn_root / "files"
     if not files_root.exists():
         return

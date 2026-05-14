@@ -20,6 +20,44 @@ def _run(coro):
     return asyncio.get_event_loop().run_until_complete(coro)
 
 
+def test_timeline_render_debug_writes_to_configured_root_and_prunes(tmp_path):
+    ctx = RuntimeCtx(
+        turn_id="turn/debug",
+        started_at="2026-02-09T00:00:00Z",
+        debug_timeline=True,
+        debug_timeline_root=str(tmp_path),
+        debug_timeline_keep_files=3,
+    )
+    tl = Timeline(runtime=ctx)
+
+    for idx in range(5):
+        tl._write_render_debug(
+            [{"type": "text", "text": f"hello {idx}"}],
+            include_sources=True,
+            include_announce=False,
+        )
+
+    files = sorted(tmp_path.glob("rendered-*.txt"))
+    assert len(files) == 3
+    assert all("turn_debug" in file.name for file in files)
+    assert files[-1].read_text(encoding="utf-8") == "hello 4"
+
+
+def test_timeline_render_debug_without_configured_root_is_noop(tmp_path, monkeypatch):
+    monkeypatch.delenv("REACT_DEBUG_ROOT", raising=False)
+    monkeypatch.delenv("HOST_REACT_DEBUG_PATH", raising=False)
+    ctx = RuntimeCtx(turn_id="turn_debug", started_at="2026-02-09T00:00:00Z", debug_timeline=True)
+    tl = Timeline(runtime=ctx)
+
+    tl._write_render_debug(
+        [{"type": "text", "text": "hello"}],
+        include_sources=True,
+        include_announce=False,
+    )
+
+    assert list(tmp_path.glob("rendered-*.txt")) == []
+
+
 def test_multimodal_token_estimate_counts_model_message_data_blocks():
     ctx = RuntimeCtx(turn_id="turn_mm", started_at="2026-02-09T00:00:00Z")
     tl = Timeline(runtime=ctx)
@@ -419,7 +457,8 @@ def test_large_internal_note_and_code_are_rendered_as_bounded_previews():
     assert tl.blocks[2]["text"] == code_text
     assert "[INTERNAL NOTE PREVIEW TRUNCATED]" in joined
     assert "[CODE PREVIEW TRUNCATED]" in joined
-    assert "Use react.rg on the file to find relevant regions before editing." in joined
+    code_section = joined[joined.index("[CODE PREVIEW TRUNCATED]"):]
+    assert "Use react.rg on the file to find relevant regions before editing." not in code_section
     assert "Button 79" not in joined
     assert len(joined) < len(html_text) + len(code_text)
 
@@ -693,7 +732,10 @@ def test_timeline_renders_failed_protocol_attempt_as_a_round():
             turn_id=ctx.turn_id,
             ts=ctx.started_at,
             path="ar:turn_fail.react.notes.tc_fail_1",
-            text="Wrong round. The agent wrote invalid content into the action channel, so this round executed no action.",
+            text=(
+                "Wrong round. The action channel was malformed JSON, so this round executed no action. "
+                "The protocol violation notice contains the parser error and diagnostic excerpt."
+            ),
             meta={
                 "tool_id": "__protocol_violation__",
                 "tool_call_id": "tc_fail_1",
@@ -724,7 +766,9 @@ def test_timeline_renders_failed_protocol_attempt_as_a_round():
             text=json.dumps(
                 {
                     "code": "protocol_violation.ReactDecisionOutV2_schema_error",
-                    "message": "Bad Protocol. The agent output in <channel:ReactDecisionOutV2> could not be parsed, so no action was executed for this round.",
+                    "message": "Malformed action JSON. <channel:ReactDecisionOutV2> could not be parsed, so no action was executed for this round. Parser reported: JSON parse error: Expecting ',' delimiter",
+                    "parser_error": "JSON parse error: Expecting ',' delimiter",
+                    "diagnostic_excerpt": "Characters 50-85:\n'inline generated content'",
                 },
                 ensure_ascii=False,
             ),
@@ -769,7 +813,8 @@ def test_timeline_renders_failed_protocol_attempt_as_a_round():
     assert "┌──────── ROUND 2 ────────┐" in text_dump
     assert "[PROTOCOL VIOLATION]" in text_dump
     assert "protocol_violation.ReactDecisionOutV2_schema_error" in text_dump
-    assert "Wrong round. The agent wrote invalid content into the action channel" in text_dump
+    assert "Wrong round. The action channel was malformed JSON" in text_dump
+    assert "diagnostic_excerpt" in text_dump
     assert "[TOOL CALL tc_ok_2].call web_tools.web_search" in text_dump
 
 
@@ -799,6 +844,18 @@ def test_timeline_renders_mid_round_followup_inside_active_round():
             ),
             "call_id": "tc_fail_1",
         },
+        {
+            **tl._block(
+                type="react.thinking",
+                author="react",
+                turn_id=ctx.turn_id,
+                ts="2026-04-16T18:04:36Z",
+                path="ar:turn_follow.react.thinking.0",
+                text="Preparing the first action.",
+                meta={"tool_call_id": "tc_fail_1", "iteration": 0},
+            ),
+            "call_id": "tc_fail_1",
+        },
         tl._block(
             type="user.followup",
             author="user",
@@ -814,7 +871,10 @@ def test_timeline_renders_mid_round_followup_inside_active_round():
             turn_id=ctx.turn_id,
             ts="2026-04-16T18:04:37Z",
             path="ar:turn_follow.react.notes.tc_fail_1",
-            text="Wrong round. The agent wrote invalid content into the action channel, so this round executed no action.",
+            text=(
+                "Wrong round. The action channel was malformed JSON, so this round executed no action. "
+                "The protocol violation notice contains the parser error and diagnostic excerpt."
+            ),
             meta={
                 "tool_id": "__protocol_violation__",
                 "tool_call_id": "tc_fail_1",
@@ -832,7 +892,9 @@ def test_timeline_renders_mid_round_followup_inside_active_round():
             text=json.dumps(
                 {
                     "code": "protocol_violation.ReactDecisionOutV2_schema_error",
-                    "message": "Bad Protocol. The agent output in <channel:ReactDecisionOutV2> could not be parsed, so no action was executed for this round.",
+                    "message": "Malformed action JSON. <channel:ReactDecisionOutV2> could not be parsed, so no action was executed for this round. Parser reported: JSON parse error: Expecting ',' delimiter",
+                    "parser_error": "JSON parse error: Expecting ',' delimiter",
+                    "diagnostic_excerpt": "Characters 50-85:\n'inline generated content'",
                 },
                 ensure_ascii=False,
             ),
@@ -844,10 +906,11 @@ def test_timeline_renders_mid_round_followup_inside_active_round():
     text_dump = "\n".join(b.get("text", "") for b in rendered if b.get("type") == "text")
 
     assert "┌──────── ROUND 1 ────────┐" in text_dump
-    assert "[AI Agent thinking...]" in text_dump
+    assert "[thinking]" in text_dump
+    assert "Preparing the first action." in text_dump
     assert "  [FOLLOWUP DURING TURN]" in text_dump
     assert "  sorry, pdf" in text_dump
-    assert text_dump.index("[AI Agent thinking...]") < text_dump.index("[FOLLOWUP DURING TURN]") < text_dump.index("[AI Agent say]: Wrong round.")
+    assert text_dump.index("[thinking]") < text_dump.index("[FOLLOWUP DURING TURN]") < text_dump.index("[AI Agent say]: Wrong round.")
 
 
 def test_read_result_says_requested_path_is_already_visible():

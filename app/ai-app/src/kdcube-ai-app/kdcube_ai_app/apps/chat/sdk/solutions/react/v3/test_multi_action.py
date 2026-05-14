@@ -8,6 +8,7 @@ import pytest
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v3.agents.decision import (
     parse_react_decision_bundle_from_raw,
+    react_decision_stream_v2,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v3.runtime import ReactSolverV2
 from kdcube_ai_app.apps.chat.sdk.solutions.react.round import ReactRound
@@ -16,6 +17,14 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.round import ReactRound
 class _LogStub:
     def log(self, *args, **kwargs):
         return None
+
+
+class _ExecStreamerStub:
+    def __init__(self, *, complete: bool):
+        self.complete = complete
+
+    def is_complete(self):
+        return self.complete
 
 
 def _solver_stub() -> ReactSolverV2:
@@ -46,6 +55,37 @@ async def _always_false(*args, **kwargs):
 async def _run_phase(*, phase, coro):
     del phase
     return False, await coro
+
+
+class _FakeDecisionService:
+    def __init__(self, text: str, chunk_size: int = 31):
+        self.text = text
+        self.chunk_size = chunk_size
+
+    def get_client(self, _role):
+        return object()
+
+    def describe_client(self, _client, role=None):
+        return type("Cfg", (), {"provider": "fake", "model_name": role or "fake"})()
+
+    async def stream_model_text_tracked(
+        self,
+        _client,
+        messages,
+        on_delta,
+        on_complete,
+        temperature,
+        max_tokens,
+        client_cfg,
+        debug,
+        role,
+        debug_citations=False,
+    ):
+        del messages, temperature, max_tokens, client_cfg, debug, role, debug_citations
+        for idx in range(0, len(self.text), self.chunk_size):
+            await on_delta(self.text[idx: idx + self.chunk_size])
+        await on_complete({})
+        return {"text": self.text, "service_error": None}
 
 
 def test_parse_react_decision_bundle_from_repeated_channels():
@@ -129,6 +169,72 @@ def test_parse_react_decision_bundle_from_multiple_fenced_blocks_in_single_chann
 
 
 @pytest.mark.asyncio
+async def test_decision_stream_recovers_repeated_action_channels_as_bundle():
+    raw = """
+<thinking>legacy hidden thought must not poison channel parsing</thinking>
+<channel:thinking>writing two files</channel:thinking>
+<channel:ReactDecisionOutV2>```json
+{"action":"call_tool","notes":"write alpha","tool_call":{"tool_id":"react.write","params":{"path":"outputs/a.md","channel":"canvas","content":"alpha"}}}
+```</channel:ReactDecisionOutV2>
+<channel:code></channel:code>
+<channel:thinking>second accidental thinking block</channel:thinking>
+<channel:ReactDecisionOutV2>```json
+{"action":"call_tool","notes":"write beta","tool_call":{"tool_id":"react.write","params":{"path":"outputs/b.md","channel":"canvas","content":"beta"}}}
+```</channel:ReactDecisionOutV2>
+<channel:code></channel:code>
+"""
+    packet = await react_decision_stream_v2(
+        svc=_FakeDecisionService(raw, chunk_size=17),
+        agent_name="solver.react.v2.decision.v2.strong",
+        adapters=[],
+        multi_action_mode="safe_fanout",
+        user_blocks=[{"type": "text", "text": "write two files"}],
+    )
+
+    assert (packet["log"] or {}).get("error") is None
+    assert (packet["log"] or {}).get("bundle_candidate_count") == 2
+    assert [d["tool_call"]["params"]["path"] for d in packet["agent_response_bundle"]] == [
+        "outputs/a.md",
+        "outputs/b.md",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_decision_stream_keeps_valid_repeated_action_and_reports_malformed_sibling():
+    raw = """
+<channel:thinking>writing files</channel:thinking>
+<channel:ReactDecisionOutV2>```json
+{"action":"call_tool","notes":"write alpha","tool_call":{"tool_id":"react.write","params":{"path":"outputs/a.md","channel":"canvas","content":"alpha"}}}
+```</channel:ReactDecisionOutV2>
+<channel:ReactDecisionOutV2>```json
+{"action":"call_tool","notes":
+```</channel:ReactDecisionOutV2>
+<channel:code></channel:code>
+"""
+    packet = await react_decision_stream_v2(
+        svc=_FakeDecisionService(raw, chunk_size=19),
+        agent_name="solver.react.v2.decision.v2.strong",
+        adapters=[],
+        multi_action_mode="safe_fanout",
+        user_blocks=[{"type": "text", "text": "write two files"}],
+    )
+
+    assert (packet["log"] or {}).get("error") is None
+    assert (packet["log"] or {}).get("bundle_candidate_count") == 2
+    assert [d["tool_call"]["params"]["path"] for d in packet["agent_response_bundle"]] == [
+        "outputs/a.md",
+    ]
+    assert (packet["log"] or {}).get("bundle_errors") == ["instance:1:no_json_candidate"]
+    assert (packet["log"] or {}).get("bundle_error_items") == [
+        {
+            "index": 1,
+            "error": "no_json_candidate",
+            "raw_preview": '{"action":"call_tool","notes":',
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_prepare_safe_multi_action_bundle_accepts_safe_tools():
     solver = _solver_stub()
     bundle = [
@@ -148,6 +254,14 @@ async def test_prepare_safe_multi_action_bundle_accepts_safe_tools():
                 "params": {"paths": ["so:sources_pool[1]"]},
             },
         },
+        {
+            "action": "call_tool",
+            "notes": "write",
+            "tool_call": {
+                "tool_id": "react.write",
+                "params": {"path": "outputs/brief.md", "channel": "canvas", "content": "Brief.", "kind": "display"},
+            },
+        },
     ]
     accepted, error, extra = await solver._prepare_safe_multi_action_bundle(
         bundle=bundle,
@@ -159,11 +273,55 @@ async def test_prepare_safe_multi_action_bundle_accepts_safe_tools():
     assert [d["tool_call"]["tool_id"] for d in accepted] == [
         "web_tools.web_search",
         "react.read",
+        "react.write",
     ]
 
 
 @pytest.mark.asyncio
-async def test_prepare_safe_multi_action_bundle_rejects_unsafe_tool():
+async def test_prepare_safe_multi_action_bundle_accepts_renderer_fanout():
+    solver = _solver_stub()
+    bundle = [
+        {
+            "action": "call_tool",
+            "notes": "render deck",
+            "tool_call": {
+                "tool_id": "rendering_tools.write_pptx",
+                "params": {
+                    "path": "outputs/news.pptx",
+                    "content": "<section><h1>News</h1></section>",
+                },
+            },
+        },
+        {
+            "action": "call_tool",
+            "notes": "render document",
+            "tool_call": {
+                "tool_id": "rendering_tools.write_docx",
+                "params": {
+                    "path": "outputs/news.docx",
+                    "content": "# News\n\nSummary.",
+                },
+            },
+        },
+    ]
+    accepted, error, extra = await solver._prepare_safe_multi_action_bundle(
+        bundle=bundle,
+        adapters_by_id={
+            "rendering_tools.write_pptx": {},
+            "rendering_tools.write_docx": {},
+        },
+    )
+
+    assert error is None
+    assert extra is None
+    assert [d["tool_call"]["tool_id"] for d in accepted] == [
+        "rendering_tools.write_pptx",
+        "rendering_tools.write_docx",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_prepare_safe_multi_action_bundle_drops_unsafe_tool_but_keeps_valid_sibling():
     solver = _solver_stub()
     bundle = [
         {
@@ -176,10 +334,10 @@ async def test_prepare_safe_multi_action_bundle_rejects_unsafe_tool():
         },
         {
             "action": "call_tool",
-            "notes": "write",
+            "notes": "exec",
             "tool_call": {
-                "tool_id": "react.write",
-                "params": {"path": "files/report.md", "channel": "canvas", "content": "x", "kind": "file"},
+                "tool_id": "exec_tools.execute_code_python",
+                "params": {"prog_name": "demo"},
             },
         },
     ]
@@ -188,12 +346,60 @@ async def test_prepare_safe_multi_action_bundle_rejects_unsafe_tool():
         adapters_by_id={"web_tools.web_search": {}},
     )
 
-    assert accepted == []
-    assert error == "multi_action_bundle_unsafe_tool"
-    assert extra == {"index": 1, "tool_id": "react.write"}
+    assert error is None
+    assert [d["tool_call"]["tool_id"] for d in accepted] == ["web_tools.web_search"]
+    assert extra == {
+        "rejected": [
+            {
+                "index": 1,
+                "code": "multi_action_bundle_unsafe_tool",
+                "tool_id": "exec_tools.execute_code_python",
+                "extra": {"tool_id": "exec_tools.execute_code_python"},
+            }
+        ]
+    }
 
 
-def test_validate_decision_packet_channel_consistency_rejects_multi_action_with_code():
+@pytest.mark.asyncio
+async def test_prepare_safe_multi_action_bundle_allows_single_complete_exec_with_code():
+    solver = _solver_stub()
+    bundle = [
+        {
+            "action": "call_tool",
+            "notes": "exec",
+            "tool_call": {
+                "tool_id": "exec_tools.execute_code_python",
+                "params": {
+                    "contract": [{"filename": "outputs/out.txt", "description": "output"}],
+                    "prog_name": "demo.py",
+                },
+            },
+        },
+        {
+            "action": "call_tool",
+            "notes": "write",
+            "tool_call": {
+                "tool_id": "react.write",
+                "params": {"path": "outputs/brief.md", "channel": "canvas", "content": "Brief.", "kind": "display"},
+            },
+        },
+    ]
+
+    accepted, error, extra = await solver._prepare_safe_multi_action_bundle(
+        bundle=bundle,
+        adapters_by_id={"exec_tools.execute_code_python": {}},
+        allow_single_exec_with_code=True,
+    )
+
+    assert error is None
+    assert extra is None
+    assert [d["tool_call"]["tool_id"] for d in accepted] == [
+        "exec_tools.execute_code_python",
+        "react.write",
+    ]
+
+
+def test_validate_decision_packet_channel_consistency_allows_multi_action_with_stray_code_for_per_item_handling():
     solver = _solver_stub()
     packet = {
         "channels": {
@@ -213,8 +419,76 @@ def test_validate_decision_packet_channel_consistency_rejects_multi_action_with_
 
     error, extra = solver._validate_decision_packet_channel_consistency(packet=packet, bundle=bundle)
 
-    assert error == "code_channel_with_multi_action"
-    assert extra == {"bundle_size": 2}
+    assert error is None
+    assert extra is None
+
+
+def test_validate_decision_packet_channel_consistency_allows_multi_action_with_complete_exec_and_code():
+    solver = _solver_stub()
+    packet = {
+        "channels": {
+            "code": {"text": "print('x')"},
+        }
+    }
+    bundle = [
+        {
+            "action": "call_tool",
+            "tool_call": {
+                "tool_id": "exec_tools.execute_code_python",
+                "params": {
+                    "contract": [{"filename": "outputs/out.txt", "description": "output"}],
+                    "prog_name": "x",
+                },
+            },
+        },
+        {
+            "action": "call_tool",
+            "tool_call": {"tool_id": "react.write", "params": {"path": "outputs/a.md", "channel": "canvas", "content": "a"}},
+        },
+    ]
+
+    error, extra = solver._validate_decision_packet_channel_consistency(
+        packet=packet,
+        bundle=bundle,
+        exec_streamer=_ExecStreamerStub(complete=True),
+    )
+
+    assert error is None
+    assert extra is None
+
+
+def test_validate_decision_packet_channel_consistency_allows_multi_action_with_incomplete_exec_for_per_item_handling():
+    solver = _solver_stub()
+    packet = {
+        "channels": {
+            "code": {"text": "print('x')"},
+        }
+    }
+    bundle = [
+        {
+            "action": "call_tool",
+            "tool_call": {
+                "tool_id": "exec_tools.execute_code_python",
+                "params": {
+                    "contract": [{"filename": "outputs/out.txt", "description": "output"}],
+                    "prog_name": "x",
+                },
+            },
+        },
+        {
+            "action": "call_tool",
+            "tool_call": {"tool_id": "react.write", "params": {"path": "outputs/a.md", "channel": "canvas", "content": "a"}},
+        },
+    ]
+
+    error, extra = solver._validate_decision_packet_channel_consistency(
+        packet=packet,
+        bundle=bundle,
+        exec_streamer=_ExecStreamerStub(complete=False),
+    )
+
+    assert error is None
+    assert extra is None
 
 
 def test_validate_decision_packet_channel_consistency_allows_single_exec_with_code():

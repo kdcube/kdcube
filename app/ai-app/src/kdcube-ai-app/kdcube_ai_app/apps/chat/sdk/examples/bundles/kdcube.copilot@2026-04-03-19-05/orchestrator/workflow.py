@@ -88,7 +88,7 @@ class WithReactWorkflow(BaseWorkflow):
         self.runtime_ctx.reactive_event_iteration_credit_enabled = True
         self.runtime_ctx.reactive_event_iteration_credit_per_event = 1
         self.runtime_ctx.reactive_event_iteration_credit_cap = 15
-        self.runtime_ctx.debug_timeline = True
+        self.runtime_ctx.debug_timeline = self.react_debug_timeline_enabled(default=True)
 
     async def construct_turn_and_scratchpad(self, payload: dict) -> CTurnScratchpad:
         """Build per-turn scratchpad — mutable object that travels through every node."""

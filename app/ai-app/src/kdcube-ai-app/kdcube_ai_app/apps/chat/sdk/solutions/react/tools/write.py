@@ -49,16 +49,19 @@ TOOL_SPEC = {
         "When channel='canvas', the file extension MUST match a supported canvas format: "
         ".md/.markdown, .html/.htm, .mermaid/.mmd, .json, .yaml/.yml, .txt, .xml. "
         "react.write only writes text-based files. For PDFs/PPTX/DOCX/PNG, use rendering_tools.write_* "
-        "or exec tools to generate the artifact."
-        "Include citations with SIDs from sources_pool when using sources."
-        "If you build your content based on prior artifacts or sources, ensure those are visible in the journal. Otherwise read them first via react.read."
-        "For recorder to work properly, fill the function params in the order they are stated below"
-        "This tool results in an artifact which is a file with visibility='external' and kind set to your choice"
+        "or exec tools to generate the artifact. "
+        "Include citations with SIDs from sources_pool when using sources. "
+        "If you build your content based on prior artifacts or sources, ensure those are visible in the journal. Otherwise read them first via react.read. "
+        "For recorder to work properly, fill the function params in the order they are stated below. "
+        "This tool creates external artifacts by default. HARD: For any report, brief, slide source, document source, "
+        "HTML/Markdown intended for rendering_tools.write_*, or content the user should see/download/approve, set "
+        "channel='canvas'. Do NOT set channel='internal' for PDF/PPTX/DOCX source files or user deliverables. "
+        "Use channel='internal' only for private scratch/notes that will not be shown to the user and will not be rendered. "
         "Note if you use this tool to generate the content for rendering tools.write_* tools, you must read the relevant skill(s) to produce the proper content. Ensure you see the proper skills in the journal or load them first via react.read."
     ),
     "args": {
         "path": "str (FIRST FIELD). Filepath of this artifact. Prefer outputs/<scope>/<name> unless writing durable project/workspace state under files/<scope>/<path>.",
-        "channel": "str (SECOND FIELD). 'canvas' (default) or 'timeline_text' or 'internal'.",
+        "channel": "str (SECOND FIELD). Use 'canvas' for generated artifacts by default and ALWAYS for user-visible content or renderer sources. Use 'internal' only for private scratch that will not be presented or rendered. 'timeline_text' is for timeline text blocks.",
         "content": "str|object (THIRD FIELD). Content to record.",
         "kind": "str (FOURTH FIELD). 'display' or 'file'.",
         "scratchpad": "bool. Optional. Only for channel='internal'; true also creates a short inline react.note.",
@@ -89,11 +92,26 @@ async def handle_react_write(*, react: Any, ctx_browser: Any, state: Dict[str, A
         visible_paths=visible_paths,
     )
     if violations:
+        details: list[str] = []
+        for violation in violations:
+            if not isinstance(violation, dict):
+                continue
+            msg = str(violation.get("message") or "").strip()
+            if msg:
+                details.append(msg)
+            suggested = str(violation.get("suggested_ref") or "").strip()
+            bad_path = str(violation.get("path") or "").strip()
+            if suggested and bad_path:
+                details.append(f"Use `ref:{suggested}` instead of `ref:{bad_path}`.")
         notice_block(
             ctx_browser=ctx_browser,
             tool_call_id=tool_call_id,
             code="protocol_violation.param_ref_not_visible",
-            message="One or more ref: bindings are not visible",
+            message=" ".join(dict.fromkeys(details)) or (
+                "One or more ref: bindings are not visible to this tool call. channel=internal artifacts are private. "
+                "For rendering_tools.write_* source refs, write the source as an external artifact first "
+                "(react.write channel=canvas, or exec visibility=external)."
+            ),
             extra={"violations": violations, "tool_id": tool_id, "protocol_violation": True},
         )
         state["retry_decision"] = True

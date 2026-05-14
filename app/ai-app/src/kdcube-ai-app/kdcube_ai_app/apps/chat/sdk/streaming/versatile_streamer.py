@@ -40,6 +40,7 @@ class ChannelResult:
     started_at: Optional[float]
     finished_at: Optional[float]
     error: Optional[str]
+    instances: Optional[List[str]] = None
 
 
 ChannelEmitFn = Callable[..., Awaitable[None]]
@@ -451,7 +452,7 @@ async def stream_with_channels(
                 cursor = 0
 
             if current is None:
-                m_tag = TAG_RE.search(buf, cursor)
+                m_tag = _find_next_valid_tag(buf, cursor)
             elif not _honor_markup_escapes_for_channel(current):
                 m_tag = TAG_RE.search(buf, cursor)
             else:
@@ -580,8 +581,7 @@ async def stream_with_channels(
             matches = _extract_valid_channel_bodies(full_raw, name)
             if matches:
                 recovered = [m for m in matches if m is not None]
-                raw_by_channel[name] = recovered
-                for body in recovered:
+                for body in list(recovered):
                     if body:
                         await _emit_raw_slice(name, body)
 
@@ -623,11 +623,20 @@ async def stream_with_channels(
     results: Dict[str, ChannelResult] = {}
     for name, spec in channel_specs.items():
         raw = "".join(raw_by_channel.get(name, []))
+        instance_raws = _extract_valid_channel_bodies(full_raw, name) if full_raw else []
+        if not instance_raws and raw:
+            instance_raws = [raw]
+        normalized_instances = [
+            _strip_structured_fences(body) if spec.format in ("json", "yaml", "xml", "html", "mermaid") else body
+            for body in instance_raws
+        ]
         if spec.format in ("json", "yaml", "xml", "html", "mermaid"):
             raw = _strip_structured_fences(raw)
         obj = None
         err: Optional[str] = None
-        if spec.model and raw:
+        if spec.model and len(normalized_instances) > 1:
+            err = f"multiple_channel_instances:{len(normalized_instances)}"
+        elif spec.model and raw:
             try:
                 data, err = _json_loads_loose_with_err(raw)
                 if data is not None:
@@ -646,6 +655,7 @@ async def stream_with_channels(
             started_at=channel_times[name]["started_at"],
             finished_at=channel_times[name]["finished_at"],
             error=err,
+            instances=normalized_instances,
         )
 
     if return_full_raw:

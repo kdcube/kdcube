@@ -71,6 +71,32 @@ class _Collector:
         return [e for e in self.events if e.get("artifact_name") == artifact_name]
 
 
+class _PhaseAwareService(_FakeService):
+    def __init__(self, chunks):
+        super().__init__(chunks)
+        self.stream_finished = False
+
+    async def stream_model_text_tracked(
+        self,
+        _client,
+        messages,
+        on_delta,
+        on_complete,
+        temperature,
+        max_tokens,
+        client_cfg,
+        debug,
+        role,
+        debug_citations=False,
+    ):
+        del messages, temperature, max_tokens, client_cfg, debug, role, debug_citations
+        for chunk in self._chunks:
+            await on_delta(chunk)
+        self.stream_finished = True
+        await on_complete({})
+        return {"text": "".join(self._chunks), "service_error": None}
+
+
 def _chunk_text(text: str, size: int = 17):
     return [text[i : i + size] for i in range(0, len(text), size)]
 
@@ -201,6 +227,425 @@ async def test_stream_with_channels_v3_fans_out_repeated_decisions_to_isolated_w
         }
     )
     assert completed_instances == [0, 1]
+
+
+@pytest.mark.asyncio
+async def test_stream_with_channels_v3_streams_three_canvas_writes_from_repeated_decisions():
+    html_report = "<!doctype html><html><body>" + ("<p>Report body.</p>" * 80) + "</body></html>"
+    html_slides = "<!doctype html><html><body>" + ("<section>Slide body.</section>" * 70) + "</body></html>"
+    markdown_doc = "# Report\n\n" + ("Markdown body.\n\n" * 120)
+
+    payloads = [
+        {
+            "action": "call_tool",
+            "notes": "Writing HTML source for PDF render",
+            "tool_call": {
+                "tool_id": "react.write",
+                "params": {
+                    "path": "outputs/ai_security_news/report.html",
+                    "channel": "canvas",
+                    "content": html_report,
+                    "kind": "display",
+                },
+            },
+        },
+        {
+            "action": "call_tool",
+            "notes": "Writing HTML source for PPTX render",
+            "tool_call": {
+                "tool_id": "react.write",
+                "params": {
+                    "path": "outputs/ai_security_news/slides.html",
+                    "channel": "canvas",
+                    "content": html_slides,
+                    "kind": "display",
+                },
+            },
+        },
+        {
+            "action": "call_tool",
+            "notes": "Writing Markdown source for DOCX render",
+            "tool_call": {
+                "tool_id": "react.write",
+                "params": {
+                    "path": "outputs/ai_security_news/report.md",
+                    "channel": "canvas",
+                    "content": markdown_doc,
+                    "kind": "display",
+                },
+            },
+        },
+    ]
+    full = "".join(_json_channel("ReactDecisionOutV2", payload) for payload in payloads)
+
+    svc = _FakeService(_chunk_text(full, size=97))
+    collector = _Collector()
+
+    def _factory(channel: str, instance_idx: int):
+        del channel
+        record = ReactWriteContentStreamer(
+            emit_delta=collector.emit,
+            agent=f"test.record.{instance_idx}",
+            artifact_name=f"react.record.{instance_idx}",
+            turn_id="turn_1",
+            sources_list=[],
+        )
+        timeline = TimelineStreamer(
+            emit_delta=collector.emit,
+            agent=f"test.timeline.{instance_idx}",
+            sources_list=[],
+            notes_artifact_name=f"timeline_text.react.decision.{instance_idx}",
+            final_answer_artifact_name=f"react.final_answer.{instance_idx}",
+            plan_artifact_name=f"timeline_text.react.plan.{instance_idx}",
+        )
+        return [
+            _wrap_json_widget(record),
+            _wrap_json_widget(timeline),
+        ]
+
+    subscribers = ChannelSubscribers().subscribe_factory("ReactDecisionOutV2", _factory)
+
+    results, meta = await stream_with_channels(
+        svc=svc,
+        messages=["sys", "user"],
+        role="answer.generator.regular",
+        channels=[ChannelSpec(name="ReactDecisionOutV2", format="json", replace_citations=False, emit_marker="answer")],
+        emit=collector.emit,
+        agent="test.agent",
+        artifact_name="react.decision",
+        subscribers=subscribers,
+        max_tokens=500,
+        temperature=0.0,
+        return_full_raw=True,
+    )
+
+    assert meta.get("service_error") is None
+    assert len(results["ReactDecisionOutV2"].instances or []) == 3
+    assert "Report body." in collector.text_for_artifact("ai_security_news/report.html")
+    assert "Slide body." in collector.text_for_artifact("ai_security_news/slides.html")
+    assert "Markdown body." in collector.text_for_artifact("ai_security_news/report.md")
+    assert any(e.get("completed") is True for e in collector.events_for_artifact("ai_security_news/report.html"))
+    assert any(e.get("completed") is True for e in collector.events_for_artifact("ai_security_news/slides.html"))
+    assert any(e.get("completed") is True for e in collector.events_for_artifact("ai_security_news/report.md"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chunk_size", [97, 10**9])
+async def test_stream_with_channels_v3_repeated_canvas_writes_emit_before_completion_recovery(chunk_size):
+    payloads = []
+    for path, label in [
+        ("outputs/ai_security_news/report.html", "Report body."),
+        ("outputs/ai_security_news/slides.html", "Slide body."),
+        ("outputs/ai_security_news/report.md", "Markdown body."),
+    ]:
+        payloads.append(
+            {
+                "action": "call_tool",
+                "notes": f"Writing {label}",
+                "tool_call": {
+                    "tool_id": "react.write",
+                    "params": {
+                        "path": path,
+                        "channel": "canvas",
+                        "content": label * 320,
+                        "kind": "display",
+                    },
+                },
+            }
+        )
+
+    full = "".join(_json_channel("ReactDecisionOutV2", payload) for payload in payloads)
+    svc = _PhaseAwareService(_chunk_text(full, size=chunk_size))
+    collector = _Collector()
+
+    async def _emit_with_phase(**kwargs):
+        event = dict(kwargs)
+        event["after_model_stream"] = svc.stream_finished
+        collector.events.append(event)
+
+    def _factory(channel: str, instance_idx: int):
+        del channel
+        record = ReactWriteContentStreamer(
+            emit_delta=_emit_with_phase,
+            agent=f"test.record.{instance_idx}",
+            artifact_name=f"react.record.{instance_idx}",
+            turn_id="turn_1",
+            sources_list=[],
+        )
+        return [_wrap_json_widget(record)]
+
+    results, meta = await stream_with_channels(
+        svc=svc,
+        messages=["sys", "user"],
+        role="answer.generator.regular",
+        channels=[ChannelSpec(name="ReactDecisionOutV2", format="json", replace_citations=False, emit_marker="answer")],
+        emit=_emit_with_phase,
+        agent="test.agent",
+        artifact_name="react.decision",
+        subscribers=ChannelSubscribers().subscribe_factory("ReactDecisionOutV2", _factory),
+        max_tokens=500,
+        temperature=0.0,
+        return_full_raw=True,
+    )
+
+    assert meta.get("service_error") is None
+    assert len(results["ReactDecisionOutV2"].instances or []) == 3
+    for artifact_name in [
+        "ai_security_news/report.html",
+        "ai_security_news/slides.html",
+        "ai_security_news/report.md",
+    ]:
+        text_events = [
+            e for e in collector.events_for_artifact(artifact_name)
+            if e.get("text")
+        ]
+        assert text_events, artifact_name
+        assert not text_events[0]["after_model_stream"], artifact_name
+
+
+@pytest.mark.asyncio
+async def test_stream_with_channels_v3_repeated_json_decisions_ignore_backticks_inside_strings():
+    payloads = [
+        {
+            "action": "call_tool",
+            "notes": "Writing source with fenced example",
+            "tool_call": {
+                "tool_id": "react.write",
+                "params": {
+                    "path": "outputs/report.md",
+                    "channel": "canvas",
+                    "content": "Before\n```python\nprint('not a protocol fence')\n```\nAfter",
+                    "kind": "display",
+                },
+            },
+        },
+        {
+            "action": "call_tool",
+            "notes": "Writing slides after fenced source",
+            "tool_call": {
+                "tool_id": "react.write",
+                "params": {
+                    "path": "outputs/slides.html",
+                    "channel": "canvas",
+                    "content": "<html><body>slides after fenced content</body></html>",
+                    "kind": "display",
+                },
+            },
+        },
+        {
+            "action": "call_tool",
+            "notes": "Writing doc after slides",
+            "tool_call": {
+                "tool_id": "react.write",
+                "params": {
+                    "path": "outputs/report.doc.md",
+                    "channel": "canvas",
+                    "content": "doc body after slides",
+                    "kind": "display",
+                },
+            },
+        },
+    ]
+    full = "".join(_json_channel("ReactDecisionOutV2", payload) for payload in payloads)
+    svc = _PhaseAwareService(_chunk_text(full, size=113))
+    collector = _Collector()
+
+    async def _emit_with_phase(**kwargs):
+        event = dict(kwargs)
+        event["after_model_stream"] = svc.stream_finished
+        collector.events.append(event)
+
+    def _factory(channel: str, instance_idx: int):
+        del channel
+        record = ReactWriteContentStreamer(
+            emit_delta=_emit_with_phase,
+            agent=f"test.record.{instance_idx}",
+            artifact_name=f"react.record.{instance_idx}",
+            turn_id="turn_1",
+            sources_list=[],
+        )
+        return [_wrap_json_widget(record)]
+
+    results, meta = await stream_with_channels(
+        svc=svc,
+        messages=["sys", "user"],
+        role="answer.generator.regular",
+        channels=[ChannelSpec(name="ReactDecisionOutV2", format="json", replace_citations=False, emit_marker="answer")],
+        emit=_emit_with_phase,
+        agent="test.agent",
+        artifact_name="react.decision",
+        subscribers=ChannelSubscribers().subscribe_factory("ReactDecisionOutV2", _factory),
+        max_tokens=500,
+        temperature=0.0,
+        return_full_raw=True,
+    )
+
+    assert meta.get("service_error") is None
+    assert len(results["ReactDecisionOutV2"].instances or []) == 3
+    for artifact_name in ["report.md", "slides.html", "report.doc.md"]:
+        text_events = [e for e in collector.events_for_artifact(artifact_name) if e.get("text")]
+        assert text_events, artifact_name
+        assert not text_events[0]["after_model_stream"], artifact_name
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chunk_size", [13, 97, 10**9])
+async def test_stream_with_channels_v3_captures_mixed_repeated_channel_sequence(chunk_size):
+    decisions = [
+        {
+            "action": "call_tool",
+            "notes": "Run code first.",
+            "tool_call": {
+                "tool_id": "exec_tools.execute_code_python",
+                "params": {
+                    "prog_name": "mixed_sequence",
+                    "contract": [
+                        {
+                            "filename": "outputs/alpha.txt",
+                            "description": "First output",
+                            "visibility": "external",
+                        }
+                    ],
+                },
+            },
+        },
+        {
+            "action": "call_tool",
+            "notes": "Write beta.",
+            "tool_call": {
+                "tool_id": "react.write",
+                "params": {
+                    "path": "outputs/beta.md",
+                    "channel": "canvas",
+                    "content": "beta body",
+                    "kind": "display",
+                },
+            },
+        },
+        {
+            "action": "call_tool",
+            "notes": "Write gamma.",
+            "tool_call": {
+                "tool_id": "react.write",
+                "params": {
+                    "path": "outputs/gamma.md",
+                    "channel": "canvas",
+                    "content": "gamma body",
+                    "kind": "display",
+                },
+            },
+        },
+    ]
+    code = "print('alpha')\nprint('done')\n"
+    full = (
+        _text_channel("thinking", "first thought")
+        + _json_channel("ReactDecisionOutV2", decisions[0])
+        + _text_channel("code", code)
+        + _text_channel("thinking", "second thought")
+        + _json_channel("ReactDecisionOutV2", decisions[1])
+        + _json_channel("ReactDecisionOutV2", decisions[2])
+        + _text_channel("thinking", "final thought")
+    )
+    svc = _PhaseAwareService(_chunk_text(full, size=chunk_size))
+    collector = _Collector()
+    decision_factory_events = []
+    decision_events = []
+    code_events = []
+    thinking_events = []
+
+    async def _emit_with_phase(**kwargs):
+        event = dict(kwargs)
+        event["after_model_stream"] = svc.stream_finished
+        collector.events.append(event)
+
+    async def _decision_sub(text: str = "", completed: bool = False, channel_instance=None, **_kwargs):
+        if text or completed:
+            decision_events.append(
+                {
+                    "text": text,
+                    "completed": completed,
+                    "channel_instance": channel_instance,
+                    "after_model_stream": svc.stream_finished,
+                }
+            )
+
+    def _decision_factory(channel: str, channel_instance: int):
+        del channel
+        decision_factory_events.append(
+            {
+                "channel_instance": channel_instance,
+                "after_model_stream": svc.stream_finished,
+            }
+        )
+        return [_decision_sub]
+
+    async def _code_sub(text: str = "", completed: bool = False, channel_instance=None, **_kwargs):
+        if text or completed:
+            code_events.append(
+                {
+                    "text": text,
+                    "completed": completed,
+                    "channel_instance": channel_instance,
+                    "after_model_stream": svc.stream_finished,
+                }
+            )
+
+    async def _thinking_sub(text: str = "", completed: bool = False, channel_instance=None, **_kwargs):
+        if text or completed:
+            thinking_events.append(
+                {
+                    "text": text,
+                    "completed": completed,
+                    "channel_instance": channel_instance,
+                    "after_model_stream": svc.stream_finished,
+                }
+            )
+
+    subscribers = (
+        ChannelSubscribers()
+        .subscribe_factory("ReactDecisionOutV2", _decision_factory)
+        .subscribe("code", _code_sub)
+        .subscribe("thinking", _thinking_sub)
+    )
+
+    results, meta = await stream_with_channels(
+        svc=svc,
+        messages=["sys", "user"],
+        role="answer.generator.regular",
+        channels=[
+            ChannelSpec(name="thinking", format="markdown", replace_citations=False, emit_marker="thinking"),
+            ChannelSpec(name="ReactDecisionOutV2", format="json", replace_citations=False, emit_marker="answer"),
+            ChannelSpec(name="code", format="text", replace_citations=False, emit_marker="subsystem"),
+        ],
+        emit=_emit_with_phase,
+        agent="test.agent",
+        artifact_name="react.decision",
+        subscribers=subscribers,
+        max_tokens=1000,
+        temperature=0.0,
+        return_full_raw=True,
+    )
+
+    assert meta.get("service_error") is None
+    assert results["thinking"].instances == ["first thought", "second thought", "final thought"]
+    assert len(results["ReactDecisionOutV2"].instances or []) == 3
+    assert results["code"].instances == [code]
+    assert code in results["code"].raw
+
+    assert [e["channel_instance"] for e in decision_factory_events] == [0, 1, 2]
+    assert all(not e["after_model_stream"] for e in decision_factory_events), chunk_size
+
+    completed_decisions = [e for e in decision_events if e["completed"]]
+    assert [e["channel_instance"] for e in completed_decisions] == [0, 1, 2]
+    assert all(not e["after_model_stream"] for e in completed_decisions), chunk_size
+
+    completed_thinking = [e for e in thinking_events if e["completed"]]
+    assert [e["channel_instance"] for e in completed_thinking] == [0, 1, 2]
+    assert all(not e["after_model_stream"] for e in completed_thinking), chunk_size
+
+    completed_code = [e for e in code_events if e["completed"]]
+    assert [e["channel_instance"] for e in completed_code] == [0]
+    assert all(not e["after_model_stream"] for e in completed_code), chunk_size
 
 
 @pytest.mark.asyncio
@@ -548,6 +993,85 @@ async def test_stream_with_channels_v3_ignores_literal_channel_mentions_inside_c
 
 
 @pytest.mark.asyncio
+async def test_stream_with_channels_v3_ignores_literal_channel_mentions_inside_legacy_thinking():
+    payload = {
+        "action": "call_tool",
+        "tool_call": {
+            "tool_id": "react.read",
+            "params": {"paths": ["alpha"]},
+        },
+    }
+    text = (
+        "<thinking>The `<channel:code>` marker was mentioned as text, not opened.</thinking>\n"
+        f"{_json_channel('ReactDecisionOutV2', payload)}\n"
+        "<channel:code></channel:code>"
+    )
+    svc = _FakeService(_chunk_text(text, size=11))
+    collector = _Collector()
+
+    results, meta = await stream_with_channels(
+        svc=svc,
+        messages=["sys", "user"],
+        role="answer.generator.regular",
+        channels=[
+            ChannelSpec(name="thinking", format="markdown", replace_citations=False, emit_marker="thinking"),
+            ChannelSpec(name="ReactDecisionOutV2", format="json", replace_citations=False, emit_marker="answer"),
+            ChannelSpec(name="code", format="text", replace_citations=False, emit_marker="subsystem"),
+        ],
+        emit=collector.emit,
+        agent="test.agent",
+        artifact_name="react.decision",
+        max_tokens=200,
+        temperature=0.0,
+        return_full_raw=True,
+    )
+
+    assert meta.get("service_error") is None
+    assert results["ReactDecisionOutV2"].raw == json.dumps(payload, ensure_ascii=True)
+    assert results["code"].raw == ""
+
+
+@pytest.mark.asyncio
+async def test_stream_with_channels_v3_ignores_literal_react_decision_mentions_inside_thinking():
+    payload = {
+        "action": "call_tool",
+        "tool_call": {
+            "tool_id": "react.read",
+            "params": {"paths": ["alpha"]},
+        },
+    }
+    text = (
+        "<channel:thinking>Do not open literal `<channel:ReactDecisionOutV2>` here.</channel:thinking>\n"
+        f"{_json_channel('ReactDecisionOutV2', payload)}\n"
+        "<channel:code></channel:code>"
+    )
+    svc = _FakeService(_chunk_text(text, size=17))
+    collector = _Collector()
+
+    results, meta = await stream_with_channels(
+        svc=svc,
+        messages=["sys", "user"],
+        role="answer.generator.regular",
+        channels=[
+            ChannelSpec(name="thinking", format="markdown", replace_citations=False, emit_marker="thinking"),
+            ChannelSpec(name="ReactDecisionOutV2", format="json", replace_citations=False, emit_marker="answer"),
+            ChannelSpec(name="code", format="text", replace_citations=False, emit_marker="subsystem"),
+        ],
+        emit=collector.emit,
+        agent="test.agent",
+        artifact_name="react.decision",
+        max_tokens=200,
+        temperature=0.0,
+        return_full_raw=True,
+    )
+
+    assert meta.get("service_error") is None
+    assert "`<channel:ReactDecisionOutV2>`" in results["thinking"].raw
+    assert results["ReactDecisionOutV2"].raw == json.dumps(payload, ensure_ascii=True)
+    assert results["code"].raw == ""
+
+
+@pytest.mark.asyncio
 async def test_stream_with_channels_v3_captures_realistic_exec_code_payload():
     output_file = "turn_demo_exec_001/outputs/monthly_priorities.xlsx"
     payload = {
@@ -616,3 +1140,8 @@ async def test_stream_with_channels_v3_captures_realistic_exec_code_payload():
         assert results["ReactDecisionOutV2"].error is None
         assert code_text in results["code"].raw, chunk_size
         assert code_text in widget.get_code(), chunk_size
+        assert any(
+            e.get("artifact_name") == "react.exec.test.code_exec_contract"
+            and "monthly_priorities.xlsx" in str(e.get("text") or "")
+            for e in collector.events
+        ), chunk_size

@@ -368,6 +368,11 @@ class ExecConfig(BaseModel):
     PY: PyExecConfig = Field(default_factory=PyExecConfig)
 
 
+class ReactDebugConfig(BaseModel):
+    REACT_DEBUG_ROOT: str | None = None
+    REACT_DEBUG_KEEP_FILES: int = 100
+
+
 # ─── PLATFORM.ACCOUNTING ──────────────────────────────────────────────────────
 
 class AccountingConfig(BaseModel):
@@ -424,6 +429,7 @@ class PlatformConfig(BaseModel):
     MONITORING: MonitoringConfig = Field(default_factory=MonitoringConfig)
     METRICS: MetricsConfig = Field(default_factory=MetricsConfig)
     EXEC: ExecConfig = Field(default_factory=ExecConfig)
+    REACT_DEBUG: ReactDebugConfig = Field(default_factory=ReactDebugConfig)
     ACCOUNTING: AccountingConfig = Field(default_factory=AccountingConfig)
     APPLICATIONS: ApplicationsConfig = Field(default_factory=ApplicationsConfig)
 

@@ -105,6 +105,9 @@ services:
       - HOST_MANAGED_BUNDLES_PATH=${HOST_MANAGED_BUNDLES_PATH:-}
       - HOST_BUNDLE_STORAGE_PATH=${HOST_BUNDLE_STORAGE_PATH}
       - HOST_EXEC_WORKSPACE_PATH=${HOST_EXEC_WORKSPACE_PATH}
+      - HOST_REACT_DEBUG_PATH=${HOST_REACT_DEBUG_PATH}
+      - REACT_DEBUG_ROOT=${REACT_DEBUG_ROOT:-/react-debug}
+      - REACT_DEBUG_KEEP_FILES=${REACT_DEBUG_KEEP_FILES:-100}
       - BUNDLES_ROOT=${BUNDLES_ROOT:-/bundles}
       - MANAGED_BUNDLES_ROOT=${MANAGED_BUNDLES_ROOT:-/managed-bundles}
       - SECRETS_TOKEN=${SECRETS_TOKEN_PROC:-}
@@ -112,6 +115,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${HOST_KDCUBE_STORAGE_PATH?}:/kdcube-storage
       - ${KDCUBE_DATA_DIR:-./data}/exec-workspace:/exec-workspace
+      - ${HOST_REACT_DEBUG_PATH?}:/react-debug
       - ${KDCUBE_LOGS_DIR:-./logs}/chat-proc:/logs
       - ${KDCUBE_CONFIG_DIR:-.}:/config
       - type: bind

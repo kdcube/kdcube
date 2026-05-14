@@ -143,6 +143,12 @@ class CodegenChanneledStreamingWidget:
     def set_code(self, code: str) -> None:
         self.captured_code = code or ""
 
+    def has_contract(self) -> bool:
+        return bool(self.pending_contract)
+
+    def is_complete(self) -> bool:
+        return bool((self.captured_code or "").strip()) and self.has_contract()
+
     async def capture_params(self, params: dict) -> None:
         if not isinstance(params, dict):
             return

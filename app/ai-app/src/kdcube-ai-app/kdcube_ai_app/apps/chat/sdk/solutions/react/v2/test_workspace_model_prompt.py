@@ -75,6 +75,8 @@ def test_build_decision_system_text_explains_one_response_is_one_round():
         infra_adapters=[],
         workspace_implementation="custom",
     )
+    assert text.lstrip().startswith("CRITICAL: you are the agent which must")
+    assert "Never emit legacy <thinking>...</thinking> tags." in text
     assert "Output protocol (strict): you must produce content which represents one round" in text
     assert "In a single round, include exactly one <channel:thinking>, one <channel:code>, and one or more <channel:ReactDecisionOutV2> channel instances." in text
     assert "The optional <channel:summary> may appear exactly once, and only when the response contains a single complete/exit action and no tool-call actions." in text
@@ -82,8 +84,45 @@ def test_build_decision_system_text_explains_one_response_is_one_round():
     assert "For call_tool-only rounds, omit <channel:summary> entirely" in text
     assert "For complete/exit rounds, include exactly one <channel:summary>" in text
     assert "If you need multiple actions in one round, repeat only <channel:ReactDecisionOutV2>." in text
+    assert "If action B needs an artifact, source path, search result, or output created by action A, split them into separate rounds." in text
     assert "Never put > 1 JSON objects, > 1 fenced JSON blocks, or prose after the JSON inside one <channel:ReactDecisionOutV2> instance." in text
     assert "Final answer shape only when action is complete or exit" in text
     assert "Goal, Outcome, Key facts, Refs" in text
     assert "If you emit multiple tool-call actions, each action must be in its own separate <channel:ReactDecisionOutV2>...</channel:ReactDecisionOutV2> instance." in text
-    assert "Use <channel:code> only when the single action is exec_tools.execute_code_python" in text
+    assert "Use <channel:code> only when this round contains exactly one exec_tools.execute_code_python action" in text
+    assert "Exec in multi-action: you may include exactly one exec_tools.execute_code_python action together with other actions" in text
+    assert "complete params.contract and complete Python in <channel:code>" in text
+
+
+def test_build_decision_system_text_has_no_stale_single_tool_limit_hint():
+    text = build_decision_system_text(
+        adapters=[],
+        infra_adapters=[],
+        workspace_implementation="custom",
+    )
+    assert "TEMPORARY CURRENT LIMIT" not in text
+    assert "use later rounds for the rest" not in text
+    assert "Each JSON object may contain at most ONE tool_call object." in text
+    assert "each action in its own separate <channel:ReactDecisionOutV2> instance" in text
+    assert "ref:<artifact_path_or_visible_file_path>" in text
+    assert "ref:<bound artifact path>" not in text
+    assert "Default write rule: reports, briefs, HTML, Markdown, slide source" in text
+    assert "must be written with react.write channel=canvas" in text
+
+
+def test_build_decision_system_text_prefers_visible_document_source_refs():
+    text = build_decision_system_text(
+        adapters=[],
+        infra_adapters=[],
+        workspace_implementation="custom",
+    )
+    assert "Prefer generating source content with `react.write`." in text
+    assert "Preferred: then call the renderer with `content=\"ref:<external artifact path>\"`." in text
+    assert "Inline renderer content is still valid when needed." in text
+    assert "internal\n  artifacts into rendering_tools.write_*" in text
+    assert "exec output with" in text and "visibility=external" in text
+    assert "if generated content is meant for the user to see, download, approve, or use as a renderer source, make it external" in text
+    assert "Do not use `channel=\"internal\"` refs as rendering_tools.write_* source." in text
+    assert "draft shape is wrong" in text
+    assert "Use the input type documented by the target rendering tool." in text
+    assert "Use HTML source for PDF" not in text

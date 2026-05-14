@@ -257,6 +257,15 @@ def _as_str(value: object) -> Optional[str]:
         return None
 
 
+def _runtime_storage_env_value(value: object, *, default_container_path: str) -> str:
+    if not value:
+        return default_container_path
+    path = _local_storage_uri_to_path(value)
+    if path is not None and _is_container_storage_path(path):
+        return str(path)
+    return str(value).strip().strip("'\"")
+
+
 def _env_scalar(value: object) -> Optional[str]:
     if value is None:
         return None
@@ -1274,6 +1283,7 @@ def ensure_local_dirs(data_dir: Path, logs_dir: Path) -> None:
     for path in [
         data_dir / "kdcube-storage",
         data_dir / "exec-workspace",
+        data_dir / "react-debug",
         data_dir / "managed-bundles",
         data_dir / "bundle-storage",
         data_dir / "bundles",
@@ -1980,6 +1990,7 @@ def compute_paths(ai_app_root: Path, lib_root: Path, workdir: Path, compose_mode
         "host_kb_storage": str(workdir / "data/kdcube-storage"),
         "host_bundle_storage": str(workdir / "data/bundle-storage"),
         "host_exec_workspace": str(workdir / "data/exec-workspace"),
+        "host_react_debug": str(workdir / "data/react-debug"),
         "host_bundles": host_bundles_default,
         "host_managed_bundles": str(workdir / "data/managed-bundles"),
         "ui_dockerfile_path": "",
@@ -2225,9 +2236,11 @@ def gather_configuration(
 
         return host_bundles_root_str
 
-    def _apply_workspace_local_topology() -> Tuple[str, str, str, str, str]:
-        storage_kdcube_path = _local_storage_uri_to_path(_get_nested(assembly_data, "storage", "kdcube"))
-        storage_bundles_path = _local_storage_uri_to_path(_get_nested(assembly_data, "storage", "bundles"))
+    def _apply_workspace_local_topology() -> Tuple[str, str, str, str, str, str]:
+        storage_kdcube_value = _get_nested(assembly_data, "storage", "kdcube")
+        storage_bundles_value = _get_nested(assembly_data, "storage", "bundles")
+        storage_kdcube_path = _local_storage_uri_to_path(storage_kdcube_value)
+        storage_bundles_path = _local_storage_uri_to_path(storage_bundles_value)
         host_storage_local = ensure_directory_root(
             str(
                 storage_kdcube_path
@@ -2238,11 +2251,13 @@ def gather_configuration(
             label="Host system storage path",
         )
         host_bundles_default = str(defaults.get("host_bundles") or (ctx.workdir / "data/bundles"))
+        host_bundles_descriptor_value = _get_nested(assembly_data, "paths", "host_bundles_path")
+        host_bundles_descriptor_default = host_bundles_descriptor_value or host_bundles_default
         if default_local_bootstrap_mode and not force_prompt:
             host_bundles_seed = ensure_absolute(
                 console,
                 "Host bundles root (local path bundles)",
-                _as_str(_get_nested(assembly_data, "paths", "host_bundles_path")),
+                _as_str(host_bundles_descriptor_default),
                 host_bundles_default,
                 force_prompt=True,
             )
@@ -2266,6 +2281,10 @@ def gather_configuration(
             str(defaults.get("host_exec_workspace") or (ctx.workdir / "data/exec-workspace")),
             label="Host exec workspace path",
         )
+        host_react_debug_local = ensure_directory_root(
+            str(defaults.get("host_react_debug") or (ctx.workdir / "data/react-debug")),
+            label="Host React debug path",
+        )
 
         # In descriptor-workspace mode the staged workspace is authoritative.
         # Ignore seed descriptor local runtime topology and derive it from the
@@ -2275,15 +2294,19 @@ def gather_configuration(
         _set_nested(assembly_data, ["paths", "host_managed_bundles_path"], host_managed_bundles_local)
         _set_nested(assembly_data, ["paths", "host_bundle_storage_path"], host_bundle_storage_local)
         _set_nested(assembly_data, ["paths", "host_exec_workspace_path"], host_exec_local)
+        _set_nested(assembly_data, ["paths", "host_react_debug_path"], host_react_debug_local)
         _set_nested(assembly_data, ["platform", "services", "ingress", "log", "log_dir"], "/logs")
         _set_nested(assembly_data, ["platform", "services", "proc", "log", "log_dir"], "/logs")
         _set_nested(assembly_data, ["platform", "services", "proc", "exec", "exec_workspace_root"], "/exec-workspace")
+        _set_nested(assembly_data, ["platform", "services", "proc", "react_debug", "debug_root"], "/react-debug")
+        if _get_nested(assembly_data, "platform", "services", "proc", "react_debug", "keep_files") is None:
+            _set_nested(assembly_data, ["platform", "services", "proc", "react_debug", "keep_files"], 100)
         _set_nested(assembly_data, ["platform", "services", "proc", "bundles", "bundles_root"], "/bundles")
         _set_nested(assembly_data, ["platform", "services", "proc", "bundles", "managed_bundles_root"], "/managed-bundles")
         _set_nested(assembly_data, ["platform", "services", "proc", "bundles", "bundle_storage_root"], "/bundle-storage")
-        if storage_kdcube_path is not None or not _get_nested(assembly_data, "storage", "kdcube"):
+        if storage_kdcube_path is not None or not storage_kdcube_value:
             _set_nested(assembly_data, ["storage", "kdcube"], "file:///kdcube-storage")
-        if storage_bundles_path is not None or not _get_nested(assembly_data, "storage", "bundles"):
+        if storage_bundles_path is not None or not storage_bundles_value:
             _set_nested(assembly_data, ["storage", "bundles"], "file:///bundle-storage")
         return (
             host_storage_local,
@@ -2291,6 +2314,7 @@ def gather_configuration(
             host_managed_bundles_local,
             host_bundle_storage_local,
             host_exec_local,
+            host_react_debug_local,
         )
 
     if gateway_data:
@@ -3110,6 +3134,7 @@ def gather_configuration(
             host_managed_bundles,
             host_bundle_storage,
             host_exec,
+            host_react_debug,
         ) = _apply_workspace_local_topology()
     else:
         host_storage_default = _get_nested(assembly_data, "paths", "host_kdcube_storage_path") or defaults.get("host_kb_storage")
@@ -3179,23 +3204,38 @@ def gather_configuration(
             str(_get_nested(assembly_data, "paths", "host_exec_workspace_path") or defaults.get("host_exec_workspace")),
             force_prompt=force_prompt,
         )
+        host_react_debug = ensure_absolute(
+            console,
+            "Host React debug path",
+            env_main.entries.get("HOST_REACT_DEBUG_PATH", (None, None))[1],
+            str(_get_nested(assembly_data, "paths", "host_react_debug_path") or defaults.get("host_react_debug")),
+            force_prompt=force_prompt,
+        )
 
         host_storage = ensure_directory_root(host_storage, label="Host system storage path")
         host_bundles = ensure_directory_root(host_bundles, label="Host bundles root")
         host_managed_bundles = ensure_directory_root(host_managed_bundles, label="Host managed bundles root")
         host_bundle_storage = ensure_directory_root(host_bundle_storage, label="Host bundle local storage path")
         host_exec = ensure_directory_root(host_exec, label="Host exec workspace path")
+        host_react_debug = ensure_directory_root(host_react_debug, label="Host React debug path")
 
     update_env_value(env_main, "HOST_KDCUBE_STORAGE_PATH", host_storage)
     update_env_value(env_main, "HOST_BUNDLES_PATH", host_bundles)
     update_env_value(env_main, "HOST_MANAGED_BUNDLES_PATH", host_managed_bundles)
     update_env_value(env_main, "HOST_BUNDLE_STORAGE_PATH", host_bundle_storage)
     update_env_value(env_main, "HOST_EXEC_WORKSPACE_PATH", host_exec)
+    update_env_value(env_main, "HOST_REACT_DEBUG_PATH", host_react_debug)
+    update_env_value(env_main, "REACT_DEBUG_ROOT", "/react-debug")
+    update_env_value(env_main, "REACT_DEBUG_KEEP_FILES", "100")
     _set_nested(assembly_data, ["paths", "host_kdcube_storage_path"], host_storage)
     _set_nested(assembly_data, ["paths", "host_bundles_path"], host_bundles)
     _set_nested(assembly_data, ["paths", "host_managed_bundles_path"], host_managed_bundles)
     _set_nested(assembly_data, ["paths", "host_bundle_storage_path"], host_bundle_storage)
     _set_nested(assembly_data, ["paths", "host_exec_workspace_path"], host_exec)
+    _set_nested(assembly_data, ["paths", "host_react_debug_path"], host_react_debug)
+    _set_nested(assembly_data, ["platform", "services", "proc", "react_debug", "debug_root"], "/react-debug")
+    if _get_nested(assembly_data, "platform", "services", "proc", "react_debug", "keep_files") is None:
+        _set_nested(assembly_data, ["platform", "services", "proc", "react_debug", "keep_files"], 100)
     # Always align compose paths to the selected workdir.
     update_env_value(env_main, "KDCUBE_CONFIG_DIR", str(ctx.config_dir))
     update_env_value(env_main, "KDCUBE_DATA_DIR", str(ctx.data_dir))
@@ -3461,10 +3501,18 @@ def gather_configuration(
 
     _autosave()
 
-    if is_placeholder(env_proc.entries.get("KDCUBE_STORAGE_PATH", (None, None))[1]):
-        update_env_value(env_proc, "KDCUBE_STORAGE_PATH", "/kdcube-storage")
-    if is_placeholder(env_proc.entries.get("CB_BUNDLE_STORAGE_URL", (None, None))[1]):
-        update_env_value(env_proc, "CB_BUNDLE_STORAGE_URL", "/kdcube-storage")
+    storage_kdcube_runtime = _runtime_storage_env_value(
+        _get_nested(assembly_data, "storage", "kdcube"),
+        default_container_path="/kdcube-storage",
+    )
+    storage_bundles_runtime = _runtime_storage_env_value(
+        _get_nested(assembly_data, "storage", "bundles"),
+        default_container_path="/bundle-storage",
+    )
+    if descriptor_workspace_mode or is_placeholder(env_proc.entries.get("KDCUBE_STORAGE_PATH", (None, None))[1]):
+        update_env_value(env_proc, "KDCUBE_STORAGE_PATH", storage_kdcube_runtime)
+    if descriptor_workspace_mode or is_placeholder(env_proc.entries.get("CB_BUNDLE_STORAGE_URL", (None, None))[1]):
+        update_env_value(env_proc, "CB_BUNDLE_STORAGE_URL", storage_bundles_runtime)
     workspace_type = _get_nested(assembly_data, "storage", "workspace", "type")
     if workspace_type and not is_placeholder(str(workspace_type)):
         update_env_value(env_proc, "REACT_WORKSPACE_IMPLEMENTATION", str(workspace_type))

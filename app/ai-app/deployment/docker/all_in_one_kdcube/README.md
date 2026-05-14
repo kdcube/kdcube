@@ -41,6 +41,7 @@ cp nginx/conf/nginx_proxy.conf ./config/nginx_proxy.conf
 - `HOST_BUNDLE_STORAGE_PATH` = host folder for shared bundle local storage
 - `BUNDLE_STORAGE_ROOT` = shared bundle local storage root inside container (e.g. `/bundle-storage`)
 - `HOST_EXEC_WORKSPACE_PATH` = host exec workspace
+- `HOST_REACT_DEBUG_PATH` = host folder mounted to `/react-debug` for ReAct timeline render dumps
 
 3. Pick the OpenResty config you want (set in `.env`):
 

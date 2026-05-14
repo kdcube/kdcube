@@ -84,7 +84,7 @@ class WithReactWorkflow(BaseWorkflow):
         self.runtime_ctx.debug_log_sources_pool = True
         if not getattr(self.runtime_ctx, "max_iterations", None):
             self.runtime_ctx.max_iterations = 15
-        self.runtime_ctx.debug_timeline = True
+        self.runtime_ctx.debug_timeline = self.react_debug_timeline_enabled(default=True)
 
     async def construct_turn_and_scratchpad(self, payload: dict) -> CTurnScratchpad:
         """Build per-turn scratchpad — mutable object that travels through every node."""

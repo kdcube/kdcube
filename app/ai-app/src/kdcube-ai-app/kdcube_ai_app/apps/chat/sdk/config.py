@@ -19,7 +19,7 @@ from kdcube_ai_app.apps.chat.sdk.config_scopes import (
     LOGConfig, ServiceConfig, AVConfig, HostedServicesConfig, MonitoringConfig,
     MetricsConfig, MetricsRuntimeConfig, MetricsProxyConfig, MetricsExportConfig,
     MetricsCloudWatchConfig, MetricsPrometheusConfig,
-    PyExecConfig, ExecConfig, AccountingConfig, GitBundlesConfig, ApplicationsConfig,
+    PyExecConfig, ExecConfig, ReactDebugConfig, AccountingConfig, GitBundlesConfig, ApplicationsConfig,
     PlatformConfig, IDPLocalConfig, IDPConfig, AuthConfig, ServicesConfig,
 )
 from kdcube_ai_app.infra.props import get_props_manager
@@ -667,6 +667,7 @@ class Settings(PLATFORM_CONFIG):
     HOST_MANAGED_BUNDLES_PATH: str | None = None
     HOST_BUNDLE_STORAGE_PATH: str | None = None
     HOST_EXEC_WORKSPACE_PATH: str | None = None
+    HOST_REACT_DEBUG_PATH: str | None = None
     PLATFORM_DESCRIPTORS_DIR: str | None = None
     REACT_WORKSPACE_IMPLEMENTATION: str = Field(default="custom")
     REACT_WORKSPACE_GIT_REPO: str | None = None
@@ -687,6 +688,8 @@ class Settings(PLATFORM_CONFIG):
     AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS: int = Field(default=1)
     AI_REACT_WORKING_SUMMARY_ENABLED: bool = Field(default=True)
     AI_REACT_PRUNED_TURN_SUMMARY_MODE: str = Field(default="working_summary")
+    AI_REACT_RENDER_THINKING: bool = Field(default=True)
+    AI_REACT_DEBUG_TIMELINE: bool | None = Field(default=None)
     CLAUDE_CODE_SESSION_STORE_IMPLEMENTATION: str = Field(default="local")
     CLAUDE_CODE_SESSION_GIT_REPO: str | None = None
 
@@ -1041,6 +1044,17 @@ class Settings(PLATFORM_CONFIG):
                     EXEC_WORKSPACE_MONITOR_INTERVAL_S=self._assembly_float(f"{exec_p}.workspace_monitor_interval_s") or 0.5,
                 ),
             ),
+            REACT_DEBUG=ReactDebugConfig(
+                REACT_DEBUG_ROOT=self._resolve_str(
+                    "REACT_DEBUG_ROOT",
+                    f"{svc}.react_debug.debug_root",
+                ),
+                REACT_DEBUG_KEEP_FILES=self._resolve_int(
+                    "REACT_DEBUG_KEEP_FILES",
+                    f"{svc}.react_debug.keep_files",
+                    ReactDebugConfig().REACT_DEBUG_KEEP_FILES,
+                ),
+            ),
             ACCOUNTING=AccountingConfig(
                 ACCOUNTING_SERVICES=self._resolve_str("ACCOUNTING_SERVICES", f"{svc}.tools.accounting_services"),
             ),
@@ -1124,6 +1138,8 @@ class Settings(PLATFORM_CONFIG):
             self.HOST_BUNDLE_STORAGE_PATH = self._assembly_str("paths.host_bundle_storage_path")
         if not self._env_present("HOST_EXEC_WORKSPACE_PATH") and not self.HOST_EXEC_WORKSPACE_PATH:
             self.HOST_EXEC_WORKSPACE_PATH = self._assembly_str("paths.host_exec_workspace_path")
+        if not self._env_present("HOST_REACT_DEBUG_PATH") and not self.HOST_REACT_DEBUG_PATH:
+            self.HOST_REACT_DEBUG_PATH = self._assembly_str("paths.host_react_debug_path")
         managed_root = str(self.PLATFORM.APPLICATIONS.MANAGED_BUNDLES_ROOT or "").strip()
         if not managed_root:
             managed_root = str(os.getenv("MANAGED_BUNDLES_ROOT") or "").strip() or "/managed-bundles"
@@ -1218,6 +1234,15 @@ class Settings(PLATFORM_CONFIG):
             )
             or "working_summary"
         )
+        self.AI_REACT_RENDER_THINKING = self._resolve_bool(
+            "AI_REACT_RENDER_THINKING",
+            "ai.react.render_thinking",
+            self.AI_REACT_RENDER_THINKING,
+        )
+        configured_debug_timeline = self._assembly_bool("ai.react.debug_timeline")
+        if configured_debug_timeline is None and self._env_present("AI_REACT_DEBUG_TIMELINE"):
+            configured_debug_timeline = self._env_bool("AI_REACT_DEBUG_TIMELINE")
+        self.AI_REACT_DEBUG_TIMELINE = configured_debug_timeline
         if not self._env_present("REACT_WORKSPACE_GIT_REPO") and not self.REACT_WORKSPACE_GIT_REPO:
             self.REACT_WORKSPACE_GIT_REPO = self._assembly_str("storage.workspace.repo")
         if not self._env_present("CLAUDE_CODE_SESSION_STORE_IMPLEMENTATION"):
@@ -1469,6 +1494,7 @@ def export_managed_env(
     _put("MANAGED_BUNDLES_ROOT", resolved.PLATFORM.APPLICATIONS.MANAGED_BUNDLES_ROOT)
     _put("HOST_BUNDLE_STORAGE_PATH", resolved.HOST_BUNDLE_STORAGE_PATH)
     _put("HOST_EXEC_WORKSPACE_PATH", resolved.HOST_EXEC_WORKSPACE_PATH)
+    _put("HOST_REACT_DEBUG_PATH", resolved.HOST_REACT_DEBUG_PATH)
     _put("BUNDLE_STORAGE_ROOT", resolved.PLATFORM.APPLICATIONS.BUNDLE_STORAGE_ROOT)
     _put("REACT_WORKSPACE_IMPLEMENTATION", resolved.REACT_WORKSPACE_IMPLEMENTATION)
     _put("REACT_WORKSPACE_GIT_REPO", resolved.REACT_WORKSPACE_GIT_REPO)
@@ -1477,6 +1503,8 @@ def export_managed_env(
     _put("PY_CODE_EXEC_NETWORK_MODE", resolved.PLATFORM.EXEC.PY.PY_CODE_EXEC_NETWORK_MODE)
     _put("PY_CODE_EXEC_CONTAINER_STRATEGY", resolved.PLATFORM.EXEC.PY.PY_CODE_EXEC_CONTAINER_STRATEGY)
     _put("EXEC_WORKSPACE_ROOT", resolved.PLATFORM.EXEC.EXEC_WORKSPACE_ROOT)
+    _put("REACT_DEBUG_ROOT", resolved.PLATFORM.REACT_DEBUG.REACT_DEBUG_ROOT)
+    _put("REACT_DEBUG_KEEP_FILES", resolved.PLATFORM.REACT_DEBUG.REACT_DEBUG_KEEP_FILES)
     _put("FARGATE_EXEC_ENABLED", resolved.plain(f"{fargate_root}.enabled"))
     _put("FARGATE_CLUSTER", resolved.plain(f"{fargate_root}.cluster"))
     _put("FARGATE_TASK_DEFINITION", resolved.plain(f"{fargate_root}.task_definition"))

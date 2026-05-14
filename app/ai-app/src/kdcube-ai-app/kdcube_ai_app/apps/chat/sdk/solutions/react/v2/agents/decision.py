@@ -76,9 +76,10 @@ class ReactDecisionOutV2(BaseModel):
 
     notes: str = ""
 
-    # TEMPORARY SINGLE-TOOL LIMIT:
-    # ReactDecisionOutV2 currently supports exactly one tool call object per decision.
-    # Remove/update this when multi-tool decisions are introduced.
+    # One action object, one tool call:
+    # One ReactDecisionOutV2 object supports exactly one tool call object.
+    # Multi-action output, when supported by the runtime, is represented by
+    # multiple ReactDecisionOutV2 channel instances, not by arrays in this field.
     tool_call: Optional[ToolCallDecisionV2] = None
 
     final_answer: Optional[str] = None
@@ -99,15 +100,15 @@ def build_decision_system_text(
         "  \"notes\": \"Short plan/rationale\",\n"
         "  \"tool_call\": {\n"
         "    \"tool_id\": \"web_tools.web_search\",\n"
-        "    \"params\": {<tool params according to tool documentation. to bind param, in param value put 'ref:<bound artifact path>'>},\n"
+        "    \"params\": {<tool params according to tool documentation. to bind artifact content, set the param value to 'ref:<artifact_path_or_visible_file_path>'>},\n"
         "  },\n"
         "  \"final_answer\": \"(required for complete/exit)\",\n"
         "  \"suggested_followups\": [\"optional suggested follow-ups\"]\n"
         "}\n"
         "\n"
-        "TEMPORARY CURRENT LIMIT: emit at most ONE tool_call object in this JSON.\n"
-        "Do NOT emit a sequence/array/list of tool calls in one decision.\n"
-        "If multiple tools are needed, emit one tool call now and use later rounds for the rest.\n"
+        "Each JSON object may contain at most ONE tool_call object.\n"
+        "Do NOT emit a sequence/array/list of tool calls inside one ReactDecisionOutV2 object.\n"
+        "If the runtime allows multiple actions in one round, emit each action in its own separate <channel:ReactDecisionOutV2> instance.\n"
     )
 
     # protocol = (
@@ -154,6 +155,7 @@ def build_decision_system_text(
     # )
     protocol = (
         "CRITICAL: you are the agent which must form output in custom protocol which you must obey. This is not similar to tool calling protocol.\n"
+        "CRITICAL: the first literal channel in your response must be <channel:thinking>. Never emit legacy <thinking>...</thinking> tags.\n"
         "CRITICAL: you have 4 channel types. Three are required every round; summary is allowed ONLY on complete/exit final-answer rounds.\n"
         "Output protocol (strict): you must produce content which represents one round and consists of these required channel types. Do not include summary unless action is complete or exit:\n"
         "<channel:thinking> ... </channel:thinking>\n"
@@ -181,8 +183,13 @@ def build_decision_system_text(
         "If you emit multiple tool-call actions, each action must be in its own separate <channel:ReactDecisionOutV2>...</channel:ReactDecisionOutV2> instance.\n"
         "Use multi-action only when every action can be planned fully from the context already visible before the round starts.\n"
         "The runtime executes the actions sequentially and you do NOT review intermediate results in the middle, so action B must not depend on action A's result.\n"
+        "If you need to inspect or assess the first result before deciding the next action, split the work into separate rounds.\n"
+        "If action B needs an artifact, source path, search result, or output created by action A, split them into separate rounds.\n"
+        "Visibility rule: if generated content is meant for the user to see, download, approve, or use as a renderer source, make it external: react.write channel=canvas or exec visibility=external. Use channel=internal only for private scratch that will not be presented or rendered for the user.\n"
+        "Default write rule: reports, briefs, HTML, Markdown, slide source, DOCX/PDF/PPTX source, and anything under outputs/ that may become a deliverable must be written with react.write channel=canvas. Do not write these as channel=internal.\n"
+        "Renderer source rule: rendering_tools.write_* produces user-visible artifacts, so content='ref:...' must point to an external artifact. Do not use channel=internal refs as PDF/PPTX/DOCX/PNG sources. For source documents that will be rendered for the user, write them first with react.write channel=canvas, or produce them from exec with visibility=external; this keeps the draft visible so the user can react before rendering if the shape is wrong. Use the input type documented by the target rendering tool.\n"
         "Do NOT schedule search/fetch first and then a later action in the same round that depends on what that retrieval will return.\n"
-        "Do NOT use exec_tools.execute_code_python in a multi-action round. If you need exec, it must be the only action in the round.\n"
+        "Exec in multi-action: you may include exactly one exec_tools.execute_code_python action together with other actions only when that same round has complete params.contract and complete Python in <channel:code>. Otherwise exec must be the only action in the round.\n"
         "Do NOT mix complete/exit with tool calls in the same multi-action response.\n"
         "Final answer shape only when action is complete or exit:\n"
         "<channel:thinking>...short final status...</channel:thinking>\n"
@@ -190,15 +197,16 @@ def build_decision_system_text(
         "<channel:code></channel:code>\n"
         "<channel:summary>Goal: ...\nOutcome: ...\nKey facts: ...\nRefs: ...</channel:summary>\n\n"
         "In <channel:code>, output ONLY the raw Python code snippet (no fencing, no any auxiliary text).\n"
-        "Use <channel:code> only when the single action is exec_tools.execute_code_python; otherwise emit an empty <channel:code></channel:code> block.\n"
+        "Use <channel:code> only when this round contains exactly one exec_tools.execute_code_python action; otherwise emit an empty <channel:code></channel:code> block.\n"
         "CRITICAL: Exec tool DOES NOT HAVE code parameter! Putting code in the tool call params is WRONG. Code goes only in <channel:code>!\n"
         "For call_tool-only rounds, omit <channel:summary> entirely. For complete/exit rounds, include exactly one <channel:summary> with a compact durable working summary using this shape: Goal, Outcome, Key facts, Refs. Scale the summary to the turn: for trivial exchanges (greeting, acknowledgment, tiny answer), make it super short, often one line or a few words per field; do not make it look like heavy reasoning happened. Refs should be logical paths for the user prompt, decisive tool calls/results, produced artifacts, and the assistant completion when known. This summary is for future cold-start continuity, not for the user-facing final_answer.\n"
         "CRITICAL: if you want to cite the channel name, i.e. if you by some reason decide to write the token which is verbatim a name one of the channels in your contract, for example, <channel:thinking>, while simply cite it as a name, not intending to open or close this channel, you MUST write it in backticks like this: `channel:CHANNEL_ID`; to avoid confusion with the actual channel opening/closing token.\n"
     )
     sys_1 = f"""
+{protocol}
+
 [ReAct Decision Module v2]
 You are the Decision module inside a ReAct loop.
-{protocol}
 {PROMPT_EXFILTRATION_GUARD}
 {INTERNAL_AGENT_JOURNAL_GUARD}
 {INTERNAL_NOTES_PRODUCER}

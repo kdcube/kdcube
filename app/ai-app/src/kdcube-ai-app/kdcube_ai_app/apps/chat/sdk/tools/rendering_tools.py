@@ -206,6 +206,14 @@ def _error_result(*, code: str, message: str, where: str, managed: bool) -> dict
     }
 
 
+REACT_RENDER_REF_NOTE = (
+    "REACT REF SOURCE: If content is `ref:<path>`, the ref must point to an external artifact "
+    "(react.write channel=canvas, or exec visibility=external). `ref:fi:<turn>.outputs/<file>` and "
+    "`ref:turn_<id>/outputs/<file>` both resolve to the same visible artifact when present. "
+    "channel=internal refs are private and are rejected for rendering_tools.write_*.\n\n"
+)
+
+
 class RenderingTools:
     def __init__(self):
         self._md2pdf: Optional[AsyncMarkdownPDF] = None
@@ -220,6 +228,7 @@ class RenderingTools:
         description=(
             "Render HTML into a PPTX deck using python-pptx. "
             "Returns an envelope: {ok, error}.\n\n"
+            f"{REACT_RENDER_REF_NOTE}"
             "For professional slide authoring (layouts, color schemes, content budgets, citations):\n"
             "→ Use skill 'pptx-press' (skills.public.pptx-press)\n\n"
             "=== QUICK ESSENTIALS ===\n\n"
@@ -321,6 +330,7 @@ class RenderingTools:
             "Render Markdown, HTML, or Mermaid diagrams to PNG using Playwright + Chromium. "
             "Supports three formats: 'markdown', 'html', or 'mermaid'. "
             "Returns an envelope: {ok, error}.\n\n"
+            f"{REACT_RENDER_REF_NOTE}"
             "For PNG authoring best practices (layout sizing, scale, cropping, mermaid tips):\n"
             "→ Use skill 'png-press' (skills.public.png-press)\n\n"
             "=== QUICK ESSENTIALS ===\n"
@@ -788,6 +798,10 @@ class RenderingTools:
         description=(
             "Render Markdown, HTML, or Mermaid diagrams to PDF **using Playwright + headless Chromium** "
             "(JavaScript is executed; Chart.js/D3/etc. render). Returns an envelope: {ok, error}.\n\n"
+            f"{REACT_RENDER_REF_NOTE}"
+            "REACT PDF SOURCE: For normal user PDF deliverables, use external HTML source and set "
+            "format='html'. Markdown mode exists for simple/legacy PDFs, but do not choose Markdown as "
+            "the normal source for user-facing PDF reports.\n\n"
             "For professional PDF layouts (multi-page documents, proper page breaks, compact spacing, "
             "domain-adaptive colors), use skill 'pdf-press' for comprehensive authoring guidance.\n\n"
             "=== QUICK AUTHORING ESSENTIALS ===\n\n"
@@ -838,7 +852,7 @@ class RenderingTools:
     async def write_pdf(
         self,
         path: Annotated[str, "Destination .pdf path under OUTPUT_DIR (relative path). Parent dirs are created."],
-        content: Annotated[str, "Content to render (Markdown, HTML, or Mermaid code depending on format)."],
+        content: Annotated[str, "Content to render. For normal ReAct user PDF deliverables, pass HTML and set format='html'. Markdown/Mermaid are only for simple or explicitly requested cases."],
         format: Annotated[str, "Content format: 'markdown', 'html', or 'mermaid'"] = "markdown",
         title: Annotated[Optional[str], "Optional document title."] = None,
         include_sources_section: Annotated[bool, "Append a 'Sources' section listing all passed sources. In Markdown mode. Ignored in HTML mode"] = True,
@@ -1132,6 +1146,7 @@ class RenderingTools:
         name="write_docx",
         description=(
             "Render Markdown into a modern, well-styled DOCX. Returns an envelope: {ok, error}.\n\n"
+            f"{REACT_RENDER_REF_NOTE}"
             "AUTHORING GUIDANCE\n"
             "- Use skills.public.docx-press for Markdown structure, tables, and citation handling.\n"
             "- Load with show_skills when needed: skills.public.docx-press."

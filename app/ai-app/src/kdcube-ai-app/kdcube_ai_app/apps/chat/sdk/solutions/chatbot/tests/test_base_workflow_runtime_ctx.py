@@ -307,6 +307,93 @@ def test_runtime_ctx_uses_default_react_context_budget(monkeypatch, tmp_path):
         workflow_mod.get_settings.cache_clear()
 
 
+def test_react_render_thinking_prefers_bundle_props_over_settings():
+    settings = SimpleNamespace(AI_REACT_RENDER_THINKING=True)
+
+    assert workflow_mod._react_render_thinking({"react": {"render_thinking": False}}, settings) is False
+    assert workflow_mod._react_render_thinking({"config": {"react": {"render_thinking": "off"}}}, settings) is False
+    assert workflow_mod._react_render_thinking({}, settings) is True
+
+
+def test_react_debug_timeline_enabled_prefers_bundle_props_over_settings():
+    settings = SimpleNamespace(AI_REACT_DEBUG_TIMELINE=True)
+
+    assert workflow_mod._react_debug_timeline_enabled({"react": {"debug_timeline": False}}, settings, default=True) is False
+    assert workflow_mod._react_debug_timeline_enabled({"config": {"react": {"debug_timeline": "off"}}}, settings, default=True) is False
+    assert workflow_mod._react_debug_timeline_enabled({}, settings, default=False) is True
+    assert workflow_mod._react_debug_timeline_enabled({}, SimpleNamespace(AI_REACT_DEBUG_TIMELINE=None), default=True) is True
+
+
+def test_react_debug_timeline_settings_use_container_root_and_retention():
+    settings = SimpleNamespace(
+        HOST_REACT_DEBUG_PATH="/host/react-debug",
+        PLATFORM=SimpleNamespace(
+            REACT_DEBUG=SimpleNamespace(
+                REACT_DEBUG_ROOT="/react-debug",
+                REACT_DEBUG_KEEP_FILES=25,
+            )
+        ),
+    )
+
+    assert workflow_mod._react_debug_timeline_root(settings) == "/react-debug"
+    assert workflow_mod._react_debug_timeline_keep_files(settings) == 25
+
+
+def test_react_debug_timeline_root_falls_back_to_existing_host_path(tmp_path):
+    settings = SimpleNamespace(
+        HOST_REACT_DEBUG_PATH=str(tmp_path),
+        PLATFORM=SimpleNamespace(
+            REACT_DEBUG=SimpleNamespace(
+                REACT_DEBUG_ROOT="",
+                REACT_DEBUG_KEEP_FILES=0,
+            )
+        ),
+    )
+
+    assert workflow_mod._react_debug_timeline_root(settings) == str(tmp_path)
+    assert workflow_mod._react_debug_timeline_keep_files(settings) == 100
+
+
+def test_react_debug_timeline_root_ignores_missing_host_path():
+    settings = SimpleNamespace(
+        HOST_REACT_DEBUG_PATH="/host/react-debug",
+        PLATFORM=SimpleNamespace(
+            REACT_DEBUG=SimpleNamespace(
+                REACT_DEBUG_ROOT="",
+                REACT_DEBUG_KEEP_FILES=0,
+            )
+        ),
+    )
+
+    assert workflow_mod._react_debug_timeline_root(settings) is None
+
+
+def test_sync_runtime_ctx_bundle_props_refreshes_render_thinking(monkeypatch):
+    monkeypatch.setattr(
+        workflow_mod,
+        "get_settings",
+        lambda: SimpleNamespace(
+            AI_REACT_RENDER_THINKING=True,
+            HOST_REACT_DEBUG_PATH="/host/react-debug",
+            PLATFORM=SimpleNamespace(
+                REACT_DEBUG=SimpleNamespace(
+                    REACT_DEBUG_ROOT="/react-debug",
+                    REACT_DEBUG_KEEP_FILES=17,
+                )
+            ),
+        ),
+    )
+    wf = BaseWorkflow.__new__(BaseWorkflow)
+    wf.bundle_props = {"react": {"render_thinking": False}}
+    wf.runtime_ctx = RuntimeCtx(render_thinking=True)
+
+    wf._sync_runtime_ctx_bundle_props()
+
+    assert wf.runtime_ctx.render_thinking is False
+    assert wf.runtime_ctx.debug_timeline_root == "/react-debug"
+    assert wf.runtime_ctx.debug_timeline_keep_files == 17
+
+
 def test_base_workflow_constructor_binds_external_event_source_when_redis_present(monkeypatch):
     sentinel = object()
     monkeypatch.setattr(
@@ -580,6 +667,36 @@ async def test_emit_committed_answer_once_streams_single_answer_pair():
     assert deltas[0]["completed"] is False
     assert deltas[1]["text"] == ""
     assert deltas[1]["completed"] is True
+
+
+@pytest.mark.asyncio
+async def test_emit_committed_answer_once_replaces_source_tokens_from_sources_pool():
+    deltas = []
+
+    async def _delta(**kwargs):
+        deltas.append(dict(kwargs))
+
+    wf = BaseWorkflow.__new__(BaseWorkflow)
+    wf.comm = SimpleNamespace(delta=_delta)
+    wf._answer_delta_idx = 0
+    wf.ctx_browser = SimpleNamespace(
+        sources_pool=[
+            {
+                "sid": 1,
+                "title": "Source 1",
+                "url": "https://example.com/source-1",
+                "text": "Source text",
+            },
+        ],
+    )
+
+    scratchpad = SimpleNamespace(answer="Committed answer [[S:1]]")
+
+    await wf._emit_committed_answer_once(scratchpad)
+
+    rendered = "".join(delta.get("text") or "" for delta in deltas)
+    assert "[[S:" not in rendered
+    assert "https://example.com/source-1" in rendered
 
 
 @pytest.mark.asyncio

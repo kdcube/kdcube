@@ -115,6 +115,56 @@ async def test_rendering_tool_accepts_generic_outdir_fi_path(monkeypatch, tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_large_inline_renderer_source_is_passed_to_tool(monkeypatch, tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path))
+    ctx = FakeBrowser(runtime)
+    large_content = "<html>" + ("x" * 5000) + "</html>"
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "tool_id": "rendering_tools.write_pdf",
+                "params": {
+                    "path": "outputs/report.pdf",
+                    "content": large_content,
+                },
+            }
+        },
+        "outdir": str(tmp_path),
+        "workdir": str(tmp_path),
+    }
+    captured = {}
+
+    async def _fake_execute_tool(**kwargs):
+        captured["params"] = kwargs["tool_execution_context"]["params"]
+        outdir = kwargs["outdir"]
+        target = outdir / kwargs["tool_execution_context"]["params"]["path"]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"%PDF-1.4\n" + (b"x" * 2048))
+        return {"output": kwargs["tool_execution_context"]["params"]["path"], "summary": ""}
+
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.external.execute_tool", _fake_execute_tool)
+
+    react = FakeReact()
+    react.tools_subsystem = None
+
+    out = await handle_external_tool(react=react, ctx_browser=ctx, state=state, tool_call_id="pdf_inline")
+
+    assert captured["params"]["content"] == large_content
+    assert not out.get("retry_decision")
+    assert not any(
+        b.get("type") == "react.notice"
+        and "too_large" in (b.get("text") or "")
+        for b in ctx.timeline.blocks
+    )
+    assert any(
+        b.get("type") == "react.tool.result"
+        and b.get("path") == "fi:turn_exec.outputs/report.pdf"
+        and b.get("mime") == "application/pdf"
+        for b in ctx.timeline.blocks
+    )
+
+
+@pytest.mark.asyncio
 async def test_external_tool_call_error_is_visible_on_result_block(monkeypatch, tmp_path):
     runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path))
     ctx = FakeBrowser(runtime)

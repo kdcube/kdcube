@@ -165,6 +165,8 @@ The proc service reads these non-secret ReAct limits from `assembly.yaml` throug
 | `AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS` | `ai.react.cache_keep_recent_intact_turns` | `assembly.yaml` | all modes | newest turns kept untrimmed during TTL pruning |
 | `AI_REACT_WORKING_SUMMARY_ENABLED` | `ai.react.working_summary_enabled` | `assembly.yaml` | all modes | emits and indexes React working-summary cards |
 | `AI_REACT_PRUNED_TURN_SUMMARY_MODE` | `ai.react.pruned_turn_summary_mode` | `assembly.yaml` | all modes | controls whether pruned historical turns prefer working-summary cards |
+| `AI_REACT_RENDER_THINKING` | `ai.react.render_thinking` | `assembly.yaml` | all modes | renders live model thinking blocks in the active ReAct timeline; bundle `config.react.render_thinking` overrides this default |
+| `AI_REACT_DEBUG_TIMELINE` | `ai.react.debug_timeline` | `assembly.yaml` | all modes | enables rendered prompt snapshot files; bundle `config.react.debug_timeline` overrides this default |
 
 Unit contract:
 
@@ -236,13 +238,17 @@ Bundles may override execution limits and routing for a single run through
 | `HOST_MANAGED_BUNDLES_PATH` | `paths.host_managed_bundles_path` | relevant for platform-managed bundles (git/example) | optional | not used |
 | `HOST_BUNDLE_STORAGE_PATH` | `paths.host_bundle_storage_path` | relevant | optional | not used |
 | `HOST_EXEC_WORKSPACE_PATH` | `paths.host_exec_workspace_path` | relevant | optional | not used |
+| `HOST_REACT_DEBUG_PATH` | `paths.host_react_debug_path` | relevant when timeline debug rendering is enabled | optional | EC2 host mount source for `/react-debug` |
+| `REACT_DEBUG_ROOT` | `platform.services.proc.react_debug.debug_root` | `/react-debug` | optional host path for direct proc runs | `/react-debug` |
+| `REACT_DEBUG_KEEP_FILES` | `platform.services.proc.react_debug.keep_files` | rolling render-debug retention | rolling render-debug retention | rolling render-debug retention |
 
 Rule:
 
 - in CLI compose these are mount-driving topology settings
 - in direct local runs they are just host-path settings if the process needs
   them
-- in AWS deployment they should be omitted or ignored
+- in AWS/ECS deployment `HOST_REACT_DEBUG_PATH` is the EC2 host-side EFS mount
+  path, while `REACT_DEBUG_ROOT` is the container path used by proc
 
 ## What to set for direct local proc debugging
 

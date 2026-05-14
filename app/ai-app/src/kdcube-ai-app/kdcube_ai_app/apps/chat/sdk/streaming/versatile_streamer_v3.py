@@ -39,6 +39,7 @@ class ChannelResult:
     started_at: Optional[float]
     finished_at: Optional[float]
     error: Optional[str]
+    instances: Optional[List[str]] = None
 
 
 ChannelEmitFn = Callable[..., Awaitable[None]]
@@ -49,6 +50,8 @@ OPEN_RE = re.compile(r"<channel:([a-zA-Z0-9_-]+)>", re.I)
 CLOSE_RE = re.compile(r"</channel:([a-zA-Z0-9_-]+)>", re.I)
 TAG_RE = re.compile(r"<\s*/?\s*channel:[a-zA-Z0-9_-]+\s*>", re.I)
 _CHANNEL_PREFIX_RE = re.compile(r"<\s*/?\s*ch", re.I)
+LEGACY_THINKING_OPEN_RE = re.compile(r"<thinking>", re.I)
+LEGACY_THINKING_CLOSE_RE = re.compile(r"</thinking>", re.I)
 
 
 class ChannelSubscribers:
@@ -111,8 +114,12 @@ class ChannelSubscribers:
 
 
 def _is_valid_channel_tag_start(text: str, idx: int) -> bool:
+    return _is_valid_channel_tag_start_from(text, 0, idx)
+
+
+def _is_valid_channel_tag_start_from(text: str, start: int, idx: int) -> bool:
     try:
-        src = text[:idx]
+        src = text[max(0, int(start or 0)):idx]
         in_fence = False
         in_inline = False
         i = 0
@@ -133,12 +140,30 @@ def _is_valid_channel_tag_start(text: str, idx: int) -> bool:
 
 def _find_next_valid_tag(text: str, start: int) -> Optional[re.Match[str]]:
     pos = max(0, int(start or 0))
+    validation_start = pos
     while True:
         m = TAG_RE.search(text, pos)
         if not m:
             return None
-        if _is_valid_channel_tag_start(text, m.start()):
+        legacy_open = LEGACY_THINKING_OPEN_RE.search(text, pos, m.start())
+        if legacy_open:
+            legacy_close = LEGACY_THINKING_CLOSE_RE.search(text, legacy_open.end())
+            if legacy_close:
+                pos = max(m.end(), legacy_close.end())
+                continue
+            return None
+        if _is_valid_channel_tag_start_from(text, validation_start, m.start()):
             return m
+        legacy_before = list(LEGACY_THINKING_OPEN_RE.finditer(text, 0, m.start()))
+        legacy_close_before = list(LEGACY_THINKING_CLOSE_RE.finditer(text, 0, m.start()))
+        if legacy_before and (
+            not legacy_close_before or legacy_before[-1].start() > legacy_close_before[-1].start()
+        ):
+            legacy_close = LEGACY_THINKING_CLOSE_RE.search(text, m.end())
+            if legacy_close:
+                pos = legacy_close.end()
+                continue
+            return None
         pos = m.start() + 1
 
 
@@ -148,12 +173,14 @@ def _extract_valid_channel_bodies(full_raw: str, channel_name: str) -> List[str]
         re.I | re.S,
     )
     out: List[str] = []
+    validation_start = 0
     for match in patt.finditer(full_raw or ""):
-        if not _is_valid_channel_tag_start(full_raw or "", match.start()):
+        if not _is_valid_channel_tag_start_from(full_raw or "", validation_start, match.start()):
             continue
         body = match.group(1)
         if body is not None:
             out.append(body)
+        validation_start = match.end()
     return out
 
 
@@ -320,9 +347,11 @@ async def stream_with_channels(
     current_in_inline = False
 
     raw_by_channel: Dict[str, List[str]] = {c.name: [] for c in channels}
+    raw_by_channel_instance: Dict[str, Dict[int, List[str]]] = {c.name: {} for c in channels}
     used_by_channel: Dict[str, set[int]] = {c.name: set() for c in channels}
     delta_counts: Dict[str, int] = {c.name: 0 for c in channels}
     next_instance_by_channel: Dict[str, int] = {c.name: 0 for c in channels}
+    completed_instances_by_channel: Dict[str, set[int]] = {c.name: set() for c in channels}
     channel_times: Dict[str, Dict[str, Optional[float]]] = {
         c.name: {"started_at": None, "finished_at": None} for c in channels
     }
@@ -360,6 +389,8 @@ async def stream_with_channels(
         }
         await emit(**payload)
         await _emit_subscribers(name, **payload)
+        if channel_instance is not None:
+            completed_instances_by_channel.setdefault(name, set()).add(int(channel_instance))
 
     async def _emit_channel(name: str, raw_text: str, *, channel_instance: Optional[int]) -> None:
         spec = channel_specs.get(name)
@@ -442,10 +473,33 @@ async def stream_with_channels(
         return False, None
 
     def _honor_markup_escapes_for_channel(name: Optional[str]) -> bool:
-        # The code channel carries raw executable text, not markdown. Generated
-        # Python/JS/HTML may contain arbitrary backticks, so markdown inline/fence
-        # state must not hide protocol tags such as </channel:code>.
-        return (name or "") != "code"
+        # Only markdown-like channels should let markdown fences hide protocol
+        # tags. Structured channels may contain arbitrary backticks inside JSON
+        # strings or HTML/code payloads; treating those as markdown fences can
+        # delay repeated channel instances until end-of-stream recovery.
+        if not name or name == "code":
+            return False
+        spec = channel_specs.get(name)
+        return bool(spec and spec.format in {"markdown", "text"})
+
+    def _body_already_completed(body: str, completed_bodies: set[str]) -> bool:
+        body_key = (body or "").strip()
+        if not body_key:
+            return False
+        if body_key in completed_bodies:
+            return True
+        for completed_body in completed_bodies:
+            if not completed_body:
+                continue
+            if body_key.startswith(completed_body):
+                suffix = body_key[len(completed_body):].lstrip()
+                if suffix.lower().startswith("</channel:"):
+                    return True
+            if completed_body.startswith(body_key):
+                suffix = completed_body[len(body_key):].lstrip()
+                if suffix.lower().startswith("</channel:"):
+                    return True
+        return False
 
     async def _emit_raw_slice(name: str, raw_slice: str, *, channel_instance: Optional[int]) -> None:
         if not raw_slice:
@@ -453,6 +507,9 @@ async def stream_with_channels(
         if composite_streamer and name == composite_channel:
             await composite_streamer.feed(raw_slice)
         raw_by_channel[name].append(raw_slice)
+        if channel_instance is not None:
+            inst = int(channel_instance)
+            raw_by_channel_instance.setdefault(name, {}).setdefault(inst, []).append(raw_slice)
         await _emit_channel(name, raw_slice, channel_instance=channel_instance)
 
     async def _close_current_channel() -> None:
@@ -484,7 +541,7 @@ async def stream_with_channels(
                 cursor = 0
 
             if current is None:
-                m_tag = TAG_RE.search(buf, cursor)
+                m_tag = _find_next_valid_tag(buf, cursor)
             elif not _honor_markup_escapes_for_channel(current):
                 m_tag = TAG_RE.search(buf, cursor)
             else:
@@ -497,7 +554,8 @@ async def stream_with_channels(
             if not m_tag:
                 if current is None:
                     if len(buf) > _tag_holdback():
-                        buf = buf[-_tag_holdback():]
+                        unconsumed = buf[cursor:]
+                        buf = unconsumed[-_tag_holdback():]
                         cursor = 0
                     break
 
@@ -605,32 +663,55 @@ async def stream_with_channels(
     full_raw = out.get("text") or ""
     if full_raw:
         for name in channel_specs.keys():
-            if raw_by_channel.get(name):
-                continue
             matches = _extract_valid_channel_bodies(full_raw, name)
             if matches:
                 recovered = [m for m in matches if m is not None]
-                raw_by_channel[name] = recovered
-                if next_instance_by_channel.get(name, 0) == 0:
-                    subscriber_registry.ensure_instance(name, 0)
+                completed_bodies = {
+                    "".join(raw_by_channel_instance.get(name, {}).get(int(idx), [])).strip()
+                    for idx in completed_instances_by_channel.get(name, set())
+                }
+                completed_bodies.discard("")
+                for instance_idx, body in enumerate(recovered):
+                    body_key = body.strip()
+                    if int(instance_idx) in completed_instances_by_channel.get(name, set()):
+                        if body_key:
+                            completed_bodies.add(body_key)
+                        continue
+                    if _body_already_completed(body_key, completed_bodies):
+                        continue
+                    target_instance = int(instance_idx)
+                    subscriber_registry.ensure_instance(name, target_instance)
                     if channel_times[name]["started_at"] is None and any(recovered):
                         channel_times[name]["started_at"] = time.time()
-                    for body in recovered:
-                        if body:
-                            await _emit_raw_slice(name, body, channel_instance=0)
+                    if body:
+                        await _emit_raw_slice(name, body, channel_instance=target_instance)
                     if channel_times[name]["finished_at"] is None:
                         channel_times[name]["finished_at"] = time.time()
-                    await _emit_completed(name, channel_instance=0)
-                    next_instance_by_channel[name] = 1
+                    await _emit_completed(name, channel_instance=target_instance)
+                    if body_key:
+                        completed_bodies.add(body_key)
+                    next_instance_by_channel[name] = max(
+                        int(next_instance_by_channel.get(name, 0) or 0),
+                        target_instance + 1,
+                    )
 
     results: Dict[str, ChannelResult] = {}
     for name, spec in channel_specs.items():
         raw = "".join(raw_by_channel.get(name, []))
+        instance_raws = _extract_valid_channel_bodies(full_raw, name) if full_raw else []
+        if not instance_raws and raw:
+            instance_raws = [raw]
+        normalized_instances = [
+            _strip_structured_fences(body) if spec.format in ("json", "yaml", "xml", "html", "mermaid") else body
+            for body in instance_raws
+        ]
         if spec.format in ("json", "yaml", "xml", "html", "mermaid"):
             raw = _strip_structured_fences(raw)
         obj = None
         err: Optional[str] = None
-        if spec.model and raw:
+        if spec.model and len(normalized_instances) > 1:
+            err = f"multiple_channel_instances:{len(normalized_instances)}"
+        elif spec.model and raw:
             try:
                 data, err = _json_loads_loose_with_err(raw)
                 if data is not None:
@@ -648,6 +729,7 @@ async def stream_with_channels(
             started_at=channel_times[name]["started_at"],
             finished_at=channel_times[name]["finished_at"],
             error=err,
+            instances=normalized_instances,
         )
 
     if return_full_raw:

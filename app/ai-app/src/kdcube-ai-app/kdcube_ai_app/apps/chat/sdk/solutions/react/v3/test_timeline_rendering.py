@@ -9,6 +9,7 @@ import json
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.timeline import Timeline
 from kdcube_ai_app.apps.chat.sdk.solutions.react.proto import RuntimeCtx
+from kdcube_ai_app.apps.chat.sdk.solutions.react.round import ReactRound
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.plan import (
     build_plan_ack_block,
     build_plan_block,
@@ -18,6 +19,98 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.plan import (
 
 def _run(coro):
     return asyncio.get_event_loop().run_until_complete(coro)
+
+
+def test_bind_params_normalizes_visible_physical_artifact_ref_to_logical_ref():
+    ctx = RuntimeCtx(turn_id="turn_cur", started_at="2026-02-09T00:00:00Z")
+    tl = Timeline(runtime=ctx)
+    tl.blocks.append({
+        "type": "react.tool.result",
+        "turn_id": "turn_cur",
+        "path": "fi:turn_cur.outputs/report.html",
+        "mime": "text/html",
+        "text": "<html>ok</html>",
+        "meta": {
+            "artifact_path": "fi:turn_cur.outputs/report.html",
+            "physical_path": "turn_cur/outputs/report.html",
+            "visibility": "external",
+        },
+    })
+
+    params, _lineage, violations = tl.bind_params_with_refs(
+        base_params={"content": "ref:turn_cur/outputs/report.html"},
+        tool_id="rendering_tools.write_pdf",
+        visible_paths=tl.visible_paths(),
+    )
+
+    assert violations == []
+    assert params["content"] == "<html>ok</html>"
+
+
+def test_bind_params_assumes_fi_for_visible_bare_artifact_ref():
+    ctx = RuntimeCtx(turn_id="turn_cur", started_at="2026-02-09T00:00:00Z")
+    tl = Timeline(runtime=ctx)
+    tl.blocks.append({
+        "type": "react.tool.result",
+        "turn_id": "turn_cur",
+        "path": "fi:outputs/report.html",
+        "mime": "text/html",
+        "text": "<html>bare</html>",
+        "meta": {
+            "artifact_path": "fi:outputs/report.html",
+            "physical_path": "outputs/report.html",
+            "visibility": "external",
+        },
+    })
+
+    params, _lineage, violations = tl.bind_params_with_refs(
+        base_params={"content": "ref:outputs/report.html"},
+        tool_id="rendering_tools.write_pdf",
+        visible_paths=tl.visible_paths(),
+    )
+
+    assert violations == []
+    assert params["content"] == "<html>bare</html>"
+
+
+def test_bind_params_reports_logical_ref_hint_for_unresolved_physical_ref():
+    ctx = RuntimeCtx(turn_id="turn_cur", started_at="2026-02-09T00:00:00Z")
+    tl = Timeline(runtime=ctx)
+
+    params, _lineage, violations = tl.bind_params_with_refs(
+        base_params={"content": "ref:turn_cur/outputs/missing.html"},
+        tool_id="rendering_tools.write_pdf",
+        visible_paths=tl.visible_paths(),
+    )
+
+    assert params["content"] is None
+    assert violations == [{
+        "code": "ref_not_visible",
+        "path": "turn_cur/outputs/missing.html",
+        "param": "content",
+        "suggested_ref": "fi:turn_cur.outputs/missing.html",
+        "message": "ref: bindings use logical artifact paths such as fi:<turn>.outputs/<file>, not physical turn/<namespace>/<file> paths.",
+    }]
+
+
+def test_bind_params_reports_fi_hint_for_unresolved_bare_artifact_ref():
+    ctx = RuntimeCtx(turn_id="turn_cur", started_at="2026-02-09T00:00:00Z")
+    tl = Timeline(runtime=ctx)
+
+    params, _lineage, violations = tl.bind_params_with_refs(
+        base_params={"content": "ref:outputs/missing.html"},
+        tool_id="rendering_tools.write_pdf",
+        visible_paths=tl.visible_paths(),
+    )
+
+    assert params["content"] is None
+    assert violations == [{
+        "code": "ref_not_visible",
+        "path": "outputs/missing.html",
+        "param": "content",
+        "suggested_ref": "fi:outputs/missing.html",
+        "message": "ref: bindings use logical artifact paths such as fi:<turn>.outputs/<file>, not physical turn/<namespace>/<file> paths.",
+    }]
 
 
 def test_multimodal_token_estimate_counts_model_message_data_blocks():
@@ -419,7 +512,8 @@ def test_large_internal_note_and_code_are_rendered_as_bounded_previews():
     assert tl.blocks[2]["text"] == code_text
     assert "[INTERNAL NOTE PREVIEW TRUNCATED]" in joined
     assert "[CODE PREVIEW TRUNCATED]" in joined
-    assert "Use react.rg on the file to find relevant regions before editing." in joined
+    code_section = joined[joined.index("[CODE PREVIEW TRUNCATED]"):]
+    assert "Use react.rg on the file to find relevant regions before editing." not in code_section
     assert "Button 79" not in joined
     assert len(joined) < len(html_text) + len(code_text)
 
@@ -737,6 +831,119 @@ def test_timeline_renders_interrupted_raw_generation_even_when_raw_hidden():
     assert "<channel:thinking>draft</channel:thinking>" in text_dump
 
 
+def test_iteration_round_groups_multi_action_tool_calls_and_followup():
+    ctx = RuntimeCtx(turn_id="turn_multi_round", started_at="2026-05-13T21:03:29Z")
+    tl = Timeline(runtime=ctx)
+    tl.blocks.extend([
+        tl._block(type="turn.header", author="system", turn_id=ctx.turn_id, ts=ctx.started_at, text="[TURN turn_multi_round]"),
+        {
+            **tl._block(
+                type="react.round.start",
+                author="react",
+                turn_id=ctx.turn_id,
+                ts="2026-05-13T21:03:33Z",
+                path="ar:turn_multi_round.react.round.start.tc_pending_0",
+                text="thinking",
+                meta={"tool_call_id": "tc_pending_0", "iteration": 0},
+            ),
+            "call_id": "tc_pending_0",
+        },
+        tl._block(
+            type="user.followup",
+            author="user",
+            turn_id=ctx.turn_id,
+            ts="2026-05-13T21:03:42Z",
+            path="ar:turn_multi_round.external.followup.evt_1",
+            text="and also in presentation and docx please",
+            meta={"target_turn_id": ctx.turn_id, "event_kind": "followup"},
+        ),
+        tl._block(
+            type="react.notes",
+            author="react",
+            turn_id=ctx.turn_id,
+            ts="2026-05-13T21:03:43Z",
+            path="ar:turn_multi_round.react.notes.tc_pending_0",
+            text="Loading skill and searching in the same decision.",
+            meta={"tool_call_id": "tc_pending_0", "iteration": 0, "action": "call_tool"},
+        ),
+        {
+            **tl._block(
+                type="react.tool.call",
+                author="agent",
+                turn_id=ctx.turn_id,
+                ts="2026-05-13T21:03:43Z",
+                mime="application/json",
+                path="tc:turn_multi_round.tc_read.call",
+                text=json.dumps({"tool_id": "react.read", "tool_call_id": "tc_read", "params": {"paths": ["sk:product"]}}),
+                meta={"tool_call_id": "tc_read", "iteration": 0},
+            ),
+            "call_id": "tc_read",
+        },
+        {
+            **tl._block(
+                type="react.tool.result",
+                author="agent",
+                turn_id=ctx.turn_id,
+                ts="2026-05-13T21:03:43Z",
+                mime="application/json",
+                path="tc:turn_multi_round.tc_read.result",
+                text=json.dumps({"paths": [{"path": "sk:product", "status": "ok"}], "total_tokens": 10}),
+                meta={"tool_call_id": "tc_read", "iteration": 0},
+            ),
+            "call_id": "tc_read",
+        },
+        {
+            **tl._block(
+                type="react.tool.call",
+                author="agent",
+                turn_id=ctx.turn_id,
+                ts="2026-05-13T21:03:43Z",
+                mime="application/json",
+                path="tc:turn_multi_round.tc_search.call",
+                text=json.dumps({"tool_id": "web_tools.web_search", "tool_call_id": "tc_search", "params": {"queries": ["ai security"]}}),
+                meta={"tool_call_id": "tc_search", "iteration": 0},
+            ),
+            "call_id": "tc_search",
+        },
+        {
+            **tl._block(
+                type="react.tool.result",
+                author="agent",
+                turn_id=ctx.turn_id,
+                ts="2026-05-13T21:03:52Z",
+                mime="application/json",
+                path="tc:turn_multi_round.tc_search.result",
+                text=json.dumps([{"sid": 10, "title": "AI security news"}]),
+                meta={"tool_call_id": "tc_search", "iteration": 0},
+            ),
+            "call_id": "tc_search",
+        },
+        {
+            **tl._block(
+                type="react.round.start",
+                author="react",
+                turn_id=ctx.turn_id,
+                ts="2026-05-13T21:03:52Z",
+                path="ar:turn_multi_round.react.round.start.tc_pending_1",
+                text="thinking",
+                meta={"tool_call_id": "tc_pending_1", "iteration": 1},
+            ),
+            "call_id": "tc_pending_1",
+        },
+    ])
+
+    rendered = _run(tl.render(cache_last=True))
+    text_dump = "\n".join(b.get("text", "") for b in rendered if b.get("type") == "text")
+
+    assert text_dump.count("┌──────── ROUND 1 ────────┐") == 1
+    assert text_dump.count("┌──────── ROUND 2 ────────┐") == 1
+    assert "┌──────── ROUND 3 ────────┐" not in text_dump
+    round_1 = text_dump.split("┌──────── ROUND 1 ────────┐", 1)[1].split("┌──────── ROUND 2 ────────┐", 1)[0]
+    assert "[FOLLOWUP DURING TURN]" in round_1
+    assert "[TOOL CALL tc_read].call react.read" in round_1
+    assert "[TOOL CALL tc_search].call web_tools.web_search" in round_1
+
+
 def test_hidden_old_blocks_render_as_minimal_retrieval_refs():
     ctx = RuntimeCtx(turn_id="turn_current", started_at="2026-02-09T00:00:00Z")
     tl = Timeline(runtime=ctx)
@@ -828,3 +1035,186 @@ def test_hidden_old_blocks_render_as_minimal_retrieval_refs():
     assert "ROUND 1" not in text
     assert "Params:" not in text
     assert "cache_pruned" not in text
+
+
+def test_live_thinking_renders_as_thinking_block_and_compacted_thinking_is_suppressed():
+    ctx = RuntimeCtx(turn_id="turn_thinking", started_at="2026-05-13T10:00:00Z")
+    tl = Timeline(runtime=ctx)
+    tl.blocks.extend([
+        tl._block(type="turn.header", author="system", turn_id=ctx.turn_id, ts=ctx.started_at, text="[TURN turn_thinking]"),
+        {
+            **tl._block(
+                type="react.round.start",
+                author="react",
+                turn_id=ctx.turn_id,
+                ts="2026-05-13T10:00:01Z",
+                path="ar:turn_thinking.react.round.start.tc_live",
+                text="thinking",
+                meta={"tool_call_id": "tc_live", "iteration": 0},
+            ),
+            "call_id": "tc_live",
+        },
+        {
+            **tl._block(
+                type="react.thinking",
+                author="react",
+                turn_id=ctx.turn_id,
+                ts="2026-05-13T10:00:02Z",
+                path="ar:turn_thinking.react.thinking.0",
+                text="Checking the requested format before calling the tool.",
+                meta={"tool_call_id": "tc_live", "iteration": 0},
+            ),
+            "call_id": "tc_live",
+        },
+        tl._block(
+            type="react.rounds.compacted",
+            author="system",
+            turn_id=ctx.turn_id,
+            ts="2026-05-13T10:00:03Z",
+            mime="application/json",
+            path="ar:turn_thinking.react.rounds.compacted",
+            text=json.dumps(
+                {
+                    "turn_id": ctx.turn_id,
+                    "events": [
+                        {
+                            "kind": "thinking",
+                            "ts": "2026-05-13T10:00:03Z",
+                            "text": "This compacted thinking must not render.",
+                        },
+                        {
+                            "kind": "notes",
+                            "ts": "2026-05-13T10:00:04Z",
+                            "text": "Compacted note remains visible.",
+                        },
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+        ),
+    ])
+
+    rendered = _run(tl.render(cache_last=True))
+    text = "\n".join(str(block.get("text") or "") for block in rendered if isinstance(block, dict))
+
+    assert "[thinking]" in text
+    assert "Checking the requested format before calling the tool." in text
+    assert "This compacted thinking must not render." not in text
+    assert "Compacted note remains visible." in text
+
+
+def test_live_thinking_rendering_can_be_disabled():
+    ctx = RuntimeCtx(
+        turn_id="turn_thinking_off",
+        started_at="2026-05-13T10:00:00Z",
+        render_thinking=False,
+    )
+    tl = Timeline(runtime=ctx)
+    tl.blocks.extend([
+        tl._block(type="turn.header", author="system", turn_id=ctx.turn_id, ts=ctx.started_at, text="[TURN turn_thinking_off]"),
+        {
+            **tl._block(
+                type="react.thinking",
+                author="react",
+                turn_id=ctx.turn_id,
+                ts="2026-05-13T10:00:02Z",
+                path="ar:turn_thinking_off.react.thinking.0",
+                text="This thinking should be hidden.",
+                meta={"tool_call_id": "tc_live", "iteration": 0},
+            ),
+            "call_id": "tc_live",
+        },
+        tl._block(
+            type="react.notes",
+            author="react",
+            turn_id=ctx.turn_id,
+            ts="2026-05-13T10:00:03Z",
+            text="Visible note.",
+            meta={"tool_call_id": "tc_live", "iteration": 0},
+        ),
+    ])
+
+    rendered = _run(tl.render(cache_last=True))
+    text = "\n".join(str(block.get("text") or "") for block in rendered if isinstance(block, dict))
+
+    assert "[thinking]" not in text
+    assert "This thinking should be hidden." not in text
+    assert "Visible note." in text
+    assert tl.build_turn_view().get("thinking") == []
+
+
+def test_react_round_thinking_is_visible_when_rendering_enabled():
+    ctx = RuntimeCtx(
+        turn_id="turn_round_thinking",
+        started_at="2026-05-13T10:00:00Z",
+        render_thinking=True,
+    )
+    tl = Timeline(runtime=ctx)
+
+    class _Browser:
+        runtime_ctx = ctx
+
+        def contribute(self, *, blocks):
+            tl.contribute(list(blocks or []))
+
+    tl.blocks.append(tl._block(type="turn.header", author="system", turn_id=ctx.turn_id, ts=ctx.started_at, text="[TURN turn_round_thinking]"))
+    ReactRound.thinking(
+        ctx_browser=_Browser(),
+        text="I need to inspect the artifact before rendering it.",
+        title="Decision",
+        iteration=0,
+        tool_call_id="tc_live",
+    )
+
+    rendered = _run(tl.render(cache_last=True))
+    text = "\n".join(str(block.get("text") or "") for block in rendered if isinstance(block, dict))
+
+    assert "[thinking]" in text
+    assert "I need to inspect the artifact before rendering it." in text
+    assert not any((blk.get("meta") or {}).get("hidden") for blk in tl.blocks if blk.get("type") == "react.thinking")
+
+
+def test_assistant_completion_attempt_renders_until_committed_completion_exists():
+    ctx = RuntimeCtx(
+        turn_id="turn_answer_attempt",
+        started_at="2026-05-13T10:00:00Z",
+    )
+    tl = Timeline(runtime=ctx)
+    tl.blocks.extend([
+        tl._block(type="turn.header", author="system", turn_id=ctx.turn_id, ts=ctx.started_at, text="[TURN turn_answer_attempt]"),
+        tl._block(
+            type="assistant.completion.attempt",
+            author="assistant",
+            turn_id=ctx.turn_id,
+            ts="2026-05-13T10:00:10Z",
+            path="ar:turn_answer_attempt.assistant.completion.attempt.1",
+            text="Draft final answer before all artifacts are done.",
+            meta={"completion_attempt_index": 1, "iteration": 2, "provisional": True},
+        ),
+    ])
+
+    rendered = _run(tl.render(cache_last=True))
+    text = "\n".join(str(block.get("text") or "") for block in rendered if isinstance(block, dict))
+
+    assert "[ASSISTANT MESSAGE ATTEMPT]" in text
+    assert "[attempt: 1]" in text
+    assert "Draft final answer before all artifacts are done." in text
+
+    tl.blocks.append(
+        tl._block(
+            type="assistant.completion",
+            author="assistant",
+            turn_id=ctx.turn_id,
+            ts="2026-05-13T10:00:20Z",
+            path="ar:turn_answer_attempt.assistant.completion",
+            text="Committed final answer after all artifacts are done.",
+        )
+    )
+
+    rendered = _run(tl.render(cache_last=True))
+    text = "\n".join(str(block.get("text") or "") for block in rendered if isinstance(block, dict))
+
+    assert "[ASSISTANT MESSAGE ATTEMPT]" not in text
+    assert "Draft final answer before all artifacts are done." not in text
+    assert "[ASSISTANT MESSAGE]" in text
+    assert "Committed final answer after all artifacts are done." in text

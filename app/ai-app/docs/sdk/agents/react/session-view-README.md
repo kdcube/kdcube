@@ -70,8 +70,11 @@ This document describes how the session view is derived from the timeline when c
 
 ## Model-Facing Generations (new timelines)
 
-New timelines should be read as three model-facing generations. The debug files
-under `debug/rendering/rendered-...txt` show this rendered message stream.
+New timelines should be read as three model-facing generations. When
+`debug_timeline` is enabled and `REACT_DEBUG_ROOT` is configured, the
+`rendered-...txt` files in that root show this rendered message stream. CLI and
+ECS deployments normally mount that root as `/react-debug`, with rolling
+retention controlled by `REACT_DEBUG_KEEP_FILES`.
 
 ### G0: Hot/full view
 

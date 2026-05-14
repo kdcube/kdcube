@@ -30,6 +30,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.live_events import (
     sync_reactive_iteration_budget,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.layout import (
+    build_assistant_completion_attempt_blocks,
     build_working_summary_attempt_blocks,
     record_assistant_completion_attempt,
 )
@@ -1119,9 +1120,10 @@ class ReactSolverV2:
         if code == "tool_signature_red":
             return f"tool params failed signature validation for tool_id={tool_id or 'unknown'}. No action was executed for this round."
         if code == "ReactDecisionOutV2_schema_error":
+            summary, _diagnostic = self._schema_error_diagnostics(error)
             return (
-                "Bad Protocol. The agent output in <channel:ReactDecisionOutV2> could not be parsed, "
-                f"so no action was executed for this round. {error}'."
+                "Malformed action JSON. <channel:ReactDecisionOutV2> could not be parsed, "
+                f"so no action was executed for this round. Parser reported: {summary}"
             )
         if final_answer and action == "call_tool":
             return f"final_answer present with action={action}."
@@ -1140,8 +1142,8 @@ class ReactSolverV2:
     ) -> str:
         if code == "ReactDecisionOutV2_schema_error":
             return (
-                "Wrong round. The agent wrote invalid content into the action channel, "
-                "so this round executed no action. Retry with exactly one valid action."
+                "Wrong round. The action channel was malformed JSON, so this round executed no action. "
+                "The protocol violation notice contains the parser error and diagnostic excerpt."
             )
         if code == "tool_call_invalid":
             target = tool_id or "the requested tool"
@@ -1165,6 +1167,33 @@ class ReactSolverV2:
             "Wrong round. The agent violated the ReAct action protocol, "
             "so this round executed no action."
         )
+
+    @staticmethod
+    def _schema_error_diagnostics(error: Optional[str]) -> tuple[str, str]:
+        raw = str(error or "").strip()
+        if not raw:
+            return "ReactDecisionOutV2 parser did not provide details.", ""
+        lines = [line.strip() for line in raw.splitlines() if line.strip()]
+        summary = next((line for line in lines if line.startswith("JSON parse error:")), lines[0])
+        detail_lines: List[str] = []
+        include_following = 0
+        for line in lines:
+            if line.startswith(("Block length:", "Characters ", "Still failed")):
+                detail_lines.append(line)
+                include_following = 2 if line.startswith("Characters ") else 0
+                continue
+            if include_following > 0:
+                detail_lines.append(line)
+                include_following -= 1
+                continue
+        if not detail_lines and len(lines) > 1:
+            detail_lines = lines[1:5]
+        diagnostic = "\n".join(detail_lines).strip()
+        if len(summary) > 500:
+            summary = summary[:500].rstrip() + "..."
+        if len(diagnostic) > 1800:
+            diagnostic = diagnostic[:1800].rstrip() + "..."
+        return summary, diagnostic
 
     def _record_failed_decision_attempt(
         self,
@@ -1882,6 +1911,7 @@ class ReactSolverV2:
                 decision=decision,
                 title=f"solver.react.v2.decision ({iteration})",
                 iteration=iteration,
+                tool_call_id=pending_tool_call_id,
             )
         except Exception:
             pass
@@ -1892,6 +1922,7 @@ class ReactSolverV2:
         protocol_entry = None
 
         if error:
+            error_summary, error_diagnostic = self._schema_error_diagnostics(error)
             notice_message = self._protocol_violation_message(
                 code="ReactDecisionOutV2_schema_error",
                 error=error,
@@ -1907,6 +1938,10 @@ class ReactSolverV2:
                     notice_message=notice_message,
                     decision_packet=decision,
                     reason="schema_error",
+                    notice_extra={
+                        "parser_error": error_summary,
+                        **({"diagnostic_excerpt": error_diagnostic} if error_diagnostic else {}),
+                    },
                 )
                 self.log.log(f"[react.v2] decision schema error: {error}", level="ERROR")
             except Exception:
@@ -2328,6 +2363,19 @@ class ReactSolverV2:
                         iteration=iteration,
                         working_summary_text=working_summary_text,
                     )
+                    timeline = getattr(self.ctx_browser, "timeline", None) if self.ctx_browser else None
+                    block_factory = getattr(timeline, "block", None)
+                    contribute = getattr(self.ctx_browser, "contribute", None) if self.ctx_browser else None
+                    if entry and callable(block_factory) and callable(contribute):
+                        entries = getattr(self.scratchpad, "assistant_completion_attempts", []) or []
+                        attempt_blocks = build_assistant_completion_attempt_blocks(
+                            runtime=self.ctx_browser.runtime_ctx,
+                            entry=entry,
+                            attempt_index=len(entries),
+                            block_factory=block_factory,
+                        )
+                        if attempt_blocks:
+                            contribute(blocks=attempt_blocks)
                     session_cfg = getattr(getattr(self.ctx_browser, "runtime_ctx", None), "session", None)
                     working_summary_enabled = bool(getattr(session_cfg, "working_summary_enabled", True))
                     if entry and working_summary_enabled and str(working_summary_text or "").strip():
@@ -2440,6 +2488,10 @@ class ReactSolverV2:
         state["timeline_streamer"] = timeline_streamer
         state["pending_exec_id"] = exec_id
         state["pending_tool_call_id"] = pending_tool_call_id
+        if action == "call_tool":
+            state["pending_tool_origin_iteration"] = iteration
+        else:
+            state.pop("pending_tool_origin_iteration", None)
         state["last_decision"] = decision
         state["iteration"] = iteration + 1
         bs = state.get("budget_state_v2")
@@ -2453,6 +2505,10 @@ class ReactSolverV2:
     async def _tool_execution_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
         if await self._apply_steer_interrupt_if_requested(state, checkpoint="tool.before_execute"):
             return state
+        try:
+            state.setdefault("pending_tool_origin_iteration", max(0, int(state.get("iteration") or 0) - 1))
+        except Exception:
+            state.setdefault("pending_tool_origin_iteration", 0)
         interrupted, result = await self._run_cancellable_phase(
             phase="tool_execution",
             coro=ReactRound.execute(react=self, state=state),
@@ -2485,6 +2541,7 @@ class ReactSolverV2:
                 )
             except Exception:
                 self.log.log(traceback.format_exc())
+        state.pop("pending_tool_origin_iteration", None)
         return state
 
     async def _exit_node(self, state: Dict[str, Any]) -> Dict[str, Any]:

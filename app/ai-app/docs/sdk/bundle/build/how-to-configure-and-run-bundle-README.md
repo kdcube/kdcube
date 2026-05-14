@@ -670,6 +670,21 @@ ReAct round limits can be set globally or per bundle:
 The per-bundle prop wins over the assembly/env default. If neither is set, the
 runtime fallback is `15`.
 
+Live ReAct thinking rendering follows the same precedence:
+
+- global runtime default: `ai.react.render_thinking` in `assembly.yaml`, or
+  `AI_REACT_RENDER_THINKING` in env
+- per-bundle override: `config.react.render_thinking` or
+  `react.render_thinking` in the bundle's deployment-scoped props
+
+This only controls whether live `react.thinking` blocks are rendered into the
+active ReAct timeline. Pruned/compacted historical thinking is never rendered.
+
+Rendered prompt snapshot debugging is separate from thinking visibility. Keep
+`ai.react.debug_timeline: false` for normal deployments; enable it only when
+you need to inspect exactly what the ReAct runtime sent to the model. A bundle
+can override with `config.react.debug_timeline` or `react.debug_timeline`.
+
 Then start the initialized runtime:
 
 ```bash

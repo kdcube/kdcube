@@ -177,9 +177,12 @@ contain physical host paths; only KDCube logical paths are readable by
 rest of the summary is the broader set of user/project objectives and may
 include completed or parked work.
 
-The debug files under `debug/rendering/rendered-...txt` are written from the
-same model message blocks sent to the decision agent, so they are the right
-place to inspect whether the model-facing shape is clear.
+When `debug_timeline` is enabled and `REACT_DEBUG_ROOT` is configured,
+`rendered-...txt` files under that debug root are written from the same model
+message blocks sent to the decision agent, so they are the right place to
+inspect whether the model-facing shape is clear. CLI and ECS deployments
+normally mount this root as `/react-debug`; `REACT_DEBUG_KEEP_FILES` limits how
+many render dumps are retained.
 
 `covered_turns` is capped in the rendered checkpoint. Small lists may render in
 full; large lists render as:

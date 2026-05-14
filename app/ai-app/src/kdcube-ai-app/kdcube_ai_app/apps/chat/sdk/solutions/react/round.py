@@ -56,6 +56,7 @@ class ReactRound:
         text: Optional[str] = None,
         title: str,
         iteration: int,
+        tool_call_id: Optional[str] = None,
     ) -> None:
         if not ctx_browser:
             return
@@ -82,8 +83,10 @@ class ReactRound:
             "channel": "thinking",
             "title": title,
             "iteration": iteration,
-            "hidden": True,
         }
+        call_id = str(tool_call_id or "").strip()
+        if call_id:
+            meta["tool_call_id"] = call_id
         if started_at:
             meta["started_at"] = started_at
         if finished_at:
@@ -97,6 +100,7 @@ class ReactRound:
             "path": f"ar:{turn_id}.react.thinking.{iteration}" if turn_id else "",
             "text": text.strip(),
             "meta": meta,
+            "call_id": call_id,
         })
 
     @classmethod
@@ -189,26 +193,49 @@ class ReactRound:
             state["error"] = {"where": "tool_execution", "error": "missing_tool_id", "managed": True}
             return state
         ctx_browser = react.ctx_browser
-        if tool_id == "react.read":
-            return await react_tools.handle_react_read(ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
-        if tool_id == "react.pull":
-            return await react_tools.handle_react_pull(ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
-        if tool_id == "react.checkout":
-            return await react_tools.handle_react_checkout(ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
-        if tool_id == "react.patch":
-            return await react_tools.handle_react_patch(react=react, ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
-        if tool_id == "react.memsearch":
-            return await react_tools.handle_react_memsearch(ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
-        if tool_id == "react.hide":
-            return await react_tools.handle_react_hide(ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
-        if tool_id == "react.rg":
-            return await react_tools.handle_react_rg(ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
-        if tool_id == "react.plan":
-            return await react_tools.handle_react_plan(react=react, ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
-        if tool_id == "react.write":
-            return await react_tools.handle_react_write(react=react, ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
+        runtime_ctx = getattr(ctx_browser, "runtime_ctx", None)
+        sentinel = object()
+        previous_iteration = sentinel
+        if runtime_ctx is not None:
+            previous_iteration = getattr(runtime_ctx, "_current_react_iteration", sentinel)
+            try:
+                raw_origin_iteration = state.get("pending_tool_origin_iteration")
+                if raw_origin_iteration is None:
+                    raw_state_iteration = int(state.get("iteration") or 0)
+                    raw_origin_iteration = max(0, raw_state_iteration - 1)
+                setattr(runtime_ctx, "_current_react_iteration", int(raw_origin_iteration))
+            except Exception:
+                pass
+        try:
+            if tool_id == "react.read":
+                return await react_tools.handle_react_read(ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
+            if tool_id == "react.pull":
+                return await react_tools.handle_react_pull(ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
+            if tool_id == "react.checkout":
+                return await react_tools.handle_react_checkout(ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
+            if tool_id == "react.patch":
+                return await react_tools.handle_react_patch(react=react, ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
+            if tool_id == "react.memsearch":
+                return await react_tools.handle_react_memsearch(ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
+            if tool_id == "react.hide":
+                return await react_tools.handle_react_hide(ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
+            if tool_id == "react.rg":
+                return await react_tools.handle_react_rg(ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
+            if tool_id == "react.plan":
+                return await react_tools.handle_react_plan(react=react, ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
+            if tool_id == "react.write":
+                return await react_tools.handle_react_write(react=react, ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
 
-        return await react_tools.handle_external_tool(react=react, ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
+            return await react_tools.handle_external_tool(react=react, ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
+        finally:
+            if runtime_ctx is not None:
+                try:
+                    if previous_iteration is sentinel:
+                        delattr(runtime_ctx, "_current_react_iteration")
+                    else:
+                        setattr(runtime_ctx, "_current_react_iteration", previous_iteration)
+                except Exception:
+                    pass
 
 
 ToolCallView = ReactRound

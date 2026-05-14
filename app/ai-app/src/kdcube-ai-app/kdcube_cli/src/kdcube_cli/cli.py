@@ -657,6 +657,8 @@ def _collect_runtime_info(*, repo_root: Path, workdir: Path) -> dict[str, object
         "host_bundle_storage_path": _env_value("HOST_BUNDLE_STORAGE_PATH"),
         "container_bundle_storage_root": _env_value("BUNDLE_STORAGE_ROOT"),
         "host_exec_workspace_path": _env_value("HOST_EXEC_WORKSPACE_PATH"),
+        "host_react_debug_path": _env_value("HOST_REACT_DEBUG_PATH"),
+        "container_react_debug_root": _env_value("REACT_DEBUG_ROOT"),
         "compose_mode": _env_value("KDCUBE_COMPOSE_MODE"),
         "tenant": _get_nested(assembly, "context", "tenant"),
         "project": _get_nested(assembly, "context", "project"),
@@ -695,6 +697,8 @@ def print_runtime_info(console: Console, *, repo_root: Path, workdir: Path) -> N
     console.print(f"[dim]Host bundle storage:[/dim] {info['host_bundle_storage_path'] or 'unset'}")
     console.print(f"[dim]Container bundle storage root:[/dim] {info['container_bundle_storage_root'] or 'unset'}")
     console.print(f"[dim]Host exec workspace:[/dim] {info['host_exec_workspace_path'] or 'unset'}")
+    console.print(f"[dim]Host React debug:[/dim] {info['host_react_debug_path'] or 'unset'}")
+    console.print(f"[dim]Container React debug root:[/dim] {info['container_react_debug_root'] or 'unset'}")
 
     host_bundles_path = str(info["host_bundles_path"] or "").strip()
     container_bundles_root = str(info["container_bundles_root"] or "").strip()

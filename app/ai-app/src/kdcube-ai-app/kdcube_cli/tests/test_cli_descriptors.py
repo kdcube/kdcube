@@ -491,6 +491,8 @@ def test_collect_runtime_info_reports_bundle_mount_mapping(tmp_path: Path):
                 "HOST_BUNDLE_STORAGE_PATH=/host/bundle-storage",
                 "BUNDLE_STORAGE_ROOT=/bundle-storage",
                 "HOST_EXEC_WORKSPACE_PATH=/host/exec-workspace",
+                "HOST_REACT_DEBUG_PATH=/host/react-debug",
+                "REACT_DEBUG_ROOT=/react-debug",
                 "KDCUBE_COMPOSE_MODE=all-in-one",
             ]
         )
@@ -512,6 +514,8 @@ def test_collect_runtime_info_reports_bundle_mount_mapping(tmp_path: Path):
     assert info["container_bundles_root"] == "/bundles"
     assert info["host_managed_bundles_path"] == "/host/managed-bundles"
     assert info["container_managed_bundles_root"] == "/managed-bundles"
+    assert info["host_react_debug_path"] == "/host/react-debug"
+    assert info["container_react_debug_root"] == "/react-debug"
     assert info["default_bundle_id"] == "demo.bundle"
     assert info["bundle_count"] == 0
     assert info["tenant"] == "demo"
@@ -1507,6 +1511,9 @@ def test_gather_configuration_keeps_proc_and_ingress_env_minimal_for_user_descri
     assert f"HOST_MANAGED_BUNDLES_PATH={(tmp_path / 'managed-bundles').resolve()}" in env_main
     assert f"HOST_BUNDLE_STORAGE_PATH={(tmp_path / 'seed-bundles').resolve()}" in env_main
     assert f"HOST_EXEC_WORKSPACE_PATH={(tmp_path / 'exec-workspace').resolve()}" in env_main
+    assert f"HOST_REACT_DEBUG_PATH={(workdir / 'data/react-debug').resolve()}" in env_main
+    assert "REACT_DEBUG_ROOT=/react-debug" in env_main
+    assert "REACT_DEBUG_KEEP_FILES=100" in env_main
     assert f"KDCUBE_CONFIG_DIR={config_dir}" in env_main
     assert "BUNDLES_ROOT=/bundles" in env_main
     assert "MANAGED_BUNDLES_ROOT=/managed-bundles" in env_main
@@ -1520,11 +1527,159 @@ def test_gather_configuration_keeps_proc_and_ingress_env_minimal_for_user_descri
     assert assembly_data["paths"]["host_managed_bundles_path"] == str((tmp_path / "managed-bundles").resolve())
     assert assembly_data["paths"]["host_bundle_storage_path"] == str((tmp_path / "seed-bundles").resolve())
     assert assembly_data["paths"]["host_exec_workspace_path"] == str((tmp_path / "exec-workspace").resolve())
+    assert assembly_data["paths"]["host_react_debug_path"] == str((workdir / "data/react-debug").resolve())
     assert assembly_data["platform"]["services"]["ingress"]["log"]["log_dir"] == "/logs"
     assert assembly_data["platform"]["services"]["proc"]["log"]["log_dir"] == "/logs"
     assert assembly_data["platform"]["services"]["proc"]["exec"]["exec_workspace_root"] == "/exec-workspace"
+    assert assembly_data["platform"]["services"]["proc"]["react_debug"]["debug_root"] == "/react-debug"
+    assert assembly_data["platform"]["services"]["proc"]["react_debug"]["keep_files"] == 100
     assert assembly_data["platform"]["services"]["proc"]["bundles"]["bundles_root"] == "/bundles"
     assert assembly_data["platform"]["services"]["proc"]["bundles"]["bundle_storage_root"] == "/bundle-storage"
+
+
+def test_gather_configuration_resolves_null_missing_and_s3_storage(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr("kdcube_cli.installer.ask", lambda _console, _label, default=None, secret=False: str(default or ""))
+    monkeypatch.setattr("kdcube_cli.installer.ask_confirm", lambda _console, _label, default=False: default)
+    monkeypatch.setattr(
+        "kdcube_cli.installer.select_option",
+        lambda _console, _title, options, default_index=0: options[default_index],
+    )
+    monkeypatch.setattr(
+        "kdcube_cli.installer.ensure_absolute",
+        lambda _console, _label, current, default, force_prompt=False: str(Path(current or default or tmp_path).resolve()),
+    )
+    monkeypatch.setattr("kdcube_cli.installer.prompt_secret_value", lambda *args, **kwargs: None)
+    monkeypatch.setattr("kdcube_cli.installer.ensure_ui_env_build_file", lambda *args, **kwargs: None)
+    monkeypatch.setattr("kdcube_cli.installer.ensure_ui_nginx_config_file", lambda *args, **kwargs: None)
+    monkeypatch.setattr("kdcube_cli.installer.write_frontend_config", lambda *args, **kwargs: None)
+    monkeypatch.setattr("kdcube_cli.installer.sync_nginx_proxy_config", lambda *args, **kwargs: None)
+    monkeypatch.setattr("kdcube_cli.installer.update_nginx_routes_prefix", lambda *args, **kwargs: None)
+    monkeypatch.setattr("kdcube_cli.installer.update_nginx_ssl_domain", lambda *args, **kwargs: None)
+    monkeypatch.setattr("kdcube_cli.installer._load_json_file", lambda *_args, **_kwargs: {})
+
+    def run_case(name: str, storage: dict) -> tuple[str, dict, Path]:
+        root = tmp_path / name
+        config_dir = root / "config"
+        config_dir.mkdir(parents=True)
+        for env_name in (
+            ".env",
+            ".env.ingress",
+            ".env.proc",
+            ".env.metrics",
+            ".env.postgres.setup",
+            ".env.proxylogin",
+        ):
+            (config_dir / env_name).write_text("")
+
+        workdir = root / "workdir"
+        workdir.mkdir()
+        ai_app_root = root / "ai-app"
+        ai_app_root.mkdir()
+        docker_dir = ai_app_root / "deployment" / "docker" / "custom-ui-managed-infra"
+        docker_dir.mkdir(parents=True)
+
+        assembly_path = config_dir / "assembly.yaml"
+        assembly_path.write_text("x: 1\n")
+        secrets_path = config_dir / "secrets.yaml"
+        secrets_path.write_text("services: {}\n")
+        bundles_path = config_dir / "bundles.yaml"
+        bundles_path.write_text("bundles:\n  items: []\n")
+        bundles_secrets_path = config_dir / "bundles.secrets.yaml"
+        bundles_secrets_path.write_text("bundles:\n  items: []\n")
+
+        monkeypatch.setattr(
+            "kdcube_cli.installer.compute_paths",
+            lambda *_args, **_kwargs: {
+                "host_kb_storage": str(workdir / "data/kdcube-storage"),
+                "host_bundles": str(workdir / "data/bundles"),
+                "host_managed_bundles": str(workdir / "data/managed-bundles"),
+                "host_bundle_storage": str(workdir / "data/bundle-storage"),
+                "host_exec_workspace": str(workdir / "data/exec-workspace"),
+                "host_react_debug": str(workdir / "data/react-debug"),
+                "ui_build_context": str(ai_app_root),
+                "ui_dockerfile_path": "Dockerfile_UI",
+                "ui_source_path": "ui/chat-web-app",
+                "ui_env_build_relative": ".env.ui.build",
+                "nginx_ui_config": "nginx_ui.conf",
+                "nginx_proxy_config": "nginx_proxy_ssl_cognito.conf",
+                "proxy_build_context": str(ai_app_root),
+                "proxy_dockerfile_path": "Dockerfile_Proxy",
+            },
+        )
+
+        ctx = PathsContext(
+            lib_root=root / "lib",
+            ai_app_root=ai_app_root,
+            docker_dir=docker_dir,
+            sample_env_dir=root / "sample_env",
+            workdir=workdir,
+            config_dir=config_dir,
+            data_dir=root / "data",
+        )
+        gather_configuration(
+            Console(file=None),
+            ctx,
+            release_descriptor_path=str(assembly_path),
+            release_descriptor={
+                "context": {"tenant": "demo-tenant", "project": "demo-project"},
+                "platform": {"ref": "2026.4.19.999"},
+                "secrets": {"provider": "secrets-file"},
+                "paths": {
+                    "host_kdcube_storage_path": None,
+                    "host_bundle_storage_path": None,
+                    "host_exec_workspace_path": None,
+                    "host_react_debug_path": None,
+                },
+                "auth": {"type": "simple"},
+                "proxy": {"ssl": False},
+                "storage": {
+                    **storage,
+                    "workspace": {"type": "local", "repo": ""},
+                    "claude_code_session": {"type": "local", "repo": ""},
+                },
+            },
+            secrets_descriptor_path=str(secrets_path),
+            secrets_descriptor={"services": {}},
+            bundles_descriptor_path=str(bundles_path),
+            bundles_descriptor={"bundles": {"items": []}},
+            bundles_secrets_path=str(bundles_secrets_path),
+            bundles_secrets_descriptor={"bundles": {"items": []}},
+            gateway_descriptor={"gateway": {"tenant": "demo-tenant", "project": "demo-project"}},
+            use_bundles_descriptor=True,
+            use_bundles_secrets=True,
+        )
+        return (
+            (config_dir / ".env").read_text(),
+            yaml.safe_load(assembly_path.read_text()),
+            workdir,
+        )
+
+    env_main, assembly_data, workdir = run_case(
+        "local-null",
+        {"kdcube": None, "bundles": None},
+    )
+    assert f"HOST_KDCUBE_STORAGE_PATH={workdir / 'data/kdcube-storage'}" in env_main
+    assert f"HOST_BUNDLE_STORAGE_PATH={workdir / 'data/bundle-storage'}" in env_main
+    assert assembly_data["storage"]["kdcube"] == "file:///kdcube-storage"
+    assert assembly_data["storage"]["bundles"] == "file:///bundle-storage"
+
+    env_main, assembly_data, workdir = run_case("local-missing", {})
+    assert f"HOST_KDCUBE_STORAGE_PATH={workdir / 'data/kdcube-storage'}" in env_main
+    assert f"HOST_BUNDLE_STORAGE_PATH={workdir / 'data/bundle-storage'}" in env_main
+    assert assembly_data["storage"]["kdcube"] == "file:///kdcube-storage"
+    assert assembly_data["storage"]["bundles"] == "file:///bundle-storage"
+
+    env_main, assembly_data, workdir = run_case(
+        "s3-overrides",
+        {
+            "kdcube": "s3://example-bucket/kdcube",
+            "bundles": "s3://example-bucket/bundles",
+        },
+    )
+    assert f"HOST_KDCUBE_STORAGE_PATH={workdir / 'data/kdcube-storage'}" in env_main
+    assert f"HOST_BUNDLE_STORAGE_PATH={workdir / 'data/bundle-storage'}" in env_main
+    assert assembly_data["storage"]["kdcube"] == "s3://example-bucket/kdcube"
+    assert assembly_data["storage"]["bundles"] == "s3://example-bucket/bundles"
 
 
 def test_gather_configuration_applies_current_aws_descriptor_shape(monkeypatch, tmp_path: Path):

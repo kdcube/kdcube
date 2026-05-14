@@ -3,6 +3,7 @@
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.layout import (
     build_assistant_completion_blocks,
+    build_assistant_completion_attempt_blocks,
     build_working_summary_attempt_blocks,
     build_working_summary_blocks,
 )
@@ -87,6 +88,31 @@ def test_build_working_summary_blocks_does_not_persist_canonical_alias():
     )
 
     assert blocks == []
+
+
+def test_build_assistant_completion_attempt_blocks_marks_attempt_provisional():
+    runtime = RuntimeCtx(turn_id="turn_attempt", started_at="2026-04-26T10:00:00Z")
+
+    blocks = build_assistant_completion_attempt_blocks(
+        runtime=runtime,
+        entry={
+            "text": "Provisional answer",
+            "ts": "2026-04-26T10:01:00Z",
+            "iteration": 4,
+            "sources_used": [1, 2],
+        },
+        attempt_index=2,
+        block_factory=_block_factory,
+    )
+
+    assert len(blocks) == 1
+    assert blocks[0]["type"] == "assistant.completion.attempt"
+    assert blocks[0]["path"] == "ar:turn_attempt.assistant.completion.attempt.2"
+    assert blocks[0]["text"] == "Provisional answer"
+    assert blocks[0]["meta"]["completion_attempt_index"] == 2
+    assert blocks[0]["meta"]["provisional"] is True
+    assert blocks[0]["meta"]["iteration"] == 4
+    assert blocks[0]["meta"]["sources_used"] == [1, 2]
 
 
 def test_build_working_summary_attempt_blocks_uses_stable_attempt_paths():

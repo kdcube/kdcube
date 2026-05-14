@@ -42,6 +42,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.tool_subsystem import create_tool_subsy
 from kdcube_ai_app.apps.chat.sdk.runtime.user_inputs import ingest_user_attachments
 from kdcube_ai_app.apps.chat.sdk.runtime.scratchpad import CTurnScratchpad
 from kdcube_ai_app.apps.chat.sdk.skills.skills_registry import SkillsSubsystem
+from kdcube_ai_app.apps.chat.sdk.tools import citations as citations_module
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.util import (truncate_text_by_tokens, _to_jsonable,
                                               ensure_event_markdown, _to_json_safe, _jd,  _now_ms,
@@ -109,6 +110,62 @@ def _react_max_iterations(bundle_props: Dict[str, Any], settings: Any) -> int:
     if configured is not None:
         return configured
     return _positive_int(getattr(settings, "AI_REACT_MAX_ITERATIONS", None)) or 15
+
+
+def _bool_or_none(value: Any) -> Optional[bool]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+    return None
+
+
+def _react_render_thinking(bundle_props: Dict[str, Any], settings: Any) -> bool:
+    configured = _bool_or_none(_get_prop_path(bundle_props or {}, "react.render_thinking"))
+    if configured is None:
+        configured = _bool_or_none(_get_prop_path(bundle_props or {}, "config.react.render_thinking"))
+    if configured is not None:
+        return configured
+    return bool(getattr(settings, "AI_REACT_RENDER_THINKING", True))
+
+
+def _react_debug_timeline_enabled(bundle_props: Dict[str, Any], settings: Any, *, default: bool = False) -> bool:
+    configured = _bool_or_none(_get_prop_path(bundle_props or {}, "react.debug_timeline"))
+    if configured is None:
+        configured = _bool_or_none(_get_prop_path(bundle_props or {}, "config.react.debug_timeline"))
+    if configured is not None:
+        return configured
+    configured = _bool_or_none(getattr(settings, "AI_REACT_DEBUG_TIMELINE", None))
+    if configured is not None:
+        return configured
+    return bool(default)
+
+
+def _react_debug_timeline_root(settings: Any) -> Optional[str]:
+    platform = getattr(settings, "PLATFORM", None)
+    react_debug = getattr(platform, "REACT_DEBUG", None)
+    root = getattr(react_debug, "REACT_DEBUG_ROOT", None)
+    if not root:
+        host_root = getattr(settings, "HOST_REACT_DEBUG_PATH", None)
+        host_text = str(host_root or "").strip()
+        if host_text and pathlib.Path(host_text).expanduser().exists():
+            root = host_text
+    text = str(root or "").strip()
+    return text or None
+
+
+def _react_debug_timeline_keep_files(settings: Any) -> int:
+    platform = getattr(settings, "PLATFORM", None)
+    react_debug = getattr(platform, "REACT_DEBUG", None)
+    return _positive_int(getattr(react_debug, "REACT_DEBUG_KEEP_FILES", None)) or 100
 
 
 def _apply_react_session_settings(runtime_ctx: Any, settings: Any) -> None:
@@ -267,6 +324,9 @@ class BaseWorkflow():
         settings = get_settings()
         runtime_max_tokens = _react_context_max_tokens(self.config, settings)
         runtime_max_iterations = _react_max_iterations(self.bundle_props, settings)
+        runtime_render_thinking = _react_render_thinking(self.bundle_props, settings)
+        runtime_debug_timeline_root = _react_debug_timeline_root(settings)
+        runtime_debug_timeline_keep_files = _react_debug_timeline_keep_files(settings)
         try:
             self.runtime_ctx = RuntimeCtx(
                 tenant=self.comm_context.actor.tenant_id,
@@ -288,6 +348,9 @@ class BaseWorkflow():
                 knowledge_read_visible_max_bytes=_positive_int(getattr(settings, "AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_BYTES", None)),
                 exec_text_preview_max_symbols=_positive_int(getattr(settings, "AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS", None)),
                 tool_result_preview_max_text_symbols=_positive_int(getattr(settings, "AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS", None)),
+                render_thinking=runtime_render_thinking,
+                debug_timeline_root=runtime_debug_timeline_root,
+                debug_timeline_keep_files=runtime_debug_timeline_keep_files,
                 bundle_storage=self._resolve_runtime_ctx_bundle_storage(),
                 workspace_implementation=settings.REACT_WORKSPACE_IMPLEMENTATION,
                 workspace_git_repo=settings.REACT_WORKSPACE_GIT_REPO,
@@ -316,6 +379,9 @@ class BaseWorkflow():
                 knowledge_read_visible_max_bytes=_positive_int(getattr(settings, "AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_BYTES", None)),
                 exec_text_preview_max_symbols=_positive_int(getattr(settings, "AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS", None)),
                 tool_result_preview_max_text_symbols=_positive_int(getattr(settings, "AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS", None)),
+                render_thinking=runtime_render_thinking,
+                debug_timeline_root=runtime_debug_timeline_root,
+                debug_timeline_keep_files=runtime_debug_timeline_keep_files,
                 workspace_implementation=settings.REACT_WORKSPACE_IMPLEMENTATION,
                 workspace_git_repo=settings.REACT_WORKSPACE_GIT_REPO,
                 multi_action_mode=settings.AI_REACT_AGENT_MULTI_ACTION,
@@ -382,6 +448,13 @@ class BaseWorkflow():
         if raw is None:
             raw = self.get_prop_path(self.bundle_props or {}, "exec_runtime")
         runtime_ctx.exec_runtime = copy.deepcopy(normalize_exec_runtime_config(raw))
+        try:
+            settings = get_settings()
+            runtime_ctx.render_thinking = _react_render_thinking(self.bundle_props, settings)
+            runtime_ctx.debug_timeline_root = _react_debug_timeline_root(settings)
+            runtime_ctx.debug_timeline_keep_files = _react_debug_timeline_keep_files(settings)
+        except Exception:
+            pass
 
     def _resolve_runtime_ctx_bundle_storage(self) -> Optional[str]:
         try:
@@ -477,6 +550,9 @@ class BaseWorkflow():
             )
         except Exception:
             return None
+
+    def react_debug_timeline_enabled(self, *, default: bool = False) -> bool:
+        return _react_debug_timeline_enabled(self.bundle_props, get_settings(), default=default)
 
     async def peek_next_continuation(self):
         source = self.continuation_source
@@ -1395,7 +1471,15 @@ class BaseWorkflow():
             return
         if bool(getattr(scratchpad, "_final_answer_delta_emitted", False)):
             return
-        await self._emit_answer_delta(text=answer_text, completed=False, agent=agent)
+        rendered_answer = answer_text
+        try:
+            sources_pool = list(getattr(getattr(self, "ctx_browser", None), "sources_pool", None) or [])
+            citation_map = citations_module.build_citation_map_from_sources(sources_pool)
+            if citation_map:
+                rendered_answer = citations_module.replace_citation_tokens_batch(answer_text, citation_map)
+        except Exception:
+            rendered_answer = answer_text
+        await self._emit_answer_delta(text=rendered_answer, completed=False, agent=agent)
         await self._emit_answer_delta(text="", completed=True, agent=agent)
         scratchpad._final_answer_delta_emitted = True
     # ------ end of streaming ---------

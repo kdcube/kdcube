@@ -116,6 +116,97 @@ async def test_rendering_tool_accepts_generic_outdir_fi_path(monkeypatch, tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_rendering_tool_stats_resolve_split_artifact_outdir(monkeypatch, tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path))
+    ctx = FakeBrowser(runtime)
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "tool_id": "rendering_tools.write_pdf",
+                "params": {"path": "outputs/report.pdf", "content": "<html><body>ok</body></html>"},
+            }
+        },
+        "outdir": str(tmp_path),
+        "workdir": str(tmp_path),
+    }
+
+    async def _fake_execute_tool(**kwargs):
+        target = tmp_path / "workdir" / kwargs["tool_execution_context"]["params"]["path"]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"%PDF-1.4\n" + (b"x" * 2048))
+        return {"output": kwargs["tool_execution_context"]["params"]["path"], "summary": ""}
+
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v3.tools.external.execute_tool", _fake_execute_tool)
+
+    react = FakeReact()
+    react.tools_subsystem = None
+
+    await handle_external_tool(react=react, ctx_browser=ctx, state=state, tool_call_id="pdf_ok")
+
+    meta_blocks = [
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result"
+        and b.get("path") == "tc:turn_exec.pdf_ok.result"
+        and (b.get("mime") or "").strip() == "application/json"
+    ]
+    assert meta_blocks
+    meta_text = meta_blocks[-1].get("text") or ""
+    assert '"artifact_path": "fi:turn_exec.outputs/report.pdf"' in meta_text
+    assert '"status": "error"' not in meta_text
+    assert '"file_not_found"' not in meta_text
+
+
+@pytest.mark.asyncio
+async def test_large_inline_renderer_source_is_passed_to_tool(monkeypatch, tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path))
+    ctx = FakeBrowser(runtime)
+    large_content = "<html>" + ("x" * 5000) + "</html>"
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "tool_id": "rendering_tools.write_pdf",
+                "params": {
+                    "path": "outputs/report.pdf",
+                    "content": large_content,
+                },
+            }
+        },
+        "outdir": str(tmp_path),
+        "workdir": str(tmp_path),
+    }
+    captured = {}
+
+    async def _fake_execute_tool(**kwargs):
+        captured["params"] = kwargs["tool_execution_context"]["params"]
+        outdir = kwargs["outdir"]
+        target = outdir / kwargs["tool_execution_context"]["params"]["path"]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"%PDF-1.4\n" + (b"x" * 2048))
+        return {"output": kwargs["tool_execution_context"]["params"]["path"], "summary": ""}
+
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v3.tools.external.execute_tool", _fake_execute_tool)
+
+    react = FakeReact()
+    react.tools_subsystem = None
+
+    out = await handle_external_tool(react=react, ctx_browser=ctx, state=state, tool_call_id="pdf_inline")
+
+    assert captured["params"]["content"] == large_content
+    assert not out.get("retry_decision")
+    assert not any(
+        b.get("type") == "react.notice"
+        and "too_large" in (b.get("text") or "")
+        for b in ctx.timeline.blocks
+    )
+    assert any(
+        b.get("type") == "react.tool.result"
+        and b.get("path") == "fi:turn_exec.outputs/report.pdf"
+        and b.get("mime") == "application/pdf"
+        for b in ctx.timeline.blocks
+    )
+
+
+@pytest.mark.asyncio
 async def test_external_tool_call_error_is_visible_on_result_block(monkeypatch, tmp_path):
     runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path))
     ctx = FakeBrowser(runtime)
@@ -769,3 +860,86 @@ async def test_external_exec_falls_back_to_decision_packet_code_channel(monkeypa
     await handle_external_tool(react=react, ctx_browser=ctx, state=state, tool_call_id="e_packet")
 
     assert captured["params"]["code"] == code_text
+
+
+@pytest.mark.asyncio
+async def test_external_exec_rejects_contaminated_code_channel(monkeypatch, tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path))
+    ctx = FakeBrowser(runtime)
+    contaminated = (
+        "` was mentioned in thinking before the real code.\n"
+        "</thinking>\n"
+        "print('this must not run')\n"
+    )
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "tool_id": "exec_tools.execute_code_python",
+                "params": {
+                    "contract": [{
+                        "filename": "turn_exec/files/out.txt",
+                        "description": "test output",
+                    }],
+                    "prog_name": "snippet.py",
+                },
+            }
+        },
+        "outdir": str(tmp_path),
+        "workdir": str(tmp_path),
+        "exec_code_streamer": _FakeExecStreamer(contaminated),
+    }
+
+    async def _fake_execute_tool(**kwargs):
+        raise AssertionError("contaminated code should be rejected before execution")
+
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v3.tools.external.execute_tool", _fake_execute_tool)
+
+    react = FakeReact()
+    react.tools_subsystem = None
+
+    out = await handle_external_tool(react=react, ctx_browser=ctx, state=state, tool_call_id="e_contaminated")
+
+    assert out["retry_decision"] is True
+    assert out["last_tool_result"][0]["error"]["code"] == "exec_code_contaminated"
+    assert any(
+        b.get("type") == "react.notice"
+        and "exec_code_contaminated" in (b.get("text") or "")
+        for b in ctx.timeline.blocks
+    )
+
+
+@pytest.mark.asyncio
+async def test_external_exec_missing_code_adds_tool_result_error(tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path))
+    ctx = FakeBrowser(runtime)
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "tool_id": "exec_tools.execute_code_python",
+                "params": {
+                    "contract": [{
+                        "filename": "turn_exec/files/out.txt",
+                        "description": "test output",
+                    }],
+                    "prog_name": "snippet.py",
+                },
+            }
+        },
+        "outdir": str(tmp_path),
+        "workdir": str(tmp_path),
+        "exec_code_streamer": _FakeExecStreamer(""),
+    }
+
+    react = FakeReact()
+    react.tools_subsystem = None
+
+    out = await handle_external_tool(react=react, ctx_browser=ctx, state=state, tool_call_id="e_missing")
+
+    assert out["retry_decision"] is True
+    assert out["last_tool_result"][0]["error"]["code"] == "exec_missing_code"
+    result_blocks = [
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result" and b.get("mime") == "application/json"
+    ]
+    assert result_blocks
+    assert "exec_missing_code" in (result_blocks[-1].get("text") or "")

@@ -34,6 +34,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.live_events import (
     sync_reactive_iteration_budget,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.layout import (
+    build_assistant_completion_attempt_blocks,
     build_working_summary_attempt_blocks,
     record_assistant_completion_attempt,
 )
@@ -69,11 +70,13 @@ class ReactSolverV2:
     MODULE_AGENT_NAME = "solver.react.v2"
     SAFE_MULTI_ACTION_TOOL_IDS = {
         "react.read",
+        "react.write",
         "react.memsearch",
         "react.rg",
     }
     SAFE_MULTI_ACTION_TOOL_PREFIXES = (
         "web_tools.",
+        "rendering_tools.write_",
     )
 
     @property
@@ -1132,13 +1135,69 @@ class ReactSolverV2:
         if code == "tool_signature_red":
             return f"tool params failed signature validation for tool_id={tool_id or 'unknown'}. No action was executed for this round."
         if code == "code_channel_with_multi_action":
-            return "code channel is only allowed with exactly one exec action."
-        if code == "code_channel_without_single_exec":
-            return "code channel is only allowed when the single action is exec_tools.execute_code_python."
-        if code == "ReactDecisionOutV2_schema_error":
             return (
-                "Bad Protocol. The agent output in <channel:ReactDecisionOutV2> could not be parsed, "
-                f"so no action was executed for this round. {error}'."
+                "You emitted multiple tool actions and also emitted non-empty `channel:code`, "
+                "but the round did not contain exactly one exec_tools.execute_code_python action for that code. "
+                "No tools were run. Next: either emit the tool actions again with an empty `channel:code`, "
+                "or include exactly one exec_tools.execute_code_python action for the Python in `channel:code`."
+            )
+        if code == "code_channel_exec_incomplete_with_multi_action":
+            return (
+                "You emitted multiple tool actions and one exec_tools.execute_code_python action, "
+                "but the exec action was not complete: it needs both params.contract and Python in `channel:code`. "
+                "No tools were run. Next: either emit a complete exec action with contract and code, "
+                "or split exec into its own round."
+            )
+        if code == "code_channel_without_single_exec":
+            return (
+                f"You emitted code, but the action is {tool_id or action or 'not an exec action'}. "
+                "Code is only allowed with exactly one exec_tools.execute_code_python action. "
+                "No tools were run. Next: remove the code channel content for this tool call, "
+                "or change the single action to exec_tools.execute_code_python and put Python only in `channel:code`."
+            )
+        if code == "multi_action_bundle_unsafe_tool":
+            unsafe_tool = str((extra or {}).get("tool_id") or tool_id or "that tool").strip()
+            if tools_insights.is_exec_tool(unsafe_tool):
+                return (
+                    f"You emitted a {unsafe_tool} action that was not complete enough to run in this multi-action round. "
+                    "That exec action was not run. Next: include exactly one exec_tools.execute_code_python action "
+                    "with params.contract and Python in `channel:code`, or run exec in its own round."
+                )
+            return (
+                f"You emitted multiple tool actions, but {unsafe_tool} cannot be combined with other actions. "
+                "That action was not run. Next: emit only that tool action, or split the actions across later rounds."
+            )
+        if code == "multi_action_bundle_mixed_actions":
+            rejected_action = str((extra or {}).get("action") or "").strip() or "a non-tool action"
+            return (
+                f"You emitted multiple actions, but one action was {rejected_action}. "
+                "A final answer must be the only action in its round; it cannot be emitted together with tool calls. "
+                "That action was not run. Next: if work is complete, emit exactly one complete/exit action; "
+                "otherwise emit only tool-call actions and complete in a later round."
+            )
+        if code == "multi_action_bundle_final_answer_not_allowed":
+            return (
+                "You emitted multiple tool actions and also included final_answer text. "
+                "Tool-call rounds must not include final_answer. That action was not run. "
+                "Next: emit the tool actions without final_answer, then complete in a later round after the tools finish."
+            )
+        if code == "multi_action_bundle_invalid_item":
+            return (
+                "One of the repeated action channel instances was not a valid ReactDecisionOutV2 JSON object. "
+                "That action was not run. Next: emit each action as its own valid "
+                "<channel:ReactDecisionOutV2> JSON object, with exactly one tool_call per action."
+            )
+        if code == "multi_action_bundle_too_small":
+            return (
+                "Only one valid tool action was available after parsing, but the round was treated as multiple-action recovery. "
+                "No tools were run. Next: emit one valid action for this round, or emit each independent action "
+                "in its own separate <channel:ReactDecisionOutV2> instance."
+            )
+        if code == "ReactDecisionOutV2_schema_error":
+            summary, _diagnostic = self._schema_error_diagnostics(error)
+            return (
+                "Malformed action JSON. <channel:ReactDecisionOutV2> could not be parsed, "
+                f"so no action was executed for this round. Parser reported: {summary}"
             )
         if final_answer and action == "call_tool":
             return f"final_answer present with action={action}."
@@ -1157,8 +1216,8 @@ class ReactSolverV2:
     ) -> str:
         if code == "ReactDecisionOutV2_schema_error":
             return (
-                "Wrong round. The agent wrote invalid content into the action channel, "
-                "so this round executed no action. Retry with exactly one valid action."
+                "Wrong round. The action channel was malformed JSON, so this round executed no action. "
+                "The protocol violation notice contains the parser error and diagnostic excerpt."
             )
         if code == "tool_call_invalid":
             target = tool_id or "the requested tool"
@@ -1178,10 +1237,58 @@ class ReactSolverV2:
                 f"Wrong round. The agent selected {target}, but that tool is not allowed in the ReAct loop, "
                 "so no action was executed."
             )
+        if code == "code_channel_with_multi_action":
+            return (
+                "Wrong round. Non-empty `channel:code` was emitted while the round contained more than one action. "
+                "`channel:code` can only be used in a multi-action round when exactly one action is "
+                "exec_tools.execute_code_python and that exec action is complete. No tools were run."
+            )
+        if code == "code_channel_exec_incomplete_with_multi_action":
+            return (
+                "Wrong round. The round had one exec action and non-empty `channel:code`, but the exec action "
+                "was not complete, so no tools were run."
+            )
+        if code == "code_channel_without_single_exec":
+            return (
+                "Wrong round. Code was emitted without a single exec_tools.execute_code_python action, "
+                "so no action was executed."
+            )
+        if code.startswith("multi_action_bundle_"):
+            return (
+                "Wrong round. Multiple actions were emitted, but at least one action could not be run in this round. "
+                "No partial action was executed; the protocol violation notice explains the exact correction."
+            )
         return (
             "Wrong round. The agent violated the ReAct action protocol, "
             "so this round executed no action."
         )
+
+    @staticmethod
+    def _schema_error_diagnostics(error: Optional[str]) -> tuple[str, str]:
+        raw = str(error or "").strip()
+        if not raw:
+            return "ReactDecisionOutV2 parser did not provide details.", ""
+        lines = [line.strip() for line in raw.splitlines() if line.strip()]
+        summary = next((line for line in lines if line.startswith("JSON parse error:")), lines[0])
+        detail_lines: List[str] = []
+        include_following = 0
+        for line in lines:
+            if line.startswith(("Block length:", "Characters ", "Still failed")):
+                detail_lines.append(line)
+                include_following = 2 if line.startswith("Characters ") else 0
+                continue
+            if include_following > 0:
+                detail_lines.append(line)
+                include_following -= 1
+                continue
+        if not detail_lines and len(lines) > 1:
+            detail_lines = lines[1:5]
+        diagnostic = "\n".join(detail_lines).strip()
+        if len(summary) > 500:
+            summary = summary[:500].rstrip() + "..."
+        if len(diagnostic) > 1800:
+            diagnostic = diagnostic[:1800].rstrip() + "..."
+        return summary, diagnostic
 
     def _record_failed_decision_attempt(
         self,
@@ -1234,6 +1341,98 @@ class ReactSolverV2:
             )
         except Exception:
             pass
+
+    def _record_dropped_multi_action_items(
+        self,
+        *,
+        iteration: int,
+        parent_tool_call_id: str,
+        rejected: List[Dict[str, Any]],
+        decision_bundle: List[Dict[str, Any]],
+        state: Dict[str, Any],
+    ) -> None:
+        if not self.ctx_browser or not rejected:
+            return
+        for item in rejected:
+            if not isinstance(item, dict):
+                continue
+            try:
+                idx = int(item.get("index") or 0)
+            except Exception:
+                idx = 0
+            code = str(item.get("code") or "multi_action_item_rejected").strip()
+            decision = decision_bundle[idx] if 0 <= idx < len(decision_bundle) and isinstance(decision_bundle[idx], dict) else {}
+            extra = item.get("extra") if isinstance(item.get("extra"), dict) else {}
+            if item.get("tool_id") and "tool_id" not in extra:
+                extra = {**extra, "tool_id": item.get("tool_id")}
+            notice_message = self._protocol_violation_message(
+                code=code,
+                decision=decision,
+                state=state,
+                extra={**extra, "index": idx},
+            )
+            try:
+                self.ctx_browser.contribute_notice(
+                    code=f"protocol_violation.{code}",
+                    message=f"Action #{idx + 1} was not run. {notice_message}",
+                    extra={
+                        "index": idx,
+                        "parent_tool_call_id": parent_tool_call_id,
+                        **({"tool_id": item.get("tool_id")} if item.get("tool_id") else {}),
+                        **({"details": extra} if extra else {}),
+                    },
+                    call_id=parent_tool_call_id,
+                    meta={
+                        "rel": "call",
+                        "iteration": iteration,
+                        "partial_multi_action": True,
+                    },
+                )
+            except Exception:
+                pass
+
+    def _record_dropped_action_parse_items(
+        self,
+        *,
+        iteration: int,
+        parent_tool_call_id: str,
+        parse_errors: List[Dict[str, Any]],
+    ) -> None:
+        if not self.ctx_browser or not parse_errors:
+            return
+        for item in parse_errors:
+            if not isinstance(item, dict):
+                continue
+            try:
+                idx = int(item.get("index") or 0)
+            except Exception:
+                idx = 0
+            error_text = str(item.get("error") or "malformed_action_json").strip()
+            raw_preview = str(item.get("raw_preview") or "").strip()
+            message = (
+                f"Action #{idx + 1} was not run. One repeated action channel instance was malformed: "
+                f"{error_text}. Next: emit that action as one valid <channel:ReactDecisionOutV2> JSON object, "
+                "with exactly one tool_call per action."
+            )
+            try:
+                self.ctx_browser.contribute_notice(
+                    code="protocol_violation.multi_action_bundle_invalid_item",
+                    message=message,
+                    extra={
+                        "index": idx,
+                        "parent_tool_call_id": parent_tool_call_id,
+                        "parser_error": error_text,
+                        **({"raw_preview": raw_preview} if raw_preview else {}),
+                    },
+                    call_id=parent_tool_call_id,
+                    meta={
+                        "rel": "call",
+                        "iteration": iteration,
+                        "partial_multi_action": True,
+                    },
+                )
+            except Exception:
+                pass
 
     async def _emit_timeline_text(self, *, text: str, agent: str, artifact_name: str):
         if not text:
@@ -1327,6 +1526,7 @@ class ReactSolverV2:
         *,
         packet: Dict[str, Any],
         bundle: List[Dict[str, Any]],
+        exec_streamer: Optional[Any] = None,
     ) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
         channels = packet.get("channels") if isinstance(packet.get("channels"), dict) else {}
         code_text = ""
@@ -1336,7 +1536,10 @@ class ReactSolverV2:
         if not code_text:
             return None, None
         if len(bundle) != 1:
-            return "code_channel_with_multi_action", {"bundle_size": len(bundle)}
+            # Multi-action rounds are validated per action. A non-empty code
+            # channel is consumed only by one complete exec action; otherwise
+            # exec actions are dropped while independent actions can still run.
+            return None, None
         decision = bundle[0] if bundle else {}
         action = (decision.get("action") or "").strip()
         tool_call = decision.get("tool_call") or {}
@@ -1345,41 +1548,102 @@ class ReactSolverV2:
             return "code_channel_without_single_exec", {"action": action, "tool_id": tool_id}
         return None, None
 
+    @staticmethod
+    def _exec_indices_in_bundle(bundle: List[Dict[str, Any]]) -> List[int]:
+        indices: List[int] = []
+        for idx, item in enumerate(bundle or []):
+            if not isinstance(item, dict):
+                continue
+            action = (item.get("action") or "").strip()
+            tool_call = item.get("tool_call") if isinstance(item.get("tool_call"), dict) else {}
+            tool_id = (tool_call.get("tool_id") or "").strip()
+            if action == "call_tool" and tools_insights.is_exec_tool(tool_id):
+                indices.append(idx)
+        return indices
+
+    @staticmethod
+    def _exec_streamer_is_complete(exec_streamer: Optional[Any]) -> bool:
+        if exec_streamer is None:
+            return False
+        try:
+            is_complete = getattr(exec_streamer, "is_complete", None)
+            if callable(is_complete):
+                return bool(is_complete())
+        except Exception:
+            return False
+        try:
+            get_code = getattr(exec_streamer, "get_code", None)
+            code = get_code() if callable(get_code) else ""
+        except Exception:
+            code = ""
+        try:
+            has_contract = getattr(exec_streamer, "has_contract", None)
+            contract_ok = bool(has_contract()) if callable(has_contract) else bool(getattr(exec_streamer, "pending_contract", None))
+        except Exception:
+            contract_ok = False
+        return bool(str(code or "").strip()) and contract_ok
+
     async def _prepare_safe_multi_action_bundle(
         self,
         *,
         bundle: List[Dict[str, Any]],
         adapters_by_id: Dict[str, Dict[str, Any]],
+        allow_single_exec_with_code: bool = False,
     ) -> tuple[List[Dict[str, Any]], Optional[str], Optional[Dict[str, Any]]]:
         if len(bundle) < 2:
             return [], "multi_action_bundle_too_small", {"count": len(bundle)}
         accepted: List[Dict[str, Any]] = []
+        rejected: List[Dict[str, Any]] = []
+        exec_indices = self._exec_indices_in_bundle(bundle)
+
+        def _reject(idx: int, code: str, extra: Optional[Dict[str, Any]] = None, decision: Optional[Dict[str, Any]] = None) -> None:
+            tool_call = (decision or {}).get("tool_call") if isinstance(decision, dict) else {}
+            tool_id = (tool_call.get("tool_id") or "").strip() if isinstance(tool_call, dict) else ""
+            rejected.append({
+                "index": idx,
+                "code": code,
+                **({"tool_id": tool_id} if tool_id else {}),
+                **({"extra": extra} if extra else {}),
+            })
+
         for idx, item in enumerate(bundle):
             decision = copy.deepcopy(item) if isinstance(item, dict) else {}
             if not isinstance(decision, dict):
-                return [], "multi_action_bundle_invalid_item", {"index": idx}
+                _reject(idx, "multi_action_bundle_invalid_item")
+                continue
             action = (decision.get("action") or "").strip()
             if action != "call_tool":
-                return [], "multi_action_bundle_mixed_actions", {"index": idx, "action": action}
+                _reject(idx, "multi_action_bundle_mixed_actions", {"action": action}, decision)
+                continue
             if (decision.get("final_answer") or "").strip():
-                return [], "multi_action_bundle_final_answer_not_allowed", {"index": idx}
+                _reject(idx, "multi_action_bundle_final_answer_not_allowed", None, decision)
+                continue
             validation_error = self._validate_decision(decision)
             if validation_error:
-                return [], validation_error, {"index": idx}
+                _reject(idx, validation_error, None, decision)
+                continue
             tool_call = decision.get("tool_call") or {}
             tool_id = (tool_call.get("tool_id") or "").strip()
             if not self._is_safe_multi_action_tool(tool_id):
-                return [], "multi_action_bundle_unsafe_tool", {"index": idx, "tool_id": tool_id}
+                if not (
+                    allow_single_exec_with_code
+                    and len(exec_indices) == 1
+                    and idx == exec_indices[0]
+                    and tools_insights.is_exec_tool(tool_id)
+                ):
+                    _reject(idx, "multi_action_bundle_unsafe_tool", {"tool_id": tool_id}, decision)
+                    continue
             verdict = self._validate_tool_call_protocol(
                 tool_call=tool_call,
                 adapters_by_id=adapters_by_id,
             )
             if not verdict.get("ok"):
-                return [], "tool_call_invalid", {
+                _reject(idx, "tool_call_invalid", {
                     "index": idx,
                     "tool_id": tool_id,
                     "violations": verdict.get("violations") or [],
-                }
+                }, decision)
+                continue
             filtered_params = tool_call.get("params") or {}
             if tool_id and not tool_id.startswith("react.") and self.tools_subsystem is not None:
                 try:
@@ -1388,17 +1652,23 @@ class ReactSolverV2:
                     tv = {}
                 sig_status = tv.get("status")
                 if sig_status == "red":
-                    return [], "tool_signature_red", {
+                    _reject(idx, "tool_signature_red", {
                         "index": idx,
                         "tool_id": tool_id,
                         "issues": tv.get("issues") or [],
-                    }
+                    }, decision)
+                    continue
                 filtered_params = tv.get("params") or filtered_params
             if isinstance(tool_call, dict):
                 tool_call["params"] = filtered_params
                 decision["tool_call"] = tool_call
             accepted.append(decision)
-        return accepted, None, None
+        if accepted:
+            return accepted, None, ({"rejected": rejected} if rejected else None)
+        first = rejected[0] if rejected else {}
+        return [], str(first.get("code") or "multi_action_bundle_no_valid_actions"), {
+            "rejected": rejected,
+        }
 
     def _validate_tool_call_protocol(
         self,
@@ -1858,6 +2128,35 @@ class ReactSolverV2:
         decision_stream_instances: Dict[int, Dict[str, Any]] = {}
         record_streamers: List[Any] = []
         timeline_streamer: Optional[Any] = None
+        code_stream_state: Dict[str, Any] = {
+            "buffer": [],
+            "json_attached": False,
+            "blocked": False,
+            "exec_instance_idx": None,
+        }
+
+        async def _attach_exec_json_if_ready(instance_state: Dict[str, Any]) -> bool:
+            if exec_streamer_widget is None or code_stream_state["blocked"] or code_stream_state["json_attached"]:
+                return False
+            parsed_decision = instance_state.get("parsed_decision")
+            if not isinstance(parsed_decision, dict):
+                return False
+            tool_call = parsed_decision.get("tool_call") or {}
+            tool_id = (tool_call.get("tool_id") or "").strip()
+            if (parsed_decision.get("action") or "").strip() != "call_tool" or not tools_insights.is_exec_tool(tool_id):
+                return False
+            raw_json = "".join(instance_state.get("raw_chunks") or [])
+            if raw_json:
+                await exec_streamer_widget.feed_json(
+                    text=raw_json,
+                    completed=True,
+                    channel_instance=instance_state.get("instance_idx") or 0,
+                )
+            else:
+                return False
+            code_stream_state["json_attached"] = True
+            code_stream_state["exec_instance_idx"] = instance_state.get("instance_idx") or 0
+            return True
 
         def _ensure_decision_stream_instance(instance_idx: int) -> Dict[str, Any]:
             nonlocal timeline_streamer
@@ -1905,6 +2204,7 @@ class ReactSolverV2:
                     instance_state["parsed_decision"] = parsed_decision
                     instance_state["parse_error"] = parse_error
                     instance_state["completed"] = True
+                    await _attach_exec_json_if_ready(instance_state)
 
             instance_state["emit_json"] = _emit_instance_json
             decision_stream_instances[safe_idx] = instance_state
@@ -1919,33 +2219,33 @@ class ReactSolverV2:
             return [instance_state["emit_json"]]
 
         def _resolve_exec_code_stream_target() -> tuple[Optional[bool], Optional[Dict[str, Any]]]:
-            if len(decision_stream_instances) != 1:
-                return False, None
-            instance_state = decision_stream_instances.get(0)
-            if instance_state is None:
-                instance_state = next(iter(decision_stream_instances.values()), None)
-            if instance_state is None:
+            if not decision_stream_instances:
                 return None, None
-            if instance_state.get("parsed_decision") is None and instance_state.get("parse_error") is None:
-                parsed_decision, parse_error = parse_single_react_decision_from_channel_text(
-                    "".join(instance_state.get("raw_chunks") or [])
-                )
-                instance_state["parsed_decision"] = parsed_decision
-                instance_state["parse_error"] = parse_error
-            parsed_decision = instance_state.get("parsed_decision")
-            if not isinstance(parsed_decision, dict):
-                return None, instance_state
-            tool_call = parsed_decision.get("tool_call") or {}
-            tool_id = (tool_call.get("tool_id") or "").strip()
-            if (parsed_decision.get("action") or "").strip() == "call_tool" and tools_insights.is_exec_tool(tool_id):
-                return True, instance_state
-            return False, instance_state
-
-        code_stream_state: Dict[str, Any] = {
-            "buffer": [],
-            "json_attached": False,
-            "blocked": False,
-        }
+            exec_states: List[Dict[str, Any]] = []
+            unresolved = False
+            for instance_state in decision_stream_instances.values():
+                if instance_state.get("parsed_decision") is None and instance_state.get("parse_error") is None:
+                    parsed_decision, parse_error = parse_single_react_decision_from_channel_text(
+                        "".join(instance_state.get("raw_chunks") or [])
+                    )
+                    instance_state["parsed_decision"] = parsed_decision
+                    instance_state["parse_error"] = parse_error
+                parsed_decision = instance_state.get("parsed_decision")
+                if not isinstance(parsed_decision, dict):
+                    if not instance_state.get("completed"):
+                        unresolved = True
+                    continue
+                tool_call = parsed_decision.get("tool_call") or {}
+                tool_id = (tool_call.get("tool_id") or "").strip()
+                if (parsed_decision.get("action") or "").strip() == "call_tool" and tools_insights.is_exec_tool(tool_id):
+                    exec_states.append(instance_state)
+            if len(exec_states) == 1:
+                return True, exec_states[0]
+            if len(exec_states) > 1:
+                return False, None
+            if unresolved:
+                return None, None
+            return False, None
 
         async def _hub_on_code(text: str = "", completed: bool = False, **_kwargs) -> None:
             if code_stream_state["blocked"]:
@@ -1962,14 +2262,7 @@ class ReactSolverV2:
                 code_stream_state["blocked"] = True
                 return
             if not code_stream_state["json_attached"]:
-                raw_json = "".join(instance_state.get("raw_chunks") or [])
-                if raw_json:
-                    await exec_streamer_widget.feed_json(
-                        text=raw_json,
-                        completed=True,
-                        channel_instance=0,
-                    )
-                code_stream_state["json_attached"] = True
+                await _attach_exec_json_if_ready(instance_state)
             if code_stream_state["buffer"]:
                 buffered = "".join(code_stream_state["buffer"])
                 code_stream_state["buffer"].clear()
@@ -1977,12 +2270,12 @@ class ReactSolverV2:
                     await exec_streamer_widget.feed_code(
                         text=buffered,
                         completed=False,
-                        channel_instance=0,
+                        channel_instance=instance_state.get("instance_idx") or 0,
                     )
             await exec_streamer_widget.feed_code(
                 text=text or "",
                 completed=completed,
-                channel_instance=0,
+                channel_instance=instance_state.get("instance_idx") or 0,
             )
 
         t0 = time.perf_counter()
@@ -2108,6 +2401,14 @@ class ReactSolverV2:
             decision_packet if isinstance(decision_packet, dict) else {}
         )
         decision_bundle = self._decision_bundle_from_packet(decision_packet)
+        decision_parse_error_items = []
+        try:
+            packet_log = decision_packet.get("log") if isinstance(decision_packet, dict) else {}
+            maybe_items = packet_log.get("bundle_error_items") if isinstance(packet_log, dict) else None
+            if isinstance(maybe_items, list):
+                decision_parse_error_items = [item for item in maybe_items if isinstance(item, dict)]
+        except Exception:
+            decision_parse_error_items = []
         bundle_mode = False
         error = (decision_packet.get("log") or {}).get("error")
         if decision_bundle and self._multi_action_enabled():
@@ -2115,6 +2416,7 @@ class ReactSolverV2:
         packet_validation_error, packet_validation_extra = self._validate_decision_packet_channel_consistency(
             packet=decision_packet if isinstance(decision_packet, dict) else {},
             bundle=decision_bundle,
+            exec_streamer=exec_streamer_widget,
         )
 
         try:
@@ -2123,6 +2425,7 @@ class ReactSolverV2:
                 decision=decision,
                 title=f"solver.react.v3.decision ({iteration})",
                 iteration=iteration,
+                tool_call_id=pending_tool_call_id,
             )
         except Exception:
             pass
@@ -2133,6 +2436,7 @@ class ReactSolverV2:
         protocol_entry = None
 
         if error:
+            error_summary, error_diagnostic = self._schema_error_diagnostics(error)
             notice_message = self._protocol_violation_message(
                 code="ReactDecisionOutV2_schema_error",
                 error=error,
@@ -2148,6 +2452,10 @@ class ReactSolverV2:
                     notice_message=notice_message,
                     decision_packet=decision,
                     reason="schema_error",
+                    notice_extra={
+                        "parser_error": error_summary,
+                        **({"diagnostic_excerpt": error_diagnostic} if error_diagnostic else {}),
+                    },
                 )
                 self.log.log(f"[react.v3] decision schema error: {error}", level="ERROR")
             except Exception:
@@ -2209,11 +2517,19 @@ class ReactSolverV2:
                     return state
                 decision = {"action": "exit", "final_answer": "Decision validation failed."}
 
+            if decision_parse_error_items and decision_bundle:
+                self._record_dropped_action_parse_items(
+                    iteration=iteration,
+                    parent_tool_call_id=pending_tool_call_id,
+                    parse_errors=decision_parse_error_items,
+                )
+
             if len(decision_bundle) > 1 and self._multi_action_enabled():
                 adapters_by_id = self._adapters_index(state.get("adapters") or [])
                 accepted_bundle, bundle_error, bundle_extra = await self._prepare_safe_multi_action_bundle(
                     bundle=decision_bundle,
                     adapters_by_id=adapters_by_id,
+                    allow_single_exec_with_code=self._exec_streamer_is_complete(exec_streamer_widget),
                 )
                 if bundle_error:
                     notice_message = self._protocol_violation_message(
@@ -2254,11 +2570,21 @@ class ReactSolverV2:
                     state["invalid_action_retries"] = 0
                     state["force_compaction_next_decision"] = False
                     state["retry_decision"] = False
+                    rejected_items = (bundle_extra or {}).get("rejected") if isinstance(bundle_extra, dict) else None
+                    if isinstance(rejected_items, list) and rejected_items:
+                        self._record_dropped_multi_action_items(
+                            iteration=iteration,
+                            parent_tool_call_id=pending_tool_call_id,
+                            rejected=rejected_items,
+                            decision_bundle=decision_bundle,
+                            state=state,
+                        )
                     decision = accepted_bundle[0]
                     state["pending_tool_bundle"] = [
                         {
                             "decision": item,
                             "tool_call_id": f"tc_{uuid.uuid4().hex[:12]}",
+                            "iteration": iteration,
                         }
                         for item in accepted_bundle
                     ]
@@ -2650,6 +2976,19 @@ class ReactSolverV2:
                         iteration=iteration,
                         working_summary_text=working_summary_text,
                     )
+                    timeline = getattr(self.ctx_browser, "timeline", None) if self.ctx_browser else None
+                    block_factory = getattr(timeline, "block", None)
+                    contribute = getattr(self.ctx_browser, "contribute", None) if self.ctx_browser else None
+                    if entry and callable(block_factory) and callable(contribute):
+                        entries = getattr(self.scratchpad, "assistant_completion_attempts", []) or []
+                        attempt_blocks = build_assistant_completion_attempt_blocks(
+                            runtime=self.ctx_browser.runtime_ctx,
+                            entry=entry,
+                            attempt_index=len(entries),
+                            block_factory=block_factory,
+                        )
+                        if attempt_blocks:
+                            contribute(blocks=attempt_blocks)
                     session_cfg = getattr(getattr(self.ctx_browser, "runtime_ctx", None), "session", None)
                     working_summary_enabled = bool(getattr(session_cfg, "working_summary_enabled", True))
                     if entry and working_summary_enabled and str(working_summary_text or "").strip():
@@ -2758,6 +3097,10 @@ class ReactSolverV2:
         state["timeline_streamer"] = timeline_streamer
         state["pending_exec_id"] = exec_id
         state["pending_tool_call_id"] = None if bundle_mode else pending_tool_call_id
+        if action == "call_tool":
+            state["pending_tool_origin_iteration"] = iteration
+        else:
+            state.pop("pending_tool_origin_iteration", None)
         state["last_decision"] = decision
         state["iteration"] = iteration + 1
         bs = state.get("budget_state_v2")
@@ -2795,10 +3138,15 @@ class ReactSolverV2:
                     return state
                 decision = item.get("decision") if isinstance(item, dict) else None
                 tool_call_id = (item.get("tool_call_id") or "").strip() if isinstance(item, dict) else ""
+                try:
+                    origin_iteration = int(item.get("iteration")) if isinstance(item, dict) and item.get("iteration") is not None else int(state.get("pending_tool_origin_iteration"))
+                except Exception:
+                    origin_iteration = max(0, int(state.get("iteration") or 0) - 1)
                 if not isinstance(decision, dict):
                     continue
                 state["last_decision"] = decision
                 state["pending_tool_call_id"] = tool_call_id or None
+                state["pending_tool_origin_iteration"] = origin_iteration
                 notes = (decision.get("notes") or "").strip()
                 tool_call = decision.get("tool_call") or {}
                 tool_id = (tool_call.get("tool_id") or "").strip()
@@ -2810,7 +3158,7 @@ class ReactSolverV2:
                             tool_call_id=tool_call_id,
                             tool_id=tool_id,
                             action="call_tool",
-                            iteration=int(state.get("iteration") or 0),
+                            iteration=origin_iteration,
                         )
                     except Exception:
                         pass
@@ -2833,10 +3181,15 @@ class ReactSolverV2:
                 if state.get("exit_reason"):
                     return state
             state["pending_tool_call_id"] = None
+            state.pop("pending_tool_origin_iteration", None)
             return state
 
         if await self._apply_steer_interrupt_if_requested(state, checkpoint="tool.before_execute"):
             return state
+        try:
+            state.setdefault("pending_tool_origin_iteration", max(0, int(state.get("iteration") or 0) - 1))
+        except Exception:
+            state.setdefault("pending_tool_origin_iteration", 0)
         interrupted, result = await self._run_cancellable_phase(
             phase="tool_execution",
             coro=ReactRound.execute(react=self, state=state),
@@ -2853,6 +3206,7 @@ class ReactSolverV2:
         if await self._apply_steer_interrupt_if_requested(state, checkpoint="tool.after_execute"):
             return state
         await _merge_pending_sources(state)
+        state.pop("pending_tool_origin_iteration", None)
         return state
 
     async def _exit_node(self, state: Dict[str, Any]) -> Dict[str, Any]:

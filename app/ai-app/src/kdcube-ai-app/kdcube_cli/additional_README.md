@@ -225,6 +225,7 @@ Correct split:
 # workdir/config/assembly.yaml
 paths:
   host_bundles_path: "/Users/you/src"
+  host_react_debug_path: "/Users/you/.kdcube/kdcube-runtime/data/react-debug"
 ```
 
 ```yaml
@@ -656,16 +657,18 @@ That first local bootstrap is descriptor-first and local-first:
 
 - `storage.workspace.type=local`
 - `storage.claude_code_session.type=local`
-- `storage.kdcube=/kdcube-storage`
-- `storage.bundles=/bundle-storage`
+- `storage.kdcube=null`
+- `storage.bundles=null`
 - `bundles.default_bundle_id=versatile@2026-03-31-13-36`
 
-When a seed descriptor sets `storage.kdcube` or `storage.bundles` to a host
-`file://...` path, `init` treats that as a host-side storage root. The staged
-runtime descriptor is rewritten to the container paths `file:///kdcube-storage`
-and `file:///bundle-storage`, and compose mounts the selected host roots there.
-This keeps descriptors portable while still allowing local host storage during
-CLI testing.
+For local seed descriptors, `null` or a missing value means CLI-managed storage
+under the tenant/project runtime namespace:
+`~/.kdcube/kdcube-runtime/<safe_tenant>__<safe_project>/data/`.
+The staged runtime descriptor is rewritten to container mount paths
+`file:///kdcube-storage` and `file:///bundle-storage`, and compose mounts the
+selected host roots there. A seed descriptor may still set
+`storage.kdcube` or `storage.bundles` to an explicit host `file://...` path for
+custom local storage, or to an explicit `s3://...` URI for remote storage.
 
 On a fresh default run, the installer asks only for:
 
@@ -734,6 +737,7 @@ Example workdir layout:
 │  │  ├─ accounting/<tenant>/project/<YYYY.MM.DD>/<service>/<bundle_id>/
 │  │  └─ analytics/<tenant>/project/accounting/{daily,weekly,monthly}/
 │  ├─ exec-workspace/
+│  ├─ react-debug/
 │  └─ bundle-storage/
 └─ logs/
    ├─ chat-ingress/
