@@ -269,6 +269,11 @@ config:
     web_app_widgets:
       memories:
         enabled: true
+      versatile_webapp:
+        shared_sources:
+          memory_widget:
+            src_folder: sdk://context/memory/ui/widget/memories
+            target: _shared/memory-widget
 ```
 
 Behavior:
@@ -286,6 +291,10 @@ Behavior:
 - `ui.web_app_widgets.memories.enabled` exposes the widget route; the default
   source folder and build command come from the memory mixin unless explicitly
   overridden.
+- `ui.web_app_widgets.<alias>.shared_sources` can materialize reusable SDK UI
+  source into a bundle widget build workspace. This is how a bundle web app can
+  mount the built-in memory widget as a direct React component without an
+  iframe and without depending on local monorepo paths.
 
 Storage summary:
 

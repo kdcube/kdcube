@@ -19,23 +19,46 @@ export interface RouteContext {
 }
 
 export interface MemoryEntry {
-  key?: string;
-  value?: unknown;
-  origin?: string;
-  evidence?: string;
+  id?: string;
+  memory?: string;
+  context?: string;
+  kind?: string;
+  status?: string;
+  tier?: number;
+  pinned?: boolean;
+  labels?: string[];
+  keywords?: string[];
+  confidence_score?: number;
+  importance_score?: number;
+  salience_score?: number;
+  evidence_count?: number;
   updated_at?: string;
-  captured_at?: string;
+  last_event_at?: string;
+  score?: number;
 }
 
 export interface MemoryPayload {
   ok?: boolean;
   user_id?: string;
-  entries?: MemoryEntry[];
-  items?: MemoryEntry[];
   memories?: MemoryEntry[];
-  document_text?: string;
   count?: number;
+  scope?: {
+    user_id?: string;
+    bundle_id?: string;
+    filter?: string;
+  };
+  filters?: {
+    query?: string;
+    scope_filter?: string;
+    status?: string;
+  };
+  capabilities?: {
+    can_write?: boolean;
+    allow_all_user_memories?: boolean;
+  };
+  has_more?: boolean;
   error?: string;
+  message?: string;
 }
 
 export interface ConversationItem {

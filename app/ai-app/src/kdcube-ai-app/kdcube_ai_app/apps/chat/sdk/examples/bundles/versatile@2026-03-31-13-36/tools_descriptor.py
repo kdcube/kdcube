@@ -17,6 +17,11 @@ TOOLS_SPECS: List[Dict[str, Any]] = [
         "use_sk": True,
     },
     {
+        "module": "kdcube_ai_app.apps.chat.sdk.context.memory.tools",
+        "alias": "memory",
+        "use_sk": True,
+    },
+    {
         "module": "kdcube_ai_app.apps.chat.sdk.tools.exec_tools",
         "alias": "exec_tools",
         "use_sk": True,
@@ -34,11 +39,6 @@ TOOLS_SPECS: List[Dict[str, Any]] = [
     {
         "module": "kdcube_ai_app.apps.chat.sdk.tools.browser_tools",
         "alias": "browser_tools",
-        "use_sk": True,
-    },
-    {
-        "ref": "tools/preference_tools.py",
-        "alias": "preferences",
         "use_sk": True,
     },
 ]

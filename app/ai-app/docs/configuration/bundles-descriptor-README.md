@@ -157,6 +157,11 @@ bundles:
           web_app_widgets:
             memories:
               enabled: true
+            versatile_webapp:
+              shared_sources:
+                memory_widget:
+                  src_folder: sdk://context/memory/ui/widget/memories
+                  target: _shared/memory-widget
 ```
 
 `memory.enabled` gates the subsystem. `memory.announce` projects a read-only
@@ -165,6 +170,9 @@ tools. `memory.widget` enables user-owned CRUD in the Memory widget.
 `memory.reconciliation` and `memory.snapshots` control maintenance jobs and
 restore points. `ui.web_app_widgets.memories.enabled` exposes the built widget
 route; the memory mixin supplies the default source folder/build command.
+`ui.web_app_widgets.<alias>.shared_sources` is optional and materializes reusable
+SDK UI source into that widget build workspace; this is useful for external-git
+bundles that want to mount platform widgets as direct React components.
 
 ## Two supported bundle styles
 

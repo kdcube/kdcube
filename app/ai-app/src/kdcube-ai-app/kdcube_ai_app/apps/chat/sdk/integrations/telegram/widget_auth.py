@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import inspect
 import json
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable
 
 from fastapi import HTTPException
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bundle_registry import register_config, resolve_config
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram import (
     INIT_DATA_HEADER,
     extract_telegram_init_data_from_request,
@@ -12,30 +14,52 @@ from kdcube_ai_app.apps.chat.sdk.integrations.telegram import (
 )
 
 _storage_for: Callable[[Any], Any] | None = None
-_bot_token: Callable[[], str] | None = None
+_bot_token: Callable[..., str] | None = None
+_CONFIGS: Dict[str, Dict[str, Any]] = {}
 
 
 def configure_telegram_widget_auth(
     *,
     storage_for: Callable[[Any], Any],
-    bot_token: Callable[[], str],
+    bot_token: Callable[..., str],
+    bundle_id: str = "",
 ) -> None:
     """Bind bundle-owned Telegram user storage and bot token resolution."""
     global _storage_for, _bot_token
     _storage_for = storage_for
     _bot_token = bot_token
+    register_config(
+        _CONFIGS,
+        bundle_id=bundle_id,
+        config={
+            "storage_for": storage_for,
+            "bot_token": bot_token,
+        },
+    )
+
+
+def _config(entrypoint: Any = None) -> Dict[str, Any]:
+    return resolve_config(_CONFIGS, entrypoint=entrypoint, label="telegram widget auth integration")
 
 
 def _storage(entrypoint: Any) -> Any:
-    if _storage_for is None:
+    storage_for = _config(entrypoint).get("storage_for")
+    if storage_for is None:
         raise RuntimeError("telegram widget auth integration is not configured: storage_for is missing")
-    return _storage_for(entrypoint)
+    return storage_for(entrypoint)
 
 
-def _token() -> str:
-    if _bot_token is None:
+def _token(entrypoint: Any) -> str:
+    bot_token = _config(entrypoint).get("bot_token")
+    if bot_token is None:
         raise RuntimeError("telegram widget auth integration is not configured: bot_token is missing")
-    return _bot_token()
+    try:
+        signature = inspect.signature(bot_token)
+    except (TypeError, ValueError):
+        return bot_token(entrypoint)
+    if len(signature.parameters) == 0:
+        return bot_token()
+    return bot_token(entrypoint)
 
 
 @dataclass(frozen=True)
@@ -78,7 +102,7 @@ def resolve_identity(
     max_age = int(entrypoint.bundle_prop("integrations.telegram.web_app_auth_max_age_seconds", 86400) or 86400)
     verified = validate_telegram_init_data(
         init_data,
-        bot_token=_token(),
+        bot_token=_token(entrypoint),
         max_age_seconds=max_age,
     )
     user = verified.user

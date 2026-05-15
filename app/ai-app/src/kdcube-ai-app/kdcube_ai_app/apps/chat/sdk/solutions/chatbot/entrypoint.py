@@ -296,6 +296,22 @@ class BaseEntrypoint:
         return sha.hexdigest()
 
     @staticmethod
+    def _ui_copy_ignore_patterns():
+        import shutil
+
+        return shutil.ignore_patterns(
+            "node_modules",
+            "dist",
+            "build",
+            ".vite",
+            ".vite-temp",
+            ".react_workspace_git",
+            ".git",
+            "__pycache__",
+            "*.tsbuildinfo",
+        )
+
+    @staticmethod
     def _ui_config_enabled(cfg: Dict[str, Any]) -> bool:
         value = cfg.get("enabled", True)
         if isinstance(value, bool):
@@ -381,10 +397,93 @@ class BaseEntrypoint:
         return install_args
 
     def _resolve_ui_src_path(self, *, src_folder: str, bundle_root: str) -> pathlib.Path:
+        raw = str(src_folder or "").strip()
+        if raw.startswith("sdk://") or raw.startswith("bundle://"):
+            return self._resolve_ui_shared_source_path(source=raw, bundle_root=bundle_root)
         src_path = pathlib.Path(src_folder)
         if not src_path.is_absolute():
             return (pathlib.Path(bundle_root) / src_folder).resolve()
         return src_path.resolve()
+
+    @staticmethod
+    def _sdk_source_root() -> pathlib.Path:
+        return pathlib.Path(__file__).resolve().parents[2]
+
+    def _resolve_ui_shared_source_path(self, *, source: str, bundle_root: str) -> pathlib.Path:
+        raw = str(source or "").strip()
+        if raw.startswith("sdk://"):
+            rel = raw[len("sdk://"):].strip().lstrip("/")
+            if not rel:
+                raise ValueError("shared UI source sdk:// path is empty")
+            root = self._sdk_source_root()
+            resolved = (root / rel).resolve()
+            try:
+                resolved.relative_to(root)
+            except ValueError as exc:
+                raise ValueError(f"shared UI source escapes SDK root: {source!r}") from exc
+            return resolved
+        if raw.startswith("bundle://"):
+            rel = raw[len("bundle://"):].strip().lstrip("/")
+            if not rel:
+                raise ValueError("shared UI source bundle:// path is empty")
+            return (pathlib.Path(bundle_root) / rel).resolve()
+        path = pathlib.Path(raw)
+        if path.is_absolute():
+            return path.resolve()
+        return (pathlib.Path(bundle_root) / raw).resolve()
+
+    @staticmethod
+    def _safe_ui_shared_target_path(target: str) -> pathlib.Path:
+        normalized = str(target or "").strip().replace("\\", "/").strip("/")
+        if not normalized:
+            raise ValueError("shared UI target is empty")
+        path = pathlib.PurePosixPath(normalized)
+        if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+            raise ValueError(f"unsafe shared UI target path: {target!r}")
+        return pathlib.Path(*path.parts)
+
+    def _ui_shared_source_specs(self, *, cfg: Dict[str, Any], bundle_root: str) -> list[Dict[str, Any]]:
+        raw_sources = cfg.get("shared_sources") or cfg.get("materialized_sources") or {}
+        if not raw_sources:
+            return []
+
+        if isinstance(raw_sources, dict):
+            items = list(raw_sources.items())
+        elif isinstance(raw_sources, list):
+            items = [(str(idx), item) for idx, item in enumerate(raw_sources)]
+        else:
+            raise ValueError("ui shared_sources must be a mapping or list")
+
+        specs: list[Dict[str, Any]] = []
+        for key, raw_spec in items:
+            name = str(key or "shared").strip() or "shared"
+            if isinstance(raw_spec, str):
+                source = raw_spec
+                target = f"_shared/{name}"
+            elif isinstance(raw_spec, dict):
+                source = str(
+                    raw_spec.get("src_folder")
+                    or raw_spec.get("source_dir")
+                    or raw_spec.get("source")
+                    or ""
+                ).strip()
+                target = str(raw_spec.get("target") or raw_spec.get("target_dir") or f"_shared/{name}").strip()
+            else:
+                raise ValueError(f"shared UI source {name!r} must be a path string or mapping")
+            if not source:
+                raise ValueError(f"shared UI source {name!r} has no source path")
+            source_path = self._resolve_ui_shared_source_path(source=source, bundle_root=bundle_root)
+            if not source_path.exists():
+                raise FileNotFoundError(f"shared UI source {name!r} not found: {source}")
+            if not source_path.is_dir():
+                raise ValueError(f"shared UI source {name!r} must be a directory: {source_path}")
+            specs.append({
+                "name": name,
+                "source": source,
+                "src_path": source_path,
+                "target_path": self._safe_ui_shared_target_path(target),
+            })
+        return specs
 
     async def _ensure_static_ui_app_build(
         self,
@@ -423,11 +522,17 @@ class BaseEntrypoint:
             self.logger.log(f"[bundle.ui] {kind} build skipped: src_folder not found: {src_folder!r}", "WARNING")
             return
 
+        shared_specs = self._ui_shared_source_specs(cfg=cfg, bundle_root=bundle_root)
         build_dest.parent.mkdir(parents=True, exist_ok=True)
         signature_path.parent.mkdir(parents=True, exist_ok=True)
 
         bundle_delivery_id = str(getattr(getattr(self.config, "ai_bundle_spec", None), "id", "") or "")
-        source_signature = self._ui_source_signature(src_path)
+        source_signature_parts = [f"src:{src_path}:{self._ui_source_signature(src_path)}"]
+        for spec in shared_specs:
+            source_signature_parts.append(
+                f"shared:{spec['name']}:{spec['src_path']}:{spec['target_path']}:{self._ui_source_signature(spec['src_path'])}"
+            )
+        source_signature = "|".join(source_signature_parts)
         signature = f"{kind}|{src_path}|{build_command}|{bundle_delivery_id}|{source_signature}"
 
         async def _build_ui() -> None:
@@ -442,18 +547,27 @@ class BaseEntrypoint:
                 shutil.copytree(
                     src_path,
                     tmp_src,
-                    ignore=shutil.ignore_patterns(
-                        "node_modules",
-                        "dist",
-                        "build",
-                        ".vite",
-                        ".vite-temp",
-                        ".react_workspace_git",
-                        ".git",
-                        "__pycache__",
-                        "*.tsbuildinfo",
-                    ),
+                    ignore=self._ui_copy_ignore_patterns(),
                 )
+                tmp_src_resolved = tmp_src.resolve()
+                for spec in shared_specs:
+                    shared_target = (tmp_src / spec["target_path"]).resolve()
+                    try:
+                        shared_target.relative_to(tmp_src_resolved)
+                    except ValueError as exc:
+                        raise ValueError(f"shared UI target escapes build workspace: {spec['target_path']}") from exc
+                    shutil.rmtree(shared_target, ignore_errors=True)
+                    shared_target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copytree(
+                        spec["src_path"],
+                        shared_target,
+                        ignore=self._ui_copy_ignore_patterns(),
+                    )
+                    self.logger.log(
+                        f"[bundle.ui] {kind} materialized shared source {spec['name']}: "
+                        f"{spec['src_path']} -> {shared_target}",
+                        "INFO",
+                    )
                 final_command = self._prepare_ui_build_command(build_command=build_command, tmp_dest=tmp_dest)
                 self.logger.log(
                     f"[bundle.ui] {kind} build start: src={src_path} build_src={tmp_src} dest={build_dest}",
@@ -601,6 +715,10 @@ class BaseEntrypoint:
         - `ui.main_view.src_folder/build_command` -> <bundle_storage_root>/ui
         - `ui.web_app_widgets.<alias>.src_folder/build_command`
           -> <bundle_storage_root>/ui/widgets/<alias>
+        - optional `shared_sources` on any UI app copies extra source folders
+          into the temporary build workspace, for example:
+          `shared_sources.memory_widget.src_folder=sdk://context/memory/ui/widget/memories`
+          and `shared_sources.memory_widget.target=_shared/memory-widget`.
 
         Uses a signature that includes source tree metadata to skip rebuilding when nothing changed.
         Bundles can override this method to customise the build behaviour.

@@ -56,6 +56,10 @@ class Settings {
     return isPlaceholder(this.values.bundleId) ? context.bundleId : this.values.bundleId;
   }
 
+  getWidgetAlias(): string {
+    return context.widgetAlias || 'memories';
+  }
+
   authHeaders(base?: HeadersInit): Headers {
     const headers = new Headers(base);
     if (this.values.accessToken && !isPlaceholder(this.values.accessToken)) {

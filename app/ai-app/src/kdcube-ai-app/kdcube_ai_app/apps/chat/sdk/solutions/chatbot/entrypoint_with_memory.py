@@ -10,6 +10,8 @@ import inspect
 import json
 import threading
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
@@ -48,6 +50,7 @@ def _deep_merge_missing(target: Dict[str, Any], defaults: Dict[str, Any]) -> Dic
 
 _memory_reconciliation_locks_guard = threading.Lock()
 _memory_reconciliation_locks: dict[str, asyncio.Lock] = {}
+_memory_user_override: ContextVar[dict[str, str] | None] = ContextVar("kdcube_memory_user_override", default=None)
 
 
 class MemoryEntrypointMixin:
@@ -178,16 +181,44 @@ class MemoryEntrypointMixin:
                 _memory_reconciliation_locks[key] = lock
             return lock
 
+    @contextmanager
+    def _memory_user_identity(
+        self,
+        *,
+        user_id: str,
+        fingerprint: str = "",
+        user_type: str = "registered",
+    ):
+        token = _memory_user_override.set({
+            "user_id": str(user_id or "").strip(),
+            "fingerprint": str(fingerprint or "").strip(),
+            "user_type": str(user_type or "registered").strip() or "registered",
+        })
+        try:
+            yield
+        finally:
+            _memory_user_override.reset(token)
+
+    def _memory_effective_user_type(self, default: str = "registered") -> str:
+        override = _memory_user_override.get()
+        if isinstance(override, dict) and str(override.get("user_type") or "").strip():
+            return str(override.get("user_type") or "").strip()
+        return str(default or "registered").strip() or "registered"
+
     def _memory_scope(self):
         from kdcube_ai_app.apps.chat.sdk.context.memory import MemoryScope
 
         actor = getattr(self.comm_context, "actor", None)
         user = getattr(self.comm_context, "user", None)
         bundle_spec = getattr(getattr(self, "config", None), "ai_bundle_spec", None)
+        override = _memory_user_override.get()
+        override_user_id = ""
+        if isinstance(override, dict):
+            override_user_id = str(override.get("user_id") or "").strip()
         return MemoryScope(
             tenant=getattr(actor, "tenant_id", None) or self.settings.TENANT,
             project=getattr(actor, "project_id", None) or self.settings.PROJECT,
-            user_id=getattr(user, "user_id", None) or getattr(self.comm, "user_id", None) or "anonymous",
+            user_id=override_user_id or getattr(user, "user_id", None) or getattr(self.comm, "user_id", None) or "anonymous",
             bundle_id=getattr(bundle_spec, "id", None) or "",
         ).normalized()
 
@@ -1917,7 +1948,7 @@ class MemoryEntrypointMixin:
             from kdcube_ai_app.infra.jobs.stream import RedisBackgroundJobStream
 
             user = getattr(self.comm_context, "user", None)
-            user_type = str(getattr(user, "user_type", "") or "registered")
+            user_type = self._memory_effective_user_type(str(getattr(user, "user_type", "") or "registered"))
             routing = getattr(self.comm_context, "routing", None)
             stream = RedisBackgroundJobStream(redis, tenant=scope.tenant, project=scope.project)
             try:

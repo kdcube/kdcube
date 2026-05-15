@@ -26,6 +26,10 @@ ScopeProvider = Callable[[], Dict[str, Any]]
 StoreFactory = Callable[[Dict[str, Any]], UserMemoryStore]
 Embedder = Callable[[Sequence[str]], Awaitable[Sequence[Sequence[float]]]]
 
+REGISTRY: Dict[str, Any] = {}
+_SERVICE: Any = None
+SERVICE: Any = None
+
 
 def _ok(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"ok": True, **payload}
@@ -42,6 +46,28 @@ def _bool_filter(value: str) -> Optional[bool]:
     if normalized in {"false", "no", "0"}:
         return False
     return None
+
+
+def _truthy(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"", "0", "false", "off", "disabled", "no"}:
+        return False
+    if normalized in {"1", "true", "on", "enabled", "yes"}:
+        return True
+    return default
+
+
+def _cfg_path(data: Dict[str, Any], path: str, default: Any = None) -> Any:
+    cur: Any = data
+    for part in path.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return default
+        cur = cur[part]
+    return cur
 
 
 def _scope_from_dict(raw: Dict[str, Any]) -> MemoryScope:
@@ -418,3 +444,228 @@ def make_user_memory_tools(
             embedding_model=embedding_model,
         ),
     )
+
+
+def bind_registry(registry: Dict[str, Any] | None) -> None:
+    global REGISTRY
+    REGISTRY = dict(registry or {})
+
+
+def bind_service(service: Any) -> None:
+    global _SERVICE, SERVICE
+    _SERVICE = service
+    SERVICE = service
+
+
+def _bundle_props() -> Dict[str, Any]:
+    props = REGISTRY.get("bundle_props") or {}
+    return props if isinstance(props, dict) else {}
+
+
+def _tools_config() -> Dict[str, Any]:
+    cfg = _cfg_path(_bundle_props(), "memory.tools", {})
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def _memory_tools_enabled() -> bool:
+    props = _bundle_props()
+    return _truthy(_cfg_path(props, "memory.enabled"), False) and _truthy(_cfg_path(props, "memory.tools.enabled"), False)
+
+
+def _runtime_scope() -> Dict[str, Any]:
+    try:
+        from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import (
+            get_current_bundle_id,
+            get_current_comm,
+            get_current_request_context,
+        )
+    except Exception:  # pragma: no cover - import guard for isolated test contexts
+        get_current_bundle_id = lambda: None  # type: ignore
+        get_current_comm = lambda: None  # type: ignore
+        get_current_request_context = lambda: None  # type: ignore
+
+    request_context = get_current_request_context()
+    comm = get_current_comm()
+    actor = getattr(request_context, "actor", None)
+    user = getattr(request_context, "user", None)
+    routing = getattr(request_context, "routing", None)
+    bundle_spec = getattr(REGISTRY.get("config"), "ai_bundle_spec", None)
+    bundle_id = (
+        get_current_bundle_id()
+        or getattr(routing, "bundle_id", None)
+        or getattr(bundle_spec, "id", None)
+        or ""
+    )
+    conversation = getattr(comm, "conversation", None)
+    if not isinstance(conversation, dict):
+        conversation = {}
+    return {
+        "pg_pool": REGISTRY.get("pg_pool"),
+        "tenant": getattr(actor, "tenant_id", None) or getattr(comm, "tenant", None) or "default",
+        "project": getattr(actor, "project_id", None) or getattr(comm, "project", None) or "default",
+        "user_id": getattr(user, "user_id", None) or getattr(comm, "user_id", None) or "anonymous",
+        "bundle_id": bundle_id,
+        "conversation_id": getattr(routing, "conversation_id", None) or conversation.get("conversation_id") or "",
+        "turn_id": getattr(routing, "turn_id", None) or conversation.get("turn_id") or "",
+        "originator": "agent",
+    }
+
+
+async def _embed_texts(texts: Sequence[str]) -> Sequence[Sequence[float]]:
+    service = _SERVICE or SERVICE
+    if service is None or not hasattr(service, "embed_texts"):
+        return []
+    return await service.embed_texts(list(texts))
+
+
+def _configured_tools() -> UserMemoryTools | None:
+    if not _memory_tools_enabled():
+        return None
+    cfg = _tools_config()
+    return make_user_memory_tools(
+        scope_provider=_runtime_scope,
+        embedder=_embed_texts,
+        allow_write=_truthy(cfg.get("allow_write"), False),
+        ensure_schema_on_first_use=_truthy(cfg.get("ensure_schema_on_first_use"), False),
+        default_scope_filter=str(cfg.get("default_scope_filter") or "current_bundle"),
+        embedding_enabled=_truthy(cfg.get("embedding_enabled"), True),
+        embedding_timeout_seconds=float(cfg.get("embedding_timeout_seconds") or 3.0),
+        embedding_model=str(cfg.get("embedding_model") or ""),
+    )
+
+
+def _disabled_error() -> Dict[str, Any]:
+    return _error(
+        "memory_tools_disabled",
+        "Durable user memory tools are disabled for this bundle. Enable memory.enabled and memory.tools.enabled in the bundle config.",
+    )
+
+
+async def search_memory(
+    query: str = "",
+    mode: str = "hybrid",
+    labels: str = "",
+    keywords: str = "",
+    kind: str = "",
+    status: str = "active",
+    visible_to_user: str = "",
+    scope_filter: str = "",
+    limit: int = 8,
+) -> Dict[str, Any]:
+    """Search durable cross-conversation user memory."""
+    tools = _configured_tools()
+    if tools is None:
+        return _disabled_error()
+    return await tools.search_memory(
+        query=query,
+        mode=mode,
+        labels=labels,
+        keywords=keywords,
+        kind=kind,
+        status=status,
+        visible_to_user=visible_to_user,
+        scope_filter=scope_filter,
+        limit=limit,
+    )
+
+
+async def recent_memories(
+    limit: int = 10,
+    created: str = "",
+    visible_to_user: str = "",
+    scope_filter: str = "",
+) -> Dict[str, Any]:
+    """Return recent durable user memories."""
+    tools = _configured_tools()
+    if tools is None:
+        return _disabled_error()
+    return await tools.recent_memories(
+        limit=limit,
+        created=created,
+        visible_to_user=visible_to_user,
+        scope_filter=scope_filter,
+    )
+
+
+async def record_memory(
+    memory: str,
+    context: str = "",
+    kind: str = "fact",
+    event_type: str = "agent_observation",
+    labels: str = "",
+    keywords: str = "",
+    visibility: str = "user",
+    confidence: float = 0.5,
+    importance: float = 0.5,
+    match_memory_id: str = "",
+) -> Dict[str, Any]:
+    """Create or update durable user memory when the bundle policy permits writes."""
+    tools = _configured_tools()
+    if tools is None:
+        return _disabled_error()
+    return await tools.record_memory(
+        memory=memory,
+        context=context,
+        kind=kind,
+        event_type=event_type,
+        labels=labels,
+        keywords=keywords,
+        visibility=visibility,
+        confidence=confidence,
+        importance=importance,
+        match_memory_id=match_memory_id,
+    )
+
+
+async def confirm_memory(
+    memory_id: str,
+    note: str = "confirmed",
+    importance: float = 0.7,
+) -> Dict[str, Any]:
+    """Confirm an existing durable memory by id when writes are enabled."""
+    tools = _configured_tools()
+    if tools is None:
+        return _disabled_error()
+    return await tools.confirm_memory(memory_id=memory_id, note=note, importance=importance)
+
+
+async def retire_memory(
+    memory_id: str,
+    reason: str = "retired",
+) -> Dict[str, Any]:
+    """Retire an existing durable memory by id when writes are enabled."""
+    tools = _configured_tools()
+    if tools is None:
+        return _disabled_error()
+    return await tools.retire_memory(memory_id=memory_id, reason=reason)
+
+
+def list_tools() -> Dict[str, Dict[str, Any]]:
+    return {
+        "search_memory": {
+            "callable": search_memory,
+            "description": (
+                "Search durable cross-conversation user memory. Use this for stable user facts, "
+                "preferences, constraints, or durable project state, not for current-turn recovery."
+            ),
+        },
+        "recent_memories": {
+            "callable": recent_memories,
+            "description": "Return recent durable user memories for the current user and configured scope.",
+        },
+        "record_memory": {
+            "callable": record_memory,
+            "description": (
+                "Create or update durable user memory when policy allows writes. Search first. "
+                "Memory text should be compact trigger first plus rule; context is why/provenance/examples."
+            ),
+        },
+        "confirm_memory": {
+            "callable": confirm_memory,
+            "description": "Confirm an existing durable user memory by id when policy allows writes.",
+        },
+        "retire_memory": {
+            "callable": retire_memory,
+            "description": "Retire an existing durable user memory by id when policy allows writes.",
+        },
+    }

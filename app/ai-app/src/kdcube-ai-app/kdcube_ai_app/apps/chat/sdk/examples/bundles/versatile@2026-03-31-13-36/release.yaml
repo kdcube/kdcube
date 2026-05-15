@@ -1,26 +1,28 @@
 bundle:
   repo: "https://github.com/kdcube/kdcube-ai-app.git"
-  ref: "main"
+  ref: "2026.5.15.1"
   description: |
-    Reference-bundle update for versatile@2026-03-31-13-36.
+    User-memory and Telegram WebApp release for versatile@2026-03-31-13-36.
 
     Highlights
 
-    - Adds Telegram bot transport wiring to the versatile reference bundle:
-      public webhook, bundle-owned Telegram user registry, and queued Telegram
-      delivery around the normal workflow result.
-    - Adds a source-folder `versatile_webapp` widget that can run as a KDCube
-      control-plane widget or as a Telegram Mini App.
-    - Exposes the current preferences canvas as the temporary memory panel,
-      plus Telegram-linked chat/channel selection and Telegram admin surfaces.
-    - Adds bundle-maintainer artifacts: config templates, interface contract,
-      design note, journal, and this release metadata.
-    - Updates Tier 1 bundle-builder docs so `interface/` is part of the
-      expected bundle skeleton and SDK-block wiring map.
+    - Replaces the old preference-demo surface with the durable user-memory
+      subsystem: widget CRUD, pin/confirm/retire flows, snapshots, restore
+      preview/apply, and reconciliation job controls.
+    - Keeps the reference `versatile_webapp` usable both as a KDCube widget and
+      as a Telegram WebApp by materializing the shared memory widget source into
+      the bundle widget build.
+    - Registers Telegram SDK helpers with bundle-scoped configuration so
+      multiple Telegram-enabled bundles can run in the same processor without
+      import-time config collisions.
+    - Wires memory tools into the ReAct tool surface so configured bundles can
+      read and, when policy allows, write durable user memory.
+    - Documents the memory configuration shape and shared-widget build pattern
+      in the bundle SDK docs.
 
     Known follow-ups
 
-    - Replace the temporary preferences-backed memory panel with the new
-      cross-conversation memories subsystem.
-    - Validate the Telegram Mini App against a real BotFather webapp button and
-      public ngrok/deployed origin.
+    - Continue end-to-end Telegram Mini App validation against a deployed public
+      origin after descriptor reloads.
+    - Keep expanding reference scenarios that show memory search, snapshots, and
+      reconciliation from a bundle-builder perspective.

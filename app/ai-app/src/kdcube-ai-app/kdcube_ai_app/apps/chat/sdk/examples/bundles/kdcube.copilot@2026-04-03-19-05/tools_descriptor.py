@@ -59,6 +59,11 @@ TOOLS_SPECS: List[Dict[str, Any]] = [
         "use_sk": True,
     },
     {
+        "module": "kdcube_ai_app.apps.chat.sdk.context.memory.tools",
+        "alias": "memory",
+        "use_sk": True,
+    },
+    {
         "module": "kdcube_ai_app.apps.chat.sdk.tools.exec_tools",  # Code execution tools
         "alias": "exec_tools",
         "use_sk": True,

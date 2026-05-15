@@ -9,15 +9,13 @@ interface MemoryPageProps {
 export function MemoryPage({ memory, reload }: MemoryPageProps) {
   const count = Number(memory?.count || memory?.memories?.length || 0);
   return (
-    <section className="page page-wide memory-embed-page">
+    <section className="page page-wide memory-page">
       <div className="page-header">
         <div>
-          <h1>Memory</h1>
-          <p>{count} durable notes · shared memory widget</p>
+          <h1>User Memory</h1>
+          <p>{count} records in the current memory view</p>
         </div>
-        <div className="toolbar-actions">
-          <button type="button" className="ghost-button" onClick={() => void reload()}>Refresh</button>
-        </div>
+        <button type="button" className="ghost-button" onClick={() => void reload()}>Refresh</button>
       </div>
       {memory?.ok === false && (
         <div className="notice error">{memory.message || memory.error || 'Memory is unavailable.'}</div>

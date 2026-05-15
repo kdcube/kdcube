@@ -296,21 +296,12 @@ textarea {
   color: #6b7280;
 }
 
-.memory-editor {
-  min-height: 240px;
-  margin-bottom: 12px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 13px;
-  line-height: 1.55;
+.memory-embed-page {
+  width: min(100%, 1120px);
 }
 
-.memory-row {
-  align-items: flex-start;
-}
-
-.memory-row small {
-  flex: 0 0 auto;
-  margin-top: 2px;
+.memory-widget-direct {
+  min-height: 760px;
 }
 
 .admin-layout {

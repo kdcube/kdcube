@@ -1,6 +1,13 @@
 from __future__ import annotations
 
+import inspect
 from typing import Any, Dict, Optional
+
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bundle_registry import (
+    configured_bundle_id,
+    register_config,
+    resolve_config,
+)
 
 BUNDLE_ID = ""
 
@@ -8,6 +15,7 @@ memory_widgets: Any = None
 settings_widgets: Any = None
 task_widgets: Any = None
 telegram_user_admin: Any = None
+_CONFIGS: Dict[str, Dict[str, Any]] = {}
 
 
 def configure_telegram_webapp(
@@ -25,11 +33,27 @@ def configure_telegram_webapp(
     settings_widgets = settings_widgets_module
     task_widgets = task_widgets_module
     telegram_user_admin = telegram_user_admin_module
+    register_config(
+        _CONFIGS,
+        bundle_id=BUNDLE_ID,
+        config={
+            "memory_widgets": memory_widgets_module,
+            "settings_widgets": settings_widgets_module,
+            "task_widgets": task_widgets_module,
+            "telegram_user_admin": telegram_user_admin_module,
+        },
+    )
 
 
-def _require_configured() -> None:
-    if memory_widgets is None or settings_widgets is None or task_widgets is None or telegram_user_admin is None:
+def _config(entrypoint: Any = None) -> Dict[str, Any]:
+    cfg = resolve_config(_CONFIGS, entrypoint=entrypoint, label="telegram webapp integration")
+    if not cfg.get("memory_widgets") or not cfg.get("settings_widgets") or not cfg.get("task_widgets") or not cfg.get("telegram_user_admin"):
         raise RuntimeError("telegram webapp integration is not configured")
+    return cfg
+
+
+def _bundle_id(entrypoint: Any = None) -> str:
+    return configured_bundle_id(_config(entrypoint)) or BUNDLE_ID
 
 
 def _active_tab(widget_path: str = "") -> str:
@@ -78,23 +102,25 @@ def _mapping_required(user_id: str = "") -> Dict[str, Any]:
 
 
 def _linked_telegram_user(entrypoint: Any, *, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    _require_configured()
+    cfg = _config(entrypoint)
+    admin = cfg["telegram_user_admin"]
     target = _effective_user_id(entrypoint, user_id)
     if not target:
         return None
-    for item in telegram_user_admin.storage(entrypoint).list_users():
+    for item in admin.storage(entrypoint).list_users():
         if str(item.get("kdcube_user_id") or "").strip() == target:
             return item
     return None
 
 
 def _conversation_result_for_user(entrypoint: Any, *, user_id: Optional[str] = None) -> Dict[str, Any]:
-    _require_configured()
+    cfg = _config(entrypoint)
+    admin = cfg["telegram_user_admin"]
     effective_user_id = _effective_user_id(entrypoint, user_id)
     user = _linked_telegram_user(entrypoint, user_id=effective_user_id)
     if not user:
         return _mapping_required(effective_user_id)
-    listing = telegram_user_admin.storage(entrypoint).list_conversations(
+    listing = admin.storage(entrypoint).list_conversations(
         telegram_user_id=str(user.get("telegram_user_id") or ""),
         telegram_chat_id=str(user.get("telegram_chat_id") or ""),
         telegram_username=str(user.get("telegram_username") or ""),
@@ -152,13 +178,14 @@ async def create_conversation(
     fingerprint: Optional[str] = None,
     title: str = "",
 ) -> Dict[str, Any]:
-    _require_configured()
+    cfg = _config(entrypoint)
+    admin = cfg["telegram_user_admin"]
     del fingerprint
     effective_user_id = _effective_user_id(entrypoint, user_id)
     user = _linked_telegram_user(entrypoint, user_id=effective_user_id)
     if not user:
         return _mapping_required(effective_user_id)
-    result = telegram_user_admin.storage(entrypoint).create_conversation(
+    result = admin.storage(entrypoint).create_conversation(
         telegram_user_id=str(user.get("telegram_user_id") or ""),
         telegram_chat_id=str(user.get("telegram_chat_id") or ""),
         telegram_username=str(user.get("telegram_username") or ""),
@@ -179,13 +206,14 @@ async def switch_conversation(
     user_id: Optional[str] = None,
     fingerprint: Optional[str] = None,
 ) -> Dict[str, Any]:
-    _require_configured()
+    cfg = _config(entrypoint)
+    admin = cfg["telegram_user_admin"]
     del fingerprint
     effective_user_id = _effective_user_id(entrypoint, user_id)
     user = _linked_telegram_user(entrypoint, user_id=effective_user_id)
     if not user:
         return _mapping_required(effective_user_id)
-    result = telegram_user_admin.storage(entrypoint).switch_conversation(
+    result = admin.storage(entrypoint).switch_conversation(
         telegram_user_id=str(user.get("telegram_user_id") or ""),
         conversation_id=conversation_id,
     )
@@ -205,7 +233,8 @@ async def delete_conversation(
     fingerprint: Optional[str] = None,
     delete_history: bool = True,
 ) -> Dict[str, Any]:
-    _require_configured()
+    cfg = _config(entrypoint)
+    admin = cfg["telegram_user_admin"]
     del fingerprint
     effective_user_id = _effective_user_id(entrypoint, user_id)
     user = _linked_telegram_user(entrypoint, user_id=effective_user_id)
@@ -213,7 +242,7 @@ async def delete_conversation(
         result = _mapping_required(effective_user_id)
         result.update({"deleted": False, "deleted_conversation_id": "", "deleted_blobs": {}})
         return result
-    registry_result = telegram_user_admin.storage(entrypoint).delete_conversation(
+    registry_result = admin.storage(entrypoint).delete_conversation(
         telegram_user_id=str(user.get("telegram_user_id") or ""),
         conversation_id=conversation_id,
     )
@@ -221,7 +250,7 @@ async def delete_conversation(
     deleted_blobs: Dict[str, int] = {}
     if registry_result.get("ok", True) and registry_result.get("deleted") and delete_history:
         tenant, project = _tenant_project(entrypoint)
-        store = telegram_user_admin._conversation_store(entrypoint)
+        store = admin._conversation_store(entrypoint)
         if tenant and project and store:
             deleted_blobs = await store.delete_conversation(
                 tenant=tenant,
@@ -248,7 +277,11 @@ async def payload(
     telegram_identity: Optional[Dict[str, Any]] = None,
     include_admin: bool = True,
 ) -> Dict[str, Any]:
-    _require_configured()
+    cfg = _config(entrypoint)
+    memory_module = cfg["memory_widgets"]
+    settings_module = cfg["settings_widgets"]
+    task_module = cfg["task_widgets"]
+    admin = cfg["telegram_user_admin"]
     tabs = [
         {"id": "conversations", "label": "Chats"},
         {"id": "tasks", "label": "Tasks"},
@@ -260,24 +293,28 @@ async def payload(
     active_tab = _active_tab(widget_path)
     if active_tab == "telegram_admin" and not include_admin:
         active_tab = "tasks"
+    memory_payload = memory_module.payload(
+        entrypoint,
+        user_id=user_id,
+        fingerprint=fingerprint,
+        mark_seen=mark_memory_seen,
+    )
+    if inspect.isawaitable(memory_payload):
+        memory_payload = await memory_payload
+
     data = {
         "ok": True,
-        "bundle_id": BUNDLE_ID,
+        "bundle_id": _bundle_id(entrypoint),
         "active_tab": active_tab,
         "path": str(widget_path or "").strip("/"),
         "tabs": tabs,
-        "tasks": await task_widgets.payload(
+        "tasks": await task_module.payload(
             entrypoint,
             user_id=user_id,
             fingerprint=fingerprint,
         ),
-        "memory": memory_widgets.payload(
-            entrypoint,
-            user_id=user_id,
-            fingerprint=fingerprint,
-            mark_seen=mark_memory_seen,
-        ),
-        "settings": settings_widgets.payload(
+        "memory": memory_payload,
+        "settings": settings_module.payload(
             entrypoint,
             user_id=user_id,
             fingerprint=fingerprint,
@@ -285,7 +322,7 @@ async def payload(
         ),
     }
     if telegram_identity:
-        listing = telegram_user_admin.storage(entrypoint).list_conversations(
+        listing = admin.storage(entrypoint).list_conversations(
             telegram_user_id=str(telegram_identity.get("telegram_user_id") or ""),
             telegram_chat_id=str(telegram_identity.get("telegram_chat_id") or ""),
             telegram_username=str(telegram_identity.get("telegram_username") or ""),
@@ -304,7 +341,7 @@ async def payload(
         )
     if include_admin:
         data["telegram_admin"] = {
-            "roles": telegram_user_admin.payload(entrypoint).get("roles") or [],
+            "roles": admin.payload(entrypoint).get("roles") or [],
             "data_operation": "telegram_user_admin_data",
             "upsert_operation": "telegram_user_admin_upsert",
             "delete_operation": "telegram_user_admin_delete",

@@ -1,26 +1,15 @@
-import { telegramInitData, isTelegramWebApp } from '../telegram/utils';
+import { telegramInitData } from '../telegram/utils';
 import { settings } from './settings';
-import type {
-  ConversationItem,
-  ConversationsPayload,
-  ExportPayload,
-  MemoryEntry,
-  MemoryPayload,
-} from './types';
 
 const TELEGRAM_OPERATION_ALIASES: Record<string, string> = {
   telegram_profile: 'telegram_profile',
-  versatile_webapp_data: 'telegram_versatile_webapp_data',
-  conversations_list: 'conversations_list',
-  conversations_create: 'telegram_conversations_create',
-  conversations_switch: 'telegram_conversations_switch',
-  conversations_delete: 'telegram_conversations_delete',
+  telegram_copilot_webapp_data: 'telegram_copilot_webapp_data',
   telegram_user_admin_data: 'telegram_webapp_user_admin_data',
   telegram_user_admin_upsert: 'telegram_webapp_user_admin_upsert',
   telegram_user_admin_delete: 'telegram_webapp_user_admin_delete',
 };
 
-const GET_OPERATIONS = new Set(['telegram_profile', 'conversations_list']);
+const GET_OPERATIONS = new Set(['telegram_profile']);
 
 function authHeaders(base?: HeadersInit): Headers {
   const headers = new Headers(base);
@@ -47,9 +36,9 @@ function operationUrl(operation: string, payload: Record<string, unknown> = {}):
   const tenant = encodeURIComponent(settings.getTenant());
   const project = encodeURIComponent(settings.getProject());
   const bundleId = encodeURIComponent(settings.getBundleId());
-  if (isTelegramWebApp() && TELEGRAM_OPERATION_ALIASES[operation]) {
-    const publicAlias = TELEGRAM_OPERATION_ALIASES[operation];
-    const path = `${settings.getBaseUrl()}/api/integrations/bundles/${tenant}/${project}/${bundleId}/public/${publicAlias}`;
+  const telegramAlias = TELEGRAM_OPERATION_ALIASES[operation];
+  if (telegramAlias && telegramInitData()) {
+    const path = `${settings.getBaseUrl()}/api/integrations/bundles/${tenant}/${project}/${bundleId}/public/${telegramAlias}`;
     return GET_OPERATIONS.has(operation) ? `${path}${queryString(payload)}` : path;
   }
   const path = `${settings.getBaseUrl()}/api/integrations/bundles/${tenant}/${project}/${bundleId}/operations/${operation}`;
@@ -57,7 +46,7 @@ function operationUrl(operation: string, payload: Record<string, unknown> = {}):
 }
 
 function responseAlias(operation: string): string {
-  return isTelegramWebApp() && TELEGRAM_OPERATION_ALIASES[operation] ? TELEGRAM_OPERATION_ALIASES[operation] : operation;
+  return TELEGRAM_OPERATION_ALIASES[operation] || operation;
 }
 
 export async function callOperation<T>(operation: string, payload: Record<string, unknown> = {}): Promise<T> {
@@ -96,26 +85,4 @@ export function assertOk(result: unknown, fallback: string): void {
   const object = result as Record<string, unknown>;
   if (object.ok !== false) return;
   throw new Error(String(object.error || fallback));
-}
-
-export function memoryEntries(memory?: MemoryPayload): MemoryEntry[] {
-  return memory?.memories || [];
-}
-
-export function conversationItems(conversations?: ConversationsPayload): ConversationItem[] {
-  return conversations?.items || conversations?.conversations || [];
-}
-
-export function downloadBase64(payload: ExportPayload): void {
-  if (!payload.content_b64) return;
-  const binary = atob(payload.content_b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  const blob = new Blob([bytes], { type: payload.mime || 'application/octet-stream' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = payload.filename || 'download.bin';
-  a.click();
-  URL.revokeObjectURL(url);
 }

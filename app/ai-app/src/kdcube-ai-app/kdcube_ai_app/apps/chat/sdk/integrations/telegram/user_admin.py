@@ -14,6 +14,11 @@ from kdcube_ai_app.apps.chat.ingress.chat_core import IngressConfig, RawAttachme
 from kdcube_ai_app.auth.sessions import RequestContext, UserSession, UserType
 from kdcube_ai_app.apps.chat.sdk.config import get_secret, get_settings
 from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bundle_registry import (
+    configured_bundle_id,
+    register_config,
+    resolve_config,
+)
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram import (
     TelegramActivityStreamer,
     deliver_react_turn_to_telegram,
@@ -30,6 +35,7 @@ log = logging.getLogger(__name__)
 _storage_factory: Callable[[Any], Any] | None = None
 _storage_root_or_error: Callable[[Any], Any] | None = None
 _migrate_telegram_user_to_kdcube_scope: Callable[..., Any] | None = None
+_CONFIGS: Dict[str, Dict[str, Any]] = {}
 _conversation_locks_guard = threading.Lock()
 _conversation_locks: dict[str, asyncio.Lock] = {}
 
@@ -47,12 +53,30 @@ def configure_telegram_user_admin(
     _storage_factory = storage_factory
     _storage_root_or_error = storage_root_or_error
     _migrate_telegram_user_to_kdcube_scope = migrate_telegram_user_to_kdcube_scope
+    register_config(
+        _CONFIGS,
+        bundle_id=BUNDLE_ID,
+        config={
+            "storage_factory": storage_factory,
+            "storage_root_or_error": storage_root_or_error,
+            "migrate_telegram_user_to_kdcube_scope": migrate_telegram_user_to_kdcube_scope,
+        },
+    )
+
+
+def _config(entrypoint: Any = None) -> Dict[str, Any]:
+    return resolve_config(_CONFIGS, entrypoint=entrypoint, label="telegram user admin integration")
+
+
+def _bundle_id(entrypoint: Any = None) -> str:
+    return configured_bundle_id(_config(entrypoint)) or BUNDLE_ID
 
 
 def _storage_root(entrypoint: Any) -> Any:
-    if _storage_root_or_error is None:
+    storage_root_or_error = _config(entrypoint).get("storage_root_or_error")
+    if storage_root_or_error is None:
         raise RuntimeError("telegram user admin integration is not configured: storage_root_or_error is missing")
-    return _storage_root_or_error(entrypoint)
+    return storage_root_or_error(entrypoint)
 
 
 def _attachment_log_items(attachments: list[Dict[str, Any]] | None) -> list[Dict[str, Any]]:
@@ -151,6 +175,7 @@ async def _host_telegram_attachments(
     """Persist Telegram upload bytes into conversation attachment storage before React sees them."""
     if not attachments:
         return []
+    bundle_id = _bundle_id(entrypoint)
     store = _conversation_store(entrypoint)
     if not store:
         raise RuntimeError("telegram attachment hosting failed: conversation store is unavailable")
@@ -158,7 +183,7 @@ async def _host_telegram_attachments(
     hosted: list[Dict[str, Any]] = []
     log.info(
         "[%s] telegram attachments host start | conversation_id=%s turn_id=%s attachments=%s",
-        BUNDLE_ID,
+        bundle_id,
         conversation_id,
         turn_id,
         _attachment_log_items(attachments),
@@ -211,7 +236,7 @@ async def _host_telegram_attachments(
         hosted.append(item)
     log.info(
         "[%s] telegram attachments host finished | conversation_id=%s turn_id=%s attachments=%s",
-        BUNDLE_ID,
+        bundle_id,
         conversation_id,
         turn_id,
         _attachment_log_items(hosted),
@@ -220,9 +245,10 @@ async def _host_telegram_attachments(
 
 
 def storage(entrypoint: Any) -> Any:
-    if _storage_factory is None:
+    storage_factory = _config(entrypoint).get("storage_factory")
+    if storage_factory is None:
         raise RuntimeError("telegram user admin integration is not configured: storage_factory is missing")
-    return _storage_factory(entrypoint)
+    return storage_factory(entrypoint)
 
 
 def payload(entrypoint: Any) -> Dict[str, Any]:
@@ -230,7 +256,7 @@ def payload(entrypoint: Any) -> Dict[str, Any]:
     roles = getattr(type(registry), "ALLOWED_ROLES", None) or getattr(registry, "ALLOWED_ROLES", ())
     return {
         "ok": True,
-        "bundle_id": BUNDLE_ID,
+        "bundle_id": _bundle_id(entrypoint),
         "roles": list(roles),
         "users": registry.list_users(),
         "storage_path": str(registry.path),
@@ -267,17 +293,19 @@ def upsert(
     )
     migration = None
     new_kdcube_user_id = str(user.get("kdcube_user_id") or "").strip()
-    if new_kdcube_user_id and _migrate_telegram_user_to_kdcube_scope is not None:
-        migration = _migrate_telegram_user_to_kdcube_scope(
+    migrate_telegram_user_to_kdcube_scope = _config(entrypoint).get("migrate_telegram_user_to_kdcube_scope")
+    bundle_id = _bundle_id(entrypoint)
+    if new_kdcube_user_id and migrate_telegram_user_to_kdcube_scope is not None:
+        migration = migrate_telegram_user_to_kdcube_scope(
             _storage_root(entrypoint),
             telegram_user_id=str(user.get("telegram_user_id") or telegram_user_id),
             old_kdcube_user_id=old_kdcube_user_id,
             new_kdcube_user_id=new_kdcube_user_id,
-            bundle_id=BUNDLE_ID,
+            bundle_id=bundle_id,
         )
         log.info(
             "[%s] telegram user scope migration | telegram_user_id=%s old_kdcube_user_id=%s new_kdcube_user_id=%s result=%s",
-            BUNDLE_ID,
+            bundle_id,
             user.get("telegram_user_id") or telegram_user_id,
             old_kdcube_user_id,
             new_kdcube_user_id,
@@ -301,10 +329,11 @@ def delete(entrypoint: Any, *, telegram_user_id: str) -> Dict[str, Any]:
     }
 
 
-def bot_token() -> str:
+def bot_token(entrypoint: Any = None) -> str:
+    bundle_id = _bundle_id(entrypoint)
     return (
         get_secret("b:integrations.telegram.bot_token")
-        or get_secret(f"bundles.{BUNDLE_ID}.secrets.integrations.telegram.bot_token")
+        or get_secret(f"bundles.{bundle_id}.secrets.integrations.telegram.bot_token")
         or ""
     )
 
@@ -344,6 +373,7 @@ async def submit_react_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> Dict
     submit = getattr(chat_submitter, "submit", None)
     if not callable(submit):
         return None
+    bundle_id = _bundle_id(entrypoint)
 
     text = str(summary.get("text") or "").strip()
     attachments = list(summary.get("attachments") or [])
@@ -412,7 +442,7 @@ async def submit_react_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> Dict
     message_data: Dict[str, Any] = {
         "tenant": tenant,
         "project": project,
-        "bundle_id": BUNDLE_ID,
+        "bundle_id": bundle_id,
         "conversation_id": conversation_id,
         "turn_id": turn_id,
         "payload": payload,
@@ -447,7 +477,7 @@ async def submit_react_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> Dict
     result_payload = asdict(result)
     log.info(
         "[%s] telegram submitter result | update_id=%s conversation_id=%s turn_id=%s ok=%s reason=%s error_type=%s continuation_kind=%s attachments=%s",
-        BUNDLE_ID,
+        bundle_id,
         update_id,
         conversation_id,
         turn_id,
@@ -471,6 +501,7 @@ async def run_react_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> Dict[st
     text = str(summary.get("text") or "").strip()
     attachments = list(summary.get("attachments") or [])
     comm_context = getattr(entrypoint, "comm_context", None)
+    bundle_id = _bundle_id(entrypoint)
     if not text and attachments:
         text = (
             "The user sent Telegram attachment(s) without text. "
@@ -493,7 +524,7 @@ async def run_react_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> Dict[st
     turn_id = new_turn_id()
     log.info(
         "[%s] telegram react turn resolved | update_id=%s chat_id=%s telegram_user_id=%s kdcube_user_id=%s role=%s conversation_id=%s turn_id=%s text_chars=%s attachments=%s",
-        BUNDLE_ID,
+        bundle_id,
         update_id,
         chat_id,
         telegram_user_id,
@@ -576,7 +607,7 @@ async def run_react_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> Dict[st
     )
     async with TelegramActivityStreamer(
         comm=getattr(entrypoint, "comm", None),
-        bot_token=bot_token(),
+        bot_token=bot_token(entrypoint),
         chat_id=chat_id,
         turn_id=turn_id,
         enabled=stream_enabled,
@@ -589,7 +620,7 @@ async def run_react_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> Dict[st
     timeline = (result or {}).get("timeline") if isinstance((result or {}).get("timeline"), dict) else {}
     log.info(
         "[%s] telegram react turn completed | update_id=%s conversation_id=%s turn_id=%s answer_chars=%s followups=%s turn_log_blocks=%s timeline_blocks=%s timeline_sources=%s",
-        BUNDLE_ID,
+        bundle_id,
         update_id,
         conversation_id,
         turn_id,
@@ -631,6 +662,7 @@ async def run_with_queued_telegram_delivery(entrypoint: Any, *, runner: Any) -> 
     telegram_meta = _queued_telegram_meta(entrypoint)
     if not telegram_meta:
         return await runner()
+    bundle_id = _bundle_id(entrypoint)
 
     chat_id = str(telegram_meta.get("chat_id") or "").strip()
     update_id = str(telegram_meta.get("update_id") or "").strip()
@@ -648,7 +680,7 @@ async def run_with_queued_telegram_delivery(entrypoint: Any, *, runner: Any) -> 
     async with _telegram_conversation_lock(lock_key):
         async with TelegramActivityStreamer(
             comm=getattr(entrypoint, "comm", None),
-            bot_token=bot_token(),
+            bot_token=bot_token(entrypoint),
             chat_id=chat_id,
             turn_id=turn_id,
             enabled=stream_enabled,
@@ -657,8 +689,8 @@ async def run_with_queued_telegram_delivery(entrypoint: Any, *, runner: Any) -> 
         if not isinstance(result, dict):
             result = {}
         delivery = await deliver_react_turn_to_telegram(
-            bundle_id=BUNDLE_ID,
-            bot_token=bot_token(),
+            bundle_id=bundle_id,
+            bot_token=bot_token(entrypoint),
             chat_id=chat_id,
             update_id=update_id,
             react_turn=result,
@@ -680,9 +712,10 @@ async def handle_webhook(entrypoint: Any, **update) -> Dict[str, Any]:
     summary = summarize_telegram_update(update)
     telegram_store = storage(entrypoint)
     update_id = str(summary.get("update_id") or "").strip()
+    bundle_id = _bundle_id(entrypoint)
     log.info(
         "[%s] telegram update extracted | update_id=%s type=%s chat_id=%s user_id=%s username=%s text_chars=%s attachments=%s",
-        BUNDLE_ID,
+        bundle_id,
         summary.get("update_id"),
         summary.get("update_type"),
         summary.get("chat_id"),
@@ -695,7 +728,7 @@ async def handle_webhook(entrypoint: Any, **update) -> Dict[str, Any]:
     if not claim.get("claimed"):
         log.info(
             "[%s] telegram update ignored | update_id=%s claim_status=%s",
-            BUNDLE_ID,
+            bundle_id,
             update_id,
             claim.get("status"),
         )
@@ -715,18 +748,18 @@ async def handle_webhook(entrypoint: Any, **update) -> Dict[str, Any]:
         if summary.get("attachments"):
             log.info(
                 "[%s] telegram attachments hydrate start | update_id=%s attachments=%s",
-                BUNDLE_ID,
+                bundle_id,
                 update_id,
                 _attachment_log_items(list(summary.get("attachments") or [])),
             )
             summary["attachments"] = await hydrate_telegram_attachments(
                 attachments=list(summary.get("attachments") or []),
-                bot_token=bot_token(),
+                bot_token=bot_token(entrypoint),
                 message_id=summary.get("message_id"),
             )
             log.info(
                 "[%s] telegram attachments hydrate finished | update_id=%s attachments=%s",
-                BUNDLE_ID,
+                bundle_id,
                 update_id,
                 _attachment_log_items(list(summary.get("attachments") or [])),
             )
@@ -760,8 +793,8 @@ async def handle_webhook(entrypoint: Any, **update) -> Dict[str, Any]:
         telegram_messages: list[Dict[str, Any]] = []
         if react_turn:
             delivery_result = await deliver_react_turn_to_telegram(
-                bundle_id=BUNDLE_ID,
-                bot_token=bot_token(),
+                bundle_id=bundle_id,
+                bot_token=bot_token(entrypoint),
                 chat_id=summary.get("chat_id") or "",
                 update_id=update_id,
                 react_turn=react_turn,
@@ -780,7 +813,7 @@ async def handle_webhook(entrypoint: Any, **update) -> Dict[str, Any]:
         raise
     log.info(
         "[%s] telegram update accepted | update_id=%s type=%s chat_id=%s user_id=%s attachments=%s",
-        BUNDLE_ID,
+        bundle_id,
         summary.get("update_id"),
         summary.get("update_type"),
         summary.get("chat_id"),

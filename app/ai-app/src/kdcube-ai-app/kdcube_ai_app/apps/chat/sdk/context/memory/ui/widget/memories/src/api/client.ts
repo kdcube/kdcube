@@ -1,17 +1,44 @@
 import { settings } from './settings';
 
+function telegramInitData(): string {
+  const own = (window as unknown as { Telegram?: { WebApp?: { initData?: string } } }).Telegram?.WebApp?.initData || '';
+  if (own) return own;
+  try {
+    return (window.parent as unknown as { Telegram?: { WebApp?: { initData?: string } } }).Telegram?.WebApp?.initData || '';
+  } catch {
+    return '';
+  }
+}
+
+function telegramOperationAlias(operation: string): string {
+  return operation.startsWith('memories_widget_') ? `telegram_${operation}` : '';
+}
+
+function useTelegramPublicBridge(operation: string): boolean {
+  return Boolean(telegramOperationAlias(operation)) && (
+    settings.getWidgetAlias() === 'telegram_memories' || telegramInitData().length > 0
+  );
+}
+
 function operationUrl(operation: string): string {
   const tenant = encodeURIComponent(settings.getTenant());
   const project = encodeURIComponent(settings.getProject());
   const bundleId = encodeURIComponent(settings.getBundleId());
+  if (useTelegramPublicBridge(operation)) {
+    const alias = telegramOperationAlias(operation);
+    return `${settings.getBaseUrl()}/api/integrations/bundles/${tenant}/${project}/${bundleId}/public/${alias}`;
+  }
   return `${settings.getBaseUrl()}/api/integrations/bundles/${tenant}/${project}/${bundleId}/operations/${operation}`;
 }
 
 export async function callOperation<T>(operation: string, payload: Record<string, unknown> = {}): Promise<T> {
+  const headers = settings.authHeaders({ 'Content-Type': 'application/json' });
+  const initData = telegramInitData();
+  if (initData) headers.set('X-Telegram-Init-Data', initData);
   const response = await fetch(operationUrl(operation), {
     method: 'POST',
     credentials: 'include',
-    headers: settings.authHeaders({ 'Content-Type': 'application/json' }),
+    headers,
     body: JSON.stringify({ data: payload }),
   });
   const text = await response.text();
@@ -26,6 +53,10 @@ export async function callOperation<T>(operation: string, payload: Record<string
       ? String((parsed as Record<string, unknown>).detail)
       : text || response.statusText;
     throw new Error(detail);
+  }
+  const telegramAlias = telegramOperationAlias(operation);
+  if (telegramAlias && parsed && typeof parsed === 'object' && telegramAlias in parsed) {
+    return (parsed as Record<string, unknown>)[telegramAlias] as T;
   }
   if (parsed && typeof parsed === 'object' && operation in parsed) {
     return (parsed as Record<string, unknown>)[operation] as T;

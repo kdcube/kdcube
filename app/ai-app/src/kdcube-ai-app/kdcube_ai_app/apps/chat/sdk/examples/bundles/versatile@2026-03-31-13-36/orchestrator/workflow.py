@@ -1,4 +1,3 @@
-import traceback
 from typing import Any, Dict
 
 from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
@@ -17,7 +16,6 @@ from langgraph.graph import END, START, StateGraph
 
 from .. import skills_descriptor, tools_descriptor
 from ..agents.gate import GateOut as MinimalGateOut, gate_stream
-from ..preferences_store import auto_capture_preferences, build_preferences_storage
 from ..resources.service_messages.resources import get_friendly_error_message
 
 
@@ -64,30 +62,6 @@ class VersatileWorkflow(BaseWorkflow):
         scratchpad = await super().construct_turn_and_scratchpad(payload)
         scratchpad.gate_out_class = MinimalGateOut
         return scratchpad
-
-    def _capture_preferences_from_turn(self, *, text: str) -> None:
-        if not self.bundle_prop("preferences.auto_capture", True):
-            return
-        user_id = getattr(self.runtime_ctx, "user_id", None) or "anonymous"
-        try:
-            bundle_id = getattr(getattr(self.config, "ai_bundle_spec", None), "id", None) or "versatile"
-            tenant = getattr(self.runtime_ctx, "tenant", None)
-            project = getattr(self.runtime_ctx, "project", None)
-            if not tenant or not project:
-                return
-            storage = build_preferences_storage(
-                tenant=tenant,
-                project=project,
-                bundle_id=bundle_id,
-            )
-            captured = auto_capture_preferences(storage, user_id, text=text, source="chat")
-            if captured:
-                self.logger.log(
-                    f"[versatile] captured {len(captured)} preference observation(s) for {user_id}",
-                    level="INFO",
-                )
-        except Exception:
-            self.logger.log(traceback.format_exc(), level="ERROR")
 
     async def process(self, payload: dict) -> Dict[str, Any]:
         scratchpad = await self.construct_turn_and_scratchpad(payload)
@@ -163,7 +137,6 @@ class VersatileWorkflow(BaseWorkflow):
                     except Exception:
                         pass
                 await self.persist_user_message(scratchpad)
-                self._capture_preferences_from_turn(text=payload.get("text") or "")
 
                 state["route"] = scratchpad.route
                 state["gate_payload"] = gate_payload

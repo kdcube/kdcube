@@ -3,10 +3,21 @@ bundles:
   items:
     - id: "versatile@2026-03-31-13-36"
       config:
-        preferences:
-          auto_capture: true
-          max_recent_events: 25
-          widget_max_events: 15
+        memory:
+          enabled: true
+          announce:
+            enabled: true
+            limit: 8
+            scope_filter: all_user_memories
+          tools:
+            enabled: true
+            allow_write: true
+            default_scope_filter: current_bundle
+          widget:
+            enabled: true
+            allow_write: true
+            default_scope_filter: current_bundle
+            allow_all_user_memories: true
         execution:
           runtime:
             mode: docker
@@ -20,23 +31,16 @@ bundles:
         visibility:
           bundle:
             allowed_roles: []
-          api:
-            telegram_user_admin_data:
-              roles:
-                - kdcube:role:super-admin
-            telegram_user_admin_upsert:
-              roles:
-                - kdcube:role:super-admin
-            telegram_user_admin_delete:
-              roles:
-                - kdcube:role:super-admin
         ui:
           web_app_widgets:
             versatile_webapp:
               src_folder: ui/widgets/versatile_webapp
               build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
+              shared_sources:
+                memory_widget:
+                  src_folder: sdk://context/memory/ui/widget/memories
+                  target: _shared/memory-widget
+            memories:
+              enabled: true
         mcp:
-          preferences:
-            auth:
-              header_name: X-Versatile-Preferences-MCP-Token
           services: {}
