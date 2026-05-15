@@ -1,64 +1,77 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.5.13.117"
+  ref: "2026.5.15.2347"
   description: |
-    This release focuses on public documentation MCP access, route-aware bundle
-    Admin overrides, gateway reload configurability, reference bundle
-    maintenance, and operational documentation for building and exposing
-    KDCube bundles.
+    This release focuses on durable User Memory, ReAct V3 protocol stability,
+    bundle-scoped runtime context, reference bundle widgets, and deployment
+    documentation for memory-enabled platform environments.
 
     Highlights
 
-    - Exposes the KDCube documentation knowledge space through the public
-      `kdcube-doc` MCP endpoint in the built-in copilot bundle, and documents
-      the hosted dev.kdcube.tech endpoint in the repository README.
-    - Fixes public MCP document reading so search results and subsequent
-      `ks:` reads resolve against the same knowledge root.
-    - Adds route-aware API enabled keys in Bundle Admin so public and
-      operations APIs may safely share the same alias/method without colliding
-      in bundle props.
-    - Keeps resource enabled configuration sparse: missing enabled overrides
-      now mean the code/decorator default applies, so descriptors do not need
-      to enumerate every enabled API, widget, MCP endpoint, or routine.
-    - Adds an assembly-level gateway startup override for loading
-      `gateway.yaml`, and documents the reload flag for CLI/local deployments.
-    - Updates the versatile reference bundle with Telegram hook/webapp
-      examples, attachment-to-artifact handling, UI layout under `ui/main` and
-      `ui/widgets`, and clearer setup/storage documentation.
-    - Updates bundle-builder and website documentation so coding agents can
-      discover Telegram, ngrok, UI layout, MCP, and Tier 1 bundle authoring
-      guidance without reverse engineering examples.
+    - Adds the durable User Memory subsystem with user-owned memory records,
+      memory widget APIs, hybrid search/read support, snapshots, restore
+      scaffolding, reconciliation job flow, and ReAct announce integration.
+    - Adds the reusable memory widget app and shared embeddable React component
+      so bundles can expose the same memory management experience in platform
+      widgets, Telegram webapps, and bundle-owned web surfaces.
+    - Wires memory and economics building blocks into the built-in Copilot,
+      versatile reference bundle, and related example entrypoints while keeping
+      memory behavior configuration-driven.
+    - Hardens ReAct V3 streaming and scheduling for repeated structured
+      decisions, canvas artifact streaming, exec-code binding, renderer ref
+      normalization, and clearer protocol-violation feedback.
+    - Restores bundle-scoped runtime context propagation for subprocess and
+      isolated tool runtimes so bundle-level service keys can resolve through
+      the standard helpers.
+    - Stabilizes web favicon enrichment with bounded browser fallback,
+      domain-scoped failure caching, and timeout behavior that does not block
+      web search/fetch tool completion.
+    - Aligns local, CLI, and deployment descriptor documentation for default
+      storage paths, memory configuration, widget packaging, Telegram bundle
+      integrations, and greenfield demo environments.
 
     Runtime and SDK work in this release line:
 
-    - Bundle Admin reads legacy `enabled.api.<alias>.<METHOD>` values for
-      compatibility but writes canonical route-aware keys.
-    - Built-in examples and the versatile reference bundle were aligned with
-      the current UI source layout and descriptor override semantics.
-    - Public MCP endpoints remain bundle-owned auth surfaces; the public
-      documentation MCP endpoint intentionally does not require credentials.
+    - Memory configuration is now a first-class bundle concern: announce
+      hotsets, memory tools, write policy, widget access, scope filters, and
+      user-visible management can be enabled independently.
+    - ReAct memory documentation now distinguishes conversation memory,
+      internal anchors, summaries, `react.memsearch`, and durable User Memory,
+      including pruning/compaction behavior and retrieval semantics.
+    - Rendering and artifact tooling now accepts friendlier `ref:` paths where
+      possible and reports actionable feedback when source refs are not usable.
+    - Telegram integration configuration is resolved per bundle at runtime
+      instead of relying on import-time globals, allowing multiple bundles to
+      expose independent Telegram/webapp surfaces.
+    - Bundle widget documentation covers hybrid reuse of platform-owned shared
+      React components from external bundle webapps.
 
     Validation and regression coverage:
 
-    - Added focused regression coverage for route-aware enabled keys and
-      versatile public API behavior.
-    - Re-ran the focused versatile bundle test suite after the Admin/config
-      changes.
-    - Re-ran the task-and-memo Telegram webhook/public API regression suite
-      before releasing the bundle content.
+    - Re-ran Python compile checks for Copilot and Telegram helper modules.
+    - Re-ran typecheck/build for the memory widget, Copilot Telegram webapp,
+      and versatile webapp integrations.
+    - Re-ran focused checks for ReAct protocol handling, renderer refs, memory
+      APIs, and descriptor parsing where local tooling was available.
+    - Verified release metadata and documentation changes with `git diff
+      --check`.
 
     Changelog
 
-    - Added README banner for the public KDCube docs MCP endpoint.
-    - Renamed the built-in public documentation MCP alias to `kdcube-doc`.
-    - Fixed public MCP knowledge-space reads after MCP search.
-    - Added route-aware enabled-key handling for API resources.
-    - Removed explicit enabled-default clutter from reference bundle config.
-    - Exposed gateway startup reload-from-file configuration.
-    - Refactored reference bundle UI source layout to `ui/main` and
-      `ui/widgets`.
-    - Expanded versatile Telegram, storage, setup, and attachment docs.
-    - Updated website and Tier 1 bundle-builder documentation for recent SDK
-      and CLI flows.
+    - Added User Memory store/search/widget/reconciliation documentation and
+      platform integration points.
+    - Added memory-enabled bundle entrypoint mixins and widget operations.
+    - Added shared memory widget embedding for bundle-owned React apps.
+    - Added Copilot Telegram webapp with Memory and Telegram Admin tabs.
+    - Added memory-aware versatile reference bundle docs, config, and release
+      metadata.
+    - Hardened ReAct repeated-decision parsing, artifact streaming, exec
+      binding, renderer refs, and protocol feedback.
+    - Fixed subprocess runtime bundle context propagation for bundle-scoped
+      service secrets.
+    - Fixed favicon enrichment to use bounded fallback and expiring
+      domain-level failure cache entries.
+    - Updated platform release procedure to include the demo environment and
+      to preserve greenfield envs without built-in/example bundles.
 config:
-    version: "2026.5.13.117"
+    version: "2026.5.15.2347"
