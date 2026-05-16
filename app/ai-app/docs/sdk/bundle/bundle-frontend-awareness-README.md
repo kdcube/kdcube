@@ -1,9 +1,10 @@
 ---
 id: ks:docs/sdk/bundle/bundle-frontend-awareness-README.md
 title: "Bundle Frontend Awareness"
-summary: "Frontend operating guidance for bundle UIs against scaled ingress and proc backends: retries, drain behavior, rate limiting, backpressure, and multi-tab or session coordination."
-tags: ["sdk", "bundle", "frontend", "sse", "retries", "rate-limits", "backpressure", "scaling"]
-keywords: ["scaled frontend behavior", "sse retry strategy", "drain and shutdown behavior", "rate limit handling", "backpressure handling", "multi tab coordination", "ingress and proc awareness", "bundle ui resilience"]
+summary: "Frontend operating guidance for bundle UIs against scaled ingress and proc backends: retries, drain behavior, rate limiting, backpressure, shared widget source, and multi-tab or session coordination."
+tags: ["sdk", "bundle", "frontend", "sse", "retries", "rate-limits", "backpressure", "scaling", "widget"]
+keywords: ["scaled frontend behavior", "sse retry strategy", "drain and shutdown behavior", "rate limit handling", "backpressure handling", "multi tab coordination", "ingress and proc awareness", "shared sdk widget source", "bundle ui resilience"]
+updated_at: 2026-05-16
 see_also:
   - ks:docs/sdk/bundle/bundle-client-ui-README.md
   - ks:docs/sdk/bundle/bundle-client-communication-README.md
@@ -144,7 +145,24 @@ See [bundle-client-communication-README.md](bundle-client-communication-README.m
 
 ---
 
-## H. Do/Don’t Summary
+## H. Shared Widget Components
+
+SDK-owned shared UI, such as the User Memory widget or Telegram admin/channels
+panels, is frontend code compiled into the host widget through
+`shared_sources`. It does not change the runtime safety rules:
+
+- the host widget still owns config handshake and operation URL construction
+- the host widget should keep one API client and inject it into shared panels
+- backend APIs still enforce KDCube roles, Telegram `initData`, and registry
+  roles; hiding a tab is only UX, not authorization
+- regular users should see only non-admin surfaces; admin panels should appear
+  only when the backend payload says they are allowed
+
+See [bundle-widget-integration-README.md#shared-ui-source-materialization](bundle-widget-integration-README.md#shared-ui-source-materialization).
+
+---
+
+## I. Do/Don’t Summary
 
 | ✅ Do | ❌ Don’t |
 | --- | --- |
@@ -152,10 +170,11 @@ See [bundle-client-communication-README.md](bundle-client-communication-README.m
 | Handle `server_shutdown` event | Treat it as a fatal error |
 | Share SSE across tabs | Open SSE per widget or per tab |
 | Use two base URLs in dev | Hardcode a single base forever |
+| Inject one host API client into shared panels | Let copied UI build its own tenant/project/bundle constants |
 
 ---
 
-## I. Troubleshooting Checklist
+## J. Troubleshooting Checklist
 
 - 429 spikes? → reduce burst, add backoff, coalesce requests.
 - 503 spikes? → capacity pressure, wait and retry.

@@ -1,11 +1,38 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
 import os
+import time
 from pathlib import Path
+from types import SimpleNamespace
+from urllib.parse import urlencode
 
 import pytest
+
+
+def _signed_init_data(
+    *,
+    bot_token: str,
+    telegram_user_id: int = 2002,
+    username: str = "elena",
+    auth_date: int | None = None,
+) -> str:
+    user = json.dumps(
+        {"id": telegram_user_id, "username": username, "first_name": username.title()},
+        separators=(",", ":"),
+    )
+    params = {
+        "auth_date": str(auth_date if auth_date is not None else int(time.time())),
+        "query_id": "query-1",
+        "user": user,
+    }
+    check_string = "\n".join(f"{key}={value}" for key, value in sorted(params.items()))
+    secret_key = hmac.new(b"WebAppData", bot_token.encode("utf-8"), hashlib.sha256).digest()
+    params["hash"] = hmac.new(secret_key, check_string.encode("utf-8"), hashlib.sha256).hexdigest()
+    return urlencode(params)
 
 
 def test_telegram_update_summary_reports_attachment_shape():
@@ -45,12 +72,22 @@ def test_telegram_user_admin_storage_maps_roles_and_conversations(tmp_path):
     storage = TelegramUserAdminStorage(tmp_path)
     anonymous = storage.resolve_telegram_user(
         telegram_user_id="2002",
-        telegram_chat_id="1001",
         telegram_username="elena",
     )
 
     assert anonymous["role"] == "anonymous"
-    assert anonymous["conversation_id"] == "telegram_chat_1001"
+    assert anonymous["conversation_id"] == "telegram_user_2002"
+
+    updated_anonymous = storage.resolve_telegram_user(
+        telegram_user_id="2002",
+        telegram_chat_id="1001",
+        telegram_username="elenaviter",
+    )
+
+    assert updated_anonymous["role"] == "anonymous"
+    assert updated_anonymous["telegram_chat_id"] == "1001"
+    assert updated_anonymous["telegram_username"] == "elenaviter"
+    assert updated_anonymous["conversation_id"] == "telegram_chat_1001"
 
     registered = storage.upsert_user(
         telegram_user_id="2002",
@@ -79,6 +116,129 @@ def test_telegram_user_admin_storage_maps_roles_and_conversations(tmp_path):
     completed = storage.complete_telegram_update(update_id="42", result={"stage": "done"})
     assert completed["status"] == "completed"
     assert storage.claim_telegram_update(update_id="42")["claimed"] is False
+
+
+def test_telegram_user_admin_uses_bound_comm_bundle_id(tmp_path):
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram import TelegramUserAdminStorage
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram import user_admin
+    from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload, ChatTaskRouting
+    from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_request_context
+
+    storage = TelegramUserAdminStorage(tmp_path)
+    user_admin.configure_telegram_user_admin(
+        storage_factory=lambda entrypoint: storage,
+        storage_root_or_error=lambda entrypoint: tmp_path,
+        bundle_id="kdcube.copilot",
+    )
+    entrypoint = SimpleNamespace(
+        BUNDLE_ID="kdcube.copilot",
+        config=SimpleNamespace(ai_bundle_spec=SimpleNamespace(id="kdcube.copilot")),
+    )
+    comm_context = ChatTaskPayload(
+        routing=ChatTaskRouting(
+            bundle_id="kdcube.copilot@2026-04-03-19-05",
+            session_id="session-1",
+        ),
+    )
+
+    with bind_current_request_context(comm_context):
+        assert user_admin.payload(entrypoint)["bundle_id"] == "kdcube.copilot@2026-04-03-19-05"
+
+
+@pytest.mark.asyncio
+async def test_telegram_profile_creates_pending_admin_row(tmp_path):
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram import TelegramUserAdminStorage
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram import widget_auth, widget_ops
+
+    bundle_id = "test.telegram-profile-create"
+    bot_token = "123456:test-token"
+    storage = TelegramUserAdminStorage(tmp_path)
+
+    widget_auth.configure_telegram_widget_auth(
+        storage_for=lambda entrypoint: storage,
+        bot_token=lambda entrypoint=None: bot_token,
+        bundle_id=bundle_id,
+    )
+    widget_ops.configure_telegram_widget_ops(
+        task_operations_module=SimpleNamespace(),
+        telegram_user_admin_module=SimpleNamespace(storage=lambda entrypoint: storage),
+        telegram_widget_auth_module=widget_auth,
+        webapp_module=SimpleNamespace(),
+        bundle_id=bundle_id,
+    )
+
+    entrypoint = SimpleNamespace(
+        BUNDLE_ID=bundle_id,
+        bundle_prop=lambda path, default=None: default,
+    )
+    result = await widget_ops.profile(
+        entrypoint,
+        telegram_init_data=_signed_init_data(
+            bot_token=bot_token,
+            telegram_user_id=9999,
+            username="pending",
+        ),
+    )
+
+    assert result["telegram"]["role"] == "anonymous"
+    assert result["telegram"]["allowed"] is False
+    users = storage.list_users()
+    assert len(users) == 1
+    assert users[0]["telegram_user_id"] == "9999"
+    assert users[0]["telegram_username"] == "pending"
+    assert users[0]["role"] == "anonymous"
+
+
+@pytest.mark.asyncio
+async def test_telegram_admin_approval_preserves_chat_id_and_notifies(tmp_path, monkeypatch):
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram import TelegramUserAdminStorage
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram import user_admin
+
+    bundle_id = "test.telegram-admin-approval"
+    storage = TelegramUserAdminStorage(tmp_path)
+    storage.resolve_telegram_user(
+        telegram_user_id="2002",
+        telegram_chat_id="1001",
+        telegram_username="pending",
+    )
+    user_admin.configure_telegram_user_admin(
+        storage_factory=lambda entrypoint: storage,
+        storage_root_or_error=lambda entrypoint: tmp_path,
+        bundle_id=bundle_id,
+    )
+    entrypoint = SimpleNamespace(BUNDLE_ID=bundle_id)
+
+    result = user_admin.upsert(
+        entrypoint,
+        telegram_user_id="2002",
+        role="admin",
+    )
+
+    assert result["user"]["telegram_chat_id"] == "1001"
+    assert result["user"]["telegram_username"] == "pending"
+    assert result["approval_transition"] == {
+        "from_role": "anonymous",
+        "to_role": "admin",
+        "approved": True,
+    }
+
+    sent = {}
+
+    async def _fake_send(*, bot_token, chat_id, messages):
+        sent["bot_token"] = bot_token
+        sent["chat_id"] = chat_id
+        sent["messages"] = messages
+        return {"ok": True, "sent": len(messages)}
+
+    monkeypatch.setattr(user_admin, "bot_token", lambda entrypoint=None: "token")
+    monkeypatch.setattr(user_admin, "send_telegram_messages", _fake_send)
+
+    notification = await user_admin.notify_access_change(entrypoint, result=result)
+
+    assert notification["ok"] is True
+    assert notification["sent"] == 1
+    assert sent["chat_id"] == "1001"
+    assert "admin permissions" in sent["messages"][0].text
 
 
 @pytest.mark.asyncio

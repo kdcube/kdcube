@@ -3,7 +3,8 @@ id: ks:docs/sdk/bundle/build/sync-tier1-bundle-docs-to-build-with-kdcube-plugins
 title: "Tier 1 Bundle Pack For Build-With-KDCube Plugins"
 summary: "Short handoff note for Claude Code and Codex plugin engineers describing the Tier 1 bundle-doc pack, the agent task facets it must support, and the minimal integration contract."
 tags: ["sdk", "bundle", "plugins", "claude-code", "codex", "handoff", "tier-1"]
-keywords: ["tier 1 bundle pack", "build with kdcube plugin", "claude code plugin", "codex plugin", "bundle docs pack", "bundle agent facets", "plugin doc links update"]
+keywords: ["tier 1 bundle pack", "build with kdcube plugin", "claude code plugin", "codex plugin", "bundle docs pack", "bundle agent facets", "shared sdk widget source", "plugin doc links update"]
+updated_at: 2026-05-16
 see_also:
   - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
@@ -107,7 +108,8 @@ Recommended:
 - keep the rest of the Tier 1 pack visible as the required baseline
 - keep [bundle-widget-integration-README.md](../bundle-widget-integration-README.md)
   reachable for source-folder widget work, especially the `OUTDIR` /
-  `<VI_BUILD_DEST_ABSOLUTE_PATH>` build command contract
+  `<VI_BUILD_DEST_ABSOLUTE_PATH>` build command contract and shared SDK UI
+  materialization via `shared_sources`
 - keep [bundle-agent-integration-README.md](../bundle-agent-integration-README.md)
   reachable for React descriptors, file-producing tool contracts, MCP
   connector/server wiring, and Claude Code subprocess agents
@@ -186,6 +188,9 @@ The plugin should steer agents away from these recurring mistakes:
   patch or replacement content
 - do not describe bundle UI as a special bundle iframe; bundles expose UI
   surfaces that KDCube serves, and iframes are a host/client embedding choice
+- do not duplicate SDK-owned widget panels such as User Memory or Telegram
+  admin/channels in every bundle; use `shared_sources` plus a host wrapper that
+  injects the bundle operation caller
 - do not use removed resource-level `enabled_config` decorator arguments for
   APIs or MCP; use bundle props/Admin resource overrides and configurable
   role/user-type paths where supported

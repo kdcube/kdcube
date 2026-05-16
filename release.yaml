@@ -1,10 +1,9 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.5.15.2347"
+  ref: "2026.5.16.407"
   description: |
-    This release focuses on durable User Memory, ReAct V3 protocol stability,
-    bundle-scoped runtime context, reference bundle widgets, and deployment
-    documentation for memory-enabled platform environments.
+    This release finalizes the durable User Memory, Telegram WebApp, ReAct V3,
+    economics, and reference-bundle work for the 2026.5.16 platform line.
 
     Highlights
 
@@ -29,6 +28,14 @@ platform:
     - Aligns local, CLI, and deployment descriptor documentation for default
       storage paths, memory configuration, widget packaging, Telegram bundle
       integrations, and greenfield demo environments.
+    - Adds shared Telegram WebApp UI components for admin approval and
+      conversation/channel switching so reference bundles can reuse one SDK
+      implementation in KDCube widgets and Telegram Mini Apps.
+    - Fixes Telegram chat submission to use the mounted runtime bundle id from
+      comm/request context, preventing `unknown_bundle` errors when descriptor
+      ids differ from short module ids.
+    - Keeps economics hooks compatible with older `pre_run_hook(state=...)`
+      overrides while still passing `econ_ctx` to hooks that accept it.
 
     Runtime and SDK work in this release line:
 
@@ -43,6 +50,9 @@ platform:
     - Telegram integration configuration is resolved per bundle at runtime
       instead of relying on import-time globals, allowing multiple bundles to
       expose independent Telegram/webapp surfaces.
+    - Telegram Mini App mode now depends on signed Telegram `initData`, so the
+      same WebApp can run cleanly in a normal KDCube iframe without being
+      mistaken for Telegram.
     - Bundle widget documentation covers hybrid reuse of platform-owned shared
       React components from external bundle webapps.
 
@@ -62,16 +72,25 @@ platform:
       platform integration points.
     - Added memory-enabled bundle entrypoint mixins and widget operations.
     - Added shared memory widget embedding for bundle-owned React apps.
-    - Added Copilot Telegram webapp with Memory and Telegram Admin tabs.
+    - Added shared Telegram widget embedding for bundle-owned React apps.
+    - Added Copilot Telegram webapp with Memory, Telegram Admin, and
+      conversation management tabs.
     - Added memory-aware versatile reference bundle docs, config, and release
       metadata.
+    - Fixed Telegram approval flow to preserve chat ids and notify newly
+      approved users when possible.
+    - Fixed Telegram bundle id resolution to use comm/request runtime context.
+    - Fixed economics pre-run hook compatibility for Copilot and other
+      economics-enabled bundles.
     - Hardened ReAct repeated-decision parsing, artifact streaming, exec
       binding, renderer refs, and protocol feedback.
     - Fixed subprocess runtime bundle context propagation for bundle-scoped
       service secrets.
+    - Fixed memory tool registration portability so isolated subprocess tools
+      can import the memory alias without breaking unrelated tool calls.
     - Fixed favicon enrichment to use bounded fallback and expiring
       domain-level failure cache entries.
     - Updated platform release procedure to include the demo environment and
       to preserve greenfield envs without built-in/example bundles.
 config:
-    version: "2026.5.15.2347"
+    version: "2026.5.16.407"

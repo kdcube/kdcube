@@ -3,7 +3,8 @@ id: ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
 title: "How To Write A Bundle"
 summary: "Authoring guide for bundle creators and integrators: bundle shape, lifecycle, decorators, runtime surfaces, configuration and storage decisions, and how to turn a product idea or existing app into a deployable bundle."
 tags: ["sdk", "bundle", "authoring", "workflow", "widget", "api", "testing"]
-keywords: ["bundle authoring guide", "bundle creator path", "bundle integrator path", "end to end bundle design", "decorator selection", "runtime surface selection", "widget api mcp cron on_job choices", "configuration and storage decisions", "bundle lifecycle design", "reference authoring patterns"]
+keywords: ["bundle authoring guide", "bundle creator path", "bundle integrator path", "end to end bundle design", "decorator selection", "runtime surface selection", "widget api mcp cron on_job choices", "shared sdk widget components", "configuration and storage decisions", "bundle lifecycle design", "reference authoring patterns"]
+updated_at: 2026-05-16
 see_also:
   - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
@@ -103,6 +104,17 @@ Critical widget/browser rule:
   page URL as the API base
 - read [bundle-widget-integration-README.md#frame-origin-and-api-base-url](../bundle-widget-integration-README.md#frame-origin-and-api-base-url)
   before writing widget networking code
+
+Shared widget rule:
+
+- do not copy SDK-owned UI panels into every bundle
+- if a bundle needs the User Memory widget or Telegram admin/channels panels
+  inside its own webapp, configure `ui.web_app_widgets.<alias>.shared_sources`
+  and import `@kdcube/memory-widget` or `@kdcube/telegram-widget`
+- keep that source wiring in `configuration_defaults()` for built-in/reference
+  bundles so descriptors can usually say only `enabled: true`
+- keep product policy and authorization in bundle APIs; shared components are
+  presentation code with injected operation callers
 
 Tier 1 role of this page:
 

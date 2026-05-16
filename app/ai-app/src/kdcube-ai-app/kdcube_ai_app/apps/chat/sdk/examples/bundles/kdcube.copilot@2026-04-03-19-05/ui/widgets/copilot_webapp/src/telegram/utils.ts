@@ -7,6 +7,7 @@ export function isTelegramWebApp(): boolean {
 }
 
 export function prepareTelegramWebApp(): void {
+  if (!isTelegramWebApp()) return;
   const webApp = (window as unknown as { Telegram?: { WebApp?: { ready?: () => void; expand?: () => void } } }).Telegram?.WebApp;
   webApp?.ready?.();
   webApp?.expand?.();

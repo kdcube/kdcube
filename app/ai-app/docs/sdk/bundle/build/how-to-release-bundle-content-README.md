@@ -3,7 +3,8 @@ id: ks:docs/sdk/bundle/build/how-to-release-bundle-content-README.md
 title: "How To Release Bundle Content"
 summary: "Optional but recommended Tier 1 lifecycle procedure for releasing bundle/content repositories: align bundle docs, config templates, release.yaml, validation, git commit/tag/push, and descriptor ref updates from a self-contained public bundle-builder workflow."
 tags: ["sdk", "bundle", "release", "content", "lifecycle", "tier-1"]
-keywords: ["bundle content release", "bundle release procedure", "release yaml", "bundle config templates", "bundle tag", "bundle descriptor ref", "agent release workflow", "optional release procedure", "bundle lifecycle maintenance"]
+keywords: ["bundle content release", "bundle release procedure", "release yaml", "bundle config templates", "bundle tag", "bundle descriptor ref", "shared widget source validation", "agent release workflow", "optional release procedure", "bundle lifecycle maintenance"]
+updated_at: 2026-05-16
 see_also:
   - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
@@ -170,6 +171,11 @@ configuration, also validate the widget build contract from
 [how-to-test-bundle-README.md#52b-source-folder-widget-build-contract](how-to-test-bundle-README.md#52b-source-folder-widget-build-contract).
 At minimum, run the widget build with an explicit temporary `OUTDIR` and confirm
 `index.html` is written there.
+
+If the widget uses `shared_sources`, validate that the descriptor uses
+`sdk://...` sources, the Vite aliases prefer materialized `_shared/...` paths,
+and the bundle still builds when importing shared SDK components such as
+`@kdcube/memory-widget` or `@kdcube/telegram-widget`.
 
 If a release changes generated standalone HTML, browser-facing widget behavior,
 or ReAct/browser-tool behavior, include the relevant browser-tool smoke test in

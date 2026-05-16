@@ -9,6 +9,7 @@ export function isTelegramWebApp(): boolean {
 }
 
 export function prepareTelegramWebApp(): void {
+  if (!isTelegramWebApp()) return;
   window.Telegram?.WebApp?.ready?.();
   window.Telegram?.WebApp?.expand?.();
 }

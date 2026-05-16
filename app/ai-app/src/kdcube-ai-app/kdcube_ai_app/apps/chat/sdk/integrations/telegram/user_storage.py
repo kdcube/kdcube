@@ -235,25 +235,56 @@ class TelegramUserAdminStorage:
         telegram_id = str(telegram_user_id or "").strip()
         if not telegram_id:
             telegram_id = str(telegram_chat_id or "anonymous").strip() or "anonymous"
+        incoming_chat_id = str(telegram_chat_id or "").strip()
+        incoming_username = str(telegram_username or "").strip()
         for item in self.list_users():
             if str(item.get("telegram_user_id") or "") == telegram_id:
+                if create_if_missing:
+                    existing_chat_id = str(item.get("telegram_chat_id") or "").strip()
+                    existing_username = str(item.get("telegram_username") or "").strip()
+                    existing_conversation_id = str(item.get("conversation_id") or "").strip()
+                    user_default_conversation = self._default_conversation_id(
+                        telegram_user_id=telegram_id,
+                    )
+                    should_update_chat = bool(incoming_chat_id and incoming_chat_id != existing_chat_id)
+                    should_update_username = bool(incoming_username and incoming_username != existing_username)
+                    if should_update_chat or should_update_username:
+                        conversation_id = existing_conversation_id
+                        if should_update_chat and (
+                            not existing_conversation_id
+                            or existing_conversation_id == user_default_conversation
+                        ):
+                            conversation_id = self._default_conversation_id(
+                                telegram_user_id=telegram_id,
+                                telegram_chat_id=incoming_chat_id,
+                                kdcube_user_id=str(item.get("kdcube_user_id") or "").strip(),
+                            )
+                        return self.upsert_user(
+                            telegram_user_id=telegram_id,
+                            telegram_chat_id=incoming_chat_id or existing_chat_id,
+                            telegram_username=incoming_username or existing_username,
+                            kdcube_user_id=str(item.get("kdcube_user_id") or "").strip(),
+                            role=str(item.get("role") or "anonymous"),
+                            conversation_id=conversation_id,
+                            notes=str(item.get("notes") or ""),
+                        )
                 return item
         if not create_if_missing:
             return {
                 "telegram_user_id": telegram_id,
-                "telegram_chat_id": str(telegram_chat_id or "").strip(),
-                "telegram_username": str(telegram_username or "").strip(),
+                "telegram_chat_id": incoming_chat_id,
+                "telegram_username": incoming_username,
                 "kdcube_user_id": "",
                 "role": "anonymous",
                 "conversation_id": self._default_conversation_id(
                     telegram_user_id=telegram_id,
-                    telegram_chat_id=str(telegram_chat_id or "").strip(),
+                    telegram_chat_id=incoming_chat_id,
                 ),
             }
         return self.upsert_user(
             telegram_user_id=telegram_id,
-            telegram_chat_id=str(telegram_chat_id or "").strip(),
-            telegram_username=str(telegram_username or "").strip(),
+            telegram_chat_id=incoming_chat_id,
+            telegram_username=incoming_username,
             role="anonymous",
         )
 

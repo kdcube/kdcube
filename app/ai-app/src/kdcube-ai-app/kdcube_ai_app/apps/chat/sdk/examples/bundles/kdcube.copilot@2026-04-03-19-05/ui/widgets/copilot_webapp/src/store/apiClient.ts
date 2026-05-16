@@ -1,15 +1,24 @@
-import { telegramInitData } from '../telegram/utils';
+import { isTelegramWebApp, telegramInitData } from '../telegram/utils';
 import { settings } from './settings';
 
 const TELEGRAM_OPERATION_ALIASES: Record<string, string> = {
   telegram_profile: 'telegram_profile',
-  telegram_copilot_webapp_data: 'telegram_copilot_webapp_data',
+  copilot_webapp_data: 'telegram_copilot_webapp_data',
+  conversations_list: 'conversations_list',
+  conversations_create: 'telegram_conversations_create',
+  conversations_switch: 'telegram_conversations_switch',
+  conversations_delete: 'telegram_conversations_delete',
   telegram_user_admin_data: 'telegram_webapp_user_admin_data',
   telegram_user_admin_upsert: 'telegram_webapp_user_admin_upsert',
   telegram_user_admin_delete: 'telegram_webapp_user_admin_delete',
 };
 
-const GET_OPERATIONS = new Set(['telegram_profile']);
+const GET_OPERATIONS = new Set(['telegram_profile', 'conversations_list']);
+
+function telegramOperationAlias(operation: string): string {
+  if (TELEGRAM_OPERATION_ALIASES[operation]) return TELEGRAM_OPERATION_ALIASES[operation];
+  return operation.startsWith('memories_widget_') ? `telegram_${operation}` : '';
+}
 
 function authHeaders(base?: HeadersInit): Headers {
   const headers = new Headers(base);
@@ -36,8 +45,8 @@ function operationUrl(operation: string, payload: Record<string, unknown> = {}):
   const tenant = encodeURIComponent(settings.getTenant());
   const project = encodeURIComponent(settings.getProject());
   const bundleId = encodeURIComponent(settings.getBundleId());
-  const telegramAlias = TELEGRAM_OPERATION_ALIASES[operation];
-  if (telegramAlias && telegramInitData()) {
+  const telegramAlias = telegramOperationAlias(operation);
+  if (telegramAlias && isTelegramWebApp()) {
     const path = `${settings.getBaseUrl()}/api/integrations/bundles/${tenant}/${project}/${bundleId}/public/${telegramAlias}`;
     return GET_OPERATIONS.has(operation) ? `${path}${queryString(payload)}` : path;
   }
@@ -46,7 +55,10 @@ function operationUrl(operation: string, payload: Record<string, unknown> = {}):
 }
 
 function responseAlias(operation: string): string {
-  return TELEGRAM_OPERATION_ALIASES[operation] || operation;
+  const telegramAlias = telegramOperationAlias(operation);
+  return isTelegramWebApp() && telegramAlias
+    ? telegramAlias
+    : operation;
 }
 
 export async function callOperation<T>(operation: string, payload: Record<string, unknown> = {}): Promise<T> {

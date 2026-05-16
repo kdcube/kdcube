@@ -3,7 +3,8 @@ id: ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
 title: "How To Configure And Run A Bundle"
 summary: "Current bundle-development runtime workflow: tenant/project environment setup, descriptor staging, local-path and git bundles, configuration translation, start/stop/reload loop, configuration/secret scopes, and the rule that one machine may hold many local deployment snapshots but should not be treated as running many local compose-backed KDCubes at once."
 tags: ["sdk", "bundle", "configuration", "runtime", "cli", "bundles.yaml"]
-keywords: ["local bundle development workflow", "tenant project environment boundary", "descriptor driven runtime setup", "local path bundle loop", "git bundle loop", "bundle reload workflow", "runtime sandbox selection", "bundle config and secret scopes", "bundle configurator workflow", "bundle deployer workflow", "current kdcube cli workflow", "multiple local runtime snapshots", "single active local compose deployment", "run multiple kdcubes on one machine", "kdcube bundle command", "patch bundle config cli", "patch bundle secret cli"]
+keywords: ["local bundle development workflow", "tenant project environment boundary", "descriptor driven runtime setup", "local path bundle loop", "git bundle loop", "bundle reload workflow", "runtime sandbox selection", "bundle config and secret scopes", "shared sdk widget sources", "bundle configurator workflow", "bundle deployer workflow", "current kdcube cli workflow", "multiple local runtime snapshots", "single active local compose deployment", "run multiple kdcubes on one machine", "kdcube bundle command", "patch bundle config cli", "patch bundle secret cli"]
+updated_at: 2026-05-16
 see_also:
   - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/configuration/bundles-descriptor-README.md
@@ -500,6 +501,47 @@ This is per widget alias. Configuring
 `task_memo_webapp` route. Inherited legacy widgets such as `ai_bundles` keep
 calling their decorated Python method unless `ui.web_app_widgets.ai_bundles`
 also defines `src_folder` and `build_command`.
+
+Reusable SDK widget UI uses build-time materialization. It is not an npm
+package and not a runtime import from the monorepo.
+
+If the widget imports SDK-owned UI code, the widget config must materialize the
+same source through `shared_sources`. For built-in/reference bundles, this
+should usually live in the bundle's `configuration_defaults()` so descriptors
+only need `enabled: true`. The descriptor can still repeat the values when you
+want the seed file to be self-documenting or to override defaults.
+
+The required shape is:
+
+```yaml
+ui:
+  web_app_widgets:
+    versatile_webapp:
+      enabled: true
+      src_folder: ui/widgets/versatile_webapp
+      build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
+      shared_sources:
+        memory_widget:
+          src_folder: sdk://context/memory/ui/widget/memories
+          target: _shared/memory-widget
+        telegram_widget:
+          src_folder: sdk://integrations/telegram/ui/widget.telegram
+          target: _shared/telegram-widget
+```
+
+Use `sdk://...` for reusable descriptors. Absolute local paths are only for
+temporary development.
+
+Failure signal:
+
+```text
+Could not load /integrations/telegram/ui/widget.telegram/src/index.tsx
+```
+
+This means the widget imported `@kdcube/telegram-widget`, but
+`sdk://integrations/telegram/ui/widget.telegram` was not materialized to the
+target expected by the Vite alias. The same rule applies to
+`@kdcube/memory-widget` and `sdk://context/memory/ui/widget/memories`.
 
 A real bundle can be a full application module with:
 

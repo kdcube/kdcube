@@ -1,5 +1,19 @@
 import { settings } from './settings';
 
+export type MemoryWidgetCallOperation = <T>(
+  operation: string,
+  payload?: Record<string, unknown>,
+) => Promise<T>;
+
+let hostCallOperation: MemoryWidgetCallOperation | null = null;
+
+export function setMemoryWidgetCallOperation(callOperation: MemoryWidgetCallOperation): () => void {
+  hostCallOperation = callOperation;
+  return () => {
+    if (hostCallOperation === callOperation) hostCallOperation = null;
+  };
+}
+
 function telegramInitData(): string {
   const own = (window as unknown as { Telegram?: { WebApp?: { initData?: string } } }).Telegram?.WebApp?.initData || '';
   if (own) return own;
@@ -32,6 +46,9 @@ function operationUrl(operation: string): string {
 }
 
 export async function callOperation<T>(operation: string, payload: Record<string, unknown> = {}): Promise<T> {
+  if (hostCallOperation) {
+    return hostCallOperation<T>(operation, payload);
+  }
   const headers = settings.authHeaders({ 'Content-Type': 'application/json' });
   const initData = telegramInitData();
   if (initData) headers.set('X-Telegram-Init-Data', initData);

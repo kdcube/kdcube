@@ -19,12 +19,15 @@ from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bundle_registry import (
     register_config,
     resolve_config,
 )
+from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import get_current_bundle_id, get_current_request_context
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram import (
+    TelegramMessage,
     TelegramActivityStreamer,
     deliver_react_turn_to_telegram,
     hydrate_telegram_attachments,
     raw_attachments_from_telegram as sdk_raw_attachments_from_telegram,
     role_to_user_type as sdk_role_to_user_type,
+    send_telegram_messages,
     summarize_telegram_update,
     telegram_command_kind_and_text as sdk_telegram_command_kind_and_text,
 )
@@ -69,6 +72,22 @@ def _config(entrypoint: Any = None) -> Dict[str, Any]:
 
 
 def _bundle_id(entrypoint: Any = None) -> str:
+    current = str(get_current_bundle_id() or "").strip()
+    if current:
+        return current
+    current_ctx = get_current_request_context()
+    current_ctx_id = str(getattr(getattr(current_ctx, "routing", None), "bundle_id", None) or "").strip()
+    if current_ctx_id:
+        return current_ctx_id
+    entrypoint_ctx_id = str(
+        getattr(getattr(getattr(entrypoint, "comm_context", None), "routing", None), "bundle_id", None) or ""
+    ).strip()
+    if entrypoint_ctx_id:
+        return entrypoint_ctx_id
+    spec = getattr(getattr(entrypoint, "config", None), "ai_bundle_spec", None)
+    spec_id = str(getattr(spec, "id", None) or "").strip()
+    if spec_id:
+        return spec_id
     return configured_bundle_id(_config(entrypoint)) or BUNDLE_ID
 
 
@@ -254,12 +273,30 @@ def storage(entrypoint: Any) -> Any:
 def payload(entrypoint: Any) -> Dict[str, Any]:
     registry = storage(entrypoint)
     roles = getattr(type(registry), "ALLOWED_ROLES", None) or getattr(registry, "ALLOWED_ROLES", ())
+    ctx_user = getattr(getattr(entrypoint, "comm_context", None), "user", None)
+    current_user_id = str(
+        getattr(ctx_user, "user_id", None)
+        or getattr(getattr(entrypoint, "comm", None), "user_id", None)
+        or ""
+    ).strip()
+    current_username = str(getattr(ctx_user, "username", None) or "").strip()
+    current_roles = [
+        str(item or "").strip()
+        for item in (getattr(ctx_user, "roles", None) or [])
+        if str(item or "").strip()
+    ]
     return {
         "ok": True,
         "bundle_id": _bundle_id(entrypoint),
         "roles": list(roles),
         "users": registry.list_users(),
         "storage_path": str(registry.path),
+        "current_kdcube_user_id": current_user_id,
+        "current_user": {
+            "user_id": current_user_id,
+            "username": current_username,
+            "roles": current_roles,
+        },
     }
 
 
@@ -282,13 +319,18 @@ def upsert(
         create_if_missing=False,
     )
     old_kdcube_user_id = str(existing.get("kdcube_user_id") or "").strip()
+    old_role = str(existing.get("role") or "anonymous").strip().lower() or "anonymous"
+    stored_chat_id = str(telegram_chat_id or existing.get("telegram_chat_id") or "").strip()
+    stored_username = str(telegram_username or existing.get("telegram_username") or "").strip()
+    stored_kdcube_user_id = str(kdcube_user_id or existing.get("kdcube_user_id") or "").strip()
+    stored_conversation_id = str(conversation_id or existing.get("conversation_id") or "").strip()
     user = registry.upsert_user(
         telegram_user_id=telegram_user_id,
-        telegram_chat_id=telegram_chat_id,
-        telegram_username=telegram_username,
-        kdcube_user_id=kdcube_user_id,
+        telegram_chat_id=stored_chat_id,
+        telegram_username=stored_username,
+        kdcube_user_id=stored_kdcube_user_id,
         role=role,
-        conversation_id=conversation_id,
+        conversation_id=stored_conversation_id,
         notes=notes,
     )
     migration = None
@@ -311,12 +353,58 @@ def upsert(
             new_kdcube_user_id,
             migration,
         )
+    new_role = str(user.get("role") or "anonymous").strip().lower() or "anonymous"
+    approval_transition = {
+        "from_role": old_role,
+        "to_role": new_role,
+        "approved": (not _role_allows_access(old_role)) and _role_allows_access(new_role),
+    }
     return {
         "ok": True,
         "user": user,
         "migration": migration,
+        "approval_transition": approval_transition,
         "users": registry.list_users(),
     }
+
+
+async def notify_access_change(entrypoint: Any, *, result: Dict[str, Any]) -> Dict[str, Any]:
+    """Best-effort chat notification when an admin approves a pending Telegram user."""
+    if not isinstance(result, dict):
+        return {"ok": False, "sent": 0, "skipped": "invalid_result"}
+    transition = result.get("approval_transition") if isinstance(result.get("approval_transition"), dict) else {}
+    if not transition.get("approved"):
+        return {"ok": True, "sent": 0, "skipped": "not_newly_approved"}
+    user = result.get("user") if isinstance(result.get("user"), dict) else {}
+    chat_id = str(user.get("telegram_chat_id") or user.get("telegram_user_id") or "").strip()
+    if not chat_id:
+        return {"ok": False, "sent": 0, "skipped": "telegram_chat_id_missing"}
+    role = str(user.get("role") or transition.get("to_role") or "").strip().lower() or "registered"
+    text = (
+        "Your KDCube bot access has been approved. "
+        "Open the Mini App again, or send a message here to continue."
+    )
+    if role == "admin":
+        text = (
+            "Your KDCube bot access has been approved with admin permissions. "
+            "Open the Mini App again, or send a message here to continue."
+        )
+    try:
+        delivery = await send_telegram_messages(
+            bot_token=bot_token(entrypoint),
+            chat_id=chat_id,
+            messages=[TelegramMessage(kind="text", text=text)],
+        )
+    except Exception as exc:
+        log.warning(
+            "[%s] telegram approval notification failed | telegram_user_id=%s chat_id=%s error=%s",
+            _bundle_id(entrypoint),
+            user.get("telegram_user_id") or "",
+            chat_id,
+            exc,
+        )
+        return {"ok": False, "sent": 0, "error": str(exc)}
+    return delivery
 
 
 def delete(entrypoint: Any, *, telegram_user_id: str) -> Dict[str, Any]:
@@ -340,6 +428,10 @@ def bot_token(entrypoint: Any = None) -> str:
 
 def _role_to_user_type(role: str) -> UserType:
     return sdk_role_to_user_type(role)
+
+
+def _role_allows_access(role: str) -> bool:
+    return str(role or "").strip().lower() in {"registered", "admin"}
 
 
 def _telegram_command_kind_and_text(text: str) -> tuple[str, str]:

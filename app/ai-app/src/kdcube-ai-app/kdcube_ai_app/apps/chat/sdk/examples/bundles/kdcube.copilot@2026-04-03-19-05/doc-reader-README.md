@@ -16,6 +16,11 @@ Motivation:
 - allow React to search & read a curated set of files via `ks:` paths
 - expose deployment + source references alongside docs
 
+## Bundle Docs
+
+- [Telegram setup](docs/integrations/telegram-setup.md) - webhook, Mini App,
+  commands, and the `/start` admin approval flow.
+
 ## How it works (high‑level)
 
 1) **Knowledge space is prepared before each turn (cached)**

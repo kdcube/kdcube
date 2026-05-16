@@ -22,6 +22,11 @@ const TELEGRAM_OPERATION_ALIASES: Record<string, string> = {
 
 const GET_OPERATIONS = new Set(['telegram_profile', 'conversations_list']);
 
+function telegramOperationAlias(operation: string): string {
+  if (TELEGRAM_OPERATION_ALIASES[operation]) return TELEGRAM_OPERATION_ALIASES[operation];
+  return operation.startsWith('memories_widget_') ? `telegram_${operation}` : '';
+}
+
 function authHeaders(base?: HeadersInit): Headers {
   const headers = new Headers(base);
   const initData = telegramInitData();
@@ -47,8 +52,8 @@ function operationUrl(operation: string, payload: Record<string, unknown> = {}):
   const tenant = encodeURIComponent(settings.getTenant());
   const project = encodeURIComponent(settings.getProject());
   const bundleId = encodeURIComponent(settings.getBundleId());
-  if (isTelegramWebApp() && TELEGRAM_OPERATION_ALIASES[operation]) {
-    const publicAlias = TELEGRAM_OPERATION_ALIASES[operation];
+  const publicAlias = telegramOperationAlias(operation);
+  if (isTelegramWebApp() && publicAlias) {
     const path = `${settings.getBaseUrl()}/api/integrations/bundles/${tenant}/${project}/${bundleId}/public/${publicAlias}`;
     return GET_OPERATIONS.has(operation) ? `${path}${queryString(payload)}` : path;
   }
@@ -57,7 +62,8 @@ function operationUrl(operation: string, payload: Record<string, unknown> = {}):
 }
 
 function responseAlias(operation: string): string {
-  return isTelegramWebApp() && TELEGRAM_OPERATION_ALIASES[operation] ? TELEGRAM_OPERATION_ALIASES[operation] : operation;
+  const publicAlias = telegramOperationAlias(operation);
+  return isTelegramWebApp() && publicAlias ? publicAlias : operation;
 }
 
 export async function callOperation<T>(operation: string, payload: Record<string, unknown> = {}): Promise<T> {

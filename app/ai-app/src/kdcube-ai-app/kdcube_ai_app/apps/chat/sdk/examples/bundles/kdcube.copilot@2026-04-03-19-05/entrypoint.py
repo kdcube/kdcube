@@ -475,9 +475,9 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
         await self._ensure_ui_build()
         return None
 
-    async def pre_run_hook(self, *, state: Dict[str, Any]) -> None:
+    async def pre_run_hook(self, *, state: Dict[str, Any], econ_ctx: Optional[Dict[str, Any]] = None) -> None:
         """Reconcile knowledge space only if load-time prep did not happen or config changed."""
-        await super().pre_run_hook(state=state)
+        await super().pre_run_hook(state=state, econ_ctx=econ_ctx or {})
         await asyncio.to_thread(self._reconcile_knowledge_space, reason="pre_run_hook")
         return None
 
@@ -567,6 +567,90 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
             "</div>"
         ]
 
+    @api(method="POST", alias="copilot_webapp_data", route="operations", user_types=("registered", "paid", "privileged"))
+    async def copilot_webapp_data(
+        self,
+        user_id: Optional[str] = None,
+        fingerprint: Optional[str] = None,
+        mark_memory_seen: bool = False,
+        widget_path: str = "",
+        path: str = "",
+        **kwargs,
+    ) -> Dict[str, Any]:
+        del kwargs
+        return await telegram_webapp.payload(
+            self,
+            user_id=user_id,
+            fingerprint=fingerprint,
+            mark_memory_seen=mark_memory_seen,
+            widget_path=widget_path or path,
+            include_admin=telegram_webapp.user_has_role(self, TELEGRAM_ADMIN_ROLE),
+        )
+
+    @api(method="GET", alias="conversations_list", route="operations", user_types=("registered", "paid", "privileged"))
+    async def conversations_list(
+        self,
+        user_id: Optional[str] = None,
+        fingerprint: Optional[str] = None,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        del kwargs
+        return await telegram_webapp.list_conversations(
+            self,
+            user_id=user_id,
+            fingerprint=fingerprint,
+        )
+
+    @api(method="POST", alias="conversations_create", route="operations", user_types=("registered", "paid", "privileged"))
+    async def conversations_create(
+        self,
+        user_id: Optional[str] = None,
+        fingerprint: Optional[str] = None,
+        title: str = "",
+        **kwargs,
+    ) -> Dict[str, Any]:
+        del kwargs
+        return await telegram_webapp.create_conversation(
+            self,
+            user_id=user_id,
+            fingerprint=fingerprint,
+            title=title,
+        )
+
+    @api(method="POST", alias="conversations_switch", route="operations", user_types=("registered", "paid", "privileged"))
+    async def conversations_switch(
+        self,
+        conversation_id: str,
+        user_id: Optional[str] = None,
+        fingerprint: Optional[str] = None,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        del kwargs
+        return await telegram_webapp.switch_conversation(
+            self,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            fingerprint=fingerprint,
+        )
+
+    @api(method="POST", alias="conversations_delete", route="operations", user_types=("registered", "paid", "privileged"))
+    async def conversations_delete(
+        self,
+        conversation_id: str,
+        user_id: Optional[str] = None,
+        fingerprint: Optional[str] = None,
+        delete_history: bool = True,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        del kwargs
+        return await telegram_webapp.delete_conversation(
+            self,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            fingerprint=fingerprint,
+            delete_history=delete_history,
+        )
+
     @api(method="POST", alias="telegram_user_admin_data", route="operations", roles=(TELEGRAM_ADMIN_ROLE,))
     async def telegram_user_admin_data(self, **kwargs) -> Dict[str, Any]:
         del kwargs
@@ -586,7 +670,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
         **kwargs,
     ) -> Dict[str, Any]:
         del kwargs
-        return telegram_user_admin.upsert(
+        result = telegram_user_admin.upsert(
             self,
             telegram_user_id=telegram_user_id,
             telegram_chat_id=telegram_chat_id,
@@ -596,6 +680,8 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
             conversation_id=conversation_id,
             notes=notes,
         )
+        result["notification"] = await telegram_user_admin.notify_access_change(self, result=result)
+        return result
 
     @api(method="POST", alias="telegram_user_admin_delete", route="operations", roles=(TELEGRAM_ADMIN_ROLE,))
     async def telegram_user_admin_delete(
@@ -2084,7 +2170,14 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
                         "src_folder": "ui/widgets/copilot_webapp",
                         "build_command": "npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build",
                         "shared_sources": {
-                            "memory-widget": "sdk://context/memory/ui/widget/memories",
+                            "memory_widget": {
+                                "src_folder": "sdk://context/memory/ui/widget/memories",
+                                "target": "_shared/memory-widget",
+                            },
+                            "telegram_widget": {
+                                "src_folder": "sdk://integrations/telegram/ui/widget.telegram",
+                                "target": "_shared/telegram-widget",
+                            },
                         },
                     },
                 },

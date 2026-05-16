@@ -3,7 +3,8 @@ id: ks:docs/sdk/bundle/bundle-developer-guide-README.md
 title: "Bundle Developer Guide"
 summary: "High-level entrypoint for bundle authors: what a bundle is, how tenant/project environments work, which runtime surfaces exist, and which docs to follow for authoring, config, testing, and delivery."
 tags: ["sdk", "bundle", "development", "entrypoint", "workflow", "tools", "skills", "configuration", "background-jobs"]
-keywords: ["bundle authoring entrypoint", "what a bundle is", "tenant project environment", "runtime surfaces overview", "configuration model overview", "reference bundle path", "local authoring loop", "bundle documentation map", "on_job background jobs"]
+keywords: ["bundle authoring entrypoint", "what a bundle is", "tenant project environment", "runtime surfaces overview", "configuration model overview", "reference bundle path", "shared sdk widget components", "local authoring loop", "bundle documentation map", "on_job background jobs"]
+updated_at: 2026-05-16
 see_also:
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
@@ -513,6 +514,17 @@ For those, use the dedicated docs:
 For bundle widgets and main UI integration, use:
 
 - [bundle-widget-integration-README.md](bundle-widget-integration-README.md)
+
+When a widget needs a platform-owned UI capability inside the same React tree,
+use the shared-source pattern from that doc instead of duplicating panels in the
+bundle. Current reusable examples are:
+
+- User Memory: `sdk://context/memory/ui/widget/memories`
+- Telegram admin/channels: `sdk://integrations/telegram/ui/widget.telegram`
+
+The bundle still owns route aliases, role policy, Telegram identity mapping,
+and operation callers. Shared widget components are UI source, not backend
+authorization.
 
 ## Validation
 
