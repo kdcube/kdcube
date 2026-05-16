@@ -1,65 +1,63 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.5.16.1704"
+  ref: "2026.5.17.126"
   description: |
-    This release fixes ECS/widget readiness and frame embedding issues found
-    after the 2026.5.16.407 platform release, and cleans up public KDCube
-    overview documentation.
+    This release fixes an ECS ingress regression in descriptor-backed
+    deployments and tightens bundle/widget diagnostics after the
+    2026.5.16.1704 platform release.
 
     Highlights
 
-    - Fixes bundle preload behavior for multi-proc deployments. Every proc now
-      performs local bundle preload even when another proc holds the Redis
-      preload lock; shared UI build locks and signatures remain responsible for
-      deduplicating the actual npm/build work.
-    - Prevents cold non-leader procs from marking themselves ready before
-      bundle `on_bundle_load()` has warmed local runtime state and current UI
-      build outputs.
-    - Updates frameable nginx routes to clear inherited `X-Frame-Options:
-      DENY` before setting `SAMEORIGIN`, so bundle widgets and static
-      integration UIs can be embedded by the same-origin control-plane shell.
-    - Adds an explicit `/api/integrations/static/` frameable route to the ECS
-      custom UI nginx template and extends integration static route timeouts for
-      first-load build/readiness paths.
-    - Documents the control-plane embedding contract: frame policies belong in
-      proxy headers, frameable document routes must clear inherited deny
-      headers, and `bundles_preload_on_start` should make iframe requests find
-      fresh current UI builds rather than serving stale output.
-    - Cleans up `what-you-can-do-with-kdcube` so it remains public product
-      documentation and no longer contains internal demo-assistant planning
-      notes.
+    - Fixes chat ingress failures where descriptor-backed deployments tried to
+      create `/config/.bundles.yaml.lock` while reading the active bundle
+      registry from a read-only ECS config mount.
+    - Separates ingress and proc responsibilities for bundle registry access:
+      ingress now reads only the Redis-published registry metadata snapshot,
+      while proc remains responsible for descriptor refresh, git/built-in
+      bundle materialization, bundle preload, and `on_bundle_load()` hooks.
+    - Adds a writable fallback lock location for file-backed bundle descriptors
+      so legitimate proc/admin descriptor operations still work when the
+      descriptor itself is mounted read-only.
+    - Downgrades ECS host-path warnings for managed bundle directories to DEBUG
+      because host-side EFS paths are not expected to exist inside application
+      containers.
+    - Improves widget load diagnostics and removes the silent admin-bundle
+      fallback when a requested bundle fails to load, so widget lookup errors
+      report the actual requested bundle/workflow state.
+    - Adds preload registry snapshot logging to make built-in and git-backed
+      bundle startup behavior easier to verify in ECS logs.
+    - Expands the public KDCube capabilities overview with clearer coverage of
+      hot reload, ReAct followups/steer, ANNOUNCE, MCP tools, custom skills,
+      multimodality, and ISO runtime usage beyond ReAct.
 
     Runtime and deployment notes:
 
-    - The Redis preload lock no longer means "only the leader preloads
-      bundles." It now only coordinates the cluster while each proc still warms
-      its own process-local bundle/module state.
-    - Existing storage-scoped UI build locks remain strict:
-      `allow_existing_on_timeout=false` and `allow_existing_while_locked=false`,
-      so stale UI is not used as a fallback for current entrypoint requests.
-    - The embedding documentation now calls out that if runtime iframe requests
-      still trigger `npm install`, that is a preload/readiness problem to fix,
-      not a reason to serve stale UI.
+    - Ingress does not import bundles, run bundle hooks, resolve git bundles,
+      or reread descriptor files. It only validates bundle ids/defaults from
+      the cached registry snapshot and enqueues work for proc.
+    - Proc remains the owner of active descriptor refresh and must publish the
+      Redis registry snapshot before ingress can accept chat requests.
+    - The previous noisy
+      `HOST_MANAGED_BUNDLES_PATH points to missing path ...` ECS message is no
+      longer emitted at WARNING level.
 
     Validation and regression coverage:
 
-    - Re-ran Python compile checks for the processor web app and integrations
-      route module.
-    - Re-ran focused preload/static/widget tests:
-      `test_proc_bundle_preload_lock.py`, `test_integrations_stream_id.py`,
-      and `test_bundle_interfaces.py`.
-    - Re-ran `git diff --check` for the platform nginx templates, Kubernetes
-      nginx templates, docs, preload code, and focused tests.
+    - Re-ran Python compile checks for bundle registry/store, git bundle path
+      resolution, proc startup, and integrations routes.
+    - Re-ran the focused bundle registry runtime-context test module with
+      explicit `PYTHONPATH`; all 7 tests passed.
+    - Re-ran `git diff --check` for the committed hotfix files.
 
     Changelog
 
-    - Fixed bundle preload skipping on non-leader procs.
-    - Fixed frameable route headers for bundle widgets/static integration UI.
-    - Added `/api/integrations/static/` frameable handling to the ECS nginx
-      template.
-    - Increased static integration route timeouts used by nginx templates.
-    - Updated embedding-control-plane frontend documentation for current
-      iframe/header/preload behavior.
-    - Removed internal demo-planning wording from the public KDCube overview.
+    - Fixed ingress registry reads to use Redis metadata only on non-proc
+      components.
+    - Added read-only descriptor lock fallback for file-backed bundle
+      descriptors.
+    - Reduced ECS managed-bundle host-path warning noise.
+    - Added bundle preload and widget mismatch diagnostics.
+    - Removed silent admin fallback from requested bundle load failures.
+    - Updated KDCube public capabilities documentation.
 config:
-    version: "2026.5.16.1704"
+    version: "2026.5.17.126"
