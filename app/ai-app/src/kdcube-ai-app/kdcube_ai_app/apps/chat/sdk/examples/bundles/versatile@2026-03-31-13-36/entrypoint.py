@@ -31,7 +31,6 @@ TELEGRAM_WEBHOOK_PUBLIC_AUTH = {
     "secret_key": "integrations.telegram.webhook_secret",
 }
 TELEGRAM_WEBAPP_PUBLIC_AUTH = "none"
-TELEGRAM_MEMORY_WIDGET_ALIAS = "telegram_memories"
 
 
 def _api_visibility(
@@ -98,8 +97,13 @@ class _VersatileMemoryWidgets:
         mark_seen: bool = False,
         **kwargs,
     ) -> Dict[str, Any]:
-        del user_id, fingerprint, mark_seen, kwargs
-        return await entrypoint.memories_widget_data(scope_filter="current_bundle", limit=30)
+        del mark_seen, kwargs
+        with entrypoint._memory_user_identity(
+            user_id=user_id or "",
+            fingerprint=fingerprint or "",
+            user_type="registered",
+        ):
+            return await entrypoint.memories_widget_data(scope_filter="current_bundle", limit=30)
 
 
 class _VersatileSettingsWidgets:
@@ -294,29 +298,6 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
         return [
             "<div style=\"font-family:system-ui,sans-serif;padding:16px\">"
             "Versatile webapp is served from the built widget source folder."
-            "</div>"
-        ]
-
-    @api(alias="telegram_memories_widget", route="public", public_auth=TELEGRAM_WEBAPP_PUBLIC_AUTH)
-    @ui_widget(
-        icon={
-            "tailwind": "heroicons-outline:book-open",
-            "lucide": "NotebookTabs",
-        },
-        alias=TELEGRAM_MEMORY_WIDGET_ALIAS,
-        user_types=(),
-        roles=(),
-    )
-    def telegram_memories_widget(
-        self,
-        request: Any = None,
-        telegram_init_data: str = "",
-        **kwargs,
-    ):
-        del request, telegram_init_data, kwargs
-        return [
-            "<div style=\"font-family:system-ui,sans-serif;padding:16px\">"
-            "Telegram user memories are served from the built memories widget."
             "</div>"
         ]
 
@@ -599,6 +580,9 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
             result.setdefault("user_id", identity.user_id)
         return result if isinstance(result, dict) else {"ok": True, "result": result}
 
+    # Public Telegram bridge APIs for the shared memory component embedded in
+    # `versatile_webapp`. These are operation endpoints, not separate widget
+    # surfaces; the only versatile web-app widget alias is `versatile_webapp`.
     @api(method="POST", alias="telegram_memories_widget_data", route="public", public_auth=TELEGRAM_WEBAPP_PUBLIC_AUTH)
     async def telegram_memories_widget_data(self, request: Any = None, telegram_init_data: str = "", **kwargs) -> Dict[str, Any]:
         return await self._telegram_memory_widget_call("memories_widget_data", request=request, telegram_init_data=telegram_init_data, **kwargs)
@@ -760,11 +744,6 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
                                 "target": "_shared/memory-widget",
                             },
                         },
-                    },
-                    TELEGRAM_MEMORY_WIDGET_ALIAS: {
-                        "enabled": False,
-                        "src_folder": "sdk://context/memory/ui/widget/memories",
-                        "build_command": "npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build",
                     },
                 },
             },

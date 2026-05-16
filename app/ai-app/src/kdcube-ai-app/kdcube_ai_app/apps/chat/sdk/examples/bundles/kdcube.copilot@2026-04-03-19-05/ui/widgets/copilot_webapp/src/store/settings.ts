@@ -21,7 +21,7 @@ export function routeContextFromLocation(): RouteContext {
       tenant: '',
       project: '',
       bundleId: 'kdcube.copilot@2026-04-03-19-05',
-      widgetAlias: 'telegram_copilot_webapp',
+      widgetAlias: 'copilot_webapp',
       widgetPath: '',
     };
   }
@@ -32,7 +32,7 @@ export function routeContextFromLocation(): RouteContext {
     tenant: parts[0] || '',
     project: parts[1] || '',
     bundleId: parts[2] || 'kdcube.copilot@2026-04-03-19-05',
-    widgetAlias: widgetsIndex >= 0 ? parts[widgetsIndex + 1] || 'telegram_copilot_webapp' : 'telegram_copilot_webapp',
+    widgetAlias: widgetsIndex >= 0 ? parts[widgetsIndex + 1] || 'copilot_webapp' : 'copilot_webapp',
     widgetPath: widgetsIndex >= 0 ? parts.slice(widgetsIndex + 2).join('/') : '',
   };
 }
@@ -53,7 +53,7 @@ function tabPath(tab: TabId): string {
   if (index < 0) return path;
   const before = path.slice(0, index + marker.length);
   const rest = path.slice(index + marker.length);
-  const alias = rest.split('/')[0] || ROUTE_CONTEXT.widgetAlias || 'telegram_copilot_webapp';
+  const alias = rest.split('/')[0] || ROUTE_CONTEXT.widgetAlias || 'copilot_webapp';
   return `${before}${alias}/${tab === 'telegram_admin' ? 'telegram-admin' : 'memory'}`;
 }
 
@@ -109,7 +109,7 @@ class SettingsManager {
   }
 
   setupParentListener(): Promise<boolean> {
-    const identity = 'KDCUBE_COPILOT_TELEGRAM_WEBAPP';
+    const identity = 'KDCUBE_COPILOT_WEBAPP';
     window.addEventListener('message', (event: MessageEvent) => {
       if (event.data?.type !== 'CONN_RESPONSE' && event.data?.type !== 'CONFIG_RESPONSE') return;
       if (event.data.identity !== identity || !event.data.config) return;

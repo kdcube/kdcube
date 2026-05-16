@@ -61,9 +61,9 @@ export default function App() {
       <header className="app-nav">
         <div className="app-mark">
           <span className="app-name">KDCube Copilot</span>
-          <span className="app-context">Telegram WebApp</span>
+          <span className="app-context">WebApp</span>
         </div>
-        <nav className="page-tabs" aria-label="Copilot Telegram sections">
+        <nav className="page-tabs" aria-label="Copilot sections">
           <button
             type="button"
             className={tab === 'memory' ? 'active' : ''}

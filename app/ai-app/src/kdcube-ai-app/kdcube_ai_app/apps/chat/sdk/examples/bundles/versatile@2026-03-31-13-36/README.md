@@ -26,7 +26,6 @@ It intentionally demonstrates the main SDK bundle surfaces together in one place
 | MCP tools                              | `tools_descriptor.py`                                                                      |
 | Bundle-authenticated MCP endpoint      | `entrypoint.py:preferences_tools_mcp`, `tools/preference_tools.py:build_preferences_mcp_app` |
 | Direct isolated exec from bundle code  | `entrypoint.py:preferences_exec_report`                                                    |
-| Custom TSX widget                      | `ui/PreferencesBrowser.tsx`, `entrypoint.py:preferences_widget`                            |
 | Source-folder webapp widget            | `ui/widgets/versatile_webapp`, `entrypoint.py:versatile_webapp_widget`                     |
 | Custom iframe main view                | `ui/main/src/App.tsx`, `ui/main/src/settings.ts`, `entrypoint.py`                            |
 | Bundle interface contract              | `interface/README.md`                                                                       |
@@ -392,10 +391,6 @@ Concrete routes:
 
 This bundle also exposes widget and notebook operations:
 
-- `preferences_widget`
-  - reads current preference data
-  - renders `ui/PreferencesBrowser.tsx`
-  - returns iframe-ready HTML
 - `preferences_summary`
   - authenticated `GET` example
   - returns current preference/event counts for the current user

@@ -9,9 +9,9 @@ bundle:
     - Derives the Copilot bundle from the memory + economics entrypoint stack so
       the bundle can expose durable user memory, cost accounting, and the normal
       ReAct workflow in one surface.
-    - Adds a `telegram_copilot_webapp` source-folder widget with two sections:
+    - Adds a single `copilot_webapp` source-folder widget with two sections:
       User Memory and Telegram Admin. It works as a normal KDCube widget and as
-      a Telegram WebApp.
+      the Telegram Mini App entrypoint.
     - Reuses the shared memory widget source directly inside the Copilot WebApp
       build through `shared_sources`, avoiding iframe composition.
     - Adds public Telegram WebApp routes for memory operations and Telegram user

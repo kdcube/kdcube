@@ -40,7 +40,5 @@ bundles:
                 memory_widget:
                   src_folder: sdk://context/memory/ui/widget/memories
                   target: _shared/memory-widget
-            memories:
-              enabled: true
         mcp:
           services: {}

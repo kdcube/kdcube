@@ -113,8 +113,7 @@ TELEGRAM_WEBHOOK_PUBLIC_AUTH = {
     "secret_key": "integrations.telegram.webhook_secret",
 }
 TELEGRAM_WEBAPP_PUBLIC_AUTH = "none"
-TELEGRAM_COPILOT_WEBAPP_ALIAS = "telegram_copilot_webapp"
-TELEGRAM_MEMORY_WIDGET_ALIAS = "telegram_memories"
+COPILOT_WEBAPP_ALIAS = "copilot_webapp"
 
 
 def _storage_root_or_error(entrypoint: Any) -> pathlib.Path:
@@ -547,49 +546,24 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
         self._require_doc_reader_mcp_auth(request)
         return self._build_doc_reader_mcp_app(name_suffix="doc_reader")
 
-    @api(alias="telegram_copilot_webapp_widget", route="public", public_auth=TELEGRAM_WEBAPP_PUBLIC_AUTH)
+    @api(alias="copilot_webapp_widget", route="operations", user_types=("registered", "paid", "privileged"))
     @ui_widget(
         icon={
             "tailwind": "heroicons-outline:squares-2x2",
             "lucide": "PanelsTopLeft",
         },
-        alias=TELEGRAM_COPILOT_WEBAPP_ALIAS,
+        alias=COPILOT_WEBAPP_ALIAS,
         user_types=(),
         roles=(),
     )
-    def telegram_copilot_webapp_widget(
+    def copilot_webapp_widget(
         self,
-        request: Any = None,
-        telegram_init_data: str = "",
         **kwargs,
     ):
-        del request, telegram_init_data, kwargs
+        del kwargs
         return [
             "<div style=\"font-family:system-ui,sans-serif;padding:16px\">"
-            "KDCube Copilot Telegram WebApp is served from the built widget source folder."
-            "</div>"
-        ]
-
-    @api(alias="telegram_memories_widget", route="public", public_auth=TELEGRAM_WEBAPP_PUBLIC_AUTH)
-    @ui_widget(
-        icon={
-            "tailwind": "heroicons-outline:book-open",
-            "lucide": "NotebookTabs",
-        },
-        alias=TELEGRAM_MEMORY_WIDGET_ALIAS,
-        user_types=(),
-        roles=(),
-    )
-    def telegram_memories_widget(
-        self,
-        request: Any = None,
-        telegram_init_data: str = "",
-        **kwargs,
-    ):
-        del request, telegram_init_data, kwargs
-        return [
-            "<div style=\"font-family:system-ui,sans-serif;padding:16px\">"
-            "Telegram user memories are served from the built memories widget."
+            "KDCube Copilot WebApp is served from the built widget source folder."
             "</div>"
         ]
 
@@ -769,6 +743,9 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
             result.setdefault("user_id", identity.user_id)
         return result if isinstance(result, dict) else {"ok": True, "result": result}
 
+    # Public Telegram bridge APIs for the shared memory component embedded in
+    # `copilot_webapp`. These are operation endpoints, not separate widget
+    # surfaces; the only Copilot web-app widget alias is `copilot_webapp`.
     @api(method="POST", alias="telegram_memories_widget_data", route="public", public_auth=TELEGRAM_WEBAPP_PUBLIC_AUTH)
     async def telegram_memories_widget_data(self, request: Any = None, telegram_init_data: str = "", **kwargs) -> Dict[str, Any]:
         return await self._telegram_memory_widget_call("memories_widget_data", request=request, telegram_init_data=telegram_init_data, **kwargs)
@@ -2102,18 +2079,13 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
             },
             "ui": {
                 "web_app_widgets": {
-                    TELEGRAM_COPILOT_WEBAPP_ALIAS: {
+                    COPILOT_WEBAPP_ALIAS: {
                         "enabled": False,
-                        "src_folder": "ui/widgets/telegram_copilot_webapp",
+                        "src_folder": "ui/widgets/copilot_webapp",
                         "build_command": "npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build",
                         "shared_sources": {
                             "memory-widget": "sdk://context/memory/ui/widget/memories",
                         },
-                    },
-                    TELEGRAM_MEMORY_WIDGET_ALIAS: {
-                        "enabled": False,
-                        "src_folder": "sdk://context/memory/ui/widget/memories",
-                        "build_command": "npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build",
                     },
                 },
             },
