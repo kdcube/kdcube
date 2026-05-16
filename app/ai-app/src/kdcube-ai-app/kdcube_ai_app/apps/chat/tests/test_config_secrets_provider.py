@@ -212,6 +212,40 @@ def test_get_secret_bundle_namespace_uses_bundle_env_fallback(monkeypatch):
     assert sdk_config.get_secret("b:user_management.cognito_user_pool_id") == "pool-123"
 
 
+def test_get_secret_bundle_namespace_without_context_does_not_query_provider(monkeypatch, caplog):
+    class _SettingsThatMustNotBeUsed:
+        def secret(self, key: str, default=None):  # pragma: no cover - should not be reached
+            raise AssertionError(f"unexpected provider lookup for {key}")
+
+    monkeypatch.setattr(sdk_config, "get_settings", lambda: _SettingsThatMustNotBeUsed())
+    monkeypatch.setattr(comm_ctx, "get_current_request_context", lambda: None)
+    monkeypatch.setattr(comm_ctx, "get_current_bundle_id", lambda: None)
+    monkeypatch.delenv("KDCUBE_BUNDLE_ID", raising=False)
+    monkeypatch.delenv("AGENTIC_BUNDLE_ID", raising=False)
+    monkeypatch.delenv("BUNDLE_ID", raising=False)
+
+    caplog.set_level(logging.WARNING, logger="kdcube.settings.secrets")
+
+    assert sdk_config.get_secret("b:services.git.http_token", default="fallback") == "fallback"
+    assert "Bundle-scoped secret b:services.git.http_token requested without bundle context" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_get_secret_async_bundle_namespace_without_context_does_not_query_provider(monkeypatch):
+    class _SettingsThatMustNotBeUsed:
+        async def secret_async(self, key: str, default=None):  # pragma: no cover - should not be reached
+            raise AssertionError(f"unexpected provider lookup for {key}")
+
+    monkeypatch.setattr(sdk_config, "get_settings", lambda: _SettingsThatMustNotBeUsed())
+    monkeypatch.setattr(comm_ctx, "get_current_request_context", lambda: None)
+    monkeypatch.setattr(comm_ctx, "get_current_bundle_id", lambda: None)
+    monkeypatch.delenv("KDCUBE_BUNDLE_ID", raising=False)
+    monkeypatch.delenv("AGENTIC_BUNDLE_ID", raising=False)
+    monkeypatch.delenv("BUNDLE_ID", raising=False)
+
+    assert await sdk_config.get_secret_async("b:services.git.http_user") is None
+
+
 @pytest.mark.asyncio
 async def test_set_bundle_secret_uses_request_context_bundle_scope(monkeypatch):
     manager = _FakeSecretsManager()

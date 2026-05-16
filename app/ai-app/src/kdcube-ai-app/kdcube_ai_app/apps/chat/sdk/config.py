@@ -104,7 +104,7 @@ def _resolve_current_bundle_id() -> str | None:
     return None
 
 
-def _normalize_secret_lookup_key(key: str) -> str:
+def _normalize_secret_lookup_key(key: str) -> str | None:
     raw = str(key or "").strip()
     if not raw:
         return raw
@@ -117,14 +117,16 @@ def _normalize_secret_lookup_key(key: str) -> str:
         bundle_id = _resolve_current_bundle_id()
         if not bundle_id:
             _SECRET_LOG.warning("Bundle-scoped secret %s requested without bundle context", raw)
-            return raw
+            return None
         return f"bundles.{bundle_id}.secrets.{tail}"
     return raw
 
 
 def get_secret(key: str, default: str | None = None) -> str | None:
-    settings = get_settings()
     normalized_key = _normalize_secret_lookup_key(key)
+    if normalized_key is None:
+        return default
+    settings = get_settings()
     for candidate in _secret_candidates(normalized_key):
         env_val = os.getenv(candidate)
         if env_val:
@@ -142,8 +144,10 @@ def get_secret(key: str, default: str | None = None) -> str | None:
 
 
 async def get_secret_async(key: str, default: str | None = None) -> str | None:
-    settings = get_settings()
     normalized_key = _normalize_secret_lookup_key(key)
+    if normalized_key is None:
+        return default
+    settings = get_settings()
     for candidate in _secret_candidates(normalized_key):
         env_val = os.getenv(candidate)
         if env_val:
