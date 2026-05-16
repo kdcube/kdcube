@@ -3,7 +3,8 @@ id: ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
 title: "How To Test A Bundle"
 summary: "Testing guide for bundle authors and QA: local syntax/suite/pytest validation, runtime reload validation, widget and API checks, scheduled-job verification, and failure diagnosis in the local runtime."
 tags: ["sdk", "bundle", "testing", "pytest", "widget", "runtime", "validation"]
-keywords: ["bundle testing workflow", "shared bundle suite", "local bundle tests", "widget and api validation", "runtime reload verification", "scheduled job checks", "bundle failure diagnosis", "manual and automated test loop", "local qa for bundles", "integration qa for bundles"]
+keywords: ["bundle testing workflow", "shared bundle suite", "local bundle tests", "widget and api validation", "shared sdk widget source validation", "runtime reload verification", "scheduled job checks", "bundle failure diagnosis", "manual and automated test loop", "local qa for bundles", "integration qa for bundles"]
+updated_at: 2026-05-16
 see_also:
   - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
@@ -929,6 +930,11 @@ Widget source requirements:
   loader output path as a positional argument
 - Vite should use `build.outDir: process.env.OUTDIR || 'dist'`
 - Vite should use relative assets such as `base: './'`
+- if the widget imports SDK-owned UI through `shared_sources`, Vite aliases
+  should prefer materialized `_shared/...` paths and only fall back to SDK-local
+  monorepo paths for direct development builds
+- run `npx tsc --noEmit` or the widget's equivalent typecheck before the Vite
+  build when the widget imports shared SDK components
 
 Local source check:
 
@@ -936,6 +942,19 @@ Local source check:
 cd /abs/path/to/bundle/ui/widgets/<widget_alias>
 OUTDIR=/tmp/kdcube-widget-build npm run build
 test -f /tmp/kdcube-widget-build/index.html
+```
+
+For widgets that use shared SDK UI, also verify the descriptor contains the
+expected source entries, for example:
+
+```yaml
+shared_sources:
+  memory_widget:
+    src_folder: sdk://context/memory/ui/widget/memories
+    target: _shared/memory-widget
+  telegram_widget:
+    src_folder: sdk://integrations/telegram/ui/widget.telegram
+    target: _shared/telegram-widget
 ```
 
 Runtime log check:
@@ -953,6 +972,18 @@ If you see:
 then the output directory leaked into Vite as a project/root argument. Fix the
 widget `package.json`/Vite `outDir` contract or update to a platform build
 runner that treats `<VI_BUILD_DEST_ABSOLUTE_PATH>` as an environment value.
+
+If you see:
+
+```text
+Could not load /integrations/telegram/ui/widget.telegram/src/index.tsx
+Could not load /context/memory/ui/widget/memories/src/embed.tsx
+```
+
+then the widget imported a shared SDK component, but the effective
+`ui.web_app_widgets.<alias>.shared_sources` did not materialize that SDK source
+under the `_shared/...` target used by the Vite alias. Fix bundle defaults or
+descriptor props; do not patch the temporary build directory.
 
 ### 5.2C Custom main-view UI contract
 

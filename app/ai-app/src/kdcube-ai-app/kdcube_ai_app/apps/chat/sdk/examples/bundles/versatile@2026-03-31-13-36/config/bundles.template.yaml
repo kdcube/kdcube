@@ -40,5 +40,8 @@ bundles:
                 memory_widget:
                   src_folder: sdk://context/memory/ui/widget/memories
                   target: _shared/memory-widget
+                telegram_widget:
+                  src_folder: sdk://integrations/telegram/ui/widget.telegram
+                  target: _shared/telegram-widget
         mcp:
           services: {}

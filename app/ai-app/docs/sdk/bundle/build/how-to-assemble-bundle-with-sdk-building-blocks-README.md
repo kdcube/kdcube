@@ -3,7 +3,8 @@ id: ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-REA
 title: "How To Assemble A Bundle With SDK Building Blocks"
 summary: "Tier 1 bundle-builder map for choosing reusable KDCube SDK and platform blocks before writing custom bundle services: tools, agents, storage, widgets, jobs, integrations, and solutions."
 tags: ["sdk", "bundle", "tier-1", "building-blocks", "integrations", "solutions", "tools"]
-keywords: ["bundle building blocks", "sdk integrations", "sdk solutions", "bundle assembly map", "reuse sdk components", "telegram integration", "email integration", "tasks solution", "delivery integration", "built in tools", "react tools"]
+keywords: ["bundle building blocks", "sdk integrations", "sdk solutions", "bundle assembly map", "reuse sdk components", "telegram integration", "email integration", "tasks solution", "delivery integration", "shared sdk widget components", "built in tools", "react tools"]
+updated_at: 2026-05-16
 see_also:
   - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
@@ -78,6 +79,7 @@ Critical widget/browser rule:
 | Bundle-served MCP endpoint | `@mcp(...)` | [Bundle Platform Integration](../bundle-platform-integration-README.md), [MCP Tools](../../tools/mcp-README.md) |
 | Claude Code subagent with scoped MCP/tools | `ClaudeCodeAgent`, `ClaudeCodeWorkspaceConfig` | [Bundle Agent Integration](../bundle-agent-integration-README.md) |
 | Browser widget or Mini App | `@ui_widget(...)`, source-folder widget build, operations/public APIs | [Bundle Widget Integration](../bundle-widget-integration-README.md) |
+| Shared widget UI pieces such as User Memory and Telegram admin/channels panels | `ui.web_app_widgets.<alias>.shared_sources` with `sdk://context/memory/ui/widget/memories` or `sdk://integrations/telegram/ui/widget.telegram` | [Shared UI Source Materialization](../bundle-widget-integration-README.md#shared-ui-source-materialization) |
 | Scheduled scan and background execution | `@cron(...)`, `@on_job`, jobs stream; use Tasks Solution for saved task execution | [Scheduled Jobs](../bundle-scheduled-jobs-README.md), [Tasks SDK Solution](../../solutions/tasks-README.md) |
 | Local mutable files, generated indexes, git working copies, runtime caches | bundle storage helpers, `AIBundleStorage`, KV cache, git helpers | [Bundle Storage And Cache](../bundle-storage-and-cache-README.md) |
 | Node/TypeScript backend inside a bundle | Python bundle shell + Node sidecar bridge | [Bundle Node Backend Bridge](../bundle-node-backend-bridge-README.md) |
@@ -174,6 +176,13 @@ The versatile reference bundle also demonstrates a Telegram Mini App style
 source-folder widget with memory canvas, chat channel selection, and Telegram
 admin routes:
 `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/widgets/versatile_webapp`.
+
+For shared Telegram UI, do not copy admin/channel panels into every bundle.
+Use `sdk://integrations/telegram/ui/widget.telegram` as a widget
+`shared_sources` entry, import `@kdcube/telegram-widget`, and inject the
+bundle's operation caller. The panels are UI only; backend operations still own
+KDCube role checks, Telegram `initData` verification, and Telegram registry
+roles.
 
 Before implementing, read the Telegram SDK bundle wiring checklist:
 [Telegram SDK Integration](../../integrations/telegram/telegram-README.md).

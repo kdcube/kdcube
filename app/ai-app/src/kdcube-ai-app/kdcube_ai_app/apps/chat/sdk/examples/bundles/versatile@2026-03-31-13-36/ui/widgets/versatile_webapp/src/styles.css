@@ -344,6 +344,52 @@ textarea {
   color: #166534;
 }
 
+.telegram-pending-card {
+  width: min(100%, 620px);
+  margin: 22px auto 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(239, 246, 255, 0.72), rgba(255, 255, 255, 0.96) 45%),
+    #ffffff;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
+  padding: 24px;
+}
+
+.telegram-pending-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border-radius: 6px;
+  background: #eff6ff;
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 650;
+  padding: 4px 8px;
+}
+
+.telegram-pending-card h1 {
+  margin: 16px 0 8px;
+  color: #111827;
+  font-size: 23px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.18;
+}
+
+.telegram-pending-card p {
+  margin: 0;
+  color: #374151;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.telegram-pending-card .telegram-pending-detail {
+  margin-top: 10px;
+  color: #6b7280;
+  font-size: 13px;
+}
+
 .loading-state,
 .empty-state {
   color: #6b7280;

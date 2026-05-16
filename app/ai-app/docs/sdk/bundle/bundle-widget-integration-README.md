@@ -2,8 +2,9 @@
 id: ks:docs/sdk/bundle/bundle-widget-integration-README.md
 title: "Bundle Widget Integration"
 summary: "Bundle widget UI contract: source-folder widget apps, runtime config handshake, operation URL construction, auth propagation, and the recommended pattern when a capability is both widget and operation."
-tags: ["sdk", "bundle", "widget", "iframe", "frontend", "integrations"]
-keywords: ["bundle widget contract", "iframe widget contract", "widget source folder", "web app widget build", "runtime config handshake", "operation url construction", "auth propagation to widget", "widget and operation dual pattern", "bundle widget integration"]
+tags: ["sdk", "bundle", "widget", "iframe", "frontend", "integrations", "telegram", "memory"]
+keywords: ["bundle widget contract", "iframe widget contract", "widget source folder", "web app widget build", "runtime config handshake", "operation url construction", "auth propagation to widget", "widget and operation dual pattern", "shared sdk widget source", "telegram widget components", "memory widget component", "bundle widget integration"]
+updated_at: 2026-05-16
 see_also:
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
@@ -23,6 +24,80 @@ This is the rule:
 - the widget must request runtime config from the display environment
 - the widget must build bundle operation URLs from that runtime config
 - the widget must not hardcode tenant, project, or bundle id from the source tree
+
+## Reusing SDK Widget Components
+
+Reusable SDK widget UI is a build-time source materialization contract.
+It is not an npm package, and it is not a runtime import from the KDCube
+monorepo.
+
+When a bundle widget imports SDK UI such as User Memory or Telegram
+admin/channels panels, these three places must agree:
+
+1. **Bundle defaults or descriptor props**
+
+   The widget config must declare `shared_sources` for every SDK UI source the
+   widget imports.
+
+   ```yaml
+   ui:
+     web_app_widgets:
+       copilot_webapp:
+         enabled: true
+         src_folder: ui/widgets/copilot_webapp
+         build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
+         shared_sources:
+           memory_widget:
+             src_folder: sdk://context/memory/ui/widget/memories
+             target: _shared/memory-widget
+           telegram_widget:
+             src_folder: sdk://integrations/telegram/ui/widget.telegram
+             target: _shared/telegram-widget
+   ```
+
+2. **Widget Vite aliases**
+
+   The widget build must resolve the public import names to the materialized
+   `_shared/...` folders. A monorepo fallback is allowed only for direct local
+   development before the loader materializes shared sources.
+
+   ```ts
+   '@kdcube/memory-widget': memoryWidgetEntry
+   '@kdcube/telegram-widget': telegramWidgetEntry
+   ```
+
+3. **Widget page wrappers**
+
+   The bundle imports shared components and injects its own operation caller.
+   The shared UI must not invent tenant/project/bundle ids or bypass backend
+   auth.
+
+   ```tsx
+   import { TelegramAdminPanel } from '@kdcube/telegram-widget';
+   import { callOperation } from './store/apiClient';
+
+   export function TelegramAdminPage() {
+     return <TelegramAdminPanel callOperation={callOperation} />;
+   }
+   ```
+
+For built-in/reference bundles, keep `src_folder`, `build_command`, and
+required `shared_sources` in `configuration_defaults()`. Then descriptors can
+usually say only `enabled: true`. Descriptors may repeat the same values when a
+seed should be self-documenting or when an environment intentionally overrides
+the default.
+
+If the build fails with a path like this:
+
+```text
+Could not load /integrations/telegram/ui/widget.telegram/src/index.tsx
+Could not load /context/memory/ui/widget/memories/src/embed.tsx
+```
+
+then the widget imported a shared SDK component, but the matching
+`shared_sources` entry was missing, had the wrong `target`, or did not get into
+the effective bundle props. Fix the widget config/defaults first; do not patch
+the built temp directory or hardcode an absolute developer-machine path.
 
 ## Source Folder Widget Apps
 
@@ -56,6 +131,9 @@ ui:
         memory_widget:
           src_folder: sdk://context/memory/ui/widget/memories
           target: _shared/memory-widget
+        telegram_widget:
+          src_folder: sdk://integrations/telegram/ui/widget.telegram
+          target: _shared/telegram-widget
 ```
 
 Build command contract:
@@ -269,6 +347,26 @@ inside the bundle repository. Configure `shared_sources` on the widget or main
 view build. The builder copies each source into the temporary build source tree
 before running `npm install` / `npm run build`.
 
+Ownership rule:
+
+- bundle code defaults should declare the widget's `src_folder`,
+  `build_command`, and required SDK `shared_sources`
+- descriptors should normally only set deployment policy such as
+  `enabled: true` and provider URLs/secrets
+- descriptor-level `shared_sources` is still allowed for explicit local testing
+  or overrides, but a built-in/reference bundle should not require every
+  descriptor to repeat its own UI source wiring
+
+Runtime flow:
+
+```text
+bundle defaults / descriptor props
+  -> ui.web_app_widgets.<alias>.shared_sources
+  -> loader copies sdk://... into widget temp source under _shared/...
+  -> Vite alias resolves @kdcube/<capability>-widget to _shared/...
+  -> one built widget app is served from bundle storage
+```
+
 ```yaml
 ui:
   web_app_widgets:
@@ -279,10 +377,21 @@ ui:
         memory_widget:
           src_folder: sdk://context/memory/ui/widget/memories
           target: _shared/memory-widget
+        telegram_widget:
+          src_folder: sdk://integrations/telegram/ui/widget.telegram
+          target: _shared/telegram-widget
 ```
 
 The widget can then import from its materialized local path, for example through
-a Vite alias that points to `_shared/memory-widget/src/embed.tsx`.
+a Vite alias that points to `_shared/memory-widget/src/embed.tsx` or
+`_shared/telegram-widget/src/index.tsx`.
+
+Current SDK-owned shared widget sources:
+
+| Capability | `sdk://` source | Usual target | Typical import |
+| --- | --- | --- | --- |
+| User Memory widget | `sdk://context/memory/ui/widget/memories` | `_shared/memory-widget` | `@kdcube/memory-widget` |
+| Telegram admin/channels panels | `sdk://integrations/telegram/ui/widget.telegram` | `_shared/telegram-widget` | `@kdcube/telegram-widget` |
 
 Supported source path forms:
 
@@ -336,6 +445,9 @@ ui:
         memory_widget:
           src_folder: sdk://context/memory/ui/widget/memories
           target: _shared/memory-widget
+        telegram_widget:
+          src_folder: sdk://integrations/telegram/ui/widget.telegram
+          target: _shared/telegram-widget
 ```
 
 Example Vite alias in the host widget:
@@ -349,13 +461,21 @@ import react from '@vitejs/plugin-react';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const materializedMemoryWidget = path.resolve(__dirname, '_shared/memory-widget/src/embed.tsx');
+const materializedTelegramWidget = path.resolve(__dirname, '_shared/telegram-widget/src/index.tsx');
 const sdkMemoryWidget = path.resolve(
   __dirname,
   '../../../../../../context/memory/ui/widget/memories/src/embed.tsx',
 );
+const sdkTelegramWidget = path.resolve(
+  __dirname,
+  '../../../../../../integrations/telegram/ui/widget.telegram/src/index.tsx',
+);
 const memoryWidgetEntry = fs.existsSync(materializedMemoryWidget)
   ? materializedMemoryWidget
   : sdkMemoryWidget;
+const telegramWidgetEntry = fs.existsSync(materializedTelegramWidget)
+  ? materializedTelegramWidget
+  : sdkTelegramWidget;
 
 export default defineConfig({
   plugins: [react()],
@@ -363,6 +483,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@kdcube/memory-widget': memoryWidgetEntry,
+      '@kdcube/telegram-widget': telegramWidgetEntry,
     },
   },
   build: {
@@ -381,9 +502,26 @@ Example host component:
 
 ```tsx
 import { MemoriesWidgetEmbed } from '@kdcube/memory-widget';
+import { TelegramAdminPanel, TelegramConversationsPanel } from '@kdcube/telegram-widget';
+
+import { callOperation } from './store/apiClient';
 
 export function MemoryPage() {
   return <MemoriesWidgetEmbed />;
+}
+
+export function TelegramAdminPage() {
+  return <TelegramAdminPanel callOperation={callOperation} />;
+}
+
+export function ConversationsPage({ conversations, reload }) {
+  return (
+    <TelegramConversationsPanel
+      conversations={conversations}
+      reload={reload}
+      callOperation={callOperation}
+    />
+  );
 }
 ```
 
@@ -400,6 +538,15 @@ Operational rules:
   routes
 - use a wrapper/export component in the shared source, such as `src/embed.tsx`,
   when the shared widget needs style isolation or its own provider tree
+- shared UI is not an authorization boundary; backend operations still enforce
+  KDCube roles, Telegram `initData`, and Telegram registry roles
+- for Telegram Mini App panels, expose the same source-folder widget in KDCube
+  and Telegram, but gate admin tabs from backend payload such as
+  `permissions.show_admin_component`; regular users should still be able to use
+  non-admin panels such as memories and chat/channel selection
+- shared Telegram panels accept an injected operation caller so each host
+  widget can map logical operations to KDCube-authenticated or Telegram-public
+  aliases without duplicating panel UI
 
 ## Required Runtime Config
 

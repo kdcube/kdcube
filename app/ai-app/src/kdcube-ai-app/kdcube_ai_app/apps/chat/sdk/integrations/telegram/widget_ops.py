@@ -8,6 +8,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bundle_registry import (
     register_config,
     resolve_config,
 )
+from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import get_current_bundle_id, get_current_request_context
 from kdcube_ai_app.apps.chat.sdk.runtime.http_ops import BundleBinaryResponse
 
 BUNDLE_ID = ""
@@ -55,6 +56,22 @@ def _config(entrypoint: Any = None) -> Dict[str, Any]:
 
 
 def _bundle_id(entrypoint: Any = None) -> str:
+    current = str(get_current_bundle_id() or "").strip()
+    if current:
+        return current
+    current_ctx = get_current_request_context()
+    current_ctx_id = str(getattr(getattr(current_ctx, "routing", None), "bundle_id", None) or "").strip()
+    if current_ctx_id:
+        return current_ctx_id
+    entrypoint_ctx_id = str(
+        getattr(getattr(getattr(entrypoint, "comm_context", None), "routing", None), "bundle_id", None) or ""
+    ).strip()
+    if entrypoint_ctx_id:
+        return entrypoint_ctx_id
+    spec = getattr(getattr(entrypoint, "config", None), "ai_bundle_spec", None)
+    spec_id = str(getattr(spec, "id", None) or "").strip()
+    if spec_id:
+        return spec_id
     return configured_bundle_id(_config(entrypoint)) or BUNDLE_ID
 
 
@@ -76,7 +93,7 @@ def _profile_identity(entrypoint: Any, *, request: Any = None, telegram_init_dat
         request=request,
         telegram_init_data=telegram_init_data,
         allowed_roles=(),
-        create_if_missing=False,
+        create_if_missing=True,
     )
 
 
@@ -307,6 +324,12 @@ async def admin_payload(
     payload["auth_surface"] = "telegram_webapp"
     payload["telegram_user_id"] = identity.telegram_user_id
     payload["kdcube_user_id"] = identity.user_id
+    payload["current_kdcube_user_id"] = identity.user_id
+    payload["current_user"] = {
+        "user_id": identity.user_id,
+        "username": identity.telegram_username,
+        "roles": [identity.role],
+    }
     return payload
 
 
@@ -335,6 +358,7 @@ async def admin_upsert(
         conversation_id=conversation_id,
         notes=notes,
     )
+    payload["notification"] = await admin.notify_access_change(entrypoint, result=payload)
     payload["auth_surface"] = "telegram_webapp"
     payload["telegram_user_id"] = identity.telegram_user_id
     payload["kdcube_user_id"] = identity.user_id

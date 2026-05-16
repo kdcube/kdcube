@@ -205,6 +205,13 @@ textarea:focus {
   background: #fff2d8;
 }
 
+.new-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
 .content-card {
   border: 1px solid #e7dfd2;
   border-radius: 8px;
@@ -227,6 +234,10 @@ textarea:focus {
 
 .list-row:last-child {
   border-bottom: 0;
+}
+
+.list-row.active {
+  background: #e9f8f5;
 }
 
 .row-main {
@@ -313,6 +324,52 @@ textarea:focus {
   border-color: #f2c6a0;
   background: #fff7ed;
   color: #9a3412;
+}
+
+.telegram-pending-card {
+  width: min(100%, 640px);
+  margin: 22px auto 0;
+  border: 1px solid #e7dfd2;
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(217, 244, 239, 0.62), rgba(255, 253, 248, 0.94) 42%),
+    #fffdf8;
+  box-shadow: 0 10px 30px rgba(85, 75, 62, 0.08);
+  padding: 24px;
+}
+
+.telegram-pending-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border-radius: 6px;
+  background: #d9f4ef;
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 720;
+  padding: 4px 8px;
+}
+
+.telegram-pending-card h1 {
+  margin: 16px 0 8px;
+  color: #1f2933;
+  font-size: 24px;
+  font-weight: 760;
+  letter-spacing: 0;
+  line-height: 1.18;
+}
+
+.telegram-pending-card p {
+  margin: 0;
+  color: #4f473d;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.telegram-pending-card .telegram-pending-detail {
+  margin-top: 10px;
+  color: #8d8171;
+  font-size: 13px;
 }
 
 .memory-widget-direct {

@@ -3,7 +3,8 @@ id: ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
 title: "How To Navigate KDCube Bundle Docs"
 summary: "Tier 1 navigation guide for bundle creators, integrators, configurators, deployers, local QA, integration QA, and document readers who need the shortest path through KDCube docs without reading the whole tree."
 tags: ["sdk", "bundle", "docs", "navigation", "tier-1", "authoring"]
-keywords: ["bundle docs navigation", "tier 1 reading order", "new bundle path", "wrap existing app into bundle", "bundle integrator path", "bundle configurator path", "bundle deployer path", "bundle qa path", "integration qa path", "kdcube docs reading strategy", "which doc to read next"]
+keywords: ["bundle docs navigation", "tier 1 reading order", "new bundle path", "wrap existing app into bundle", "bundle integrator path", "bundle configurator path", "bundle deployer path", "bundle qa path", "integration qa path", "shared sdk widget source", "kdcube docs reading strategy", "which doc to read next"]
+updated_at: 2026-05-16
 see_also:
   - ks:docs/sdk/bundle/bundle-index-README.md
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
@@ -76,6 +77,9 @@ Critical widget/browser rule:
   the API base
 - read [bundle-widget-integration-README.md#frame-origin-and-api-base-url](../bundle-widget-integration-README.md#frame-origin-and-api-base-url)
   before writing widget networking code
+- if the widget reuses SDK UI such as User Memory or Telegram admin/channels
+  panels, also read
+  [bundle-widget-integration-README.md#shared-ui-source-materialization](../bundle-widget-integration-README.md#shared-ui-source-materialization)
 
 There is also one optional Tier 1 lifecycle procedure:
 

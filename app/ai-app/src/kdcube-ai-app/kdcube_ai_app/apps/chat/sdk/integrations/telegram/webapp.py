@@ -8,6 +8,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bundle_registry import (
     register_config,
     resolve_config,
 )
+from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import get_current_bundle_id, get_current_request_context
 
 BUNDLE_ID = ""
 
@@ -53,7 +54,32 @@ def _config(entrypoint: Any = None) -> Dict[str, Any]:
 
 
 def _bundle_id(entrypoint: Any = None) -> str:
+    current = str(get_current_bundle_id() or "").strip()
+    if current:
+        return current
+    current_ctx = get_current_request_context()
+    current_ctx_id = str(getattr(getattr(current_ctx, "routing", None), "bundle_id", None) or "").strip()
+    if current_ctx_id:
+        return current_ctx_id
+    entrypoint_ctx_id = str(
+        getattr(getattr(getattr(entrypoint, "comm_context", None), "routing", None), "bundle_id", None) or ""
+    ).strip()
+    if entrypoint_ctx_id:
+        return entrypoint_ctx_id
+    spec = getattr(getattr(entrypoint, "config", None), "ai_bundle_spec", None)
+    spec_id = str(getattr(spec, "id", None) or "").strip()
+    if spec_id:
+        return spec_id
     return configured_bundle_id(_config(entrypoint)) or BUNDLE_ID
+
+
+def user_has_role(entrypoint: Any, role: str) -> bool:
+    wanted = str(role or "").strip()
+    if not wanted:
+        return False
+    user = getattr(getattr(entrypoint, "comm_context", None), "user", None)
+    roles = getattr(user, "roles", None) or []
+    return wanted in {str(item or "").strip() for item in roles}
 
 
 def _active_tab(widget_path: str = "") -> str:
@@ -308,6 +334,9 @@ async def payload(
         "active_tab": active_tab,
         "path": str(widget_path or "").strip("/"),
         "tabs": tabs,
+        "permissions": {
+            "show_admin_component": bool(include_admin),
+        },
         "tasks": await task_module.payload(
             entrypoint,
             user_id=user_id,

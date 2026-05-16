@@ -1,8 +1,15 @@
 ---
-title: Versatile Telegram Setup
-kind: integration-setup
-bundle_id: versatile@2026-03-31-13-36
+id: ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/docs/integrations/telegram-setup.md
+title: "Versatile Telegram Setup"
+summary: "Compact operator commands for configuring the Versatile reference bundle Telegram bot webhook, Mini App menu button, bot commands, and pending user approval flow."
+tags: ["bundle", "versatile", "telegram", "webhook", "mini-app", "botfather", "operator-setup"]
+keywords: ["versatile telegram setup", "telegram webhook", "setWebhook", "secret_token", "getWebhookInfo", "setChatMenuButton", "setMyCommands", "versatile_webapp", "pending telegram user", "telegram admin"]
 updated_at: 2026-05-16
+see_also:
+  - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
+  - ks:docs/sdk/integrations/telegram/telegram-README.md
+  - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
+  - ks:docs/sdk/bundle/bundle-widget-integration-README.md
 ---
 
 # Versatile Telegram Setup
@@ -22,7 +29,8 @@ export TENANT="demo-tenant"
 export PROJECT="demo-project"
 export BUNDLE_ID="versatile@2026-03-31-13-36"
 export WIDGET_ALIAS="versatile_webapp"
-export PUBLIC_HOST="https://YOUR_PUBLIC_HTTPS_HOST"
+export PUBLIC_HOST="https://YOUR_PUBLIC_HTTPS_HOST" # no trailing slash
+export PUBLIC_HOST="${PUBLIC_HOST%/}"
 
 export TELEGRAM_BOT_TOKEN="..."       # from bundles.secrets.yaml / secrets provider
 export TELEGRAM_WEBHOOK_SECRET="..."  # same value as integrations.telegram.webhook_secret
@@ -47,12 +55,28 @@ curl "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo"
 
 If `result.url` is empty, `/start` will not reach KDCube.
 
-Register the Mini App/menu button:
+Create the Mini App in `@BotFather` before registering the menu button:
+
+```text
+/newapp
+select @<bot_username>
+App title: Versatile
+Short description: KDCube versatile reference assistant
+App URL: ${MINI_APP_URL}
+```
+
+Use the same `MINI_APP_URL` for the menu button:
 
 ```bash
 curl -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setChatMenuButton" \
   -H "Content-Type: application/json" \
   -d "{\"menu_button\":{\"type\":\"web_app\",\"text\":\"Open Versatile\",\"web_app\":{\"url\":\"${MINI_APP_URL}\"}}}"
+```
+
+Check what the blue chat button currently opens:
+
+```bash
+curl "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getChatMenuButton"
 ```
 
 Register bot commands:
@@ -68,10 +92,34 @@ Test:
 ```text
 1. Send /start to the bot.
 2. Open the Versatile widget in KDCube.
-3. Go to Admin.
+3. Go to Admin (requires KDCube admin role).
 4. Refresh users.
 5. Promote the pending anonymous Telegram user to registered or admin.
 ```
+
+Visible Mini App surfaces:
+
+```text
+anonymous Telegram user  -> Pending approval banner
+registered Telegram user -> User Memory + Chats
+admin Telegram user      -> User Memory + Chats + Admin
+KDCube admin widget user -> User Memory + Chats + Admin
+```
+
+Widget build note:
+
+```text
+versatile_webapp imports shared SDK UI:
+- @kdcube/memory-widget    -> sdk://context/memory/ui/widget/memories
+- @kdcube/telegram-widget  -> sdk://integrations/telegram/ui/widget.telegram
+```
+
+These sources must be present in
+`ui.web_app_widgets.versatile_webapp.shared_sources` or in the bundle's
+configuration defaults. If the Mini App fails with
+`Could not load /integrations/telegram/ui/widget.telegram/src/index.tsx`, the
+Telegram shared widget source was not materialized into `_shared/telegram-widget`
+before Vite built the widget.
 
 If `/start` does not appear in Admin:
 
@@ -81,4 +129,6 @@ If `/start` does not appear in Admin:
 3. Confirm setWebhook used secret_token.
 4. Confirm TELEGRAM_WEBHOOK_SECRET matches the bundle secret.
 5. Confirm PUBLIC_HOST points to the running KDCube ingress.
+6. If the blue chat button opens `{"detail":"Not Found"}`, run
+   getChatMenuButton and confirm its URL equals MINI_APP_URL.
 ```

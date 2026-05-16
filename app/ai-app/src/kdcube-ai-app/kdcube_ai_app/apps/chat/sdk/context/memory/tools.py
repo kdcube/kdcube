@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import sys
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, Optional, Sequence
 
@@ -669,3 +670,10 @@ def list_tools() -> Dict[str, Dict[str, Any]]:
             "description": "Retire an existing durable user memory by id when policy allows writes.",
         },
     }
+
+
+# Isolated tool runtimes import every registered alias as:
+#   from <dynamic_module> import tools as <alias>
+# This module exposes callable tools through list_tools(), so the module itself
+# is the callable owner for portable runtime imports.
+tools = sys.modules[__name__]

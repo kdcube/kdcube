@@ -9,6 +9,7 @@ from typing import Any, Optional, Dict
 
 import asyncio
 import dataclasses
+import inspect
 import json
 import math
 import secrets
@@ -217,6 +218,32 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
 
     async def post_run_hook(self, *, state: Dict[str, Any], result: Dict[str, Any], econ_ctx: Dict[str, Any]) -> None:
         return None
+
+    @staticmethod
+    def _callable_accepts_kwarg(fn: Any, name: str) -> bool:
+        try:
+            params = inspect.signature(fn).parameters
+        except (TypeError, ValueError):
+            return True
+        return name in params or any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values())
+
+    async def _invoke_pre_run_hook(self, *, state: Dict[str, Any], econ_ctx: Dict[str, Any]) -> None:
+        kwargs: Dict[str, Any] = {"state": state}
+        if self._callable_accepts_kwarg(self.pre_run_hook, "econ_ctx"):
+            kwargs["econ_ctx"] = econ_ctx
+        await self.pre_run_hook(**kwargs)
+
+    async def _invoke_post_run_hook(
+        self,
+        *,
+        state: Dict[str, Any],
+        result: Dict[str, Any],
+        econ_ctx: Dict[str, Any],
+    ) -> None:
+        kwargs: Dict[str, Any] = {"state": state, "result": result}
+        if self._callable_accepts_kwarg(self.post_run_hook, "econ_ctx"):
+            kwargs["econ_ctx"] = econ_ctx
+        await self.post_run_hook(**kwargs)
 
     def project_budget_user_types(self) -> set[str]:
         """
@@ -1628,7 +1655,7 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
             "plan_admit_now": plan_admit_now,
         }
 
-        await self.pre_run_hook(state=state, econ_ctx=econ_ctx)
+        await self._invoke_pre_run_hook(state=state, econ_ctx=econ_ctx)
 
         result = None
         admit_snapshot_pre = dict(admit.snapshot or {})
@@ -2141,7 +2168,7 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
             except Exception as e:
                 _log("cleanup", "Failed to clear accounting turn cache", "WARN", error=str(e))
 
-        await self.post_run_hook(state=state, result=result, econ_ctx=econ_ctx)
+        await self._invoke_post_run_hook(state=state, result=result, econ_ctx=econ_ctx)
         _log("done", "run() completed successfully", lane=lane)
         _log("economics", "--- END POST-RUN ECONOMICS ---")
         return self.project_app_state(result)

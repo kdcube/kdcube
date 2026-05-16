@@ -323,6 +323,7 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
             fingerprint=fingerprint,
             mark_memory_seen=mark_memory_seen,
             widget_path=widget_path or path,
+            include_admin=telegram_webapp.user_has_role(self, TELEGRAM_ADMIN_ROLE),
         )
 
     @api(method="GET", alias="conversations_list", route="operations", **_api_visibility("conversations_list"))
@@ -418,7 +419,7 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
         **kwargs,
     ) -> Dict[str, Any]:
         del kwargs
-        return telegram_user_admin.upsert(
+        result = telegram_user_admin.upsert(
             self,
             telegram_user_id=telegram_user_id,
             telegram_chat_id=telegram_chat_id,
@@ -428,6 +429,8 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
             conversation_id=conversation_id,
             notes=notes,
         )
+        result["notification"] = await telegram_user_admin.notify_access_change(self, result=result)
+        return result
 
     @api(
         method="POST",
@@ -742,6 +745,10 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
                             "memory_widget": {
                                 "src_folder": "sdk://context/memory/ui/widget/memories",
                                 "target": "_shared/memory-widget",
+                            },
+                            "telegram_widget": {
+                                "src_folder": "sdk://integrations/telegram/ui/widget.telegram",
+                                "target": "_shared/telegram-widget",
                             },
                         },
                     },

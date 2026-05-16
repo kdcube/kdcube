@@ -1,6 +1,6 @@
 bundle:
   repo: "https://github.com/kdcube/kdcube-ai-app.git"
-  ref: "2026.5.15.1"
+  ref: "2026.5.16.407"
   description: |
     User-memory, Telegram WebApp, and economics release for kdcube.copilot.
 
@@ -16,8 +16,17 @@ bundle:
       build through `shared_sources`, avoiding iframe composition.
     - Adds public Telegram WebApp routes for memory operations and Telegram user
       administration, scoped through verified Telegram `initData`.
+    - Adds shared Telegram WebApp admin/channel components to the Copilot widget
+      so Telegram users can request access, admins can approve users, and
+      approved users can manage Telegram conversations from the same WebApp.
+    - Resolves Telegram chat submission through the mounted runtime bundle id
+      from comm/request context, avoiding `unknown_bundle` when descriptor ids
+      differ from the bundle's short module id.
     - Wires memory tools into the Copilot ReAct tool descriptor so configured
       agents can search/read and, when policy allows, write durable user memory.
+    - Keeps the economics pre-run hook compatible with both legacy
+      `pre_run_hook(state=...)` subclasses and newer hooks that accept
+      `econ_ctx`.
 
     Known follow-ups
 
