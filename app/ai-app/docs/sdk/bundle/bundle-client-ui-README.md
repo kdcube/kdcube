@@ -12,6 +12,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/service/auth/auth-README.md
   - ks:docs/service/comm/README-comm.md
+  - ks:docs/service/cicd/embedding-control-plane-frontend-README.md
 ---
 # Bundle Client UI
 
@@ -94,7 +95,10 @@ own request authentication, such as Telegram `initData` verification.
 For one widget codebase that runs in both KDCube and Telegram:
 
 - detect Telegram with `window.Telegram?.WebApp?.initData`
-- in KDCube, wait for iframe parent config and call `/operations/{alias}`
+- in KDCube, first fetch `/api/cp-frontend-config` from the KDCube frame origin
+  and call `/operations/{alias}`
+- if that endpoint is unavailable, fall back to iframe parent
+  `CONFIG_REQUEST` / `CONFIG_RESPONSE`
 - in Telegram, skip parent config, call `/public/{telegram_alias}`, and send
   `X-Telegram-Init-Data`
 - keep admin-only panels behind KDCube-authenticated operations, not Telegram
@@ -111,6 +115,57 @@ Use these docs when you need to know:
 - which response headers and retry signals the client should honor
 
 This is no longer a separate top-level client namespace. These docs live under bundle because bundle code now owns widgets, main UI apps, and custom frontend interactions.
+
+## External Embedding
+
+When a bundle UI is opened from another web application, for example:
+
+```text
+https://dev.kdcube.tech/api/integrations/static/demo/demo-march/versatile@2026-03-31-13-36
+```
+
+the browser decides whether that document may be framed from the response
+headers on the KDCube route. Bundle React code cannot override
+`X-Frame-Options` or CSP `frame-ancestors`.
+
+Use the deployment `proxy.frame_embedding` descriptor to choose the frame
+policy. Cross-origin embedding requires `mode: allowlist`, clears
+`X-Frame-Options`, and emits `Content-Security-Policy: frame-ancestors ...` on
+the KDCube shell and frameable bundle/static document routes. See
+[Embedding The Control Plane Frontend](../../service/cicd/embedding-control-plane-frontend-README.md)
+for the deployment contract and examples.
+
+For cross-origin iframe sizing, the embedding page must listen for the KDCube
+resize message:
+
+```js
+window.addEventListener('message', (event) => {
+  if (event.data?.type !== 'kdcube-resize') return;
+  if (event.origin !== 'https://dev.kdcube.tech') return;
+  const height = Number(event.data.height);
+  const width = Number(event.data.width);
+  if (Number.isFinite(height) && height > 0) iframe.style.height = `${Math.ceil(height)}px`;
+  if (Number.isFinite(width) && width > 0) iframe.style.width = `${Math.ceil(width)}px`;
+});
+```
+
+KDCube injects this reporter into static bundle UI and widget HTML entrypoints.
+Headers such as CSP `frame-ancestors` allow display; they do not let the parent
+read cross-origin iframe DOM dimensions. The embedding page should validate
+`event.origin` against the exact KDCube origin it framed.
+
+Bundle UIs that need runtime scope must support both config paths:
+
+1. `GET /api/cp-frontend-config`, used by direct external embedding and by
+   normal KDCube-hosted frames; if it returns a valid response, do not wait for
+   parent messaging
+2. parent `CONFIG_RESPONSE` / `CONN_RESPONSE`, used as fallback when the config
+   endpoint is unavailable or blocked
+
+If both are unavailable, static routes can still recover tenant/project/bundle
+from `/api/integrations/static/{tenant}/{project}/{bundle_id}` or
+`/api/integrations/bundles/{tenant}/{project}/{bundle_id}/...`, but that route
+fallback does not carry auth token metadata.
 
 ## Server-Side References
 

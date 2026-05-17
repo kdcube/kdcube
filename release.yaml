@@ -1,64 +1,56 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.5.17.1535"
+  ref: "2026.5.17.2144"
   description: |
-    This release completes the bundle widget lifecycle cleanup after the ECS
-    widget-routing investigation. It removes the old `ui.web_app_widgets`
-    contract, documents the source-folder UI lifecycle, and makes static widget
-    build/load behavior more robust when browser iframe requests are canceled.
+    This release adds the embedding and runtime-config fixes needed for
+    KDCube-hosted bundle UI and widgets to run correctly when framed from an
+    approved external application origin.
 
     Highlights
 
-    - Renames source-folder widget configuration from `ui.web_app_widgets` to
-      `ui.widgets` across platform docs, SDK defaults, reference bundles, and
-      tests. The old key is no longer treated as an alias.
-    - Keeps `@ui_widget` as the only widget surface declaration. `ui.widgets`
-      configures build/serve behavior for an already-declared widget alias; it
-      does not create toolbar-visible widget surfaces by itself.
-    - Adds `docs/sdk/bundle/ui-components-lifecycle-README.md`, covering
-      discovery, preload, request-time fallback, shared-storage locks,
-      signatures, concurrent workers, cancellation behavior, and diagnostics.
-    - Keeps static bundle entrypoint loading alive after a browser/client
-      disconnect. A canceled iframe request no longer cancels the underlying
-      process-local load task; cleanup is identity-guarded and failed loads can
-      be retried.
-    - Preserves direct widget iframe loading and improved proc diagnostics from
-      the previous unreleased fixes.
-    - Aligns Copilot, Versatile, memory docs, and bundle-build docs with the
-      current widget config contract.
+    - Adds cooperative iframe sizing for KDCube static bundle UI and widget
+      entrypoints. Served HTML now posts `kdcube-resize` messages with both
+      height and width so cross-origin parent pages do not need DOM access.
+    - Applies the resize reporter to static bundle routes, authenticated widget
+      routes, public widget routes, and static widget iframe wrappers.
+    - Updates built-in and example bundle UIs to load runtime scope from
+      `GET /api/cp-frontend-config` first. If that endpoint returns usable
+      config, the UI does not wait for parent messaging.
+    - Keeps parent `CONFIG_REQUEST` / `CONFIG_RESPONSE` as a fallback for older
+      display environments or deployments where the config endpoint is blocked.
+    - Documents the external embedding contract, frame-policy scope, iframe
+      sizing message, and endpoint-first runtime config behavior.
+    - Extends tests for static/widget serving and resize-reporter injection.
 
     Runtime and deployment notes:
 
-    - Direct widget serving still requires a decorated `@ui_widget` method.
-    - `ui.widgets.<alias>.enabled` controls the static build config for that
-      alias. Use `enabled.widget.<alias>` for widget surface visibility.
-    - Static UI builds still run in proc workers, use shared bundle storage, and
-      are coordinated by storage-scoped locks/signatures. ISO runtime is not
-      involved.
-    - If a browser navigates away during a long request-triggered build, that
-      request may fail with a client-disconnect response, but the shielded
-      static load/build task can finish for the next request.
-    - No customer/private content is part of this release.
+    - Cross-origin embedding still requires deployment descriptors to configure
+      the allowed frame ancestors. Browser headers allow display; runtime UI
+      code handles sizing and config discovery.
+    - The config endpoint is authoritative when available. Parent messaging is
+      now a compatibility path, not the first path.
+    - If both config paths are unavailable, route-derived tenant/project/bundle
+      values may still support read-only static surfaces, but auth metadata is
+      missing.
+    - No private deployment or organization-specific content is part of this
+      release.
 
     Validation and regression coverage:
 
-    - Python compile checks passed for integrations routes, proc startup,
-      agentic loader, chatbot entrypoints, and Copilot/Versatile entrypoints.
-    - Focused platform/widget tests passed: 56 passed.
     - `git diff --check` passed.
-    - A broader Versatile preference-canvas test run still has existing
-      unrelated failures around visibility defaults and monkeypatch targets; it
-      was not used as the release gate.
+    - Python compile check passed for the integrations routes.
+    - Focused TypeScript checks passed for memory, Copilot widget, and
+      Versatile widget runtime config modules.
+    - Copilot and Versatile widget production builds passed.
+    - Focused static/widget integration tests passed: 4 passed.
 
     Changelog
 
-    - Replaced `ui.web_app_widgets` with `ui.widgets` in code, examples, docs,
-      and tests.
-    - Added UI component lifecycle documentation for source-folder widgets and
-      main views.
-    - Added request-cancellation-safe static entrypoint load cleanup.
-    - Added regression tests for static entrypoint load cleanup after waiter
-      cancellation and failure.
-    - Updated Copilot and Versatile widget defaults to the new config key.
+    - Added resize-reporter injection for static bundle UI and widget HTML.
+    - Added runtime config endpoint fallback support across built-in control
+      plane panels and example bundle UIs.
+    - Switched widget/main UI config discovery to endpoint-first behavior.
+    - Updated embedding and bundle UI documentation.
+    - Added regression coverage for public/static widget resize injection.
 config:
-    version: "2026.5.17.1535"
+    version: "2026.5.17.2144"

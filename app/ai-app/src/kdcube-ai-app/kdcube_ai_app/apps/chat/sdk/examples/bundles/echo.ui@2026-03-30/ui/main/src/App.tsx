@@ -14,6 +14,21 @@ interface AppSettings {
   project: string
 }
 
+interface RuntimeConfigPayload {
+  baseUrl?: string
+  accessToken?: string | null
+  idToken?: string | null
+  idTokenHeader?: string
+  idTokenHeaderName?: string
+  auth?: { idTokenHeaderName?: string }
+  defaultTenant?: string
+  defaultProject?: string
+  tenant?: string
+  tenant_id?: string
+  project?: string
+  project_id?: string
+}
+
 const PLACEHOLDER_BASE_URL = '{{CHAT_BASE_URL}}'
 const PLACEHOLDER_ACCESS_TOKEN = '{{ACCESS_TOKEN}}'
 const PLACEHOLDER_ID_TOKEN = '{{ID_TOKEN}}'
@@ -23,6 +38,30 @@ const PLACEHOLDER_PROJECT = '{{DEFAULT_PROJECT}}'
 
 // Bundles built through the SDK UI pipeline receive their delivery id at build time.
 const BUNDLE_ID = import.meta.env.VITE_BUNDLE_ID || 'echo.ui@2026-03-30'
+
+function isPlaceholder(value: string | null | undefined): boolean {
+  return typeof value === 'string' && value.includes('{{') && value.includes('}}')
+}
+
+function routeContextFromLocation(): { tenant: string; project: string } {
+  const path = window.location.pathname
+  for (const marker of ['/api/integrations/static/', '/api/integrations/bundles/']) {
+    const index = path.indexOf(marker)
+    if (index < 0) continue
+    const parts = path.slice(index + marker.length).split('/').map(part => {
+      try {
+        return decodeURIComponent(part)
+      } catch {
+        return part
+      }
+    })
+    return { tenant: parts[0] || '', project: parts[1] || '' }
+  }
+  const params = new URLSearchParams(window.location.search)
+  return { tenant: params.get('tenant') || '', project: params.get('project') || '' }
+}
+
+const ROUTE_CONTEXT = routeContextFromLocation()
 
 class SettingsManager {
   private settings: AppSettings = {
@@ -37,34 +76,34 @@ class SettingsManager {
   private configReceivedCallback: (() => void) | null = null
 
   getBaseUrl(): string {
-    if (this.settings.baseUrl === PLACEHOLDER_BASE_URL) return window.location.origin
+    if (isPlaceholder(this.settings.baseUrl)) return window.location.origin
     return this.settings.baseUrl
   }
 
   getAccessToken(): string | null {
-    return this.settings.accessToken === PLACEHOLDER_ACCESS_TOKEN ? null : this.settings.accessToken
+    return isPlaceholder(this.settings.accessToken) ? null : this.settings.accessToken
   }
 
   getIdToken(): string | null {
-    return this.settings.idToken === PLACEHOLDER_ID_TOKEN ? null : this.settings.idToken
+    return isPlaceholder(this.settings.idToken) ? null : this.settings.idToken
   }
 
   getIdTokenHeader(): string {
-    return this.settings.idTokenHeader === PLACEHOLDER_ID_TOKEN_HEADER
+    return isPlaceholder(this.settings.idTokenHeader)
       ? 'X-ID-Token'
       : this.settings.idTokenHeader
   }
 
   getTenant(): string {
-    return this.settings.tenant === PLACEHOLDER_TENANT ? '' : this.settings.tenant
+    return isPlaceholder(this.settings.tenant) ? ROUTE_CONTEXT.tenant : this.settings.tenant
   }
 
   getProject(): string {
-    return this.settings.project === PLACEHOLDER_PROJECT ? '' : this.settings.project
+    return isPlaceholder(this.settings.project) ? ROUTE_CONTEXT.project : this.settings.project
   }
 
   hasPlaceholders(): boolean {
-    return this.settings.baseUrl === PLACEHOLDER_BASE_URL
+    return isPlaceholder(this.settings.baseUrl) || isPlaceholder(this.settings.tenant) || isPlaceholder(this.settings.project)
   }
 
   update(partial: Partial<AppSettings>): void {
@@ -73,6 +112,45 @@ class SettingsManager {
 
   onConfigReceived(cb: () => void): void {
     this.configReceivedCallback = cb
+  }
+
+  applyRuntimeConfig(config: RuntimeConfigPayload, options: { notify?: boolean } = {}): boolean {
+    const updates: Partial<AppSettings> = {}
+    const tenant = config.defaultTenant || config.tenant || config.tenant_id
+    const project = config.defaultProject || config.project || config.project_id
+    const idTokenHeader = config.idTokenHeader || config.idTokenHeaderName || config.auth?.idTokenHeaderName
+    if (config.baseUrl) updates.baseUrl = config.baseUrl
+    if (config.accessToken !== undefined) updates.accessToken = config.accessToken
+    if (config.idToken !== undefined) updates.idToken = config.idToken
+    if (idTokenHeader) updates.idTokenHeader = idTokenHeader
+    if (tenant) updates.tenant = tenant
+    if (project) updates.project = project
+    if (Object.keys(updates).length === 0) return false
+    this.update(updates)
+    if (options.notify !== false) this.configReceivedCallback?.()
+    return true
+  }
+
+  async loadFrontendConfig(): Promise<boolean> {
+    const controller = new AbortController()
+    const timeout = window.setTimeout(() => controller.abort(), 1000)
+    try {
+      const response = await fetch(`${this.getBaseUrl()}/api/cp-frontend-config`, {
+        method: 'GET',
+        credentials: 'include',
+        cache: 'no-store',
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      })
+      if (!response.ok) return false
+      const config = (await response.json()) as RuntimeConfigPayload | null
+      if (!config || typeof config !== 'object') return false
+      return this.applyRuntimeConfig(config, { notify: false })
+    } catch {
+      return false
+    } finally {
+      window.clearTimeout(timeout)
+    }
   }
 
   setupParentListener(): Promise<boolean> {
@@ -85,45 +163,48 @@ class SettingsManager {
       const config = event.data.config
       if (!config) return
 
-      const updates: Partial<AppSettings> = {}
-      if (config.baseUrl) updates.baseUrl = config.baseUrl
-      if (config.accessToken !== undefined) updates.accessToken = config.accessToken
-      if (config.idToken !== undefined) updates.idToken = config.idToken
-      if (config.idTokenHeader) updates.idTokenHeader = config.idTokenHeader
-      if (config.defaultTenant) updates.tenant = config.defaultTenant
-      if (config.defaultProject) updates.project = config.defaultProject
-
-      if (Object.keys(updates).length > 0) {
-        this.update(updates)
-        this.configReceivedCallback?.()
-      }
+      this.applyRuntimeConfig(config)
     })
 
     if (this.hasPlaceholders()) {
-      window.parent.postMessage(
-        {
-          type: 'CONFIG_REQUEST',
-          data: {
-            requestedFields: [
-              'baseUrl', 'accessToken', 'idToken', 'idTokenHeader',
-              'defaultTenant', 'defaultProject',
-            ],
-            identity,
-          },
-        },
-        '*',
-      )
-
       return new Promise<boolean>((resolve) => {
-        const timeout = setTimeout(() => {
-          console.warn('[EchoUI] Config request timeout — proceeding with defaults')
-          resolve(false)
-        }, 3000)
-        const prev = this.configReceivedCallback
-        this.onConfigReceived(() => {
-          clearTimeout(timeout)
-          prev?.()
-          resolve(true)
+        let resolved = false
+        const finish = (ready: boolean) => {
+          if (resolved) return
+          resolved = true
+          resolve(ready)
+        }
+        const requestParentConfig = () => {
+          window.parent.postMessage(
+            {
+              type: 'CONFIG_REQUEST',
+              data: {
+                requestedFields: [
+                  'baseUrl', 'accessToken', 'idToken', 'idTokenHeader',
+                  'defaultTenant', 'defaultProject',
+                ],
+                identity,
+              },
+            },
+            '*',
+          )
+          const timeout = window.setTimeout(() => {
+            console.warn('[EchoUI] Config request timeout - proceeding with defaults')
+            finish(false)
+          }, 3000)
+          const prev = this.configReceivedCallback
+          this.onConfigReceived(() => {
+            window.clearTimeout(timeout)
+            prev?.()
+            finish(true)
+          })
+        }
+        void this.loadFrontendConfig().then((loaded) => {
+          if (loaded) {
+            finish(true)
+          } else {
+            requestParentConfig()
+          }
         })
       })
     }

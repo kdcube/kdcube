@@ -631,7 +631,9 @@ async def test_get_bundle_interface_and_widgets_use_decorators(monkeypatch):
         request=_request(headers=[(b"accept", b"text/html")]),
         session=session,
     )
-    assert html_payload.body.decode("utf-8") == "<p>fp-1</p>"
+    html = html_payload.body.decode("utf-8")
+    assert "<p>fp-1</p>" in html
+    assert "data-kdcube-resize-reporter" in html
 
     routed_payload = await integrations.serve_bundle_widget_path(
         tenant="tenant-a",
@@ -642,7 +644,9 @@ async def test_get_bundle_interface_and_widgets_use_decorators(monkeypatch):
         request=request,
         session=session,
     )
-    assert routed_payload.body.decode("utf-8") == "<p>fp-1:settings/profile</p>"
+    html = routed_payload.body.decode("utf-8")
+    assert "<p>fp-1:settings/profile</p>" in html
+    assert "data-kdcube-resize-reporter" in html
 
 
 @pytest.mark.asyncio
@@ -683,6 +687,9 @@ async def test_static_widget_payload_points_to_widget_app(monkeypatch):
     html = widget_payload["preferences"][0]
     assert "<iframe" in html
     assert "CONFIG_REQUEST" in html
+    assert "kdcube-resize" in html
+    assert "width" in html
+    assert "height" in html
     assert "/api/integrations/bundles/tenant-a/project-a/bundle.demo/widgets/preferences/index.html" in html
 
 
@@ -902,7 +909,77 @@ async def test_static_widget_subpaths_fall_back_to_index_html(monkeypatch, tmp_p
     html = response.body.decode("utf-8")
     assert response.status_code == 200
     assert "<base href=\"/api/integrations/bundles/tenant-a/project-a/bundle.demo/widgets/preferences/\">" in html
+    assert "data-kdcube-resize-reporter" in html
+    assert "type:'kdcube-resize',height:height,width:width" in html
     assert "<div id=\"root\"></div>" in html
+
+
+@pytest.mark.asyncio
+async def test_public_static_widget_index_injects_resize_reporter(monkeypatch, tmp_path):
+    class _Workflow:
+        bundle_props = {
+            "ui": {
+                "widgets": {
+                    "preferences": {
+                        "enabled": True,
+                        "src_folder": "ui/widgets/preferences",
+                        "build_command": "true",
+                    },
+                },
+            },
+        }
+
+        @ui_widget(icon={"lucide": "SlidersHorizontal"}, alias="preferences")
+        def preferences_widget(self, **kwargs):
+            del kwargs
+            return []
+
+    async def _load_bundle_workflow(**kwargs):
+        del kwargs
+        return _Workflow(), SimpleNamespace(id="bundle.demo"), "tenant-a", "project-a"
+
+    def _store_get_bundle_props(*args, **kwargs):
+        del args, kwargs
+        return {}
+
+    async def _resolve_bundle_async(*args, **kwargs):
+        del args, kwargs
+        return SimpleNamespace(id="bundle.demo", path=str(tmp_path), module="entrypoint", singleton=False)
+
+    async def _run_static_bundle_entrypoint_load_once(**kwargs):
+        del kwargs
+        return None
+
+    storage_root = tmp_path / "bundle-storage"
+    ui_root = storage_root / "ui" / "widgets" / "preferences"
+    ui_root.mkdir(parents=True)
+    (ui_root / "index.html").write_text(
+        "<!doctype html><html><head></head><body><div id=\"root\"></div></body></html>",
+        encoding="utf-8",
+    )
+
+    from kdcube_ai_app.infra.plugin import bundle_storage
+
+    monkeypatch.setattr(integrations, "_load_bundle_workflow", _load_bundle_workflow)
+    monkeypatch.setattr(integrations, "_authoritative_bundle_props", _store_get_bundle_props)
+    monkeypatch.setattr(integrations, "_resolve_bundle_spec_from_runtime", _resolve_bundle_async)
+    monkeypatch.setattr(integrations, "run_static_bundle_entrypoint_load_once", _run_static_bundle_entrypoint_load_once)
+    monkeypatch.setattr(bundle_storage, "storage_for_spec", lambda **kwargs: storage_root)
+
+    response = await integrations.serve_public_static_bundle_widget_path(
+        tenant="tenant-a",
+        project="project-a",
+        bundle_id="bundle.demo",
+        widget_alias="preferences",
+        widget_path="index.html",
+        request=_request(headers=[(b"accept", b"text/html")]),
+    )
+
+    html = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert "<base href=\"/api/integrations/bundles/tenant-a/project-a/bundle.demo/public/widgets/preferences/\">" in html
+    assert "data-kdcube-resize-reporter" in html
+    assert "type:'kdcube-resize',height:height,width:width" in html
 
 
 @pytest.mark.asyncio

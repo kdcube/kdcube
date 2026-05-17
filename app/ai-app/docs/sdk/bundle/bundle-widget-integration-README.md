@@ -11,6 +11,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
   - ks:docs/sdk/bundle/bundle-client-ui-README.md
   - ks:docs/sdk/bundle/bundle-client-communication-README.md
+  - ks:docs/service/cicd/embedding-control-plane-frontend-README.md
 ---
 # Bundle Widget Integration
 
@@ -32,6 +33,13 @@ This is the rule:
 For the full lifecycle of discovery, preload, build, request-time fallback,
 shared-storage locks, signatures, and concurrent workers, see
 [UI Components Lifecycle](./ui-components-lifecycle-README.md).
+
+If the same widget or static bundle UI is embedded by an external website, the
+frame permission is an operator deployment setting, not a widget-code setting.
+Configure `proxy.frame_embedding` so the KDCube proxy clears
+`X-Frame-Options` and emits a CSP `frame-ancestors` allowlist on frameable
+bundle routes. See
+[Embedding The Control Plane Frontend](../../service/cicd/embedding-control-plane-frontend-README.md).
 
 ## Two Contracts: Surface And Build Config
 
@@ -639,8 +647,9 @@ https://host-app.example.net
       fetch("/api/...")     -> "https://kdcube.example.com/api/..."
 
       nested bundle widget frame:
-        baseUrl from CONFIG_REQUEST == "https://kdcube.example.com"
-        operation call              -> "https://kdcube.example.com/api/..."
+        baseUrl from /api/cp-frontend-config or CONFIG_REQUEST
+          == "https://kdcube.example.com"
+        operation call -> "https://kdcube.example.com/api/..."
 ```
 
 This means a normal embedded deployment works when the host application frames
@@ -657,7 +666,10 @@ make the widget call `https://host-app.example.net/api/...` by mistake.
 
 Correct base URL selection:
 
-- first use `baseUrl` received from the KDCube runtime config handshake
+- first fetch `/api/cp-frontend-config` from the widget frame origin and use
+  its `baseUrl` when it returns usable runtime config
+- if that endpoint is unavailable, use `baseUrl` received from the KDCube
+  runtime config handshake
 - if no runtime config is available, fall back to `window.location.origin` from
   the widget frame itself
 - if the widget route contains tenant/project/bundle, use that route only as a
@@ -668,6 +680,31 @@ widget rendered by `srcDoc` still runs under the KDCube frontend frame origin;
 a widget loaded by `src` from `/api/integrations/.../widgets/...` also runs
 under the KDCube origin. In both cases, root-relative URLs and
 runtime-provided `baseUrl` must resolve to the hosted KDCube domain.
+
+## Frame Resize Contract
+
+A parent page from another origin cannot read the widget iframe DOM to measure
+`scrollHeight` or `scrollWidth`. Cross-origin sizing must be cooperative.
+
+KDCube-hosted static bundle UI and widget HTML entrypoints inject a resize
+reporter before serving `index.html`. The reporter posts:
+
+```js
+window.parent.postMessage({
+  type: 'kdcube-resize',
+  height: document.documentElement.scrollHeight,
+  width: document.documentElement.scrollWidth,
+}, '*');
+```
+
+The actual server-injected reporter measures the maximum document/body
+scroll/client/offset dimensions and sends both `height` and `width`. It runs on
+load, DOM changes, resize observations, and short delayed retries.
+
+If a widget or bundle UI contains another iframe, each frame layer must either
+host a KDCube-injected document or manually forward the same `kdcube-resize`
+message upward. Frame headers decide whether the browser may display the frame;
+they do not grant cross-origin DOM measurement.
 
 There is one valid exception: a same-origin reverse-proxy deployment may serve
 the host application and KDCube under one public origin:
@@ -822,24 +859,53 @@ window.addEventListener('message', (event: MessageEvent) => {
   applyConfig(event.data.config)
 })
 
-window.parent.postMessage(
-  {
-    type: 'CONFIG_REQUEST',
-    data: {
-      identity,
-      requestedFields: [
-        'baseUrl',
-        'accessToken',
-        'idToken',
-        'idTokenHeader',
-        'defaultTenant',
-        'defaultProject',
-        'defaultAppBundleId',
-      ],
+async function loadFrontendConfig(): Promise<boolean> {
+  try {
+    const response = await fetch(`${state.baseUrl}/api/cp-frontend-config`, {
+      credentials: 'include',
+      cache: 'no-store',
+      headers: { Accept: 'application/json' },
+    })
+    if (!response.ok) return false
+    const config = await response.json()
+    applyConfig({
+      ...config,
+      defaultTenant: config.defaultTenant || config.tenant || config.tenant_id,
+      defaultProject: config.defaultProject || config.project || config.project_id,
+      idTokenHeader: config.idTokenHeader || config.idTokenHeaderName || config.auth?.idTokenHeaderName,
+    })
+    return hasConfig()
+  } catch {
+    // Route-derived tenant/project/bundle may still be enough for read-only
+    // static surfaces, but auth metadata only comes from runtime config.
+    return false
+  }
+}
+
+function requestParentConfig(): void {
+  window.parent.postMessage(
+    {
+      type: 'CONFIG_REQUEST',
+      data: {
+        identity,
+        requestedFields: [
+          'baseUrl',
+          'accessToken',
+          'idToken',
+          'idTokenHeader',
+          'defaultTenant',
+          'defaultProject',
+          'defaultAppBundleId',
+        ],
+      },
     },
-  },
-  '*',
-)
+    '*',
+  )
+}
+
+void loadFrontendConfig().then((loaded) => {
+  if (!loaded) requestParentConfig()
+})
 ```
 
 ## Operational Rules
@@ -847,7 +913,11 @@ window.parent.postMessage(
 - Widget load should be read-only by default.
 - Use an explicit in-widget action such as `Refresh` if the widget needs to trigger a syncing bootstrap or other mutating backend operation.
 - If the widget can derive tenant/project/bundle defaults from its route, use those only as safe standalone fallbacks.
-- Still keep the runtime config handshake, because auth tokens and final runtime scope belong to KDCube.
+- First fetch `/api/cp-frontend-config`; if it returns usable runtime config,
+  do not wait for parent messaging.
+- Keep parent `CONFIG_REQUEST` / `CONFIG_RESPONSE` as a fallback, because
+  older runtime display environments may be the only source of auth tokens and
+  final runtime scope.
 - For platform widgets and embedded browser clients, the preferred `POST /operations/{alias}` body shape is `{ "data": { ... } }`.
 - The integrations layer also accepts a raw JSON object body and treats it as `data`, so webhook-style service integrations do not need a platform-specific wrapper.
 - The integrations layer returns an envelope shaped like `{ status, tenant, project, bundle_id, [alias]: result }`; widgets should unwrap the `[alias]` field.
@@ -871,7 +941,8 @@ Python-rendered widget responses.
 
 They show:
 
-- `CONFIG_REQUEST` to the runtime display environment
+- `/api/cp-frontend-config` first, then `CONFIG_REQUEST` as fallback to the
+  runtime display environment
 - accept both `CONN_RESPONSE` and `CONFIG_RESPONSE`
 - build operation URLs from runtime scope
 - use the host-provided auth tokens and token-header name

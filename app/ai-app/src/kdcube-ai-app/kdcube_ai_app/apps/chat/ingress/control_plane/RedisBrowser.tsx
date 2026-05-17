@@ -112,6 +112,46 @@ class SettingsManager {
         this.configReceivedCallback = callback;
     }
 
+    private applyRuntimeConfig(config: any, options: { notify?: boolean } = {}): boolean {
+        const tenant = config.defaultTenant || config.tenant || config.tenant_id;
+        const project = config.defaultProject || config.project || config.project_id;
+        const idTokenHeader = config.idTokenHeader || config.idTokenHeaderName || config.auth?.idTokenHeaderName;
+        const updates: Partial<AppSettings> = {};
+        if (config.baseUrl && typeof config.baseUrl === 'string') updates.baseUrl = config.baseUrl;
+        if (config.accessToken !== undefined) updates.accessToken = config.accessToken;
+        if (config.idToken !== undefined) updates.idToken = config.idToken;
+        if (idTokenHeader) updates.idTokenHeader = idTokenHeader;
+        if (tenant) updates.defaultTenant = tenant;
+        if (project) updates.defaultProject = project;
+        if (config.defaultAppBundleId) updates.defaultAppBundleId = config.defaultAppBundleId;
+        if (Object.keys(updates).length === 0) return false;
+        this.updateSettings(updates);
+        if (options.notify !== false) this.configReceivedCallback?.();
+        return true;
+    }
+
+    private async loadFrontendConfig(): Promise<boolean> {
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), 1000);
+        try {
+            const response = await fetch(`${this.getBaseUrl()}/api/cp-frontend-config`, {
+                method: 'GET',
+                credentials: 'include',
+                cache: 'no-store',
+                headers: {Accept: 'application/json'},
+                signal: controller.signal,
+            });
+            if (!response.ok) return false;
+            const config = await response.json();
+            if (!config || typeof config !== 'object') return false;
+            return this.applyRuntimeConfig(config, {notify: false});
+        } catch {
+            return false;
+        } finally {
+            window.clearTimeout(timeout);
+        }
+    }
+
     setupParentListener(): Promise<boolean> {
         const identity = 'REDIS_BROWSER_ADMIN';
 
@@ -122,64 +162,43 @@ class SettingsManager {
                     return;
                 }
 
-                if (event.data.config) {
-                    const config = event.data.config;
-                    const updates: Partial<AppSettings> = {};
-
-                    if (config.baseUrl && typeof config.baseUrl === 'string') {
-                        updates.baseUrl = config.baseUrl;
-                    }
-                    if (config.accessToken !== undefined) {
-                        updates.accessToken = config.accessToken;
-                    }
-                    if (config.idToken !== undefined) {
-                        updates.idToken = config.idToken;
-                    }
-                    if (config.idTokenHeader) {
-                        updates.idTokenHeader = config.idTokenHeader;
-                    }
-                    if (config.defaultTenant) {
-                        updates.defaultTenant = config.defaultTenant;
-                    }
-                    if (config.defaultProject) {
-                        updates.defaultProject = config.defaultProject;
-                    }
-                    if (config.defaultAppBundleId) {
-                        updates.defaultAppBundleId = config.defaultAppBundleId;
-                    }
-
-                    if (Object.keys(updates).length > 0) {
-                        this.updateSettings(updates);
-                        if (this.configReceivedCallback) {
-                            this.configReceivedCallback();
-                        }
-                    }
-                }
+                if (event.data.config) this.applyRuntimeConfig(event.data.config);
             }
         });
 
         if (this.hasPlaceholderSettings()) {
-            window.parent.postMessage({
-                type: 'CONFIG_REQUEST',
-                data: {
-                    requestedFields: [
-                        'baseUrl', 'accessToken', 'idToken', 'idTokenHeader',
-                        'defaultTenant', 'defaultProject', 'defaultAppBundleId'
-                    ],
-                    identity: identity
-                }
-            }, '*');
-
             return new Promise<boolean>((resolve) => {
-                const timeout = setTimeout(() => {
-                    resolve(false);
-                }, 3000);
-
-                const originalCallback = this.configReceivedCallback;
-                this.onConfigReceived(() => {
-                    clearTimeout(timeout);
-                    if (originalCallback) originalCallback();
-                    resolve(true);
+                let resolved = false;
+                const finish = (ready: boolean) => {
+                    if (resolved) return;
+                    resolved = true;
+                    resolve(ready);
+                };
+                const requestParentConfig = () => {
+                    window.parent.postMessage({
+                        type: 'CONFIG_REQUEST',
+                        data: {
+                            requestedFields: [
+                                'baseUrl', 'accessToken', 'idToken', 'idTokenHeader',
+                                'defaultTenant', 'defaultProject', 'defaultAppBundleId'
+                            ],
+                            identity: identity
+                        }
+                    }, '*');
+                    const timeout = window.setTimeout(() => finish(false), 3000);
+                    const originalCallback = this.configReceivedCallback;
+                    this.onConfigReceived(() => {
+                        window.clearTimeout(timeout);
+                        if (originalCallback) originalCallback();
+                        finish(true);
+                    });
+                };
+                void this.loadFrontendConfig().then((loaded) => {
+                    if (loaded) {
+                        finish(true);
+                    } else {
+                        requestParentConfig();
+                    }
                 });
             });
         }

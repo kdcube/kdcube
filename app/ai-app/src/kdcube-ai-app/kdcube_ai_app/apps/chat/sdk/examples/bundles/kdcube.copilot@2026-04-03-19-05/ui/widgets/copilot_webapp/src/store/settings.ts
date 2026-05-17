@@ -8,8 +8,34 @@ const PLACEHOLDER_TENANT = '{{DEFAULT_TENANT}}';
 const PLACEHOLDER_PROJECT = '{{DEFAULT_PROJECT}}';
 const PLACEHOLDER_BUNDLE_ID = '{{DEFAULT_APP_BUNDLE_ID}}';
 
+interface RuntimeConfigPayload {
+  baseUrl?: string;
+  accessToken?: string | null;
+  idToken?: string | null;
+  idTokenHeader?: string;
+  idTokenHeaderName?: string;
+  defaultTenant?: string;
+  defaultProject?: string;
+  defaultAppBundleId?: string;
+  tenant?: string;
+  project?: string;
+  tenant_id?: string;
+  project_id?: string;
+  auth?: {
+    idTokenHeaderName?: string;
+  };
+}
+
 function isPlaceholder(value: string | null | undefined): boolean {
   return typeof value === 'string' && value.includes('{{') && value.includes('}}');
+}
+
+function decodePathPart(part: string): string {
+  try {
+    return decodeURIComponent(part);
+  } catch {
+    return part;
+  }
 }
 
 export function routeContextFromLocation(): RouteContext {
@@ -17,16 +43,17 @@ export function routeContextFromLocation(): RouteContext {
   const marker = '/api/integrations/bundles/';
   const index = path.indexOf(marker);
   if (index < 0) {
+    const params = new URLSearchParams(window.location.search);
     return {
-      tenant: '',
-      project: '',
-      bundleId: 'kdcube.copilot@2026-04-03-19-05',
-      widgetAlias: 'copilot_webapp',
-      widgetPath: '',
+      tenant: params.get('tenant') || '',
+      project: params.get('project') || '',
+      bundleId: params.get('bundle_id') || params.get('bundleId') || 'kdcube.copilot@2026-04-03-19-05',
+      widgetAlias: params.get('widget') || 'copilot_webapp',
+      widgetPath: params.get('widget_path') || params.get('widgetPath') || '',
     };
   }
   const rest = path.slice(index + marker.length);
-  const parts = rest.split('/').map((part) => decodeURIComponent(part));
+  const parts = rest.split('/').map(decodePathPart);
   const widgetsIndex = parts.indexOf('widgets');
   return {
     tenant: parts[0] || '',
@@ -109,34 +136,100 @@ class SettingsManager {
     return !this.values.idToken || isPlaceholder(this.values.idToken) ? null : this.values.idToken;
   }
 
+  private needsRuntimeConfig(): boolean {
+    return (
+      isPlaceholder(this.values.baseUrl) ||
+      isPlaceholder(this.values.defaultTenant) ||
+      isPlaceholder(this.values.defaultProject) ||
+      isPlaceholder(this.values.defaultAppBundleId)
+    );
+  }
+
+  private applyRuntimeConfig(config: RuntimeConfigPayload): void {
+    const tenant = config.defaultTenant || config.tenant || config.tenant_id;
+    const project = config.defaultProject || config.project || config.project_id;
+    this.values = {
+      ...this.values,
+      baseUrl: config.baseUrl || this.values.baseUrl,
+      accessToken: config.accessToken ?? this.values.accessToken,
+      idToken: config.idToken ?? this.values.idToken,
+      idTokenHeader:
+        config.idTokenHeader ||
+        config.idTokenHeaderName ||
+        config.auth?.idTokenHeaderName ||
+        this.values.idTokenHeader,
+      defaultTenant: tenant || this.values.defaultTenant,
+      defaultProject: project || this.values.defaultProject,
+      defaultAppBundleId: config.defaultAppBundleId || this.values.defaultAppBundleId,
+    };
+  }
+
+  private async loadFrontendConfig(): Promise<boolean> {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 1000);
+    try {
+      const response = await fetch(`${this.getBaseUrl()}/api/cp-frontend-config`, {
+        method: 'GET',
+        credentials: 'include',
+        cache: 'no-store',
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      });
+      if (!response.ok) return false;
+      const config = (await response.json()) as RuntimeConfigPayload | null;
+      if (!config || typeof config !== 'object') return false;
+      this.applyRuntimeConfig(config);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }
+
   setupParentListener(): Promise<boolean> {
     const identity = 'KDCUBE_COPILOT_WEBAPP';
+    let resolved = false;
+    let resolveReady: ((value: boolean) => void) | null = null;
+    const finish = (value: boolean) => {
+      if (resolved) return;
+      resolved = true;
+      resolveReady?.(value);
+    };
     window.addEventListener('message', (event: MessageEvent) => {
       if (event.data?.type !== 'CONN_RESPONSE' && event.data?.type !== 'CONFIG_RESPONSE') return;
       if (event.data.identity !== identity || !event.data.config) return;
-      const config = event.data.config;
-      this.values = {
-        ...this.values,
-        baseUrl: config.baseUrl || this.values.baseUrl,
-        accessToken: config.accessToken ?? this.values.accessToken,
-        idToken: config.idToken ?? this.values.idToken,
-        idTokenHeader: config.idTokenHeader || this.values.idTokenHeader,
-        defaultTenant: config.defaultTenant || this.values.defaultTenant,
-        defaultProject: config.defaultProject || this.values.defaultProject,
-        defaultAppBundleId: config.defaultAppBundleId || this.values.defaultAppBundleId,
-      };
+      this.applyRuntimeConfig(event.data.config);
+      finish(true);
     });
-    window.parent.postMessage(
-      {
-        type: 'CONFIG_REQUEST',
-        data: {
-          identity,
-          requestedFields: ['baseUrl', 'accessToken', 'idToken', 'idTokenHeader', 'defaultTenant', 'defaultProject', 'defaultAppBundleId'],
-        },
-      },
-      '*',
-    );
-    return new Promise((resolve) => window.setTimeout(() => resolve(true), 500));
+
+    return new Promise((resolve) => {
+      resolveReady = resolve;
+      if (!this.needsRuntimeConfig()) {
+        finish(true);
+        return;
+      }
+      const requestParentConfig = () => {
+        window.parent.postMessage(
+          {
+            type: 'CONFIG_REQUEST',
+            data: {
+              identity,
+              requestedFields: ['baseUrl', 'accessToken', 'idToken', 'idTokenHeader', 'defaultTenant', 'defaultProject', 'defaultAppBundleId'],
+            },
+          },
+          '*',
+        );
+        window.setTimeout(() => finish(Boolean(this.getTenant() && this.getProject())), 3000);
+      };
+      void this.loadFrontendConfig().then((loaded) => {
+        if (loaded) {
+          finish(true);
+        } else {
+          requestParentConfig();
+        }
+      });
+    });
   }
 }
 

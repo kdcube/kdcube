@@ -380,8 +380,11 @@ def test_serve_static_asset_builds_ui_on_first_request(monkeypatch, tmp_path):
     )
 
     assert isinstance(response, HTMLResponse)
-    assert "Echo UI" in response.body.decode("utf-8")
-    assert '/api/integrations/static/tenant-a/project-a/echo.ui@2026-03-30/' in response.body.decode("utf-8")
+    html = response.body.decode("utf-8")
+    assert "Echo UI" in html
+    assert '/api/integrations/static/tenant-a/project-a/echo.ui@2026-03-30/' in html
+    assert "data-kdcube-resize-reporter" in html
+    assert "type:'kdcube-resize',height:height,width:width" in html
 
 
 def test_serve_static_asset_refreshes_existing_ui_on_entrypoint_request(monkeypatch, tmp_path):
@@ -423,8 +426,10 @@ def test_serve_static_asset_refreshes_existing_ui_on_entrypoint_request(monkeypa
 
     assert load_calls == ["echo.ui@2026-03-30"]
     assert isinstance(response, HTMLResponse)
-    assert "Fresh UI" in response.body.decode("utf-8")
-    assert "Stale UI" not in response.body.decode("utf-8")
+    html = response.body.decode("utf-8")
+    assert "Fresh UI" in html
+    assert "Stale UI" not in html
+    assert "data-kdcube-resize-reporter" in html
 
     response = asyncio.run(
         integrations.serve_static_asset(
@@ -438,7 +443,9 @@ def test_serve_static_asset_refreshes_existing_ui_on_entrypoint_request(monkeypa
 
     assert load_calls == ["echo.ui@2026-03-30"]
     assert isinstance(response, HTMLResponse)
-    assert "Fresh UI" in response.body.decode("utf-8")
+    html = response.body.decode("utf-8")
+    assert "Fresh UI" in html
+    assert "data-kdcube-resize-reporter" in html
 
 
 def test_serve_static_asset_does_not_refresh_existing_asset_request(monkeypatch, tmp_path):

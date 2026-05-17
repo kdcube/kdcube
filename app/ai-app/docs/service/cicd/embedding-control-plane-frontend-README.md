@@ -225,10 +225,14 @@ window.location.origin == "https://kdcube.example.com"
 fetch("/api/...")     -> "https://kdcube.example.com/api/..."
 ```
 
-Nested bundle widgets follow the same rule. KDCube widgets either:
+Nested bundle widgets follow the same rule. KDCube widgets should:
 
-- receive `baseUrl` from the KDCube frontend runtime config handshake, which is
-  based on the KDCube frontend frame origin; or
+- first fetch `GET /api/cp-frontend-config` from their own KDCube frame origin;
+  if the endpoint returns usable config, the widget should not wait for parent
+  messaging; or
+- fall back to the KDCube frontend runtime config handshake, where the parent
+  answers `CONFIG_REQUEST` with `baseUrl` and auth metadata based on the KDCube
+  frontend frame origin; or
 - fall back to their own `window.location.origin`, which is also the KDCube
   origin when loaded from KDCube widget routes.
 
@@ -269,6 +273,23 @@ can produce a browser document inside the control-plane experience.
 Do not apply the relaxed frame policy blindly to unrelated APIs. JSON APIs,
 SSE, upload endpoints, and internal service endpoints do not need to be
 frameable.
+
+Frame policy is separate from iframe sizing. When KDCube is framed from another
+origin, the embedding page cannot read the KDCube iframe DOM to call
+`scrollHeight` or `scrollWidth`. KDCube frameable HTML entrypoints post a
+cooperative resize event instead:
+
+```js
+window.parent.postMessage({
+  type: 'kdcube-resize',
+  height: document.documentElement.scrollHeight,
+  width: document.documentElement.scrollWidth,
+}, '*');
+```
+
+The host application should listen for `kdcube-resize` and update the iframe
+box. Nested KDCube frames use the same message shape so resize information can
+be forwarded through each iframe layer.
 
 When `bundles_preload_on_start` is enabled, bundle UI builds should happen
 during processor startup. Runtime iframe requests should normally find the
@@ -324,6 +345,22 @@ proxy:
       - https://host-app.example.net
 ```
 
+For KDCube-owned website embedding where the parent may be the apex domain or a
+subdomain, configure both the apex and the wildcard subdomain source:
+
+```yaml
+proxy:
+  frame_embedding:
+    mode: allowlist
+    allowed_origins:
+      - https://kdcube.tech
+      - https://*.kdcube.tech
+```
+
+The wildcard subdomain source does not replace the apex entry. Keep both when
+`https://kdcube.tech` and `https://www.kdcube.tech` or another subdomain should
+be allowed.
+
 The proxy renderer should translate the descriptor into headers.
 
 For `standalone`:
@@ -371,9 +408,10 @@ are valid:
 allowed_origins:
   - https://app.example.com
   - https://host-app.example.net
+  - https://*.kdcube.tech
 ```
 
-These are not valid frame ancestors:
+These are not valid frame ancestors in KDCube descriptors:
 
 ```yaml
 allowed_origins:
@@ -381,8 +419,9 @@ allowed_origins:
   - "*.example.com"
 ```
 
-If wildcard subdomains are ever needed, add an explicit product decision and
-validation rule before supporting them. The safe default is exact origins only.
+Wildcard subdomains must include a scheme and should be scoped to owned domains
+only. Do not use a wildcard as a substitute for a deliberate embedding
+allowlist.
 
 ## Auth And Cookies
 

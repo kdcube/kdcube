@@ -11,6 +11,7 @@ import inspect
 import json
 import logging
 import os
+import re
 import traceback
 import uuid
 from dataclasses import asdict
@@ -89,6 +90,82 @@ from kdcube_ai_app.infra.secrets import (
 import kdcube_ai_app.infra.namespaces as namespaces
 
 logger = logging.getLogger("ChatProc.Integrations")
+
+_HTML_HEAD_OPEN_RE = re.compile(r"(<head\b[^>]*>)", re.IGNORECASE)
+_HTML_BODY_CLOSE_RE = re.compile(r"</body\s*>", re.IGNORECASE)
+
+_KDCUBE_RESIZE_REPORTER_SCRIPT = (
+    "<script data-kdcube-resize-reporter=\"true\">"
+    "(function(){"
+    "if(window.__kdcubeResizeReporterInstalled){return;}"
+    "window.__kdcubeResizeReporterInstalled=true;"
+    "var scheduled=false;"
+    "function maxDim(name){"
+    "var d=document.documentElement,b=document.body;"
+    "return Math.max("
+    "d?d['scroll'+name]:0,d?d['offset'+name]:0,d?d['client'+name]:0,"
+    "b?b['scroll'+name]:0,b?b['offset'+name]:0,b?b['client'+name]:0"
+    ");"
+    "}"
+    "function report(){"
+    "scheduled=false;"
+    "if(!window.parent||window.parent===window){return;}"
+    "var width=maxDim('Width'),height=maxDim('Height');"
+    "window.parent.postMessage({type:'kdcube-resize',height:height,width:width},'*');"
+    "}"
+    "function schedule(){"
+    "if(scheduled){return;}"
+    "scheduled=true;"
+    "(window.requestAnimationFrame||function(fn){return setTimeout(fn,16);})(report);"
+    "}"
+    "window.addEventListener('load',schedule,{passive:true});"
+    "document.addEventListener('DOMContentLoaded',schedule,{passive:true});"
+    "window.addEventListener('message',function(event){"
+    "var data=event.data||{};"
+    "if(data.type!=='kdcube-resize'){return;}"
+    "var frames=document.getElementsByTagName('iframe');"
+    "for(var i=0;i<frames.length;i++){"
+    "if(frames[i].contentWindow===event.source){"
+    "var h=Number(data.height),w=Number(data.width);"
+    "if(isFinite(h)&&h>0){frames[i].style.height=Math.ceil(h)+'px';}"
+    "if(isFinite(w)&&w>0){frames[i].style.minWidth=Math.ceil(w)+'px';}"
+    "break;"
+    "}"
+    "}"
+    "schedule();"
+    "});"
+    "if(window.ResizeObserver){"
+    "var ro=new ResizeObserver(schedule);"
+    "if(document.documentElement){ro.observe(document.documentElement);}"
+    "if(document.body){ro.observe(document.body);}"
+    "}"
+    "if(window.MutationObserver){"
+    "var mo=new MutationObserver(schedule);"
+    "mo.observe(document.documentElement||document,{childList:true,subtree:true,attributes:true,characterData:true});"
+    "}"
+    "setTimeout(schedule,0);setTimeout(schedule,250);setTimeout(schedule,1000);"
+    "})();"
+    "</script>"
+)
+
+
+def _inject_kdcube_resize_reporter(content: str, *, base_href: str | None = None) -> str:
+    injection_parts: List[str] = []
+    if base_href:
+        injection_parts.append(f"<base href=\"{html.escape(base_href, quote=True)}\">")
+    if "data-kdcube-resize-reporter" not in content:
+        injection_parts.append(_KDCUBE_RESIZE_REPORTER_SCRIPT)
+    if not injection_parts:
+        return content
+
+    injection = "".join(injection_parts)
+    if _HTML_HEAD_OPEN_RE.search(content):
+        return _HTML_HEAD_OPEN_RE.sub(lambda match: f"{match.group(1)}{injection}", content, count=1)
+    if _HTML_BODY_CLOSE_RE.search(content):
+        return _HTML_BODY_CLOSE_RE.sub(lambda match: f"{injection}{match.group(0)}", content, count=1)
+    return f"{injection}{content}"
+
+
 _integrations_limit: Optional[int] = None
 _integrations_semaphore = None
 
@@ -2168,7 +2245,7 @@ async def serve_static_asset(
         from fastapi.responses import HTMLResponse
         base_href = f"/api/integrations/static/{tenant}/{project}/{bundle_id}/"
         content = target.read_text(encoding="utf-8")
-        content = content.replace("<head>", f"<head><base href=\"{base_href}\">", 1)
+        content = _inject_kdcube_resize_reporter(content, base_href=base_href)
         return HTMLResponse(content=content, headers={"Cache-Control": "no-cache"})
 
     rel_parts = target.relative_to(ui_root).parts
@@ -2676,15 +2753,52 @@ def _static_widget_iframe_html(
         "<!doctype html><html><head><meta charset=\"utf-8\">"
         "<style>html,body,#root{margin:0;width:100%;height:100%;overflow:hidden}"
         "iframe{width:100%;height:100%;border:0;display:block}</style>"
+        f"{_KDCUBE_RESIZE_REPORTER_SCRIPT}"
         "<script>"
         "(function(){"
         "var frame=null;"
-        "window.addEventListener('DOMContentLoaded',function(){frame=document.getElementById('widget-frame');});"
+        "function num(value){var n=Number(value);return isFinite(n)&&n>0?Math.ceil(n):0;}"
+        "function ownSize(){"
+        "var d=document.documentElement,b=document.body;"
+        "return {"
+        "width:Math.max(d?d.scrollWidth:0,d?d.offsetWidth:0,d?d.clientWidth:0,b?b.scrollWidth:0,b?b.offsetWidth:0,b?b.clientWidth:0),"
+        "height:Math.max(d?d.scrollHeight:0,d?d.offsetHeight:0,d?d.clientHeight:0,b?b.scrollHeight:0,b?b.offsetHeight:0,b?b.clientHeight:0)"
+        "};"
+        "}"
+        "function postResize(width,height){"
+        "var size=ownSize();"
+        "window.parent.postMessage({type:'kdcube-resize',height:Math.max(num(height),size.height),width:Math.max(num(width),size.width)},'*');"
+        "}"
+        "function applyChildSize(data){"
+        "var h=num(data&&data.height),w=num(data&&data.width);"
+        "if(h&&frame){frame.style.height=h+'px';}"
+        "if(w&&frame){frame.style.minWidth=w+'px';}"
+        "postResize(w,h);"
+        "}"
+        "function reportSameOriginFrame(){"
+        "if(!frame){postResize(0,0);return;}"
+        "try{"
+        "var doc=frame.contentDocument||frame.contentWindow.document;"
+        "var d=doc.documentElement,b=doc.body;"
+        "applyChildSize({"
+        "width:Math.max(d?d.scrollWidth:0,d?d.offsetWidth:0,d?d.clientWidth:0,b?b.scrollWidth:0,b?b.offsetWidth:0,b?b.clientWidth:0),"
+        "height:Math.max(d?d.scrollHeight:0,d?d.offsetHeight:0,d?d.clientHeight:0,b?b.scrollHeight:0,b?b.offsetHeight:0,b?b.clientHeight:0)"
+        "});"
+        "}catch(e){postResize(0,0);}"
+        "}"
+        "window.addEventListener('DOMContentLoaded',function(){"
+        "frame=document.getElementById('widget-frame');"
+        "if(frame){frame.addEventListener('load',reportSameOriginFrame);}"
+        "postResize(0,0);"
+        "});"
         "window.addEventListener('message',function(event){"
         "var data=event.data||{};"
         "if(data.type==='CONFIG_REQUEST'&&frame&&event.source===frame.contentWindow){window.parent.postMessage(data,'*');return;}"
+        "if(data.type==='kdcube-resize'&&frame&&event.source===frame.contentWindow){applyChildSize(data);return;}"
         "if((data.type==='CONN_RESPONSE'||data.type==='CONFIG_RESPONSE')&&frame&&frame.contentWindow){frame.contentWindow.postMessage(data,'*');}"
         "});"
+        "setTimeout(function(){postResize(0,0);},0);"
+        "setTimeout(function(){postResize(0,0);},250);"
         "})();"
         "</script>"
         "</head><body><div id=\"root\">"
@@ -2861,7 +2975,7 @@ async def _serve_static_widget_app(
         base_route = "public/widgets" if public else "widgets"
         base_href = f"/api/integrations/bundles/{tenant}/{project}/{bundle_id}/{base_route}/{widget_spec.alias}/"
         content = target.read_text(encoding="utf-8")
-        content = content.replace("<head>", f"<head><base href=\"{base_href}\">", 1)
+        content = _inject_kdcube_resize_reporter(content, base_href=base_href)
         return HTMLResponse(content=content, headers={"Cache-Control": "no-cache"})
 
     rel_parts = target.relative_to(ui_root).parts
@@ -2918,7 +3032,7 @@ async def fetch_bundle_widget(
     )
     if _request_prefers_widget_html(request):
         return HTMLResponse(
-            content=_widget_payload_content(payload, widget_alias),
+            content=_inject_kdcube_resize_reporter(_widget_payload_content(payload, widget_alias)),
             headers={"Cache-Control": "no-cache"},
         )
     return payload
@@ -2956,7 +3070,7 @@ async def serve_bundle_widget_path(
         session=session,
     )
     return HTMLResponse(
-        content=_widget_payload_content(payload, widget_alias),
+        content=_inject_kdcube_resize_reporter(_widget_payload_content(payload, widget_alias)),
         headers={"Cache-Control": "no-cache"},
     )
 
