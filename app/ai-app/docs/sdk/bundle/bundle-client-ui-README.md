@@ -136,7 +136,23 @@ the KDCube shell and frameable bundle/static document routes. See
 for the deployment contract and examples.
 
 For cross-origin iframe sizing, the embedding page must listen for the KDCube
-resize message:
+resize message. The host page owns the normal iframe width with CSS; do not set
+`iframe.style.width` from every resize event. Doing that can feed a temporary
+narrow measurement back into the child frame, make the bundle UI reflow as a
+mobile-width page, and leave the final height much larger than expected.
+
+Start with a stable iframe box:
+
+```html
+<iframe
+  id="bundle-frame"
+  src="https://dev.kdcube.tech/api/integrations/static/demo/demo-march/versatile@2026-03-31-13-36"
+  style="display:block;width:100%;border:0"
+></iframe>
+```
+
+Then update height from the cooperative message. `width` is only an optional
+overflow/min-width signal; ignore it for ordinary responsive embedding.
 
 ```js
 window.addEventListener('message', (event) => {
@@ -145,7 +161,9 @@ window.addEventListener('message', (event) => {
   const height = Number(event.data.height);
   const width = Number(event.data.width);
   if (Number.isFinite(height) && height > 0) iframe.style.height = `${Math.ceil(height)}px`;
-  if (Number.isFinite(width) && width > 0) iframe.style.width = `${Math.ceil(width)}px`;
+  if (Number.isFinite(width) && width > iframe.clientWidth) {
+    iframe.style.minWidth = `${Math.ceil(width)}px`;
+  }
 });
 ```
 
@@ -153,6 +171,32 @@ KDCube injects this reporter into static bundle UI and widget HTML entrypoints.
 Headers such as CSP `frame-ancestors` allow display; they do not let the parent
 read cross-origin iframe DOM dimensions. The embedding page should validate
 `event.origin` against the exact KDCube origin it framed.
+
+The message can include diagnostics:
+
+- `height`: content height the parent should apply to the iframe
+- `width`: non-zero only when content needs more horizontal space than the
+  current iframe viewport
+- `contentWidth`: measured content width
+- `viewportWidth`: current iframe viewport width seen by the embedded document
+- `seq`: monotonic sequence number from the reporter instance
+- `reason`: trigger that produced the measurement, such as `load`,
+  `window.resize`, `resize-observer`, or `mutation-observer`
+
+To diagnose sizing issues, append `?kdcube_resize_debug=1` to the framed KDCube
+URL or run this in the embedded page DevTools console and reload:
+
+```js
+localStorage.setItem('kdcube.resize.debug', '1')
+```
+
+The injected reporter then writes `[kdcube-resize]` console entries for posted
+measurements and skipped measurements, including the observed viewport width.
+Turn it off with:
+
+```js
+localStorage.removeItem('kdcube.resize.debug')
+```
 
 Bundle UIs that need runtime scope must support both config paths:
 

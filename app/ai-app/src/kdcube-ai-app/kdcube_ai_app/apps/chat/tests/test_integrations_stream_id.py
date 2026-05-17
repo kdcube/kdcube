@@ -384,7 +384,9 @@ def test_serve_static_asset_builds_ui_on_first_request(monkeypatch, tmp_path):
     assert "Echo UI" in html
     assert '/api/integrations/static/tenant-a/project-a/echo.ui@2026-03-30/' in html
     assert "data-kdcube-resize-reporter" in html
-    assert "type:'kdcube-resize',height:height,width:width" in html
+    assert "type:'kdcube-resize'" in html
+    assert "contentWidth" in html
+    assert "viewportWidth" in html
 
 
 def test_serve_static_asset_refreshes_existing_ui_on_entrypoint_request(monkeypatch, tmp_path):

@@ -692,14 +692,37 @@ reporter before serving `index.html`. The reporter posts:
 ```js
 window.parent.postMessage({
   type: 'kdcube-resize',
-  height: document.documentElement.scrollHeight,
-  width: document.documentElement.scrollWidth,
+  height: measuredContentHeight,
+  width: optionalOverflowWidth,
+  contentWidth: measuredContentWidth,
+  viewportWidth: currentFrameViewportWidth,
 }, '*');
 ```
 
 The actual server-injected reporter measures the maximum document/body
-scroll/client/offset dimensions and sends both `height` and `width`. It runs on
-load, DOM changes, resize observations, and short delayed retries.
+scroll/client/offset dimensions, debounces short layout bursts, and sends:
+
+- `height`: the content height the parent should apply to the iframe
+- `width`: non-zero only when content overflows the current iframe viewport
+- `contentWidth`: measured content width for diagnostics
+- `viewportWidth`: the iframe viewport width observed by the embedded document
+- `seq`: monotonic sequence number from the reporter instance
+- `reason`: trigger that produced the measurement
+
+It runs on load, window resize, DOM changes, resize observations, and short
+delayed retries.
+
+The parent must provide normal iframe width with CSS, for example
+`width: 100%`. Do not set `iframe.style.width` from every `kdcube-resize`
+message. That creates a width feedback loop: an early narrow measurement can be
+applied as the real iframe width, the widget reflows into a narrow layout, and
+the final height becomes genuinely large. Use the message `width` only as an
+optional `min-width` signal when it is greater than the current iframe width.
+
+For diagnostics, append `?kdcube_resize_debug=1` to the widget/static UI route
+or set `localStorage.setItem('kdcube.resize.debug', '1')` in the embedded page
+and reload. The reporter logs `[kdcube-resize]` entries for measurements it
+posts and for measurements it skips, including untrusted tiny viewport cases.
 
 If a widget or bundle UI contains another iframe, each frame layer must either
 host a KDCube-injected document or manually forward the same `kdcube-resize`

@@ -282,14 +282,53 @@ cooperative resize event instead:
 ```js
 window.parent.postMessage({
   type: 'kdcube-resize',
-  height: document.documentElement.scrollHeight,
-  width: document.documentElement.scrollWidth,
+  height: measuredContentHeight,
+  width: optionalOverflowWidth,
+  contentWidth: measuredContentWidth,
+  viewportWidth: currentFrameViewportWidth,
+  seq: reporterSequence,
+  reason: measurementTrigger,
 }, '*');
 ```
 
-The host application should listen for `kdcube-resize` and update the iframe
-box. Nested KDCube frames use the same message shape so resize information can
-be forwarded through each iframe layer.
+The host application should listen for `kdcube-resize` and update iframe
+height. The host application should own normal iframe width through CSS, for
+example `width: 100%`. Do not blindly assign `iframe.style.width` from the
+message. A temporary narrow measurement can otherwise become the iframe's real
+width, force a mobile layout inside the embedded app, and make the final
+reported height much larger than expected.
+
+Parent-side sizing pattern:
+
+```js
+window.addEventListener('message', (event) => {
+  if (event.origin !== 'https://kdcube.example.com') return;
+  if (event.data?.type !== 'kdcube-resize') return;
+
+  const height = Number(event.data.height);
+  const width = Number(event.data.width);
+
+  if (Number.isFinite(height) && height > 0) {
+    iframe.style.height = `${Math.ceil(height)}px`;
+  }
+
+  // Optional only: use width as an overflow/min-width signal, not as the
+  // normal responsive iframe width.
+  if (Number.isFinite(width) && width > iframe.clientWidth) {
+    iframe.style.minWidth = `${Math.ceil(width)}px`;
+  }
+});
+```
+
+Nested KDCube frames use the same message shape so resize information can be
+forwarded through each iframe layer.
+
+For browser-side diagnosis, add `?kdcube_resize_debug=1` to the framed KDCube
+URL or enable `localStorage.setItem('kdcube.resize.debug', '1')` inside the
+embedded document and reload. The injected reporter logs `[kdcube-resize]`
+messages for posted and skipped measurements. The most important field is
+`viewportWidth`: if it is small when the final height is huge, the parent page
+or one of its containers has given the iframe a narrow layout box.
 
 When `bundles_preload_on_start` is enabled, bundle UI builds should happen
 during processor startup. Runtime iframe requests should normally find the

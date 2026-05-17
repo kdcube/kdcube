@@ -910,7 +910,9 @@ async def test_static_widget_subpaths_fall_back_to_index_html(monkeypatch, tmp_p
     assert response.status_code == 200
     assert "<base href=\"/api/integrations/bundles/tenant-a/project-a/bundle.demo/widgets/preferences/\">" in html
     assert "data-kdcube-resize-reporter" in html
-    assert "type:'kdcube-resize',height:height,width:width" in html
+    assert "type:'kdcube-resize'" in html
+    assert "contentWidth" in html
+    assert "viewportWidth" in html
     assert "<div id=\"root\"></div>" in html
 
 
@@ -979,7 +981,9 @@ async def test_public_static_widget_index_injects_resize_reporter(monkeypatch, t
     assert response.status_code == 200
     assert "<base href=\"/api/integrations/bundles/tenant-a/project-a/bundle.demo/public/widgets/preferences/\">" in html
     assert "data-kdcube-resize-reporter" in html
-    assert "type:'kdcube-resize',height:height,width:width" in html
+    assert "type:'kdcube-resize'" in html
+    assert "contentWidth" in html
+    assert "viewportWidth" in html
 
 
 @pytest.mark.asyncio
