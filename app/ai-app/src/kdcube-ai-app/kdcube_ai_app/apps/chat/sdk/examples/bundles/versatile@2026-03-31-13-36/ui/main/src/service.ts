@@ -143,6 +143,8 @@ export interface ChatHistoryItem {
   id: number
 }
 
+export type ContinuationKind = 'regular' | 'followup' | 'steer'
+
 export interface OpenChatStreamOptions {
   sessionId?: string | null
   timeoutMs?: number
@@ -170,6 +172,12 @@ export interface SubmitChatMessageParams {
   text: string
   files: File[]
   chatHistory: ChatHistoryItem[]
+  messageKind?: ContinuationKind
+  continuationKind?: ContinuationKind
+  activeTurnId?: string
+  targetTurnId?: string
+  followup?: boolean
+  steer?: boolean
 }
 
 interface SubmitChatMessageApiResponse {
@@ -419,6 +427,24 @@ export async function submitChatMessage(params: SubmitChatMessageParams): Promis
   }
   if (params.conversationId) {
     message.conversation_id = params.conversationId
+  }
+  if (params.messageKind) {
+    message.message_kind = params.messageKind
+  }
+  if (params.continuationKind) {
+    message.continuation_kind = params.continuationKind
+  }
+  if (params.activeTurnId) {
+    message.active_turn_id = params.activeTurnId
+  }
+  if (params.targetTurnId) {
+    message.target_turn_id = params.targetTurnId
+  }
+  if (params.followup) {
+    message.followup = true
+  }
+  if (params.steer) {
+    message.steer = true
   }
 
   const payload = {

@@ -25,6 +25,7 @@ import type {
   ConversationArtifactDTO,
   ConversationDTO,
   ConversationSummary,
+  ContinuationKind,
   ConvStatusEnvelope,
   RateLimitPayload,
   StepStatus,
@@ -33,7 +34,7 @@ import { BUILT_BUNDLE_ID, createLocalId, settings } from './settings'
 
 type ConnectionState = 'booting' | 'connecting' | 'connected' | 'disconnected'
 type TurnState = 'pending' | 'running' | 'completed' | 'error'
-type TurnTab = 'overview' | 'timeline' | 'steps' | 'downloads'
+type TurnTab = 'overview' | 'timeline' | 'steps' | 'links' | 'files'
 
 interface Banner {
   id: string
@@ -167,6 +168,14 @@ interface TurnAttachment {
   file?: File
 }
 
+interface AdditionalUserMessage {
+  id: string
+  text: string
+  timestamp: number
+  attachments: TurnAttachment[]
+  continuationKind: Exclude<ContinuationKind, 'regular'>
+}
+
 type TimelineEntryKind = 'lifecycle' | 'answer' | 'thinking' | 'timeline' | 'canvas' | 'subsystem' | 'error'
 type TimelineEntryFormat = 'markdown' | 'text' | 'json' | 'code'
 
@@ -197,6 +206,7 @@ interface ChatTurn {
   createdAt: number
   userMessage: string
   userAttachments: TurnAttachment[]
+  additionalUserMessages: AdditionalUserMessage[]
   answer: string
   error?: string | null
   steps: Record<string, TurnStep>
@@ -278,24 +288,24 @@ function formatBytes(bytes: number): string {
 function toneClass(tone: BannerTone): string {
   switch (tone) {
     case 'error':
-      return 'border-[rgba(165,63,50,0.22)] bg-[rgba(165,63,50,0.08)] text-[var(--danger)]'
+      return 'border-[rgba(247,96,154,0.3)] bg-[var(--danger-soft)] text-[var(--danger)]'
     case 'warning':
-      return 'border-[rgba(164,103,33,0.22)] bg-[rgba(164,103,33,0.08)] text-[var(--warning)]'
+      return 'border-[rgba(240,188,46,0.38)] bg-[var(--gold-soft)] text-[var(--warning)]'
     default:
-      return 'border-[rgba(29,109,115,0.2)] bg-[rgba(29,109,115,0.09)] text-[var(--accent)]'
+      return 'border-[rgba(217,229,99,0.34)] bg-[var(--accent-soft)] text-[var(--accent)]'
   }
 }
 
 function stepTone(status: StepStatus): string {
   switch (status) {
     case 'completed':
-      return 'bg-[rgba(35,114,79,0.12)] text-[var(--success)]'
+      return 'bg-[var(--success-soft)] text-[var(--success)]'
     case 'error':
-      return 'bg-[rgba(165,63,50,0.12)] text-[var(--danger)]'
+      return 'bg-[var(--danger-soft)] text-[var(--danger)]'
     case 'skipped':
       return 'bg-[rgba(94,107,120,0.12)] text-[var(--muted)]'
     default:
-      return 'bg-[rgba(29,109,115,0.12)] text-[var(--accent)]'
+      return 'bg-[var(--accent-soft)] text-[var(--accent)]'
   }
 }
 
@@ -341,6 +351,20 @@ function updateTurn(
   const turns = state.turns.slice()
   turns[index] = updater(turns[index])
   return { ...state, turns }
+}
+
+function ensureTurn(state: ChatState, turnId: string, createdAt: number, message = ''): ChatState {
+  if (state.turns.some((turn) => turn.id === turnId)) return state
+  return {
+    ...state,
+    turns: [
+      ...state.turns,
+      {
+        ...createEmptyTurn(turnId, createdAt, message),
+        state: 'running',
+      },
+    ],
+  }
 }
 
 function syncConversationFromEnvelope(state: ChatState, env: BaseEnvelope): ChatState {
@@ -398,6 +422,14 @@ function buildChatHistory(turns: ChatTurn[]): ChatHistoryItem[] {
     })
     return items
   }, [])
+}
+
+function findActiveTurn(turns: ChatTurn[]): ChatTurn | null {
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index]
+    if (turn.state === 'pending' || turn.state === 'running') return turn
+  }
+  return null
 }
 
 function fallbackRateLimitMessage(rateLimit: RateLimitPayload | undefined, data: Record<string, unknown>): string {
@@ -534,6 +566,7 @@ function createEmptyTurn(turnId: string, createdAt: number, message = ''): ChatT
     createdAt,
     userMessage: message,
     userAttachments: [],
+    additionalUserMessages: [],
     answer: '',
     error: null,
     steps: {},
@@ -553,10 +586,34 @@ function hydrateHistoricalConversation(conversation: ConversationDTO): ChatTurn[
 
       switch (artifact.type) {
         case 'chat:user': {
+          const dataRecord = artifact.data && typeof artifact.data === 'object'
+            ? artifact.data as Record<string, unknown>
+            : {}
           const text =
             (typeof artifact.data?.text === 'string' && artifact.data.text) ||
             (typeof payload.text === 'string' && payload.text) ||
             ''
+          const continuationKind =
+            (typeof dataRecord.continuation_kind === 'string' && dataRecord.continuation_kind) ||
+            (typeof payload.continuation_kind === 'string' && payload.continuation_kind) ||
+            null
+          if (turn.userMessage || continuationKind === 'followup' || continuationKind === 'steer') {
+            turn = {
+              ...turn,
+              createdAt: Math.min(turn.createdAt, ts),
+              additionalUserMessages: [
+                ...turn.additionalUserMessages,
+                {
+                  id: `stored-user:${turnDto.turn_id}:${turn.additionalUserMessages.length}`,
+                  text,
+                  timestamp: ts,
+                  attachments: [],
+                  continuationKind: continuationKind === 'steer' ? 'steer' : 'followup',
+                },
+              ],
+            }
+            break
+          }
           turn = {
             ...turn,
             createdAt: ts,
@@ -773,7 +830,14 @@ function hydrateHistoricalConversation(conversation: ConversationDTO): ChatTurn[
 }
 
 function applyChatStart(state: ChatState, env: ChatStartEnvelope): ChatState {
-  const syncedState = syncConversationFromEnvelope(state, env)
+  const timestamp = timestampValue(env.timestamp)
+  const ensuredState = ensureTurn(
+    state,
+    env.conversation.turn_id,
+    timestamp,
+    typeof env.data?.message === 'string' ? env.data.message : '',
+  )
+  const syncedState = syncConversationFromEnvelope(ensuredState, env)
   return updateTurn(syncedState, env.conversation.turn_id, (turn) => ({
     ...turn,
     state: 'running',
@@ -781,7 +845,7 @@ function applyChatStart(state: ChatState, env: ChatStartEnvelope): ChatState {
       ...turn.timeline,
       {
         id: `lifecycle:start:${env.service.request_id}:${env.conversation.turn_id}`,
-        timestamp: timestampValue(env.timestamp),
+        timestamp,
         kind: 'lifecycle',
         title: 'Turn started',
         body: typeof env.data?.message === 'string' ? env.data.message : undefined,
@@ -794,7 +858,8 @@ function applyChatStart(state: ChatState, env: ChatStartEnvelope): ChatState {
 }
 
 function applyChatComplete(state: ChatState, env: ChatCompleteEnvelope): ChatState {
-  const syncedState = syncConversationFromEnvelope(state, env)
+  const ensuredState = ensureTurn(state, env.conversation.turn_id, timestampValue(env.timestamp))
+  const syncedState = syncConversationFromEnvelope(ensuredState, env)
   return updateTurn(syncedState, env.conversation.turn_id, (turn) => ({
     ...turn,
     state: env.data?.error_message ? 'error' : 'completed',
@@ -819,7 +884,8 @@ function applyChatComplete(state: ChatState, env: ChatCompleteEnvelope): ChatSta
 
 function applyChatError(state: ChatState, env: ChatErrorEnvelope): ChatState {
   const message = env.data?.error || 'Request failed.'
-  const syncedState = syncConversationFromEnvelope(state, env)
+  const ensuredState = ensureTurn(state, env.conversation.turn_id, timestampValue(env.timestamp))
+  const syncedState = syncConversationFromEnvelope(ensuredState, env)
   return updateTurn(syncedState, env.conversation.turn_id, (turn) => ({
     ...turn,
     state: 'error',
@@ -871,7 +937,10 @@ function applyConvStatus(state: ChatState, env: ConvStatusEnvelope): ChatState {
 }
 
 function applyChatStep(state: ChatState, env: ChatStepEnvelope): ChatState {
-  const syncedState = syncConversationFromEnvelope(state, env)
+  const syncedState = syncConversationFromEnvelope(
+    ensureTurn(state, env.conversation.turn_id, timestampValue(env.timestamp)),
+    env,
+  )
   return updateTurn(syncedState, env.conversation.turn_id, (turn) => {
     const timestamp = timestampValue(env.timestamp)
     const nextStep: TurnStep = {
@@ -938,7 +1007,7 @@ function applyChatDelta(state: ChatState, env: ChatDeltaEnvelope): ChatState {
   const textDelta = env.delta?.text || ''
   const index = env.delta?.index || 0
 
-  const syncedState = syncConversationFromEnvelope(state, env)
+  const syncedState = syncConversationFromEnvelope(ensureTurn(state, turnId, timestamp), env)
   return updateTurn(syncedState, turnId, (turn) => {
     let nextTurn: ChatTurn = { ...turn }
     let artifacts = turn.artifacts.slice()
@@ -1215,7 +1284,7 @@ function MarkdownBlock({ content, compact = false }: { content: string; compact?
               href={href}
               target="_blank"
               rel="noreferrer"
-              className="font-medium text-[var(--accent)] underline underline-offset-2"
+              className="font-medium text-[var(--action)] underline underline-offset-2"
             >
               {children}
             </a>
@@ -1227,12 +1296,12 @@ function MarkdownBlock({ content, compact = false }: { content: string; compact?
           ol: ({ children }) => <ol className={compact ? 'my-1 list-decimal pl-5' : 'my-3 list-decimal pl-6'}>{children}</ol>,
           li: ({ children }) => <li className="my-1">{children}</li>,
           blockquote: ({ children }) => (
-            <blockquote className="my-3 border-l-4 border-[rgba(29,109,115,0.22)] pl-4 text-[var(--muted)]">
+            <blockquote className="my-3 border-l-2 border-[rgba(244,204,71,0.42)] pl-4 text-[var(--muted)]">
               {children}
             </blockquote>
           ),
           pre: ({ children }) => (
-            <pre className="my-3 overflow-x-auto rounded-2xl bg-[#11202b] px-4 py-3 text-sm text-[#edf5f6]">
+            <pre className="my-3 overflow-x-auto rounded-lg bg-[#11202b] px-4 py-3 text-sm text-[#edf5f6]">
               {children}
             </pre>
           ),
@@ -1245,7 +1314,7 @@ function MarkdownBlock({ content, compact = false }: { content: string; compact?
               </code>
             ),
           table: ({ children }) => (
-            <div className="my-3 overflow-x-auto rounded-2xl border border-[var(--line)]">
+            <div className="my-3 overflow-x-auto rounded-lg border border-[var(--line)]">
               <table className="min-w-full border-collapse text-sm">{children}</table>
             </div>
           ),
@@ -1272,7 +1341,7 @@ function BannerStrip({
       {banners.map((banner) => (
         <div
           key={banner.id}
-          className={`flex items-start gap-3 rounded-2xl border px-4 py-3 text-sm ${toneClass(banner.tone)}`}
+          className={`flex items-start gap-3 rounded-lg border px-4 py-3 text-sm ${toneClass(banner.tone)}`}
         >
           <div className="min-w-0 flex-1">{banner.text}</div>
           <button
@@ -1314,104 +1383,127 @@ function ConversationsSidebar({
   onStartNew: () => void
 }) {
   return (
-    <aside className="glass-panel h-fit rounded-[32px] px-4 py-4 lg:sticky lg:top-4">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">
-            Chats
+    <aside className="glass-panel flex min-h-[520px] overflow-hidden rounded-lg lg:sticky lg:top-4">
+      <nav className="flex w-12 flex-col items-center gap-2 border-r border-[var(--line)] bg-[rgba(255,255,255,0.54)] py-3">
+        {[
+          ['Chats', 'C'],
+          ['Artifacts', 'A'],
+          ['Settings', 'S'],
+        ].map(([label, glyph], index) => (
+          <button
+            key={label}
+            type="button"
+            aria-label={label}
+            className={`grid h-8 w-8 place-items-center rounded-md border text-xs font-semibold transition ${
+              index === 0
+                ? 'border-[rgba(67,114,195,0.26)] bg-[var(--action-soft)] text-[var(--action)]'
+                : 'border-transparent text-[var(--muted)] hover:border-[var(--line)] hover:bg-white'
+            }`}
+          >
+            {glyph}
+          </button>
+        ))}
+      </nav>
+
+      <div className="min-w-0 flex-1 px-3 py-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">
+              Chats
+            </div>
+            <div className="pt-1 text-base font-semibold text-[var(--ink)]">
+              Conversations
+            </div>
           </div>
-          <div className="pt-1 text-lg font-semibold text-[var(--ink)]">
-            Bundle conversations
+          <button
+            type="button"
+            onClick={onStartNew}
+            disabled={disabled}
+            className="rounded-md border border-[var(--line)] bg-white/70 px-2.5 py-1.5 text-sm font-medium transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            New
+          </button>
+        </div>
+
+        <div className="flex gap-2 pt-4">
+          <input
+            value={query}
+            onChange={(event) => onQueryChange(event.target.value)}
+            placeholder="Search chats"
+            disabled={disabled}
+            className="min-w-0 flex-1 rounded-md border border-[var(--line)] bg-white/75 px-3 py-2 text-sm outline-none transition placeholder:text-[var(--muted)] focus:border-[var(--action)]"
+          />
+          <button
+            type="button"
+            onClick={onRefresh}
+            className="rounded-md border border-[var(--line)] bg-white/70 px-2.5 py-2 text-sm font-medium transition hover:bg-white"
+          >
+            R
+          </button>
+        </div>
+
+        {error ? (
+          <div className="mt-3 rounded-lg border border-[rgba(247,96,154,0.28)] bg-[var(--danger-soft)] px-3 py-2 text-sm text-[var(--danger)]">
+            {error}
           </div>
-        </div>
-        <button
-          type="button"
-          onClick={onStartNew}
-          disabled={disabled}
-          className="rounded-full border border-[var(--line)] bg-white/70 px-3 py-1.5 text-sm font-medium transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          New
-        </button>
-      </div>
+        ) : null}
 
-      <div className="flex gap-2 pt-4">
-        <input
-          value={query}
-          onChange={(event) => onQueryChange(event.target.value)}
-          placeholder="Search chats"
-          disabled={disabled}
-          className="min-w-0 flex-1 rounded-full border border-[var(--line)] bg-white/75 px-4 py-2 text-sm outline-none transition placeholder:text-[var(--muted)] focus:border-[rgba(29,109,115,0.3)]"
-        />
-        <button
-          type="button"
-          onClick={onRefresh}
-          className="rounded-full border border-[var(--line)] bg-white/70 px-3 py-2 text-sm font-medium transition hover:bg-white"
-        >
-          Refresh
-        </button>
-      </div>
+        {loading && conversations.length === 0 ? (
+          <p className="pt-4 text-sm text-[var(--muted)]">Loading conversations…</p>
+        ) : null}
 
-      {error ? (
-        <div className="mt-3 rounded-2xl border border-[rgba(165,63,50,0.18)] bg-[rgba(165,63,50,0.08)] px-3 py-2 text-sm text-[var(--danger)]">
-          {error}
-        </div>
-      ) : null}
+        {!loading && conversations.length === 0 ? (
+          <p className="pt-4 text-sm leading-6 text-[var(--muted)]">
+            {query.trim()
+              ? 'No chats match the current search.'
+              : 'No saved chats yet. Start a new one and it will appear here.'}
+          </p>
+        ) : null}
 
-      {loading && conversations.length === 0 ? (
-        <p className="pt-4 text-sm text-[var(--muted)]">Loading conversations…</p>
-      ) : null}
-
-      {!loading && conversations.length === 0 ? (
-        <p className="pt-4 text-sm leading-6 text-[var(--muted)]">
-          {query.trim()
-            ? 'No chats match the current search.'
-            : 'No saved chats for this bundle yet. Start a new one and it will appear here.'}
-        </p>
-      ) : null}
-
-      {conversations.length > 0 ? (
-        <div className="space-y-2 pt-4">
-          {conversations.map((conversation) => {
-            const isActive = conversation.id === activeConversationId
-            const isLoading = loadingConversationId === conversation.id
-            return (
-              <button
-                key={conversation.id}
-                type="button"
-                onClick={() => onSelect(conversation.id)}
-                disabled={disabled || isLoading}
-                className={`block w-full rounded-[24px] border px-4 py-3 text-left transition ${
-                  isActive
-                    ? 'border-[rgba(29,109,115,0.22)] bg-[rgba(29,109,115,0.1)]'
-                    : 'border-[var(--line)] bg-white/65 hover:border-[rgba(29,109,115,0.16)] hover:bg-white'
-                } disabled:cursor-wait disabled:opacity-70`}
-              >
-                <div className="flex items-start gap-2">
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate font-medium text-[var(--ink)]">
-                      {conversation.title || 'Untitled conversation'}
+        {conversations.length > 0 ? (
+          <div className="space-y-2 pt-4">
+            {conversations.map((conversation) => {
+              const isActive = conversation.id === activeConversationId
+              const isLoading = loadingConversationId === conversation.id
+              return (
+                <button
+                  key={conversation.id}
+                  type="button"
+                  onClick={() => onSelect(conversation.id)}
+                  disabled={disabled || isLoading}
+                  className={`block w-full rounded-lg border px-3 py-3 text-left transition ${
+                    isActive
+                      ? 'border-[rgba(67,114,195,0.26)] bg-[var(--action-soft)]'
+                      : 'border-[var(--line)] bg-white/65 hover:border-[rgba(67,114,195,0.22)] hover:bg-white'
+                  } disabled:cursor-wait disabled:opacity-70`}
+                >
+                  <div className="flex items-start gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate font-medium text-[var(--ink)]">
+                        {conversation.title || 'Untitled conversation'}
+                      </div>
+                      <div className="pt-1 text-xs text-[var(--muted)]">
+                        {formatConversationTime(conversation.lastActivityAt || conversation.startedAt)}
+                      </div>
+                      <div className="truncate pt-1 text-[11px] uppercase tracking-[0.08em] text-[var(--muted)]">
+                        {conversation.id}
+                      </div>
                     </div>
-                    <div className="pt-1 text-xs text-[var(--muted)]">
-                      {formatConversationTime(conversation.lastActivityAt || conversation.startedAt)}
-                    </div>
-                    <div className="truncate pt-1 text-[11px] uppercase tracking-[0.08em] text-[var(--muted)]">
-                      {conversation.id}
-                    </div>
+                    {isActive ? (
+                      <span className="rounded-md bg-[var(--action-soft)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--action)]">
+                        Open
+                      </span>
+                    ) : null}
                   </div>
-                  {isActive ? (
-                    <span className="rounded-full bg-[rgba(29,109,115,0.14)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--accent)]">
-                      Current
-                    </span>
+                  {isLoading ? (
+                    <div className="pt-2 text-xs font-medium text-[var(--action)]">Loading chat…</div>
                   ) : null}
-                </div>
-                {isLoading ? (
-                  <div className="pt-2 text-xs font-medium text-[var(--accent)]">Loading chat…</div>
-                ) : null}
-              </button>
-            )
-          })}
-        </div>
-      ) : null}
+                </button>
+              )
+            })}
+          </div>
+        ) : null}
+      </div>
     </aside>
   )
 }
@@ -1434,7 +1526,7 @@ function SuggestedQuestions({
           type="button"
           disabled={disabled}
           onClick={() => onSelect(item)}
-          className="rounded-full border border-[rgba(29,109,115,0.16)] bg-[rgba(29,109,115,0.09)] px-3 py-1.5 text-sm text-[var(--accent)] transition hover:bg-[rgba(29,109,115,0.14)] disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-md border border-[rgba(67,114,195,0.24)] bg-[var(--action-soft)] px-3 py-1.5 text-sm text-[var(--action)] transition hover:bg-[rgba(67,114,195,0.16)] disabled:cursor-not-allowed disabled:opacity-50"
         >
           {item}
         </button>
@@ -1448,7 +1540,7 @@ function StepList({ steps }: { steps: TurnStep[] }) {
   return (
     <div className="space-y-2 pt-3">
       {steps.map((step) => (
-        <div key={step.step} className="rounded-2xl border border-[var(--line)] bg-white/55 px-3 py-3">
+        <div key={step.step} className="rounded-lg border border-[var(--line)] bg-white/55 px-3 py-3">
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium">{step.title || step.step}</span>
             <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] ${stepTone(step.status)}`}>
@@ -1467,6 +1559,155 @@ function StepList({ steps }: { steps: TurnStep[] }) {
   )
 }
 
+interface TurnLink {
+  id: string
+  kind: 'citation' | 'web_search' | 'web_fetch'
+  title: string
+  url: string
+  body?: string | null
+}
+
+function shortUrl(url: string): string {
+  try {
+    const parsed = new URL(url)
+    return parsed.hostname.replace(/^www\./, '')
+  } catch {
+    return url
+  }
+}
+
+function collectTurnLinks(artifacts: Artifact[]): TurnLink[] {
+  const links: TurnLink[] = []
+  const seen = new Set<string>()
+
+  const addLink = (link: TurnLink) => {
+    if (!link.url || seen.has(link.url)) return
+    seen.add(link.url)
+    links.push(link)
+  }
+
+  artifacts.forEach((artifact) => {
+    if (artifact.kind === 'citation') {
+      addLink({
+        id: `citation:${artifact.url}`,
+        kind: 'citation',
+        title: artifact.title || artifact.url,
+        url: artifact.url,
+        body: artifact.body,
+      })
+    }
+    if (artifact.kind === 'web_search') {
+      artifact.items.forEach((item) => {
+        addLink({
+          id: `web-search:${item.url}`,
+          kind: 'web_search',
+          title: item.title || item.url,
+          url: item.url,
+          body: item.body,
+        })
+      })
+    }
+    if (artifact.kind === 'web_fetch') {
+      artifact.items.forEach((item) => {
+        addLink({
+          id: `web-fetch:${item.url}`,
+          kind: 'web_fetch',
+          title: item.url,
+          url: item.url,
+          body: [
+            item.status ? item.status.toUpperCase() : null,
+            item.mime,
+            typeof item.content_length === 'number' ? formatBytes(item.content_length) : null,
+          ].filter(Boolean).join(' • '),
+        })
+      })
+    }
+  })
+
+  return links
+}
+
+function LinksPanel({ links }: { links: TurnLink[] }) {
+  if (links.length === 0) {
+    return <p className="pt-3 text-sm text-[var(--muted)]">No links have been produced for this turn yet.</p>
+  }
+
+  const toneClassForLink = (kind: TurnLink['kind']) => {
+    switch (kind) {
+      case 'web_search':
+        return 'bg-[var(--action-soft)] text-[var(--action)]'
+      case 'web_fetch':
+        return 'bg-[var(--gold-soft)] text-[var(--warning)]'
+      default:
+        return 'bg-[var(--blue-pale)] text-[var(--blue-dark)]'
+    }
+  }
+
+  return (
+    <div className="space-y-2 pt-3">
+      {links.map((link) => (
+        <a
+          key={link.id}
+          href={link.url}
+          target="_blank"
+          rel="noreferrer"
+          className="block rounded-lg border border-[var(--line)] bg-white/65 px-4 py-3 transition hover:border-[rgba(67,114,195,0.28)] hover:bg-white"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`rounded-full px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] ${toneClassForLink(link.kind)}`}>
+              {link.kind.replace('_', ' ')}
+            </span>
+            <span className="text-xs text-[var(--muted)]">{shortUrl(link.url)}</span>
+          </div>
+          <div className="pt-2 font-medium text-[var(--ink)]">{link.title}</div>
+          {link.body ? <p className="line-clamp-3 pt-1 text-sm leading-6 text-[var(--muted)]">{link.body}</p> : null}
+        </a>
+      ))}
+    </div>
+  )
+}
+
+function ThinkingBlock({
+  entries,
+  active,
+}: {
+  entries: TimelineEntry[]
+  active: boolean
+}) {
+  if (entries.length === 0) return null
+
+  const sortedEntries = entries.slice().sort((left, right) => left.timestamp - right.timestamp)
+
+  return (
+    <section className="mb-4 rounded-lg border border-[rgba(240,188,46,0.28)] bg-[var(--gold-soft)] px-4 py-3">
+      <div className="flex flex-wrap items-center gap-2 pb-2">
+        <span className="rounded-full bg-white/75 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--warning)]">
+          Thinking
+        </span>
+        {active ? <span className="text-xs font-medium text-[var(--warning)]">live</span> : null}
+      </div>
+      <div className="max-h-[260px] space-y-3 overflow-auto pr-1">
+        {sortedEntries.map((entry) => (
+          <div key={entry.id} className="rounded-lg border border-[rgba(240,188,46,0.2)] bg-white/65 px-3 py-3">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
+              <span className="font-semibold text-[var(--ink)]">{entry.agent || entry.title}</span>
+              {entry.status ? <span>{entry.status}</span> : null}
+              <span className="ml-auto">{formatTime(entry.timestamp)}</span>
+            </div>
+            {entry.body ? (
+              <div className="pt-2">
+                <MarkdownBlock content={entry.body} compact />
+              </div>
+            ) : (
+              <p className="pt-2 text-sm text-[var(--muted)]">Reasoning started.</p>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 function TimelineFeed({ entries }: { entries: TimelineEntry[] }) {
   if (entries.length === 0) {
     return <p className="pt-3 text-sm text-[var(--muted)]">No timeline events yet.</p>
@@ -1477,15 +1718,15 @@ function TimelineFeed({ entries }: { entries: TimelineEntry[] }) {
   const badgeClass = (kind: TimelineEntryKind): string => {
     switch (kind) {
       case 'answer':
-        return 'bg-[rgba(29,109,115,0.12)] text-[var(--accent)]'
+        return 'bg-[var(--accent-soft)] text-[var(--accent)]'
       case 'thinking':
-        return 'bg-[rgba(190,136,72,0.14)] text-[#87541a]'
+        return 'bg-[var(--gold-soft)] text-[var(--warning)]'
       case 'subsystem':
-        return 'bg-[rgba(22,35,47,0.1)] text-[var(--ink)]'
+        return 'bg-[var(--blue-pale)] text-[var(--blue-dark)]'
       case 'error':
-        return 'bg-[rgba(165,63,50,0.12)] text-[var(--danger)]'
+        return 'bg-[var(--danger-soft)] text-[var(--danger)]'
       case 'lifecycle':
-        return 'bg-[rgba(35,114,79,0.12)] text-[var(--success)]'
+        return 'bg-[var(--success-soft)] text-[var(--success)]'
       default:
         return 'bg-[rgba(94,107,120,0.12)] text-[var(--muted)]'
     }
@@ -1494,7 +1735,7 @@ function TimelineFeed({ entries }: { entries: TimelineEntry[] }) {
   return (
     <div className="space-y-3 pt-3">
       {sortedEntries.map((entry) => (
-        <div key={entry.id} className="rounded-[24px] border border-[var(--line)] bg-white/60 px-4 py-4">
+        <div key={entry.id} className="rounded-lg border border-[var(--line)] bg-white/60 px-4 py-4">
           <div className="flex flex-wrap items-center gap-2 pb-2">
             <span className={`rounded-full px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] ${badgeClass(entry.kind)}`}>
               {entry.kind}
@@ -1506,13 +1747,15 @@ function TimelineFeed({ entries }: { entries: TimelineEntry[] }) {
           </div>
           {entry.body ? (
             entry.format === 'markdown' ? (
-              <MarkdownBlock content={entry.body} compact />
+              <div className="max-h-[360px] overflow-auto pr-1">
+                <MarkdownBlock content={entry.body} compact />
+              </div>
             ) : entry.format === 'json' || entry.format === 'code' ? (
-              <pre className="overflow-x-auto rounded-2xl bg-[#11202b] px-4 py-3 text-sm text-[#edf5f6]">
+              <pre className="max-h-[360px] overflow-auto rounded-lg bg-[#11202b] px-4 py-3 text-sm text-[#edf5f6]">
                 {entry.body}
               </pre>
             ) : (
-              <p className="whitespace-pre-wrap text-sm leading-6 text-[var(--ink)]">{entry.body}</p>
+              <p className="max-h-[360px] overflow-auto whitespace-pre-wrap pr-1 text-sm leading-6 text-[var(--ink)]">{entry.body}</p>
             )
           ) : (
             <p className="text-sm text-[var(--muted)]">No body payload.</p>
@@ -1585,7 +1828,7 @@ function DownloadsPanel({
                 key={attachment.id}
                 type="button"
                 onClick={() => void handleAttachmentDownload(attachment, index)}
-                className="flex w-full items-center justify-between rounded-2xl border border-[var(--line)] bg-white/60 px-4 py-3 text-left transition hover:bg-white"
+                className="flex w-full items-center justify-between rounded-lg border border-[var(--line)] bg-white/60 px-4 py-3 text-left transition hover:bg-white"
               >
                 <div>
                   <div className="font-medium">{attachment.name}</div>
@@ -1593,7 +1836,7 @@ function DownloadsPanel({
                     {typeof attachment.size === 'number' ? formatBytes(attachment.size) : attachment.mime || attachment.rn || 'Stored attachment'}
                   </div>
                 </div>
-                <span className="text-sm text-[var(--accent)]">
+                <span className="text-sm text-[var(--action)]">
                   {downloadingId === `attachment:${index}` ? 'Preparing…' : 'Download'}
                 </span>
               </button>
@@ -1613,13 +1856,13 @@ function DownloadsPanel({
                 key={file.rn}
                 type="button"
                 onClick={() => void handleFileDownload(file)}
-                className="flex w-full items-center justify-between rounded-2xl border border-[var(--line)] bg-white/60 px-4 py-3 text-left transition hover:bg-white"
+                className="flex w-full items-center justify-between rounded-lg border border-[var(--line)] bg-white/60 px-4 py-3 text-left transition hover:bg-white"
               >
                 <div>
                   <div className="font-medium">{file.filename}</div>
                   <div className="text-sm text-[var(--muted)]">{file.description || file.mime || file.rn}</div>
                 </div>
-                <span className="text-sm text-[var(--accent)]">
+                <span className="text-sm text-[var(--action)]">
                   {downloadingId === `file:${file.rn}` ? 'Downloading…' : 'Download'}
                 </span>
               </button>
@@ -1641,18 +1884,24 @@ function ArtifactFeed({ artifacts }: { artifacts: Artifact[] }) {
       {sortedArtifacts.map((artifact) => {
         if (artifact.kind === 'timeline') {
           return (
-            <div key={`${artifact.kind}-${artifact.name}`} className="rounded-[24px] border border-[rgba(29,109,115,0.14)] bg-[rgba(29,109,115,0.07)] px-4 py-4">
-              <div className="pb-2 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--accent)]">
-                Timeline
+            <div key={`${artifact.kind}-${artifact.name}`} className="rounded-lg border border-[rgba(217,229,99,0.34)] bg-[var(--accent-soft)] px-4 py-4">
+              <div className="flex flex-wrap items-center gap-2 pb-2">
+                <span className="rounded-full bg-white/75 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--accent)]">
+                  Live update
+                </span>
+                <span className="font-medium text-[var(--ink)]">{artifact.name}</span>
+                <span className="ml-auto text-xs text-[var(--muted)]">{formatTime(artifact.timestamp)}</span>
               </div>
-              <MarkdownBlock content={artifact.markdown} />
+              <div className="max-h-[320px] overflow-auto pr-1">
+                <MarkdownBlock content={artifact.markdown} />
+              </div>
             </div>
           )
         }
 
         if (artifact.kind === 'canvas') {
           return (
-            <details key={`${artifact.kind}-${artifact.name}`} className="rounded-[24px] border border-[var(--line)] bg-white/60 px-4 py-4">
+            <details key={`${artifact.kind}-${artifact.name}`} className="rounded-lg border border-[var(--line)] bg-white/60 px-4 py-4">
               <summary className="cursor-pointer list-none font-medium">
                 {artifact.title || artifact.name}
                 <span className="pl-2 text-xs uppercase tracking-[0.12em] text-[var(--muted)]">
@@ -1661,9 +1910,11 @@ function ArtifactFeed({ artifacts }: { artifacts: Artifact[] }) {
               </summary>
               <div className="pt-3">
                 {artifact.format === 'markdown' ? (
-                  <MarkdownBlock content={artifact.content} />
+                  <div className="max-h-[360px] overflow-auto pr-1">
+                    <MarkdownBlock content={artifact.content} />
+                  </div>
                 ) : (
-                  <pre className="overflow-x-auto rounded-2xl bg-[#11202b] px-4 py-3 text-sm text-[#edf5f6]">
+                  <pre className="max-h-[360px] overflow-auto rounded-lg bg-[#11202b] px-4 py-3 text-sm text-[#edf5f6]">
                     {artifact.content}
                   </pre>
                 )}
@@ -1679,7 +1930,7 @@ function ArtifactFeed({ artifacts }: { artifacts: Artifact[] }) {
               href={artifact.url}
               target="_blank"
               rel="noreferrer"
-              className="block rounded-[24px] border border-[var(--line)] bg-white/65 px-4 py-4 transition hover:-translate-y-0.5 hover:border-[rgba(29,109,115,0.2)]"
+              className="block rounded-lg border border-[var(--line)] bg-white/65 px-4 py-4 transition hover:-translate-y-0.5 hover:border-[rgba(67,114,195,0.26)]"
             >
               <div className="pb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
                 Link
@@ -1692,7 +1943,7 @@ function ArtifactFeed({ artifacts }: { artifacts: Artifact[] }) {
 
         if (artifact.kind === 'file') {
           return (
-            <div key={`${artifact.kind}-${artifact.rn}`} className="rounded-[24px] border border-[var(--line)] bg-white/65 px-4 py-4">
+            <div key={`${artifact.kind}-${artifact.rn}`} className="rounded-lg border border-[var(--line)] bg-white/65 px-4 py-4">
               <div className="pb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
                 File
               </div>
@@ -1706,12 +1957,16 @@ function ArtifactFeed({ artifacts }: { artifacts: Artifact[] }) {
 
         if (artifact.kind === 'web_search') {
           return (
-            <div key={`${artifact.kind}-${artifact.searchId}`} className="rounded-[24px] border border-[var(--line)] bg-white/65 px-4 py-4">
+            <div key={`${artifact.kind}-${artifact.searchId}`} className="rounded-lg border border-[rgba(217,229,99,0.34)] bg-[var(--accent-soft)] px-4 py-4">
               <div className="flex flex-wrap items-center gap-2 pb-2">
-                <span className="rounded-full bg-[rgba(29,109,115,0.12)] px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--accent)]">
+                <span className="rounded-full bg-white/75 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--accent)]">
                   Web Search
                 </span>
-                <span className="font-medium">{artifact.title || artifact.name}</span>
+                <span className="font-medium text-[var(--ink)]">{artifact.title || artifact.name}</span>
+                <span className="text-xs text-[var(--muted)]">
+                  {artifact.items.length} result{artifact.items.length === 1 ? '' : 's'}
+                </span>
+                <span className="ml-auto text-xs text-[var(--muted)]">{formatTime(artifact.timestamp)}</span>
               </div>
               {artifact.objective ? <p className="pb-2 text-sm text-[var(--muted)]">{artifact.objective}</p> : null}
               {artifact.queries.length > 0 ? (
@@ -1726,7 +1981,7 @@ function ArtifactFeed({ artifacts }: { artifacts: Artifact[] }) {
                     href={item.url}
                     target="_blank"
                     rel="noreferrer"
-                    className="block rounded-2xl border border-[var(--line)] bg-[rgba(255,255,255,0.7)] px-3 py-3 transition hover:border-[rgba(29,109,115,0.2)]"
+                    className="block rounded-lg border border-[var(--line)] bg-[rgba(255,255,255,0.7)] px-3 py-3 transition hover:border-[rgba(67,114,195,0.26)]"
                   >
                     <div className="font-medium">{item.title || item.url}</div>
                     {item.body ? <p className="pt-1 text-sm text-[var(--muted)]">{item.body}</p> : null}
@@ -1735,10 +1990,10 @@ function ArtifactFeed({ artifacts }: { artifacts: Artifact[] }) {
               </div>
               {artifact.reportContent ? (
                 <details className="pt-3">
-                  <summary className="cursor-pointer text-sm font-medium text-[var(--accent)]">
+                  <summary className="cursor-pointer text-sm font-medium text-[var(--action)]">
                     Show report
                   </summary>
-                  <div className="pt-3">
+                  <div className="max-h-[360px] overflow-auto pt-3 pr-1">
                     <MarkdownBlock content={artifact.reportContent} compact />
                   </div>
                 </details>
@@ -1749,16 +2004,20 @@ function ArtifactFeed({ artifacts }: { artifacts: Artifact[] }) {
 
         if (artifact.kind === 'web_fetch') {
           return (
-            <div key={`${artifact.kind}-${artifact.executionId}`} className="rounded-[24px] border border-[var(--line)] bg-white/65 px-4 py-4">
+            <div key={`${artifact.kind}-${artifact.executionId}`} className="rounded-lg border border-[rgba(240,188,46,0.3)] bg-[var(--gold-soft)] px-4 py-4">
               <div className="flex flex-wrap items-center gap-2 pb-2">
-                <span className="rounded-full bg-[rgba(190,136,72,0.14)] px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-[#87541a]">
+                <span className="rounded-full bg-white/75 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--warning)]">
                   Web Fetch
                 </span>
-                <span className="font-medium">{artifact.title || artifact.name}</span>
+                <span className="font-medium text-[var(--ink)]">{artifact.title || artifact.name}</span>
+                <span className="text-xs text-[var(--muted)]">
+                  {artifact.items.length} URL{artifact.items.length === 1 ? '' : 's'}
+                </span>
+                <span className="ml-auto text-xs text-[var(--muted)]">{formatTime(artifact.timestamp)}</span>
               </div>
               <div className="space-y-2">
                 {artifact.items.slice(0, 4).map((item) => (
-                  <div key={item.url} className="rounded-2xl border border-[var(--line)] bg-[rgba(255,255,255,0.7)] px-3 py-3">
+                  <div key={item.url} className="rounded-lg border border-[var(--line)] bg-[rgba(255,255,255,0.7)] px-3 py-3">
                     <a href={item.url} target="_blank" rel="noreferrer" className="font-medium underline underline-offset-2">
                       {item.url}
                     </a>
@@ -1787,19 +2046,23 @@ function ArtifactFeed({ artifacts }: { artifacts: Artifact[] }) {
                     : 'Ready'
 
           return (
-            <details key={`${artifact.kind}-${artifact.executionId}`} className="rounded-[24px] border border-[var(--line)] bg-white/65 px-4 py-4">
-              <summary className="flex cursor-pointer list-none flex-wrap items-center gap-2">
-                <span className="rounded-full bg-[rgba(22,35,47,0.1)] px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--ink)]">
+            <article key={`${artifact.kind}-${artifact.executionId}`} className="rounded-lg border border-[rgba(24,42,58,0.14)] bg-white/70 px-4 py-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded-full bg-[rgba(22,35,47,0.08)] px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--ink)]">
                   Exec
                 </span>
-                <span className="font-medium">{artifact.name || 'Program'}</span>
+                <span className="font-medium">{artifact.title || artifact.name || 'Program'}</span>
                 <span className="text-sm text-[var(--muted)]">{statusLabel}</span>
-              </summary>
+                <span className="ml-auto text-xs text-[var(--muted)]">{formatTime(artifact.timestamp)}</span>
+              </div>
+              {artifact.name && artifact.title && artifact.name !== artifact.title ? (
+                <p className="pt-2 text-sm font-medium text-[var(--ink)]">{artifact.name}</p>
+              ) : null}
               {artifact.objective ? <p className="pt-3 text-sm text-[var(--muted)]">{artifact.objective}</p> : null}
               {artifact.contract && artifact.contract.length > 0 ? (
                 <div className="space-y-1 pt-3 text-sm">
                   {artifact.contract.map((item) => (
-                    <div key={item.filename} className="rounded-xl bg-[rgba(17,32,43,0.05)] px-3 py-2">
+                    <div key={item.filename} className="rounded-lg bg-[rgba(17,32,43,0.05)] px-3 py-2">
                       <span className="font-medium">{item.filename}</span>
                       {item.description ? <span className="text-[var(--muted)]"> • {item.description}</span> : null}
                     </div>
@@ -1808,7 +2071,7 @@ function ArtifactFeed({ artifacts }: { artifacts: Artifact[] }) {
               ) : null}
               {artifact.program ? (
                 <div className="pt-3">
-                  <pre className="overflow-x-auto rounded-2xl bg-[#11202b] px-4 py-3 text-sm text-[#edf5f6]">
+                  <pre className="max-h-[360px] overflow-auto rounded-lg bg-[#11202b] px-4 py-3 text-sm text-[#edf5f6]">
                     {artifact.program}
                   </pre>
                 </div>
@@ -1818,12 +2081,12 @@ function ArtifactFeed({ artifacts }: { artifacts: Artifact[] }) {
                   {Object.values(artifact.status.error).join(' ')}
                 </div>
               ) : null}
-            </details>
+            </article>
           )
         }
 
         return (
-          <div key={`${artifact.kind}-${artifact.timestamp}`} className="rounded-[24px] border border-[rgba(165,63,50,0.14)] bg-[rgba(165,63,50,0.08)] px-4 py-4 text-[var(--danger)]">
+          <div key={`${artifact.kind}-${artifact.timestamp}`} className="rounded-lg border border-[rgba(247,96,154,0.28)] bg-[var(--danger-soft)] px-4 py-4 text-[var(--danger)]">
             {artifact.message}
           </div>
         )
@@ -1852,13 +2115,18 @@ function TurnView({
     () => turn.artifacts.filter((artifact): artifact is FileArtifact => artifact.kind === 'file'),
     [turn.artifacts],
   )
+  const turnLinks = useMemo(() => collectTurnLinks(turn.artifacts), [turn.artifacts])
+  const thinkingEntries = useMemo(
+    () => turn.timeline.filter((entry) => entry.kind === 'thinking'),
+    [turn.timeline],
+  )
   const overviewArtifacts = useMemo(
-    () => turn.artifacts.filter((artifact) => artifact.kind !== 'file' && artifact.kind !== 'timeline'),
+    () => turn.artifacts,
     [turn.artifacts],
   )
 
   return (
-    <article className="glass-panel rounded-[32px] px-5 py-5">
+    <article className="glass-panel rounded-lg px-5 py-5">
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
@@ -1878,21 +2146,54 @@ function TurnView({
               ))}
             </div>
           ) : null}
+          {turn.additionalUserMessages.length > 0 ? (
+            <div className="space-y-2 pt-4">
+              {turn.additionalUserMessages.map((message) => (
+                <div
+                  key={message.id}
+                  className="rounded-lg border border-[rgba(217,229,99,0.32)] bg-[var(--accent-soft)] px-3 py-3"
+                >
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
+                    <span className="rounded-full bg-white/75 px-2 py-0.5 font-semibold uppercase tracking-[0.08em] text-[var(--accent)]">
+                      {message.continuationKind === 'steer' ? 'Steer' : 'Follow-up'}
+                    </span>
+                    <span>{formatTime(message.timestamp)}</span>
+                  </div>
+                  <p className="pt-2 whitespace-pre-wrap text-sm leading-6 text-[var(--ink)]">
+                    {message.text || 'Stop requested'}
+                  </p>
+                  {message.attachments.length > 0 ? (
+                    <div className="flex flex-wrap gap-2 pt-2">
+                      {message.attachments.map((attachment) => (
+                        <span
+                          key={attachment.id}
+                          className="rounded-full border border-[rgba(24,42,58,0.12)] bg-white/65 px-3 py-1 text-xs text-[var(--muted)]"
+                        >
+                          {attachment.name}
+                          {typeof attachment.size === 'number' ? ` • ${formatBytes(attachment.size)}` : ''}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
         </div>
         <span
           className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] ${
             turn.state === 'error'
-              ? 'bg-[rgba(165,63,50,0.12)] text-[var(--danger)]'
+              ? 'bg-[var(--danger-soft)] text-[var(--danger)]'
               : turn.state === 'completed'
-                ? 'bg-[rgba(35,114,79,0.12)] text-[var(--success)]'
-                : 'bg-[rgba(29,109,115,0.12)] text-[var(--accent)]'
+                ? 'bg-[var(--success-soft)] text-[var(--success)]'
+                : 'bg-[var(--accent-soft)] text-[var(--accent)]'
           }`}
         >
           {turn.state}
         </span>
       </div>
 
-      <div className="mt-5 rounded-[28px] border border-[var(--line)] bg-[var(--paper-strong)] px-4 py-4">
+      <div className="mt-5 rounded-lg border border-[var(--line)] bg-[var(--paper-strong)] px-4 py-4">
         <div className="pb-4 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
           Assistant
         </div>
@@ -1902,15 +2203,16 @@ function TurnView({
             ['overview', 'Overview'],
             ['timeline', `Timeline${turn.timeline.length ? ` (${turn.timeline.length})` : ''}`],
             ['steps', `Steps${steps.length ? ` (${steps.length})` : ''}`],
-            ['downloads', `Downloads${turn.userAttachments.length + assistantFiles.length ? ` (${turn.userAttachments.length + assistantFiles.length})` : ''}`],
+            ['links', `Links${turnLinks.length ? ` (${turnLinks.length})` : ''}`],
+            ['files', `Files${turn.userAttachments.length + assistantFiles.length ? ` (${turn.userAttachments.length + assistantFiles.length})` : ''}`],
           ] as Array<[TurnTab, string]>).map(([tab, label]) => (
             <button
               key={tab}
               type="button"
               onClick={() => setActiveTab(tab)}
-              className={`rounded-full px-3 py-1.5 text-sm transition ${
+              className={`rounded-md px-3 py-1.5 text-sm transition ${
                 activeTab === tab
-                  ? 'bg-[var(--ink)] text-white'
+                  ? 'bg-[var(--action)] text-white'
                   : 'border border-[var(--line)] bg-white/70 text-[var(--ink)] hover:bg-white'
               }`}
             >
@@ -1921,6 +2223,7 @@ function TurnView({
 
         {activeTab === 'overview' ? (
           <>
+            <ThinkingBlock entries={thinkingEntries} active={turn.state === 'pending' || turn.state === 'running'} />
             {turn.answer ? (
               <MarkdownBlock content={turn.answer} />
             ) : turn.state === 'error' ? (
@@ -1935,7 +2238,8 @@ function TurnView({
 
         {activeTab === 'timeline' ? <TimelineFeed entries={turn.timeline} /> : null}
         {activeTab === 'steps' ? <StepList steps={steps} /> : null}
-        {activeTab === 'downloads' ? (
+        {activeTab === 'links' ? <LinksPanel links={turnLinks} /> : null}
+        {activeTab === 'files' ? (
           <DownloadsPanel attachments={turn.userAttachments} files={assistantFiles} onError={onDownloadError} />
         ) : null}
       </div>
@@ -1947,25 +2251,29 @@ function Composer({
   text,
   files,
   disabled,
+  inProgress,
   lockedMessage,
   onTextChange,
   onFilesAdd,
   onFileRemove,
   onSubmit,
+  onStop,
 }: {
   text: string
   files: File[]
   disabled: boolean
+  inProgress: boolean
   lockedMessage: string | null
   onTextChange: (value: string) => void
   onFilesAdd: (files: FileList | null) => void
   onFileRemove: (index: number) => void
   onSubmit: () => void
+  onStop: () => void
 }) {
   return (
-    <div className="glass-panel sticky bottom-4 rounded-[28px] px-4 py-4">
+    <div className="rounded-lg border border-[var(--line)] bg-white/70 px-3 py-3">
       {lockedMessage ? (
-        <div className="mb-3 rounded-2xl border border-[rgba(164,103,33,0.18)] bg-[rgba(164,103,33,0.08)] px-3 py-2 text-sm text-[var(--warning)]">
+        <div className="mb-3 rounded-lg border border-[rgba(240,188,46,0.34)] bg-[var(--gold-soft)] px-3 py-2 text-sm text-[var(--warning)]">
           {lockedMessage}
         </div>
       ) : null}
@@ -1987,27 +2295,43 @@ function Composer({
         </div>
       ) : null}
 
-      <label className="mb-3 inline-flex cursor-pointer items-center rounded-full border border-[rgba(24,42,58,0.12)] bg-white/70 px-3 py-1.5 text-sm font-medium text-[var(--ink)] transition hover:bg-white">
-        Attach files
-        <input type="file" multiple className="hidden" disabled={disabled} onChange={(event) => onFilesAdd(event.target.files)} />
-      </label>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <label className="inline-flex cursor-pointer items-center rounded-md border border-[rgba(24,42,58,0.12)] bg-white/70 px-3 py-1.5 text-sm font-medium text-[var(--ink)] transition hover:bg-white">
+          Attach files
+          <input type="file" multiple className="hidden" disabled={disabled} onChange={(event) => onFilesAdd(event.target.files)} />
+        </label>
+        {inProgress ? (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={onStop}
+            className="inline-flex items-center rounded-md border border-[rgba(247,96,154,0.26)] bg-[var(--danger-soft)] px-3 py-1.5 text-sm font-medium text-[var(--danger)] transition hover:bg-[rgba(247,96,154,0.18)] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Stop
+          </button>
+        ) : null}
+      </div>
 
       <div className="grid gap-3 md:grid-cols-[1fr_auto]">
         <textarea
           value={text}
           disabled={disabled}
           onChange={(event) => onTextChange(event.target.value)}
-          placeholder="Ask the versatile bundle anything. This sample main view supports attachments, SSE streaming, rate-limit banners, followups, and tool widgets."
+          placeholder={
+            inProgress
+              ? 'Send a follow-up while the current turn is still running.'
+              : 'Ask anything. This view supports attachments, streaming responses, followups, and tool outputs.'
+          }
           rows={4}
-          className="min-h-[120px] rounded-[24px] border border-[var(--line)] bg-white/75 px-4 py-3 text-[15px] leading-7 shadow-[inset_0_1px_1px_rgba(0,0,0,0.02)] outline-none transition placeholder:text-[var(--muted)] focus:border-[rgba(29,109,115,0.32)] disabled:cursor-not-allowed disabled:opacity-60"
+          className="min-h-[96px] rounded-md border border-[var(--line)] bg-white/80 px-3 py-2.5 text-[15px] leading-7 shadow-[inset_0_1px_1px_rgba(0,0,0,0.02)] outline-none transition placeholder:text-[var(--muted)] focus:border-[var(--action)] disabled:cursor-not-allowed disabled:opacity-60"
         />
         <button
           type="button"
           disabled={disabled || (!text.trim() && files.length === 0)}
           onClick={onSubmit}
-          className="h-fit rounded-[22px] bg-[var(--ink)] px-5 py-3 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-[#0d1922] disabled:cursor-not-allowed disabled:opacity-50"
+          className="h-fit rounded-md bg-[var(--action)] px-4 py-2.5 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-[var(--action-dark)] disabled:cursor-not-allowed disabled:opacity-50"
         >
-          Send
+          {inProgress ? 'Follow up' : 'Send'}
         </button>
       </div>
     </div>
@@ -2026,13 +2350,32 @@ export default function App() {
   const sessionIdRef = useRef<string | null>(null)
   const streamIdRef = useRef<string | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
+  const autoScrollRef = useRef(true)
 
   useEffect(() => {
     stateRef.current = state
   }, [state])
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    const updateAutoScroll = () => {
+      const doc = document.documentElement
+      const scrollTop = window.scrollY || doc.scrollTop || 0
+      const remaining = doc.scrollHeight - (scrollTop + window.innerHeight)
+      autoScrollRef.current = remaining < 140
+    }
+
+    updateAutoScroll()
+    window.addEventListener('scroll', updateAutoScroll, { passive: true })
+    window.addEventListener('resize', updateAutoScroll)
+    return () => {
+      window.removeEventListener('scroll', updateAutoScroll)
+      window.removeEventListener('resize', updateAutoScroll)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!autoScrollRef.current) return
+    bottomRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
   }, [state.turns, state.banners, ready])
 
   const hasPendingTurn = state.turns.some((turn) => turn.state === 'pending' || turn.state === 'running')
@@ -2279,45 +2622,83 @@ export default function App() {
     }
   }
 
-  const sendMessage = async (textOverride?: string) => {
-    const draftText = (textOverride ?? stateRef.current.composerText).trim()
-    const draftFiles = textOverride ? [] : stateRef.current.composerFiles
-    if (!draftText && draftFiles.length === 0) return
+  const sendMessage = async (textOverride?: string, requestedKind?: ContinuationKind) => {
+    const snapshot = stateRef.current
+    const activeTurn = findActiveTurn(snapshot.turns)
+    let continuationKind: ContinuationKind = requestedKind ?? (activeTurn ? 'followup' : 'regular')
+    if (continuationKind !== 'regular' && !activeTurn) {
+      continuationKind = 'regular'
+    }
+    const isContinuation = continuationKind === 'followup' || continuationKind === 'steer'
+    const isSteer = continuationKind === 'steer'
+    const continuationMessageKind: Exclude<ContinuationKind, 'regular'> =
+      continuationKind === 'steer' ? 'steer' : 'followup'
+    const targetTurnId = isContinuation ? activeTurn?.id : undefined
+    const draftText = (textOverride ?? snapshot.composerText).trim()
+    const draftFiles = isSteer || textOverride !== undefined ? [] : snapshot.composerFiles
+    if (!draftText && draftFiles.length === 0 && !isSteer) return
 
     const turnId = createLocalId('turn')
-    const existingConversationId = stateRef.current.conversationId
-
-    setState((previous) => ({
-      ...previous,
-      composerText: '',
-      composerFiles: [],
-      turns: [
-        ...previous.turns,
+    const sentAt = Date.now()
+    const existingConversationId = snapshot.conversationId
+    const draftAttachments = draftFiles.map((file, index) =>
+      normalizeTurnAttachment(
         {
-          id: turnId,
-          state: 'pending',
-          createdAt: Date.now(),
-          userMessage: draftText,
-          userAttachments: draftFiles.map((file, index) =>
-            normalizeTurnAttachment(
-              {
-                filename: file.name,
-                size: file.size,
-                mime: file.type,
-              },
-              `live:${turnId}:${index}`,
-              file,
-            ),
-          ),
-          answer: '',
-          error: null,
-          steps: {},
-          artifacts: [],
-          timeline: [],
-          followups: [],
+          filename: file.name,
+          size: file.size,
+          mime: file.type,
         },
-      ],
-    }))
+        `live:${turnId}:${index}`,
+        file,
+      ),
+    )
+
+    if (isContinuation && targetTurnId) {
+      setState((previous) => ({
+        ...previous,
+        composerText: '',
+        composerFiles: [],
+        turns: previous.turns.map((turn) => {
+          if (turn.id !== targetTurnId) return turn
+          return {
+            ...turn,
+            additionalUserMessages: [
+              ...turn.additionalUserMessages,
+              {
+                id: `continuation:${turnId}`,
+                text: draftText,
+                timestamp: sentAt,
+                attachments: draftAttachments,
+                continuationKind: continuationMessageKind,
+              },
+            ],
+          }
+        }),
+      }))
+    } else {
+      setState((previous) => ({
+        ...previous,
+        composerText: '',
+        composerFiles: [],
+        turns: [
+          ...previous.turns,
+          {
+            id: turnId,
+            state: 'pending',
+            createdAt: sentAt,
+            userMessage: draftText,
+            userAttachments: draftAttachments,
+            additionalUserMessages: [],
+            answer: '',
+            error: null,
+            steps: {},
+            artifacts: [],
+            timeline: [],
+            followups: [],
+          },
+        ],
+      }))
+    }
 
     try {
       await connectStream()
@@ -2332,23 +2713,62 @@ export default function App() {
         turnId,
         text: draftText,
         files: draftFiles,
-        chatHistory: buildChatHistory(stateRef.current.turns),
+        chatHistory: isContinuation ? [] : buildChatHistory(snapshot.turns),
+        ...(isContinuation
+          ? {
+              messageKind: continuationKind,
+              continuationKind,
+              activeTurnId: targetTurnId,
+              targetTurnId,
+              followup: continuationKind === 'followup',
+              steer: continuationKind === 'steer',
+            }
+          : {}),
       })
       setState((previous) => {
-        const stillOwnsTurn = previous.turns.some((turn) => turn.id === turnId)
+        const stillOwnsTurn = isContinuation
+          ? previous.turns.some((turn) => turn.id === targetTurnId)
+          : previous.turns.some((turn) => turn.id === turnId)
         const canBindConversation =
           !previous.conversationId ||
           previous.conversationId === existingConversationId ||
           previous.conversationId === response.conversationId
         if (!stillOwnsTurn || !canBindConversation) return previous
-        return {
+        let next: ChatState = {
           ...previous,
           conversationId: response.conversationId,
         }
+        const ackStatus = typeof response.status === 'string' ? response.status : null
+        const continuationAccepted = ackStatus === 'followup_accepted' || ackStatus === 'steer_accepted'
+        const continuationStartedNewTurn = isContinuation && !!ackStatus && !continuationAccepted
+        if (continuationStartedNewTurn && !next.turns.some((turn) => turn.id === turnId)) {
+          next = {
+            ...next,
+            turns: [
+              ...next.turns,
+              {
+                id: turnId,
+                state: 'pending',
+                createdAt: sentAt,
+                userMessage: draftText,
+                userAttachments: draftAttachments,
+                additionalUserMessages: [],
+                answer: '',
+                error: null,
+                steps: {},
+                artifacts: [],
+                timeline: [],
+                followups: [],
+              },
+            ],
+          }
+        }
+        return next
       })
       void refreshConversationList()
     } catch (error) {
       const text = messageForError(error)
+      const errorTurnId = isContinuation && targetTurnId ? targetTurnId : turnId
       setState((previous) => applyChatError(previous, {
         type: 'chat.error',
         timestamp: new Date().toISOString(),
@@ -2356,7 +2776,7 @@ export default function App() {
         conversation: {
           session_id: previous.sessionId || '',
           conversation_id: existingConversationId || previous.conversationId || '',
-          turn_id: turnId,
+          turn_id: errorTurnId,
         },
         event: {
           step: 'send',
@@ -2406,11 +2826,11 @@ export default function App() {
   if (!ready) {
     return (
       <div className="shell-grid flex min-h-screen items-center justify-center px-6">
-        <div className="glass-panel rounded-[32px] px-8 py-7 text-center">
+        <div className="glass-panel rounded-lg px-8 py-7 text-center">
           <div className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">
-            Versatile Bundle
+            Versatile
           </div>
-          <div className="pt-3 text-lg font-medium">Connecting iframe config…</div>
+          <div className="pt-3 text-lg font-medium">Connecting application config...</div>
         </div>
       </div>
     )
@@ -2418,18 +2838,18 @@ export default function App() {
 
   return (
     <div className="shell-grid">
-      <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 py-5 sm:px-6 lg:px-8">
-        <header className="glass-panel rounded-[34px] px-5 py-5">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+      <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 py-4 sm:px-6 lg:px-8">
+        <header className="px-1 py-2">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
-                Versatile Bundle Main View
+                Versatile
               </div>
-              <h1 className="pt-2 text-2xl font-semibold tracking-tight text-[var(--ink)]">
-                Lightweight iframe chat over the same SSE and REST contract as the platform client
+              <h1 className="pt-1 text-xl font-semibold tracking-tight text-[var(--ink)]">
+                Application chat workspace
               </h1>
-              <p className="pt-2 max-w-3xl text-sm leading-6 text-[var(--muted)]">
-                Bundle: <span className="font-medium text-[var(--ink)]">{bundleId}</span>
+              <p className="pt-1 max-w-3xl text-sm leading-6 text-[var(--muted)]">
+                Application: <span className="font-medium text-[var(--ink)]">{bundleId}</span>
                 {' '}•{' '}
                 Scope: <span className="font-medium text-[var(--ink)]">{settings.getTenant() || '(tenant)'}</span>
                 {' / '}
@@ -2439,12 +2859,12 @@ export default function App() {
 
             <div className="flex flex-wrap items-center gap-2">
               <span
-                className={`rounded-full px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.12em] ${
+                className={`rounded-md px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.12em] ${
                   state.connection === 'connected'
-                    ? 'bg-[rgba(35,114,79,0.12)] text-[var(--success)]'
+                    ? 'bg-[var(--success-soft)] text-[var(--success)]'
                     : state.connection === 'disconnected'
-                      ? 'bg-[rgba(165,63,50,0.12)] text-[var(--danger)]'
-                      : 'bg-[rgba(29,109,115,0.12)] text-[var(--accent)]'
+                      ? 'bg-[var(--danger-soft)] text-[var(--danger)]'
+                      : 'bg-[var(--accent-soft)] text-[var(--accent)]'
                 }`}
               >
                 {state.connection}
@@ -2453,14 +2873,14 @@ export default function App() {
                 type="button"
                 onClick={startNewChat}
                 disabled={hasPendingTurn}
-                className="rounded-full border border-[var(--line)] bg-white/70 px-3 py-1.5 text-sm font-medium transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-md border border-[var(--line)] bg-white/70 px-3 py-1.5 text-sm font-medium transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
               >
                 New chat
               </button>
               <button
                 type="button"
                 onClick={handleReconnect}
-                className="rounded-full border border-[var(--line)] bg-white/70 px-3 py-1.5 text-sm font-medium transition hover:bg-white"
+                className="rounded-md border border-[var(--line)] bg-white/70 px-3 py-1.5 text-sm font-medium transition hover:bg-white"
               >
                 Reconnect
               </button>
@@ -2484,8 +2904,8 @@ export default function App() {
           />
         </div>
 
-        <main className="flex-1 pt-4">
-          <div className="grid gap-4 lg:grid-cols-[300px_minmax(0,1fr)]">
+        <main className="flex-1 pt-3">
+          <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
             <ConversationsSidebar
               conversations={filteredConversations}
               query={conversationQuery}
@@ -2500,15 +2920,15 @@ export default function App() {
               onStartNew={startNewChat}
             />
 
-            <div className="min-w-0">
-              <section className="glass-panel rounded-[32px] px-5 py-4">
+            <div className="glass-panel min-w-0 overflow-hidden rounded-lg">
+              <section className="border-b border-[var(--line)] px-4 py-3">
                 <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                   <div className="min-w-0">
                     <div className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">
                       {state.conversationId ? 'Selected chat' : 'New chat'}
                     </div>
                     <div className="truncate pt-1 text-lg font-semibold text-[var(--ink)]">
-                      {state.conversationTitle || (state.conversationId ? 'Untitled conversation' : 'Start a bundle-scoped conversation')}
+                      {state.conversationTitle || (state.conversationId ? 'Untitled conversation' : 'Start a conversation')}
                     </div>
                     <div className="truncate pt-1 text-sm text-[var(--muted)]">
                       {state.conversationId || 'No saved conversation selected yet'}
@@ -2520,22 +2940,19 @@ export default function App() {
                 </div>
               </section>
 
-              <div className="pt-4">
+              <div className="px-4 py-4">
                 {state.turns.length === 0 ? (
-                  <section className="glass-panel rounded-[36px] px-6 py-10 text-center">
-                    <div className="mx-auto max-w-2xl">
-                      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">
-                        Sample capabilities
+                  <section className="rounded-lg border border-dashed border-[var(--line-strong)] bg-white/55 px-3 py-3">
+                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                      <div className="min-w-0">
+                        <div className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">
+                          Start
+                        </div>
+                        <h2 className="pt-1 text-base font-semibold tracking-tight text-[var(--ink)]">
+                        Open a focused chat
+                        </h2>
                       </div>
-                      <h2 className="pt-3 text-3xl font-semibold tracking-tight">
-                        One bundle UI, minimal slice
-                      </h2>
-                      <p className="pt-4 text-[15px] leading-7 text-[var(--muted)]">
-                        This reference main view intentionally stays small while still covering the important runtime
-                        behaviors: existing chats, attachments, SSE markdown streaming, step updates, followups,
-                        citations, rate-limit banners, and tool widgets for exec, web search, and web fetch.
-                      </p>
-                      <div className="flex flex-wrap justify-center gap-2 pt-6">
+                      <div className="flex flex-wrap gap-2">
                         {[
                           'Summarize the last attachment as markdown',
                           'Search the web and cite three sources about React compiler',
@@ -2544,7 +2961,7 @@ export default function App() {
                           <button
                             key={prompt}
                             type="button"
-                            className="rounded-full border border-[rgba(29,109,115,0.16)] bg-[rgba(29,109,115,0.09)] px-4 py-2 text-sm text-[var(--accent)] transition hover:bg-[rgba(29,109,115,0.14)]"
+                            className="rounded-md border border-[rgba(67,114,195,0.24)] bg-[var(--action-soft)] px-3 py-1.5 text-sm text-[var(--action)] transition hover:bg-[rgba(67,114,195,0.16)]"
                             onClick={() => setState((previous) => ({ ...previous, composerText: prompt }))}
                           >
                             {prompt}
@@ -2559,13 +2976,13 @@ export default function App() {
                       <TurnView
                         key={turn.id}
                         turn={turn}
-                        sendingDisabled={hasPendingTurn || state.inputLocked}
+                        sendingDisabled={state.inputLocked || state.connection === 'booting'}
                         onDownloadError={(text) =>
                           setState((previous) => addBanner(previous, 'error', `Download failed: ${text}`))
                         }
                         onFollowup={(text) => {
-                          if (hasPendingTurn || state.inputLocked) return
-                          void sendMessage(text)
+                          if (state.inputLocked || state.connection === 'booting') return
+                          void sendMessage(text, hasPendingTurn ? 'followup' : 'regular')
                         }}
                       />
                     ))}
@@ -2573,35 +2990,40 @@ export default function App() {
                 )}
                 <div ref={bottomRef} />
               </div>
+
+              <div className="border-t border-[var(--line)] bg-[rgba(255,255,255,0.52)] px-4 py-4">
+                <Composer
+                  text={state.composerText}
+                  files={state.composerFiles}
+                  disabled={state.inputLocked || state.connection === 'booting'}
+                  inProgress={hasPendingTurn}
+                  lockedMessage={state.inputLockMessage}
+                  onTextChange={(value) => setState((previous) => ({ ...previous, composerText: value }))}
+                  onFilesAdd={(files) =>
+                    setState((previous) => ({
+                      ...previous,
+                      composerFiles: files ? [...previous.composerFiles, ...Array.from(files)] : previous.composerFiles,
+                    }))
+                  }
+                  onFileRemove={(index) =>
+                    setState((previous) => ({
+                      ...previous,
+                      composerFiles: previous.composerFiles.filter((_, currentIndex) => currentIndex !== index),
+                    }))
+                  }
+                  onSubmit={() => {
+                    if (state.inputLocked || state.connection === 'booting') return
+                    void sendMessage(undefined, hasPendingTurn ? 'followup' : 'regular')
+                  }}
+                  onStop={() => {
+                    if (state.inputLocked || state.connection === 'booting') return
+                    void sendMessage('', 'steer')
+                  }}
+                />
+              </div>
             </div>
           </div>
         </main>
-
-        <div className="pt-4">
-          <Composer
-            text={state.composerText}
-            files={state.composerFiles}
-            disabled={state.inputLocked || hasPendingTurn || state.connection === 'booting'}
-            lockedMessage={state.inputLockMessage}
-            onTextChange={(value) => setState((previous) => ({ ...previous, composerText: value }))}
-            onFilesAdd={(files) =>
-              setState((previous) => ({
-                ...previous,
-                composerFiles: files ? [...previous.composerFiles, ...Array.from(files)] : previous.composerFiles,
-              }))
-            }
-            onFileRemove={(index) =>
-              setState((previous) => ({
-                ...previous,
-                composerFiles: previous.composerFiles.filter((_, currentIndex) => currentIndex !== index),
-              }))
-            }
-            onSubmit={() => {
-              if (hasPendingTurn || state.inputLocked) return
-              void sendMessage()
-            }}
-          />
-        </div>
       </div>
     </div>
   )

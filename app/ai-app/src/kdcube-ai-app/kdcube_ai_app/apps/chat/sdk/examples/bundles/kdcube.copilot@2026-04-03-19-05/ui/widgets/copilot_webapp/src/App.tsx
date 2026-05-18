@@ -114,7 +114,7 @@ export default function App() {
       <header className="app-nav">
         <div className="app-mark">
           <span className="app-name">KDCube Copilot</span>
-          <span className="app-context">WebApp</span>
+          <span className="app-context">Widget</span>
         </div>
         {!telegramGateActive && (
           <nav className="page-tabs" aria-label="Copilot sections">

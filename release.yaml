@@ -1,56 +1,57 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.5.17.2144"
+  ref: "2026.5.18.0319"
   description: |
-    This release adds the embedding and runtime-config fixes needed for
-    KDCube-hosted bundle UI and widgets to run correctly when framed from an
-    approved external application origin.
+    This release refreshes the built-in bundle UI surfaces and extends the
+    Versatile main view so it behaves more like the full platform chat client
+    while keeping the example surface small and embeddable.
 
     Highlights
 
-    - Adds cooperative iframe sizing for KDCube static bundle UI and widget
-      entrypoints. Served HTML now posts `kdcube-resize` messages with both
-      height and width so cross-origin parent pages do not need DOM access.
-    - Applies the resize reporter to static bundle routes, authenticated widget
-      routes, public widget routes, and static widget iframe wrappers.
-    - Updates built-in and example bundle UIs to load runtime scope from
-      `GET /api/cp-frontend-config` first. If that endpoint returns usable
-      config, the UI does not wait for parent messaging.
-    - Keeps parent `CONFIG_REQUEST` / `CONFIG_RESPONSE` as a fallback for older
-      display environments or deployments where the config endpoint is blocked.
-    - Documents the external embedding contract, frame-policy scope, iframe
-      sizing message, and endpoint-first runtime config behavior.
-    - Extends tests for static/widget serving and resize-reporter injection.
+    - Restyles the shared memory widget, Copilot widget, Versatile widget, and
+      Versatile main view toward a lighter line-based interface with restrained
+      panels, thinner controls, and clearer text hierarchy.
+    - Adds active-turn continuation support to the Versatile main view. Users
+      can now send follow-ups while a turn is running, and a Stop control sends
+      the same steer/continuation contract used by the main chat client.
+    - Adds inline live activity rendering in the Versatile main view for
+      thinking, timeline updates, web search, web fetch, execution output,
+      generated files, links, and service errors.
+    - Adds Links and Files tabs to the Versatile turn view while keeping the
+      existing Steps tab.
+    - Makes streaming panels bounded so generated code, HTML, JSON, and long
+      timeline content can be inspected without forcing the page to scroll.
+    - Changes auto-scroll behavior so streaming keeps the bottom visible only
+      when the user is already near the bottom.
+    - Uses the configured continuation metadata fields for follow-up and steer
+      requests: `message_kind`, `continuation_kind`, `active_turn_id`,
+      `target_turn_id`, `followup`, and `steer`.
+    - Keeps the main UI workspace light and compact, with a persistent left
+      chat workspace area and restrained steel-blue action controls.
 
     Runtime and deployment notes:
 
-    - Cross-origin embedding still requires deployment descriptors to configure
-      the allowed frame ancestors. Browser headers allow display; runtime UI
-      code handles sizing and config discovery.
-    - The config endpoint is authoritative when available. Parent messaging is
-      now a compatibility path, not the first path.
-    - If both config paths are unavailable, route-derived tenant/project/bundle
-      values may still support read-only static surfaces, but auth metadata is
-      missing.
+    - This is an OSS UI/runtime release. It does not require descriptor changes
+      by itself, but deployments must point at this platform ref to receive the
+      updated built-in surfaces.
+    - The Versatile main view now sends active-turn continuation requests to the
+      existing `/sse/chat` endpoint; no new backend endpoint is introduced.
     - No private deployment or organization-specific content is part of this
       release.
 
     Validation and regression coverage:
 
-    - `git diff --check` passed.
-    - Python compile check passed for the integrations routes.
-    - Focused TypeScript checks passed for memory, Copilot widget, and
-      Versatile widget runtime config modules.
-    - Copilot and Versatile widget production builds passed.
-    - Focused static/widget integration tests passed: 4 passed.
+    - Shared memory widget TypeScript check and production build passed.
+    - Copilot widget typecheck and production build passed.
+    - Versatile widget TypeScript check and production build passed.
+    - Versatile main view TypeScript check and production build passed.
 
     Changelog
 
-    - Added resize-reporter injection for static bundle UI and widget HTML.
-    - Added runtime config endpoint fallback support across built-in control
-      plane panels and example bundle UIs.
-    - Switched widget/main UI config discovery to endpoint-first behavior.
-    - Updated embedding and bundle UI documentation.
-    - Added regression coverage for public/static widget resize injection.
+    - Updated built-in memory, Copilot, and Versatile widget styling.
+    - Reworked the Versatile main view layout into a compact workspace.
+    - Added follow-up and Stop support for active Versatile turns.
+    - Added live subsystem activity banners and bounded scroll regions.
+    - Added links/files turn tabs and continuation-aware user message display.
 config:
-    version: "2026.5.17.2144"
+    version: "2026.5.18.0319"
