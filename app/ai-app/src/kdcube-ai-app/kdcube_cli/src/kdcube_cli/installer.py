@@ -3636,8 +3636,10 @@ def gather_configuration(
             fallback_source_candidate = (
                 ui_context_path / fallback_ui_source
             ).resolve() if fallback_ui_source else None
+            platform_ui_context = ctx.ai_app_root.expanduser().resolve()
             if (
-                fallback_source_candidate is not None
+                ui_context_path == platform_ui_context
+                and fallback_source_candidate is not None
                 and not source_candidate.exists()
                 and fallback_source_candidate.exists()
             ):
