@@ -76,13 +76,31 @@ def _resolve_dotted_value(data: Any, dotted_path: str) -> Any:
                 return None
             continue
         if isinstance(cur, list):
-            if not segment.isdigit():
+            if segment.isdigit():
+                list_idx = int(segment)
+                if list_idx < 0 or list_idx >= len(cur):
+                    return None
+                cur = cur[list_idx]
+                idx += 1
+                continue
+            # Search list items by "id" field, supporting compound ids with dots
+            found = None
+            next_idx = idx
+            for end in range(len(segments), idx, -1):
+                compound = ".".join(segments[idx:end])
+                for item in cur:
+                    if isinstance(item, dict) and item.get("id") == compound:
+                        found = item
+                        next_idx = end
+                        break
+                if found is not None:
+                    break
+            if found is None:
                 return None
-            list_idx = int(segment)
-            if list_idx < 0 or list_idx >= len(cur):
-                return None
-            cur = cur[list_idx]
-            idx += 1
+            # Navigate into "config" section if present — b:<bundle_id>.<key>
+            # resolves as bundle["config"]["<key>"], not bundle["<key>"]
+            cur = found.get("config", found)
+            idx = next_idx
             continue
         return None
     return cur

@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 import redis.asyncio as aioredis
 from croniter import croniter
 
-from kdcube_ai_app.apps.chat.sdk.config import get_settings, get_secret, read_plain
+from kdcube_ai_app.apps.chat.sdk.config import get_settings, get_secret, read_plain, _plain_or_settings
 from kdcube_ai_app.apps.chat.sdk.infra.economics.project_budget import ProjectBudgetLimiter
 from kdcube_ai_app.infra.redis.client import get_async_redis_client
 
@@ -22,13 +22,6 @@ logger = logging.getLogger(__name__)
 SUBSCRIPTION_TZ = ZoneInfo("UTC")
 
 _economics_redis: Optional[aioredis.Redis] = None
-
-
-def _plain_or_settings(plain_key: str, settings_attr: str, default=None):
-    value = read_plain(plain_key, default=None)
-    if value is not None:
-        return value
-    return getattr(get_settings(), settings_attr, default)
 
 
 async def _get_redis() -> Optional[aioredis.Redis]:

@@ -5,16 +5,9 @@ import logging
 from email.message import EmailMessage
 from typing import Optional, Sequence
 
-from kdcube_ai_app.apps.chat.sdk.config import get_settings, get_secret, read_plain
+from kdcube_ai_app.apps.chat.sdk.config import get_settings, get_secret, read_plain, _plain_or_settings
 
 logger = logging.getLogger(__name__)
-
-
-def _plain_or_settings(plain_key: str, settings_attr: str, default=None):
-    value = read_plain(plain_key, default=None)
-    if value is not None:
-        return value
-    return getattr(get_settings(), settings_attr, default)
 
 
 def _smtp_settings() -> dict:

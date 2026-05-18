@@ -448,8 +448,11 @@ class AsyncMarkdownPDF:
             page_size = self.pdf_options.format or "A4"
 
             # 4) Add **generic** print CSS (not tailored to any particular HTML)
+            # bottom margin must match pdf_options.margin_bottom so CSS layout and
+            # Playwright's footer zone don't overlap when display_header_footer=True
+            _bottom_margin = self.pdf_options.margin_bottom or "20mm"
             PRINT_SAFE_CSS = f"""
-            @page {{ size: {page_size} {orient}; margin: 16mm 16mm 20mm 16mm; }}
+            @page {{ size: {page_size} {orient}; margin: 16mm 16mm {_bottom_margin} 16mm; }}
             
             * {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
             

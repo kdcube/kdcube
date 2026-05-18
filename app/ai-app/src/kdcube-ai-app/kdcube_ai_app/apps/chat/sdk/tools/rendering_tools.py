@@ -30,6 +30,7 @@ from kdcube_ai_app.apps.chat.sdk.tools.docx_renderer import render_docx, KDCUBE_
 from kdcube_ai_app.apps.chat.sdk.tools.pptx_renderer import render_pptx
 from kdcube_ai_app.apps.chat.sdk.tools.md2pdf_async import AsyncMarkdownPDF, PDFOptions, get_shared_md2pdf
 from kdcube_ai_app.apps.chat.sdk.util import _defence
+from kdcube_ai_app.apps.chat.sdk.config import get_plain, _resolve_current_bundle_id
 
 # Bound at runtime by ToolManager
 _SERVICE = None
@@ -45,6 +46,62 @@ def bind_integrations(integrations):
 
 logger = logging.getLogger("rendering_tools")
 _DATA_URI_RE = re.compile(r"data:[^;]+;base64,", re.IGNORECASE)
+
+_FOOTER_DIV_STYLE = (
+    "font-size:8pt;color:#6b7280;text-align:center;"
+    "border-top:1px solid #e5e7eb;padding-top:6px;margin-top:20px;"
+    "width:100%;"
+)
+
+
+def _pdf_bundle_id() -> str | None:
+    """Resolve bundle id for the current execution context.
+
+    Tries RUNTIME_GLOBALS_JSON (set by iso runtime) first, then falls back
+    to the request-context / env-var resolver so the tool works in both the
+    react-agent loop and isolated code-execution runtimes.
+    """
+    import json as _json
+    rg = _json.loads(os.getenv("RUNTIME_GLOBALS_JSON") or "{}")
+    bid = str((rg.get("EXEC_CONTEXT") or {}).get("bundle_id") or "").strip()
+    if bid:
+        return bid
+    try:
+        return _resolve_current_bundle_id()
+    except Exception:
+        return None
+
+
+def _pdf_footer_text() -> str | None:
+    """Return the configured pdf_footer for the current bundle, or None."""
+    bundle_id = _pdf_bundle_id()
+    if not bundle_id:
+        return None
+    return get_plain(f"b:bundles.items.{bundle_id}.pdf_footer") or None
+
+
+def _inject_footer_html(html_content: str, footer_text: str) -> str:
+    """Embed footer div before </body>; append at end if tag not found."""
+    import html as _html
+    footer_div = (
+        f'<div style="{_FOOTER_DIV_STYLE}">'
+        f'{_html.escape(str(footer_text))}</div>'
+    )
+    lower = html_content.lower()
+    idx = lower.rfind("</body>")
+    if idx != -1:
+        return html_content[:idx] + footer_div + "\n" + html_content[idx:]
+    return html_content + "\n" + footer_div
+
+
+def _inject_footer_md(md_content: str, footer_text: str) -> str:
+    """Append footer as an HTML div at the end of markdown content."""
+    import html as _html
+    footer_div = (
+        f'\n\n<div style="{_FOOTER_DIV_STYLE}">'
+        f'{_html.escape(str(footer_text))}</div>'
+    )
+    return md_content + footer_div
 
 
 def _warn_on_data_uri(content: str, tool_name: str) -> None:
@@ -948,6 +1005,10 @@ class RenderingTools:
                 conv.pdf_options.landscape = landscape
                 conv.extra_css = []
 
+                _mermaid_footer = _pdf_footer_text()
+                if _mermaid_footer:
+                    mermaid_html = _inject_footer_html(mermaid_html, _mermaid_footer)
+
                 await conv.convert_html_string(
                     html=mermaid_html,
                     output_pdf=str(out_path),
@@ -983,6 +1044,10 @@ class RenderingTools:
                                 content = _replace_html_citations(content, cmap)
                     except Exception:
                         pass
+
+                _html_footer = _pdf_footer_text()
+                if _html_footer:
+                    content = _inject_footer_html(content, _html_footer)
 
                 await conv.convert_html_string(
                     html=content,
@@ -1055,6 +1120,11 @@ class RenderingTools:
 
             if include_sources_section and by_id:
                 final_md += md_utils._create_clean_sources_section(by_id, order)
+
+            _md_footer = _pdf_footer_text()
+            if _md_footer:
+                final_md = _inject_footer_md(final_md, _md_footer)
+
             await conv.convert_string(
                 markdown_text=final_md,
                 output_pdf=str(out_path),
