@@ -1,57 +1,53 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.5.18.0319"
+  ref: "2026.5.18.0344"
   description: |
-    This release refreshes the built-in bundle UI surfaces and extends the
-    Versatile main view so it behaves more like the full platform chat client
-    while keeping the example surface small and embeddable.
+    This release tightens the built-in bundle UI surfaces after the previous
+    layout pass. The widgets and the Versatile main view now follow a cleaner
+    application style with flat panels, compact controls, neutral borders, and
+    restrained use of brand color.
 
     Highlights
 
-    - Restyles the shared memory widget, Copilot widget, Versatile widget, and
-      Versatile main view toward a lighter line-based interface with restrained
-      panels, thinner controls, and clearer text hierarchy.
-    - Adds active-turn continuation support to the Versatile main view. Users
-      can now send follow-ups while a turn is running, and a Stop control sends
-      the same steer/continuation contract used by the main chat client.
-    - Adds inline live activity rendering in the Versatile main view for
-      thinking, timeline updates, web search, web fetch, execution output,
-      generated files, links, and service errors.
-    - Adds Links and Files tabs to the Versatile turn view while keeping the
-      existing Steps tab.
-    - Makes streaming panels bounded so generated code, HTML, JSON, and long
-      timeline content can be inspected without forcing the page to scroll.
-    - Changes auto-scroll behavior so streaming keeps the bottom visible only
-      when the user is already near the bottom.
-    - Uses the configured continuation metadata fields for follow-up and steer
-      requests: `message_kind`, `continuation_kind`, `active_turn_id`,
-      `target_turn_id`, `followup`, and `steer`.
-    - Keeps the main UI workspace light and compact, with a persistent left
-      chat workspace area and restrained steel-blue action controls.
+    - Moves the shared memory widget, Copilot widget, Versatile widget, and
+      Versatile main view to a GitHub-like visual baseline: white surfaces,
+      thin neutral borders, smaller radii, and minimal shadows.
+    - Removes decorative page textures and translucent panels from the affected
+      built-in surfaces so the UI reads as a professional application rather
+      than an illustrated demo.
+    - Keeps the platform palette for meaningful accents only: status chips,
+      warnings, errors, success states, selected tabs, and primary actions.
+    - Uses steel-blue controls and focus rings for primary actions while
+      keeping teal, gold, green, purple, and pink as lightweight semantic
+      accents.
+    - Updates Versatile main-view timeline, code, links, files, web search,
+      web fetch, execution, and thinking blocks to use light bordered panels
+      instead of heavy dark or semi-transparent containers.
+    - Makes the Versatile composer more compact with smaller controls and a
+      shorter default input height.
 
     Runtime and deployment notes:
 
     - This is an OSS UI/runtime release. It does not require descriptor changes
       by itself, but deployments must point at this platform ref to receive the
       updated built-in surfaces.
-    - The Versatile main view now sends active-turn continuation requests to the
-      existing `/sse/chat` endpoint; no new backend endpoint is introduced.
+    - No backend contract changes are introduced.
     - No private deployment or organization-specific content is part of this
       release.
 
     Validation and regression coverage:
 
-    - Shared memory widget TypeScript check and production build passed.
-    - Copilot widget typecheck and production build passed.
-    - Versatile widget TypeScript check and production build passed.
-    - Versatile main view TypeScript check and production build passed.
+    - Shared memory widget production build passed.
+    - Copilot widget production build passed.
+    - Versatile widget production build passed.
+    - Versatile main view production build passed.
+    - Staged OSS private-name scan passed.
 
     Changelog
 
-    - Updated built-in memory, Copilot, and Versatile widget styling.
-    - Reworked the Versatile main view layout into a compact workspace.
-    - Added follow-up and Stop support for active Versatile turns.
-    - Added live subsystem activity banners and bounded scroll regions.
-    - Added links/files turn tabs and continuation-aware user message display.
+    - Polished built-in widget styling toward clean application chrome.
+    - Flattened Versatile main-view panels and subsystem blocks.
+    - Normalized borders, radii, shadows, focus states, and primary actions
+      across affected built-in UI components.
 config:
-    version: "2026.5.18.0319"
+    version: "2026.5.18.0344"
