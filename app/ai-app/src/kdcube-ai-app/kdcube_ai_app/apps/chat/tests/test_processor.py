@@ -15,6 +15,7 @@ from kdcube_ai_app.apps.chat.processor_scheduler_backend import (
     SCHEDULER_BACKEND_LEGACY_LISTS,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import (
+    bind_current_bundle_call_context_patch,
     bind_current_request_context,
     get_current_bundle_call_context,
     get_current_comm,
@@ -24,6 +25,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import (
     set_current_request_context,
     snapshot_ctxvars as snapshot_comm_ctxvars,
     touch_current_task_activity,
+    update_current_bundle_call_context,
 )
 from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload
 from kdcube_ai_app.infra.jobs.stream import BackgroundJob, BackgroundJobClaim
@@ -284,6 +286,35 @@ def test_comm_ctx_snapshots_bundle_call_context():
     finally:
         set_current_request_context(None)
         set_current_bundle_call_context({})
+
+
+def test_comm_ctx_update_syncs_request_context_and_snapshots():
+    payload = ChatTaskPayload.model_validate(_build_task_payload("bundle-call-context-update"))
+    payload.bundle_call_context = {"task_id": "task-a"}
+    with bind_current_request_context(payload):
+        update_current_bundle_call_context({"execution_id": "exec-b"})
+        assert get_current_request_context().bundle_call_context == {
+            "task_id": "task-a",
+            "execution_id": "exec-b",
+        }
+        snapshot = snapshot_comm_ctxvars()
+
+    try:
+        restore_comm_ctxvars(snapshot)
+        assert get_current_bundle_call_context() == {"task_id": "task-a", "execution_id": "exec-b"}
+        assert get_current_request_context().bundle_call_context["execution_id"] == "exec-b"
+    finally:
+        set_current_request_context(None)
+        set_current_bundle_call_context({})
+
+
+def test_comm_ctx_patch_binding_restores_request_context():
+    payload = ChatTaskPayload.model_validate(_build_task_payload("bundle-call-context-patch"))
+    payload.bundle_call_context = {"scope": "base"}
+    with bind_current_request_context(payload):
+        with bind_current_bundle_call_context_patch({"role_models": {"agent": "haiku"}}):
+            assert get_current_request_context().bundle_call_context["role_models"]["agent"] == "haiku"
+        assert get_current_request_context().bundle_call_context == {"scope": "base"}
 
 
 @pytest.mark.asyncio

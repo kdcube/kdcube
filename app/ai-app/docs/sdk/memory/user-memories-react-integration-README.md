@@ -114,14 +114,21 @@ The widget supports:
 ```text
 list/search memories
 view details and compact evidence
+enable/disable memory use for the current user across bundles
 create memory
 edit memory
 confirm memory
-retire memory
+delete memory and related events
+retire memory when preserving inactive rows is desired
 pin/unpin memory
 filter by scope/status/tags/keywords
 paginate results
 ```
+
+Disabling memory is a user-global preference. The widget still lets the user
+inspect, export, delete, and re-enable saved notes, but create/edit/pin/confirm,
+reconciliation, snapshots, announce hotset, and SDK memory tools are blocked
+while `memory_enabled=false`.
 
 User-authored memory fields:
 
@@ -230,10 +237,19 @@ This lets relevant memories match without allowing unrelated one-row databases
 to return every memory. `widget.search_min_relevance_score` is the final weak
 match guard.
 
+Widget pagination is stateless. The server accepts `limit` and `offset` and
+returns `count` and `has_more`. Exact count is available for normal filters.
+Semantic pages currently recompute the query embedding and ranking per request;
+if a workflow requires a stable large semantic result set, add a server-side
+search cursor/result id.
+
 ## Announce Hotset
 
 When enabled, ReAct receives a small memory block during turn preparation. It is
 durable user context, not chat history.
+
+If the user disables memory use, announce returns an empty hotset and records a
+non-fatal disabled marker. The turn continues without durable memory context.
 
 Example shape:
 

@@ -662,6 +662,10 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
     async def telegram_memories_widget_reconcile_export(self, request: Any = None, telegram_init_data: str = "", **kwargs) -> Dict[str, Any]:
         return await self._telegram_memory_widget_call("memories_widget_reconcile_export", request=request, telegram_init_data=telegram_init_data, **kwargs)
 
+    @api(method="POST", alias="telegram_memories_widget_reconcile_apply", route="public", public_auth=TELEGRAM_WEBAPP_PUBLIC_AUTH)
+    async def telegram_memories_widget_reconcile_apply(self, request: Any = None, telegram_init_data: str = "", **kwargs) -> Dict[str, Any]:
+        return await self._telegram_memory_widget_call("memories_widget_reconcile_apply", request=request, telegram_init_data=telegram_init_data, **kwargs)
+
     @api(method="POST", alias="telegram_webapp_user_admin_data", route="public", public_auth=TELEGRAM_WEBAPP_PUBLIC_AUTH)
     async def telegram_user_admin_data_public(
         self,
@@ -760,6 +764,7 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
     @property
     def configuration(self) -> Dict[str, Any]:
         sonnet_45 = "claude-sonnet-4-5-20250929"
+        opus_46 = "claude-opus-4-6"
         haiku_4 = "claude-haiku-4-5-20251001"
 
         config = dict(super().configuration)
@@ -770,6 +775,10 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
             "solver.coordinator.v2": {"provider": "anthropic", "model": sonnet_45},
             "solver.react.v2.decision.v2.strong": {"provider": "anthropic", "model": sonnet_45},
             "solver.react.v2.decision.v2.regular": {"provider": "anthropic", "model": haiku_4},
+            "memory.reconciler": {"provider": "anthropic", "model": sonnet_45},
+            "memory.reconciler.lite": {"provider": "anthropic", "model": haiku_4},
+            "memory.reconciler.regular": {"provider": "anthropic", "model": sonnet_45},
+            "memory.reconciler.strong": {"provider": "anthropic", "model": opus_46},
         }.items():
             role_models.setdefault(key, value)
         config["role_models"] = role_models

@@ -576,7 +576,7 @@ vars are not inherited by generated code.
 
 | Key | Purpose |
 |---|---|
-| `PORTABLE_SPEC_JSON` | ModelService config, KB config |
+| `PORTABLE_SPEC_JSON` | Platform-built portable spec: ModelService config, communicator/integrations, accounting, and contextvar snapshot including `comm_ctx.BUNDLE_CALL_CONTEXT` |
 | `TOOL_ALIAS_MAP` | `{alias: dynamic_module_name}` |
 | `TOOL_MODULE_FILES` | `{alias: /path/to/tool.py}` — rewritten for container |
 | `BUNDLE_SPEC` | `{id, module, version, ...}` |

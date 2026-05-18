@@ -28,6 +28,8 @@ It intentionally demonstrates the main SDK bundle surfaces together in one place
 | Direct isolated exec from bundle code  | `entrypoint.py:preferences_exec_report`                                                    |
 | Source-folder webapp widget            | `ui/widgets/versatile_webapp`, `entrypoint.py:versatile_webapp_widget`                     |
 | Custom iframe main view                | `ui/main/src/App.tsx`, `ui/main/src/settings.ts`, `entrypoint.py`                            |
+| SDK durable memory widget              | shared memory widget source, inherited `memories_widget_*` operations                      |
+| Memory maintenance                     | `memories_widget_snapshot_*`, `memories_widget_reconcile_*` inherited from SDK memory mixin |
 | Bundle interface contract              | `interface/README.md`                                                                       |
 | Bundle config templates                | `config/bundles.template.yaml`, `config/bundles.secrets.template.yaml`                     |
 | Bundle release metadata                | `release.yaml`                                                                              |
@@ -99,6 +101,24 @@ documentation expected from real bundles:
     channels, and Telegram user administration
   - public `telegram_*` WebApp APIs are normal public bundle APIs; they verify
     Telegram `initData` inside the bundle before reading or mutating data
+- The bundle inherits the SDK memory widget operations through
+  `BaseEntrypointWithEconomicsAndMemory`:
+  - `memories_widget_snapshot_create`, `memories_widget_snapshots`, and
+    `memories_widget_snapshot_export` manage memory snapshots
+  - `memories_widget_reconcile_analyze` inspects candidate memory records
+  - `memories_widget_reconcile_run` queues a dry-run proposal job and does not
+    mutate memory records; it accepts `agent_type: lite | regular | strong`
+    and stores the selected reconciler strength with the background job.
+    It also accepts optional JSON-safe `reconciliation_context`, which is
+    persisted, enqueued, and rebound under
+    `bundle_call_context.memory.reconciliation.context` when the job runs.
+    Override `on_memory_reconciliation_request(request=...)` for bundle-local
+    validation or request augmentation.
+  - `memories_widget_reconcile_export` exposes proposal artifacts for review
+  - `memories_widget_reconcile_apply` applies a succeeded proposal only with
+    explicit confirmation and first creates a safety snapshot
+  - Telegram Mini App wrappers expose the same maintenance flow as
+    `telegram_memories_widget_reconcile_*` public APIs
 
 Telegram requires external operator setup. Hosting this bundle in KDCube is not
 enough by itself: an operator must create or choose a bot in BotFather, expose

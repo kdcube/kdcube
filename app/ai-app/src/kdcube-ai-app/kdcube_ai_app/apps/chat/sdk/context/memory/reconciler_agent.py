@@ -18,7 +18,7 @@ from kdcube_ai_app.infra.service_hub.inventory import (
 from .models import MemoryRecord, MemorySearchResult, normalize_status, normalize_terms, normalize_visibility
 
 
-MemoryReconciliationActionType = Literal["merge", "weaken", "retire", "no_op"]
+MemoryReconciliationActionType = Literal["merge", "squash", "weaken", "retire", "no_op"]
 
 
 def _clip(value: Any, limit: int) -> str:
@@ -76,8 +76,14 @@ class MemoryReconciliationAction(BaseModel):
 
     action: MemoryReconciliationActionType
     source_memory_id: str | None = Field(default=None)
+    source_memory_ids: list[str] = Field(default_factory=list)
     target_memory_id: str | None = Field(default=None)
     memory_id: str | None = Field(default=None)
+    merged_memory: str | None = Field(default=None)
+    merged_context: str | None = Field(default=None)
+    merged_kind: str | None = Field(default=None)
+    merged_labels: list[str] = Field(default_factory=list)
+    merged_keywords: list[str] = Field(default_factory=list)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     reason: str = Field(default="")
 
@@ -161,7 +167,8 @@ def build_reconciliation_system_prompt(*, max_actions: int = 12) -> str:
         "<channel:thinking>short maintenance status only; no private reasoning</channel:thinking>\n"
         "<channel:output>{\"actions\":[...],\"notes\":\"...\"}</channel:output>\n\n"
         "Allowed actions:\n"
-        "- merge: source_memory_id, target_memory_id, confidence, reason.\n"
+        "- merge: source_memory_id, target_memory_id, confidence, reason, optional merged_memory, merged_context, merged_labels, merged_keywords.\n"
+        "- squash: source_memory_ids, target_memory_id, merged_memory, confidence, reason, optional merged_context, merged_labels, merged_keywords.\n"
         "- weaken: memory_id, confidence, reason.\n"
         "- retire: memory_id, confidence, reason.\n"
         "- no_op: confidence, reason.\n\n"
@@ -169,10 +176,13 @@ def build_reconciliation_system_prompt(*, max_actions: int = 12) -> str:
         "- Use only candidate ids shown in the input. Never invent ids.\n"
         "- Prefer no_op when uncertain.\n"
         "- Merge only when two memories describe the same durable fact/preference and are compatible.\n"
+        "- Use squash instead of many pairwise merges when three or more compatible memories should become one target memory.\n"
         "- Pick the clearer, stronger, or more confirmed memory as the merge target.\n"
+        "- If merging would otherwise lose useful non-conflicting details, include merged_memory with the complete replacement text for the target memory.\n"
+        "- Squash must include merged_memory, and that text must preserve durable, compatible details from all source memories and the target without duplicating wording.\n"
         "- Weaken a memory when it is stale, unsupported, or partially contradicted but still useful for review.\n"
         "- Retire only when the memory is redundant, invalid, or no longer useful.\n"
-        "- Do not rewrite memories. Do not create new memories.\n"
+        "- Do not create new memories; merge/squash may only update the chosen target memory and retire or merge sources into it.\n"
         f"- Return at most {max_actions} actions.\n"
         "- Keep reasons short and auditable.\n"
     )
@@ -247,10 +257,64 @@ def validate_reconciliation_output(
             if float(action.confidence or 0.0) < min_merge_confidence:
                 warnings.append(f"action[{idx}] merge rejected: confidence below threshold")
                 continue
+            update = {
+                "reason": reason,
+                "merged_memory": _clip(action.merged_memory, 1200),
+                "merged_context": _clip(action.merged_context, 800),
+                "merged_kind": _clip(action.merged_kind, 80),
+                "merged_labels": normalize_terms(action.merged_labels)[:12],
+                "merged_keywords": normalize_terms(action.merged_keywords)[:12],
+            }
             valid.append(
-                action.model_copy(update={"reason": reason})
+                action.model_copy(update=update)
                 if hasattr(action, "model_copy")
-                else action.copy(update={"reason": reason})
+                else action.copy(update=update)
+            )
+            continue
+
+        if kind == "squash":
+            target_id = str(action.target_memory_id or "")
+            source_ids: list[str] = []
+            seen: set[str] = set()
+            for item in action.source_memory_ids or []:
+                source_id = str(item or "").strip()
+                if not source_id or source_id == target_id or source_id in seen:
+                    continue
+                seen.add(source_id)
+                source_ids.append(source_id)
+            if not target_id:
+                warnings.append(f"action[{idx}] squash rejected: missing target id")
+                continue
+            if target_id not in allowed_ids:
+                warnings.append(f"action[{idx}] squash rejected: unknown target id")
+                continue
+            unknown_sources = [source_id for source_id in source_ids if source_id not in allowed_ids]
+            if unknown_sources:
+                warnings.append(f"action[{idx}] squash rejected: unknown source ids")
+                continue
+            if not source_ids:
+                warnings.append(f"action[{idx}] squash rejected: no source ids")
+                continue
+            if float(action.confidence or 0.0) < min_merge_confidence:
+                warnings.append(f"action[{idx}] squash rejected: confidence below threshold")
+                continue
+            merged_memory = _clip(action.merged_memory, 1200)
+            if not merged_memory:
+                warnings.append(f"action[{idx}] squash rejected: missing merged_memory")
+                continue
+            update = {
+                "reason": reason,
+                "source_memory_ids": source_ids,
+                "merged_memory": merged_memory,
+                "merged_context": _clip(action.merged_context, 800),
+                "merged_kind": _clip(action.merged_kind, 80),
+                "merged_labels": normalize_terms(action.merged_labels)[:12],
+                "merged_keywords": normalize_terms(action.merged_keywords)[:12],
+            }
+            valid.append(
+                action.model_copy(update=update)
+                if hasattr(action, "model_copy")
+                else action.copy(update=update)
             )
             continue
 

@@ -31,7 +31,13 @@ tenant/project schema.
   |     many rows per memory entry
   |
   +-- user_memory_aliases
-        labels / keywords / alternate retrieval hooks
+  |     labels / keywords / alternate retrieval hooks
+  |
+  +-- user_memory_maintenance_artifacts
+  |     user-visible snapshot/reconciliation job index
+  |
+  +-- user_bundle_props
+        generic user-scoped settings, including memory preferences
 ```
 
 The older `<schema>.user_memory` table is a legacy primitive table with
@@ -115,6 +121,39 @@ user_memory_aliases
 ```
 
 Labels are stable facets. Keywords are looser retrieval hooks.
+
+## User Memory Preference
+
+The user can disable memory globally for themselves. This is stored in the
+generic user settings table, not in a memory-specific table:
+
+```text
+user_bundle_props
+  user_id
+  bundle_id="*"
+  subsystem="memory"
+  key="preferences"
+  value_json.memory_enabled=false
+```
+
+The `subsystem` column is present so cross-system records in
+`user_bundle_props` remain distinguishable. Existing deployments are upgraded
+with `ALTER TABLE ... ADD COLUMN IF NOT EXISTS subsystem TEXT NOT NULL DEFAULT
+'bundle'`.
+
+When `memory_enabled=false`:
+
+```text
+agent/tool memory search     blocked
+agent/tool recent memories   blocked
+agent/tool record memory     blocked
+announce hotset              empty, marked disabled
+widget inspect/export/delete allowed
+widget create/edit/reconcile blocked until re-enabled
+```
+
+This preference is intentionally cross-bundle. A user asking the system not to
+use their memory must not depend on which bundle provided the UI.
 
 ## Conversational Creation
 
@@ -276,6 +315,28 @@ MemorySearchResult[]
 
 `recent_events` is the exception: it reads `user_memory_events` because the user
 asked for the latest evidence events, not the current memory rows.
+
+Widget list endpoints return `count`, `limit`, `offset`, and `has_more` for
+pagination. For non-semantic filters the count is exact. Semantic search is
+currently stateless: each page recomputes the query embedding and candidate
+ranking. This avoids server-side cursor state for now, but a future stable
+large-result workflow should persist a search result id/cursor instead of
+recomputing each page.
+
+## User Deletion
+
+User delete is hard delete. The single-memory delete endpoint removes the
+selected `user_memory_entries` row; the database cascades related
+`user_memory_events` and `user_memory_aliases` rows.
+
+Filtered bulk delete uses the same search criteria as export and then deletes
+matching ids with explicit confirmation. It exists because user-controlled
+memory is not complete unless a user can remove saved memory and the supporting
+events.
+
+Retire still exists as a maintenance/status action. It is not the same as user
+delete: retired memories may remain in storage and can be included by explicit
+status filters.
 
 This is intentionally similar to the KB retrieval pattern:
 

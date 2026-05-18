@@ -34,7 +34,7 @@ import { BUILT_BUNDLE_ID, createLocalId, settings } from './settings'
 
 type ConnectionState = 'booting' | 'connecting' | 'connected' | 'disconnected'
 type TurnState = 'pending' | 'running' | 'completed' | 'error'
-type TurnTab = 'overview' | 'timeline' | 'steps' | 'links' | 'files'
+type TurnTab = 'overview' | 'timeline' | 'steps' | 'links' | 'files' | 'canvases'
 
 interface Banner {
   id: string
@@ -1275,51 +1275,21 @@ function MarkdownBlock({ content, compact = false }: { content: string; compact?
   const normalized = useMemo(() => closeStreamingMarkdown(content), [content])
 
   return (
-    <div className="markdown-body text-[15px]">
+    <div className={`markdown-body ${compact ? 'text-[13px]' : 'text-[14px]'}`}>
       <ReactMarkdown
         remarkPlugins={markdownPlugins}
         components={{
           a: ({ children, href }) => (
-            <a
-              href={href}
-              target="_blank"
-              rel="noreferrer"
-              className="font-medium text-[var(--action)] underline underline-offset-2"
-            >
+            <a href={href} target="_blank" rel="noreferrer">
               {children}
             </a>
           ),
           p: ({ children }) => (
-            <p className={compact ? 'my-1 leading-6' : 'my-3 leading-7'}>{children}</p>
+            <p className={compact ? 'my-1 leading-5' : 'my-2 leading-6'}>{children}</p>
           ),
-          ul: ({ children }) => <ul className={compact ? 'my-1 list-disc pl-5' : 'my-3 list-disc pl-6'}>{children}</ul>,
-          ol: ({ children }) => <ol className={compact ? 'my-1 list-decimal pl-5' : 'my-3 list-decimal pl-6'}>{children}</ol>,
-          li: ({ children }) => <li className="my-1">{children}</li>,
-          blockquote: ({ children }) => (
-            <blockquote className="my-3 border-l-2 border-[var(--line-strong)] pl-4 text-[var(--muted)]">
-              {children}
-            </blockquote>
-          ),
-          pre: ({ children }) => (
-            <pre className="my-3 overflow-x-auto rounded-md border border-[var(--line)] bg-[var(--surface-2)] px-4 py-3 text-sm text-[var(--ink)]">
-              {children}
-            </pre>
-          ),
-          code: ({ children, className }) =>
-            className ? (
-              <code className={className}>{children}</code>
-            ) : (
-              <code className="rounded border border-[var(--line)] bg-[var(--surface-2)] px-1.5 py-0.5 text-[0.92em]">
-                {children}
-              </code>
-            ),
-          table: ({ children }) => (
-            <div className="my-3 overflow-x-auto rounded-lg border border-[var(--line)]">
-              <table className="min-w-full border-collapse text-sm">{children}</table>
-            </div>
-          ),
-          th: ({ children }) => <th className="border-b border-[var(--line)] px-3 py-2 text-left">{children}</th>,
-          td: ({ children }) => <td className="border-b border-[var(--line)] px-3 py-2 align-top">{children}</td>,
+          ul: ({ children }) => <ul className={compact ? 'my-1 list-disc pl-5' : 'my-2 list-disc pl-5'}>{children}</ul>,
+          ol: ({ children }) => <ol className={compact ? 'my-1 list-decimal pl-5' : 'my-2 list-decimal pl-5'}>{children}</ol>,
+          li: ({ children }) => <li className="my-0.5">{children}</li>,
         }}
       >
         {normalized}
@@ -1336,20 +1306,33 @@ function BannerStrip({
   onDismiss: (id: string) => void
 }) {
   if (banners.length === 0) return null
+  const noticeClass = (tone: BannerTone) => {
+    switch (tone) {
+      case 'error':
+        return 'k-notice k-error'
+      case 'warning':
+        return 'k-notice k-warning'
+      case 'success':
+        return 'k-notice k-success'
+      default:
+        return 'k-notice k-info'
+    }
+  }
   return (
-    <div className="space-y-2">
+    <div className="flex flex-col gap-2">
       {banners.map((banner) => (
-        <div
-          key={banner.id}
-          className={`flex items-start gap-3 rounded-lg border px-4 py-3 text-sm ${toneClass(banner.tone)}`}
-        >
+        <div key={banner.id} className={noticeClass(banner.tone)}>
           <div className="min-w-0 flex-1">{banner.text}</div>
           <button
             type="button"
-            className="rounded-full px-2 py-1 text-xs transition hover:bg-black/5"
+            className="k-iconbtn k-borderless"
             onClick={() => onDismiss(banner.id)}
+            aria-label="Dismiss"
+            title="Dismiss"
           >
-            Dismiss
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M18 6L6 18M6 6l12 12" />
+            </svg>
           </button>
         </div>
       ))}
@@ -1383,127 +1366,96 @@ function ConversationsSidebar({
   onStartNew: () => void
 }) {
   return (
-    <aside className="glass-panel flex min-h-[520px] overflow-hidden rounded-lg lg:sticky lg:top-4">
-      <nav className="flex w-12 flex-col items-center gap-2 border-r border-[var(--line)] bg-[var(--surface-2)] py-3">
-        {[
-          ['Chats', 'C'],
-          ['Artifacts', 'A'],
-          ['Settings', 'S'],
-        ].map(([label, glyph], index) => (
-          <button
-            key={label}
-            type="button"
-            aria-label={label}
-            className={`grid h-8 w-8 place-items-center rounded-md border text-xs font-semibold transition ${
-              index === 0
-                ? 'border-[rgba(67,114,195,0.26)] bg-[var(--action-soft)] text-[var(--action)]'
-                : 'border-transparent text-[var(--muted)] hover:border-[var(--line)] hover:bg-white'
-            }`}
-          >
-            {glyph}
-          </button>
-        ))}
-      </nav>
-
-      <div className="min-w-0 flex-1 px-3 py-4">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">
-              Chats
-            </div>
-            <div className="pt-1 text-base font-semibold text-[var(--ink)]">
-              Conversations
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={onStartNew}
-            disabled={disabled}
-            className="rounded-md border border-[var(--line)] bg-white px-2.5 py-1.5 text-sm font-medium transition hover:bg-[var(--surface-2)] disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            New
-          </button>
+    <aside className="glass-panel flex min-h-[520px] flex-col overflow-hidden lg:sticky lg:top-4">
+      <div className="flex items-center justify-between gap-2 border-b border-[var(--line-soft)] px-3 py-2">
+        <div className="min-w-0">
+          <div className="text-[13px] font-semibold text-[var(--ink)]">Chats</div>
+          <div className="text-[11px] text-[var(--muted)]">Bundle conversations</div>
         </div>
-
-        <div className="flex gap-2 pt-4">
-          <input
-            value={query}
-            onChange={(event) => onQueryChange(event.target.value)}
-            placeholder="Search chats"
-            disabled={disabled}
-            className="min-w-0 flex-1 rounded-md border border-[var(--line)] bg-white px-3 py-2 text-sm outline-none transition placeholder:text-[var(--muted)] focus:border-[var(--action)]"
-          />
-          <button
-            type="button"
-            onClick={onRefresh}
-            className="rounded-md border border-[var(--line)] bg-white px-2.5 py-2 text-sm font-medium transition hover:bg-[var(--surface-2)]"
-          >
-            R
-          </button>
-        </div>
-
-        {error ? (
-          <div className="mt-3 rounded-lg border border-[rgba(247,96,154,0.28)] bg-[var(--danger-soft)] px-3 py-2 text-sm text-[var(--danger)]">
-            {error}
-          </div>
-        ) : null}
-
-        {loading && conversations.length === 0 ? (
-          <p className="pt-4 text-sm text-[var(--muted)]">Loading conversations…</p>
-        ) : null}
-
-        {!loading && conversations.length === 0 ? (
-          <p className="pt-4 text-sm leading-6 text-[var(--muted)]">
-            {query.trim()
-              ? 'No chats match the current search.'
-              : 'No saved chats yet. Start a new one and it will appear here.'}
-          </p>
-        ) : null}
-
-        {conversations.length > 0 ? (
-          <div className="space-y-2 pt-4">
-            {conversations.map((conversation) => {
-              const isActive = conversation.id === activeConversationId
-              const isLoading = loadingConversationId === conversation.id
-              return (
-                <button
-                  key={conversation.id}
-                  type="button"
-                  onClick={() => onSelect(conversation.id)}
-                  disabled={disabled || isLoading}
-                  className={`block w-full rounded-lg border px-3 py-3 text-left transition ${
-                    isActive
-                      ? 'border-[rgba(67,114,195,0.26)] bg-[var(--action-soft)]'
-                      : 'border-[var(--line)] bg-white hover:border-[rgba(67,114,195,0.22)] hover:bg-[var(--surface-2)]'
-                  } disabled:cursor-wait disabled:opacity-70`}
-                >
-                  <div className="flex items-start gap-2">
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate font-medium text-[var(--ink)]">
-                        {conversation.title || 'Untitled conversation'}
-                      </div>
-                      <div className="pt-1 text-xs text-[var(--muted)]">
-                        {formatConversationTime(conversation.lastActivityAt || conversation.startedAt)}
-                      </div>
-                      <div className="truncate pt-1 text-[11px] uppercase tracking-[0.08em] text-[var(--muted)]">
-                        {conversation.id}
-                      </div>
-                    </div>
-                    {isActive ? (
-                      <span className="rounded-md bg-[var(--action-soft)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--action)]">
-                        Open
-                      </span>
-                    ) : null}
-                  </div>
-                  {isLoading ? (
-                    <div className="pt-2 text-xs font-medium text-[var(--action)]">Loading chat…</div>
-                  ) : null}
-                </button>
-              )
-            })}
-          </div>
-        ) : null}
+        <button
+          type="button"
+          onClick={onStartNew}
+          disabled={disabled}
+          className="k-iconbtn"
+          aria-label="New chat"
+          title="New chat"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+        </button>
       </div>
+
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--line-soft)]">
+        <input
+          value={query}
+          onChange={(event) => onQueryChange(event.target.value)}
+          placeholder="Search chats"
+          disabled={disabled}
+          className="k-input"
+        />
+        <button
+          type="button"
+          onClick={onRefresh}
+          className="k-iconbtn"
+          aria-label="Refresh"
+          title="Refresh"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M21 12a9 9 0 1 1-3-6.7" />
+            <path d="M21 3v6h-6" />
+          </svg>
+        </button>
+      </div>
+
+      {error ? (
+        <div className="px-3 pt-3">
+          <div className="k-notice k-error">
+            <span>{error}</span>
+          </div>
+        </div>
+      ) : null}
+
+      {loading && conversations.length === 0 ? (
+        <p className="px-3 py-3 text-[12px] text-[var(--muted)]">Loading conversations…</p>
+      ) : null}
+
+      {!loading && conversations.length === 0 ? (
+        <p className="px-3 py-3 text-[12px] leading-5 text-[var(--muted)]">
+          {query.trim()
+            ? 'No chats match the current search.'
+            : 'No saved chats yet. Start a new one and it will appear here.'}
+        </p>
+      ) : null}
+
+      {conversations.length > 0 ? (
+        <div className="k-rows min-w-0 flex-1 overflow-auto">
+          {conversations.map((conversation) => {
+            const isActive = conversation.id === activeConversationId
+            const isLoading = loadingConversationId === conversation.id
+            return (
+              <button
+                key={conversation.id}
+                type="button"
+                onClick={() => onSelect(conversation.id)}
+                disabled={disabled || isLoading}
+                className={`k-row ${isActive ? 'k-active' : ''}`}
+              >
+                <div className="k-row-main">
+                  <div className="k-row-title">
+                    {conversation.title || 'Untitled conversation'}
+                  </div>
+                  <div className="k-row-sub">
+                    {formatConversationTime(conversation.lastActivityAt || conversation.startedAt)}
+                    {isLoading ? ' · loading…' : ''}
+                  </div>
+                </div>
+                {isActive ? <span className="k-chip k-teal">open</span> : null}
+              </button>
+            )
+          })}
+        </div>
+      ) : null}
     </aside>
   )
 }
@@ -1519,14 +1471,14 @@ function SuggestedQuestions({
 }) {
   if (items.length === 0) return null
   return (
-    <div className="flex flex-wrap gap-2 pt-3">
+    <div className="flex flex-wrap gap-1.5 pt-2">
       {items.map((item) => (
         <button
           key={item}
           type="button"
           disabled={disabled}
           onClick={() => onSelect(item)}
-          className="rounded-md border border-[rgba(67,114,195,0.24)] bg-[var(--action-soft)] px-3 py-1.5 text-sm text-[var(--action)] transition hover:bg-[rgba(67,114,195,0.16)] disabled:cursor-not-allowed disabled:opacity-50"
+          className="k-followup"
         >
           {item}
         </button>
@@ -1537,24 +1489,53 @@ function SuggestedQuestions({
 
 function StepList({ steps }: { steps: TurnStep[] }) {
   if (steps.length === 0) return null
+  const statusChip = (status: StepStatus) => {
+    switch (status) {
+      case 'completed':
+        return 'k-chip k-green'
+      case 'error':
+        return 'k-chip k-pink'
+      case 'started':
+        return 'k-chip k-teal'
+      default:
+        return 'k-chip'
+    }
+  }
   return (
-    <div className="space-y-2 pt-3">
-      {steps.map((step) => (
-        <div key={step.step} className="rounded-lg border border-[var(--line)] bg-white px-3 py-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-medium">{step.title || step.step}</span>
-            <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] ${stepTone(step.status)}`}>
-              {step.status}
-            </span>
-            {step.agent ? <span className="text-xs text-[var(--muted)]">{step.agent}</span> : null}
+    <div className="flex flex-col gap-1.5 pt-1">
+      {steps.map((step) => {
+        const hasBody = Boolean(
+          step.markdown || (typeof step.data?.message === 'string') || step.error,
+        )
+        return (
+          <div key={step.step} className="k-workitem">
+            <div className="k-workitem-head">
+              <span className="k-workitem-icon">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="M9 12l2 2 4-4" />
+                </svg>
+              </span>
+              <span className="k-workitem-title">
+                <span className="k-text">{step.title || step.step}</span>
+                <span className={statusChip(step.status)}>{step.status}</span>
+                {step.agent ? <span className="k-micro">{step.agent}</span> : null}
+              </span>
+            </div>
+            {hasBody ? (
+              <div className="k-workitem-body">
+                {step.markdown ? <MarkdownBlock content={step.markdown} compact /> : null}
+                {!step.markdown && typeof step.data?.message === 'string' ? (
+                  <p className="text-[12px] text-[var(--muted)]">{step.data.message}</p>
+                ) : null}
+                {step.error ? (
+                  <p className="text-[12px] text-[var(--pink-dark)]">{step.error}</p>
+                ) : null}
+              </div>
+            ) : null}
           </div>
-          {step.markdown ? <div className="pt-2"><MarkdownBlock content={step.markdown} compact /></div> : null}
-          {!step.markdown && typeof step.data?.message === 'string' ? (
-            <p className="pt-2 text-sm text-[var(--muted)]">{step.data.message}</p>
-          ) : null}
-          {step.error ? <p className="pt-2 text-sm text-[var(--danger)]">{step.error}</p> : null}
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
@@ -1629,41 +1610,509 @@ function collectTurnLinks(artifacts: Artifact[]): TurnLink[] {
 
 function LinksPanel({ links }: { links: TurnLink[] }) {
   if (links.length === 0) {
-    return <p className="pt-3 text-sm text-[var(--muted)]">No links have been produced for this turn yet.</p>
+    return <p className="pt-2 text-[12px] text-[var(--muted)]">No links have been produced for this turn yet.</p>
   }
 
-  const toneClassForLink = (kind: TurnLink['kind']) => {
+  const linkChip = (kind: TurnLink['kind']) => {
     switch (kind) {
       case 'web_search':
-        return 'bg-[var(--action-soft)] text-[var(--action)]'
+        return 'k-chip k-teal'
       case 'web_fetch':
-        return 'bg-[var(--gold-soft)] text-[var(--warning)]'
+        return 'k-chip k-gold'
       default:
-        return 'bg-[var(--blue-pale)] text-[var(--blue-dark)]'
+        return 'k-chip k-blue'
     }
   }
 
   return (
-    <div className="space-y-2 pt-3">
+    <div className="k-result-list mt-1">
       {links.map((link) => (
         <a
           key={link.id}
           href={link.url}
           target="_blank"
           rel="noreferrer"
-          className="block rounded-lg border border-[var(--line)] bg-white px-4 py-3 transition hover:border-[rgba(67,114,195,0.28)] hover:bg-[var(--surface-2)]"
+          className="k-result-row"
         >
-          <div className="flex flex-wrap items-center gap-2">
-            <span className={`rounded-full px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] ${toneClassForLink(link.kind)}`}>
-              {link.kind.replace('_', ' ')}
-            </span>
-            <span className="text-xs text-[var(--muted)]">{shortUrl(link.url)}</span>
+          <span className="k-result-favicon" aria-hidden="true" />
+          <div className="k-result-main">
+            <span className="k-result-title">{link.title}</span>
+            <span className="k-result-host">{shortUrl(link.url)}</span>
+            {link.body ? <span className="k-result-body">{link.body}</span> : null}
           </div>
-          <div className="pt-2 font-medium text-[var(--ink)]">{link.title}</div>
-          {link.body ? <p className="line-clamp-3 pt-1 text-sm leading-6 text-[var(--muted)]">{link.body}</p> : null}
+          <span className={linkChip(link.kind)}>{link.kind.replace('_', ' ')}</span>
         </a>
       ))}
     </div>
+  )
+}
+
+/* Minimal token highlighter — Python/JS/TS/Bash/JSON. No external deps.
+   Recognises strings, comments, numbers, decorators, keywords, builtins,
+   function-call names. Anything else stays default colour. */
+const HL_KEYWORDS: Record<string, Set<string>> = {
+  python: new Set([
+    'False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await', 'break',
+    'class', 'continue', 'def', 'del', 'elif', 'else', 'except', 'finally',
+    'for', 'from', 'global', 'if', 'import', 'in', 'is', 'lambda', 'nonlocal',
+    'not', 'or', 'pass', 'raise', 'return', 'try', 'while', 'with', 'yield',
+    'match', 'case',
+  ]),
+  javascript: new Set([
+    'async', 'await', 'break', 'case', 'catch', 'class', 'const', 'continue',
+    'debugger', 'default', 'delete', 'do', 'else', 'export', 'extends',
+    'finally', 'for', 'function', 'if', 'import', 'in', 'instanceof', 'let',
+    'new', 'null', 'of', 'return', 'super', 'switch', 'this', 'throw', 'true',
+    'false', 'try', 'typeof', 'undefined', 'var', 'void', 'while', 'yield',
+  ]),
+  bash: new Set([
+    'if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'do', 'done', 'case',
+    'esac', 'function', 'in', 'select', 'until', 'return', 'export', 'local',
+    'readonly', 'set', 'unset', 'echo', 'cd', 'pwd', 'source',
+  ]),
+  json: new Set(['true', 'false', 'null']),
+}
+
+const HL_BUILTINS: Record<string, Set<string>> = {
+  python: new Set([
+    'print', 'len', 'range', 'list', 'dict', 'set', 'tuple', 'str', 'int',
+    'float', 'bool', 'bytes', 'open', 'isinstance', 'type', 'super',
+    'enumerate', 'zip', 'map', 'filter', 'sorted', 'reversed', 'any', 'all',
+    'min', 'max', 'sum', 'abs', 'round', 'hash', 'id', '__init__', 'self',
+    'cls', 'Path',
+  ]),
+  javascript: new Set([
+    'console', 'window', 'document', 'Math', 'JSON', 'Object', 'Array',
+    'String', 'Number', 'Boolean', 'Promise', 'Map', 'Set', 'Date',
+    'Error', 'parseInt', 'parseFloat',
+  ]),
+}
+
+function inferLanguage(hint: string | null | undefined, code: string): keyof typeof HL_KEYWORDS {
+  const h = String(hint || '').toLowerCase()
+  if (h.startsWith('py')) return 'python'
+  if (h === 'js' || h === 'jsx' || h === 'ts' || h === 'tsx' || h === 'javascript' || h === 'typescript') return 'javascript'
+  if (h === 'sh' || h === 'bash' || h === 'shell') return 'bash'
+  if (h === 'json') return 'json'
+  const sample = code.slice(0, 240)
+  if (/^\s*(def |class |import |from |if __name__)/m.test(sample)) return 'python'
+  if (/^\s*(const |let |var |function |export |import )/m.test(sample)) return 'javascript'
+  if (/^\s*(#!\/|echo |cd |export )/m.test(sample)) return 'bash'
+  return 'python'
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function highlightCode(code: string, lang: keyof typeof HL_KEYWORDS): string {
+  if (!code) return ''
+  const keywords = HL_KEYWORDS[lang] || new Set<string>()
+  const builtins = HL_BUILTINS[lang] || new Set<string>()
+  const tokens: Array<{ kind: string; text: string }> = []
+  let index = 0
+  const length = code.length
+
+  const isPython = lang === 'python'
+  const isBash = lang === 'bash'
+  const isJs = lang === 'javascript'
+
+  while (index < length) {
+    const char = code[index]
+
+    // Comments
+    if (isPython && char === '#') {
+      const end = code.indexOf('\n', index)
+      const stop = end === -1 ? length : end
+      tokens.push({ kind: 'c', text: code.slice(index, stop) })
+      index = stop
+      continue
+    }
+    if (isBash && char === '#') {
+      const end = code.indexOf('\n', index)
+      const stop = end === -1 ? length : end
+      tokens.push({ kind: 'c', text: code.slice(index, stop) })
+      index = stop
+      continue
+    }
+    if (isJs && char === '/' && code[index + 1] === '/') {
+      const end = code.indexOf('\n', index)
+      const stop = end === -1 ? length : end
+      tokens.push({ kind: 'c', text: code.slice(index, stop) })
+      index = stop
+      continue
+    }
+    if (isJs && char === '/' && code[index + 1] === '*') {
+      const end = code.indexOf('*/', index + 2)
+      const stop = end === -1 ? length : end + 2
+      tokens.push({ kind: 'c', text: code.slice(index, stop) })
+      index = stop
+      continue
+    }
+
+    // Strings (single, double, triple-quoted python, template literals)
+    if (isPython && (code.startsWith('"""', index) || code.startsWith("'''", index))) {
+      const quote = code.slice(index, index + 3)
+      const end = code.indexOf(quote, index + 3)
+      const stop = end === -1 ? length : end + 3
+      tokens.push({ kind: 's', text: code.slice(index, stop) })
+      index = stop
+      continue
+    }
+    if (char === '"' || char === "'" || (isJs && char === '`')) {
+      const quote = char
+      let stop = index + 1
+      while (stop < length) {
+        if (code[stop] === '\\') { stop += 2; continue }
+        if (code[stop] === quote) { stop += 1; break }
+        if (code[stop] === '\n' && quote !== '`') { break }
+        stop += 1
+      }
+      tokens.push({ kind: 's', text: code.slice(index, stop) })
+      index = stop
+      continue
+    }
+
+    // Decorators (Python)
+    if (isPython && char === '@' && /[A-Za-z_]/.test(code[index + 1] || '')) {
+      let stop = index + 1
+      while (stop < length && /[A-Za-z0-9_.]/.test(code[stop])) stop += 1
+      tokens.push({ kind: 'd', text: code.slice(index, stop) })
+      index = stop
+      continue
+    }
+
+    // Numbers
+    if (/[0-9]/.test(char)) {
+      let stop = index + 1
+      while (stop < length && /[0-9._eExXa-fA-F]/.test(code[stop])) stop += 1
+      tokens.push({ kind: 'n', text: code.slice(index, stop) })
+      index = stop
+      continue
+    }
+
+    // Identifiers / keywords / builtins / function calls
+    if (/[A-Za-z_$]/.test(char)) {
+      let stop = index + 1
+      while (stop < length && /[A-Za-z0-9_$]/.test(code[stop])) stop += 1
+      const word = code.slice(index, stop)
+      if (keywords.has(word)) {
+        tokens.push({ kind: 'k', text: word })
+      } else if (builtins.has(word)) {
+        tokens.push({ kind: 'b', text: word })
+      } else if (code[stop] === '(') {
+        tokens.push({ kind: 'f', text: word })
+      } else {
+        tokens.push({ kind: 'o', text: word })
+      }
+      index = stop
+      continue
+    }
+
+    // Default — accumulate until next interesting char
+    let stop = index + 1
+    while (
+      stop < length &&
+      !/[A-Za-z_$0-9"'`#]/.test(code[stop]) &&
+      !(isJs && code[stop] === '/' && (code[stop + 1] === '/' || code[stop + 1] === '*')) &&
+      !(isPython && code[stop] === '@')
+    ) {
+      stop += 1
+    }
+    tokens.push({ kind: 'plain', text: code.slice(index, stop) })
+    index = stop
+  }
+
+  return tokens
+    .map((token) => {
+      const safe = escapeHtml(token.text)
+      if (token.kind === 'plain' || token.kind === 'o') return safe
+      return `<span class="tok-${token.kind}">${safe}</span>`
+    })
+    .join('')
+}
+
+function copyToClipboard(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    return navigator.clipboard.writeText(text)
+  }
+  // Fallback for non-secure contexts
+  return new Promise((resolve, reject) => {
+    try {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+      resolve()
+    } catch (error) {
+      reject(error)
+    }
+  })
+}
+
+function CopyButton({ value, title = 'Copy' }: { value: string; title?: string }) {
+  const [done, setDone] = useState(false)
+  return (
+    <button
+      type="button"
+      className="k-tinybtn"
+      title={title}
+      data-flash={done ? 'true' : undefined}
+      onClick={(event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        void copyToClipboard(value).then(() => {
+          setDone(true)
+          window.setTimeout(() => setDone(false), 1200)
+        })
+      }}
+    >
+      {done ? (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4">
+          <path d="M5 12l4 4 10-10" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <rect x="9" y="9" width="13" height="13" rx="2" />
+          <path d="M5 15V5a2 2 0 0 1 2-2h10" />
+        </svg>
+      )}
+    </button>
+  )
+}
+
+function DownloadButton({
+  data,
+  filename,
+  mime = 'text/plain',
+  title = 'Download',
+}: {
+  data: string
+  filename: string
+  mime?: string
+  title?: string
+}) {
+  return (
+    <button
+      type="button"
+      className="k-tinybtn"
+      title={title}
+      onClick={(event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        try {
+          const blob = new Blob([data], { type: mime })
+          const url = URL.createObjectURL(blob)
+          const anchor = document.createElement('a')
+          anchor.href = url
+          anchor.download = filename
+          anchor.style.display = 'none'
+          document.body.appendChild(anchor)
+          anchor.click()
+          window.setTimeout(() => {
+            URL.revokeObjectURL(url)
+            document.body.removeChild(anchor)
+          }, 0)
+        } catch (error) {
+          console.warn('Download failed', error)
+        }
+      }}
+    >
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M12 3v12M7 10l5 5 5-5M5 21h14" />
+      </svg>
+    </button>
+  )
+}
+
+interface SnippetProps {
+  content: string
+  format: 'markdown' | 'code' | 'json' | 'text'
+  language?: keyof typeof HL_KEYWORDS
+  label?: string
+  filename?: string
+  downloadMime?: string
+  showCopy?: boolean
+  showDownload?: boolean
+  maxHeight?: number
+}
+
+function Snippet({
+  content,
+  format,
+  language,
+  label,
+  filename,
+  downloadMime,
+  showCopy = true,
+  showDownload = false,
+  maxHeight,
+}: SnippetProps) {
+  const isCodeFamily = format === 'code' || format === 'json'
+  const lang = language || (format === 'json' ? 'json' : inferLanguage(null, content))
+  const html = isCodeFamily ? highlightCode(content, lang) : null
+  const labelText = label || (isCodeFamily ? lang : format)
+
+  return (
+    <div className={`k-snippet ${isCodeFamily ? 'k-snippet-dark' : ''}`}>
+      <div className="k-snippet-head">
+        <span className={`k-snippet-label ${isCodeFamily ? 'k-mono' : ''}`}>{labelText}</span>
+        <span className="k-snippet-tools">
+          {showCopy ? <CopyButton value={content} /> : null}
+          {showDownload && filename ? (
+            <DownloadButton data={content} filename={filename} mime={downloadMime} />
+          ) : null}
+        </span>
+      </div>
+      {format === 'markdown' ? (
+        <div
+          className="k-snippet-body"
+          style={maxHeight ? { maxHeight: `${maxHeight}px` } : undefined}
+        >
+          <MarkdownBlock content={content} compact />
+        </div>
+      ) : isCodeFamily ? (
+        <pre
+          className="k-snippet-body k-snippet-pre"
+          style={maxHeight ? { maxHeight: `${maxHeight}px` } : undefined}
+          dangerouslySetInnerHTML={{ __html: html || '' }}
+        />
+      ) : (
+        <pre
+          className="k-snippet-body k-snippet-pre k-snippet-wrap"
+          style={maxHeight ? { maxHeight: `${maxHeight}px` } : undefined}
+        >
+          {content}
+        </pre>
+      )}
+    </div>
+  )
+}
+
+function canvasFilename(canvas: CanvasArtifact): string {
+  const base = canvas.name || canvas.title || 'canvas'
+  // strip path-y parts the agent might emit
+  const trimmed = String(base).split('/').pop() || base
+  const format = String(canvas.format || '').toLowerCase()
+  const ext = format === 'markdown' || format === 'md' ? 'md'
+    : format === 'html' || format === 'srcdoc' ? 'html'
+    : format === 'json' ? 'json'
+    : format === 'csv' ? 'csv'
+    : format === 'python' || format === 'py' ? 'py'
+    : format === 'javascript' || format === 'js' ? 'js'
+    : format === 'bash' || format === 'shell' || format === 'sh' ? 'sh'
+    : format === 'text' || !format ? 'txt'
+    : format
+  return trimmed.includes('.') ? trimmed : `${trimmed}.${ext}`
+}
+
+function canvasMime(canvas: CanvasArtifact): string {
+  const format = String(canvas.format || '').toLowerCase()
+  if (format === 'html' || format === 'srcdoc') return 'text/html'
+  if (format === 'markdown' || format === 'md') return 'text/markdown'
+  if (format === 'json') return 'application/json'
+  if (format === 'csv') return 'text/csv'
+  return 'text/plain'
+}
+
+/* Canvas content renderer — picks markdown / html-iframe / code-with-highlight
+   based on the canvas format. Falls back to plain pre-text for unknown types. */
+function CanvasRender({ canvas }: { canvas: CanvasArtifact }) {
+  const format = String(canvas.format || '').toLowerCase()
+  const content = canvas.content || ''
+
+  if (format === 'html' || format === 'srcdoc') {
+    return (
+      <iframe
+        className="k-canvas-frame"
+        srcDoc={content}
+        sandbox="allow-same-origin"
+        title={canvas.title || canvas.name}
+      />
+    )
+  }
+
+  if (format === 'markdown' || format === 'md') {
+    return (
+      <div className="k-canvas-markdown markdown-body">
+        <ReactMarkdown
+          remarkPlugins={markdownPlugins}
+          components={{
+            a: ({ children, href }) => (
+              <a href={href} target="_blank" rel="noreferrer">{children}</a>
+            ),
+          }}
+        >
+          {closeStreamingMarkdown(content)}
+        </ReactMarkdown>
+      </div>
+    )
+  }
+
+  return (
+    <Snippet
+      content={content}
+      format={format === 'json' ? 'json' : 'code'}
+      language={inferLanguage(format, content)}
+      label={format || inferLanguage(format, content)}
+    />
+  )
+}
+
+function CanvasPanel({ canvases }: { canvases: CanvasArtifact[] }) {
+  if (canvases.length === 0) {
+    return <p className="pt-2 text-[12px] text-[var(--muted)]">No canvas items in this turn yet.</p>
+  }
+  return (
+    <div className="flex flex-col gap-2 pt-1">
+      {canvases.map((canvas) => (
+        <details key={`${canvas.kind}-${canvas.name}-${canvas.timestamp}`} className="k-workitem k-tint-green" open>
+          <summary className="k-workitem-head">
+            <span className="k-workitem-icon">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <rect x="3" y="3" width="18" height="18" rx="2" />
+                <path d="M3 9h18M9 21V9" />
+              </svg>
+            </span>
+            <span className="k-workitem-title">
+              <span className="k-text">{canvas.title || canvas.name}</span>
+              <span className="k-micro">{canvas.format || 'text'}</span>
+            </span>
+            <span className="k-workitem-meta">{formatTime(canvas.timestamp)}</span>
+            <span className="k-snippet-tools" onClick={(e) => e.stopPropagation()}>
+              <CopyButton value={canvas.content} title="Copy canvas" />
+              <DownloadButton
+                data={canvas.content}
+                filename={canvasFilename(canvas)}
+                mime={canvasMime(canvas)}
+                title="Download canvas"
+              />
+            </span>
+            <CaretIcon />
+          </summary>
+          <div className="k-workitem-body">
+            <CanvasRender canvas={canvas} />
+          </div>
+        </details>
+      ))}
+    </div>
+  )
+}
+
+function CaretIcon() {
+  return (
+    <svg className="k-workitem-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M9 6l6 6-6 6" />
+    </svg>
   )
 }
 
@@ -1679,89 +2128,111 @@ function ThinkingBlock({
   const sortedEntries = entries.slice().sort((left, right) => left.timestamp - right.timestamp)
 
   return (
-    <section className="mb-4 rounded-lg border border-[rgba(240,188,46,0.28)] bg-[var(--gold-soft)] px-4 py-3">
-      <div className="flex flex-wrap items-center gap-2 pb-2">
-        <span className="rounded-full bg-white/75 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--warning)]">
-          Thinking
+    <details className={`k-workitem k-tint-gold ${active ? 'k-live' : ''}`} open={active}>
+      <summary className="k-workitem-head">
+        <span className="k-workitem-icon" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M12 2v3M12 19v3M4.93 4.93l2.12 2.12M16.95 16.95l2.12 2.12M2 12h3M19 12h3M4.93 19.07l2.12-2.12M16.95 7.05l2.12-2.12" />
+          </svg>
         </span>
-        {active ? <span className="text-xs font-medium text-[var(--warning)]">live</span> : null}
-      </div>
-      <div className="max-h-[260px] space-y-3 overflow-auto pr-1">
-        {sortedEntries.map((entry) => (
-          <div key={entry.id} className="rounded-lg border border-[rgba(240,188,46,0.2)] bg-white px-3 py-3">
-            <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
-              <span className="font-semibold text-[var(--ink)]">{entry.agent || entry.title}</span>
-              {entry.status ? <span>{entry.status}</span> : null}
-              <span className="ml-auto">{formatTime(entry.timestamp)}</span>
-            </div>
-            {entry.body ? (
-              <div className="pt-2">
-                <MarkdownBlock content={entry.body} compact />
+        <span className="k-workitem-title">
+          <span className="k-text">Thinking</span>
+          <span className="k-micro">{sortedEntries.length} step{sortedEntries.length === 1 ? '' : 's'}</span>
+        </span>
+        {active ? <span className="k-status k-live" aria-label="live" /> : null}
+        <CaretIcon />
+      </summary>
+      <div className="k-workitem-body">
+        <div className="max-h-[260px] overflow-auto pr-1">
+          {sortedEntries.map((entry) => (
+            <div key={entry.id} className="border-l border-[var(--line-soft)] pl-3 py-1.5 text-[12px]">
+              <div className="flex flex-wrap items-center gap-2 text-[var(--muted)]">
+                <span className="font-medium text-[var(--ink)]">{entry.agent || entry.title}</span>
+                {entry.status ? <span>{entry.status}</span> : null}
+                <span className="ml-auto">{formatTime(entry.timestamp)}</span>
               </div>
-            ) : (
-              <p className="pt-2 text-sm text-[var(--muted)]">Reasoning started.</p>
-            )}
-          </div>
-        ))}
+              {entry.body ? (
+                <div className="pt-1">
+                  <MarkdownBlock content={entry.body} compact />
+                </div>
+              ) : (
+                <p className="pt-1 text-[var(--muted)]">Reasoning started.</p>
+              )}
+            </div>
+          ))}
+        </div>
       </div>
-    </section>
+    </details>
   )
 }
 
 function TimelineFeed({ entries }: { entries: TimelineEntry[] }) {
   if (entries.length === 0) {
-    return <p className="pt-3 text-sm text-[var(--muted)]">No timeline events yet.</p>
+    return <p className="pt-2 text-[12px] text-[var(--muted)]">No timeline events yet.</p>
   }
 
   const sortedEntries = entries.slice().sort((left, right) => left.timestamp - right.timestamp)
 
-  const badgeClass = (kind: TimelineEntryKind): string => {
+  const chipClass = (kind: TimelineEntryKind): string => {
     switch (kind) {
       case 'answer':
-        return 'bg-[var(--accent-soft)] text-[var(--accent)]'
+        return 'k-chip k-teal'
       case 'thinking':
-        return 'bg-[var(--gold-soft)] text-[var(--warning)]'
+        return 'k-chip k-gold'
       case 'subsystem':
-        return 'bg-[var(--blue-pale)] text-[var(--blue-dark)]'
+        return 'k-chip k-blue'
       case 'error':
-        return 'bg-[var(--danger-soft)] text-[var(--danger)]'
+        return 'k-chip k-pink'
       case 'lifecycle':
-        return 'bg-[var(--success-soft)] text-[var(--success)]'
+        return 'k-chip k-green'
       default:
-        return 'bg-[rgba(94,107,120,0.12)] text-[var(--muted)]'
+        return 'k-chip'
     }
   }
 
+  /* Backend frequently sets agent = title-in-caps for subsystem entries.
+     If the agent string is just the title (case-insensitive) or longer than
+     ~24 chars, hide it — the title already says what the entry is. */
+  const visibleAgent = (entry: TimelineEntry): string | null => {
+    const raw = String(entry.agent || '').trim()
+    if (!raw) return null
+    if (raw.length > 24) return null
+    if (raw.toLowerCase() === String(entry.title || '').toLowerCase()) return null
+    return raw
+  }
+
   return (
-    <div className="space-y-3 pt-3">
-      {sortedEntries.map((entry) => (
-        <div key={entry.id} className="rounded-lg border border-[var(--line)] bg-white px-4 py-4">
-          <div className="flex flex-wrap items-center gap-2 pb-2">
-            <span className={`rounded-full px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] ${badgeClass(entry.kind)}`}>
-              {entry.kind}
-            </span>
-            <span className="font-medium">{entry.title}</span>
-            {entry.agent ? <span className="text-xs text-[var(--muted)]">{entry.agent}</span> : null}
-            {entry.status ? <span className="text-xs text-[var(--muted)]">{entry.status}</span> : null}
-            <span className="ml-auto text-xs text-[var(--muted)]">{formatTime(entry.timestamp)}</span>
-          </div>
-          {entry.body ? (
-            entry.format === 'markdown' ? (
-              <div className="max-h-[360px] overflow-auto pr-1">
-                <MarkdownBlock content={entry.body} compact />
-              </div>
-            ) : entry.format === 'json' || entry.format === 'code' ? (
-              <pre className="max-h-[360px] overflow-auto rounded-md border border-[var(--line)] bg-[var(--surface-2)] px-4 py-3 text-sm text-[var(--ink)]">
-                {entry.body}
-              </pre>
-            ) : (
-              <p className="max-h-[360px] overflow-auto whitespace-pre-wrap pr-1 text-sm leading-6 text-[var(--ink)]">{entry.body}</p>
-            )
-          ) : (
-            <p className="text-sm text-[var(--muted)]">No body payload.</p>
-          )}
-        </div>
-      ))}
+    <div className="flex flex-col gap-1.5 pt-1">
+      {sortedEntries.map((entry) => {
+        const agent = visibleAgent(entry)
+        const hasBody = Boolean(entry.body)
+        return (
+          <details key={entry.id} className="k-workitem">
+            <summary className="k-workitem-head">
+              <span className={chipClass(entry.kind)}>{entry.kind}</span>
+              <span className="k-workitem-title">
+                <span className="k-text">{entry.title}</span>
+                {agent ? <span className="k-micro">{agent}</span> : null}
+                {entry.status ? <span className="k-micro">{entry.status}</span> : null}
+              </span>
+              <span className="k-workitem-meta">{formatTime(entry.timestamp)}</span>
+              <CaretIcon />
+            </summary>
+            <div className="k-workitem-body">
+              {hasBody ? (
+                <Snippet
+                  content={entry.body!}
+                  format={entry.format === 'json' ? 'json' : entry.format === 'code' ? 'code' : entry.format === 'markdown' ? 'markdown' : 'text'}
+                  language={entry.format === 'code' ? inferLanguage(null, entry.body!) : undefined}
+                  maxHeight={240}
+                />
+              ) : (
+                <p className="text-[12px] text-[var(--muted)]">No body payload.</p>
+              )}
+            </div>
+          </details>
+        )
+      })}
     </div>
   )
 }
@@ -1778,7 +2249,7 @@ function DownloadsPanel({
   const [downloadingId, setDownloadingId] = useState<string | null>(null)
 
   if (attachments.length === 0 && files.length === 0) {
-    return <p className="pt-3 text-sm text-[var(--muted)]">No downloadable files for this turn yet.</p>
+    return <p className="pt-2 text-[12px] text-[var(--muted)]">No downloadable files for this turn yet.</p>
   }
 
   const handleAttachmentDownload = async (attachment: TurnAttachment, index: number) => {
@@ -1816,27 +2287,31 @@ function DownloadsPanel({
   }
 
   return (
-    <div className="space-y-4 pt-3">
+    <div className="flex flex-col gap-3 pt-1">
       {attachments.length > 0 ? (
         <div>
-          <div className="pb-2 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
-            Sent attachments
-          </div>
-          <div className="space-y-2">
+          <div className="k-micro pb-1">Sent attachments</div>
+          <div className="k-result-list">
             {attachments.map((attachment, index) => (
               <button
                 key={attachment.id}
                 type="button"
                 onClick={() => void handleAttachmentDownload(attachment, index)}
-                className="flex w-full items-center justify-between rounded-lg border border-[var(--line)] bg-white px-4 py-3 text-left transition hover:bg-[var(--surface-2)]"
+                className="k-result-row"
+                style={{ background: 'transparent', border: 0, font: 'inherit' }}
               >
-                <div>
-                  <div className="font-medium">{attachment.name}</div>
-                  <div className="text-sm text-[var(--muted)]">
+                <span className="k-workitem-icon" style={{ width: 18, height: 18 }}>
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M21.4 11.05 12.5 19.95a5 5 0 1 1-7-7l9-9a3.5 3.5 0 1 1 5 5l-9 9a2 2 0 1 1-3-3l8.5-8.5" />
+                  </svg>
+                </span>
+                <div className="k-result-main">
+                  <span className="k-result-title">{attachment.name}</span>
+                  <span className="k-result-host">
                     {typeof attachment.size === 'number' ? formatBytes(attachment.size) : attachment.mime || attachment.rn || 'Stored attachment'}
-                  </div>
+                  </span>
                 </div>
-                <span className="text-sm text-[var(--action)]">
+                <span className="text-[12px] text-[var(--blue-dark)]">
                   {downloadingId === `attachment:${index}` ? 'Preparing…' : 'Download'}
                 </span>
               </button>
@@ -1847,22 +2322,27 @@ function DownloadsPanel({
 
       {files.length > 0 ? (
         <div>
-          <div className="pb-2 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
-            Assistant files
-          </div>
-          <div className="space-y-2">
+          <div className="k-micro pb-1">Assistant files</div>
+          <div className="k-result-list">
             {files.map((file) => (
               <button
                 key={file.rn}
                 type="button"
                 onClick={() => void handleFileDownload(file)}
-                className="flex w-full items-center justify-between rounded-lg border border-[var(--line)] bg-white px-4 py-3 text-left transition hover:bg-[var(--surface-2)]"
+                className="k-result-row"
+                style={{ background: 'transparent', border: 0, font: 'inherit' }}
               >
-                <div>
-                  <div className="font-medium">{file.filename}</div>
-                  <div className="text-sm text-[var(--muted)]">{file.description || file.mime || file.rn}</div>
+                <span className="k-workitem-icon" style={{ width: 18, height: 18 }}>
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <path d="M14 2v6h6" />
+                  </svg>
+                </span>
+                <div className="k-result-main">
+                  <span className="k-result-title">{file.filename}</span>
+                  <span className="k-result-host">{file.description || file.mime || file.rn}</span>
                 </div>
-                <span className="text-sm text-[var(--action)]">
+                <span className="text-[12px] text-[var(--blue-dark)]">
                   {downloadingId === `file:${file.rn}` ? 'Downloading…' : 'Download'}
                 </span>
               </button>
@@ -1880,44 +2360,52 @@ function ArtifactFeed({ artifacts }: { artifacts: Artifact[] }) {
   const sortedArtifacts = artifacts.slice().sort((left, right) => left.timestamp - right.timestamp)
 
   return (
-    <div className="space-y-3 pt-3">
+    <div className="flex flex-col gap-2 pt-1">
       {sortedArtifacts.map((artifact) => {
         if (artifact.kind === 'timeline') {
           return (
-            <div key={`${artifact.kind}-${artifact.name}`} className="rounded-lg border border-[rgba(217,229,99,0.34)] bg-[var(--accent-soft)] px-4 py-4">
-              <div className="flex flex-wrap items-center gap-2 pb-2">
-                <span className="rounded-full bg-white/75 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--accent)]">
-                  Live update
+            <details key={`${artifact.kind}-${artifact.name}`} className="k-workitem k-tint-teal k-live" open>
+              <summary className="k-workitem-head">
+                <span className="k-workitem-icon">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <circle cx="12" cy="12" r="9" />
+                    <path d="M12 7v6l4 2" />
+                  </svg>
                 </span>
-                <span className="font-medium text-[var(--ink)]">{artifact.name}</span>
-                <span className="ml-auto text-xs text-[var(--muted)]">{formatTime(artifact.timestamp)}</span>
+                <span className="k-workitem-title">
+                  <span className="k-text">{artifact.name}</span>
+                  <span className="k-micro">live update</span>
+                </span>
+                <span className="k-workitem-meta">{formatTime(artifact.timestamp)}</span>
+                <CaretIcon />
+              </summary>
+              <div className="k-workitem-body">
+                <div className="max-h-[320px] overflow-auto pr-1">
+                  <MarkdownBlock content={artifact.markdown} compact />
+                </div>
               </div>
-              <div className="max-h-[320px] overflow-auto pr-1">
-                <MarkdownBlock content={artifact.markdown} />
-              </div>
-            </div>
+            </details>
           )
         }
 
         if (artifact.kind === 'canvas') {
           return (
-            <details key={`${artifact.kind}-${artifact.name}`} className="rounded-lg border border-[var(--line)] bg-white px-4 py-4">
-              <summary className="cursor-pointer list-none font-medium">
-                {artifact.title || artifact.name}
-                <span className="pl-2 text-xs uppercase tracking-[0.12em] text-[var(--muted)]">
-                  {artifact.format || 'text'}
+            <details key={`${artifact.kind}-${artifact.name}`} className="k-workitem k-tint-green" open>
+              <summary className="k-workitem-head">
+                <span className="k-workitem-icon">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <rect x="3" y="3" width="18" height="18" rx="2" />
+                    <path d="M3 9h18M9 21V9" />
+                  </svg>
                 </span>
+                <span className="k-workitem-title">
+                  <span className="k-text">{artifact.title || artifact.name}</span>
+                  <span className="k-micro">{artifact.format || 'text'}</span>
+                </span>
+                <CaretIcon />
               </summary>
-              <div className="pt-3">
-                {artifact.format === 'markdown' ? (
-                  <div className="max-h-[360px] overflow-auto pr-1">
-                    <MarkdownBlock content={artifact.content} />
-                  </div>
-                ) : (
-                  <pre className="max-h-[360px] overflow-auto rounded-md border border-[var(--line)] bg-[var(--surface-2)] px-4 py-3 text-sm text-[var(--ink)]">
-                    {artifact.content}
-                  </pre>
-                )}
+              <div className="k-workitem-body">
+                <CanvasRender canvas={artifact} />
               </div>
             </details>
           )
@@ -1930,26 +2418,47 @@ function ArtifactFeed({ artifacts }: { artifacts: Artifact[] }) {
               href={artifact.url}
               target="_blank"
               rel="noreferrer"
-              className="block rounded-lg border border-[var(--line)] bg-white px-4 py-4 transition hover:border-[rgba(67,114,195,0.26)] hover:bg-[var(--surface-2)]"
+              className="k-workitem"
+              style={{ display: 'block', textDecoration: 'none', color: 'inherit' }}
             >
-              <div className="pb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
-                Link
+              <div className="k-workitem-head">
+                <span className="k-workitem-icon">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 1 0-7.07-7.07L11.5 4.5" />
+                    <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5" />
+                  </svg>
+                </span>
+                <span className="k-workitem-title">
+                  <span className="k-text">{artifact.title || artifact.url}</span>
+                </span>
+                <span className="k-workitem-meta">{shortUrl(artifact.url)}</span>
               </div>
-              <div className="font-medium">{artifact.title || artifact.url}</div>
-              {artifact.body ? <p className="pt-1 text-sm text-[var(--muted)]">{artifact.body}</p> : null}
+              {artifact.body ? (
+                <div className="k-workitem-body">
+                  <div className="line-clamp-2 text-[12px] text-[var(--text-2)]">{artifact.body}</div>
+                </div>
+              ) : null}
             </a>
           )
         }
 
         if (artifact.kind === 'file') {
           return (
-            <div key={`${artifact.kind}-${artifact.rn}`} className="rounded-lg border border-[var(--line)] bg-white px-4 py-4">
-              <div className="pb-1 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
-                File
-              </div>
-              <div className="font-medium">{artifact.filename}</div>
-              <div className="pt-1 text-sm text-[var(--muted)]">
-                {artifact.description || artifact.mime || artifact.rn}
+            <div key={`${artifact.kind}-${artifact.rn}`} className="k-workitem">
+              <div className="k-workitem-head">
+                <span className="k-workitem-icon">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <path d="M14 2v6h6" />
+                  </svg>
+                </span>
+                <span className="k-workitem-title">
+                  <span className="k-text">{artifact.filename}</span>
+                  <span className="k-micro">file</span>
+                </span>
+                <span className="k-workitem-meta">
+                  {artifact.description || artifact.mime || (artifact.rn ? artifact.rn.split(':').pop() : '')}
+                </span>
               </div>
             </div>
           )
@@ -1957,79 +2466,114 @@ function ArtifactFeed({ artifacts }: { artifacts: Artifact[] }) {
 
         if (artifact.kind === 'web_search') {
           return (
-            <div key={`${artifact.kind}-${artifact.searchId}`} className="rounded-lg border border-[rgba(217,229,99,0.34)] bg-[var(--accent-soft)] px-4 py-4">
-              <div className="flex flex-wrap items-center gap-2 pb-2">
-                <span className="rounded-full bg-white/75 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--accent)]">
-                  Web Search
+            <details key={`${artifact.kind}-${artifact.searchId}`} className="k-workitem k-tint-sky" open>
+              <summary className="k-workitem-head">
+                <span className="k-workitem-icon">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <circle cx="11" cy="11" r="7" />
+                    <path d="M21 21l-4.3-4.3" />
+                  </svg>
                 </span>
-                <span className="font-medium text-[var(--ink)]">{artifact.title || artifact.name}</span>
-                <span className="text-xs text-[var(--muted)]">
-                  {artifact.items.length} result{artifact.items.length === 1 ? '' : 's'}
+                <span className="k-workitem-title">
+                  <span className="k-text">{artifact.title || artifact.name || 'Web search'}</span>
+                  <span className="k-micro">
+                    web search · {artifact.items.length} result{artifact.items.length === 1 ? '' : 's'}
+                  </span>
                 </span>
-                <span className="ml-auto text-xs text-[var(--muted)]">{formatTime(artifact.timestamp)}</span>
-              </div>
-              {artifact.objective ? <p className="pb-2 text-sm text-[var(--muted)]">{artifact.objective}</p> : null}
-              {artifact.queries.length > 0 ? (
-                <div className="pb-3 text-sm text-[var(--muted)]">
-                  Queries: {artifact.queries.join(' • ')}
-                </div>
-              ) : null}
-              <div className="space-y-2">
-                {artifact.items.slice(0, 4).map((item) => (
-                  <a
-                    key={item.url}
-                    href={item.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="block rounded-lg border border-[var(--line)] bg-white px-3 py-3 transition hover:border-[rgba(67,114,195,0.26)] hover:bg-[var(--surface-2)]"
-                  >
-                    <div className="font-medium">{item.title || item.url}</div>
-                    {item.body ? <p className="pt-1 text-sm text-[var(--muted)]">{item.body}</p> : null}
-                  </a>
-                ))}
-              </div>
-              {artifact.reportContent ? (
-                <details className="pt-3">
-                  <summary className="cursor-pointer text-sm font-medium text-[var(--action)]">
-                    Show report
-                  </summary>
-                  <div className="max-h-[360px] overflow-auto pt-3 pr-1">
-                    <MarkdownBlock content={artifact.reportContent} compact />
+                <span className="k-workitem-meta">{formatTime(artifact.timestamp)}</span>
+                <CaretIcon />
+              </summary>
+              <div className="k-workitem-body">
+                {artifact.objective ? (
+                  <p className="text-[12px] text-[var(--muted)]">{artifact.objective}</p>
+                ) : null}
+                {artifact.queries.length > 0 ? (
+                  <div className="k-query-row">
+                    <span className="k-micro">queries</span>
+                    {artifact.queries.map((query) => (
+                      <span key={query} className="k-query-chip">{query}</span>
+                    ))}
                   </div>
-                </details>
-              ) : null}
-            </div>
+                ) : null}
+                {artifact.items.length > 0 ? (
+                  <div className="k-result-list">
+                    {artifact.items.slice(0, 6).map((item, idx) => (
+                      <a
+                        key={item.url}
+                        href={item.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="k-result-row"
+                      >
+                        <span className="k-result-favicon" aria-hidden="true" />
+                        <div className="k-result-main">
+                          <span className="k-result-title">{item.title || shortUrl(item.url)}</span>
+                          <span className="k-result-host">{shortUrl(item.url)}</span>
+                          {item.body ? <span className="k-result-body">{item.body}</span> : null}
+                        </div>
+                        <span className="k-result-tag">[{idx + 1}]</span>
+                      </a>
+                    ))}
+                  </div>
+                ) : null}
+                {artifact.reportContent ? (
+                  <details>
+                    <summary className="cursor-pointer text-[12px] font-medium text-[var(--blue-dark)]">
+                      Show report
+                    </summary>
+                    <div className="mt-1 max-h-[360px] overflow-auto pr-1">
+                      <MarkdownBlock content={artifact.reportContent} compact />
+                    </div>
+                  </details>
+                ) : null}
+              </div>
+            </details>
           )
         }
 
         if (artifact.kind === 'web_fetch') {
           return (
-            <div key={`${artifact.kind}-${artifact.executionId}`} className="rounded-lg border border-[rgba(240,188,46,0.3)] bg-[var(--gold-soft)] px-4 py-4">
-              <div className="flex flex-wrap items-center gap-2 pb-2">
-                <span className="rounded-full bg-white/75 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--warning)]">
-                  Web Fetch
+            <details key={`${artifact.kind}-${artifact.executionId}`} className="k-workitem k-tint-gold" open>
+              <summary className="k-workitem-head">
+                <span className="k-workitem-icon">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M21 12a9 9 0 1 1-9-9" />
+                    <path d="M21 3v6h-6" />
+                  </svg>
                 </span>
-                <span className="font-medium text-[var(--ink)]">{artifact.title || artifact.name}</span>
-                <span className="text-xs text-[var(--muted)]">
-                  {artifact.items.length} URL{artifact.items.length === 1 ? '' : 's'}
+                <span className="k-workitem-title">
+                  <span className="k-text">{artifact.title || artifact.name || 'Web fetch'}</span>
+                  <span className="k-micro">
+                    web fetch · {artifact.items.length} URL{artifact.items.length === 1 ? '' : 's'}
+                  </span>
                 </span>
-                <span className="ml-auto text-xs text-[var(--muted)]">{formatTime(artifact.timestamp)}</span>
-              </div>
-              <div className="space-y-2">
-                {artifact.items.slice(0, 4).map((item) => (
-                  <div key={item.url} className="rounded-lg border border-[var(--line)] bg-white px-3 py-3">
-                    <a href={item.url} target="_blank" rel="noreferrer" className="font-medium underline underline-offset-2">
-                      {item.url}
+                <span className="k-workitem-meta">{formatTime(artifact.timestamp)}</span>
+                <CaretIcon />
+              </summary>
+              <div className="k-workitem-body">
+                <div className="k-result-list">
+                  {artifact.items.slice(0, 6).map((item) => (
+                    <a
+                      key={item.url}
+                      href={item.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="k-result-row"
+                    >
+                      <span className="k-result-favicon" aria-hidden="true" />
+                      <div className="k-result-main">
+                        <span className="k-result-title">{shortUrl(item.url)}</span>
+                        <span className="k-result-host">
+                          {(item.status || 'unknown').toUpperCase()}
+                          {item.mime ? ` · ${item.mime}` : ''}
+                          {typeof item.content_length === 'number' ? ` · ${formatBytes(item.content_length)}` : ''}
+                        </span>
+                      </div>
                     </a>
-                    <div className="pt-1 text-sm text-[var(--muted)]">
-                      {(item.status || 'unknown').toUpperCase()}
-                      {item.mime ? ` • ${item.mime}` : ''}
-                      {typeof item.content_length === 'number' ? ` • ${formatBytes(item.content_length)}` : ''}
-                    </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
-            </div>
+            </details>
           )
         }
 
@@ -2044,52 +2588,160 @@ function ArtifactFeed({ artifacts }: { artifacts: Artifact[] }) {
                   : artifact.status?.status === 'done'
                     ? 'Done'
                     : 'Ready'
+          const isError = artifact.status?.status === 'error'
+          const isRunning = artifact.status?.status === 'exec' || artifact.status?.status === 'gen'
+          const lang = inferLanguage(null, artifact.program || '')
 
           return (
-            <article key={`${artifact.kind}-${artifact.executionId}`} className="rounded-lg border border-[var(--line)] bg-white px-4 py-4">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="rounded-full bg-[rgba(22,35,47,0.08)] px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--ink)]">
-                  Exec
+            <details
+              key={`${artifact.kind}-${artifact.executionId}`}
+              className={`k-workitem k-tint-purple ${isError ? 'k-err' : isRunning ? 'k-live' : ''}`}
+              open
+            >
+              <summary className="k-workitem-head">
+                <span className="k-workitem-icon">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <polyline points="16 18 22 12 16 6" />
+                    <polyline points="8 6 2 12 8 18" />
+                  </svg>
                 </span>
-                <span className="font-medium">{artifact.title || artifact.name || 'Program'}</span>
-                <span className="text-sm text-[var(--muted)]">{statusLabel}</span>
-                <span className="ml-auto text-xs text-[var(--muted)]">{formatTime(artifact.timestamp)}</span>
+                <span className="k-workitem-title">
+                  <span className="k-text">{artifact.title || artifact.name || 'Program'}</span>
+                  <span className="k-micro">exec · {statusLabel.toLowerCase()}</span>
+                </span>
+                <span className="k-workitem-meta">{formatTime(artifact.timestamp)}</span>
+                <CaretIcon />
+              </summary>
+              <div className="k-workitem-body">
+                {artifact.objective ? (
+                  <p className="text-[12px] text-[var(--muted)]">{artifact.objective}</p>
+                ) : null}
+                {artifact.contract && artifact.contract.length > 0 ? (
+                  <div className="k-result-list">
+                    {artifact.contract.map((item) => (
+                      <div key={item.filename} className="k-result-row" style={{ gridTemplateColumns: 'auto minmax(0,1fr)' }}>
+                        <span className="k-workitem-icon" style={{ width: 18, height: 18 }}>
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                            <path d="M14 2v6h6" />
+                          </svg>
+                        </span>
+                        <div className="k-result-main">
+                          <span className="k-result-title">{item.filename}</span>
+                          {item.description ? <span className="k-result-host">{item.description}</span> : null}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {artifact.program ? (
+                  <Snippet
+                    content={artifact.program}
+                    format="code"
+                    language={lang}
+                    label={lang}
+                    filename={`program.${lang === 'python' ? 'py' : lang === 'javascript' ? 'js' : lang === 'bash' ? 'sh' : 'txt'}`}
+                    downloadMime="text/plain"
+                    showDownload
+                  />
+                ) : null}
+                {artifact.status?.status === 'error' && artifact.status.error ? (
+                  <div className="k-notice k-error">
+                    <span>{Object.values(artifact.status.error).join(' ')}</span>
+                  </div>
+                ) : null}
               </div>
-              {artifact.name && artifact.title && artifact.name !== artifact.title ? (
-                <p className="pt-2 text-sm font-medium text-[var(--ink)]">{artifact.name}</p>
-              ) : null}
-              {artifact.objective ? <p className="pt-3 text-sm text-[var(--muted)]">{artifact.objective}</p> : null}
-              {artifact.contract && artifact.contract.length > 0 ? (
-                <div className="space-y-1 pt-3 text-sm">
-                  {artifact.contract.map((item) => (
-                    <div key={item.filename} className="rounded-lg border border-[var(--line)] bg-[var(--surface-2)] px-3 py-2">
-                      <span className="font-medium">{item.filename}</span>
-                      {item.description ? <span className="text-[var(--muted)]"> • {item.description}</span> : null}
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-              {artifact.program ? (
-                <div className="pt-3">
-                  <pre className="max-h-[360px] overflow-auto rounded-md border border-[var(--line)] bg-[var(--surface-2)] px-4 py-3 text-sm text-[var(--ink)]">
-                    {artifact.program}
-                  </pre>
-                </div>
-              ) : null}
-              {artifact.status?.status === 'error' && artifact.status.error ? (
-                <div className="pt-3 text-sm text-[var(--danger)]">
-                  {Object.values(artifact.status.error).join(' ')}
-                </div>
-              ) : null}
-            </article>
+            </details>
           )
         }
 
         return (
-          <div key={`${artifact.kind}-${artifact.timestamp}`} className="rounded-lg border border-[rgba(247,96,154,0.28)] bg-[var(--danger-soft)] px-4 py-4 text-[var(--danger)]">
-            {artifact.message}
+          <div key={`${artifact.kind}-${artifact.timestamp}`} className="k-notice k-error">
+            <span>{artifact.message}</span>
           </div>
         )
+      })}
+    </div>
+  )
+}
+
+function FollowupMessageBlock({ message }: { message: AdditionalUserMessage }) {
+  const isSteer = message.continuationKind === 'steer'
+  const text = message.text || (isSteer ? 'Stop requested' : '')
+  return (
+    <div className="flex flex-col gap-1 self-end max-w-[760px]" style={{ marginLeft: 'auto' }}>
+      <div className="flex items-center gap-2 text-[11px] text-[var(--muted)]">
+        <span className={`k-chip ${isSteer ? 'k-pink' : 'k-teal'}`}>
+          {isSteer ? 'steer' : 'follow-up'}
+        </span>
+        <span>{formatTime(message.timestamp)}</span>
+      </div>
+      <div className="k-msg rounded-md border border-[var(--line-soft)] bg-[var(--surface-2)] px-3 py-2 text-[14px] leading-6 whitespace-pre-wrap">
+        {text}
+        {text ? (
+          <span className="k-msg-toolbar">
+            <CopyButton value={text} title="Copy follow-up" />
+          </span>
+        ) : null}
+        {message.attachments.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5 pt-1.5">
+            {message.attachments.map((attachment) => (
+              <span key={attachment.id} className="k-chip">
+                {attachment.name}
+                {typeof attachment.size === 'number' ? ` · ${formatBytes(attachment.size)}` : ''}
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+type OverviewEvent =
+  | { kind: 'artifact'; timestamp: number; artifact: Artifact; key: string }
+  | { kind: 'followup'; timestamp: number; message: AdditionalUserMessage; key: string }
+
+function mergeOverviewEvents(
+  artifacts: Artifact[],
+  additionalUserMessages: AdditionalUserMessage[],
+): OverviewEvent[] {
+  const events: OverviewEvent[] = []
+  artifacts.forEach((artifact, index) => {
+    events.push({
+      kind: 'artifact',
+      timestamp: artifact.timestamp,
+      artifact,
+      key: `artifact:${artifact.kind}:${index}:${artifact.timestamp}`,
+    })
+  })
+  additionalUserMessages.forEach((message) => {
+    events.push({
+      kind: 'followup',
+      timestamp: message.timestamp,
+      message,
+      key: `followup:${message.id}`,
+    })
+  })
+  events.sort((left, right) => left.timestamp - right.timestamp)
+  return events
+}
+
+function MergedOverviewFeed({
+  events,
+}: {
+  events: OverviewEvent[]
+}) {
+  if (events.length === 0) return null
+  /* Each artifact pass goes through ArtifactFeed with a one-element list so
+     we reuse its existing per-kind rendering without duplicating logic. */
+  return (
+    <div className="flex flex-col gap-2 pt-1">
+      {events.map((event) => {
+        if (event.kind === 'followup') {
+          return <FollowupMessageBlock key={event.key} message={event.message} />
+        }
+        return <ArtifactFeed key={event.key} artifacts={[event.artifact]} />
       })}
     </div>
   )
@@ -2120,128 +2772,117 @@ function TurnView({
     () => turn.timeline.filter((entry) => entry.kind === 'thinking'),
     [turn.timeline],
   )
-  const overviewArtifacts = useMemo(
-    () => turn.artifacts,
+  const canvases = useMemo(
+    () => turn.artifacts.filter((artifact): artifact is CanvasArtifact => artifact.kind === 'canvas'),
     [turn.artifacts],
   )
+  /* Overview shows artifacts AND follow-up user messages in real timestamp
+     order so the user can see the conversation evolve. Thinking entries are
+     consolidated separately into ThinkingBlock and never enter this list. */
+  const overviewEvents = useMemo(
+    () => mergeOverviewEvents(turn.artifacts, turn.additionalUserMessages),
+    [turn.artifacts, turn.additionalUserMessages],
+  )
+
+  const stateChipClass =
+    turn.state === 'error'
+      ? 'k-chip k-pink'
+      : turn.state === 'completed'
+        ? 'k-chip k-green'
+        : 'k-chip k-teal'
 
   return (
-    <article className="glass-panel rounded-lg px-4 py-4">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <div className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
-            User • {formatTime(turn.createdAt)}
-          </div>
-          <p className="pt-2 whitespace-pre-wrap text-[15px] leading-7">{turn.userMessage || 'Sent attachments only'}</p>
-          {turn.userAttachments.length > 0 ? (
-            <div className="flex flex-wrap gap-2 pt-3">
-              {turn.userAttachments.map((attachment) => (
-                <span
-                  key={attachment.id}
-                  className="rounded-full border border-[rgba(24,42,58,0.12)] bg-[rgba(24,42,58,0.05)] px-3 py-1 text-xs text-[var(--muted)]"
-                >
-                  {attachment.name}
-                  {typeof attachment.size === 'number' ? ` • ${formatBytes(attachment.size)}` : ''}
-                </span>
-              ))}
-            </div>
-          ) : null}
-          {turn.additionalUserMessages.length > 0 ? (
-            <div className="space-y-2 pt-4">
-              {turn.additionalUserMessages.map((message) => (
-                <div
-                  key={message.id}
-                  className="rounded-lg border border-[rgba(1,190,178,0.24)] bg-[var(--accent-soft)] px-3 py-3"
-                >
-                  <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
-                    <span className="rounded-full bg-white/75 px-2 py-0.5 font-semibold uppercase tracking-[0.08em] text-[var(--accent)]">
-                      {message.continuationKind === 'steer' ? 'Steer' : 'Follow-up'}
-                    </span>
-                    <span>{formatTime(message.timestamp)}</span>
-                  </div>
-                  <p className="pt-2 whitespace-pre-wrap text-sm leading-6 text-[var(--ink)]">
-                    {message.text || 'Stop requested'}
-                  </p>
-                  {message.attachments.length > 0 ? (
-                    <div className="flex flex-wrap gap-2 pt-2">
-                      {message.attachments.map((attachment) => (
-                        <span
-                          key={attachment.id}
-                          className="rounded-full border border-[rgba(24,42,58,0.12)] bg-white px-3 py-1 text-xs text-[var(--muted)]"
-                        >
-                          {attachment.name}
-                          {typeof attachment.size === 'number' ? ` • ${formatBytes(attachment.size)}` : ''}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              ))}
-            </div>
+    <article className="flex flex-col gap-3">
+      {/* User turn */}
+      <div className="flex flex-col gap-1 self-end max-w-[760px]">
+        <div className="flex items-center gap-2 text-[11px] text-[var(--muted)]">
+          <span className="font-semibold text-[var(--text-2)]">You</span>
+          <span>{formatTime(turn.createdAt)}</span>
+        </div>
+        <div className="k-msg rounded-md border border-[var(--line-soft)] bg-[var(--surface-2)] px-3 py-2 text-[14px] leading-6 whitespace-pre-wrap">
+          {turn.userMessage || 'Sent attachments only'}
+          {turn.userMessage ? (
+            <span className="k-msg-toolbar">
+              <CopyButton value={turn.userMessage} title="Copy message" />
+            </span>
           ) : null}
         </div>
-        <span
-          className={`rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.08em] ${
-            turn.state === 'error'
-              ? 'bg-[var(--danger-soft)] text-[var(--danger)]'
-              : turn.state === 'completed'
-                ? 'bg-[var(--success-soft)] text-[var(--success)]'
-                : 'bg-[var(--accent-soft)] text-[var(--accent)]'
-          }`}
-        >
-          {turn.state}
-        </span>
+        {turn.userAttachments.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5 pt-1">
+            {turn.userAttachments.map((attachment) => (
+              <span key={attachment.id} className="k-chip">
+                {attachment.name}
+                {typeof attachment.size === 'number' ? ` · ${formatBytes(attachment.size)}` : ''}
+              </span>
+            ))}
+          </div>
+        ) : null}
       </div>
 
-      <div className="mt-4 rounded-lg border border-[var(--line)] bg-[var(--paper-strong)] px-4 py-4">
-        <div className="pb-4 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--muted)]">
-          Assistant
+      {/* Assistant turn */}
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between gap-2 text-[11px] text-[var(--muted)]">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold text-[var(--text-2)]">Assistant</span>
+            <span className={stateChipClass}>{turn.state}</span>
+          </div>
         </div>
 
-        <div className="flex flex-wrap gap-2 border-b border-[var(--line)] pb-3">
+        <div className="k-tabs">
           {([
-            ['overview', 'Overview'],
-            ['timeline', `Timeline${turn.timeline.length ? ` (${turn.timeline.length})` : ''}`],
-            ['steps', `Steps${steps.length ? ` (${steps.length})` : ''}`],
-            ['links', `Links${turnLinks.length ? ` (${turnLinks.length})` : ''}`],
-            ['files', `Files${turn.userAttachments.length + assistantFiles.length ? ` (${turn.userAttachments.length + assistantFiles.length})` : ''}`],
-          ] as Array<[TurnTab, string]>).map(([tab, label]) => (
+            ['overview', 'Overview', null],
+            ['timeline', 'Timeline', turn.timeline.length || null],
+            ['steps', 'Steps', steps.length || null],
+            ['canvases', 'Canvas', canvases.length || null],
+            ['links', 'Links', turnLinks.length || null],
+            ['files', 'Files', (turn.userAttachments.length + assistantFiles.length) || null],
+          ] as Array<[TurnTab, string, number | null]>).map(([tab, label, count]) => (
             <button
               key={tab}
               type="button"
               onClick={() => setActiveTab(tab)}
-              className={`rounded-md px-3 py-1.5 text-sm transition ${
-                activeTab === tab
-                  ? 'border border-[var(--blue)] bg-[var(--blue-pale)] text-[var(--blue-dark)]'
-                  : 'border border-[var(--line)] bg-white text-[var(--ink)] hover:bg-[var(--surface-2)]'
-              }`}
+              className={`k-tab ${activeTab === tab ? 'k-active' : ''}`}
             >
               {label}
+              {count ? <span className="k-count">{count}</span> : null}
             </button>
           ))}
         </div>
 
-        {activeTab === 'overview' ? (
-          <>
-            <ThinkingBlock entries={thinkingEntries} active={turn.state === 'pending' || turn.state === 'running'} />
-            {turn.answer ? (
-              <MarkdownBlock content={turn.answer} />
-            ) : turn.state === 'error' ? (
-              <p className="pt-3 text-sm text-[var(--danger)]">{turn.error || 'Request failed.'}</p>
-            ) : (
-              <p className="pt-3 text-sm text-[var(--muted)]">Streaming response…</p>
-            )}
-            <ArtifactFeed artifacts={overviewArtifacts} />
-            <SuggestedQuestions items={turn.followups} disabled={sendingDisabled} onSelect={onFollowup} />
-          </>
-        ) : null}
+        <div className="flex flex-col gap-2 pt-1">
+          {activeTab === 'overview' ? (
+            <>
+              <ThinkingBlock entries={thinkingEntries} active={turn.state === 'pending' || turn.state === 'running'} />
+              <MergedOverviewFeed events={overviewEvents} />
+              {turn.answer ? (
+                <div className="k-msg mt-1 rounded-md border border-[var(--line-soft)] bg-[var(--surface)] px-3 py-2">
+                  <MarkdownBlock content={turn.answer} />
+                  <span className="k-msg-toolbar">
+                    <CopyButton value={turn.answer} title="Copy answer" />
+                  </span>
+                </div>
+              ) : turn.state === 'error' ? (
+                <div className="k-notice k-error">
+                  <span>{turn.error || 'Request failed.'}</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 text-[12px] text-[var(--muted)]">
+                  <span className="k-status k-live" />
+                  <span>Streaming response…</span>
+                </div>
+              )}
+              <SuggestedQuestions items={turn.followups} disabled={sendingDisabled} onSelect={onFollowup} />
+            </>
+          ) : null}
 
-        {activeTab === 'timeline' ? <TimelineFeed entries={turn.timeline} /> : null}
-        {activeTab === 'steps' ? <StepList steps={steps} /> : null}
-        {activeTab === 'links' ? <LinksPanel links={turnLinks} /> : null}
-        {activeTab === 'files' ? (
-          <DownloadsPanel attachments={turn.userAttachments} files={assistantFiles} onError={onDownloadError} />
-        ) : null}
+          {activeTab === 'timeline' ? <TimelineFeed entries={turn.timeline} /> : null}
+          {activeTab === 'steps' ? <StepList steps={steps} /> : null}
+          {activeTab === 'canvases' ? <CanvasPanel canvases={canvases} /> : null}
+          {activeTab === 'links' ? <LinksPanel links={turnLinks} /> : null}
+          {activeTab === 'files' ? (
+            <DownloadsPanel attachments={turn.userAttachments} files={assistantFiles} onError={onDownloadError} />
+          ) : null}
+        </div>
       </div>
     </article>
   )
@@ -2271,48 +2912,26 @@ function Composer({
   onStop: () => void
 }) {
   return (
-    <div className="rounded-lg border border-[var(--line)] bg-white px-3 py-3">
+    <div className="flex flex-col gap-2">
       {lockedMessage ? (
-        <div className="mb-3 rounded-lg border border-[rgba(240,188,46,0.34)] bg-[var(--gold-soft)] px-3 py-2 text-sm text-[var(--warning)]">
-          {lockedMessage}
+        <div className="k-notice k-warning">
+          <span>{lockedMessage}</span>
         </div>
       ) : null}
 
-      {files.length > 0 ? (
-        <div className="mb-3 flex flex-wrap gap-2">
-          {files.map((file, index) => (
-            <span
-              key={`${file.name}-${file.size}-${index}`}
-              className="inline-flex items-center gap-2 rounded-full border border-[rgba(24,42,58,0.12)] bg-white px-3 py-1 text-xs"
-            >
-              <span>{file.name}</span>
-              <span className="text-[var(--muted)]">{formatBytes(file.size)}</span>
-              <button type="button" onClick={() => onFileRemove(index)} className="text-[var(--muted)] hover:text-[var(--ink)]">
-                ×
-              </button>
-            </span>
-          ))}
-        </div>
-      ) : null}
-
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <label className="inline-flex cursor-pointer items-center rounded-md border border-[var(--line)] bg-white px-3 py-1.5 text-sm font-medium text-[var(--ink)] transition hover:bg-[var(--surface-2)]">
-          Attach files
-          <input type="file" multiple className="hidden" disabled={disabled} onChange={(event) => onFilesAdd(event.target.files)} />
-        </label>
-        {inProgress ? (
-          <button
-            type="button"
-            disabled={disabled}
-            onClick={onStop}
-            className="inline-flex items-center rounded-md border border-[rgba(247,96,154,0.26)] bg-[var(--danger-soft)] px-3 py-1.5 text-sm font-medium text-[var(--danger)] transition hover:bg-[rgba(247,96,154,0.18)] disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Stop
-          </button>
+      <div className="k-composer">
+        {files.length > 0 ? (
+          <div className="k-composer-attachments">
+            {files.map((file, index) => (
+              <span key={`${file.name}-${file.size}-${index}`} className="k-composer-attach-pill">
+                <span>{file.name}</span>
+                <span className="text-[var(--muted)]">{formatBytes(file.size)}</span>
+                <button type="button" aria-label="Remove" onClick={() => onFileRemove(index)}>×</button>
+              </span>
+            ))}
+          </div>
         ) : null}
-      </div>
 
-      <div className="grid gap-3 md:grid-cols-[1fr_auto]">
         <textarea
           value={text}
           disabled={disabled}
@@ -2320,19 +2939,49 @@ function Composer({
           placeholder={
             inProgress
               ? 'Send a follow-up while the current turn is still running.'
-              : 'Ask anything. This view supports attachments, streaming responses, followups, and tool outputs.'
+              : 'Ask anything — attachments, web search, code exec, and follow-ups are supported.'
           }
-          rows={3}
-          className="min-h-[76px] rounded-md border border-[var(--line)] bg-white px-3 py-2.5 text-sm leading-6 outline-none transition placeholder:text-[var(--muted)] focus:border-[var(--action)] disabled:cursor-not-allowed disabled:opacity-60"
+          rows={2}
         />
-        <button
-          type="button"
-          disabled={disabled || (!text.trim() && files.length === 0)}
-          onClick={onSubmit}
-          className="h-fit rounded-md border border-[var(--action)] bg-[var(--action)] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[var(--action-dark)] disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {inProgress ? 'Follow up' : 'Send'}
-        </button>
+
+        <div className="k-composer-bar">
+          <div className="left">
+            <label className="k-iconbtn cursor-pointer" title="Attach files">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M21.4 11.05 12.5 19.95a5 5 0 1 1-7-7l9-9a3.5 3.5 0 1 1 5 5l-9 9a2 2 0 1 1-3-3l8.5-8.5" />
+              </svg>
+              <input
+                type="file"
+                multiple
+                className="hidden"
+                disabled={disabled}
+                onChange={(event) => onFilesAdd(event.target.files)}
+              />
+            </label>
+            {inProgress ? (
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={onStop}
+                className="k-btn k-sm k-danger"
+                title="Stop the current turn"
+              >
+                Stop
+              </button>
+            ) : null}
+          </div>
+          <div className="right">
+            <span className="k-micro hidden sm:inline">⌘↵ to send</span>
+            <button
+              type="button"
+              disabled={disabled || (!text.trim() && files.length === 0)}
+              onClick={onSubmit}
+              className="k-btn k-primary"
+            >
+              {inProgress ? 'Follow up' : 'Send'}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -2351,6 +3000,7 @@ export default function App() {
   const streamIdRef = useRef<string | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const autoScrollRef = useRef(true)
+  const [showScrollDown, setShowScrollDown] = useState(false)
 
   useEffect(() => {
     stateRef.current = state
@@ -2361,7 +3011,9 @@ export default function App() {
       const doc = document.documentElement
       const scrollTop = window.scrollY || doc.scrollTop || 0
       const remaining = doc.scrollHeight - (scrollTop + window.innerHeight)
-      autoScrollRef.current = remaining < 140
+      const near = remaining < 140
+      autoScrollRef.current = near
+      setShowScrollDown(!near && doc.scrollHeight > window.innerHeight + 80)
     }
 
     updateAutoScroll()
@@ -2372,6 +3024,10 @@ export default function App() {
       window.removeEventListener('resize', updateAutoScroll)
     }
   }, [])
+
+  const scrollToBottom = () => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+  }
 
   useEffect(() => {
     if (!autoScrollRef.current) return
@@ -2826,86 +3482,93 @@ export default function App() {
   if (!ready) {
     return (
       <div className="shell-grid flex min-h-screen items-center justify-center px-6">
-        <div className="glass-panel rounded-lg px-8 py-7 text-center">
-          <div className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">
-            Versatile
-          </div>
-          <div className="pt-3 text-lg font-medium">Connecting application config...</div>
+        <div className="glass-panel px-6 py-5 text-center">
+          <div className="k-status k-live justify-center">Connecting application config…</div>
         </div>
       </div>
     )
   }
 
+  const connectionDotClass =
+    state.connection === 'connected'
+      ? 'k-status'
+      : state.connection === 'disconnected'
+        ? 'k-status k-crit'
+        : 'k-status k-live'
+
   return (
     <div className="shell-grid">
-      <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col px-4 py-4 sm:px-6 lg:px-8">
-        <header className="px-1 py-2">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
-                Versatile
-              </div>
-              <h1 className="pt-1 text-xl font-semibold tracking-tight text-[var(--ink)]">
-                Application chat workspace
-              </h1>
-              <p className="pt-1 max-w-3xl text-sm leading-6 text-[var(--muted)]">
-                Application: <span className="font-medium text-[var(--ink)]">{bundleId}</span>
-                {' '}•{' '}
-                Scope: <span className="font-medium text-[var(--ink)]">{settings.getTenant() || '(tenant)'}</span>
-                {' / '}
-                <span className="font-medium text-[var(--ink)]">{settings.getProject() || '(project)'}</span>
-              </p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <span
-                className={`rounded-md px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.12em] ${
-                  state.connection === 'connected'
-                    ? 'bg-[var(--success-soft)] text-[var(--success)]'
-                    : state.connection === 'disconnected'
-                      ? 'bg-[var(--danger-soft)] text-[var(--danger)]'
-                      : 'bg-[var(--accent-soft)] text-[var(--accent)]'
-                }`}
-              >
-                {state.connection}
-              </span>
-              <button
-                type="button"
-                onClick={startNewChat}
-                disabled={hasPendingTurn}
-              className="rounded-md border border-[var(--line)] bg-white px-3 py-1.5 text-sm font-medium transition hover:bg-[var(--surface-2)] disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                New chat
-              </button>
-              <button
-                type="button"
-                onClick={handleReconnect}
-                className="rounded-md border border-[var(--line)] bg-white px-3 py-1.5 text-sm font-medium transition hover:bg-[var(--surface-2)]"
-              >
-                Reconnect
-              </button>
-            </div>
+      <button
+        type="button"
+        className={`k-scroll-to-bottom ${showScrollDown ? 'k-show' : ''}`}
+        onClick={scrollToBottom}
+        aria-label="Scroll to latest"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M12 5v14M5 12l7 7 7-7" />
+        </svg>
+        <span>Latest</span>
+      </button>
+      <div className="mx-auto flex min-h-screen w-full max-w-[1320px] flex-col">
+        <header className="k-appbar">
+          <div className="k-brand min-w-0">
+            <span className="k-brand-mark" aria-hidden="true" />
+            <span className="k-brand-name">Versatile</span>
+            <span className="k-brand-sep">/</span>
+            <span className="k-brand-path">{bundleId}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className={connectionDotClass}>
+              {state.connection === 'connected'
+                ? `${settings.getTenant() || 'tenant'} / ${settings.getProject() || 'project'}`
+                : state.connection}
+            </span>
+            <button
+              type="button"
+              onClick={handleReconnect}
+              className="k-iconbtn"
+              aria-label="Reconnect"
+              title="Reconnect"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M21 12a9 9 0 1 1-3-6.7" />
+                <path d="M21 3v6h-6" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              onClick={startNewChat}
+              disabled={hasPendingTurn}
+              className="k-btn"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              New chat
+            </button>
           </div>
         </header>
 
-        <div className="pt-4">
-          <BannerStrip
-            banners={bootError ? [{ id: 'boot-error', tone: 'error', text: bootError }, ...state.banners] : state.banners}
-            onDismiss={(id) => {
-              if (id === 'boot-error') {
-                setBootError(null)
-                return
-              }
-              setState((previous) => ({
-                ...previous,
-                banners: previous.banners.filter((banner) => banner.id !== id),
-              }))
-            }}
-          />
-        </div>
+        <main className="flex-1 px-3 py-3 sm:px-4 sm:py-4 lg:px-6 lg:py-5">
+          {bootError || state.banners.length > 0 ? (
+            <div className="pb-3">
+              <BannerStrip
+                banners={bootError ? [{ id: 'boot-error', tone: 'error', text: bootError }, ...state.banners] : state.banners}
+                onDismiss={(id) => {
+                  if (id === 'boot-error') {
+                    setBootError(null)
+                    return
+                  }
+                  setState((previous) => ({
+                    ...previous,
+                    banners: previous.banners.filter((banner) => banner.id !== id),
+                  }))
+                }}
+              />
+            </div>
+          ) : null}
 
-        <main className="flex-1 pt-3">
-          <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+          <div className="grid gap-3 lg:gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
             <ConversationsSidebar
               conversations={filteredConversations}
               query={conversationQuery}
@@ -2920,58 +3583,42 @@ export default function App() {
               onStartNew={startNewChat}
             />
 
-            <div className="glass-panel min-w-0 overflow-hidden rounded-lg">
-              <section className="border-b border-[var(--line)] px-4 py-3">
-                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                  <div className="min-w-0">
-                    <div className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">
-                      {state.conversationId ? 'Selected chat' : 'New chat'}
-                    </div>
-                    <div className="truncate pt-1 text-lg font-semibold text-[var(--ink)]">
-                      {state.conversationTitle || (state.conversationId ? 'Untitled conversation' : 'Start a conversation')}
-                    </div>
-                    <div className="truncate pt-1 text-sm text-[var(--muted)]">
-                      {state.conversationId || 'No saved conversation selected yet'}
-                    </div>
+            <div className="glass-panel min-w-0 overflow-hidden flex flex-col">
+              <section className="flex items-center justify-between gap-3 border-b border-[var(--line-soft)] px-4 py-2.5">
+                <div className="min-w-0">
+                  <div className="truncate text-[15px] font-semibold text-[var(--ink)]">
+                    {state.conversationTitle || (state.conversationId ? 'Untitled conversation' : 'New chat')}
                   </div>
-                  <div className="text-sm text-[var(--muted)]">
-                    {state.conversationsLoading ? 'Refreshing chats…' : `${state.conversations.length} saved chat${state.conversations.length === 1 ? '' : 's'}`}
+                  <div className="truncate text-[11px] text-[var(--muted)]">
+                    {state.conversationId || (state.conversationsLoading ? 'Refreshing chats…' : `${state.conversations.length} saved chat${state.conversations.length === 1 ? '' : 's'}`)}
                   </div>
                 </div>
               </section>
 
-              <div className="px-4 py-4">
+              <div className="flex-1 px-4 py-3">
                 {state.turns.length === 0 ? (
-                  <section className="rounded-lg border border-dashed border-[var(--line-strong)] bg-white px-3 py-3">
-                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                      <div className="min-w-0">
-                        <div className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--muted)]">
-                          Start
-                        </div>
-                        <h2 className="pt-1 text-base font-semibold tracking-tight text-[var(--ink)]">
-                        Open a focused chat
-                        </h2>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {[
-                          'Summarize the last attachment as markdown',
-                          'Search the web and cite three sources about React compiler',
-                          'Run an exec tool to generate a small report',
-                        ].map((prompt) => (
-                          <button
-                            key={prompt}
-                            type="button"
-                            className="rounded-md border border-[rgba(67,114,195,0.24)] bg-[var(--action-soft)] px-3 py-1.5 text-sm text-[var(--action)] transition hover:bg-[rgba(67,114,195,0.16)]"
-                            onClick={() => setState((previous) => ({ ...previous, composerText: prompt }))}
-                          >
-                            {prompt}
-                          </button>
-                        ))}
-                      </div>
+                  <div className="k-empty">
+                    <div className="k-empty-title">No turns yet</div>
+                    <div className="k-empty-body">Ask anything — attachments, web search, and code exec are available.</div>
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {[
+                        'Summarize the last attachment as markdown',
+                        'Search the web and cite three sources',
+                        'Run a small exec report',
+                      ].map((prompt) => (
+                        <button
+                          key={prompt}
+                          type="button"
+                          className="k-followup"
+                          onClick={() => setState((previous) => ({ ...previous, composerText: prompt }))}
+                        >
+                          {prompt}
+                        </button>
+                      ))}
                     </div>
-                  </section>
+                  </div>
                 ) : (
-                  <div className="space-y-4">
+                  <div className="flex flex-col gap-4">
                     {state.turns.map((turn) => (
                       <TurnView
                         key={turn.id}
@@ -2991,7 +3638,7 @@ export default function App() {
                 <div ref={bottomRef} />
               </div>
 
-              <div className="border-t border-[var(--line)] bg-[var(--surface-2)] px-4 py-4">
+              <div className="border-t border-[var(--line-soft)] px-3 py-3">
                 <Composer
                   text={state.composerText}
                   files={state.composerFiles}

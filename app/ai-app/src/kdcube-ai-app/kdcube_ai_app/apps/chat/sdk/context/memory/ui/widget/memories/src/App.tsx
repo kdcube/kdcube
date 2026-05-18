@@ -7,11 +7,20 @@ import { MemoryEditor } from './features/memories/MemoryEditor';
 import { MemoryFilters } from './features/memories/MemoryFilters';
 import { MemoryList } from './features/memories/MemoryList';
 import { ReconciliationPanel } from './features/memories/ReconciliationPanel';
-import { loadMemories } from './features/memories/memoriesSlice';
+import { loadMemories, updateMemoryPreferences } from './features/memories/memoriesSlice';
 
 export default function App() {
   const dispatch = useAppDispatch();
-  const { allowWrite, error, memories, mutationError, selectedId } = useAppSelector((state) => state.memories);
+  const {
+    allowWrite,
+    count,
+    error,
+    memories,
+    memoryUseEnabled,
+    mutationError,
+    saving,
+    selectedId,
+  } = useAppSelector((state) => state.memories);
   const [editorMode, setEditorMode] = useState<'create' | 'edit' | ''>('');
   const selectedMemory = memories.find((memory) => memory.id === selectedId);
 
@@ -20,7 +29,21 @@ export default function App() {
   }, [dispatch]);
 
   return (
-    <AppShell allowWrite={allowWrite} onCreate={() => setEditorMode('create')}>
+    <AppShell
+      allowWrite={allowWrite}
+      count={count}
+      memoryUseEnabled={memoryUseEnabled}
+      saving={saving}
+      onCreate={() => setEditorMode('create')}
+      onToggleMemoryUse={() => {
+        void dispatch(updateMemoryPreferences({ memoryEnabled: !memoryUseEnabled })).then(() => dispatch(loadMemories()));
+      }}
+    >
+      {!memoryUseEnabled ? (
+        <div className="warning-box">
+          Memory use is off. Existing notes remain visible for review, export, or deletion.
+        </div>
+      ) : null}
       <MemoryFilters />
       <ReconciliationPanel />
       {error && <div className="error-box">{error}</div>}

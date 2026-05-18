@@ -89,6 +89,228 @@ What the bundle has in this path:
 - the sync helpers remain available for compatibility, but async entrypoints,
   APIs, hooks, cron handlers, `@on_job`, and tools should use the async helpers
 
+## Portable bundle call context
+
+`bundle_call_context` is the bundle-owned, request-scoped context room.
+
+Use it when a bundle needs to put JSON-safe metadata into the current execution
+so nested agents, tools, background handlers, and isolated runtimes can inherit
+it without asking the model to pass those values as tool arguments.
+
+This is the right place for per-invocation values such as:
+
+- task or execution ids
+- selected UI mode or user-requested agent strength
+- request-scoped role model overrides
+- bundle-owned correlation ids
+- a small policy snapshot that should follow nested tool execution
+
+It is not durable storage. It survives the current execution graph and child
+runtime boundaries. It does not survive a later request unless the bundle stores
+the relevant values somewhere durable, such as job payload/metadata, bundle/user
+props, or bundle storage, and re-applies them on the later invocation.
+
+### Concept diagram
+
+`bundle_call_context` is attached to the current `ChatTaskPayload`, then bound
+to task-local contextvars. That is what makes it visible to bundle code, tools,
+and child runtimes.
+
+```text
+HTTP/chat/job request
+        |
+        v
++-------------------------------+
+| ChatTaskPayload               |
+| - routing / actor / user      |
+| - request                     |
+| - bundle_call_context  <------+  bundle code can add JSON-safe call metadata
++---------------+---------------+
+                |
+                | bind_current_request_context(...)
+                v
++-------------------------------+
+| task-local runtime context    |
+| - REQUEST_CONTEXT_CV          |
+| - BUNDLE_CALL_CONTEXT_CV      |
++---+-----------------------+---+
+    |                       |
+    |                       |
+    v                       v
+bundle entrypoint/API       in-process tools
+self.comm_context           get_current_bundle_call_context()
+get_current_bundle_call_    bundle_tool_context.scope()
+context()                   ["bundle_call_context"]
+    |
+    | isolated execution requested
+    v
++-------------------------------+
+| RUNTIME_GLOBALS_JSON          |
+| - PORTABLE_SPEC_JSON          |
+| - EXEC_CONTEXT                |
+| - BUNDLE_SPEC                 |
+| - contextvars.comm_ctx        |
+|   - REQUEST_CONTEXT           |
+|   - BUNDLE_CALL_CONTEXT       |
++---------------+---------------+
+                |
+                | child bootstrap restore
+                v
+isolated / Docker / Fargate runtime
+same get_current_bundle_call_context() contract
+```
+
+`PORTABLE_SPEC_JSON` is platform-built. Bundle code does not extend it
+directly. Bundle-owned per-call metadata travels through
+`bundle_call_context`, which is included in the contextvar snapshot inside
+`RUNTIME_GLOBALS_JSON`.
+
+### Lifetime diagram
+
+```text
+current request / job
+        |
+        | update_current_bundle_call_context(...)
+        v
+visible to nested agents + tools + isolated runtimes
+        |
+        +----> child runtime gets snapshot copy
+        |
+request finishes
+        |
+        v
+context binding is gone
+
+later request / later background job
+        |
+        v
+does NOT inherit previous bundle_call_context
+unless the bundle stored the decision in durable state
+and re-applied it for this invocation
+```
+
+### Read surfaces
+
+| Runtime location | How to read |
+|---|---|
+| bundle entrypoint, `@api`, widget operation, chat turn | `self.comm_context.bundle_call_context` or `get_current_bundle_call_context()` |
+| `@on_job` handler | `self.comm_context.bundle_call_context` or `get_current_bundle_call_context()`; proc seeds it from the job envelope |
+| in-process tool | `get_current_bundle_call_context()` or `bundle_tool_context.scope()["bundle_call_context"]` |
+| isolated exec / Docker / Fargate tool runtime | same as tool code after bootstrap restores `RUNTIME_GLOBALS_JSON` |
+
+### Write surfaces
+
+Bundle code can set or temporarily extend the context through:
+
+```python
+from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import (
+    bind_current_bundle_call_context_patch,
+    get_current_bundle_call_context,
+    update_current_bundle_call_context,
+)
+
+# Persist for the rest of the current invocation.
+update_current_bundle_call_context({
+    "my_bundle": {"selected_strength": "lite"},
+})
+
+# Temporarily apply around one nested run. ContextVar binding survives awaits
+# inside the block and is restored afterwards.
+with bind_current_bundle_call_context_patch({
+    "my_bundle": {"selected_strength": "strong"},
+    "role_models": {
+        "my.named.agent": {
+            "provider": "anthropic",
+            "model": "claude-opus-4-1",
+        },
+    },
+}):
+    await self.run_named_agent(...)
+
+current = get_current_bundle_call_context()
+```
+
+Rules:
+
+- values must be JSON-serializable
+- keep it small; pass ids, modes, and policy snapshots, not large documents
+- use bundle-owned namespaces for custom keys, for example
+  `{"my_bundle": {...}}`
+- `role_models` is a reserved key inside `bundle_call_context`; the model
+  router interprets it as a request-scoped model-role override
+- never use this context for secrets
+- do not cache it in singleton instance fields; it is per invocation
+
+### Request-scoped role model override
+
+Static model routing belongs in bundle props:
+
+```yaml
+config:
+  role_models:
+    my.named.agent:
+      provider: anthropic
+      model: claude-sonnet-4-6
+```
+
+For one request, a bundle may overlay the same role through
+`bundle_call_context.role_models`:
+
+```python
+with bind_current_bundle_call_context_patch({
+    "role_models": {
+        "my.named.agent": {
+            "provider": "anthropic",
+            "model": "claude-haiku-4-5-20251001",
+        }
+    }
+}):
+    await my_agent_run(...)
+```
+
+The router precedence is:
+
+1. `bundle_call_context.role_models` for the current invocation
+2. effective bundle props `role_models`
+3. platform defaults
+
+The overlay does not mutate bundle props or `Config.role_models`; it affects
+only model calls made while the context is bound.
+
+Diagram:
+
+```text
+configured bundle props
+config.role_models
+        |
+        v
++---------------------------+
+| Config.role_models        |
+| memory.reconciler=Sonnet  |
++-------------+-------------+
+              |
+              | request wants a temporary override
+              v
++---------------------------+
+| bundle_call_context       |
+| role_models:              |
+|   memory.reconciler=Haiku |
++-------------+-------------+
+              |
+              v
++---------------------------+
+| ModelRouter.describe/get  |
+| 1. call-context override  |
+| 2. Config.role_models     |
+| 3. platform default       |
++-------------+-------------+
+              |
+              v
+current request uses Haiku;
+next request falls back to configured Sonnet
+unless override is re-applied
+```
+
 Communicator behavior in this path:
 - if request routing carries an exact socket/stream target, direct peer delivery
   is possible

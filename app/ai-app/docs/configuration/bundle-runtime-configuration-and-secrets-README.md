@@ -100,6 +100,65 @@ resolve a bundle-owned external identity such as `telegram_<telegram_user_id>`
 or another stable mapped user key. Do not assume every bundle user owns a KDCube
 login.
 
+## Per-invocation portable context
+
+In addition to stored configuration, the runtime has one request-scoped portable
+context room: `bundle_call_context`.
+
+This is not a seventh stored data class. It is not exported and it is not
+durable. It is a JSON-safe bundle-owned payload attached to the current
+`ChatTaskPayload`, rebound through task-local contextvars, and restored into
+child runtimes through `RUNTIME_GLOBALS_JSON`.
+
+Use `bundle_call_context` for values that should follow the current execution
+across supported runtimes:
+
+- bundle entrypoint methods
+- `@api` and widget operations
+- `@on_job` handlers
+- in-process tools
+- isolated exec / Docker / Fargate tool runtimes
+
+Read it with:
+
+```python
+from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import get_current_bundle_call_context
+
+ctx = get_current_bundle_call_context()
+```
+
+Set or temporarily extend it with:
+
+```python
+from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import (
+    bind_current_bundle_call_context_patch,
+    update_current_bundle_call_context,
+)
+
+update_current_bundle_call_context({"my_bundle": {"request_mode": "preview"}})
+
+with bind_current_bundle_call_context_patch({"my_bundle": {"request_mode": "final"}}):
+    await run_nested_work()
+```
+
+Tool code can also read it through:
+
+```python
+from kdcube_ai_app.apps.chat.sdk.tools.bundle_tool_context import scope
+
+call_context = scope()["bundle_call_context"]
+```
+
+Use this room for small per-call metadata, not for durable settings or secrets.
+If the value must affect a future request, store it in the appropriate durable
+scope first: job metadata/payload, bundle props, user props, or bundle storage.
+
+Reserved platform-interpreted key:
+
+| Key inside `bundle_call_context` | Effect |
+|---|---|
+| `role_models` | request-scoped overlay over effective bundle `role_models`; used by the model router for model-role selection during the bound invocation |
+
 ## Decide the scope before you write code
 
 | If the value belongs to... | Use | Do not use |

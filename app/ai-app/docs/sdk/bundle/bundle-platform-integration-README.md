@@ -281,6 +281,86 @@ Use the canonical `enabled.*` switches when you need:
 - turning off one scheduled job while leaving the rest of the bundle live
 - hiding an operation/widget without removing its code or descriptor entry
 
+### Runtime Hooks
+
+Runtime hooks are normal entrypoint methods that a bundle may override. They are
+not manifest decorators unless explicitly listed as decorators above. Keep hook
+implementations idempotent: proc can run multiple workers, bundles can reload,
+and background work can be retried after task interruption.
+
+| Hook | Available On | When It Runs | Main Use | Important Contract |
+| --- | --- | --- | --- | --- |
+| `on_bundle_load(**kwargs)` | `BaseEntrypoint` and subclasses | Once per process / tenant / project when the bundle is loaded or preloaded | Build static UI, warm local indexes, prepare per-process assets | Accept only kwargs you need. Default refreshes bundle props and ensures UI build. Avoid long unbounded work. |
+| `on_props_changed(previous_props, current_props, reason, tenant, project, updated_by, source)` | `BaseEntrypoint` and subclasses | After effective bundle props change for the live bundle instance | Reconcile side effects after config changes | Default is no-op except UI-related cache handling. Treat props as deployment/runtime config, not secrets. |
+| `pre_run_hook(state)` | `BaseEntrypoint` and subclasses | Before the main `@on_message` execution core | Per-turn setup, state enrichment, request-local checks | Keep fast. For `BaseEntrypointWithEconomics`, the hook may also accept `econ_ctx`. |
+| `post_run_hook(state, result)` | `BaseEntrypoint` and subclasses | After successful main turn execution | Per-turn finalization based on output | Keep fast and non-critical. For `BaseEntrypointWithEconomics`, the hook may also accept `econ_ctx`. |
+| `on_turn_completed(state, result, error, status, reason, **kwargs)` | `BaseEntrypoint` and subclasses | After the turn exits, errors, or is cancelled | Cleanup that must run even when a turn fails | If overriding in a class that also uses mixins, call `super().on_turn_completed(...)` so platform/mixin cleanup still runs. |
+| `handle_job(**kwargs)` | Bundles with `@on_job`, plus mixins that implement job handling | When proc claims a background job and dispatches it to the bundle | Handle custom background work | If inheriting mixins, call `await super().handle_job(**kwargs)` first and return it when `handled=true`. Then process bundle-specific `work_kind` values. |
+| `on_memory_reconciliation_request(request)` | `MemoryEntrypointMixin` / `BaseEntrypointWithMemory` / `BaseEntrypointWithEconomicsAndMemory` | Inside `memories_widget_reconcile_run`, before the dry-run job is stored and enqueued | Validate or augment request-local memory reconciliation controls | Return `None` or a JSON-safe dict patch. Return `{"ok": false, "error": "...", "message": "..."}` to reject. Put bundle-specific controls under `reconciliation_context`. |
+
+#### Memory Reconciliation Request Hook
+
+The memory reconciliation request hook is the extension point for bundle-owned
+controls that should travel with one reconciliation job. Do not add a new
+top-level platform field for every bundle-specific option. Use:
+
+```json
+{
+  "agent_type": "regular",
+  "reconciliation_context": {
+    "policy": "strict"
+  }
+}
+```
+
+`agent_type` is a platform-supported selector with these values:
+
+- `lite`
+- `regular`
+- `strong`
+
+The selected value maps the logical `memory.reconciler` role to the configured
+`memory.reconciler.lite`, `memory.reconciler.regular`, or
+`memory.reconciler.strong` role model for this job only.
+
+`reconciliation_context` is an opaque JSON-safe object owned by the bundle. The
+SDK persists it in the job status, sends it with the background job payload, and
+rebinds it when the reconciler actually runs:
+
+```text
+bundle_call_context.memory.reconciliation.context
+```
+
+Example hook:
+
+```python
+async def on_memory_reconciliation_request(self, *, request: dict) -> dict | None:
+    context = dict(request.get("reconciliation_context") or {})
+    context.setdefault("policy", "strict")
+    return {
+        "agent_type": request.get("agent_type") or "regular",
+        "reconciliation_context": context,
+    }
+```
+
+A rejecting hook:
+
+```python
+async def on_memory_reconciliation_request(self, *, request: dict) -> dict | None:
+    if not self.bundle_prop("memory.reconciliation.allow_manual", True):
+        return {
+            "ok": False,
+            "error": "memory_reconciliation_not_allowed",
+            "message": "Manual memory reconciliation is disabled for this bundle.",
+        }
+    return None
+```
+
+This hook runs only on request submission. The background job later uses the
+persisted job payload. If the bundle needs the data during downstream tool,
+agent, or isolated-runtime work, read it from `bundle_call_context`, not from
+the original HTTP request.
+
 ### 1.4 `@api(...)`
 
 Marks a method as a remotely callable bundle operation.
@@ -368,8 +448,15 @@ Important current rule:
 - if bundle code needs request-bound execution context, use runtime helpers:
   - `get_current_comm()`
   - `get_current_request_context()`
+  - `get_current_bundle_call_context()`
+  - `update_current_bundle_call_context(...)`
+  - `bind_current_bundle_call_context_patch(...)`
 - for entrypoints based on `BaseEntrypoint`, prefer `self.comm` /
   `self.comm_context`
+- use `bundle_call_context` for JSON-safe bundle-owned metadata that must
+  follow the current API/widget invocation into tools, nested agents, or
+  isolated runtimes; for request-scoped model routing, set
+  `bundle_call_context.role_models`
 
 Route mapping:
 

@@ -239,6 +239,27 @@ CREATE TABLE IF NOT EXISTS <SCHEMA>.user_memory_aliases (
     PRIMARY KEY (memory_id, alias_type, value)
 );
 
+-- User-scoped maintenance artifact registry.
+-- The artifact bytes still live in the bundle storage that created them; this
+-- table makes jobs/snapshots discoverable from any bundle allowed to inspect
+-- all memories for the same user.
+CREATE TABLE IF NOT EXISTS <SCHEMA>.user_memory_maintenance_artifacts (
+    id                TEXT PRIMARY KEY,
+    tenant            TEXT NOT NULL,
+    project           TEXT NOT NULL,
+    user_id           TEXT NOT NULL,
+    bundle_id         TEXT NOT NULL DEFAULT '',
+    artifact_type     TEXT NOT NULL,
+    artifact_id       TEXT NOT NULL,
+    scope_filter      TEXT NOT NULL DEFAULT 'current_bundle',
+    status            TEXT NOT NULL DEFAULT '',
+    storage_bundle_id TEXT NOT NULL DEFAULT '',
+    summary           JSONB NOT NULL DEFAULT '{}'::jsonb,
+    artifacts         JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_<SCHEMA>_user_memory_entries_canonical
   ON <SCHEMA>.user_memory_entries (tenant, project, user_id, canonical_key)
   WHERE merged_into_id IS NULL;
@@ -258,6 +279,8 @@ CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_user_memory_entries_embedding
   ON <SCHEMA>.user_memory_entries USING ivfflat (embedding vector_cosine_ops) WITH (lists=50);
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_user_memory_events_scope
   ON <SCHEMA>.user_memory_events (tenant, project, user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_user_memory_events_scope_bundle
+  ON <SCHEMA>.user_memory_events (tenant, project, user_id, bundle_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_user_memory_events_memory
   ON <SCHEMA>.user_memory_events (memory_id, created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_<SCHEMA>_user_memory_events_idempotency
@@ -265,6 +288,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_<SCHEMA>_user_memory_events_idempotency
   WHERE idempotency_key <> '';
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_user_memory_aliases_value
   ON <SCHEMA>.user_memory_aliases (alias_type, value);
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_user_memory_maintenance_scope
+  ON <SCHEMA>.user_memory_maintenance_artifacts (tenant, project, user_id, artifact_type, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_user_memory_maintenance_scope_bundle
+  ON <SCHEMA>.user_memory_maintenance_artifacts (tenant, project, user_id, bundle_id, artifact_type, updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_<SCHEMA>_user_memory_maintenance_artifact
+  ON <SCHEMA>.user_memory_maintenance_artifacts (tenant, project, user_id, artifact_type, artifact_id);
 
 -- ---------- Turn-level preferences extracted from NL (assertions + exceptions) ----------
 CREATE TABLE IF NOT EXISTS <SCHEMA>.conv_prefs (
@@ -299,12 +328,17 @@ CREATE TABLE IF NOT EXISTS <SCHEMA>.user_bundle_props (
     value_json JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    subsystem  TEXT NOT NULL DEFAULT 'bundle',
     PRIMARY KEY (user_id, bundle_id, key)
 );
+ALTER TABLE <SCHEMA>.user_bundle_props
+  ADD COLUMN IF NOT EXISTS subsystem TEXT NOT NULL DEFAULT 'bundle';
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_ubp_user_bundle_updated
   ON <SCHEMA>.user_bundle_props (user_id, bundle_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_ubp_bundle_updated
   ON <SCHEMA>.user_bundle_props (bundle_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_ubp_subsystem_updated
+  ON <SCHEMA>.user_bundle_props (user_id, subsystem, bundle_id, key, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_ubp_value_gin
   ON <SCHEMA>.user_bundle_props USING gin (value_json);
 

@@ -24,8 +24,77 @@ Important distinction used throughout this document:
 - **bundle readonly data** = prepared local bundle data such as built knowledge indexes, cloned docs repos, and other per-bundle cached assets
 - **descriptor payloads** = base64-encoded `assembly.yaml`, `bundles.yaml`, `gateway.yaml`, `secrets.yaml`, and `bundles.secrets.yaml` shipped to the supervisor so it can materialize the same descriptor-backed settings/secrets view as proc.
 - **exec launch payload** = one execution's runtime globals, tool module list, contract, communicator spec, and snapshot metadata.
+- **portable spec** = platform-built JSON inside `PORTABLE_SPEC_JSON`; it
+  reconstructs `ModelService`, communicator, integrations, selected
+  contextvars, and accounting storage in the child runtime.
+- **runtime globals** = the full `RUNTIME_GLOBALS_JSON` envelope. It contains
+  `PORTABLE_SPEC_JSON`, `EXEC_CONTEXT`, `BUNDLE_SPEC`, tool alias maps, raw tool
+  specs, and the contextvar snapshot used to restore `bundle_call_context`.
 
 These are transported separately in external exec.
+
+## Launch payload anatomy
+
+The isolated runtime receives two different kinds of data:
+
+1. descriptor payloads, which rebuild the same settings/secrets view as proc
+2. per-execution runtime globals, which rebuild the current call context and
+   tool execution surface
+
+```text
+proc / host runtime
+        |
+        | builds one execution launch
+        v
++-------------------------------------------------------------------+
+| RUNTIME_GLOBALS_JSON                                              |
+|                                                                   |
+|  CONTRACT             tool-call contract for this execution        |
+|  COMM_SPEC            communicator routing snapshot                |
+|  EXEC_CONTEXT         tenant/project/user/conversation/work dirs   |
+|  BUNDLE_SPEC          active bundle identity + source path         |
+|  TOOL_ALIAS_MAP       alias -> dynamic module name                 |
+|  TOOL_MODULE_FILES    alias -> tool module file                    |
+|  RAW_TOOL_SPECS       source tool descriptors                      |
+|  MCP_*                MCP specs/services for child tool subsystem  |
+|                                                                   |
+|  PORTABLE_SPEC_JSON                                              |
+|    model_config.role_models                                      |
+|    comm                                                          |
+|    integrations                                                  |
+|    contextvars                                                   |
+|      run_ctx                                                     |
+|      comm_ctx                                                    |
+|        REQUEST_CONTEXT                                           |
+|        BUNDLE_ID                                                 |
+|        BUNDLE_CALL_CONTEXT  <-- bundle_call_context travels here  |
+|      accounting                                                  |
++-------------------------------------------------------------------+
+        |
+        | plus descriptor payloads:
+        | KDCUBE_RUNTIME_*_YAML_B64
+        | assembly/bundles/gateway/secrets
+        v
+child supervisor bootstrap
+        |
+        +--> restore descriptors/settings/secrets
+        +--> parse PORTABLE_SPEC_JSON
+        +--> restore run_ctx / comm_ctx / accounting contextvars
+        +--> rebuild ModelService / communicator / integrations
+        +--> rebuild ToolSubsystem from BUNDLE_SPEC + TOOL_* maps
+```
+
+Important:
+
+- bundle code does not extend `PORTABLE_SPEC_JSON` directly
+- bundle-owned per-invocation metadata belongs in `bundle_call_context`
+- `bundle_call_context` is JSON-safe and request-scoped
+- `bundle_call_context` is snapshotted in `contextvars.comm_ctx` and restored
+  in child runtimes, so trusted tool code can read it with
+  `get_current_bundle_call_context()`
+- request-scoped model routing uses the reserved
+  `bundle_call_context.role_models` overlay; this does not mutate
+  `Config.role_models` or bundle props
 
 ## **Diagram 1: Detailed Execution Flow (Docker Mode)**
 
@@ -50,10 +119,12 @@ entrypoint flow. The split filesystem tree is documented in
 │  │ Agent Service (Python)                                        │    │
 │  │                                                                │    │
 │  │  1. Codegen produces main.py loader + user_code.py            │    │
-│  │  2. Prepares runtime_globals:                                 │    │
-│  │     - PORTABLE_SPEC_JSON (ModelService, KB, Redis config)     │    │
-│  │     - TOOL_ALIAS_MAP (io_tools → dyn_io_tools_abc123)        │    │
-│  │     - TOOL_MODULE_FILES (paths to tool .py files)            │    │
+│  │  2. Prepares RUNTIME_GLOBALS_JSON:                            │    │
+│  │     - PORTABLE_SPEC_JSON (ModelService, comm, contextvars)    │    │
+│  │     - EXEC_CONTEXT (tenant/project/user/work/out dirs)        │    │
+│  │     - BUNDLE_SPEC + raw tool specs                            │    │
+│  │     - TOOL_ALIAS_MAP (io_tools → dyn_io_tools_abc123)         │    │
+│  │     - TOOL_MODULE_FILES (paths to tool .py files)             │    │
 │  │  3. Calls run_py_in_docker()                                  │    │
 │  └───────────────────────────────────┬─────────────────────────────┘    │
 │                                      │                                  │
@@ -86,6 +157,7 @@ entrypoint flow. The split filesystem tree is documented in
 │  │     - Load dynamic tool modules (dyn_io_tools_abc123.py)     │    │
 │  │     - Call bootstrap_bind_all(bootstrap_env=False)            │    │
 │  │       • DON'T apply env_passthrough (keeps PYTHONPATH clean)  │    │
+│  │       • Restore run_ctx / comm_ctx / accounting ContextVars   │    │
 │  │       • Initialize ModelService, KB client, Redis comm        │    │
 │  │       • Bind into all tool modules                            │    │
 │  │  3. Start PrivilegedSupervisor on Unix socket                 │    │
@@ -341,12 +413,13 @@ entrypoint flow. The split filesystem tree is documented in
 │                                                                         │
 │  Host (Agent Service):                                                 │
 │  • Generate code with codegen                                          │
-│  • Prepare PORTABLE_SPEC (ModelService config, secrets)                │
+│  • Prepare RUNTIME_GLOBALS_JSON and PORTABLE_SPEC_JSON                 │
+│  • Snapshot ContextVars, including comm_ctx.bundle_call_context         │
 │  • Launch docker container                                             │
 │  • Collect results from /host/outdir                                   │
 │                                                                         │
 │  Supervisor (py_code_exec_entry.py):                                   │
-│  • Bootstrap runtime (ModelService, KB, Redis)                         │
+│  • Bootstrap runtime (ModelService, KB, Redis, comm_ctx)                │
 │  • Start Unix socket server                                            │
 │  • Execute privileged tool calls                                       │
 │  • Manage tool accounting & audit trail                                │
@@ -377,6 +450,73 @@ entrypoint flow. The split filesystem tree is documented in
 5. **Filesystem isolation is applied to the executor child, not the supervisor** - this preserves tool functionality while preventing untrusted code from browsing runtime internals
 6. **Network isolation doesn't break functionality** - tools that need network run in supervisor
 7. **`combined` vs `split` is configurable** - `split` keeps the same tool-call contract while removing supervisor runtime roots, descriptors, bundle mounts, and supervisor logs from the executor filesystem
+
+---
+
+## Runtime Context Propagation
+
+The platform does not move live Python objects into isolated runtimes. It
+snapshots narrow, JSON-safe runtime state and reconstructs the trusted surfaces
+inside the child runtime.
+
+```text
+main proc task
+        |
+        | current ContextVars
+        | - run_ctx: OUTDIR / WORKDIR / source id
+        | - comm_ctx: REQUEST_CONTEXT / BUNDLE_ID / BUNDLE_CALL_CONTEXT
+        | - accounting
+        v
++-------------------------------+
+| build_portable_spec(...)      |
+|                               |
+| model_config                  |
+| comm                          |
+| integrations                  |
+| contextvars                   |
+| accounting_storage            |
++---------------+---------------+
+                |
+                v
+PORTABLE_SPEC_JSON inside RUNTIME_GLOBALS_JSON
+                |
+                v
+child bootstrap
+        |
+        +--> restore run_ctx ContextVars
+        +--> restore comm_ctx ContextVars
+        |      REQUEST_CONTEXT
+        |      BUNDLE_ID
+        |      BUNDLE_CALL_CONTEXT
+        +--> restore accounting ContextVars
+        +--> rebuild ModelService and ToolSubsystem
+                |
+                v
+trusted child tools use the same accessors:
+get_current_bundle_call_context()
+bundle_tool_context.scope()["bundle_call_context"]
+```
+
+`bundle_call_context` is the bundle-owned portable room inside this mechanism.
+It is appropriate for ids, small policy snapshots, selected agent strength, and
+request-scoped model role overrides. It is not appropriate for secrets or large
+documents.
+
+`bundle_call_context.role_models` is interpreted by `ModelRouter` as a
+request-scoped overlay over the configured bundle `role_models`. The overlay is
+visible in the child runtime after context restore, but it is not persisted.
+
+```text
+bundle props role_models
+        |
+        v
+Config.role_models --------------+
+                                  |
+bundle_call_context.role_models --+--> ModelRouter effective role spec
+     current invocation only            1. call context
+                                        2. Config.role_models
+                                        3. platform default
+```
 
 ---
 
@@ -415,6 +555,8 @@ cb/tenants/<tenant>/projects/<project>/ai-bundle-storage-snapshots/
 
 ### Flow summary
 - Host creates input snapshots (workdir + runtime outdir).
+- Host sends the same `RUNTIME_GLOBALS_JSON` contract as Docker mode, including
+  `PORTABLE_SPEC_JSON` and restored contextvars.
 - If bundle-local tools are used, host snapshots the bundle code root.
 - If bundle-local readonly data is used, host snapshots the per-bundle readonly storage dir.
 - Remote executor restores input zips before supervisor bootstrap.

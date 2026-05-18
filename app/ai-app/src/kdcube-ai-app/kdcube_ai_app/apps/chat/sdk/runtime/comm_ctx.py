@@ -4,6 +4,7 @@
 # kdcube_ai_app/apps/chat/sdk/runtime/comm_ctx.py
 from __future__ import annotations
 
+import json
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Optional, Dict, Any, Callable, Mapping
@@ -20,6 +21,24 @@ TASK_ACTIVITY_TOUCH_CV: ContextVar[Callable[[str], None] | None] = ContextVar("T
 _BIND_COMM_UNSET = object()
 _BIND_BUNDLE_UNSET = object()
 _BIND_BUNDLE_CALL_CONTEXT_UNSET = object()
+
+
+def _json_safe_mapping(context: Mapping[str, Any] | None) -> Dict[str, Any]:
+    if not isinstance(context, Mapping):
+        return {}
+    try:
+        return json.loads(json.dumps(dict(context), ensure_ascii=False))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("bundle_call_context must be JSON-serializable") from exc
+
+
+def _sync_request_bundle_call_context(context: Mapping[str, Any] | None) -> None:
+    request_context = REQUEST_CONTEXT_CV.get()
+    if request_context is not None:
+        try:
+            request_context.bundle_call_context = dict(context or {})
+        except Exception:
+            pass
 
 def set_comm(comm: object) -> None:
     """Register the ChatCommunicator singleton for this context."""
@@ -47,7 +66,9 @@ def get_current_request_context() -> Optional[ChatTaskPayload]:
 
 def set_current_bundle_call_context(context: Mapping[str, Any] | None) -> None:
     """Register bundle-owned call metadata for tools and child runtimes."""
-    BUNDLE_CALL_CONTEXT_CV.set(dict(context or {}))
+    safe_context = _json_safe_mapping(context)
+    BUNDLE_CALL_CONTEXT_CV.set(safe_context)
+    _sync_request_bundle_call_context(safe_context)
 
 
 def get_current_bundle_call_context() -> Dict[str, Any]:
@@ -76,11 +97,43 @@ def bind_current_task_activity_touch(callback: Callable[[str], None] | None):
 
 @contextmanager
 def bind_current_bundle_call_context(context: Mapping[str, Any] | None):
-    token = BUNDLE_CALL_CONTEXT_CV.set(dict(context or {}))
+    safe_context = _json_safe_mapping(context)
+    request_context = REQUEST_CONTEXT_CV.get()
+    previous_request_context_value = None
+    if request_context is not None:
+        previous_request_context_value = getattr(request_context, "bundle_call_context", None)
+    token = BUNDLE_CALL_CONTEXT_CV.set(safe_context)
+    _sync_request_bundle_call_context(safe_context)
     try:
         yield BUNDLE_CALL_CONTEXT_CV.get()
     finally:
         BUNDLE_CALL_CONTEXT_CV.reset(token)
+        if request_context is not None:
+            try:
+                request_context.bundle_call_context = (
+                    dict(previous_request_context_value or {})
+                    if isinstance(previous_request_context_value, Mapping)
+                    else {}
+                )
+            except Exception:
+                pass
+
+
+def update_current_bundle_call_context(patch: Mapping[str, Any] | None) -> Dict[str, Any]:
+    """Shallow-merge JSON-safe bundle-owned metadata into the current call context."""
+    current = get_current_bundle_call_context()
+    current.update(_json_safe_mapping(patch))
+    set_current_bundle_call_context(current)
+    return get_current_bundle_call_context()
+
+
+@contextmanager
+def bind_current_bundle_call_context_patch(patch: Mapping[str, Any] | None):
+    """Temporarily shallow-merge metadata into the current bundle call context."""
+    current = get_current_bundle_call_context()
+    current.update(_json_safe_mapping(patch))
+    with bind_current_bundle_call_context(current) as bound:
+        yield bound
 
 
 def set_current_bundle_id(bundle_id: str | None) -> None:

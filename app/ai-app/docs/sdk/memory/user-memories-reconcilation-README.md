@@ -127,6 +127,9 @@ User clicks "Dry run"
   v
 POST memories_widget_reconcile_run
   |
+  +-- optional bundle hook normalizes request
+  |     on_memory_reconciliation_request(request=...)
+  |
   +-- server finds active queued/running job for same user + bundle + scope
   |     |
   |     v
@@ -146,6 +149,30 @@ POST memories_widget_reconcile_run
         v
       return immediately: accepted=true, job_id, status=queued
 ```
+
+`memories_widget_reconcile_run` accepts stable platform fields such as
+`scope_filter`, `limit`, `reason`, and `agent_type`. Bundle-specific controls
+must go into optional JSON object `reconciliation_context`, not into new
+top-level platform fields. The SDK stores that object in the job status,
+includes it in the background queue payload, and rebinds it at execution time:
+
+```text
+bundle_call_context.memory.reconciliation.context
+```
+
+Bundles that need request-specific validation, defaults, or derived controls can
+override:
+
+```python
+async def on_memory_reconciliation_request(self, *, request: dict) -> dict | None:
+    context = dict(request.get("reconciliation_context") or {})
+    context.setdefault("policy", "strict")
+    return {"reconciliation_context": context}
+```
+
+This hook is request-side only. It prepares what is persisted and later carried
+into the background job; the actual reconciler still runs through
+`memory.reconciliation.run`.
 
 The processor delivers that envelope to the bundle's single `@on_job` handler.
 Bundles that derive from the memory mixin should dispatch superclass jobs first:
@@ -198,6 +225,12 @@ running
   v
 succeeded
 ```
+
+Jobs are indexed in `user_memory_maintenance_artifacts`; larger artifacts live
+in the bundle storage that created them. The index includes the originating
+`storage_bundle_id`, so an all-memory widget opened from another bundle can list
+and export jobs for the same user without assuming the artifacts were written by
+the current bundle.
 
 Only one queued/running reconciliation job is allowed per user, bundle, and
 scope filter. A second click should not enqueue duplicate work. The server must
@@ -253,20 +286,23 @@ read current user-visible memories for selected scope
 write bundle-storage artifacts
   |
   v
-append/update snapshot index
+register snapshot in user_memory_maintenance_artifacts
 ```
 
 Suggested artifact layout:
 
 ```text
-memory/snapshots/<snapshot_id>/status.json
-memory/snapshots/<snapshot_id>/memories.json
-memory/snapshots/<snapshot_id>/memories.md
-memory/snapshots/<snapshot_id>/memories.csv
-memory/snapshots/<snapshot_id>/restore-preview.json      # only after preview
-memory/snapshots/<snapshot_id>/restore.json              # only after restore
-memory/snapshots/index.json
+memory/snapshots/YYYY/MM/DD/<snapshot_id>/status.json
+memory/snapshots/YYYY/MM/DD/<snapshot_id>/memories.json
+memory/snapshots/YYYY/MM/DD/<snapshot_id>/memories.md
+memory/snapshots/YYYY/MM/DD/<snapshot_id>/memories.csv
+memory/snapshots/YYYY/MM/DD/<snapshot_id>/restore-preview.json      # only after preview
+memory/snapshots/YYYY/MM/DD/<snapshot_id>/restore.json              # only after restore
 ```
+
+Current retention keeps the last few snapshots per user/scope as recovery
+checkpoints. Snapshot metadata is listed with `limit`/`offset`; widgets must not
+try to render an unbounded job or snapshot history.
 
 Snapshot restore is a separate explicit operation from reconciliation apply:
 
@@ -327,7 +363,8 @@ restored
 ```
 
 The widget should always be able to show recent job status and the stored
-proposal/result artifacts.
+proposal/result artifacts. Jobs are listed with `limit`/`offset` and
+`has_more`; a widget should page them rather than showing every historical job.
 
 ## Export and Restore
 
@@ -519,6 +556,16 @@ Initial action set:
 merge
   source_memory_id
   target_memory_id
+  merged_memory
+  merged_context
+  confidence
+  reason
+
+squash
+  source_memory_ids[]
+  target_memory_id
+  merged_memory
+  merged_context
   confidence
   reason
 
@@ -559,14 +606,21 @@ COMMIT
 Merge should look like:
 
 ```text
+target.memory/context = reconciler-proposed merged text
 source.status = merged
 source.merged_into_id = target.id
 append event_type=merge to source
 append event_type=merge_target_updated to target
 ```
 
-The source row remains queryable for audit if explicitly requested, but normal
-search filters `merged_into_id IS NULL`.
+Squash is the first-class form for many-to-one cleanup. It must rewrite the
+target once, rebuild the target embedding, append one target squash event
+containing all source ids, and mark each source row as `merged` with
+`merged_into_id=target.id`. Normal search filters `merged_into_id IS NULL`, so
+merged source rows do not reappear in future memory queries.
+
+The source rows remain available only through explicit historical/status
+inspection. They are not part of normal active memory serving.
 
 Apply must check revisions from `before.json` before changing rows. If a memory
 was edited after the proposal was generated, the action should become a conflict

@@ -1,4 +1,5 @@
 export type ScopeFilter = 'current_bundle' | 'all_user_memories';
+export type ReconcilerAgentType = 'lite' | 'regular' | 'strong';
 
 export interface MemoryEntry {
   id: string;
@@ -45,11 +46,17 @@ export interface MemoryEvent {
 export interface MemoriesPayload {
   ok: boolean;
   error?: string;
+  message?: string;
   capabilities?: {
     allow_all_user_memories?: boolean;
     allow_write?: boolean;
     allow_reconciliation?: boolean;
     allow_snapshots?: boolean;
+  };
+  preferences?: MemoryPreferences;
+  viewer?: {
+    user_type?: string;
+    is_admin?: boolean;
   };
   scope?: {
     tenant: string;
@@ -65,6 +72,23 @@ export interface MemoriesPayload {
   has_more?: boolean;
 }
 
+export interface MemoryPreferences {
+  memory_enabled: boolean;
+  updated_by?: string;
+  metadata?: Record<string, unknown>;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface MemoryPreferencesPayload {
+  ok: boolean;
+  error?: string;
+  message?: string;
+  preferences?: MemoryPreferences;
+  capabilities?: MemoriesPayload['capabilities'];
+  viewer?: MemoriesPayload['viewer'];
+}
+
 export interface MemoryEventsPayload {
   ok: boolean;
   error?: string;
@@ -78,6 +102,29 @@ export interface MemoryMutationPayload {
   error?: string;
   message?: string;
   memory?: MemoryEntry;
+  memory_id?: string;
+  deleted?: boolean;
+}
+
+export interface MemoryExportPayload {
+  ok: boolean;
+  error?: string;
+  message?: string;
+  format?: string;
+  filename?: string;
+  mime?: string;
+  content?: string;
+  count?: number;
+}
+
+export interface MemoryDeleteSearchPayload {
+  ok: boolean;
+  error?: string;
+  message?: string;
+  deleted_count?: number;
+  deleted_ids?: string[];
+  skipped_ids?: string[];
+  soft_delete?: boolean;
 }
 
 export interface MemoryDraft {
@@ -110,6 +157,12 @@ export interface ReconciliationJob {
   job_id: string;
   status: string;
   reason?: string;
+  agent_type?: ReconcilerAgentType;
+  reconciliation_context?: Record<string, unknown>;
+  role_model?: {
+    provider?: string;
+    model?: string;
+  };
   scope_filter?: string;
   candidate_count?: number;
   proposal_count?: number;
@@ -140,6 +193,9 @@ export interface SnapshotsPayload {
   message?: string;
   snapshots: MemorySnapshot[];
   count: number;
+  limit?: number;
+  offset?: number;
+  has_more?: boolean;
 }
 
 export interface SnapshotCreatePayload {
@@ -159,6 +215,14 @@ export interface SnapshotExportPayload {
   uri?: string;
   mime?: string;
   content?: string;
+}
+
+export interface SnapshotDeletePayload {
+  ok: boolean;
+  error?: string;
+  message?: string;
+  snapshot_id?: string;
+  deleted_artifacts?: number;
 }
 
 export interface SnapshotRestoreChange {
@@ -216,6 +280,9 @@ export interface ReconciliationJobsPayload {
   message?: string;
   jobs: ReconciliationJob[];
   count: number;
+  limit?: number;
+  offset?: number;
+  has_more?: boolean;
 }
 
 export interface ReconciliationRunPayload {
@@ -236,4 +303,18 @@ export interface ReconciliationExportPayload {
   uri?: string;
   mime?: string;
   content?: string;
+}
+
+export interface ReconciliationApplyPayload {
+  ok: boolean;
+  error?: string;
+  message?: string;
+  job?: ReconciliationJob;
+  safety_snapshot?: MemorySnapshot;
+  apply_result?: {
+    applied_count?: number;
+    skipped_count?: number;
+    safety_snapshot_id?: string;
+    results?: Array<Record<string, unknown>>;
+  };
 }

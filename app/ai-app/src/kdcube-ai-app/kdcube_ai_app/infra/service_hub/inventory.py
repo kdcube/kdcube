@@ -827,6 +827,26 @@ class ModelRouter:
         self._anthropic_client = None
         self._anthropic_async = None
 
+    def _request_role_models(self) -> Dict[str, Any]:
+        try:
+            from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import get_current_bundle_call_context
+            call_context = get_current_bundle_call_context()
+        except Exception:
+            return {}
+        role_models = call_context.get("role_models") if isinstance(call_context, dict) else None
+        return role_models if isinstance(role_models, dict) else {}
+
+    def _effective_role_spec(self, role: str) -> Dict[str, str]:
+        base = dict(self.config.ensure_role(role) or {})
+        override = self._request_role_models().get(role)
+        if isinstance(override, str):
+            override = {"model": override}
+        if not isinstance(override, dict):
+            return base
+        provider = str(override.get("provider") or base.get("provider") or self.config.default_llm_model["provider"])
+        model = str(override.get("model") or base.get("model") or self.config.default_llm_model["model_name"])
+        return {"provider": provider, "model": model}
+
     def _mk_openai(self, model: str, temperature: float) -> ChatOpenAI:
         from kdcube_ai_app.apps.chat.sdk.config import get_service_secret
         return make_chat_openai(
@@ -883,7 +903,7 @@ class ModelRouter:
 
     def get_client(self, role: str, temperature: float) -> Optional[Any]:
         # ensure mapping exists even for new roles
-        spec = self.config.ensure_role(role)
+        spec = self._effective_role_spec(role)
         if not spec:
             return None
 
@@ -910,7 +930,7 @@ class ModelRouter:
         return client
 
     def describe(self, role: str) -> ClientConfigHint:
-        spec = self.config.ensure_role(role)
+        spec = self._effective_role_spec(role)
         return ClientConfigHint(provider=spec.get("provider", "unknown"),
                                 model_name=spec.get("model", "unknown"))
 

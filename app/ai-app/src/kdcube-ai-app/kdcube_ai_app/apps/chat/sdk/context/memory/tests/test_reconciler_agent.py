@@ -70,6 +70,8 @@ def test_validate_reconciliation_output_rejects_unknown_ids_and_low_confidence_m
                 target_memory_id="mem_2",
                 confidence=0.91,
                 reason="same preference",
+                merged_memory="User prefers short Telegram summaries with source links.",
+                merged_labels=["Reports", "reports", "Telegram"],
             ),
             MemoryReconciliationAction(
                 action="merge",
@@ -92,12 +94,49 @@ def test_validate_reconciliation_output_rejects_unknown_ids_and_low_confidence_m
 
     assert [action.action for action in validated.actions] == ["merge"]
     assert validated.actions[0].source_memory_id == "mem_1"
+    assert validated.actions[0].merged_memory == "User prefers short Telegram summaries with source links."
+    assert validated.actions[0].merged_labels == ["reports", "telegram"]
     assert len(validated.warnings) == 2
+
+
+def test_validate_reconciliation_output_accepts_squash_group() -> None:
+    output = MemoryReconciliationOut(
+        actions=[
+            MemoryReconciliationAction(
+                action="squash",
+                source_memory_ids=["mem_1", "mem_2", "mem_1", "mem_3"],
+                target_memory_id="mem_4",
+                confidence=0.93,
+                reason="same durable family fact split across records",
+                merged_memory="The user has one son, Timur, born in 2009, who wears wide shoes.",
+                merged_context="Squashed from compatible family facts.",
+                merged_labels=["family", "Family"],
+                merged_keywords=["timur", "wide shoes"],
+            ),
+            MemoryReconciliationAction(
+                action="squash",
+                source_memory_ids=["mem_1"],
+                target_memory_id="mem_4",
+                confidence=0.93,
+                reason="missing merged text",
+            ),
+        ]
+    )
+
+    validated = validate_reconciliation_output(output, candidate_ids=["mem_1", "mem_2", "mem_3", "mem_4"])
+
+    assert [action.action for action in validated.actions] == ["squash"]
+    assert validated.actions[0].source_memory_ids == ["mem_1", "mem_2", "mem_3"]
+    assert validated.actions[0].target_memory_id == "mem_4"
+    assert validated.actions[0].merged_labels == ["family"]
+    assert len(validated.warnings) == 1
 
 
 def test_system_prompt_keeps_reconciler_as_proposal_agent() -> None:
     prompt = build_reconciliation_system_prompt(max_actions=5)
 
     assert "propose safe maintenance actions" in prompt
-    assert "Do not rewrite memories" in prompt
+    assert "squash" in prompt
+    assert "merged_memory" in prompt
+    assert "preserve durable, compatible details" in prompt
     assert "Return at most 5 actions" in prompt

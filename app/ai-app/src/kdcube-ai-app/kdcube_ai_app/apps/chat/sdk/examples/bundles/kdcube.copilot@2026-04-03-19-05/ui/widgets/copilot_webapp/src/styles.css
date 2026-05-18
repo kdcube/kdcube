@@ -1,96 +1,96 @@
+/* KDCube Copilot widget — restyle (May 2026)
+   Compact widget chrome: white surfaces, thin 1px borders, GitHub-style
+   underline tabs, 28-32 px buttons, dense list rows. Class names match
+   what the shared Telegram and Memory widgets render. */
+
 :root {
   color-scheme: light;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: #f6f8fa;
-  color: #24292f;
-  --bg: #f6f8fa;
-  --surface: #ffffff;
-  --surface-2: #f6f8fa;
-  --surface-3: #fdf9ee;
-  --ink: #24292f;
-  --text-2: #3f4a55;
-  --muted: #57606a;
-  --line: #d0d7de;
-  --line-strong: #8c959f;
-  --teal: #01beb2;
-  --teal-dark: #009c92;
-  --teal-pale: #c6f3f1;
-  --blue: #4372c3;
-  --blue-dark: #2b4b8a;
-  --blue-pale: #ddeafe;
-  --purple: #6b63fe;
-  --purple-pale: #ebebff;
-  --gold: #f0bc2e;
-  --gold-dark: #c89a10;
-  --gold-pale: #fff8dc;
-  --green: #52b044;
-  --green-dark: #3a8030;
-  --green-pale: #e8f7e5;
-  --pink: #f7609a;
-  --pink-dark: #c03272;
-  --pink-pale: #ffe0ef;
+  background: #FCFDFD;
+  color: #0D1E2C;
+
+  --bg:           #FCFDFD;
+  --surface:      #FFFFFF;
+  --surface-2:    #F6F8F8;
+  --surface-3:    #FAFBFB;
+  --ink:          #0D1E2C;
+  --text-2:       #3A5672;
+  --muted:        #7A99B0;
+  --line:         #E2E8E8;
+  --line-soft:    #ECF1F1;
+  --line-strong:  #D8ECEB;
+
+  --teal:         #01BEB2;
+  --teal-dark:    #009C92;
+  --teal-pale:    #C6F3F1;
+
+  --blue:         #4372C3;
+  --blue-dark:    #2B4B8A;
+  --blue-pale:    #DDEAFE;
+
+  --purple:       #6B63FE;
+  --purple-pale:  #EBEBFF;
+
+  --gold:         #F0BC2E;
+  --gold-dark:    #C89A10;
+  --gold-pale:    #FFF8DC;
+
+  --green:        #52B044;
+  --green-dark:   #3A8030;
+  --green-pale:   #E8F7E5;
+
+  --pink:         #F7609A;
+  --pink-dark:    #C03272;
+  --pink-pale:    #FFE0EF;
+
+  --red:          #E04935;
+  --red-dark:     #B5331F;
+  --red-pale:     #FDE3DD;
+
+  --focus:        rgba(67, 114, 195, 0.45);
+
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 8px;
 }
 
-* {
-  box-sizing: border-box;
-}
+* { box-sizing: border-box; }
 
-html,
-body,
-#root {
-  min-height: 100%;
-}
+html, body, #root { min-height: 100%; }
 
 body {
   margin: 0;
   background: var(--bg);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
-button,
-input,
-select,
-textarea {
-  font: inherit;
-}
+button, input, select, textarea { font: inherit; }
+button { border: 0; background: transparent; cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: 0.55; }
 
-button {
-  border: 0;
-  background: transparent;
-  cursor: pointer;
-}
-
-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-input,
-select,
-textarea {
+input, select, textarea {
   width: 100%;
-  border: 1px solid var(--line-strong);
-  border-radius: 6px;
-  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
   color: var(--ink);
   outline: none;
-  padding: 8px 10px;
+  padding: 6px 10px;
+  font-size: 13px;
 }
-
-textarea {
-  resize: vertical;
-}
-
-input:focus,
-select:focus,
-textarea:focus {
+input, select { height: 30px; }
+textarea { min-height: 64px; padding: 8px 10px; resize: vertical; line-height: 1.55; }
+input:focus, select:focus, textarea:focus {
   border-color: var(--blue);
-  box-shadow: 0 0 0 3px rgba(67, 114, 195, 0.12);
+  box-shadow: 0 0 0 3px var(--focus);
 }
 
+/* ─── App chrome ─── */
 .app-shell {
   width: 100%;
   min-height: 100vh;
-  padding: 18px 14px 28px;
+  padding: 14px 14px 28px;
 }
 
 .app-nav {
@@ -98,12 +98,14 @@ textarea:focus {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  width: min(100%, 980px);
-  margin: 0 auto 14px;
+  width: min(100%, 1100px);
+  margin: 0 auto 12px;
+  padding: 4px 0 8px;
+  border-bottom: 1px solid var(--line);
 }
 
 .app-mark {
-  display: flex;
+  display: inline-flex;
   align-items: baseline;
   gap: 8px;
   min-width: 0;
@@ -111,8 +113,8 @@ textarea:focus {
 
 .app-name {
   color: var(--ink);
-  font-size: 15px;
-  font-weight: 760;
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .app-context {
@@ -121,43 +123,45 @@ textarea:focus {
   white-space: nowrap;
 }
 
+/* GitHub-style underline tabs (was a pill bar) */
 .page-tabs {
   display: flex;
-  align-items: center;
-  gap: 4px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: #ffffff;
-  padding: 3px;
+  align-items: flex-end;
+  gap: 2px;
+  margin-bottom: -9px;  /* sit on top of border-bottom of .app-nav */
 }
 
 .page-tabs button {
-  min-height: 31px;
-  border-radius: 5px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 0;
+  background: transparent;
   color: var(--text-2);
   font-size: 13px;
-  font-weight: 650;
-  padding: 6px 11px;
+  font-weight: 500;
+  border-bottom: 2px solid transparent;
 }
 
 .page-tabs button:hover:not(:disabled) {
-  background: var(--surface-2);
-  color: var(--blue-dark);
+  color: var(--ink);
 }
 
 .page-tabs button.active {
-  background: var(--blue-pale);
-  color: var(--blue-dark);
+  color: var(--ink);
+  font-weight: 600;
+  border-bottom-color: var(--teal);
+  background: transparent;
 }
 
+/* ─── Page surfaces ─── */
 .page {
-  width: min(100%, 860px);
+  width: min(100%, 1100px);
   margin: 0 auto;
-  padding: 10px 0;
+  padding: 8px 0 16px;
 }
 
 .page-wide {
-  width: min(100%, 980px);
+  width: min(100%, 1180px);
 }
 
 .page-header {
@@ -165,19 +169,20 @@ textarea:focus {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .page-header h1 {
   margin: 0;
   color: var(--ink);
-  font-size: 20px;
-  font-weight: 760;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 0;
   line-height: 1.2;
 }
 
 .page-header p {
-  margin: 4px 0 0;
+  margin: 2px 0 0;
   color: var(--muted);
   font-size: 12px;
 }
@@ -187,76 +192,76 @@ textarea:focus {
 .row-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
+/* ─── Buttons ─── */
 .ghost-button,
-.primary-button,
-.link-button {
-  border-radius: 6px;
+.primary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--r-md);
   font-size: 13px;
-  font-weight: 650;
-  line-height: 1.2;
-  min-height: 33px;
-  padding: 8px 12px;
-  transition: background-color 140ms ease, color 140ms ease, border-color 140ms ease, transform 140ms ease;
+  font-weight: 500;
+  line-height: 1;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
 }
 
 .ghost-button {
   border: 1px solid var(--line);
-  background: #ffffff;
-  color: var(--text-2);
+  background: var(--surface);
+  color: var(--ink);
 }
-
 .ghost-button:hover:not(:disabled) {
   background: var(--surface-2);
-  border-color: rgba(67, 114, 195, 0.32);
-  color: var(--blue-dark);
 }
 
 .primary-button {
-  border: 1px solid var(--blue);
-  background: var(--blue);
-  color: #ffffff;
+  border: 1px solid var(--teal);
+  background: var(--teal);
+  color: #fff;
 }
-
 .primary-button:hover:not(:disabled) {
-  background: var(--blue-dark);
+  background: var(--teal-dark);
+  border-color: var(--teal-dark);
 }
 
 .link-button {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: var(--r-md);
+  background: transparent;
   color: var(--blue-dark);
-  padding-inline: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  transition: background-color 120ms ease, color 120ms ease;
 }
-
 .link-button:hover:not(:disabled) {
   background: var(--surface-2);
 }
+.link-button.danger { color: var(--pink-dark); }
+.link-button.danger:hover:not(:disabled) { background: var(--pink-pale); }
 
-.link-button.danger {
-  color: var(--pink-dark);
-}
-
-.link-button.danger:hover:not(:disabled) {
-  background: var(--pink-pale);
-}
-
+/* ─── New row composite (input + button) ─── */
 .new-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
-.content-card,
-.notice,
-.status-line,
-.empty-state,
-.memory-widget-direct {
+/* ─── Cards / lists ─── */
+.content-card {
   border: 1px solid var(--line);
-  border-radius: 6px;
-  background: #ffffff;
+  border-radius: var(--r-lg);
+  background: var(--surface);
 }
 
 .list-card {
@@ -267,217 +272,180 @@ textarea:focus {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
-  min-height: 58px;
-  border-bottom: 1px solid var(--line);
-  padding: 12px 16px;
+  gap: 12px;
+  min-height: 44px;
+  border-bottom: 1px solid var(--line-soft);
+  padding: 8px 12px;
+  background: var(--surface);
 }
+.list-row:last-child { border-bottom: 0; }
+.list-row:hover { background: var(--surface-2); }
+.list-row.active { background: rgba(198, 243, 241, 0.22); }
 
-.list-row:last-child {
-  border-bottom: 0;
-}
-
-.list-row.active {
-  background: var(--surface-2);
-}
-
-.row-main {
-  min-width: 0;
-}
-
+.row-main { min-width: 0; flex: 1; }
 .row-main strong {
   display: block;
   color: var(--ink);
-  font-size: 14px;
-  font-weight: 720;
+  font-size: 13px;
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
 .row-main span,
 .list-row small {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   overflow-wrap: anywhere;
 }
 
 .row-title {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
 }
 
 .pill {
   display: inline-flex;
   align-items: center;
-  border: 1px solid rgba(67, 114, 195, 0.18);
+  height: 20px;
+  padding: 0 7px;
   border-radius: 999px;
-  background: var(--blue-pale);
-  color: var(--blue-dark);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text-2);
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 500;
   line-height: 1;
-  padding: 4px 7px;
 }
-
 .pill.neutral {
-  border-color: rgba(67, 114, 195, 0.18);
-  background: var(--blue-pale);
-  color: var(--blue-dark);
+  border-color: var(--line);
+  background: var(--surface-2);
+  color: var(--text-2);
 }
 
-.memory-page {
-  width: min(100%, 1120px);
-}
-
+/* ─── Memory page (hosts the shared widget) ─── */
+.memory-page { width: min(100%, 1180px); }
 .memory-widget-direct {
-  min-height: 760px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  min-height: 560px;
   overflow: hidden;
 }
 
+/* ─── Telegram admin layout ─── */
 .admin-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.9fr);
-  gap: 14px;
+  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+  gap: 12px;
 }
 
-.admin-row {
-  align-items: flex-start;
-}
+.admin-row { align-items: flex-start; }
 
 .edit-form {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   align-content: start;
-  padding: 14px;
+  padding: 12px;
 }
+.edit-form textarea { min-height: 80px; }
 
-.edit-form textarea {
-  min-height: 92px;
-}
-
+/* ─── Notices / status ─── */
 .notice,
 .status-line,
 .empty-state {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
   color: var(--text-2);
   font-size: 13px;
-  padding: 12px 14px;
+  padding: 8px 12px;
 }
 
 .status-line,
 .shell-notice,
 .app-error {
-  width: min(100%, 980px);
-  margin: 0 auto 12px;
+  width: min(100%, 1100px);
+  margin: 0 auto 10px;
 }
 
 .notice.error,
 .error {
   border-color: rgba(247, 96, 154, 0.35);
-  background: var(--pink-pale);
+  background: rgba(255, 224, 239, 0.5);
   color: var(--pink-dark);
 }
 
 .success {
   border: 1px solid rgba(82, 176, 68, 0.32);
-  background: var(--green-pale);
+  background: rgba(232, 247, 229, 0.55);
   color: var(--green-dark);
 }
 
+.empty-state {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 20px 14px;
+  text-align: center;
+  background: var(--surface);
+  border-color: var(--line-soft);
+}
+
+/* ─── Telegram pending approval card ─── */
 .telegram-pending-card {
-  width: min(100%, 640px);
-  margin: 22px auto 0;
+  width: min(100%, 520px);
+  margin: 18px auto 0;
   border: 1px solid var(--line);
-  border-radius: 6px;
-  background: #ffffff;
-  box-shadow: 0 1px 2px rgba(31, 35, 40, 0.04);
-  padding: 24px;
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  padding: 18px 20px;
 }
 
 .telegram-pending-badge {
   display: inline-flex;
   align-items: center;
-  min-height: 24px;
-  border: 1px solid rgba(67, 114, 195, 0.18);
-  border-radius: 6px;
-  background: var(--surface-2);
-  color: var(--blue-dark);
-  font-size: 12px;
-  font-weight: 720;
-  padding: 4px 8px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(240, 188, 46, 0.45);
+  background: var(--gold-pale);
+  color: #76570e;
+  font-size: 11px;
+  font-weight: 500;
 }
 
 .telegram-pending-card h1 {
-  margin: 16px 0 8px;
+  margin: 12px 0 6px;
   color: var(--ink);
-  font-size: 23px;
-  font-weight: 760;
+  font-size: 17px;
+  font-weight: 600;
   letter-spacing: 0;
-  line-height: 1.18;
+  line-height: 1.25;
 }
 
 .telegram-pending-card p {
   margin: 0;
   color: var(--text-2);
-  font-size: 15px;
+  font-size: 13px;
   line-height: 1.5;
 }
 
 .telegram-pending-card .telegram-pending-detail {
-  margin-top: 10px;
+  margin-top: 6px;
   color: var(--muted);
-  font-size: 13px;
-}
-
-.loading-state,
-.empty-state {
-  color: var(--muted);
-  font-size: 14px;
-  padding: 36px 16px;
-  text-align: center;
+  font-size: 12px;
 }
 
 @media (max-width: 760px) {
-  .app-shell {
-    padding: 14px 12px 24px;
-  }
-
-  .app-nav,
-  .page-header {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .page-tabs {
-    width: 100%;
-  }
-
-  .page-tabs button {
-    flex: 1;
-  }
-
-  .toolbar-actions {
-    width: 100%;
-  }
-
-  .toolbar-actions button {
-    flex: 1 1 auto;
-  }
-
-  .new-row,
-  .admin-layout {
-    grid-template-columns: 1fr;
-  }
-
-  .list-row {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .row-actions {
-    width: 100%;
-  }
+  .app-shell { padding: 12px 12px 24px; }
+  .app-nav { flex-wrap: wrap; gap: 8px; }
+  .page-header { align-items: stretch; flex-direction: column; }
+  .page-tabs { width: 100%; overflow-x: auto; }
+  .toolbar-actions { width: 100%; }
+  .new-row { grid-template-columns: 1fr; }
+  .admin-layout { grid-template-columns: 1fr; }
+  .list-row { align-items: flex-start; flex-direction: column; gap: 6px; }
+  .row-actions { width: 100%; }
 }

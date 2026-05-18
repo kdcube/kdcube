@@ -185,11 +185,16 @@ So yes: the bundle does receive a request-specific communicator for REST calls, 
 Practical rule:
 - inside bundle code, use `self.comm` / `self.comm_context` as request-bound surfaces
 - if the bundle is singleton, never retain an old communicator reference across requests
+- use `bundle_call_context` for small bundle-owned metadata that must follow
+  this invocation into tools, nested agents, and isolated runtimes
 
 For custom singleton bundles that do not use `BaseEntrypoint`, the platform now
 also exposes request-local helpers via `kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx`:
 - `get_current_request_context()`
 - `get_current_comm()`
+- `get_current_bundle_call_context()`
+- `update_current_bundle_call_context(...)`
+- `bind_current_bundle_call_context_patch(...)`
 
 Those helpers are bound by the platform for queued `run(...)` execution and for
 REST/widget invocation paths. Use them instead of storing request execution
@@ -222,6 +227,13 @@ Lifecycle implications:
 - `bundle_call_context` is the reserved JSON context that proc snapshots and
   restores into nested runtimes; use it for task/execution metadata tools must
   inherit without model-supplied arguments
+- background job processing seeds `bundle_call_context` from the job envelope:
+  `kind`, `job_id`, `work_kind`, `source`, `metadata`, and `payload`
+- if a producer needs a later `@on_job` handler to inherit request-scoped model
+  routing, selected agent strength, or other call metadata, put those fields in
+  the job metadata/payload and have the handler re-apply them through
+  `update_current_bundle_call_context(...)` or
+  `bind_current_bundle_call_context_patch(...)`
 - the handler should assume retry is possible until the stream message is acked
 - cron should decide what is due; `@on_job` should execute the ready job
 - long-running per-user work should be queued as jobs instead of executed inside

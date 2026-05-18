@@ -14,7 +14,7 @@ export function MemoryPage({ memory, reload, callOperation }: MemoryPageProps) {
       <div className="page-header">
         <div>
           <h1>Memory</h1>
-          <p>{count} records in the current memory view</p>
+          <p>{count} records in scope</p>
         </div>
         <button type="button" className="ghost-button" onClick={() => void reload()}>Refresh</button>
       </div>

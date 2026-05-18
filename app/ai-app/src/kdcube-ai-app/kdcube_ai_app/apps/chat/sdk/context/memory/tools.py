@@ -216,6 +216,24 @@ class UserMemoryTools:
             self._schema_ready = True
         return store, _scope_from_dict(raw), raw
 
+    async def _memory_usage_enabled(self, store: UserMemoryStore, scope: MemoryScope) -> bool:
+        try:
+            prefs = await store.get_user_preferences(scope=scope)
+            return bool(prefs.get("memory_enabled", True))
+        except Exception:
+            # Older deployments may not have the preference table until the
+            # schema migration runs. Do not break existing tools because of
+            # the preference lookup itself.
+            return True
+
+    async def _disabled_by_user(self, store: UserMemoryStore, scope: MemoryScope) -> Optional[Dict[str, Any]]:
+        if await self._memory_usage_enabled(store, scope):
+            return None
+        return _error(
+            "memory_usage_disabled_by_user",
+            "The user disabled durable memory use. Do not read or write user memory.",
+        )
+
     async def _embed_one(self, text: str) -> Optional[Sequence[float]]:
         if not self._config.embedding_enabled or self._embedder is None:
             return None
@@ -254,6 +272,9 @@ class UserMemoryTools:
     ) -> Dict[str, Any]:
         try:
             store, scope, _raw = await self._store_and_scope()
+            disabled = await self._disabled_by_user(store, scope)
+            if disabled:
+                return disabled
             mode_value = mode if mode else "hybrid"
             query_embedding = None
             if mode_value == "hybrid":
@@ -289,6 +310,9 @@ class UserMemoryTools:
     ) -> Dict[str, Any]:
         try:
             store, scope, _raw = await self._store_and_scope()
+            disabled = await self._disabled_by_user(store, scope)
+            if disabled:
+                return disabled
             rows = await store.search(
                 MemorySearchRequest(
                     scope=scope,
@@ -330,6 +354,9 @@ class UserMemoryTools:
             return _error("memory_write_disabled", "This memory tool instance is read-only")
         try:
             store, scope, raw = await self._store_and_scope()
+            disabled = await self._disabled_by_user(store, scope)
+            if disabled:
+                return disabled
             embedding = await self._embed_one("\n".join(part for part in [memory, context] if str(part).strip()))
             labels_list = normalize_terms(labels)
             keywords_list = normalize_terms(keywords)
@@ -380,6 +407,9 @@ class UserMemoryTools:
             return _error("memory_write_disabled", "This memory tool instance is read-only")
         try:
             store, scope, raw = await self._store_and_scope()
+            disabled = await self._disabled_by_user(store, scope)
+            if disabled:
+                return disabled
             record = await store.confirm_memory(
                 scope=scope,
                 memory_id=memory_id,
@@ -406,6 +436,9 @@ class UserMemoryTools:
             return _error("memory_write_disabled", "This memory tool instance is read-only")
         try:
             store, scope, raw = await self._store_and_scope()
+            disabled = await self._disabled_by_user(store, scope)
+            if disabled:
+                return disabled
             record = await store.retire_memory(
                 scope=scope,
                 memory_id=memory_id,

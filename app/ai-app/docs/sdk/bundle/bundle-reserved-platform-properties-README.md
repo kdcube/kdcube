@@ -189,6 +189,57 @@ Storage summary:
 
 This property is interpreted by `BaseEntrypoint`, not by bundle code directly.
 
+### Request-scoped override through `bundle_call_context`
+
+Deployment-scoped `role_models` is still the durable source of model routing.
+For one invocation, bundle code may overlay role routing through
+`bundle_call_context.role_models`.
+
+Use this when a bundle API or widget lets the user choose a temporary agent
+strength, for example:
+
+- `lite` -> Haiku
+- `regular` -> Sonnet
+- `strong` -> Opus
+
+Example:
+
+```python
+from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_bundle_call_context_patch
+
+strength_to_model = {
+    "lite": "claude-haiku-4-5-20251001",
+    "regular": "claude-sonnet-4-6",
+    "strong": "claude-opus-4-1",
+}
+
+model = strength_to_model.get(strength, strength_to_model["regular"])
+
+with bind_current_bundle_call_context_patch({
+    "role_models": {
+        "my.named.agent": {
+            "provider": "anthropic",
+            "model": model,
+        },
+    },
+    "my_bundle": {"selected_strength": strength},
+}):
+    await run_named_agent(...)
+```
+
+Precedence:
+
+1. `bundle_call_context.role_models` for the currently bound invocation
+2. effective bundle props `role_models`
+3. platform defaults
+
+The request-scoped override is portable into nested tools and isolated
+runtimes because `bundle_call_context` is snapshotted through
+`RUNTIME_GLOBALS_JSON`. It is not persisted back to `bundles.yaml`, Redis, or
+admin props. If a bundle wants the same override to apply to a later background
+job or request, it must store the selected mode in its own durable state or job
+payload and re-apply it in that later invocation.
+
 ## `embedding`
 
 `embedding` overrides the embedding provider/model for the bundle.

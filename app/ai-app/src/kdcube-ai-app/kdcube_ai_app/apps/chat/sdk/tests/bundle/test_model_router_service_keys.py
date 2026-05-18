@@ -17,6 +17,7 @@ import types
 import pytest
 
 from kdcube_ai_app.apps.chat.sdk import config as sdk_config
+from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_bundle_call_context
 from kdcube_ai_app.infra.service_hub import inventory
 
 
@@ -35,6 +36,8 @@ def _make_config(*, openai_api_key="", claude_api_key="", google_api_key=""):
     cfg.custom_model_endpoint = None
     cfg.custom_model_api_key = None
     cfg.role_models = {}
+    cfg.default_llm_model = {"provider": "anthropic", "model_name": "claude-sonnet-static"}
+    cfg.format_fixer_model = "claude-haiku-static"
     return cfg
 
 
@@ -99,6 +102,44 @@ class TestMkOpenai:
         router = inventory.ModelRouter(_make_config(openai_api_key=""))
         router._mk_openai("gpt-4o", 0.0)
         assert captured["api_key"] is None
+
+
+class TestRequestRoleModelOverrides:
+    def test_bundle_call_context_role_models_override_static_role(self):
+        cfg = _make_config()
+        cfg.role_models = {
+            "memory.reconciler": {"provider": "anthropic", "model": "claude-sonnet-static"}
+        }
+        router = inventory.ModelRouter(cfg)
+
+        assert router.describe("memory.reconciler").model_name == "claude-sonnet-static"
+        with bind_current_bundle_call_context(
+            {
+                "role_models": {
+                    "memory.reconciler": {
+                        "provider": "anthropic",
+                        "model": "claude-haiku-request",
+                    }
+                }
+            }
+        ):
+            hint = router.describe("memory.reconciler")
+            assert hint.provider == "anthropic"
+            assert hint.model_name == "claude-haiku-request"
+
+        assert router.describe("memory.reconciler").model_name == "claude-sonnet-static"
+
+    def test_bundle_call_context_role_models_accept_model_string(self):
+        cfg = _make_config()
+        cfg.role_models = {
+            "agent.decision": {"provider": "anthropic", "model": "claude-sonnet-static"}
+        }
+        router = inventory.ModelRouter(cfg)
+
+        with bind_current_bundle_call_context({"role_models": {"agent.decision": "claude-opus-request"}}):
+            hint = router.describe("agent.decision")
+            assert hint.provider == "anthropic"
+            assert hint.model_name == "claude-opus-request"
 
 
 # ---------------------------------------------------------------------------

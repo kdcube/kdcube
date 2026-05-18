@@ -264,6 +264,56 @@ The current memory panel is backed by the existing preferences canvas. It is a
 temporary compatibility surface until the new cross-conversation memories
 subsystem replaces it.
 
+SDK durable memory maintenance uses the shared `memories_widget_*` operations.
+The reconciliation flow is intentionally two phase: a dry run writes a proposal
+and artifacts; a later apply call mutates memory only after explicit
+confirmation.
+
+```ts
+const analysis = await callOperation("memories_widget_reconcile_analyze", {
+  scope_filter: "current_bundle",
+  limit: 30
+});
+
+const dryRun = await callOperation("memories_widget_reconcile_run", {
+  scope_filter: "current_bundle",
+  limit: 30,
+  reason: "manual widget reconciliation dry run",
+  agent_type: "regular", // "lite" | "regular" | "strong"
+  reconciliation_context: {
+    // Optional JSON-safe bundle-owned controls for this reconciliation job.
+  }
+});
+
+const jobs = await callOperation("memories_widget_reconcile_jobs");
+
+const proposal = await callOperation("memories_widget_reconcile_export", {
+  job_id: dryRun.job.job_id,
+  artifact: "proposal_md"
+});
+
+await callOperation("memories_widget_reconcile_apply", {
+  job_id: dryRun.job.job_id,
+  confirm: true
+});
+```
+
+`memories_widget_reconcile_run` does not change user memory. It creates a
+snapshot, queues a background proposal job, and writes `proposal.json` /
+`proposal.md` artifacts. `agent_type` selects the reconciler strength for that
+job. The value is persisted in the job payload and rebound when the background
+worker runs so `memory.reconciler` uses the configured
+`memory.reconciler.lite`, `.regular`, or `.strong` role model for this job only.
+`reconciliation_context` is an optional JSON object. It is persisted with the
+job, enqueued with the background task, and rebound under
+`bundle_call_context.memory.reconciliation.context` when the reconciler runs.
+Bundles that need more request-local controls can override
+`on_memory_reconciliation_request(request=...)` to validate or augment the
+request without changing the platform operation signature.
+`memories_widget_reconcile_apply` is the mutating operation; it only accepts a
+`succeeded` proposal job and creates another safety snapshot before applying
+retire, weaken, or merge actions.
+
 Telegram admin operations:
 
 ```ts

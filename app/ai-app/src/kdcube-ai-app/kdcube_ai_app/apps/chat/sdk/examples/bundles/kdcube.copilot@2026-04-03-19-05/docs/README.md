@@ -16,3 +16,20 @@ see_also:
 
 - [Telegram setup](integrations/telegram-setup.md) - webhook, Mini App,
   commands, and the `/start` admin approval flow.
+- The copilot WebApp inherits the SDK durable-memory operations through
+  `BaseEntrypointWithEconomicsAndMemory`. The memory maintenance contract is
+  two phase:
+  - `memories_widget_reconcile_run` queues a dry-run proposal job and does not
+    mutate memory records. It accepts `agent_type: lite | regular | strong`
+    and stores the selected reconciler strength with the background job.
+    It also accepts optional JSON-safe `reconciliation_context`, which is
+    persisted, enqueued, and rebound under
+    `bundle_call_context.memory.reconciliation.context` when the job runs.
+    Bundles can override `on_memory_reconciliation_request(request=...)` to
+    validate or augment request-local reconciliation controls.
+  - `memories_widget_reconcile_export` exposes proposal artifacts for review.
+  - `memories_widget_reconcile_apply` applies a succeeded proposal only with
+    `confirm: true` and creates a safety snapshot before retire/weaken/merge
+    changes.
+  - Telegram Mini App wrappers expose the same flow through
+    `telegram_memories_widget_reconcile_*` public APIs.

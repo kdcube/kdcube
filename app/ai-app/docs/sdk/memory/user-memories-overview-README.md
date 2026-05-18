@@ -97,18 +97,25 @@ tables, and the module uses `pgvector` in version 1. Redis is not part of the
 memory correctness path; use it only for optional cross-replica locks around
 maintenance jobs.
 
-The store creates three tables in the tenant/project schema:
+The store creates/uses these tables in the tenant/project schema:
 
 ```text
 <schema>.user_memory_entries
 <schema>.user_memory_events
 <schema>.user_memory_aliases
+<schema>.user_memory_maintenance_artifacts
+<schema>.user_bundle_props
 ```
 
 `user_memory_entries` is the current state of each memory.
 `user_memory_events` is the append-only evidence trail: confirmations,
 refinements, contradictions, edits, retirements, and agent observations.
 `user_memory_aliases` stores stable lookup hooks such as labels and keywords.
+`user_memory_maintenance_artifacts` indexes user-visible memory snapshots and
+reconciliation jobs whose larger artifacts live in bundle storage.
+`user_bundle_props` stores user-scoped settings. Memory uses this generic table
+with `subsystem='memory'`, `bundle_id='*'`, and `key='preferences'` for the
+cross-bundle user preference that enables or disables memory use.
 
 These names intentionally do not reuse the older `<schema>.user_memory`
 `fact/strength/tags` table. That table can continue to exist until we decide on
@@ -138,6 +145,33 @@ The store accepts an existing processor `pg_pool`:
 store = UserMemoryStore(pg_pool=request.app.state.pg_pool, tenant=tenant, project=project)
 await store.ensure_schema()
 ```
+
+## User Control
+
+The memory widget exposes a global "Use my memory" preference. This is not
+bundle-local: when the user disables memory, SDK memory tools and announce
+hotset loading stop reading and writing memory for that user across all
+bundles in the tenant/project schema.
+
+The control UI remains available while memory is disabled so the user can
+inspect, export, delete, or re-enable saved notes. The preference record is:
+
+```text
+user_bundle_props
+  user_id=<current user>
+  bundle_id="*"
+  subsystem="memory"
+  key="preferences"
+  value_json={
+    "memory_enabled": false,
+    "updated_by": "user",
+    "metadata": {}
+  }
+```
+
+Single-note delete and filtered bulk delete are hard deletes. They remove the
+memory row and rely on `ON DELETE CASCADE` to remove related event and alias
+rows. Use `retire` only when preserving an inactive memory is desired.
 
 ## Writes
 
@@ -314,8 +348,10 @@ policy allows it.
 
 User edits should become events, not silent overwrites. A canvas edit can call
 `record_signal(event_type="user_edit", match_memory_id=...)`; a user
-confirmation can call `confirm_memory(...)`; a delete/hide action should
-normally call `retire_memory(...)` so the evidence trail remains available.
+confirmation can call `confirm_memory(...)`. A user delete action should call
+the hard-delete API so the memory row and related event/alias rows are removed.
+Use `retire_memory(...)` only for a status transition where the inactive memory
+should remain in storage for explicit historical inspection.
 
 The service/API layer can live in a bundle base entrypoint: widgets and API
 endpoints call this SDK store with the authenticated user scope and the

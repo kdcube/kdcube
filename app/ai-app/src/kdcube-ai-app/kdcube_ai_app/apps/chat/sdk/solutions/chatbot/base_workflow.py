@@ -509,6 +509,16 @@ class BaseWorkflow():
                 tenant=scope.tenant,
                 project=scope.project,
             )
+            try:
+                prefs = await store.get_user_preferences(scope=scope)
+                if prefs.get("memory_enabled") is False:
+                    runtime_ctx.memory_hotset = []
+                    runtime_ctx.memory_hotset_error = "disabled by user"
+                    return
+            except Exception:
+                # Preference table may not exist until the memory schema
+                # migration runs; keep legacy behavior in that case.
+                pass
             timeout = float(getattr(runtime_ctx, "memory_announce_timeout_seconds", 1.5) or 1.5)
             rows = await asyncio.wait_for(
                 store.search(

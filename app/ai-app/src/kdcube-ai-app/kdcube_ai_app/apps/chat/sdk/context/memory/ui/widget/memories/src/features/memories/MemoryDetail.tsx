@@ -20,7 +20,7 @@ interface MemoryDetailProps {
 
 export function MemoryDetail({ onEdit }: MemoryDetailProps) {
   const dispatch = useAppDispatch();
-  const { allowWrite, eventsLoading, memories, saving, selectedEvents, selectedId } = useAppSelector((state) => state.memories);
+  const { allowWrite, eventsLoading, memories, memoryUseEnabled, saving, selectedEvents, selectedId } = useAppSelector((state) => state.memories);
   const memory = memories.find((item) => item.id === selectedId);
 
   useEffect(() => {
@@ -42,12 +42,12 @@ export function MemoryDetail({ onEdit }: MemoryDetailProps) {
 
       {allowWrite ? (
         <div className="detail-actions">
-          <button type="button" className="secondary-button" onClick={onEdit} disabled={saving}>Edit</button>
+          <button type="button" className="secondary-button" onClick={onEdit} disabled={saving || !memoryUseEnabled}>Edit</button>
           <button
             type="button"
             className="secondary-button"
             onClick={() => void dispatch(confirmMemory(memory.id)).then(() => dispatch(loadMemoryEvents(memory.id)))}
-            disabled={saving}
+            disabled={saving || !memoryUseEnabled}
           >
             Confirm
           </button>
@@ -55,17 +55,20 @@ export function MemoryDetail({ onEdit }: MemoryDetailProps) {
             type="button"
             className="secondary-button"
             onClick={() => void dispatch(pinMemory({ id: memory.id, pinned: !memory.pinned })).then(() => dispatch(loadMemoryEvents(memory.id)))}
-            disabled={saving || memory.status !== 'active'}
+            disabled={saving || !memoryUseEnabled || memory.status !== 'active'}
           >
             {memory.pinned ? 'Unpin' : 'Pin'}
           </button>
           <button
             type="button"
             className="danger-button"
-            onClick={() => void dispatch(retireMemory(memory.id)).then(() => dispatch(loadMemoryEvents(memory.id)))}
-            disabled={saving || memory.status === 'retired'}
+            onClick={() => {
+              if (!window.confirm('Delete this memory note and its memory events?')) return;
+              void dispatch(retireMemory(memory.id));
+            }}
+            disabled={saving}
           >
-            Retire
+            Delete
           </button>
         </div>
       ) : null}

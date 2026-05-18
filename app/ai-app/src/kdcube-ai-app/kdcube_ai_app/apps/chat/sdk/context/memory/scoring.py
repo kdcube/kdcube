@@ -125,7 +125,7 @@ def event_weight(event_type: str, *, confidence: float = 0.5, importance: float 
         return 0.0, 1.25 + conf + 0.5 * imp, False
     if event in {"retire", "retired"}:
         return 0.0, 2.0, False
-    if event in {"refine", "refinement", "merge", "manual_update"}:
+    if event in {"refine", "refinement", "merge", "squash", "manual_update"}:
         return 0.75 + 0.5 * conf + 0.5 * imp, 0.0, False
     if event in {"agent_observation", "observation", "inferred"}:
         return 0.25 + 0.5 * conf + 0.25 * imp, 0.0, False

@@ -7,7 +7,7 @@ function percent(value: number): string {
 
 export function MemoryList() {
   const dispatch = useAppDispatch();
-  const { hasMore, loading, memories, page, pageSize, selectedId } = useAppSelector((state) => state.memories);
+  const { count, hasMore, loading, memories, page, pageSize, selectedId } = useAppSelector((state) => state.memories);
 
   if (loading) return <div className="empty-state">Opening notes...</div>;
   if (memories.length === 0) return <div className="empty-state">No memory notes yet.</div>;
@@ -69,7 +69,7 @@ export function MemoryList() {
         >
           Previous
         </button>
-        <span>{page * pageSize + 1}-{page * pageSize + memories.length}</span>
+        <span>{count > 0 ? `${page * pageSize + 1}-${Math.min(count, page * pageSize + memories.length)} of ${count}` : '0'}</span>
         <button
           type="button"
           className="secondary-button"

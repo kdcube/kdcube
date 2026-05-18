@@ -6,10 +6,13 @@ import type {
   SnapshotExportPayload,
   SnapshotRestoreApplyPayload,
   SnapshotRestorePreviewPayload,
+  ReconcilerAgentType,
 } from '../../api/types';
 import {
   analyzeReconciliation,
+  applyReconciliation,
   createSnapshot,
+  deleteSnapshot,
   exportSnapshot,
   exportReconciliation,
   loadMemories,
@@ -18,6 +21,7 @@ import {
   runReconciliation,
   selectReconciliationJob,
   selectSnapshot,
+  setReconcilerAgentType,
 } from './memoriesSlice';
 
 function formatDate(value?: string): string {
@@ -70,13 +74,21 @@ export function ReconciliationPanel() {
     reconciliationError,
     reconciliationExport,
     reconciliationJobs,
+    reconciliationJobPage,
+    reconciliationJobsCount,
+    reconciliationJobsHasMore,
     reconciliationJobsLoading,
     reconciliationLoading,
     reconciliationRunning,
+    reconcilerAgentType,
+    memoryUseEnabled,
     selectedSnapshotId,
     selectedReconciliationJobId,
     snapshotExport,
     snapshotLoading,
+    snapshotPage,
+    snapshotsCount,
+    snapshotsHasMore,
     snapshots,
     scopeFilter,
   } = useAppSelector((state) => state.memories);
@@ -91,6 +103,7 @@ export function ReconciliationPanel() {
   const selectedJob = reconciliationJobs.find((job) => job.job_id === selectedReconciliationJobId);
   const selectedSnapshot = snapshots.find((snapshot) => snapshot.snapshot_id === selectedSnapshotId);
   const busy = reconciliationLoading || reconciliationRunning || reconciliationJobsLoading || snapshotLoading || restoreBusy;
+  const mutationDisabled = busy || !memoryUseEnabled;
   const downloading = downloadInProgress;
 
   async function previewRestore(snapshot: MemorySnapshot) {
@@ -126,7 +139,7 @@ export function ReconciliationPanel() {
       setRestoreResult(payload);
       setRestorePreview(payload.post_restore_preview || null);
       dispatch(loadMemories());
-      dispatch(loadSnapshots());
+      dispatch(loadSnapshots({ page: 0 }));
     } catch (error) {
       setRestoreError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -143,12 +156,26 @@ export function ReconciliationPanel() {
           <p>Analyze and export a dry-run proposal before any memory changes are applied.</p>
         </div>
         <div className="reconcile-actions">
+          {allowReconciliation ? (
+            <label className="reconcile-agent-select">
+              <span>Agent</span>
+              <select
+                value={reconcilerAgentType}
+                disabled={mutationDisabled}
+                onChange={(event) => dispatch(setReconcilerAgentType(event.target.value as ReconcilerAgentType))}
+              >
+                <option value="lite">Lite</option>
+                <option value="regular">Regular</option>
+                <option value="strong">Strong</option>
+              </select>
+            </label>
+          ) : null}
           {allowSnapshots ? (
             <button
               type="button"
               className="secondary-button"
-              disabled={busy}
-              onClick={() => void dispatch(createSnapshot()).then(() => dispatch(loadSnapshots()))}
+              disabled={mutationDisabled}
+              onClick={() => void dispatch(createSnapshot()).then(() => dispatch(loadSnapshots({ page: 0 })))}
             >
               Snapshot
             </button>
@@ -158,7 +185,7 @@ export function ReconciliationPanel() {
               <button
                 type="button"
                 className="secondary-button"
-                disabled={busy}
+                disabled={mutationDisabled}
                 onClick={() => void dispatch(analyzeReconciliation())}
               >
                 Analyze
@@ -166,10 +193,10 @@ export function ReconciliationPanel() {
               <button
                 type="button"
                 className="primary-button"
-                disabled={busy}
+                disabled={mutationDisabled}
                 onClick={() => void dispatch(runReconciliation()).then(() => {
-                  dispatch(loadReconciliationJobs());
-                  dispatch(loadSnapshots());
+                  dispatch(loadReconciliationJobs({ page: 0 }));
+                  dispatch(loadSnapshots({ page: 0 }));
                 })}
               >
                 Dry Run
@@ -214,7 +241,7 @@ export function ReconciliationPanel() {
                 className="icon-button"
                 title="Refresh snapshots"
                 disabled={busy}
-                onClick={() => void dispatch(loadSnapshots())}
+                onClick={() => void dispatch(loadSnapshots({ page: snapshotPage }))}
               >
                 R
               </button>
@@ -276,7 +303,7 @@ export function ReconciliationPanel() {
                 <button
                   type="button"
                   className="secondary-button"
-                  disabled={busy}
+                  disabled={mutationDisabled}
                   onClick={() => void previewRestore(selectedSnapshot)}
                 >
                   Restore Preview
@@ -284,10 +311,44 @@ export function ReconciliationPanel() {
                 <button
                   type="button"
                   className="danger-button"
-                  disabled={busy || !restorePreview || restorePreview.snapshot_id !== selectedSnapshot.snapshot_id}
+                  disabled={mutationDisabled || !restorePreview || restorePreview.snapshot_id !== selectedSnapshot.snapshot_id}
                   onClick={() => void applyRestore(selectedSnapshot)}
                 >
                   Restore
+                </button>
+                <button
+                  type="button"
+                  className="danger-button"
+                  disabled={busy}
+                  onClick={() => {
+                    if (!window.confirm('Delete this memory snapshot? This does not delete current memories.')) return;
+                    void dispatch(deleteSnapshot({ snapshotId: selectedSnapshot.snapshot_id }));
+                  }}
+                >
+                Delete
+                </button>
+              </div>
+            ) : null}
+            {snapshots.length > 0 ? (
+              <div className="pager compact-pager">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={busy || snapshotPage === 0}
+                  onClick={() => void dispatch(loadSnapshots({ page: Math.max(0, snapshotPage - 1) }))}
+                >
+                  Previous
+                </button>
+                <span>
+                  Page {snapshotPage + 1} · {snapshotsCount || snapshots.length} total
+                </span>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={busy || !snapshotsHasMore}
+                  onClick={() => void dispatch(loadSnapshots({ page: snapshotPage + 1 }))}
+                >
+                  Next
                 </button>
               </div>
             ) : null}
@@ -337,7 +398,7 @@ export function ReconciliationPanel() {
               className="icon-button"
               title="Refresh jobs"
               disabled={busy}
-              onClick={() => void dispatch(loadReconciliationJobs())}
+              onClick={() => void dispatch(loadReconciliationJobs({ page: reconciliationJobPage }))}
             >
               R
             </button>
@@ -352,9 +413,33 @@ export function ReconciliationPanel() {
             >
               <span>{job.status}</span>
               <strong>{job.proposal_count ?? 0} actions</strong>
+              <small>{job.agent_type || 'regular'} agent</small>
               <small>{formatDate(job.updated_at || job.created_at)}</small>
             </button>
           ))}
+          {reconciliationJobs.length > 0 ? (
+            <div className="pager compact-pager">
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={busy || reconciliationJobPage === 0}
+                onClick={() => void dispatch(loadReconciliationJobs({ page: Math.max(0, reconciliationJobPage - 1) }))}
+              >
+                Previous
+              </button>
+              <span>
+                Page {reconciliationJobPage + 1} · {reconciliationJobsCount || reconciliationJobs.length} total
+              </span>
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={busy || !reconciliationJobsHasMore}
+                onClick={() => void dispatch(loadReconciliationJobs({ page: reconciliationJobPage + 1 }))}
+              >
+                Next
+              </button>
+            </div>
+          ) : null}
         </div>
 
         <div className="reconcile-export">
@@ -370,10 +455,29 @@ export function ReconciliationPanel() {
                 Preview
               </button>
             ) : null}
+            {selectedJob ? (
+              <button
+                type="button"
+                className="danger-button"
+                disabled={mutationDisabled || selectedJob.status !== 'succeeded' || (selectedJob.proposal_count ?? 0) <= 0}
+                onClick={() => {
+                  if (!window.confirm('Apply this memory reconciliation proposal? A safety snapshot will be created first.')) return;
+                  void dispatch(applyReconciliation({ jobId: selectedJob.job_id })).then(() => {
+                    dispatch(loadReconciliationJobs({ page: 0 }));
+                    dispatch(loadSnapshots({ page: 0 }));
+                    dispatch(loadMemories());
+                  });
+                }}
+              >
+                Apply
+              </button>
+            ) : null}
           </div>
           {selectedJob ? (
             <div className="job-summary">
               <span>{selectedJob.job_id}</span>
+              <span>{selectedJob.agent_type || 'regular'} agent</span>
+              {selectedJob.role_model?.model ? <span>{selectedJob.role_model.model}</span> : null}
               {selectedJob.snapshot_id ? <span>snapshot {selectedJob.snapshot_id}</span> : null}
               <span>{selectedJob.candidate_count ?? 0} candidates</span>
               <span>{selectedJob.warning_count ?? 0} warnings</span>

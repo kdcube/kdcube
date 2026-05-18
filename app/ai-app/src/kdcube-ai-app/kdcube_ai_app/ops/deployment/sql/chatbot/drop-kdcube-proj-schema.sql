@@ -36,14 +36,19 @@ DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_um_emb_ivf;
 -- ---------- Indexes: user_memory_entries / events / aliases ----------
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_user_memory_entries_canonical;
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_user_memory_entries_scope;
+DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_user_memory_entries_hotset;
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_user_memory_entries_visible;
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_user_memory_entries_labels;
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_user_memory_entries_keywords;
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_user_memory_entries_tsv;
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_user_memory_entries_embedding;
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_user_memory_events_scope;
+DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_user_memory_events_scope_bundle;
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_user_memory_events_memory;
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_user_memory_aliases_value;
+DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_user_memory_maintenance_scope;
+DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_user_memory_maintenance_scope_bundle;
+DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_user_memory_maintenance_artifact;
 
 -- ---------- Indexes: conv_prefs ----------
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_cp_user_conv_key_ts;
@@ -54,6 +59,7 @@ DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_cp_tags_gin;
 -- ---------- Indexes: user_bundle_props ----------
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_ubp_user_bundle_updated;
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_ubp_bundle_updated;
+DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_ubp_subsystem_updated;
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_ubp_value_gin;
 
 -- ---------- Indexes: rag_chunks ----------
@@ -76,6 +82,7 @@ DROP TABLE IF EXISTS <SCHEMA>.rag_chunks CASCADE;
 DROP TABLE IF EXISTS <SCHEMA>.conv_pref_exceptions CASCADE;
 DROP TABLE IF EXISTS <SCHEMA>.conv_prefs CASCADE;
 DROP TABLE IF EXISTS <SCHEMA>.user_bundle_props CASCADE;
+DROP TABLE IF EXISTS <SCHEMA>.user_memory_maintenance_artifacts CASCADE;
 DROP TABLE IF EXISTS <SCHEMA>.user_memory_aliases CASCADE;
 DROP TABLE IF EXISTS <SCHEMA>.user_memory_events CASCADE;
 DROP TABLE IF EXISTS <SCHEMA>.user_memory_entries CASCADE;

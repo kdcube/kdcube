@@ -28,6 +28,11 @@ logger = logging.getLogger(__name__)
 MEMORY_TABLE = "user_memory_entries"
 EVENT_TABLE = "user_memory_events"
 ALIAS_TABLE = "user_memory_aliases"
+MAINTENANCE_TABLE = "user_memory_maintenance_artifacts"
+USER_BUNDLE_PROPS_TABLE = "user_bundle_props"
+MEMORY_PREFERENCES_SUBSYSTEM = "memory"
+MEMORY_PREFERENCES_BUNDLE_ID = "*"
+MEMORY_PREFERENCES_KEY = "preferences"
 
 
 def _safe_identifier(value: str, *, fallback: str = "kdcube_default_default") -> str:
@@ -244,10 +249,41 @@ class UserMemoryStore:
             )
             """,
             f"""
+            CREATE TABLE IF NOT EXISTS {schema}.{MAINTENANCE_TABLE} (
+                id TEXT PRIMARY KEY,
+                tenant TEXT NOT NULL,
+                project TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                bundle_id TEXT NOT NULL DEFAULT '',
+                artifact_type TEXT NOT NULL,
+                artifact_id TEXT NOT NULL,
+                scope_filter TEXT NOT NULL DEFAULT 'current_bundle',
+                status TEXT NOT NULL DEFAULT '',
+                storage_bundle_id TEXT NOT NULL DEFAULT '',
+                summary JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+                artifacts JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """,
+            f"""
+            CREATE TABLE IF NOT EXISTS {schema}.{USER_BUNDLE_PROPS_TABLE} (
+                user_id TEXT NOT NULL,
+                bundle_id TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value_json JSONB NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                subsystem TEXT NOT NULL DEFAULT 'bundle',
+                PRIMARY KEY (user_id, bundle_id, key)
+            )
+            """,
+            f"""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_user_memory_entries_canonical
             ON {schema}.{MEMORY_TABLE} (tenant, project, user_id, canonical_key)
             WHERE merged_into_id IS NULL
             """,
+            f"ALTER TABLE {schema}.{USER_BUNDLE_PROPS_TABLE} ADD COLUMN IF NOT EXISTS subsystem TEXT NOT NULL DEFAULT 'bundle'",
             f"ALTER TABLE {schema}.{MEMORY_TABLE} ADD COLUMN IF NOT EXISTS pinned BOOLEAN NOT NULL DEFAULT FALSE",
             f"CREATE INDEX IF NOT EXISTS idx_user_memory_entries_scope ON {schema}.{MEMORY_TABLE} (tenant, project, user_id, status, tier, updated_at DESC)",
             f"CREATE INDEX IF NOT EXISTS idx_user_memory_entries_hotset ON {schema}.{MEMORY_TABLE} (tenant, project, user_id, status, tier, pinned DESC, updated_at DESC)",
@@ -258,7 +294,15 @@ class UserMemoryStore:
             f"CREATE INDEX IF NOT EXISTS idx_user_memory_entries_embedding ON {schema}.{MEMORY_TABLE} USING ivfflat (embedding vector_cosine_ops) WITH (lists=50)",
             f"ALTER TABLE {schema}.{EVENT_TABLE} ADD COLUMN IF NOT EXISTS idempotency_key TEXT NOT NULL DEFAULT ''",
             f"CREATE INDEX IF NOT EXISTS idx_user_memory_events_scope ON {schema}.{EVENT_TABLE} (tenant, project, user_id, created_at DESC)",
+            f"CREATE INDEX IF NOT EXISTS idx_user_memory_events_scope_bundle ON {schema}.{EVENT_TABLE} (tenant, project, user_id, bundle_id, created_at DESC)",
             f"CREATE INDEX IF NOT EXISTS idx_user_memory_events_memory ON {schema}.{EVENT_TABLE} (memory_id, created_at DESC)",
+            f"CREATE INDEX IF NOT EXISTS idx_user_memory_maintenance_scope ON {schema}.{MAINTENANCE_TABLE} (tenant, project, user_id, artifact_type, updated_at DESC)",
+            f"CREATE INDEX IF NOT EXISTS idx_user_memory_maintenance_scope_bundle ON {schema}.{MAINTENANCE_TABLE} (tenant, project, user_id, bundle_id, artifact_type, updated_at DESC)",
+            f"CREATE INDEX IF NOT EXISTS idx_user_bundle_props_subsystem ON {schema}.{USER_BUNDLE_PROPS_TABLE} (user_id, subsystem, bundle_id, key, updated_at DESC)",
+            f"""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_user_memory_maintenance_artifact
+            ON {schema}.{MAINTENANCE_TABLE} (tenant, project, user_id, artifact_type, artifact_id)
+            """,
             f"""
             CREATE UNIQUE INDEX IF NOT EXISTS idx_user_memory_events_idempotency
             ON {schema}.{EVENT_TABLE} (tenant, project, user_id, idempotency_key)
@@ -544,6 +588,361 @@ class UserMemoryStore:
             rows = await con.fetch(sql, *args)
         return [self._event_from_row(dict(row)) for row in rows]
 
+    async def get_user_preferences(self, *, scope: MemoryScope) -> Dict[str, Any]:
+        """Return user-level memory preferences.
+
+        Absence means enabled. This keeps existing deployments permissive until
+        the user explicitly opts out.
+        """
+
+        pool = self._require_pool()
+        scope = scope.normalized()
+        async with pool.acquire() as con:
+            row = await con.fetchrow(
+                f"""
+                SELECT value_json, created_at, updated_at
+                FROM {self.schema}.{USER_BUNDLE_PROPS_TABLE}
+                WHERE user_id=$1
+                  AND bundle_id=$2
+                  AND key=$3
+                  AND COALESCE(subsystem, 'bundle')=$4
+                LIMIT 1
+                """,
+                scope.user_id,
+                MEMORY_PREFERENCES_BUNDLE_ID,
+                MEMORY_PREFERENCES_KEY,
+                MEMORY_PREFERENCES_SUBSYSTEM,
+            )
+        if not row:
+            now = _utc_now().isoformat()
+            return {
+                "memory_enabled": True,
+                "updated_by": "",
+                "metadata": {},
+                "created_at": now,
+                "updated_at": now,
+            }
+        data = dict(row)
+        prefs = _json(data.get("value_json"))
+        if not isinstance(prefs, dict):
+            prefs = {}
+        return {
+            "memory_enabled": bool(prefs.get("memory_enabled", True)),
+            "updated_by": str(prefs.get("updated_by") or ""),
+            "metadata": _json(prefs.get("metadata")),
+            "created_at": _coerce_datetime(data.get("created_at")).isoformat(),
+            "updated_at": _coerce_datetime(data.get("updated_at")).isoformat(),
+        }
+
+    async def set_user_preferences(
+        self,
+        *,
+        scope: MemoryScope,
+        memory_enabled: bool,
+        updated_by: str = "user",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        pool = self._require_pool()
+        scope = scope.normalized()
+        now = _utc_now()
+        value = {
+            "memory_enabled": bool(memory_enabled),
+            "updated_by": str(updated_by or "user"),
+            "metadata": metadata or {},
+            "tenant": scope.tenant,
+            "project": scope.project,
+        }
+        async with pool.acquire() as con:
+            row = await con.fetchrow(
+                f"""
+                INSERT INTO {self.schema}.{USER_BUNDLE_PROPS_TABLE}
+                    (user_id, bundle_id, key, value_json, created_at, updated_at, subsystem)
+                VALUES ($1, $2, $3, $4::jsonb, $5, $5, $6)
+                ON CONFLICT (user_id, bundle_id, key)
+                DO UPDATE SET
+                    value_json = EXCLUDED.value_json,
+                    subsystem = EXCLUDED.subsystem,
+                    updated_at = EXCLUDED.updated_at
+                RETURNING value_json, created_at, updated_at
+                """,
+                scope.user_id,
+                MEMORY_PREFERENCES_BUNDLE_ID,
+                MEMORY_PREFERENCES_KEY,
+                json.dumps(value, ensure_ascii=False, default=str),
+                now,
+                MEMORY_PREFERENCES_SUBSYSTEM,
+            )
+        data = dict(row) if row else {}
+        prefs = _json(data.get("value_json"))
+        if not isinstance(prefs, dict):
+            prefs = value
+        return {
+            "memory_enabled": bool(prefs.get("memory_enabled", memory_enabled)),
+            "updated_by": str(prefs.get("updated_by") or updated_by or "user"),
+            "metadata": _json(prefs.get("metadata")),
+            "created_at": _coerce_datetime(data.get("created_at"), default=now).isoformat(),
+            "updated_at": _coerce_datetime(data.get("updated_at"), default=now).isoformat(),
+        }
+
+    async def count_memories(
+        self,
+        *,
+        scope: MemoryScope,
+        query: str = "",
+        labels: Sequence[str] = (),
+        keywords: Sequence[str] = (),
+        kind: str = "",
+        status: str = "active",
+        visible_to_user: Optional[bool] = None,
+        include_private: bool = True,
+        scope_filter: str = "current_bundle",
+    ) -> int:
+        pool = self._require_pool()
+        scope = scope.normalized()
+        args: list[Any] = [scope.tenant, scope.project, scope.user_id]
+        where = ["tenant=$1", "project=$2", "user_id=$3", "merged_into_id IS NULL"]
+        normalized_status = normalize_term(status)
+        if normalized_status and normalized_status != "any":
+            args.append(normalized_status)
+            where.append(f"status=${len(args)}")
+        if kind:
+            args.append(normalize_term(kind))
+            where.append(f"kind=${len(args)}")
+        if visible_to_user is not None:
+            args.append(bool(visible_to_user))
+            where.append(f"visible_to_user=${len(args)}")
+        elif not include_private:
+            where.append("visible_to_user=TRUE")
+        self._append_scope_filter(where=where, args=args, scope=scope, scope_filter=scope_filter, table_alias="")
+        labels_list = normalize_terms(labels)
+        if labels_list:
+            args.append(labels_list)
+            where.append(f"labels && ${len(args)}::text[]")
+        keywords_list = normalize_terms(keywords)
+        if keywords_list:
+            args.append(keywords_list)
+            where.append(f"keywords && ${len(args)}::text[]")
+        normalized_query = str(query or "").strip()
+        lexical_tsquery = _lexical_tsquery(normalized_query)
+        if lexical_tsquery:
+            args.append(lexical_tsquery)
+            where.append(f"to_tsvector('english', search_text) @@ to_tsquery('english', ${len(args)})")
+        async with pool.acquire() as con:
+            count = await con.fetchval(
+                f"""
+                SELECT count(*)
+                FROM {self.schema}.{MEMORY_TABLE}
+                WHERE {' AND '.join(where)}
+                """,
+                *args,
+            )
+        return int(count or 0)
+
+    async def delete_memory(
+        self,
+        *,
+        scope: MemoryScope,
+        memory_id: str,
+        visible_to_user: Optional[bool] = None,
+        scope_filter: str = "current_bundle",
+        ensure_schema: bool = False,
+    ) -> bool:
+        """Hard-delete a user memory row.
+
+        Events and aliases reference memory rows with ON DELETE CASCADE, so this
+        removes the user-visible note and its attached audit events together.
+        """
+
+        if ensure_schema:
+            await self.ensure_schema()
+        pool = self._require_pool()
+        scope = scope.normalized()
+        args: list[Any] = [scope.tenant, scope.project, scope.user_id, str(memory_id or "")]
+        where = ["tenant=$1", "project=$2", "user_id=$3", "id=$4"]
+        if visible_to_user is not None:
+            args.append(bool(visible_to_user))
+            where.append(f"visible_to_user=${len(args)}")
+        self._append_scope_filter(where=where, args=args, scope=scope, scope_filter=scope_filter, table_alias="")
+        async with pool.acquire() as con:
+            row = await con.fetchrow(
+                f"""
+                DELETE FROM {self.schema}.{MEMORY_TABLE}
+                WHERE {' AND '.join(where)}
+                RETURNING id
+                """,
+                *args,
+            )
+        return bool(row)
+
+    async def register_maintenance_artifact(
+        self,
+        *,
+        scope: MemoryScope,
+        artifact_type: str,
+        artifact_id: str,
+        status: str = "",
+        scope_filter: str = "current_bundle",
+        storage_bundle_id: str = "",
+        summary: Optional[Dict[str, Any]] = None,
+        artifacts: Optional[Dict[str, Any]] = None,
+        created_at: Any = None,
+        updated_at: Any = None,
+    ) -> Dict[str, Any]:
+        """Register a user-scoped memory maintenance artifact.
+
+        Jobs and snapshots may be created through any bundle, but when a widget
+        reads `all_user_memories` it needs a user-level index independent from
+        the bundle storage that owns the artifact bytes.
+        """
+
+        pool = self._require_pool()
+        scope = scope.normalized()
+        artifact_type = normalize_term(artifact_type).replace(" ", "_")
+        artifact_id = str(artifact_id or "").strip()
+        if not artifact_type or not artifact_id:
+            raise ValueError("artifact_type and artifact_id are required")
+        storage_bundle_id = str(storage_bundle_id or scope.bundle_id or "").strip()
+        created = _coerce_datetime(created_at, default=_utc_now())
+        updated = _coerce_datetime(updated_at, default=created)
+        row_id = f"{scope.tenant}:{scope.project}:{scope.user_id}:{artifact_type}:{artifact_id}"
+        async with pool.acquire() as con:
+            row = await con.fetchrow(
+                f"""
+                INSERT INTO {self.schema}.{MAINTENANCE_TABLE}
+                    (id, tenant, project, user_id, bundle_id, artifact_type, artifact_id,
+                     scope_filter, status, storage_bundle_id, summary, artifacts, created_at, updated_at)
+                VALUES
+                    ($1, $2, $3, $4, $5, $6, $7,
+                     $8, $9, $10, $11::jsonb, $12::jsonb, $13, $14)
+                ON CONFLICT (tenant, project, user_id, artifact_type, artifact_id)
+                DO UPDATE SET
+                    bundle_id = EXCLUDED.bundle_id,
+                    scope_filter = EXCLUDED.scope_filter,
+                    status = EXCLUDED.status,
+                    storage_bundle_id = EXCLUDED.storage_bundle_id,
+                    summary = EXCLUDED.summary,
+                    artifacts = EXCLUDED.artifacts,
+                    created_at = LEAST({self.schema}.{MAINTENANCE_TABLE}.created_at, EXCLUDED.created_at),
+                    updated_at = EXCLUDED.updated_at
+                RETURNING *
+                """,
+                row_id,
+                scope.tenant,
+                scope.project,
+                scope.user_id,
+                scope.bundle_id,
+                artifact_type,
+                artifact_id,
+                normalize_scope_filter(scope_filter),
+                str(status or ""),
+                storage_bundle_id,
+                json.dumps(summary or {}, ensure_ascii=False, default=str),
+                json.dumps(artifacts or {}, ensure_ascii=False, default=str),
+                created,
+                updated,
+            )
+        return self._maintenance_artifact_from_row(dict(row)) if row else {}
+
+    async def list_maintenance_artifacts(
+        self,
+        *,
+        scope: MemoryScope,
+        artifact_type: str,
+        scope_filter: str = "current_bundle",
+        limit: int = 20,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        pool = self._require_pool()
+        scope = scope.normalized()
+        artifact_type = normalize_term(artifact_type).replace(" ", "_")
+        normalized_scope_filter = normalize_scope_filter(scope_filter)
+        args: list[Any] = [scope.tenant, scope.project, scope.user_id, artifact_type]
+        where = ["tenant=$1", "project=$2", "user_id=$3", "artifact_type=$4"]
+        if normalized_scope_filter != "all_user_memories":
+            args.append(scope.bundle_id)
+            where.append(f"bundle_id=${len(args)}")
+        limit = max(1, min(int(limit or 20), 100))
+        offset = max(0, int(offset or 0))
+        where_sql = " AND ".join(where)
+        async with pool.acquire() as con:
+            count = await con.fetchval(
+                f"SELECT count(*) FROM {self.schema}.{MAINTENANCE_TABLE} WHERE {where_sql}",
+                *args,
+            )
+            rows = await con.fetch(
+                f"""
+                SELECT *
+                FROM {self.schema}.{MAINTENANCE_TABLE}
+                WHERE {where_sql}
+                ORDER BY updated_at DESC, created_at DESC
+                LIMIT {limit} OFFSET {offset}
+                """,
+                *args,
+            )
+        return {
+            "items": [self._maintenance_artifact_from_row(dict(row)) for row in rows],
+            "count": int(count or 0),
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + limit < int(count or 0),
+        }
+
+    async def get_maintenance_artifact(
+        self,
+        *,
+        scope: MemoryScope,
+        artifact_type: str,
+        artifact_id: str,
+        allow_cross_bundle: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        pool = self._require_pool()
+        scope = scope.normalized()
+        args: list[Any] = [
+            scope.tenant,
+            scope.project,
+            scope.user_id,
+            normalize_term(artifact_type).replace(" ", "_"),
+            str(artifact_id or "").strip(),
+        ]
+        where = ["tenant=$1", "project=$2", "user_id=$3", "artifact_type=$4", "artifact_id=$5"]
+        if not allow_cross_bundle:
+            args.append(scope.bundle_id)
+            where.append(f"bundle_id=${len(args)}")
+        async with pool.acquire() as con:
+            row = await con.fetchrow(
+                f"SELECT * FROM {self.schema}.{MAINTENANCE_TABLE} WHERE {' AND '.join(where)} LIMIT 1",
+                *args,
+            )
+        return self._maintenance_artifact_from_row(dict(row)) if row else None
+
+    async def delete_maintenance_artifact(
+        self,
+        *,
+        scope: MemoryScope,
+        artifact_type: str,
+        artifact_id: str,
+        allow_cross_bundle: bool = False,
+    ) -> bool:
+        pool = self._require_pool()
+        scope = scope.normalized()
+        args: list[Any] = [
+            scope.tenant,
+            scope.project,
+            scope.user_id,
+            normalize_term(artifact_type).replace(" ", "_"),
+            str(artifact_id or "").strip(),
+        ]
+        where = ["tenant=$1", "project=$2", "user_id=$3", "artifact_type=$4", "artifact_id=$5"]
+        if not allow_cross_bundle:
+            args.append(scope.bundle_id)
+            where.append(f"bundle_id=${len(args)}")
+        async with pool.acquire() as con:
+            result = await con.execute(
+                f"DELETE FROM {self.schema}.{MAINTENANCE_TABLE} WHERE {' AND '.join(where)}",
+                *args,
+            )
+        return not str(result or "").endswith(" 0")
+
     async def confirm_memory(
         self,
         *,
@@ -599,6 +998,306 @@ class UserMemoryStore:
             )
         except ValueError:
             return None
+
+    async def merge_memories(
+        self,
+        *,
+        scope: MemoryScope,
+        source_memory_id: str,
+        target_memory_id: str,
+        reason: str = "merged by memory reconciliation",
+        originator: str = "user",
+        source: Optional[Dict[str, Any]] = None,
+        scope_filter: str = "current_bundle",
+        ensure_schema: bool = False,
+    ) -> Optional[Dict[str, MemoryRecord]]:
+        """Mark one memory as merged into another and audit both rows.
+
+        Reconciliation is proposal-driven, so this method is deliberately
+        explicit: both records must belong to the same user scope and pass the
+        requested scope filter. The source row becomes `merged` with
+        `merged_into_id=target`, while the target row receives merge evidence.
+        """
+
+        if ensure_schema:
+            await self.ensure_schema()
+        source_memory_id = str(source_memory_id or "").strip()
+        target_memory_id = str(target_memory_id or "").strip()
+        if not source_memory_id or not target_memory_id or source_memory_id == target_memory_id:
+            return None
+
+        pool = self._require_pool()
+        scope = scope.normalized()
+        base_source = dict(source or {})
+        normalized_scope_filter = normalize_scope_filter(scope_filter)
+        async with pool.acquire() as con:
+            async with con.transaction():
+                source_row = await self._fetch_memory_for_update_scoped(
+                    con,
+                    scope=scope,
+                    memory_id=source_memory_id,
+                    visible_to_user=True,
+                    scope_filter=normalized_scope_filter,
+                )
+                target_row = await self._fetch_memory_for_update_scoped(
+                    con,
+                    scope=scope,
+                    memory_id=target_memory_id,
+                    visible_to_user=True,
+                    scope_filter=normalized_scope_filter,
+                )
+                if source_row is None or target_row is None:
+                    return None
+
+                now = _utc_now()
+                source_scope = MemoryScope(scope.tenant, scope.project, scope.user_id, str(source_row.get("bundle_id") or ""))
+                source_signal = self._normalize_signal(
+                    source_scope,
+                    MemorySignal(
+                        memory=reason or f"merged into {target_memory_id}",
+                        event_type="merged",
+                        originator=originator,
+                        status="merged",
+                        visibility="internal",
+                        confidence=0.95,
+                        importance=0.5,
+                        source={
+                            **base_source,
+                            "action": "memory_reconciliation_merge_source",
+                            "source_memory_id": source_memory_id,
+                            "target_memory_id": target_memory_id,
+                        },
+                    ),
+                )
+                await self._insert_event(con, scope=source_scope, row=source_row, signal=source_signal)
+                source_updated = await con.fetchrow(
+                    f"""
+                    UPDATE {self.schema}.{MEMORY_TABLE}
+                    SET status='merged',
+                        tier=4,
+                        merged_into_id=$2,
+                        update_count=update_count + 1,
+                        negative_weight=negative_weight + 0.25,
+                        updated_at=$3,
+                        last_event_at=$3,
+                        source=$4::jsonb,
+                        metadata=metadata || $5::jsonb,
+                        revision=revision + 1
+                    WHERE id=$1
+                    RETURNING *
+                    """,
+                    source_row["id"],
+                    target_row["id"],
+                    now,
+                    json.dumps(source_signal["source"]),
+                    json.dumps({"merged_into_id": target_memory_id}),
+                )
+
+                target_scope = MemoryScope(scope.tenant, scope.project, scope.user_id, str(target_row.get("bundle_id") or ""))
+                target_signal = self._normalize_signal(
+                    target_scope,
+                    MemorySignal(
+                        memory=reason or f"merged from {source_memory_id}",
+                        event_type="merge",
+                        originator=originator,
+                        status=str(target_row.get("status") or "active"),
+                        visibility="internal",
+                        confidence=0.95,
+                        importance=0.6,
+                        source={
+                            **base_source,
+                            "action": "memory_reconciliation_merge_target",
+                            "source_memory_id": source_memory_id,
+                            "target_memory_id": target_memory_id,
+                        },
+                    ),
+                )
+                target_updated = await self._append_event_and_update_scores(
+                    con,
+                    scope=target_scope,
+                    row=target_row,
+                    signal=target_signal,
+                )
+
+        if source_updated is None or target_updated is None:
+            return None
+        return {
+            "source": self._record_from_row(dict(source_updated)),
+            "target": self._record_from_row(dict(target_updated)),
+        }
+
+    async def squash_memories(
+        self,
+        *,
+        scope: MemoryScope,
+        source_memory_ids: Sequence[str],
+        target_memory_id: str,
+        merged_memory: str,
+        merged_context: str = "",
+        merged_kind: str = "fact",
+        labels: Sequence[str] = (),
+        keywords: Sequence[str] = (),
+        confidence: float = 0.95,
+        importance: float = 0.7,
+        pinned: Optional[bool] = None,
+        embedding: Optional[Sequence[float]] = None,
+        embedding_model: str = "",
+        reason: str = "squashed by memory reconciliation",
+        originator: str = "user",
+        source: Optional[Dict[str, Any]] = None,
+        scope_filter: str = "current_bundle",
+        ensure_schema: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """Rewrite one target memory and merge many source memories into it.
+
+        The target receives one `squash` event that names every source id. Each
+        source receives its own `merged` event and is hidden from future memory
+        search via `merged_into_id`.
+        """
+
+        if ensure_schema:
+            await self.ensure_schema()
+        scope = scope.normalized()
+        target_memory_id = str(target_memory_id or "").strip()
+        merged_memory = str(merged_memory or "").strip()
+        if not target_memory_id or not merged_memory:
+            return None
+        normalized_sources: list[str] = []
+        seen_sources: set[str] = set()
+        for item in source_memory_ids:
+            source_memory_id = str(item or "").strip()
+            if not source_memory_id or source_memory_id == target_memory_id or source_memory_id in seen_sources:
+                continue
+            seen_sources.add(source_memory_id)
+            normalized_sources.append(source_memory_id)
+        if not normalized_sources:
+            return None
+
+        pool = self._require_pool()
+        base_source = dict(source or {})
+        normalized_scope_filter = normalize_scope_filter(scope_filter)
+        async with pool.acquire() as con:
+            async with con.transaction():
+                target_row = await self._fetch_memory_for_update_scoped(
+                    con,
+                    scope=scope,
+                    memory_id=target_memory_id,
+                    visible_to_user=True,
+                    scope_filter=normalized_scope_filter,
+                )
+                if target_row is None:
+                    return None
+
+                source_rows: list[Dict[str, Any]] = []
+                skipped_sources: list[Dict[str, str]] = []
+                for source_memory_id in normalized_sources:
+                    source_row = await self._fetch_memory_for_update_scoped(
+                        con,
+                        scope=scope,
+                        memory_id=source_memory_id,
+                        visible_to_user=True,
+                        scope_filter=normalized_scope_filter,
+                    )
+                    if source_row is None:
+                        skipped_sources.append({"source_memory_id": source_memory_id, "reason": "source_not_found"})
+                    else:
+                        source_rows.append(source_row)
+                if not source_rows:
+                    return {
+                        "target": self._record_from_row(target_row),
+                        "sources": [],
+                        "skipped_sources": skipped_sources,
+                    }
+
+                target_scope = MemoryScope(scope.tenant, scope.project, scope.user_id, str(target_row.get("bundle_id") or ""))
+                target_signal = self._normalize_signal(
+                    target_scope,
+                    MemorySignal(
+                        memory=merged_memory,
+                        context=merged_context,
+                        kind=merged_kind or str(target_row.get("kind") or "fact"),
+                        event_type="squash",
+                        originator=originator,
+                        status=str(target_row.get("status") or "active"),
+                        visibility=str(target_row.get("visibility") or "user"),
+                        labels=labels,
+                        keywords=keywords,
+                        pinned=pinned,
+                        confidence=confidence,
+                        importance=importance,
+                        embedding=embedding,
+                        embedding_model=embedding_model,
+                        source={
+                            **base_source,
+                            "action": "memory_reconciliation_squash_target",
+                            "source_memory_ids": [str(row.get("id") or "") for row in source_rows],
+                            "target_memory_id": target_memory_id,
+                            "reason": reason,
+                        },
+                    ),
+                )
+                target_updated = await self._append_event_and_update_scores(
+                    con,
+                    scope=target_scope,
+                    row=target_row,
+                    signal=target_signal,
+                )
+
+                now = _utc_now()
+                updated_sources: list[MemoryRecord] = []
+                for source_row in source_rows:
+                    source_memory_id = str(source_row.get("id") or "")
+                    source_scope = MemoryScope(scope.tenant, scope.project, scope.user_id, str(source_row.get("bundle_id") or ""))
+                    source_signal = self._normalize_signal(
+                        source_scope,
+                        MemorySignal(
+                            memory=reason or f"squashed into {target_memory_id}",
+                            event_type="merged",
+                            originator=originator,
+                            status="merged",
+                            visibility="internal",
+                            confidence=0.95,
+                            importance=0.5,
+                            source={
+                                **base_source,
+                                "action": "memory_reconciliation_squash_source",
+                                "source_memory_id": source_memory_id,
+                                "source_memory_ids": [str(row.get("id") or "") for row in source_rows],
+                                "target_memory_id": target_memory_id,
+                            },
+                        ),
+                    )
+                    await self._insert_event(con, scope=source_scope, row=source_row, signal=source_signal)
+                    source_updated = await con.fetchrow(
+                        f"""
+                        UPDATE {self.schema}.{MEMORY_TABLE}
+                        SET status='merged',
+                            tier=4,
+                            merged_into_id=$2,
+                            update_count=update_count + 1,
+                            negative_weight=negative_weight + 0.25,
+                            updated_at=$3,
+                            last_event_at=$3,
+                            source=$4::jsonb,
+                            metadata=metadata || $5::jsonb,
+                            revision=revision + 1
+                        WHERE id=$1
+                        RETURNING *
+                        """,
+                        source_memory_id,
+                        str(target_updated.get("id") or target_memory_id),
+                        now,
+                        json.dumps(source_signal["source"]),
+                        json.dumps({"merged_into_id": str(target_updated.get("id") or target_memory_id)}),
+                    )
+                    if source_updated is not None:
+                        updated_sources.append(self._record_from_row(dict(source_updated)))
+
+        return {
+            "target": self._record_from_row(dict(target_updated)),
+            "sources": updated_sources,
+            "skipped_sources": skipped_sources,
+        }
 
     async def update_status(
         self,
@@ -893,6 +1592,10 @@ class UserMemoryStore:
                     contradiction_count = max(0, int(memory.get("contradiction_count") or 0))
                     positive_weight = max(0.0, float(evidence_count - contradiction_count))
                     negative_weight = max(0.0, float(contradiction_count))
+                    embedding = memory.get("embedding")
+                    if not isinstance(embedding, (list, tuple)):
+                        embedding = None
+                    embedding_model = str(memory.get("embedding_model") or "")
                     row_source = dict(base_source)
                     row_source.update({
                         "action": "snapshot_restore",
@@ -910,11 +1613,12 @@ class UserMemoryStore:
                             positive_weight, negative_weight, confidence_score, importance_score,
                             freshness_score, salience_score, confirmation_rate, tier,
                             created_at, updated_at, last_event_at, last_confirmed_at,
-                            source, metadata, revision
+                            source, metadata, revision, embedding, embedding_model
                         )
                         VALUES (
                             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::text[],$14::text[],$15,$16,
                             $17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33::jsonb,$34::jsonb,$35
+                            ,$36::vector,$37
                         )
                         ON CONFLICT (id) DO UPDATE
                         SET bundle_id=$5,
@@ -947,6 +1651,8 @@ class UserMemoryStore:
                             source=$33::jsonb,
                             metadata=$34::jsonb,
                             revision=EXCLUDED.revision + 1,
+                            embedding=$36::vector,
+                            embedding_model=$37,
                             merged_into_id=NULL
                         RETURNING *
                         """,
@@ -985,6 +1691,8 @@ class UserMemoryStore:
                         json.dumps(row_source),
                         json.dumps(row_metadata),
                         max(1, int(memory.get("revision") or 1)),
+                        _embedding_vector(embedding),
+                        embedding_model,
                     )
                     if row is None:
                         skipped.append({"id": memory_id, "reason": "upsert_failed"})
@@ -1571,7 +2279,7 @@ class UserMemoryStore:
         )
         labels = sorted(set(_array(row.get("labels")) + signal["labels"]))
         keywords = sorted(set(_array(row.get("keywords")) + signal["keywords"]))
-        memory_text = signal["memory"] if signal["event_type"] in {"user_edit", "manual_update", "refinement"} else row["memory"]
+        memory_text = signal["memory"] if signal["event_type"] in {"user_edit", "manual_update", "refinement", "squash"} else row["memory"]
         context = signal["context"] or row.get("context") or ""
         updated = await con.fetchrow(
             f"""
@@ -1763,3 +2471,43 @@ class UserMemoryStore:
             source=_json(row.get("source")),
             metadata=_json(row.get("metadata")),
         )
+
+    def _maintenance_artifact_from_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        summary = _json(row.get("summary"))
+        if not isinstance(summary, dict):
+            summary = {}
+        artifacts = _json(row.get("artifacts"))
+        if not isinstance(artifacts, dict):
+            artifacts = {}
+
+        artifact_type = str(row.get("artifact_type") or "")
+        artifact_id = str(row.get("artifact_id") or "")
+        storage_bundle_id = str(row.get("storage_bundle_id") or "")
+        created_at = row.get("created_at")
+        updated_at = row.get("updated_at")
+
+        payload = dict(summary)
+        payload.setdefault("artifact_type", artifact_type)
+        payload.setdefault("artifact_id", artifact_id)
+        if artifact_type == "snapshot":
+            payload.setdefault("snapshot_id", artifact_id)
+        elif artifact_type == "reconciliation_job":
+            payload.setdefault("job_id", artifact_id)
+        payload.setdefault("status", str(row.get("status") or ""))
+        payload.setdefault("scope_filter", str(row.get("scope_filter") or "current_bundle"))
+        payload.setdefault(
+            "scope",
+            {
+                "tenant": str(row.get("tenant") or ""),
+                "project": str(row.get("project") or ""),
+                "user_id": str(row.get("user_id") or ""),
+                "bundle_id": str(row.get("bundle_id") or ""),
+            },
+        )
+        payload["artifacts"] = artifacts
+        payload["storage_bundle_id"] = storage_bundle_id
+        if created_at is not None:
+            payload.setdefault("created_at", created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at))
+        if updated_at is not None:
+            payload.setdefault("updated_at", updated_at.isoformat() if hasattr(updated_at, "isoformat") else str(updated_at))
+        return payload
