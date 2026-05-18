@@ -208,12 +208,24 @@ code and use the SDK piece.
 
 ### Pre-completion smell check
 
-Before marking the bundle task complete, scan your own diff for these smells and,
-if you find one, return to the gate above:
+Before marking the bundle task complete, scan your own diff for re-implementation
+smells and, if you find one, return to the gate above.
+
+**This list is illustrative, not exhaustive.** The smells below are common shapes
+that have actually shipped in this repo; they exist to *prime* your eye, not to
+define the search space. The real test is the framing in Rule #6: *is this a
+subsystem the SDK could plausibly own?* If yes, run the gate — even if nothing in
+your diff matches any pattern below. Conversely, matching a pattern below is not
+proof of duplication; it is a prompt to re-check. Do not treat the absence of
+these specific shapes as a green light.
+
+Common shapes (non-exhaustive):
 
 - A new class whose name ends in `Store`, `Executor`, `Queue`, `Runner`,
-  `Scheduler`, `Dispatcher`, `Registry` — these names almost always duplicate an
-  SDK block.
+  `Scheduler`, `Dispatcher`, `Registry` — these names often duplicate an SDK
+  block, but the SDK also owns plenty of subsystems whose hand-rolled twin would
+  not be named this way (rate limiters, identity propagators, webhook
+  validators, retry envelopes, …).
 - An `@api(method="GET", ...)` route whose body reads a file from `Path(__file__)`
   and returns `BundleBinaryResponse` — the bundle is bypassing the declarative UI
   build pipeline.
@@ -231,6 +243,12 @@ if you find one, return to the gate above:
 
 A smell is not a verdict; it is a prompt to re-run the discovery gate against that
 specific piece and either remove it or document why the SDK block does not fit.
+
+**Inverse rule (important):** the absence of any listed smell is **not** evidence
+that the bundle is SDK-clean. If your bundle adds a subsystem whose shape is not
+listed above, the gate still applies — search the SDK for that capability before
+shipping. The smells exist because we have seen them; the gate exists because we
+have not yet seen every way the SDK can be re-implemented by accident.
 
 ---
 
@@ -365,7 +383,15 @@ Resolve each reference **in this order** (navigate first, then the rest):
 - `repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_cli/additional_README.md` — `kdcube bundle` reference (source, identity, config/secrets patch, delete)
 - `repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-agent-integration-README.md` — **fetch when the task involves React agents with local tools, file-producing tools, MCP endpoints or client config, or Claude Code subprocess agents;** covers agent runtime comparison (React vs Claude Code), tool descriptors, skill descriptors, `@mcp(...)` endpoints, `ClaudeCodeAgentConfig`, SDK-managed skill materialization
 
-### SDK integrations — Telegram, Email, ngrok, callbacks
+### SDK integrations — worked example (Telegram, Email, ngrok, callbacks)
+
+> **Read this as one worked instance of Rule #6, not as the scope of Rule #6.**
+> The same SDK-first / discovery-gate logic applies to every other integration
+> family the bundle touches (delivery transports, identity providers, file
+> producers, scheduled work, persistence, agent loops, …) — including ones not
+> enumerated anywhere in this skill. If a future integration is missing from
+> this document, that is not permission to hand-roll it; it is a prompt to run
+> the gate (Rule #6) against the assemble map and the SDK packages.
 
 Before writing any custom transport, webhook, Mini App auth, OAuth callback, or local
 public-HTTPS workaround, route through the SDK building-block map

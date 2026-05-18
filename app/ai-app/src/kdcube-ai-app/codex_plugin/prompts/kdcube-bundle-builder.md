@@ -122,6 +122,125 @@ Current decorator/config behavior for access control and visibility:
 
 ---
 
+## Rule #6 — SDK-discovery gate (HARD GATE — NO HAND-ROLLING WITHOUT PROOF)
+
+**Before writing any subsystem inside a bundle, prove that the SDK does not already
+provide it.** A "subsystem" is anything that is not product-specific business logic:
+persistence, queueing, scheduling, transport, identity, authentication, file
+delivery, UI serving, agent loops, model dispatch, retry/timeout machinery, locking,
+caching, search indices, etc. Product-specific business logic is the prompt
+wording, the policy rules, the user-visible workflow shape — nothing else.
+
+This rule replaces every per-feature "do not hand-roll X" warning. The SDK grows;
+enumerating forbidden patterns rots. The discoverable inventory is the source of
+truth, and you must consult it every time.
+
+### The gate (mandatory, before any non-trivial code)
+
+For each subsystem the bundle needs, complete all four steps and record the outcome
+in the design doc / journal entry for this session **before** writing the code:
+
+1. **Search the SDK packages** for the capability. Cast a wide net — search by
+   intent, not by your preferred name. At minimum:
+
+   ```bash
+   grep -rln "<keyword>" \
+     src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/ \
+     src/kdcube-ai-app/kdcube_ai_app/infra/plugin/ \
+     src/kdcube-ai-app/kdcube_ai_app/infra/
+
+   grep -n "^def [a-z_]*(" \
+     src/kdcube-ai-app/kdcube_ai_app/infra/plugin/agentic_loader.py
+   ```
+
+   Search **at least three** keyword variants (synonyms, antonyms, verb/noun forms).
+   For "queue background work", try `queue`, `job`, `enqueue`, `stream`, `worker`,
+   `scheduler`, `cron`, `due`. For "serve a page", try `ui_main`, `main_view`,
+   `static`, `serve`, `BundleBinaryResponse`. One miss is normal; three misses is a
+   real signal it does not exist.
+
+2. **Open the reference bundles** under
+   `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/` and check
+   whether one of them already wires that subsystem the SDK way. Shipped bundles
+   are the contract, not just samples. Start with `versatile` (transport / Mini App
+   / widget / admin / memory), `echo.ui` (`@ui_main` + build pipeline + `@cron`),
+   and `kdcube.copilot` (knowledge space, `@on_job`).
+
+3. **Read the matching SDK module's docstring or first 100 lines** to confirm what
+   it covers and how it is configured (most SDK modules expose a
+   `configure_<thing>(...)` entry that wires bundle-specific glue).
+
+4. **Record the outcome** in `docs/design/<topic>.md` and the journal entry as a
+   short block — what you searched for, what you found, and either: (a) which SDK
+   module/decorator you are going to wire, or (b) the explicit reason it does not
+   apply and why a custom implementation is justified. Three lines is enough; the
+   point is auditability.
+
+### Default verdict: use the SDK
+
+If the search surfaces anything that looks even adjacent, the default is to use it
+and shape your bundle around its contract — not to write a parallel implementation
+because "it's simpler" or "the SDK looks heavier than I need." The SDK piece carries
+operational properties (Redis locking, multi-replica safety, cache invalidation,
+signed downloads, identity propagation, telemetry hooks) that hand-rolled code
+silently lacks.
+
+### When hand-rolling is allowed
+
+You may write a custom subsystem only if **all** of the following hold, and the
+design doc says so explicitly:
+
+- The four-step search above turned up nothing close.
+- The SDK piece exists but its contract is fundamentally wrong for this bundle
+  (not just "more than I need" — actually incompatible).
+- A short note in `docs/design/<topic>.md` explains the gap and what migration to
+  the SDK piece would look like once it covers the case.
+
+"MVP simplicity", "I'll swap it later", and "no time to learn the SDK" are not
+acceptable justifications.
+
+### Pre-completion smell check
+
+Before marking the bundle task complete, scan your own diff for re-implementation
+smells and, if you find one, return to the gate above.
+
+**This list is illustrative, not exhaustive.** The smells below are common shapes
+that have actually shipped in this repo; they exist to *prime* your eye, not to
+define the search space. The real test is the framing above: *is this a subsystem
+the SDK could plausibly own?* If yes, run the gate — even if nothing in your diff
+matches any pattern below. Conversely, matching a pattern is not proof of
+duplication; it is a prompt to re-check. Do not treat the absence of these specific
+shapes as a green light.
+
+Common shapes (non-exhaustive):
+
+- A new class whose name ends in `Store`, `Executor`, `Queue`, `Runner`,
+  `Scheduler`, `Dispatcher`, `Registry` — often duplicates an SDK block, but the
+  SDK also owns plenty of subsystems whose hand-rolled twin would not be named
+  this way (rate limiters, identity propagators, webhook validators, …).
+- An `@api(method="GET", ...)` route whose body reads a file from `Path(__file__)`
+  and returns `BundleBinaryResponse` — the bundle is bypassing the declarative UI
+  build pipeline.
+- A `_NoopXxx` / `_StubXxx` / `_MockXxx` class passed into `configure_<sdk>(...)` —
+  you are stubbing out the SDK instead of wiring it.
+- A polling `asyncio` loop with `await asyncio.sleep(...)` over a file/redis
+  directory — the SDK already has `@cron`, due-scan, or stream subscribers for
+  this.
+- Direct `models_service.generate_answer(...)` / `chat(...)` calls outside the
+  bundle's workflow graph — the SDK workflows (versatile, ReAct) carry timeline,
+  delivery, error reporting, and cost telemetry that a raw call skips.
+- Custom `threading.Lock` / file-based mutex / `os.replace` write-then-rename for
+  state the SDK already owns — the SDK uses Redis or SQLite with the right
+  semantics.
+
+**Inverse rule (important):** the absence of any listed smell is **not** evidence
+the bundle is SDK-clean. If your bundle adds a subsystem whose shape is not listed
+above, the gate still applies — search the SDK for that capability before
+shipping. The smells exist because we have seen them; the gate exists because we
+have not yet seen every way the SDK can be re-implemented by accident.
+
+---
+
 ## Agent task facets
 
 This prompt is one facet of a single planning agent. The agent combines:
@@ -219,7 +338,15 @@ Fetch in this order:
 - `repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_cli/additional_README.md` — `kdcube bundle` reference (source, identity, config/secrets patch, delete)
 - `repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-agent-integration-README.md` — **fetch when the task involves React agents with local tools, file-producing tools, MCP endpoints or client config, or Claude Code subprocess agents;** covers agent runtime comparison (React vs Claude Code), tool descriptors, skill descriptors, `@mcp(...)` endpoints, `ClaudeCodeAgentConfig`, SDK-managed skill materialization
 
-### SDK integrations — Telegram, Email, ngrok, callbacks
+### SDK integrations — worked example (Telegram, Email, ngrok, callbacks)
+
+> **Read this as one worked instance of Rule #6, not as the scope of Rule #6.**
+> The same SDK-first / discovery-gate logic applies to every other integration
+> family the bundle touches (delivery transports, identity providers, file
+> producers, scheduled work, persistence, agent loops, …) — including ones not
+> enumerated anywhere in this prompt. If a future integration is missing from
+> this document, that is not permission to hand-roll it; it is a prompt to run
+> the gate (Rule #6) against the assemble map and the SDK packages.
 
 Before writing any custom transport, webhook, Mini App auth, OAuth callback, or local
 public-HTTPS workaround, route through the SDK building-block map
