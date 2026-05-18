@@ -18,7 +18,7 @@ export function AppShell({ activeTab, showAdmin, hideTabs = false, loading, erro
       <header className="app-nav">
         <div className="app-mark">
           <span className="app-name">Versatile</span>
-          <span className="app-context">{isTelegramWebApp() ? 'Telegram WebApp' : 'KDCube widget'}</span>
+          <span className="app-context">{isTelegramWebApp() ? 'Telegram WebApp' : 'Widget'}</span>
         </div>
         {!hideTabs && (
           <nav className="page-tabs" aria-label="Views">
