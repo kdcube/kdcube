@@ -835,6 +835,22 @@ textarea:focus {
   color: var(--pink-dark);
 }
 
+.dismissible-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.dismissible-error button {
+  border: 1px solid rgba(154, 44, 88, 0.25);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--pink-dark);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .memory-editor {
   display: grid;
   gap: 10px;

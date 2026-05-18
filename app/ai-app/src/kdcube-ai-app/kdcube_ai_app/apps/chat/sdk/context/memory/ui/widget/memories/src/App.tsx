@@ -7,7 +7,7 @@ import { MemoryEditor } from './features/memories/MemoryEditor';
 import { MemoryFilters } from './features/memories/MemoryFilters';
 import { MemoryList } from './features/memories/MemoryList';
 import { ReconciliationPanel } from './features/memories/ReconciliationPanel';
-import { loadMemories, updateMemoryPreferences } from './features/memories/memoriesSlice';
+import { clearTransientErrors, loadMemories, updateMemoryPreferences } from './features/memories/memoriesSlice';
 
 export default function App() {
   const dispatch = useAppDispatch();
@@ -46,8 +46,18 @@ export default function App() {
       ) : null}
       <MemoryFilters />
       <ReconciliationPanel />
-      {error && <div className="error-box">{error}</div>}
-      {mutationError && <div className="error-box">{mutationError}</div>}
+      {error ? (
+        <div className="error-box dismissible-error">
+          <span>{error}</span>
+          <button type="button" onClick={() => dispatch(clearTransientErrors())}>Dismiss</button>
+        </div>
+      ) : null}
+      {mutationError ? (
+        <div className="error-box dismissible-error">
+          <span>{mutationError}</span>
+          <button type="button" onClick={() => dispatch(clearTransientErrors())}>Dismiss</button>
+        </div>
+      ) : null}
       <div className="workspace">
         <MemoryList />
         <div className="side-panel">

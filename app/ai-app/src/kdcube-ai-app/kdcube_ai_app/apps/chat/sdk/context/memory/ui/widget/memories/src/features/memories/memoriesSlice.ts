@@ -459,6 +459,10 @@ const memoriesSlice = createSlice({
     setReconcilerAgentType(state, action: PayloadAction<ReconcilerAgentType>) {
       state.reconcilerAgentType = action.payload;
     },
+    clearTransientErrors(state) {
+      state.error = '';
+      state.mutationError = '';
+    },
     selectSnapshot(state, action: PayloadAction<string>) {
       state.selectedSnapshotId = action.payload;
       state.snapshotExport = '';
@@ -469,6 +473,7 @@ const memoriesSlice = createSlice({
       .addCase(loadMemories.pending, (state) => {
         state.loading = true;
         state.error = '';
+        state.mutationError = '';
       })
       .addCase(loadMemories.fulfilled, (state, action) => {
         state.loading = false;
@@ -478,6 +483,8 @@ const memoriesSlice = createSlice({
           state.count = 0;
           return;
         }
+        state.error = '';
+        state.mutationError = '';
         state.memories = action.payload.memories || [];
         state.count = Number(action.payload.count || 0);
         state.currentBundleId = action.payload.scope?.bundle_id || state.currentBundleId;
@@ -591,6 +598,7 @@ const memoriesSlice = createSlice({
           state.count = Math.max(0, state.count - 1);
           state.selectedId = state.memories[0]?.id || '';
           state.selectedEvents = [];
+          state.mutationError = '';
         }
       })
       .addCase(updateMemoryPreferences.fulfilled, (state, action) => {
@@ -781,6 +789,7 @@ const memoriesSlice = createSlice({
 });
 
 export const {
+  clearTransientErrors,
   nextPage,
   previousPage,
   selectMemory,

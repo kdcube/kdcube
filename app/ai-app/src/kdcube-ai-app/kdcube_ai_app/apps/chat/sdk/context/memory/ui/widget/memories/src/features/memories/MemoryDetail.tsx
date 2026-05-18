@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useAppDispatch, useAppSelector } from '../../app/hooks';
-import { confirmMemory, loadMemoryEvents, pinMemory, retireMemory } from './memoriesSlice';
+import { confirmMemory, loadMemories, loadMemoryEvents, pinMemory, retireMemory } from './memoriesSlice';
 
 function formatDate(value: string): string {
   if (!value) return '';
@@ -64,7 +64,7 @@ export function MemoryDetail({ onEdit }: MemoryDetailProps) {
             className="danger-button"
             onClick={() => {
               if (!window.confirm('Delete this memory note and its memory events?')) return;
-              void dispatch(retireMemory(memory.id));
+              void dispatch(retireMemory(memory.id)).finally(() => dispatch(loadMemories()));
             }}
             disabled={saving}
           >
