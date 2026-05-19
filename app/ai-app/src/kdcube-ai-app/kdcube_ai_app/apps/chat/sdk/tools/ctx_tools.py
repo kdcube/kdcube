@@ -35,7 +35,7 @@ def _max_sid(rows: List[Dict[str,Any]]) -> int:
             pass
     return m
 def _outdir() -> pathlib.Path:
-    return resolve_output_dir()
+    return resolve_runtime_output_dir()
 
 class SourcesUsedStore:
     def __init__(self) -> None:

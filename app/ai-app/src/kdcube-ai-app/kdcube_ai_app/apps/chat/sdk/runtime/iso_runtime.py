@@ -20,6 +20,11 @@ from typing import Dict, Any, List, Tuple, Optional, Literal, Mapping
 from kdcube_ai_app.apps.chat.ids import new_exec_id
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.runtime.exec_runtime_config import resolve_exec_runtime_profile
+from kdcube_ai_app.apps.chat.sdk.runtime.workspace import (
+    ARTIFACT_OUTPUT_ENV,
+    RUNTIME_OUTPUT_ENV,
+    artifact_outdir_for,
+)
 from kdcube_ai_app.apps.chat.sdk.util import strip_lone_surrogates
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
 
@@ -2467,13 +2472,16 @@ class _InProcessRuntime:
 
         # Build subprocess env
         child_env = os.environ.copy()
-        child_env["OUTPUT_DIR"] = str(output_dir)
+        artifact_output_dir = artifact_outdir_for(output_dir)
+        child_env["OUTPUT_DIR"] = str(artifact_output_dir)
+        child_env[ARTIFACT_OUTPUT_ENV] = str(artifact_output_dir)
+        child_env[RUNTIME_OUTPUT_ENV] = str(output_dir)
         child_env["WORKDIR"] = str(workdir)
         child_env["LOG_DIR"] = str(pathlib.Path(child_env.get("LOG_DIR") or (output_dir / "logs")))
         child_env["LOG_FILE_PREFIX"] = "executor"
         if extra_env:
             for k, v in extra_env.items():
-                if k in {"WORKDIR", "OUTPUT_DIR"}:
+                if k in {"WORKDIR", "OUTPUT_DIR", ARTIFACT_OUTPUT_ENV, RUNTIME_OUTPUT_ENV}:
                     continue
                 child_env[k] = v
 

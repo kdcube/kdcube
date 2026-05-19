@@ -9,7 +9,7 @@ import base64
 
 import semantic_kernel as sk
 
-from kdcube_ai_app.apps.chat.sdk.runtime.workdir_discovery import resolve_output_dir
+from kdcube_ai_app.apps.chat.sdk.runtime.workdir_discovery import resolve_output_dir, resolve_runtime_output_dir
 from kdcube_ai_app.apps.chat.sdk.tools.citations import extract_citation_sids_from_text, dedupe_sources_by_url, \
     CITATION_OPTIONAL_ATTRS, normalize_sources_any
 from kdcube_ai_app.apps.chat.sdk.tools.tools_insights import CITABLE_TOOL_IDS
@@ -58,7 +58,7 @@ def _is_limited_executor() -> bool:
     return ctx == "limited"
 
 def _outdir() -> pathlib.Path:
-    return resolve_output_dir()
+    return resolve_runtime_output_dir()
 
 def _sanitize_tool_id(tid: str) -> str:
     # "web_tools.web_search" -> "web_tools"

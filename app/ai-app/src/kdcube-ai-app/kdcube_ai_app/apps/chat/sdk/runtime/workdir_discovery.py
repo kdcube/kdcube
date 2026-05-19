@@ -6,7 +6,12 @@ import os, json
 import pathlib
 from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import OUTDIR_CV, WORKDIR_CV
 from kdcube_ai_app.apps.chat.sdk.tools.citations import normalize_sources_any
-from kdcube_ai_app.apps.chat.sdk.runtime.workspace import RUNTIME_OUTPUT_ENV
+from kdcube_ai_app.apps.chat.sdk.runtime.workspace import (
+    ARTIFACT_OUTPUT_ENV,
+    RUNTIME_OUTPUT_ENV,
+    artifact_outdir_for,
+    runtime_outdir_for_artifact_outdir,
+)
 
 
 def _from_cv(cv) -> str:
@@ -33,18 +38,26 @@ def _isolated_runtime_env_is_trusted() -> bool:
 
 def resolve_output_dir() -> pathlib.Path:
     """
-    Resolve the solver's output/data root from OUTDIR_CV.
+    Resolve the solver's artifact output root.
 
     OUTPUT_DIR is accepted only at runtime bootstrap boundaries where it is
     copied into OUTDIR_CV. Reading it here would be process-global and can race
     between concurrent in-process tool calls.
 
+    User-visible/generated files live under ``out/workdir``. Some older or
+    local runtime paths still bind OUTDIR_CV to the runtime root ``out``; map
+    that root to the separated artifact root here so SDK tools follow the same
+    OUTPUT_DIR contract as generated code in Docker/Fargate runtimes.
+
     Ensures the directory exists.
     """
-    raw = _from_cv(OUTDIR_CV)
+    explicit_artifact = os.environ.get(ARTIFACT_OUTPUT_ENV, "") if _isolated_runtime_env_is_trusted() else ""
+    raw = explicit_artifact or _from_cv(OUTDIR_CV)
     if not raw:
         raise RuntimeError("OUTDIR_CV not set in run context")
     p = pathlib.Path(raw).resolve()
+    if not explicit_artifact:
+        p = artifact_outdir_for(p)
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -57,12 +70,13 @@ def resolve_runtime_output_dir() -> pathlib.Path:
     KDCUBE_RUNTIME_OUTPUT_DIR points to the internal root containing
     timeline/sources/log metadata. In legacy/local paths they may be the same.
     """
-    raw = os.environ.get(RUNTIME_OUTPUT_ENV, "") if _isolated_runtime_env_is_trusted() else ""
-    if not raw:
-        raw = _from_cv(OUTDIR_CV)
+    explicit_runtime = os.environ.get(RUNTIME_OUTPUT_ENV, "") if _isolated_runtime_env_is_trusted() else ""
+    raw = explicit_runtime or _from_cv(OUTDIR_CV)
     if not raw:
         raise RuntimeError("runtime output directory not set in run context")
     p = pathlib.Path(raw).resolve()
+    if not explicit_runtime:
+        p = runtime_outdir_for_artifact_outdir(p)
     p.mkdir(parents=True, exist_ok=True)
     return p
 
