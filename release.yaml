@@ -1,36 +1,40 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.5.20.042"
+  ref: "2026.5.20.126"
   description: |
-    This patch release fixes isolated Python execution in split Docker runtime
-    deployments. It targets EC2/ECS deployments where chat-proc creates the
-    execution workspace inside the proc-visible /exec-workspace mount and then
-    starts sibling py-code-exec containers through Docker.
+    This patch release completes the split Docker isolated execution permission
+    fix by covering executor artifact and log mounts in addition to workdir and
+    outdir preparation.
 
     Highlights
 
-    - Normalizes split executor workspace permissions on the proc-visible
-      /exec-workspace tree before launching sibling py-code-exec containers.
+    - Normalizes executor-visible artifact output and executor log directories
+      before launching sibling py-code-exec containers in split Docker mode.
     - Prevents executor containers with dropped capabilities from failing to
-      read generated main.py files with Permission denied.
-    - Keeps the fix scoped to split container execution while preserving the
-      existing host-path translation and mount preflight behavior.
+      open /workspace/logs/executor/executor.log with Permission denied.
+    - Keeps the fix scoped to executor-visible split surfaces only: workdir,
+      artifact output, and logs/executor.
+    - Documents the distinction between Docker host path hints and executor
+      filesystem isolation in the ISO runtime guide.
 
     Runtime and deployment notes:
 
-    - Deployments must point the platform ref at 2026.5.20.042 to receive the
-      split runtime permission fix.
+    - Deployments must point the platform ref at 2026.5.20.126 to receive the
+      complete split runtime permission fix.
     - No descriptor shape migration is required for existing deployments.
-    - No organization-specific content is part of this OSS release.
+    - No private deployment content is part of this OSS release.
 
     Validation and regression coverage:
 
     - Python syntax validation passed for the changed runtime file.
+    - Split runtime isolation tests passed.
     - Staged OSS private-name scan passed before commit.
 
     Changelog
 
-    - Fixed split Docker isolated runtime permission normalization for
-      /exec-workspace workdir and outdir paths.
+    - Fixed split Docker isolated runtime permission normalization for artifact
+      and executor log directories.
+    - Added ISO runtime documentation for host path translation versus executor
+      mount isolation.
 config:
-    version: "2026.5.20.042"
+    version: "2026.5.20.126"

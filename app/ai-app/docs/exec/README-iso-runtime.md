@@ -111,6 +111,66 @@ Common properties:
 - Generated code writes artifacts under `OUTPUT_DIR`; in split mode this maps
   to the artifact workspace, not to the full runtime output tree.
 
+### Host path hints vs executor isolation
+
+In Docker-in-Docker deployments, `chat-proc` runs inside a container but starts
+sibling Docker containers through the host Docker daemon. Paths visible inside
+`chat-proc` are therefore not automatically valid as Docker bind-mount source
+paths on the host. The runtime uses host path hints such as:
+
+```yaml
+paths:
+  host_exec_workspace_path: "/opt/kdcube/efs/exec-workspace"
+```
+
+or the equivalent environment variable:
+
+```bash
+HOST_EXEC_WORKSPACE_PATH=/opt/kdcube/efs/exec-workspace
+```
+
+to translate proc-visible paths like:
+
+```text
+/exec-workspace/react_<id>/out/logs/executor
+```
+
+into Docker-daemon-visible host paths like:
+
+```text
+/opt/kdcube/efs/exec-workspace/react_<id>/out/logs/executor
+```
+
+This translation does not grant the executor access to the full host workspace.
+It only tells Docker where the source directory for a specific narrow bind mount
+lives. In split mode, the executor container still receives only:
+
+```text
+/workspace/work
+/workspace/out
+/workspace/logs/executor
+/supervisor-socket
+```
+
+The executor must not receive `/workspace/runtime-out`, `logs/supervisor`,
+`infra.log`, bundle roots, bundle storage, platform storage, descriptor files,
+or provider secrets.
+
+Operationally, this distinction matters:
+
+- ECS/EC2 deployments normally set `HOST_EXEC_WORKSPACE_PATH` to an EFS-backed
+  host path, for example `/opt/kdcube/efs/exec-workspace`. The EFS access point
+  creates the workspace with the expected service UID/GID, so Docker bind mounts
+  existing writable directories.
+- Local or EC2 CLI deployments that omit `host_exec_workspace_path` may fall back
+  to host `/exec-workspace`. If that path does not exist, Docker may create a
+  root-owned bind source, which can later make the UID-dropped executor fail when
+  opening `/workspace/work/main.py` or `/workspace/logs/executor/executor.log`.
+
+The runtime should defensively pre-create and chmod only executor-visible split
+surfaces (`work`, artifact output, and `logs/executor`) before launching the
+executor. It must not make supervisor-only paths visible to the executor.
+
 ```
 Host, combined strategy
 └─ /exec-workspace/react_<id>/

@@ -45,7 +45,7 @@ REACT_LITE_TIMELINE_CONTEXT = """
 - The context is a rendered timeline: prior turns, current user input, attachments, tool calls/results, artifacts, summaries, and current-turn progress.
 - The rendered timeline is both working context and a recovery map. It may show compact summaries, metadata, logical paths, source ids, tool ids, and turn indexes for content that is no longer fully visible.
 - It is ordered oldest to newest. The newest same-turn `followup` or `steer` is the latest user control input.
-- A turn can contain multiple visible assistant completions if a live followup extends the same turn after an earlier completion.
+- A turn can contain multiple visible assistant completions if a live followup extends the same turn after an earlier completion. Those completions are already visible to the user; later completions should be incremental, not a replay of the whole turn.
 - Stable logical paths identify recoverable content: `ar:`, `fi:`, `tc:`, `so:`, `su:`, `ws:`, `ks:`, and `sk:` when present.
 - Use visible evidence first. When exact content is missing, hidden, pruned, compacted, or too large, use the timeline's recovery handles to read/search/pull the needed material.
 - Line numbers shown in previews are model-facing viewing prefixes. Use them for ranged reads and patch locations; never copy them into patch/full-file content.
@@ -63,7 +63,8 @@ REACT_LITE_ANNOUNCE = """
 
 REACT_LITE_EXTERNAL_EVENTS = """
 [LIVE TURN EVENTS]
-- `followup` means the user added input while this same turn was already running. Fold it into the current objective.
+- `followup` means the user added input while this same turn was already running. Treat it as the newest unresolved user request in the same turn.
+- The timeline is streamed to the user as you produce it. If an earlier same-turn completion already answered something, do not re-list or re-answer it unless the user explicitly asks, the earlier answer was unclear/failed, or one short bridge is needed for context.
 - `steer` means the user is redirecting or stopping the current work. Treat it as latest user intent.
 - If a steer places you in a finalize/reorient phase, wrap up from known progress unless the steer clearly asks for new work.
 - Followup/steer blocks are part of the same turn once folded. Their attachments use event-scoped `fi:turn_<id>.external.<kind>.attachments/<message_id>/<name>` paths.
@@ -410,6 +411,7 @@ REACT_LITE_FINALIZATION = """
 [FINALIZATION]
 - Use `complete` only when you can answer from visible context and completed tool results.
 - For complete/exit, keep root `notes` empty; put the user-facing response in `final_answer`.
+- `final_answer` closes the newest unresolved request. Do not summarize the whole turn or replay earlier visible completions after a live followup; answer only what is new or changed, with at most a brief pointer to earlier completed work.
 - Include a compact summary channel for future continuity, scaled to the turn size.
 - Do not promise future/background work.
 - Do not say a tool action succeeded unless the successful tool result is visible in the current context.

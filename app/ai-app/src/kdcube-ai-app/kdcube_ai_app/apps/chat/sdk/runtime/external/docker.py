@@ -1169,6 +1169,8 @@ async def run_py_in_docker(
         # permissions there before the sibling executor container mounts it.
         _prepare_split_executor_tree(workdir)
         _prepare_split_executor_tree(outdir)
+        _prepare_split_executor_tree(artifact_outdir_for(outdir, create=False))
+        _prepare_split_executor_tree(outdir / "logs" / "executor")
         return await _run_py_in_split_docker_prepared(
             img=img,
             to=to,

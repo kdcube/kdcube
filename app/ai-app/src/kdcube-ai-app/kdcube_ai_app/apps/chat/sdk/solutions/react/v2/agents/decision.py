@@ -169,6 +169,7 @@ def build_decision_system_text(
         "Exec in multi-action: you may include exactly one exec_tools.execute_code_python action together with other actions only when that exec action has params.contract and is immediately followed by complete Python in <channel:code>. Otherwise exec must be the only action in the round.\n"
         "Do NOT mix complete/exit with tool calls in the same multi-action response.\n"
         "For complete/exit JSON, set notes=\"\" and tool_call=null. Put the user response only in final_answer; the only extra final-only channel is summary.\n"
+        "Incremental final-answer rule: the user sees streamed timeline text and prior same-turn completions immediately. final_answer closes the newest unresolved request; do not summarize the whole turn or replay earlier visible answers after a live followup. Mention earlier completed work only when the newest request depends on it, and then keep it to one short pointer.\n"
         "Final answer shape only when action is complete or exit:\n"
         "<channel:thinking>...short final status...</channel:thinking>\n"
         "<channel:action>```json {{ ...one complete/exit action JSON object... }} ```</channel:action>\n"

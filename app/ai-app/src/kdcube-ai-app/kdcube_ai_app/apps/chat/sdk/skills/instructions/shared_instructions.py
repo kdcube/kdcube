@@ -143,7 +143,8 @@ EXTERNAL_TURN_EVENTS_GUIDE = """
 - ANNOUNCE may also include a `[LIVE TURN EVENTS]` section summarizing the latest same-turn external events.
 - These are real user inputs for the SAME running turn, not diagnostics and not assistant-authored notes.
 - Treat them as high-priority user intent updates.
-- `followup` means: the user added more input while you were already working. Fold it into the current objective and continue with the SAME turn.
+- `followup` means: the user added more input while you were already working. Treat it as the newest unresolved user request in the SAME turn.
+- The timeline is streamed to the user as you produce it; prior assistant completions are already visible. When a followup arrives after you already answered something, answer the new or changed request incrementally. Do not re-list or re-answer earlier parts unless the user explicitly asks, the earlier answer was unclear/failed, or one short bridge is needed for context.
 - `steer` means: the user wants to redirect or stop the current line of work. Treat it as authoritative latest intent. Do not continue the previous plan blindly.
 - Same-turn reactive events may produce another visible `assistant.completion` in the SAME turn.
 - `ar:turn_<id>.assistant.completion` means the latest completion in that turn. Earlier visible completions use `ar:turn_<id>.assistant.completion.<n>`.
@@ -1071,9 +1072,9 @@ REACT_DECISION_SHARED_OPERATING_GUIDE = f"""
 - Use final_answer only when action=exit/complete (this ends the turn).
 - Never include final_answer in a tool-call round. If you need a tool, call only the tool now; after
   its result is visible, self-assess the result and then complete in a later round.
-- The final_answer is the PRIMARY user response. It must contain everything the user needs to act,
+- The final_answer is the user-facing close for the newest unresolved request. It must contain what the user needs now,
   or a concise, complete summary with clear references to any attached documents you produced (e.g., “See the attached report…”).
-  Do not rely on the timeline stream alone — final_answer is the main index of this turn.
+  The timeline stream is already visible to the user and is part of the conversation record; do not replay earlier answers or summarize the whole turn just because a live followup created another completion.
 - You are responsible to produce response onto the user timeline nicely. Use react.write for user-visible content or internal artifacts; use scratchpad=true only for short inline internal notes.
   Timeline is the main chat stream and should remain readable; avoid overloading it with large content.
   Use channel=timeline_text only for SHORT markdown status or brief summaries.
@@ -1089,7 +1090,7 @@ REACT_DECISION_SHARED_OPERATING_GUIDE = f"""
 - Before final_answer, self-assess what is actually visible: required tool results, output artifacts,
   or saved memory records must be present and successful. If something is missing or failed, repair it
   first or state the partial result honestly.
-- Avoid repeating large portions of content you already streamed; summarize and reference the attached document(s).
+- Avoid repeating content you already streamed or answered. Summarize/reference attached document(s) when useful, but do not re-list earlier user requests, skills, tool results, or accomplishments unless they are needed to answer the newest unresolved request.
   If the task is simple, answer fully in final_answer without extra streaming.
   If you want to make some illustrations before completing the turn, even if you do not need exploration, you first use react.write. final_answer must be last step in the turn.
 - Ensure needed data/knowledge visible in context when needed: if generation depends on external evidence (search/fetch/attachments) which you do not see now in your visible context loaded (or maybe they are truncated), first load those sources via react.read so they appear in your visible context. Use sources_pool slices (e.g., so:sources_pool[sid,..]) for sources,  sk: for skills or ar: or fi: artifact paths with react.read.
