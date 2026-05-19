@@ -1,7 +1,7 @@
 ---
 id: ks:docs/sdk/agents/react/agent-workspace-collboration-README.md
 title: "Agent Workspace Collaboration"
-summary: "How react.read, react.write, react.patch, and react.rg cooperate across current-turn OUT_DIR, conversation artifacts, and read-only bundle knowledge space."
+summary: "How react.read, react.write, react.patch, and react.rg cooperate across the current-turn artifact root, conversation artifacts, and read-only bundle knowledge space."
 tags: ["sdk", "agents", "react", "workspace", "artifacts", "files"]
 keywords: ["outdir", "react.read", "react.rg", "react.patch", "versioned workspace"]
 see_also:
@@ -25,11 +25,18 @@ Scope:
 The agent does **not** work against one mutable flat directory. It reasons across these surfaces:
 
 ```text
-1) CURRENT TURN OUT_DIR (physical)
-   out/turn_<id>/files/...
-   out/turn_<id>/outputs/...   # produced artifacts, not workspace members
-   out/turn_<id>/attachments/...
-   out/logs/...
+1) CURRENT TURN ARTIFACT ROOT (physical)
+   OUTPUT_DIR == artifact root
+   local host layout: out/workdir/
+     turn_<id>/files/...
+     turn_<id>/outputs/...     # produced artifacts, not workspace members
+     turn_<id>/attachments/...
+
+   Runtime metadata root, not an agent artifact namespace:
+   out/
+     timeline.json
+     tool_calls_index.json
+     logs/...
 
 2) CONVERSATION ARTIFACT MEMORY (logical)
    ar:...  tc:...  so:...  su:...
@@ -48,8 +55,13 @@ The logical workspace view is:
 - for `files/<subpath>`: the latest relevant turn version
 - for `outputs/<subpath>`: a produced artifact area, not part of the workspace tree
 - for `attachments/<subpath>`: the attached artifact under its original turn namespace
-- for non-versioned OUT_DIR folders like `logs/`: the physical OUT_DIR file itself
-- for `ks:`: a read-only logical namespace owned by the bundle, not a directory under OUT_DIR
+- runtime folders like `logs/`: platform diagnostics, not normal agent artifact paths
+- for `ks:`: a read-only logical namespace owned by the bundle, not a directory under the artifact root
+
+The agent should only use visible `turn_...` relative paths or logical paths
+(`fi:`, `ar:`, `tc:`, `so:`, `su:`, `ks:`). It should not use absolute host
+paths, execution sandbox paths, hosted `file://` paths, or the runtime
+metadata root.
 
 ## Read / search / write responsibilities
 
@@ -59,9 +71,9 @@ The logical workspace view is:
   - `fi:<turn_id>.files/<subpath>`
   - `fi:<turn_id>.outputs/<subpath>`
   - `fi:<turn_id>.user.attachments/<subpath>`
-- also supports any readable OUT_DIR file via:
-  - `fi:<outdir-relative-path>`
-  - example: `fi:logs/docker.err.log`
+- also supports any readable artifact-root file via:
+  - `fi:<artifact-root-relative-path>`
+  - example: `fi:turn_<id>/outputs/report.md`
 - also supports exact `ks:` paths:
   - `ks:<relpath>`
   - example: `ks:<bundle-defined-path>`
@@ -94,7 +106,7 @@ The logical workspace view is:
 
 ## Knowledge space browsing
 
-`ks:` is not part of the current-turn OUT_DIR tree.
+`ks:` is not part of the current-turn artifact tree.
 
 Current rules:
 - if the exact `ks:` path is known, `react.read` can load it directly

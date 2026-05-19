@@ -64,7 +64,7 @@ All rows are dictionaries; fields are additive. Common fields:
 - `mime` (str)
 - `size_bytes` (int)
 - `artifact_path` (str): logical path (e.g., `fi:<turn>.files/report.pdf`)
-- `physical_path` (str): OUT_DIR‑relative file path
+- `physical_path` (str): artifact-root-relative `turn_...` file path
 - `rn`, `hosted_uri`, `key` (str): hosting references (not rendered to the model)
 
 Optional metadata for web sources:
@@ -100,7 +100,9 @@ Notes:
 - `fetch_ctx` returns the raw list of source rows (not a canonical artifact object).
 - For web rows, use `row.get("content") or row.get("text")` when you need source text.
   `text` is the search preview; `content` is the fetched page body when available.
-- For files/attachments, read from `OUT_DIR / physical_path`.
+- For files/attachments, read from `Path(OUTPUT_DIR) / physical_path`.
+  `OUTPUT_DIR` is the artifact root; in local runtime storage that root is
+  `out/workdir`.
 
 ## Citing sources
 

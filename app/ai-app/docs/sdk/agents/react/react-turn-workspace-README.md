@@ -34,16 +34,23 @@ The agent does **not** perceive one flat filesystem. It reasons across several s
 ```text
 VISIBLE / ADDRESSABLE WORKSPACE MODEL
 
-1) CURRENT TURN OUT_DIR (physical; current-turn execution surface)
+1) CURRENT TURN ARTIFACT ROOT / OUTPUT_DIR (physical; current-turn execution surface)
    out/
-     turn_<current_turn>/
-       files/           # durable workspace/project namespace
-       outputs/         # non-workspace produced artifacts
-       attachments/     # current-turn attachments and rehosted copies pulled into this turn
-     logs/              # runtime logs and diagnostics
      timeline.json
-     ...
-   work/                # exec scratch only; not stable collaboration state
+     tool_calls_index.json
+     logs/
+     ...                 # runtime metadata, tool-call JSON, diagnostics
+     workdir/            # artifact root exposed as OUTPUT_DIR
+       turn_<current_turn>/
+         files/           # durable workspace/project namespace
+         outputs/         # non-workspace produced artifacts
+         attachments/     # current-turn attachments and rehosted copies pulled into this turn
+   work/                  # exec scratch only; not stable collaboration state
+
+   Agent-visible paths are relative to out/workdir:
+     turn_<id>/files/...
+     turn_<id>/outputs/...
+     turn_<id>/attachments/...
 
 2) CONVERSATION ARTIFACT MEMORY (logical; cross-turn; not a browsable folder)
    ar:...  tc:...  so:...  su:...
@@ -57,19 +64,19 @@ VISIBLE / ADDRESSABLE WORKSPACE MODEL
 ```
 
 Current behavior:
-- History is preserved physically under `out/turn_<id>/files/...`, `out/turn_<id>/outputs/...`, and `out/turn_<id>/attachments/...`.
+- History is preserved physically under `out/workdir/turn_<id>/files/...`, `out/workdir/turn_<id>/outputs/...`, and `out/workdir/turn_<id>/attachments/...`.
 - Writes for the current turn go to:
-  - `out/<current_turn>/files/...` for durable workspace/project state
-  - `out/<current_turn>/outputs/...` for non-workspace produced artifacts
+  - `out/workdir/<current_turn>/files/...` for durable workspace/project state
+  - `out/workdir/<current_turn>/outputs/...` for non-workspace produced artifacts
 - Reads can target:
   - versioned turn artifacts and attachments
-  - any readable file already present under `out/` (for example `out/logs/docker.err.log`)
+  - any readable artifact file already present under `out/workdir/`
   - exact logical `ks:` paths via `react.read`
 - The practical mental model is:
   - `turn_<id>/files/...` and `turn_<id>/attachments/...` preserve origin and history
   - the latest visible version of a file path is the current logical workspace view
-  - runtime folders like `logs/` are part of OUT_DIR but are not part of the turn-versioned file namespace
-  - `ks:` is not inside OUT_DIR at all; it is a bundle-owned read-only virtual space
+  - runtime folders like `logs/` are platform diagnostics under the sibling runtime root, not artifact paths
+  - `ks:` is not inside the artifact root at all; it is a bundle-owned read-only virtual space
 
 Workspace implementation (`RuntimeCtx.workspace_implementation`):
 - `custom`
@@ -79,7 +86,7 @@ Workspace implementation (`RuntimeCtx.workspace_implementation`):
 - `git`
   - the agent is taught to use `fi:` plus `react.pull(paths=[...])` for historical materialization and `react.checkout(paths=[...])` for copying pulled `files/...` refs into the active current-turn workspace
   - `.files/...` pulls hydrate from git-backed lineage snapshots
-  - the current turn root `out/<current_turn>/` is bootstrapped as a local git repo
+  - the current turn root `out/workdir/<current_turn>/` is bootstrapped as a local git repo
   - that current-turn repo keeps lineage history available but does not eagerly populate the worktree
   - ANNOUNCE may show `previous saved workspace paths (pull to bring local; checkout to edit)` so React can see prior saved workspace paths without mistaking them for the current editable workspace
   - the agent may use local git inspection/history/edit commands inside that current-turn repo, except pull/push/fetch
@@ -120,6 +127,7 @@ If the bundle does **not** expose a resolver for directory-style browsing, then 
 
 1. ReAct creates a fresh per-turn workspace directory (`exec_YYYYMMDDHHMMSS_ab12`, timestamped in UTC) with `work/` and `out/`.
 2. During the turn, tools and runtime write files into `out/` (and sometimes `work/`).
+   User-visible artifacts are under `out/workdir`; runtime metadata/logs stay directly under `out`.
 3. Optionally, `react.persist_workspace()` stores zipped `out`/`work` for diagnostics.
 4. For distributed/Fargate exec, a lightweight snapshot is built, uploaded, restored remotely, then outputs are merged back.
 
@@ -143,12 +151,20 @@ Directory creation pattern:
 ```
 
 Runtime bindings set immediately:
-- `RuntimeCtx.workdir` / `RuntimeCtx.outdir`
+- `RuntimeCtx.workdir` / `RuntimeCtx.outdir` (`outdir` is the runtime metadata root)
 - env vars: `WORKDIR`, `OUTPUT_DIR`
 - context vars: `WORKDIR_CV`, `OUTDIR_CV`
 
+Important:
+- generated code and isolated rendering tools see `OUTPUT_DIR` as the artifact
+  root, i.e. `out/workdir` in local runtime storage
+- the platform uses the runtime output root `out` for metadata (`timeline.json`,
+  `tool_calls_index.json`, tool-call JSON, logs, diagnostics)
+- the agent should only use `turn_...` paths relative to `OUTPUT_DIR`; it should
+  never use absolute host paths or `out/workdir` prefixes in tool params
+
 When `workspace_implementation=git`:
-- runtime also bootstraps `out/turn_<current_turn>/` as a local git repo
+- runtime also bootstraps `out/workdir/turn_<current_turn>/` as a local git repo
 - if the lineage branch already exists, that repo starts from the latest lineage head
 - runtime keeps the repo history/refs available but leaves the worktree empty until the agent explicitly materializes files
 - if the lineage branch does not exist yet, runtime creates an empty orphan repo for the turn
@@ -177,9 +193,11 @@ exec_20260506125243_ab12/
       <execution_id>/
         main.py                            # platform loader as actually executed
         user_code.py                       # verbatim agent-generated program body/snippet
-    turn_<turn_id>/
-      files/                               # turn-scoped file artifacts/rehosted files
-      attachments/                         # turn-scoped attachment files
+    workdir/                               # artifact root exposed as OUTPUT_DIR
+      turn_<turn_id>/
+        files/                             # turn-scoped file artifacts/rehosted files
+        outputs/                           # non-workspace produced artifacts
+        attachments/                       # turn-scoped attachment files
     logs/                                  # isolated runtime logs
       user.log                             # program/user stream (stdout/stderr + logger "user")
       infra.log                            # merged infra view for current execution id
@@ -203,12 +221,11 @@ Notes:
 
 ### Path conventions used inside the workspace
 
-Logical `fi:` paths map to physical `out/` paths by convention:
+Logical `fi:` paths map to physical artifact-root paths by convention:
 - `fi:<turn_id>.files/<rel>` -> `turn_<id>/files/<rel>`
 - `fi:<turn_id>.user.attachments/<rel>` -> `turn_<id>/attachments/<rel>`
 - legacy `fi:<turn_id>.attachments/<rel>` -> `turn_<id>/attachments/<rel>`
-- `fi:<outdir-relative-path>` -> `<outdir-relative-path>` for any readable file already present under `out/`
-  Example: `fi:logs/docker.err.log` -> `logs/docker.err.log`
+- `fi:<artifact-root-relative-path>` -> `<artifact-root-relative-path>` for readable files already present under `out/workdir/`
 
 Other logical paths (`ar:`, `tc:`, `so:`) resolve from timeline state and are not always direct files.
 
@@ -217,8 +234,8 @@ Workspace/read-write summary:
   - `turn_<id>/files/...` for durable workspace state
   - `turn_<id>/outputs/...` for non-workspace produced artifacts
 - unqualified `react.write` and exec contract paths default to `outputs/...`; use `files/...` explicitly for durable workspace/project state
-- `react.read` can load any readable OUT_DIR file through `fi:...`.
-- `react.pull` materializes selected `fi:` snapshot refs locally under OUT_DIR as historical/reference material.
+- `react.read` can load any readable artifact-root file through `fi:...`.
+- `react.pull` materializes selected `fi:` snapshot refs locally under the artifact root as historical/reference material.
 - `react.checkout` copies selected historical `files/...` refs into the active current-turn `files/` workspace so they can be modified there.
 - `.files/...` pulls come from:
   - artifact/timeline/hosting-backed snapshot state in `custom`
@@ -259,7 +276,8 @@ This is for diagnostics/forensics, not canonical conversation reconstruction.
 
 Local split Docker execution keeps the same distinction as remote snapshots:
 the runtime output root owns `timeline.json`, sources, logs, and runtime
-metadata, while the artifact root is exposed to generated code as `OUTPUT_DIR`.
+metadata, while the artifact root (`out/workdir` locally, `/workspace/out` in
+the executor container) is exposed to generated code as `OUTPUT_DIR`.
 `ctx_tools.fetch_ctx` reads logical timeline refs from the runtime output root
 first and only falls back to the artifact root for legacy layouts.
 
@@ -269,7 +287,7 @@ Before remote execution, host builds a reduced workspace (`build_exec_snapshot_w
 - copy full `work/`
 - create filtered `out/timeline.json`
 - include only referenced files required by code (`fetch_ctx`/file refs)
-- if any referenced file belongs to a git-backed turn root, copy the whole `out/turn_<id>/` tree so `.git` survives in isolated exec
+- if any referenced file belongs to a git-backed turn root, copy the whole artifact-root `turn_<id>/` tree so `.git` survives in isolated exec
 - write `out/exec_snapshot_manifest.json`
 
 Temporary snapshot tree:
@@ -281,7 +299,8 @@ Temporary snapshot tree:
   out/
     timeline.json                          # filtered to referenced paths
     exec_snapshot_manifest.json            # included paths summary
-    <referenced files only>
+    workdir/
+      <referenced turn_... artifact files only>
 ```
 
 ### 4.2 Storage layout for remote execution
@@ -311,7 +330,8 @@ Container runtime paths:
 ```text
 /workspace/
   work/                                    # restored from input/work.zip
-  out/                                     # restored from input/out.zip
+  runtime-out/                             # runtime metadata/logs in split mode
+  out/                                     # artifact root exposed as OUTPUT_DIR inside the executor
   bundles/<bundle_dir>/                    # optional bundle restore from BUNDLE_SNAPSHOT_URI
 ```
 
@@ -327,7 +347,7 @@ Host merge behavior (`external/fargate.py`):
 - `output/work.zip` -> extracted directly into local `workdir`
 - `output/out.zip` -> extracted to temp dir, then selective merge:
   - append `logs/*`
-  - copy trees with top-level folder `turn_*`
+  - copy artifact trees with top-level folder `turn_*` into the local artifact root
   - do **not** overwrite `timeline.json` / `sources_pool` directly
 
 This preserves local timeline/sources authority while still importing generated turn artifacts.

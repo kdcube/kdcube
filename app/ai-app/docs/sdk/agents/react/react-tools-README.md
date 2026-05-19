@@ -46,12 +46,16 @@ Used for reading, hiding, or reopening existing artifacts:
 
 Used for writing or patching new current-turn files:
 
-- OUT_DIR-relative paths under the current turn
+- artifact-root-relative paths under the current turn
+- `OUTPUT_DIR` is the artifact root; in local host storage that root is
+  `out/workdir`
 - `files/<scope>/...` for durable workspace/project state
 - `outputs/<scope>/...` for reports, exports, test results, demos, and other produced artifacts
 - unqualified `react.write` and exec contract paths default to `outputs/...`; use `files/...` explicitly for durable workspace/project state
 
 Do not pass logical `fi:` paths to `react.write` or `react.patch`.
+Do not pass absolute host paths, hosted `file://` paths, or `out/workdir`
+prefixed paths. Tool params use the agent-visible relative path only.
 
 ## Built-in Tool Catalog
 
@@ -204,7 +208,7 @@ Use it for text artifacts only. For PDFs, PPTX, DOCX, PNG, and other binary deli
 Updates an existing current-turn materialized text file under `files/...` or `outputs/...`.
 
 - input: `path`, `patch`
-- accepted paths: current-turn physical OUT_DIR-relative paths; prefer concise paths such as `files/<scope>/file.py` or `outputs/<scope>/page.html`, not logical `fi:` paths
+- accepted paths: current-turn artifact-root-relative paths; prefer concise paths such as `files/<scope>/file.py` or `outputs/<scope>/page.html`, not logical `fi:` paths
 - patch format: unified diff or full replacement text
 - generated unified-diff hunk counts are normalized before apply; a wrong `@@ -a,b +c,d @@` count should not force a full-file rewrite when the hunk content is otherwise correct
 - rendered-preview line-number prefixes are rejected; remove the viewing prefixes and retry

@@ -330,6 +330,11 @@ Each block may include:
 - `meta`: hosted_uri / rn / key / physical_path / artifact_path / sources_used  
   (hosted fields are **not** rendered to the model; logical paths are surfaced instead)
 
+`physical_path` is always an artifact-root-relative `turn_...` path such as
+`turn_<id>/outputs/report.pdf`. In local runtime storage the file sits under
+`out/workdir/<physical_path>`. The sibling runtime root `out/` contains
+timeline/tool-call/log metadata and is not the agent-facing artifact namespace.
+
 See `event-blocks-README.md` for concrete block examples.
 
 ## Internal Memory Beacons

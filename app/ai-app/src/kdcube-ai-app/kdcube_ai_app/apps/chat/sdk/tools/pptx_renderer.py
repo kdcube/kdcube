@@ -1889,6 +1889,13 @@ def _domain_of(url: str) -> str:
     except Exception:
         return url
 
+def _is_external_http_url(url: str) -> bool:
+    try:
+        parsed = urlparse((url or "").strip())
+        return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+    except Exception:
+        return False
+
 def _normalize_html_citations(html: str) -> str:
     """
     Convert <sup class='cite'>…</sup> patterns into [[S:...]] tokens so we can process consistently.
@@ -1981,7 +1988,7 @@ def _emit_text_with_links_and_citations(
             for idx, sid in enumerate(ids):
                 rec = sources_map.get(sid, {})
                 url = rec.get("url", "")
-                _emit_run(f"[{sid}]", col=accent, link=(url or None))
+                _emit_run(f"[{sid}]", col=accent, link=(url if _is_external_http_url(url) else None))
                 if idx != len(ids) - 1:
                     _emit_run(" · ")  # small separator between multiple cites
 
@@ -2020,6 +2027,14 @@ def _emit_runs_with_sources(
         )
 
 def _add_sources_slide(prs, sources_map: Dict[int, Dict[str, str]], order: List[int]) -> None:
+    external_sids = [
+        sid
+        for sid in order
+        if _is_external_http_url(str((sources_map.get(sid) or {}).get("url") or ""))
+    ]
+    if not external_sids:
+        return
+
     slide = prs.slides.add_slide(prs.slide_layouts[6])
 
     # Title
@@ -2034,7 +2049,7 @@ def _add_sources_slide(prs, sources_map: Dict[int, Dict[str, str]], order: List[
     tf = box.text_frame
     p = tf.paragraphs[0]
 
-    for i, sid in enumerate(order):
+    for i, sid in enumerate(external_sids):
         if i > 0:
             p = tf.add_paragraph()
         src = sources_map.get(sid, {})
@@ -2141,7 +2156,9 @@ def render_pptx(
             print(f"Rendering slide: {slide_data.get('title')}")
             render_slide(prs, slide_data, css_parser, sources_map, resolve_citations, base_dir, workdir)
 
-        # Always add Sources slide when we have sources (per spec)
+        # Always add Sources slide when we have external citation sources.
+        # Local generated artifacts may be present in sources_pool for rendering,
+        # but they are not bibliography entries.
         if sources_map:
             _add_sources_slide(prs, sources_map, order)
 

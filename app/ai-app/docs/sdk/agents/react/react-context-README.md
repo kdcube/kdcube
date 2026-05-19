@@ -58,25 +58,26 @@ Block formatting lives in:
 
 ---
 
-## 2.5) Data Spaces (Knowledge vs OUT_DIR vs Future Workspace)
+## 2.5) Data Spaces (Knowledge vs Artifact Root vs Future Workspace)
 
 ReAct interacts with **three data spaces**. Only two exist today:
 
 - **Knowledge Space** (`ks:`) — read‑only reference files prepared by the system (docs, indexes, cloned repos).
-- **OUT_DIR** (`fi:`) — per‑turn execution output and hosted artifacts (read/write during the turn).
+- **Artifact root / OUTPUT_DIR** (`fi:`) — per-turn execution output and hosted artifacts (read/write during the turn).
 - **Conversation Workspace** (future) — shared, writable workspace across turns (not implemented yet).
 
 ```mermaid
 flowchart LR
   Agent[ReAct Agent] -->|react.read ks:...| KS["Knowledge Space (read-only)"]
-  Agent -->|react.read fi:...| OUT["OUT_DIR (per-turn)"]
+  Agent -->|react.read fi:...| OUT["Artifact root / OUTPUT_DIR (per-turn)"]
   Agent -->|react.write / react.patch| OUT
   Agent -. future: read/write .-> WK["Conversation Workspace (future, RW)"]
 ```
 
 Notes:
 - **Knowledge Space** is **read‑only** and accessed via `ks:<relpath>`.
-- **OUT_DIR** is where tools write artifacts during a turn; turn outputs map to `fi:<turn_id>.files/...`, and any readable OUT_DIR file can be loaded with `fi:<outdir-relative-path>`.
+- **OUTPUT_DIR** is where tools write artifacts during a turn. It points to the artifact root (`out/workdir` in local host storage). Turn outputs map to `fi:<turn_id>.files/...` or `fi:<turn_id>.outputs/...`, and readable artifact files can be loaded with `fi:<artifact-root-relative-path>`.
+- Runtime metadata such as `timeline.json`, `tool_calls_index.json`, tool-call JSON, and logs lives in the sibling runtime root `out/`; it is platform state, not the normal agent artifact namespace.
 - **Conversation Workspace** will be the long‑lived, writable project state for copilot‑style flows.
 
 ---

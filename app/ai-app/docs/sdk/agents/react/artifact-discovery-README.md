@@ -17,7 +17,7 @@ This document defines how artifacts are discovered from timeline blocks and how 
 are resolved for tools (`react.read`, `fetch_ctx`, `react.patch`, exec code).
 
 Important distinction:
-- this document is about artifact discovery and OUT_DIR-relative artifact paths
+- this document is about artifact discovery and artifact-root-relative paths
 - it is not the contract for bundle namespace resolution inside isolated exec
 - it describes the current artifact path model, including the phase-1 `files/...` vs `outputs/...` namespace split
 
@@ -43,17 +43,21 @@ Stable identifier used in `react.read` / `fetch_ctx`. Examples:
 - `tc:<turn_id>.<call_id>.result`
 
 **Physical path**  
-OUT_DIR‑relative path used for `react.patch`, rendering tools, and exec code file I/O.
+Artifact-root-relative path used for `react.patch`, rendering tools, and exec code file I/O.
 Common forms:
 - `turn_<id>/files/<relpath>` (files; current or historical)
 - `turn_<id>/outputs/<relpath>` (non-workspace produced artifacts)
 - `turn_<id>/attachments/<name>` (attachments)
-- `logs/<name>` and other runtime-managed files already present in OUT_DIR
 
 This `physical_path` means:
-- OUT_DIR-relative artifact location for normal artifact/tool workflows
+- artifact location relative to the agent artifact root
+- in local runtime storage, the actual host path is under `out/workdir/<physical_path>`
+- in Docker/Fargate, `OUTPUT_DIR` points directly at the equivalent artifact root
 
 It does **not** mean:
+- an absolute host path
+- a hosted `file://` or S3 path
+- a path relative to the runtime metadata root `out/`
 - bundle namespace resolution for readonly bundle data inside isolated exec
 
 That other case uses a different contract:
@@ -71,7 +75,7 @@ Artifacts are described by a **metadata JSON result block** plus one or more **c
 - **Metadata block** is a `react.tool.result` JSON block whose **text** is a **safe digest** of artifact
   metadata (no hosted_uri/rn/key/physical_path).
   - `artifact_path` (logical path)
-  - `physical_path` (OUT_DIR‑relative, when applicable)
+  - `physical_path` (artifact-root-relative `turn_...` path, when applicable)
   - `tool_call_id`
   - `mime`, `kind`, `visibility`, `channel` (when applicable)
   - `sources_used` (if known)
@@ -131,26 +135,28 @@ The rewrite is recorded as a **protocol notice** in the timeline so the agent ca
 - Accept logical path (fi:/ar:/so:/su:/tc:).
 - Resolve artifact by logical path; return canonical artifact payload.
 - For plan-related `ar:` paths, the recovery handle to use is the stable latest-snapshot alias: `ar:plan.latest:<plan_id>`.
-- For `fi:` paths, `react.read` **rehosts** the file into OUT_DIR and reconstructs the
+- For `fi:` paths, `react.read` **rehosts** the file into the artifact root and reconstructs the
   metadata block from `meta.digest` (if present). It then emits:
   - metadata digest block (text only)
   - file content block (text or base64) when readable; binary files emit **metadata only**
-- `react.read` also accepts `fi:<outdir-relative-path>` for any readable file already present in OUT_DIR.
-  Example: `fi:logs/docker.err.log`
+- `react.read` also accepts `fi:<artifact-root-relative-path>` for readable
+  files already present in the artifact root. New artifact reads should use
+  `turn_...` paths or canonical `fi:<turn_id>...` logical paths. Runtime logs
+  and metadata are platform diagnostics, not normal agent artifacts.
 
 **react.patch**
-- Accepts current-turn physical path (OUT_DIR-relative), usually `files/<scope>/...` or `outputs/<scope>/...`.
+- Accepts current-turn physical path (artifact-root-relative), usually `files/<scope>/...`, `outputs/<scope>/...`, or their canonical `turn_<id>/...` form.
 - Patches any existing current-turn materialized text file, including files produced by exec; it is not limited to files created by `react.write`.
 - Historical (`turn_X/files/...`) files are never patched directly. Pull first if needed, then checkout/copy the pulled file into the current turn and patch the current-turn path.
 
 **rendering_tools.write_*** / **react.write**
 - Use physical path; timeline stores logical path in `meta`.
 - For `kind=file`, file is hosted and metadata (hosted_uri/rn/key) stored in `meta`.
-  - `visibility=internal` files are **not hosted** (stored only in OUT_DIR + timeline).
+  - `visibility=internal` files are **not hosted** (stored only in the artifact root + timeline).
 - For `kind=display`, content is emitted and stored as text block.
 
 **react.rg**
-- Searches files already materialized under OUT_DIR and returns discovery metadata plus optional line-numbered content matches.
+- Searches files already materialized under the artifact root and returns discovery metadata plus optional line-numbered content matches.
 - It does not search hidden/pruned timeline, unpulled historical snapshots, or `ks:`. Use visible refs or `react.memsearch` to identify older `fi:` refs, then `react.pull` them before local search. Checkout only when you need an editable current-turn copy.
 - Result shape is `{root, hits}`.
 - Each hit contains:
@@ -189,7 +195,7 @@ The rewrite is recorded as a **protocol notice** in the timeline so the agent ca
   - code inspects files under the returned `physical_path`
   - if code finds `runtime/execution.py`, it should emit logical ref `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/execution.py` in an `OUTPUT_DIR` file or short `user.log` note
 - The returned `physical_path` is an exec-runtime path only.
-- It is not an artifact `physical_path`, not an OUT_DIR-relative path, and not a valid input to normal react tools.
+- It is not an artifact `physical_path`, not artifact-root-relative, and not a valid input to normal react tools.
 - Generated code must respect `access` exactly; for example, `access='r'` means browse/read only.
 - The generated code must then decide what to do and propagate any useful result back through:
   - files written under `OUTPUT_DIR`
@@ -206,21 +212,21 @@ Compaction summarizes **blocks**, not artifacts. Artifact metadata must remain v
 
 When rendering tools (e.g., `rendering_tools.write_pdf`, `write_pptx`, `write_png`) receive
 HTML/Markdown content, that content may reference **local artifacts** that are not currently
-present in the execution workspace (OUT_DIR). We treat these as **cache misses** and pull
+present in the artifact root. We treat these as **cache misses** and pull
 the required assets before rendering.
 
 ### How it works
 
 1) **Local path mentions**
    - The content is scanned for local paths (`turn_<id>/files/...` and `turn_<id>/attachments/...`).
-   - For each referenced path, the runtime rehosts that file into OUT_DIR.
+   - For each referenced path, the runtime rehosts that file into the artifact root.
    - If any are missing, a tool notice is emitted (`tool_call_error.missing_assets`).
 
 2) **SID mentions**
    - The content is scanned for citation tokens (`[[S:n]]`).
    - Each SID is resolved against `sources_pool`.
    - If a SID maps to a file/attachment source (via `physical_path` or `artifact_path`),
-     that file is rehosted into OUT_DIR.
+     that file is rehosted into the artifact root.
    - If a SID is missing in sources_pool, a warning notice is emitted
      (`tool_call_warning.missing_sources`).
 
@@ -238,7 +244,7 @@ These fields are populated automatically for:
 
 ### Why this matters
 
-Rendering tools run in isolated workspaces and only see **OUT_DIR**. Rehosting ensures:
+Rendering tools run in isolated workspaces and only see the artifact root through **OUTPUT_DIR**. Rehosting ensures:
 - `<img src="turn_123/attachments/x.png">` renders correctly
 - `[[S:n]]` that references a file source becomes renderable
 - Tool outputs are reproducible even when prior turns are compacted

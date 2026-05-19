@@ -373,7 +373,7 @@ In other words:
 - not merely a lineage checkout layered over a broader metadata source
 
 Current implemented behavior:
-- the current turn root `out/turn_<current_turn>/` is bootstrapped as a sparse local git repo
+- the current turn root `out/workdir/turn_<current_turn>/` is bootstrapped as a sparse local git repo in local runtime storage
 - if the lineage branch already exists, its history is available locally there
 - the sparse worktree starts empty; runtime does not eagerly materialize project files
 - isolated exec preserves `.git` when referenced paths come from a git-backed turn root

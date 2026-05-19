@@ -281,7 +281,7 @@ Exec tools produce:
   remains available by its `fi:` path.
 - Each contracted output may optionally declare `visibility=external|internal`.
   - `external` is the default and is user-shareable.
-  - `internal` remains agent-visible in timeline/OUT_DIR but is not hosted or sent to the user.
+  - `internal` remains agent-visible in the timeline/artifact root but is not hosted or sent to the user.
 
 ### How the model *sees* file blocks (rendered)
 

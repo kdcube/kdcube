@@ -119,7 +119,7 @@ Current behavior:
 - that mirror points at `REACT_WORKSPACE_GIT_REPO`
 - the mirror fetches only the current lineage branch into local `refs/heads/workspace`
 - the current turn root is created under:
-  - `out/<turn_id>/`
+  - `out/workdir/<turn_id>/` in local runtime storage
 - that turn root is initialized as a real local git repo
 - sparse checkout is enabled with an empty sparse spec
 - the turn repo fetches only the mirror's `workspace` branch
@@ -230,10 +230,10 @@ This rule is enforced in runtime and stated in the agent instructions.
 
 Important distinction:
 - `react.pull(...)` materializes a historical snapshot view under the referenced version path such as:
-  - `out/<older_turn>/files/...`
+  - `out/workdir/<older_turn>/files/...` in local runtime storage
 - the active editable workspace in `git` mode remains:
-  - `out/<current_turn>/files/...`
-- React should treat `out/<current_turn>/files/...` as its main project tree for the turn.
+  - `out/workdir/<current_turn>/files/...` in local runtime storage
+- React should treat `turn_<current_turn>/files/...` as its main project tree for the turn.
 
 If React wants the active current-turn workspace itself to contain a runnable,
 searchable, or testable project snapshot, it should use:
@@ -242,9 +242,9 @@ searchable, or testable project snapshot, it should use:
 {"tool_id":"react.checkout","params":{"paths":["fi:<turn_id>.files/<scope-or-path>"]}}
 ```
 
-`react.checkout(mode="replace", ...)` replaces `out/<current_turn>/files/`,
+`react.checkout(mode="replace", ...)` replaces `turn_<current_turn>/files/`,
 then applies the requested `fi:<turn_id>.files/...` refs in order.
-`react.checkout(mode="overlay", ...)` keeps `out/<current_turn>/files/` and
+`react.checkout(mode="overlay", ...)` keeps `turn_<current_turn>/files/` and
 imports or overwrites only the selected historical files/scopes on top.
 This is the normal way to seed or selectively extend the active workspace from
 historical/project state; `react.pull(...)` remains historical side
@@ -273,7 +273,7 @@ In split Docker execution, two output roots are visible:
 runtime output root, then falls back to the artifact root for legacy layouts.
 
 If referenced paths belong to a git-backed turn root:
-- the whole `out/<turn_id>/` tree is copied into the exec snapshot
+- the whole artifact-root `turn_<id>/` tree is copied into the exec snapshot
 - this preserves `.git`
 
 That allows local git commands inside exec to work against the current lineage repo without exposing broader metadata.
@@ -287,7 +287,7 @@ Current snapshot behavior:
 - build filtered `out/timeline.json`
 - include the current sources pool in that filtered snapshot
 - include only referenced files needed by code or `fetch_ctx`
-- if a referenced path belongs to a git-backed turn root, copy the whole `out/<turn_id>/` tree so `.git` survives remotely
+- if a referenced path belongs to a git-backed turn root, copy the whole artifact-root `turn_<id>/` tree so `.git` survives remotely
 - write `out/exec_snapshot_manifest.json`
 
 Then:

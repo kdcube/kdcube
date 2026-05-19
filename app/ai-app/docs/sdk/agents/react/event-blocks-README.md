@@ -65,7 +65,7 @@ Blocks are dicts with:
    - `text` or `base64` content
    - Metadata JSON block text contains a **safe digest** (no hosted_uri/rn/key/physical_path):
      - `artifact_path`
-     - `physical_path` (OUT_DIR‑relative)
+     - `physical_path` (artifact-root-relative)
      - `mime`
      - `kind` (`file` | `display`)
      - `visibility` (`external` | `internal`)
@@ -292,7 +292,7 @@ Blocks can be hidden with `react.hide(path, replacement_text)` (path is a logica
 - `so:sources_pool[...]`
 - `ks:<relpath>` (knowledge space; read‑only)
 
-Physical (OUT_DIR‑relative):
+Physical (artifact-root-relative):
 - attachments: `turn_<id>/attachments/<name>`
 - files: `turn_<id>/files/<relative_path>`
 
@@ -384,7 +384,7 @@ Params:
 ### artifact_path vs physical_path
 ```
 artifact_path : fi:turn_1771234567890_abcd.files/reports/summary.md
-physical_path : turn_1771234567890_abcd/files/reports/summary.md   # OUT_DIR‑relative
+physical_path : turn_1771234567890_abcd/files/reports/summary.md   # artifact-root-relative
 ```
 
 ### react.write(kind=display)
@@ -472,7 +472,7 @@ react.tool.result (meta JSON for file #2: pdf, call_id=<id>)
 react.tool.result (binary block for file #2, call_id=<id>)  # pdf only
 ```
 Note: only **pdf/image** outputs get binary blocks (base64). Other files (e.g., xlsx)
-are represented by metadata only and must be read from `physical_path` on disk.
+are represented by metadata only and must be read from `physical_path` under the artifact root.
 
 User attachments follow the same rule:
 - `application/pdf` and `image/*` -> binary block

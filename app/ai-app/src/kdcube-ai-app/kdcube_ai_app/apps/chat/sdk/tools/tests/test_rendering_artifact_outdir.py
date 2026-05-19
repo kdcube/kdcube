@@ -14,6 +14,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.workdir_discovery import (
     resolve_runtime_output_dir,
 )
 from kdcube_ai_app.apps.chat.sdk.tools.io_tools import tools as io_tools
+from kdcube_ai_app.apps.chat.sdk.tools.pptx_renderer import render_pptx
 from kdcube_ai_app.apps.chat.sdk.tools.rendering_tools import RenderingTools
 
 
@@ -118,3 +119,51 @@ def test_write_pptx_embeds_image_from_artifact_root(tmp_path):
         names = zf.namelist()
 
     assert any(name.startswith("ppt/media/") for name in names)
+
+
+def test_pptx_sources_slide_omits_local_artifact_file_links(tmp_path):
+    runtime_outdir = tmp_path / "out"
+    workdir = tmp_path / "work"
+    runtime_outdir.mkdir()
+    workdir.mkdir()
+
+    OUTDIR_CV.set(str(runtime_outdir))
+    WORKDIR_CV.set(str(workdir))
+
+    artifact_outdir = resolve_output_dir()
+    pptx_path = artifact_outdir / "turn_test/outputs/deck.pptx"
+
+    render_pptx(
+        path="turn_test/outputs/deck.pptx",
+        content_html="""
+        <html>
+        <body>
+          <section>
+            <h1>Report</h1>
+            <p>External evidence [[S:1]] and a generated chart [[S:4]].</p>
+          </section>
+        </body>
+        </html>
+        """,
+        sources=[
+            {"sid": 1, "title": "External Article", "url": "https://example.com/source"},
+            {
+                "sid": 4,
+                "title": "trend_chart.png",
+                "url": "file:///kdcube-storage/cb/tenants/demo-tenant/projects/demo-project/attachments/user/conv/turn_test/trend_chart.png",
+            },
+        ],
+        resolve_citations=True,
+    )
+
+    assert pptx_path.exists()
+    with zipfile.ZipFile(pptx_path) as zf:
+        payload = b"\n".join(
+            zf.read(name)
+            for name in zf.namelist()
+            if name.endswith((".xml", ".rels"))
+        )
+
+    assert b"https://example.com/source" in payload
+    assert b"file:///kdcube-storage" not in payload
+    assert b"trend_chart.png" not in payload

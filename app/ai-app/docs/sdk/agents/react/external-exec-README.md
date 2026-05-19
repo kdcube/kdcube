@@ -95,7 +95,12 @@ Current public contract:
   `user_code.py`
 - `contract` is required
 - `contract` must be a non-empty list (or JSON string) of files to produce
-- each contract file must live under `turn_<id>/files/...`
+- each contract filename is relative to `OUTPUT_DIR`
+- `OUTPUT_DIR` is the artifact root; in local host storage this is
+  `out/workdir`, while in Docker/Fargate it is the executor artifact mount
+- each contract file must use an agent-visible `turn_...` path, normally
+  `turn_<id>/files/...` for durable workspace files or
+  `turn_<id>/outputs/...` for produced reports/artifacts
 - each contract item supports:
   - `filename`
   - `description`
@@ -146,7 +151,7 @@ Visibility rules for contracted files:
   - eligible for hosting / RN emission
   - shown to the user as a produced file artifact
 - `visibility=internal`
-  - kept in OUT_DIR and timeline for agent/runtime use
+  - kept in the artifact root and timeline for agent/runtime use
   - not hosted
   - not emitted to the user as a file attachment
 
@@ -154,8 +159,11 @@ Visibility rules for contracted files:
 
 If the agent wants its runtime progress or notes to appear in the execution result, it should write code that emits to `user.log`.
 
-Use `OUTPUT_DIR` as the primary runtime root.
+Use `OUTPUT_DIR` as the artifact root.
 `OUT_DIR` is simply `Path(OUTPUT_DIR)` if Path operations are more convenient.
+The runtime metadata root (`timeline.json`, `tool_calls_index.json`, logs, and
+tool-call JSON) is separate. Generated code should not construct paths into
+that metadata root. It should only write `turn_...` paths under `OUTPUT_DIR`.
 
 Normal pattern:
 
@@ -318,13 +326,14 @@ So today the safest public contract for agentic/copilot-like exec is still:
     - `output/work.zip`, `output/out.zip`
 - Input snapshot uses a **lightweight exec workspace**:
   - `work/` copied fully
-  - `out/` contains filtered `timeline.json` + only referenced files (from code + fetch_ctx)
+  - runtime `out/` contains filtered `timeline.json` and metadata
+  - artifact files referenced by code/fetch_ctx are restored under the artifact root (`out/workdir` locally, `/workspace/out` in split executor mode)
   - Manifest: `exec_snapshot_manifest.json`
 - Remote executor restores `input/*` before supervisor bootstrap in  
   `kdcube_ai_app/apps/chat/sdk/runtime/isolated/py_code_exec_entry.py`
 - Remote executor uploads `output/*` after execution (delta-aware).
 - Host (Fargate runner) restores `output/*` into local `workdir/outdir` after task finishes.
-  - Outdir merge is **selective**: only `turn_*` outputs copied, `logs/` appended.
+  - Outdir merge is **selective**: artifact `turn_*` outputs copied into the local artifact root, `logs/` appended.
   - `timeline.json` / `sources_pool.json` are preserved.
 
 ### Delta packaging

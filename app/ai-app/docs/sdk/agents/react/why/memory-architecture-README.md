@@ -69,7 +69,7 @@ That is why React memory is organized around:
 | SOURCES POOL | Rolling source registry and citation memory | Tail, always easy to find | Persisted as `conv:sources_pool` |
 | ANNOUNCE | Operational attention board / signal memory | Tail, always easy to find | Rebuilt each round; final state persisted on exit |
 | Turn log | Per-turn reconstruction memory | Not directly the model view | Persisted as `artifact:turn.log` |
-| Workspace | Project/file continuity memory | Local filesystem + `fi:` refs | Files/outputs in OUT_DIR, optionally git-backed |
+| Workspace | Project/file continuity memory | Local filesystem + `fi:` refs | Files/outputs in the artifact root, optionally git-backed |
 | Conversation artifact index | Searchable/indexed memory | Not directly visible | Postgres index rows + storage blobs |
 | Summaries / hidden replacements / feedback / plans | Derived memory layers | Sometimes visible, sometimes retrievable | Persisted as blocks and/or artifacts |
 
@@ -505,7 +505,7 @@ So memsearch is:
 
 Use to search the current local filesystem surface:
 
-- files already materialized under OUT_DIR
+- files already materialized under the artifact root
 
 It does not search hidden/pruned timeline, unpulled historical snapshots, or `ks:`. Use visible refs or `react.memsearch` to identify older `fi:` refs, then `react.pull` or `react.checkout` them before local search.
 

@@ -19,11 +19,23 @@ Scope:
 
 ## Files vs Tool Results
 Tool results are stored in the **event log blocks** (timeline), not on disk.
-Only the following are written to disk in OUT_DIR:
+Only the following are written to disk in the artifact output root:
 - exec tool outputs
 - `react.write` artifacts
 - `rendering_tools.write_*` outputs
 - user attachments (materialized when needed)
+
+Path root contract:
+- Agent-visible physical paths are always relative paths such as
+  `turn_<id>/files/...`, `turn_<id>/outputs/...`, and
+  `turn_<id>/attachments/...`.
+- The agent should not know or mention the host/runtime prefix. It should only
+  use the `turn_...` path.
+- In local runtime storage, those paths live under the artifact root
+  `out/workdir/`.
+- The sibling runtime root `out/` is reserved for platform metadata such as
+  `timeline.json`, `tool_calls_index.json`, tool-call JSON records, logs, and
+  execution diagnostics.
 
 User attachments:
 - PDFs/images are attached as binary blocks.
@@ -90,12 +102,14 @@ Both artifacts are indexed in `conv_messages` with:
 - `fi:<turn_id>.user.attachments/<name>`
 - `fi:<turn_id>.files/<relative_path>`
 - `fi:<turn_id>.outputs/<relative_path>`
-- Physical paths (OUT_DIR‑relative):
+- Physical paths (artifact-root-relative, under `out/workdir` locally):
   - Files: `turn_<id>/files/<relative_path>`
   - Outputs: `turn_<id>/outputs/<relative_path>`
   - Attachments: `turn_<id>/attachments/<filename>`
 
 Artifacts never use `current_turn` in their paths. Always use the concrete `turn_id`.
+Do not expose absolute host paths, execution sandbox paths, or hosted `file://`
+paths to the agent as write/read targets.
 
 ## Hosted file fields (external only)
 When a file is hosted, metadata blocks include:
@@ -108,7 +122,7 @@ These are **not interchangeable**; UI expects `rn` for downloads.
 - `visibility=external`: sent to user (chat or file attachment)
 - `visibility=internal`: stored only for agent use
   - Internal notes written via `react.write(channel="internal")` are stored as `react.note` blocks.
-  - Files created with `kind=file` are **not hosted** (they remain in OUT_DIR and the timeline).
+  - Files created with `kind=file` are **not hosted** (they remain in the artifact root and the timeline).
   - Exec contract files may explicitly request `visibility=internal` to keep the output agent-only.
 
 Important:
