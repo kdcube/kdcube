@@ -1,53 +1,59 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.5.18.0344"
+  ref: "2026.5.19.350"
   description: |
-    This release tightens the built-in bundle UI surfaces after the previous
-    layout pass. The widgets and the Versatile main view now follow a cleaner
-    application style with flat panels, compact controls, neutral borders, and
-    restrained use of brand color.
+    This release stabilizes React artifact handling, CLI local initialization,
+    and memory maintenance flows after the UI refresh. It also documents model
+    override patterns for bundle agents and tightens the dependency barrier used
+    by React multi-action planning.
 
     Highlights
 
-    - Moves the shared memory widget, Copilot widget, Versatile widget, and
-      Versatile main view to a GitHub-like visual baseline: white surfaces,
-      thin neutral borders, smaller radii, and minimal shadows.
-    - Removes decorative page textures and translucent panels from the affected
-      built-in surfaces so the UI reads as a professional application rather
-      than an illustrated demo.
-    - Keeps the platform palette for meaningful accents only: status chips,
-      warnings, errors, success states, selected tabs, and primary actions.
-    - Uses steel-blue controls and focus rings for primary actions while
-      keeping teal, gold, green, purple, and pink as lightweight semantic
-      accents.
-    - Updates Versatile main-view timeline, code, links, files, web search,
-      web fetch, execution, and thinking blocks to use light bordered panels
-      instead of heavy dark or semi-transparent containers.
-    - Makes the Versatile composer more compact with smaller controls and a
-      shorter default input height.
+    - Hardens React structured channel parsing so HTML, CSS, escaped content,
+      and large code-fenced payloads inside ReactDecisionOutV2 are parsed as
+      structured actions instead of being rejected as malformed output.
+    - Fixes artifact path recovery for timestamp-style turn ids and current-turn
+      output paths, preventing false react.pull requirements for files created
+      in the active turn.
+    - Removes duplicate protocol-violation rendering for pre-exec pull checks
+      and keeps the tool result as the authoritative failure signal.
+    - Clarifies React v2/v3 dependency-review instructions: an artifact is
+      "already visible" only if it existed before the current decision response
+      began, so same-response write-and-render chains are not allowed.
+    - Normalizes client-generated turn ids across the web clients and example
+      bundle UIs.
+    - Repairs CLI local initialization for managed-infra and custom UI compose
+      modes so platform UI and descriptor-defined UI source paths build from the
+      expected Docker context.
+    - Improves memory reconciliation and memory widget behavior, including
+      stale delete handling and clearer maintenance controls.
+    - Documents bundle agent role-model overrides at bundle, descriptor, and
+      ad-hoc execution scope, and adds bundle-configurable PDF footer support.
 
     Runtime and deployment notes:
 
-    - This is an OSS UI/runtime release. It does not require descriptor changes
-      by itself, but deployments must point at this platform ref to receive the
-      updated built-in surfaces.
-    - No backend contract changes are introduced.
-    - No private deployment or organization-specific content is part of this
-      release.
+    - Deployments must point the platform ref at 2026.5.19.350 to receive these
+      runtime, CLI, and documentation updates.
+    - No descriptor shape migration is required for existing deployments.
+    - Local CLI runs that build web-ui from source should use this release to
+      get the repaired UI source-path defaults.
+    - No organization-specific content is part of this OSS release.
 
     Validation and regression coverage:
 
-    - Shared memory widget production build passed.
-    - Copilot widget production build passed.
-    - Versatile widget production build passed.
-    - Versatile main view production build passed.
+    - React v2/v3 prompt and multi-action regression tests passed.
+    - React artifact path and workspace path tests passed.
+    - React external pre-exec pull guard tests passed for v2 and v3.
+    - CLI release metadata was updated on a dedicated release branch.
     - Staged OSS private-name scan passed.
 
     Changelog
 
-    - Polished built-in widget styling toward clean application chrome.
-    - Flattened Versatile main-view panels and subsystem blocks.
-    - Normalized borders, radii, shadows, focus states, and primary actions
-      across affected built-in UI components.
+    - Fixed React structured output parsing for complex embedded content.
+    - Fixed current-turn artifact path normalization and pull hints.
+    - Tightened React dependency-review prompts for v2, v3, and lite variants.
+    - Fixed CLI local web-ui source path resolution.
+    - Updated memory maintenance behavior and related SDK documentation.
+    - Added agent role-model override documentation and PDF footer config.
 config:
-    version: "2026.5.18.0344"
+    version: "2026.5.19.350"
