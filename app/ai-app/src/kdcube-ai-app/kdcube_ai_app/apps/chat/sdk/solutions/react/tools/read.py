@@ -9,7 +9,14 @@ import pathlib
 
 import json
 import hashlib
-from kdcube_ai_app.apps.chat.sdk.util import format_visible_line_window, line_number_text, visible_line_window
+from kdcube_ai_app.apps.chat.sdk.util import (
+    LINE_NUMBERS_DISABLED,
+    LINE_NUMBERS_LINES,
+    format_visible_line_window,
+    line_number_text,
+    normalize_line_numbers_mode,
+    visible_line_window,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
     build_artifact_meta_block,
 )
@@ -44,7 +51,7 @@ TOOL_SPEC = {
     "purpose": (
         "Read artifacts or skills into the visible context so you can use them. "
         "Paths must be context paths (fi:/ar:/so:/sk:/ks:), not physical paths. "
-        "For old-turn recovery, ar:<turn_id>.react.turn.index reconstructs a compact semantic inventory; "
+        "For old-turn recovery, ar:turn_<id>.react.turn.index reconstructs a compact semantic inventory; "
         "use it with react.memsearch hits when the summary does not name enough refs. "
         "Batch multiple known paths in one read call. "
         "react.rg read_items are directly readable here via params.items. "
@@ -68,8 +75,8 @@ TOOL_SPEC = {
     "args": {
         "paths": (
             "list[str] context paths to read: "
-            "turn indexes via ar:<turn_id>.react.turn.index, "
-            "files via fi:<turn_id>.files/<filepath>, "
+            "turn indexes via ar:turn_<id>.react.turn.index, "
+            "files via fi:turn_<id>.files/<filepath>, "
             "sources via so:sources_pool[...], "
             "skills via sk:<skill_id or num>, "
             "knowledge space via ks:<relpath> (read-only reference files). "
@@ -81,7 +88,8 @@ TOOL_SPEC = {
             "Use read_items returned by react.rg when available; otherwise create manual line ranges from stats_only metadata."
         ),
         "line_numbers": (
-            "optional bool; when reading line ranges, include line numbers. Defaults true for ranged items."
+            "optional mode: disabled, lines, or sparsed. Boolean values are accepted for compatibility "
+            "(true=lines, false=disabled). Defaults to lines for ranged items."
         ),
         "max_text_symbols": (
             "optional int; for text payloads, materialize at most this many visible characters/symbols per path. "
@@ -125,6 +133,10 @@ def _bool_param(value: Any) -> bool:
     return bool(value)
 
 
+def _line_numbers_param(value: Any, *, default: str = LINE_NUMBERS_DISABLED) -> str:
+    return normalize_line_numbers_mode(value, default=default)
+
+
 def _read_item_requests(params: Dict[str, Any]) -> List[Dict[str, Any]]:
     raw_items = params.get("items")
     if not isinstance(raw_items, list):
@@ -147,7 +159,7 @@ def _read_item_requests(params: Dict[str, Any]) -> List[Dict[str, Any]]:
             if value is not None:
                 req[key] = value
         if "line_numbers" in raw:
-            req["line_numbers"] = _bool_param(raw.get("line_numbers"))
+            req["line_numbers"] = _line_numbers_param(raw.get("line_numbers"))
         requests.append(req)
     return requests
 
@@ -164,8 +176,9 @@ def _apply_text_range(text: str, req: Dict[str, Any]) -> tuple[str, Optional[Dic
         count = max(1, int(req.get("line_count") or 1))
         lines = text.splitlines()
         selected = lines[start - 1:start - 1 + count]
-        if req.get("line_numbers", True):
-            ranged = line_number_text("\n".join(selected), line_start=start)
+        line_numbers_mode = _line_numbers_param(req.get("line_numbers", LINE_NUMBERS_LINES), default=LINE_NUMBERS_LINES)
+        if line_numbers_mode != LINE_NUMBERS_DISABLED:
+            ranged = line_number_text("\n".join(selected), line_start=start, line_numbers=line_numbers_mode)
         else:
             ranged = "\n".join(selected)
         visible = len(selected)
@@ -176,7 +189,7 @@ def _apply_text_range(text: str, req: Dict[str, Any]) -> tuple[str, Optional[Dic
             "requested_line_count": count,
             "visible_lines": visible,
             "total_line_count": len(lines),
-            "line_numbers": bool(req.get("line_numbers", True)),
+            "line_numbers": line_numbers_mode,
         }
     offset = max(0, int(req.get("offset_text_symbols") or 0))
     count = max(1, int(req.get("max_text_symbols") or len(text)))
@@ -202,7 +215,7 @@ def _range_header(*, path: str, view: Optional[Dict[str, Any]]) -> str:
         }
         lines.append(f"lines: {format_visible_line_window(window)}")
         lines.append(f"visible_lines: {view.get('visible_lines')}")
-        lines.append(f"line_numbers: {str(bool(view.get('line_numbers'))).lower()}")
+        lines.append(f"line_numbers: {_line_numbers_param(view.get('line_numbers'), default=LINE_NUMBERS_DISABLED)}")
     elif view.get("range_kind") == "text_symbols":
         offset = int(view.get("offset_text_symbols") or 0)
         visible = int(view.get("visible_text_symbols") or 0)
@@ -354,8 +367,10 @@ def _truncated_read_text(
     source_line_count: Optional[int],
     limit_text_symbols: int,
     byte_cap: Optional[int],
+    line_numbers: Any = LINE_NUMBERS_LINES,
 ) -> str:
     clipped = text[:max(0, limit_text_symbols)].rstrip()
+    line_numbers_mode = normalize_line_numbers_mode(line_numbers, default=LINE_NUMBERS_LINES)
     omitted_text_symbols = max(0, source_text_symbols - len(clipped))
     line_window = visible_line_window(
         clipped,
@@ -363,14 +378,18 @@ def _truncated_read_text(
         total_line_count=source_line_count,
     )
     visible_lines = int(line_window.get("visible_lines") or 0)
-    numbered = line_number_text(clipped) if clipped else ""
+    numbered = (
+        line_number_text(clipped, line_numbers=line_numbers_mode)
+        if clipped and line_numbers_mode != LINE_NUMBERS_DISABLED
+        else clipped
+    )
     return "\n".join([
         "[READ PREVIEW]",
         f"path: {path}",
         f"lines: {format_visible_line_window(line_window)}",
         f"partial_line: {line_window.get('partial_line')}" if line_window.get("partial_line") is not None else "",
         f"visible_lines: {visible_lines}",
-        "line_numbers: true" if visible_lines else "line_numbers: false",
+        f"line_numbers: {line_numbers_mode if visible_lines else LINE_NUMBERS_DISABLED}",
         "",
         numbered if numbered else clipped,
         "",
@@ -399,7 +418,15 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
     paths = [str(p).strip() for p in raw_paths if str(p).strip()]
     read_item_requests = _read_item_requests(params)
     stats_only = _bool_param(params.get("stats_only"))
-    default_line_numbers = _bool_param(params.get("line_numbers")) if "line_numbers" in params else True
+    configured_line_numbers = normalize_line_numbers_mode(
+        getattr(getattr(ctx_browser, "runtime_ctx", None), "line_numbers_mode", LINE_NUMBERS_LINES),
+        default=LINE_NUMBERS_LINES,
+    )
+    default_line_numbers = (
+        _line_numbers_param(params.get("line_numbers"), default=configured_line_numbers)
+        if "line_numbers" in params
+        else configured_line_numbers
+    )
 
     turn_id = (ctx_browser.runtime_ctx.turn_id or "")
     tool_call_block(
@@ -846,6 +873,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 source_line_count=source_line_count,
                 limit_text_symbols=len(clipped),
                 byte_cap=limit_bytes,
+                line_numbers=default_line_numbers,
             )
             marker_meta = dict(meta_extra or {})
             marker_meta.update({
@@ -909,7 +937,10 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
         item_req = item_req or {}
         item_has_range = _has_range_request(item_req)
         item_max_text_symbols = _positive_int(item_req.get("max_text_symbols")) or requested_read_text_symbols or visible_read_text_symbol_cap
-        item_line_numbers = bool(item_req.get("line_numbers", default_line_numbers if item_has_range else False))
+        item_line_numbers = _line_numbers_param(
+            item_req.get("line_numbers", default_line_numbers if item_has_range else LINE_NUMBERS_DISABLED),
+            default=default_line_numbers if item_has_range else LINE_NUMBERS_DISABLED,
+        )
         outdir_raw = (
             state.get("outdir")
             or getattr(getattr(ctx_browser, "runtime_ctx", None), "outdir", "")
@@ -1182,7 +1213,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
         if isinstance(text, str) and text.strip():
             text_view_meta = None
             if item_has_range:
-                item_line_numbers = bool(item_req.get("line_numbers", default_line_numbers))
+                item_line_numbers = _line_numbers_param(item_req.get("line_numbers", default_line_numbers), default=default_line_numbers)
                 ranged_req = dict(item_req)
                 ranged_req["line_numbers"] = item_line_numbers
                 text, text_view_meta = _apply_text_range(text, ranged_req)

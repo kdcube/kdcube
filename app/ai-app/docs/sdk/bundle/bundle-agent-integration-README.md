@@ -83,6 +83,27 @@ The model should not be asked to invent runtime ids or paths. Those must come
 from runtime context, job payload, bundle props, secret lookups, or prior tool
 results.
 
+### ReAct Preview Line Numbering
+
+The platform default comes from `assembly.yaml` at
+`ai.react.line_numbers_mode` / `AI_REACT_LINE_NUMBERS_MODE`. A bundle can
+override it with:
+
+```yaml
+items:
+  - id: my.bundle@1-0
+    config:
+      react:
+        line_numbers_mode: sparsed  # disabled | lines | sparsed
+```
+
+`lines` preserves the historical behavior and numbers every rendered preview
+line. `sparsed` numbers only the first, middle, and last preview windows to
+reduce model-input cost. `disabled` omits preview line prefixes. This changes
+only model-visible previews and `react.read` rendering; it does not change file
+contents or stored artifacts. `react.read` also accepts an explicit
+`line_numbers` value for a single read when the tool is available.
+
 ## 2A. Model Selection For Agent Roles
 
 Every SDK model call should use a logical role such as

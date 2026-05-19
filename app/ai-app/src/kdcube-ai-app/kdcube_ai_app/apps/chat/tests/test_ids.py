@@ -20,5 +20,7 @@ def test_timestamped_id_uses_utc_timestamp_and_short_suffix():
 def test_runtime_id_helpers_use_expected_prefixes():
     now = datetime(2026, 5, 6, 12, 52, 43, tzinfo=timezone.utc)
 
-    assert re.fullmatch(r"turn_20260506125243_[0-9a-f]{4}", new_turn_id(now=now))
+    turn_id = new_turn_id(now=now)
+    assert turn_id == "turn_2026-05-06-12-52-43-000"
+    assert not turn_id.startswith("turn_turn_")
     assert re.fullmatch(r"exec_20260506125243_[0-9a-f]{4}", new_exec_id(now=now))

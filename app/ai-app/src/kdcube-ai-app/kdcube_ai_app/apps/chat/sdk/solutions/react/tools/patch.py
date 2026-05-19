@@ -38,7 +38,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.workspace import resolve_artifact_path
 TOOL_SPEC = {
     "id": "react.patch",
     "purpose": (
-        "Apply a text patch to an existing current-turn materialized text file under files/... or outputs/... and stream the patch to the user. "
+        "Apply a text patch to an existing current-turn materialized text file under the canonical turn_<current>/files/... or turn_<current>/outputs/... namespace and stream the patch to the user. "
         "If patch starts with ---/+++/@@ it is treated as unified diff and generated hunk counts are normalized, otherwise replaces the whole file. "
         "Line-number prefixes from rendered previews are rejected because they are not file content. "
         "The target does not have to be created by react.write; current-turn files produced by exec, checkout, "
@@ -46,7 +46,7 @@ TOOL_SPEC = {
         "If kind='file' the updated file is shared; if kind='display' it is streamed only."
     ),
     "args": {
-        "path": "str (FIRST FIELD). Current-turn physical OUT_DIR-relative file path to patch, e.g. files/<scope>/x.py or outputs/<scope>/x.html.",
+        "path": "str (FIRST FIELD). Canonical current-turn physical OUT_DIR-relative file path, e.g. turn_<current>/files/<scope>/x.py or turn_<current>/outputs/<scope>/x.html.",
         "channel": "str (SECOND FIELD). 'canvas' (default) or 'timeline_text'.",
         "patch": "str (THIRD FIELD). Unified diff if starts with ---/+++/@@; otherwise full replacement.",
         "kind": "str (FOURTH FIELD). 'display' or 'file'.",
@@ -100,7 +100,7 @@ def _looks_like_copied_rendered_line_numbers(
         return False, {}
 
     ratio = suspicious / max(1, inspected)
-    has_preview_marker = "line_numbers: true" in patch_text or "content:\n" in patch_text
+    has_preview_marker = bool(re.search(r"line_numbers:\s*(true|lines|sparsed)\b", patch_text)) or "content:\n" in patch_text
     triggered = bool((suspicious >= 2 and ratio >= 0.35) or (suspicious >= 5) or (has_preview_marker and suspicious >= 1))
     if not triggered:
         return False, {}
@@ -147,7 +147,7 @@ def _normalize_patch_target(path_value: str, *, turn_id: str) -> tuple[str, str,
             "message": (
                 "react.patch expects a current-turn physical path, not a logical fi: path. "
                 "Use react.pull to materialize historical refs; for historical files use react.checkout "
-                "to copy them into current files/... before patching."
+                "to copy them into the current turn before patching."
             ),
             "extra": extra,
         }
@@ -158,8 +158,8 @@ def _normalize_patch_target(path_value: str, *, turn_id: str) -> tuple[str, str,
             return "", "", "", {
                 "code": "patch_requires_current_turn_path",
                 "message": (
-                    "react.patch only patches current-turn files/... or outputs/... paths. For a historical files/... path, "
-                    "use react.pull first if needed, then react.checkout to copy it into current files/...; "
+                    "react.patch only patches canonical current-turn files/ or outputs/ paths. For a historical files/ path, "
+                    "use react.pull first if needed, then react.checkout to copy it into the current turn; "
                     "patch the resulting current-turn path."
                 ),
                 "extra": {
@@ -173,7 +173,7 @@ def _normalize_patch_target(path_value: str, *, turn_id: str) -> tuple[str, str,
         if namespace not in {ARTIFACT_NAMESPACE_FILES, ARTIFACT_NAMESPACE_OUTPUTS}:
             return "", "", "", {
                 "code": "patch_unsupported_namespace",
-                "message": "react.patch supports only current-turn files/... and outputs/... text paths.",
+                "message": "react.patch supports only canonical current-turn files/ and outputs/ text paths.",
                 "extra": {"path": path_value, "namespace": namespace},
             }
         return raw, rel, namespace, None
@@ -191,7 +191,7 @@ def _normalize_patch_target(path_value: str, *, turn_id: str) -> tuple[str, str,
 
     return "", "", "", {
         "code": "patch_requires_namespaced_path",
-        "message": "react.patch path must be current-turn files/... or outputs/...; unqualified paths are ambiguous.",
+        "message": "react.patch path must be a canonical current-turn files/ or outputs/ path.",
         "extra": {"path": path_value},
     }
 

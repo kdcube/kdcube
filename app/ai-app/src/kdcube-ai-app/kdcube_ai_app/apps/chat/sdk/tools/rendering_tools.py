@@ -265,8 +265,8 @@ def _error_result(*, code: str, message: str, where: str, managed: bool) -> dict
 
 REACT_RENDER_REF_NOTE = (
     "REACT REF SOURCE: If content is `ref:<path>`, the ref must point to an external artifact "
-    "(react.write channel=canvas, or exec visibility=external). `ref:fi:<turn>.outputs/<file>` and "
-    "`ref:turn_<id>/outputs/<file>` both resolve to the same visible artifact when present. "
+    "(react.write channel=canvas, or exec visibility=external). `ref:fi:turn_<id>.outputs/<scope>/<file>` and "
+    "`ref:turn_<id>/outputs/<scope>/<file>` both resolve to the same visible artifact when present. "
     "channel=internal refs are private and are rejected for rendering_tools.write_*.\n\n"
 )
 
@@ -296,7 +296,7 @@ class RenderingTools:
             "• Inline: <strong>, <em>, <span class='...'>, <sup class='cite'> for citations\n\n"
             "IMAGES (CRITICAL - Use File Paths):\n"
             "• MUST use relative file paths from OUT_DIR, NOT base64 data URIs\n"
-            "• Pattern: <img src='turn_id/files/chart.png' width='640'> when file at OUT_DIR/turn_id/files/chart.png\n"
+            "• Pattern: <img src='turn_<id>/files/report/chart.png' width='640'> when file at OUT_DIR/turn_<id>/files/report/chart.png\n"
             "• Sizing: width='640' or style='width:5in; height:3in;' (supports px/pt/in)\n"
             "• Base64 URIs will crash - always use file paths\n\n"
             "SUPPORTED CSS (others ignored):\n"
@@ -888,8 +888,8 @@ class RenderingTools:
             "   • Legends should wrap; avoid cramped spaces\n\n"
             "6) IMAGES (CRITICAL - Use File Paths, NOT Base64)\n"
             "   • MUST use relative file paths from OUT_DIR (the tool's output directory / base_dir)\n"
-            "   • HTML mode: <img src='turn_id/files/chart.png' alt='Chart'> when file is at OUT_DIR/turn_id/files/chart.png\n"
-            "   • Markdown mode: ![Chart](turn_id/files/chart.png) when file is at OUT_DIR/turn_id/files/chart.png\n"
+            "   • HTML mode: <img src='turn_<id>/files/report/chart.png' alt='Chart'> when file is at OUT_DIR/turn_<id>/files/report/chart.png\n"
+            "   • Markdown mode: ![Chart](turn_<id>/files/report/chart.png) when file is at OUT_DIR/turn_<id>/files/report/chart.png\n"
             "   • Do NOT embed base64 data URIs in HTML/Markdown; they can crash headless Chromium on multi-page PDFs\n"
             "   • Ensure HTML/Markdown generator knows relative paths and their association with visual content\n\n"
             "7) DON'TS (cause clipping, overlaps, or ugly splits)\n"

@@ -19,18 +19,28 @@ ARTIFACT_NAMESPACE_FILES = "files"
 ARTIFACT_NAMESPACE_OUTPUTS = "outputs"
 ARTIFACT_NAMESPACE_ATTACHMENTS = "attachments"
 ARTIFACT_EXTERNAL_PREFIX = "external/"
+_TIMESTAMP_TURN_ID_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}(?:-\d{2})?(?:-\d{3,6})?$"
+)
 _EXTERNAL_LOGICAL_RE = re.compile(
-    r"^(?P<turn>turn_[^.]+)\.external\.(?P<kind>[^.]+)\.attachments/(?P<message_id>[^/]+)/(?P<rel>.+)$"
+    r"^(?P<turn>[^.]+)\.external\.(?P<kind>[^.]+)\.attachments/(?P<message_id>[^/]+)/(?P<rel>.+)$"
 )
 _EXTERNAL_LOGICAL_LEGACY_RE = re.compile(
-    r"^(?P<turn>turn_[^.]+)\.external\.(?P<kind>[^.]+)\.(?P<message_id>[^.]+)\.attachments/(?P<rel>.+)$"
+    r"^(?P<turn>[^.]+)\.external\.(?P<kind>[^.]+)\.(?P<message_id>[^.]+)\.attachments/(?P<rel>.+)$"
 )
 _EXTERNAL_PHYSICAL_RE = re.compile(
-    r"^(?P<turn>turn_[^/]+)/external/(?P<kind>[^/]+)/attachments/(?P<message_id>[^/]+)/(?P<rel>.+)$"
+    r"^(?P<turn>[^/]+)/external/(?P<kind>[^/]+)/attachments/(?P<message_id>[^/]+)/(?P<rel>.+)$"
 )
 _EXTERNAL_PHYSICAL_LEGACY_RE = re.compile(
-    r"^(?P<turn>turn_[^/]+)/external/(?P<kind>[^/]+)/(?P<message_id>[^/]+)/attachments/(?P<rel>.+)$"
+    r"^(?P<turn>[^/]+)/external/(?P<kind>[^/]+)/(?P<message_id>[^/]+)/attachments/(?P<rel>.+)$"
 )
+
+
+def is_turn_id(value: str) -> bool:
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+    return raw.startswith("turn_") or raw.startswith("telegram_turn_") or bool(_TIMESTAMP_TURN_ID_RE.fullmatch(raw))
 
 
 def _split_external_attachment_rel(relpath: str) -> tuple[str, str, str]:
@@ -118,7 +128,7 @@ def build_logical_artifact_path(*, turn_id: str, namespace: str, relpath: str) -
 
 def split_physical_artifact_path(path_value: str) -> tuple[str, str, str]:
     raw = (path_value or "").strip().lstrip("/")
-    if not raw or not raw.startswith("turn_"):
+    if not raw:
         return "", "", ""
     match = _EXTERNAL_PHYSICAL_RE.match(raw) or _EXTERNAL_PHYSICAL_LEGACY_RE.match(raw)
     if match:
@@ -126,19 +136,27 @@ def split_physical_artifact_path(path_value: str) -> tuple[str, str, str]:
         kind = match.group("kind")
         message_id = match.group("message_id")
         rel = match.group("rel")
-        if turn_id and kind and message_id and rel:
+        if is_turn_id(turn_id) and kind and message_id and rel:
             return turn_id, ARTIFACT_NAMESPACE_ATTACHMENTS, f"external/{kind}/attachments/{message_id}/{rel}"
+    if ".user.attachments/" in raw:
+        turn_id, rel = raw.split(".user.attachments/", 1)
+        if is_turn_id(turn_id) and rel:
+            return turn_id, ARTIFACT_NAMESPACE_ATTACHMENTS, rel
     for namespace in (
         ARTIFACT_NAMESPACE_FILES,
         ARTIFACT_NAMESPACE_OUTPUTS,
         ARTIFACT_NAMESPACE_ATTACHMENTS,
     ):
         marker = f"/{namespace}/"
-        if marker not in raw:
-            continue
-        turn_id, rel = raw.split(marker, 1)
-        if turn_id and rel:
-            return turn_id, namespace, rel
+        if marker in raw:
+            turn_id, rel = raw.split(marker, 1)
+            if is_turn_id(turn_id) and rel:
+                return turn_id, namespace, rel
+        marker = f".{namespace}/"
+        if marker in raw:
+            turn_id, rel = raw.split(marker, 1)
+            if is_turn_id(turn_id) and rel:
+                return turn_id, namespace, rel
     return "", "", ""
 
 
@@ -154,7 +172,7 @@ def split_logical_artifact_path(path_value: str) -> tuple[str, str, str]:
         kind = match.group("kind")
         message_id = match.group("message_id")
         rel = match.group("rel")
-        if turn_id and kind and message_id and rel:
+        if is_turn_id(turn_id) and kind and message_id and rel:
             return turn_id, ARTIFACT_NAMESPACE_ATTACHMENTS, f"external/{kind}/attachments/{message_id}/{rel}"
     if ".files/" in raw:
         turn_id, rel = raw.split(".files/", 1)
@@ -165,9 +183,24 @@ def split_logical_artifact_path(path_value: str) -> tuple[str, str, str]:
     if ".user.attachments/" in raw:
         turn_id, rel = raw.split(".user.attachments/", 1)
         return turn_id, ARTIFACT_NAMESPACE_ATTACHMENTS, rel
+    if "/user.attachments/" in raw:
+        turn_id, rel = raw.split("/user.attachments/", 1)
+        if is_turn_id(turn_id) and rel:
+            return turn_id, ARTIFACT_NAMESPACE_ATTACHMENTS, rel
     if ".attachments/" in raw:
         turn_id, rel = raw.split(".attachments/", 1)
         return turn_id, ARTIFACT_NAMESPACE_ATTACHMENTS, rel
+    for namespace in (
+        ARTIFACT_NAMESPACE_FILES,
+        ARTIFACT_NAMESPACE_OUTPUTS,
+        ARTIFACT_NAMESPACE_ATTACHMENTS,
+    ):
+        marker = f"/{namespace}/"
+        if marker not in raw:
+            continue
+        turn_id, rel = raw.split(marker, 1)
+        if is_turn_id(turn_id) and rel:
+            return turn_id, namespace, rel
     return "", "", ""
 
 
@@ -194,6 +227,11 @@ def physical_path_to_logical_path(path_value: str) -> str:
     raw = (path_value or "").strip().lstrip("/")
     if not raw:
         return ""
+    if raw.startswith("fi:"):
+        turn_id, namespace, rel = split_logical_artifact_path(raw)
+        if turn_id and namespace and rel:
+            return build_logical_artifact_path(turn_id=turn_id, namespace=namespace, relpath=rel)
+        return raw
     turn_id, namespace, rel = split_physical_artifact_path(raw)
     if turn_id and namespace and rel:
         return build_logical_artifact_path(turn_id=turn_id, namespace=namespace, relpath=rel)
@@ -882,14 +920,14 @@ class ArtifactView:
             else ""
         )
         if art_path:
-            lines.append(f"    artifact_path: {art_path}")
+            lines.append(f"    logical_path: {art_path}")
         phys = (
             build_physical_artifact_path(turn_id=self.turn_id, namespace=namespace, relpath=rel)
             if self.turn_id and namespace and rel
             else ""
         )
         if phys:
-            lines.append(f"    physical_path: {phys}")
+            lines.append("    physical_path: exists (derive)")
         meta = []
         if self.tool_id:
             meta.append(f"tool={self.tool_id}")
@@ -945,14 +983,14 @@ class ArtifactView:
             else ""
         )
         if art_path:
-            lines.append(f"    artifact_path: {art_path}")
+            lines.append(f"    logical_path: {art_path}")
         phys = (
             build_physical_artifact_path(turn_id=self.turn_id, namespace=namespace, relpath=rel)
             if self.turn_id and namespace and rel
             else ""
         )
         if phys:
-            lines.append(f"    physical_path: {phys}")
+            lines.append("    physical_path: exists (derive)")
         meta = []
         if self.tool_id:
             meta.append(f"tool={self.tool_id}")

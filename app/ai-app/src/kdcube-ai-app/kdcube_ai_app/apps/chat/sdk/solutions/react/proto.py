@@ -9,6 +9,8 @@ import copy
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Protocol
 
+from kdcube_ai_app.apps.chat.sdk.util import LINE_NUMBERS_LINES
+
 
 class KnowledgeSearchFn(Protocol):
     def __call__(
@@ -135,6 +137,7 @@ class RuntimeCtx:
     render_react_state: bool = False
     render_react_exit: bool = False
     render_thinking: bool = True
+    line_numbers_mode: str = LINE_NUMBERS_LINES
     session: RuntimeSessionConfig = field(default_factory=RuntimeSessionConfig)
     cache: RuntimeCacheConfig = field(default_factory=RuntimeCacheConfig)
     # Legacy cache fields (prefer RuntimeCtx.session).
@@ -203,6 +206,7 @@ class RuntimeCtx:
             "render_react_state": bool(self.render_react_state),
             "render_react_exit": bool(self.render_react_exit),
             "render_thinking": bool(self.render_thinking),
+            "line_numbers_mode": self.line_numbers_mode,
             "session": self.session.to_dict() if self.session else {},
             "cache": self.cache.to_dict() if self.cache else {},
             "cache_ttl_seconds": self.cache_ttl_seconds,

@@ -25,8 +25,8 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.workspace import (
 TOOL_SPEC = {
     "id": "react.checkout",
     "purpose": (
-        "Define the active current-turn workspace by copying selected materialized fi:<turn_id>.files refs "
-        "into turn_<current_turn>/files in order. "
+        "Define the active current-turn workspace by copying selected materialized fi:turn_<id>.files refs "
+        "into turn_<current>/files in order. "
         "Use this when the current workspace itself must contain a runnable/searchable project snapshot, "
         "rather than only materializing historical side views with react.pull. "
         "For older refs that may not be local on this worker, call react.pull(paths=[...]) first."
@@ -38,9 +38,9 @@ TOOL_SPEC = {
             "overlay keeps existing current-turn files/ and overwrites only the selected files."
         ),
         "paths": (
-            "ordered list[str] of fi:<turn_id>.files refs to apply into the current-turn workspace. "
+            "ordered list[str] of fi:turn_<id>.files refs to apply into the current-turn workspace. "
             "Later entries override earlier ones if they overlap. "
-            "For compatibility, params.version is still accepted as a whole-tree checkout of fi:<turn_id>.files/."
+            "For compatibility, params.version is still accepted as a whole-tree checkout of fi:turn_<id>.files/."
         ),
     },
     "returns": (
@@ -122,14 +122,14 @@ async def handle_react_checkout(*, ctx_browser: Any, state: Dict[str, Any], tool
     if invalid:
         return _fail(
             "protocol_violation.checkout_invalid_paths",
-            "react.checkout requires fi:<turn_id>.files refs in params.paths (or legacy params.version).",
+            "react.checkout requires fi:turn_<id>.files refs in params.paths (or legacy params.version).",
             extra={"invalid": invalid},
         )
 
     if not requests:
         return _fail(
             "protocol_violation.checkout_missing_paths",
-            "react.checkout requires params.paths with fi:<turn_id>.files refs (or legacy params.version).",
+            "react.checkout requires params.paths with fi:turn_<id>.files refs (or legacy params.version).",
         )
 
     result = await checkout_workspace_paths(

@@ -9,7 +9,12 @@ import json
 import traceback, pathlib, logging
 from typing import Any, Optional, List, Dict, Union
 
-from kdcube_ai_app.apps.chat.sdk.util import count_text_lines
+from kdcube_ai_app.apps.chat.sdk.util import (
+    LINE_NUMBERS_DISABLED,
+    count_text_lines,
+    line_number_text,
+    normalize_line_numbers_mode,
+)
 from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
 from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
@@ -67,9 +72,10 @@ def _read_local_file(
     line_start: Optional[int] = None,
     line_count: Optional[int] = None,
     offset_text_symbols: Optional[int] = None,
-    line_numbers: bool = False,
+    line_numbers: Any = LINE_NUMBERS_DISABLED,
 ) -> tuple[Optional[str], Optional[str], Optional[str], Optional[int], bool, Optional[Dict[str, Any]]]:
     def _line_range_text() -> tuple[str, Dict[str, Any]]:
+        line_numbers_mode = normalize_line_numbers_mode(line_numbers, default=LINE_NUMBERS_DISABLED)
         start = max(1, int(line_start or 1))
         count = max(1, int(line_count or 1))
         end = start + count - 1
@@ -83,19 +89,19 @@ def _read_local_file(
                     break
                 actual_end = lineno
                 line = raw_line.rstrip("\n\r")
-                if line_numbers:
-                    lines.append(f"{lineno:>6}\t{line}")
-                else:
-                    lines.append(line)
+                lines.append(line)
         meta = {
             "range_kind": "lines",
             "line_start": start,
             "line_end": actual_end,
             "requested_line_count": count,
             "visible_lines": max(0, actual_end - start + 1),
-            "line_numbers": bool(line_numbers),
+            "line_numbers": line_numbers_mode,
         }
-        return "\n".join(lines), meta
+        text = "\n".join(lines)
+        if line_numbers_mode != LINE_NUMBERS_DISABLED:
+            text = line_number_text(text, line_start=start, line_numbers=line_numbers_mode)
+        return text, meta
 
     def _symbol_range_text() -> tuple[str, Dict[str, Any]]:
         offset = max(0, int(offset_text_symbols or 0))
@@ -189,7 +195,7 @@ async def read_artifact_for_react(
         line_start: Optional[int] = None,
         line_count: Optional[int] = None,
         offset_text_symbols: Optional[int] = None,
-        line_numbers: bool = False,
+        line_numbers: Any = LINE_NUMBERS_DISABLED,
 ) -> Dict[str, Any]:
     """
     Resolve a fi: artifact path to a local file (rehosting if needed) and read its

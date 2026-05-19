@@ -84,7 +84,7 @@ class BrowserTools:
     @kernel_function(
         name="open_page",
         description=(
-            "Open a URL, file:// URL, OUTPUT_DIR-relative path, or fi:<turn>.outputs/... artifact "
+            "Open a URL, file:// URL, canonical OUTPUT_DIR-relative path, or fi:turn_<id>.outputs/... artifact "
             "in a turn-scoped Playwright browser tab. Use this to verify generated HTML/apps in a real browser. "
             "The same turn reuses the same browser session; use different tab_id values for multiple tabs. "
             "Returns page title/url, visible text preview, controls, console warnings/errors, page errors, and request failures. "
@@ -93,7 +93,7 @@ class BrowserTools:
     )
     async def open_page(
         self,
-        url_or_path: Annotated[str, "URL, file:// URL, OUTPUT_DIR-relative path, or fi:<turn>.outputs/... logical file path."],
+        url_or_path: Annotated[str, "URL, file:// URL, canonical OUTPUT_DIR-relative path, or fi:turn_<id>.outputs/... logical file path."],
         tab_id: Annotated[str, "Named tab inside the current turn-scoped browser session."] = "main",
         wait_until: Annotated[str, "'commit'|'domcontentloaded'|'load'|'networkidle'."] = "domcontentloaded",
         timeout_ms: Annotated[int, "Navigation timeout in milliseconds."] = 10000,

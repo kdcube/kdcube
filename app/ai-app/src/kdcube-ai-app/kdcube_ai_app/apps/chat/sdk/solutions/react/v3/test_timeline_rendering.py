@@ -232,7 +232,7 @@ def test_timeline_rendering_with_attachment_and_tool_blocks():
             turn_id=ctx.turn_id,
             ts=ctx.started_at,
             path="fi:turn_123.user.attachments/menu.pdf",
-            text="[USER ATTACHMENT] menu.pdf | application/pdf\n[path: fi:turn_123.user.attachments/menu.pdf]\n[physical_path: turn_123/attachments/menu.pdf]",
+            text="[USER ATTACHMENT] menu.pdf | application/pdf\n[logical_path: fi:turn_123.user.attachments/menu.pdf]\n[physical_path: exists (derive)]",
             meta={"physical_path": "turn_123/attachments/menu.pdf"},
         ),
         tl._block(
@@ -250,7 +250,7 @@ def test_timeline_rendering_with_attachment_and_tool_blocks():
             turn_id=ctx.turn_id,
             ts=ctx.started_at,
             path="fi:turn_123.user.attachments/notes.txt",
-            text="[USER ATTACHMENT] notes.txt | text/plain\n[path: fi:turn_123.user.attachments/notes.txt]\n[physical_path: turn_123/attachments/notes.txt]",
+            text="[USER ATTACHMENT] notes.txt | text/plain\n[logical_path: fi:turn_123.user.attachments/notes.txt]\n[physical_path: exists (derive)]",
             meta={"physical_path": "turn_123/attachments/notes.txt"},
         ),
         tl._block(
@@ -317,7 +317,8 @@ def test_timeline_rendering_with_attachment_and_tool_blocks():
 
     assert any("TURN turn_123" in b.get("text", "") for b in text_blocks)
     assert any("[path: ar:turn_123.user.prompt]" in b.get("text", "") for b in text_blocks)
-    assert any("turn_123/attachments/menu.pdf" in b.get("text", "") for b in text_blocks)
+    assert any("[logical_path: fi:turn_123.user.attachments/menu.pdf]" in b.get("text", "") for b in text_blocks)
+    assert any("[physical_path: exists (derive)]" in b.get("text", "") for b in text_blocks)
     assert any("fi:turn_123.user.attachments/notes.txt" in b.get("text", "") for b in text_blocks)
     assert any("hello notes" in b.get("text", "") for b in text_blocks)
     assert any("fi:turn_123.files/draft.md" in b.get("text", "") for b in text_blocks)
@@ -448,9 +449,9 @@ def test_large_text_artifact_is_rendered_as_bounded_preview():
     assert tl.blocks[-1]["text"] == artifact_text
     assert "[ARTIFACT PREVIEW TRUNCATED]" in joined
     assert "logical_path: fi:turn_artifact.outputs/report.md" in joined
-    assert "physical_path: turn_artifact/outputs/report.md" in joined
+    assert "physical_path: exists (derive)" in joined
     assert "preview_lines: [1-" in joined
-    assert "line_numbers: true" in joined
+    assert "line_numbers: lines" in joined
     assert "Use react.rg on the file to find relevant regions before editing." in joined
     assert "line 29:" not in joined
     assert len(joined) < len(artifact_text)
@@ -504,7 +505,7 @@ def test_small_text_artifact_is_rendered_with_line_numbers():
     assert tl.blocks[-1]["text"] == artifact_text
     assert "logical_path: fi:turn_small_artifact.files/demo/a.txt" in joined
     assert "lines: [1-3]/3" in joined
-    assert "line_numbers: true" in joined
+    assert "line_numbers: lines" in joined
     assert "     1\talpha" in joined
     assert "     2\tbeta" in joined
     assert "[ARTIFACT PREVIEW TRUNCATED]" not in joined
@@ -606,7 +607,7 @@ def test_file_artifact_render_includes_size_bytes():
     rendered = _run(tl.render(cache_last=True))
     joined = "\n".join(b.get("text", "") for b in rendered if b.get("type") == "text")
 
-    assert "- logical_path: fi:turn_file.outputs/report.md | kind: file | visibility: external | text_symbols: 12000 | size_bytes: 12345" in joined
+    assert "- logical_path: fi:turn_file.outputs/report.md | physical_path: exists (derive) | kind: file | visibility: external | text_symbols: 12000 | size_bytes: 12345" in joined
     assert "logical_path: fi:turn_file.outputs/report.md | text_symbols: 12000 | size_bytes: 12345" in joined
 
 

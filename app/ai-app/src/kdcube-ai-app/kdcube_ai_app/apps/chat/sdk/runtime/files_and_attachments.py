@@ -18,6 +18,11 @@ from kdcube_ai_app.infra.service_hub.multimodality import (
     MODALITY_MAX_DOC_BYTES,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.artifact_analysis import prepare_summary_artifact
+from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
+    ARTIFACT_NAMESPACE_ATTACHMENTS,
+    ARTIFACT_NAMESPACE_FILES,
+    split_physical_artifact_path,
+)
 from kdcube_ai_app.apps.chat.sdk.tools.citations import extract_local_paths_any
 from kdcube_ai_app.apps.chat.sdk.runtime.workspace import artifact_outdir_for, resolve_artifact_path
 
@@ -181,8 +186,9 @@ def resolve_cited_file_sources_from_content(
         hosted_uri = ""
         found_rn = ""
 
-        if rel_str.startswith("turn_") and "/files/" in rel_str:
-            turn_id, _, _tail = rel_str.partition("/files/")
+        parsed_turn_id, parsed_namespace, _parsed_rel = split_physical_artifact_path(rel_str)
+        if parsed_turn_id and parsed_namespace == ARTIFACT_NAMESPACE_FILES:
+            turn_id = parsed_turn_id
             if turn_id != "current_turn":
                 tlog = get_turn_log(turn_id) if callable(get_turn_log) else {}
                 assistant_obj = tlog.get("assistant") if isinstance(tlog.get("assistant"), dict) else {}
@@ -195,8 +201,8 @@ def resolve_cited_file_sources_from_content(
                     hosted_uri = (f.get("hosted_uri") or "").strip()
                     found_rn = (f.get("rn") or "").strip()
                     break
-        elif rel_str.startswith("turn_") and "/attachments/" in rel_str:
-            turn_id, _, _tail = rel_str.partition("/attachments/")
+        elif parsed_turn_id and parsed_namespace == ARTIFACT_NAMESPACE_ATTACHMENTS:
+            turn_id = parsed_turn_id
             art_name, hosted_uri = _find_attachment_artifact(turn_id, filename)
             if art_name:
                 artifact_path = f"{turn_id}.user.attachments.{art_name}"

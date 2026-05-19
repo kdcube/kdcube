@@ -42,9 +42,8 @@ TOOL_SPEC = {
         "use channel='canvas' for LARGE content (even markdown) or any non‑markdown. "
         "Use channel='internal' to write user-invisible internal file artifacts. "
         "Set scratchpad=true only for short inline notes that should appear as react.note. "
-        "Use paths under files/... only for durable project/workspace state. "
-        "Use paths under outputs/... for reports, exports, demos, and other produced artifacts. "
-        "Unqualified paths are treated as outputs/... for compatibility. "
+        "Use canonical current-turn physical paths: turn_<current>/files/... for durable workspace state "
+        "or turn_<current>/outputs/... for reports, exports, demos, and other produced artifacts. "
         "The file extension MUST match the content format (e.g., HTML -> .html, Markdown -> .md). "
         "When channel='canvas', the file extension MUST match a supported canvas format: "
         ".md/.markdown, .html/.htm, .mermaid/.mmd, .json, .yaml/.yml, .txt, .xml. "
@@ -60,7 +59,7 @@ TOOL_SPEC = {
         "Note if you use this tool to generate the content for rendering tools.write_* tools, you must read the relevant skill(s) to produce the proper content. Ensure you see the proper skills in the journal or load them first via react.read."
     ),
     "args": {
-        "path": "str (FIRST FIELD). Filepath of this artifact. Prefer outputs/<scope>/<name> unless writing durable project/workspace state under files/<scope>/<path>.",
+        "path": "str (FIRST FIELD). Canonical current-turn physical filepath: turn_<current>/outputs/<scope>/<name>, or turn_<current>/files/<scope>/<path> for durable workspace state.",
         "channel": "str (SECOND FIELD). Use 'canvas' for generated artifacts by default and ALWAYS for user-visible content or renderer sources. Use 'internal' only for private scratch that will not be presented or rendered. 'timeline_text' is for timeline text blocks.",
         "content": "str|object (THIRD FIELD). Content to record.",
         "kind": "str (FOURTH FIELD). 'display' or 'file'.",

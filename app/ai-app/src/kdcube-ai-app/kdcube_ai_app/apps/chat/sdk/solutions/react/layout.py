@@ -27,7 +27,13 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.workspace import (
 )
 
 from kdcube_ai_app.apps.chat.sdk.skills.skills_registry import skills_gallery_text
-from kdcube_ai_app.apps.chat.sdk.util import _wrap_lines, _shorten, token_count
+from kdcube_ai_app.apps.chat.sdk.util import (
+    LINE_NUMBERS_LINES,
+    _shorten,
+    _wrap_lines,
+    normalize_line_numbers_mode,
+    token_count,
+)
 from kdcube_ai_app.tools.content_type import is_text_mime_type
 import re
 
@@ -866,12 +872,16 @@ def build_announce_context_cap_lines(*, runtime_ctx: Optional[RuntimeCtx]) -> Li
         "tool_result_preview_max_text_symbols",
         DEFAULT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS,
     )
+    line_numbers_mode = normalize_line_numbers_mode(
+        getattr(runtime_ctx, "line_numbers_mode", LINE_NUMBERS_LINES),
+        default=LINE_NUMBERS_LINES,
+    )
     return [
         "[CONTEXT CAPS]",
         (
             f"  read text={read_text} tok={read_tokens} bytes={_bytes_label(read_bytes)} ctx_frac={read_fraction:g}; "
             f"ks_read text={_optional_label(ks_read_text)} tok={_optional_label(ks_read_tokens)} bytes={_optional_label(ks_read_bytes, bytes_value=True)}; "
-            f"tool_result_preview={tool_preview}; exec_file_preview={exec_preview}"
+            f"tool_result_preview={tool_preview}; exec_file_preview={exec_preview}; line_numbers={line_numbers_mode}"
         ),
         "  regular text is capped; skills are always uncapped; ks: is uncapped unless knowledge_read_visible_* caps are configured; use stats_only plus ranged react.read items for capped text; exec_stdout=capped",
     ]

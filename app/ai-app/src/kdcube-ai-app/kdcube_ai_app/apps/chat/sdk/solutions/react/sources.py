@@ -19,6 +19,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import SOURCE_ID_CV
 from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
     build_physical_artifact_path,
     split_logical_artifact_path,
+    split_physical_artifact_path,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.workspace import hydrate_workspace_paths
 
@@ -297,9 +298,8 @@ async def ensure_rendering_assets(
                             )
                         else:
                             physical_path = ap[len("fi:"):].lstrip("/")
-                if physical_path and physical_path.startswith("turn_") and (
-                    "/files/" in physical_path or "/outputs/" in physical_path or "/attachments/" in physical_path
-                ):
+                tid, namespace, rel = split_physical_artifact_path(physical_path)
+                if tid and namespace and rel:
                     sid_rehost.append(physical_path)
             if sid_rehost:
                 rehost = await hydrate_workspace_paths(
@@ -349,7 +349,8 @@ async def ensure_rendering_assets(
             continue
         if p.startswith(("/", "\\")):
             continue
-        if p.startswith("turn_") and ("/files/" in p or "/outputs/" in p or "/attachments/" in p):
+        tid, namespace, rel = split_physical_artifact_path(p)
+        if tid and namespace and rel:
             rehost_paths.append(p)
     if rehost_paths:
         rehost = await hydrate_workspace_paths(

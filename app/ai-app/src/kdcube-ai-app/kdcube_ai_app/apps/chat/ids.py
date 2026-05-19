@@ -25,7 +25,11 @@ def timestamped_id(prefix: str, *, now: datetime | None = None, suffix_chars: in
 
 
 def new_turn_id(*, now: datetime | None = None) -> str:
-    return timestamped_id("turn", now=now)
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    current = current.astimezone(timezone.utc)
+    return f"turn_{current:%Y-%m-%d-%H-%M-%S}-{current.microsecond // 1000:03d}"
 
 
 def new_exec_id(*, now: datetime | None = None) -> str:

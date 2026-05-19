@@ -30,17 +30,17 @@ TOOL_SPEC = {
         "Materialize selected fi: snapshot refs locally under OUT_DIR so later exec/code can use them by physical path. "
         "Use this for versioned files/folders you need locally as historical reference material. "
         "Pulled content stays under its historical turn root and does not become the editable current-turn workspace. "
-        "Folder pulls are supported only for fi:<turn_id>.files/<scope-or-subtree>. "
+        "Folder pulls are supported only for fi:turn_<id>.files/<scope-or-subtree>. "
         "Non-workspace outputs and attachment/binary pulls must name exact refs."
     ),
     "args": {
         "paths": (
             "list[str] of fi: refs to materialize locally. "
-            "Allowed: fi:<turn_id>.files/<path> (exact file or subtree), "
-            "fi:<turn_id>.outputs/<file> (exact file only), "
-            "fi:<turn_id>.user.attachments/<file> (exact file only), "
-            "fi:<turn_id>.external.<kind>.attachments/<message_id>/<file> (exact file only), "
-            "and legacy fi:<turn_id>.attachments/<file> (exact file only)."
+            "Allowed: fi:turn_<id>.files/<path> (exact file or subtree), "
+            "fi:turn_<id>.outputs/<file> (exact file only), "
+            "fi:turn_<id>.user.attachments/<file> (exact file only), "
+            "fi:turn_<id>.external.<kind>.attachments/<message_id>/<file> (exact file only), "
+            "and legacy fi:turn_<id>.attachments/<file> (exact file only)."
         ),
     },
     "returns": (

@@ -3,6 +3,7 @@
 from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
     normalize_physical_path,
     physical_path_to_logical_path,
+    split_logical_artifact_path,
 )
 
 
@@ -22,9 +23,30 @@ def test_physical_path_to_logical_path_supports_generic_outdir_paths():
     assert physical_path_to_logical_path("logs/docker.err.log") == "fi:logs/docker.err.log"
     assert physical_path_to_logical_path("turn_prev/files/report.md") == "fi:turn_prev.files/report.md"
     assert physical_path_to_logical_path("turn_prev/outputs/report.md") == "fi:turn_prev.outputs/report.md"
+    assert physical_path_to_logical_path("turn_prev.files/report.md") == "fi:turn_prev.files/report.md"
+    assert physical_path_to_logical_path("turn_prev.outputs/report.md") == "fi:turn_prev.outputs/report.md"
     assert (
         physical_path_to_logical_path("turn_prev/external/followup/attachments/mabc123/brief.txt")
         == "fi:turn_prev.external.followup.attachments/mabc123/brief.txt"
+    )
+
+
+def test_logical_artifact_path_accepts_recoverable_separator_mixup():
+    assert physical_path_to_logical_path("fi:turn_prev/outputs/report.md") == "fi:turn_prev.outputs/report.md"
+    assert split_logical_artifact_path("fi:turn_prev/files/report.md") == (
+        "turn_prev",
+        "files",
+        "report.md",
+    )
+    assert split_logical_artifact_path("fi:turn_prev/outputs/report.md") == (
+        "turn_prev",
+        "outputs",
+        "report.md",
+    )
+    assert split_logical_artifact_path("fi:turn_prev/user.attachments/template.xlsx") == (
+        "turn_prev",
+        "attachments",
+        "template.xlsx",
     )
 
 

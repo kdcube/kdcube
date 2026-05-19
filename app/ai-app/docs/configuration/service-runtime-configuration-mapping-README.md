@@ -161,6 +161,7 @@ The proc service reads these non-secret ReAct limits from `assembly.yaml` throug
 | `AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_BYTES` | `ai.react.knowledge_read_visible_max_bytes` | `assembly.yaml` | all modes | optional byte guard for `ks:` payloads; default `null` means uncapped |
 | `AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS` | `ai.react.exec_text_preview_max_symbols` | `assembly.yaml` | all modes | text preview cap for each exec-produced text artifact |
 | `AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS` | `ai.react.tool_result_preview_max_text_symbols` | `assembly.yaml` | all modes | model-visible text preview cap for large initial tool results |
+| `AI_REACT_LINE_NUMBERS_MODE` | `ai.react.line_numbers_mode` | `assembly.yaml` | all modes | rendered text preview line numbering mode: `disabled`, `lines`, or `sparsed`; bundle `config.react.line_numbers_mode` overrides this default |
 | `AI_REACT_CACHE_KEEP_RECENT_TURNS` | `ai.react.cache_keep_recent_turns` | `assembly.yaml` | all modes | recent turns kept visible after TTL pruning |
 | `AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS` | `ai.react.cache_keep_recent_intact_turns` | `assembly.yaml` | all modes | newest turns kept untrimmed during TTL pruning |
 | `AI_REACT_WORKING_SUMMARY_ENABLED` | `ai.react.working_summary_enabled` | `assembly.yaml` | all modes | emits and indexes React working-summary cards |

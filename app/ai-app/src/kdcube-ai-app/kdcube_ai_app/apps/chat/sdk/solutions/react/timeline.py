@@ -24,8 +24,11 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.proto import RuntimeCtx
 
 from kdcube_ai_app.apps.chat.sdk.tools import citations as citations_module
 from kdcube_ai_app.apps.chat.sdk.util import (
+    LINE_NUMBERS_DISABLED,
+    LINE_NUMBERS_LINES,
     format_visible_line_window,
     line_number_text,
+    normalize_line_numbers_mode,
     token_count,
     visible_line_window,
     isoz,
@@ -40,7 +43,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.plan import (
     latest_plan_block_by_id,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
+    ARTIFACT_NAMESPACE_FILES,
     physical_path_to_logical_path,
+    split_physical_artifact_path,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.compaction_memory import (
     build_internal_note_compaction_result,
@@ -572,7 +577,7 @@ def build_turn_index_text(
     if not tid:
         tids = extract_turn_ids_from_blocks(filtered)
         tid = tids[0] if tids else ""
-    path = f"ar:{tid}.react.turn.index" if tid else "ar:<turn_id>.react.turn.index"
+    path = f"ar:{tid}.react.turn.index" if tid else "ar:turn_<id>.react.turn.index"
     ts_vals = [_block_ts(b) for b in filtered if _block_ts(b)]
     started_at = ts_vals[0] if ts_vals else ""
     ended_at = ts_vals[-1] if ts_vals else ""
@@ -1131,6 +1136,10 @@ def resolve_artifact_from_timeline(timeline: Dict[str, Any], path: str) -> Optio
         p = p[len("so:"):]
     if p.startswith("sources_pool["):
         return {"kind": "sources_pool", "items": resolve_sources_pool_selector(timeline, p)}
+    lookup_paths = {p}
+    logical_from_physical = physical_path_to_logical_path(p)
+    if logical_from_physical:
+        lookup_paths.add(logical_from_physical)
 
     blocks = _collect_blocks(timeline)
     working_summary_suffix = ".conv.working.summary"
@@ -1201,14 +1210,14 @@ def resolve_artifact_from_timeline(timeline: Dict[str, Any], path: str) -> Optio
         if not isinstance(txt, str):
             continue
         meta_obj = _parse_meta_json(txt)
-        if meta_obj.get("artifact_path") == p:
+        if meta_obj.get("artifact_path") in lookup_paths or meta_obj.get("physical_path") in lookup_paths:
             meta = meta_obj
             bmeta = b.get("meta")
             if isinstance(bmeta, dict) and bmeta:
                 meta_block_meta = dict(bmeta)
             break
 
-    matching = [b for b in blocks if (b.get("path") or "") == p]
+    matching = [b for b in blocks if (b.get("path") or "") in lookup_paths]
     if not matching and not meta:
         return None
 
@@ -2431,6 +2440,7 @@ class Timeline:
         preview_label: str = "[TOOL RESULT PREVIEW TRUNCATED]",
         recovery_lines: Optional[List[str]] = None,
         line_number_visible_text: bool = False,
+        display_path: str = "",
     ) -> str:
         text = raw_text if isinstance(raw_text, str) else str(raw_text or "")
         if (tool_id or "").strip() == "react.read":
@@ -2441,15 +2451,23 @@ class Timeline:
         if len(text) <= cap:
             if line_number_visible_text:
                 total_lines = len(text.splitlines())
+                line_numbers_mode = normalize_line_numbers_mode(
+                    getattr(self.runtime, "line_numbers_mode", LINE_NUMBERS_LINES),
+                    default=LINE_NUMBERS_LINES,
+                )
                 line_window = visible_line_window(
                     text,
                     source_truncated=False,
                     total_line_count=total_lines,
                 )
-                numbered_text = line_number_text(text) if total_lines else text
+                numbered_text = (
+                    line_number_text(text, line_numbers=line_numbers_mode)
+                    if total_lines and line_numbers_mode != LINE_NUMBERS_DISABLED
+                    else text
+                )
                 lines = [
                     f"lines: {format_visible_line_window(line_window)}",
-                    "line_numbers: true" if total_lines else "line_numbers: false",
+                    f"line_numbers: {line_numbers_mode if total_lines else LINE_NUMBERS_DISABLED}",
                     "content:",
                     numbered_text,
                 ]
@@ -2457,12 +2475,20 @@ class Timeline:
             return text
 
         preview = text[:cap].rstrip()
+        line_numbers_mode = normalize_line_numbers_mode(
+            getattr(self.runtime, "line_numbers_mode", LINE_NUMBERS_LINES),
+            default=LINE_NUMBERS_LINES,
+        )
         line_window = visible_line_window(
             preview,
             source_truncated=True,
             total_line_count=len(text.splitlines()),
         )
-        numbered_preview = line_number_text(preview) if preview else ""
+        numbered_preview = (
+            line_number_text(preview, line_numbers=line_numbers_mode)
+            if preview and line_numbers_mode != LINE_NUMBERS_DISABLED
+            else preview
+        )
         tokens_estimate = max(1, len(text) // 4)
         try:
             byte_count = len(text.encode("utf-8"))
@@ -2482,15 +2508,17 @@ class Timeline:
             f"visible_preview_chars: {len(preview)}",
             f"preview_cap_text_symbols: {cap}",
             f"preview_lines: {format_visible_line_window(line_window)}",
-            "line_numbers: true" if line_window.get("visible_lines") else "line_numbers: false",
+            f"line_numbers: {line_numbers_mode if line_window.get('visible_lines') else LINE_NUMBERS_DISABLED}",
             f"shape_depth: {TOOL_RESULT_PREVIEW_SHAPE_DEPTH}",
         ]
         if line_window.get("partial_line") is not None:
             lines.append(f"partial_line: {line_window.get('partial_line')}")
         if tool_id:
             lines.append(f"tool: {tool_id}")
-        if path:
-            lines.append(f"logical_path: {path}")
+        shown_path = (display_path or path or "").strip()
+        if shown_path:
+            path_label = "path" if split_physical_artifact_path(shown_path)[0] else "logical_path"
+            lines.append(f"{path_label}: {shown_path}")
         lines.append("shape:")
         lines.append(json.dumps(self._payload_shape_tree(shape_payload), ensure_ascii=False, indent=2))
         lines.append("preview:")
@@ -2517,7 +2545,7 @@ class Timeline:
             lines.append("- Use react.rg on the file to find relevant regions before editing.")
             lines.append("- Pass react.rg read_item ranges to react.read({\"items\":[...]}) for exact visible regions.")
             if physical_path:
-                lines.append("- Use exec with the shown physical_path only for computation or for producing smaller derived artifacts.")
+                lines.append("- For exec, derive the physical OUT_DIR path from logical_path only when computation needs the file.")
         elif path.startswith("tc:"):
             lines.append("- Use react.read for another bounded visible preview.")
             lines.append("- For large text, use react.read stats_only and then ranged react.read items.")
@@ -5350,12 +5378,12 @@ class Timeline:
             if not p:
                 return ""
             try:
-                # tc:<turn_id>.tool_calls.<call_id>.out.json
+                # tc:turn_<id>.tool_calls.<call_id>.out.json
                 if ".tool_calls." in p:
                     tail = p.split(".tool_calls.", 1)[1]
                     call_id = tail.split(".", 1)[0]
                     return call_id
-                # tc:<turn_id>.<call_id>.call|result
+                # tc:turn_<id>.<call_id>.call|result
                 if p.startswith("tc:"):
                     tail = p[len("tc:"):]
                     parts = tail.split(".")
@@ -5374,8 +5402,8 @@ class Timeline:
                 return ""
             if path.startswith("fi:"):
                 return path
-            if path.startswith("turn_") and "/files/" in path:
-                tid, rel = path.split("/files/", 1)
+            tid, namespace, rel = split_physical_artifact_path(path)
+            if tid and namespace == ARTIFACT_NAMESPACE_FILES and rel:
                 return f"fi:{tid}.files/{rel}"
             if "/files/" in path and ".files/" in path:
                 # already logical-ish
@@ -6032,11 +6060,11 @@ class Timeline:
                     prefix += f" | {mime}"
                 if ts:
                     prefix += f"\n[ts: {ts}]"
-                if path:
-                    prefix += f"\n[path: {path}]"
                 phys = (meta.get("physical_path") or "").strip()
+                if path:
+                    prefix += f"\n[logical_path: {path}]"
                 if phys:
-                    prefix += f"\n[physical_path: {phys}]"
+                    prefix += "\n[physical_path: exists (derive)]"
                 summary = (meta.get("summary") or "").strip()
                 if summary:
                     prefix += f"\nsummary: {summary}"
@@ -6171,7 +6199,10 @@ class Timeline:
                         text_symbols = payload.get("text_symbols")
                         size_bytes = payload.get("size_bytes")
                         if ap:
+                            phys = (payload.get("physical_path") or "").strip()
                             meta_bits = []
+                            if phys:
+                                meta_bits.append("physical_path: exists (derive)")
                             if kind:
                                 meta_bits.append(f"kind: {kind}")
                             if visibility:
@@ -6321,21 +6352,19 @@ class Timeline:
                         if tool_id:
                             header += f" {tool_id}"
                         lines.append(header)
-                        if path:
-                            logical_line = f"logical_path: {path}"
-                            if isinstance(meta, dict) and meta.get("text_symbols") is not None:
-                                logical_line += f" | text_symbols: {meta.get('text_symbols')}"
-                            if isinstance(meta, dict) and meta.get("size_bytes") is not None:
-                                logical_line += f" | size_bytes: {meta.get('size_bytes')}"
-                            lines.append(logical_line)
-                        if meta:
-                            phys = (meta.get("physical_path") or "").strip()
-                            if phys:
-                                lines.append(f"physical_path: {phys}")
-                        header_text = "\n".join([l for l in lines if l]).strip()
                         physical_path = ""
                         if isinstance(meta, dict):
                             physical_path = str(meta.get("physical_path") or "").strip()
+                        if path:
+                            path_line = f"logical_path: {path}"
+                            if isinstance(meta, dict) and meta.get("text_symbols") is not None:
+                                path_line += f" | text_symbols: {meta.get('text_symbols')}"
+                            if isinstance(meta, dict) and meta.get("size_bytes") is not None:
+                                path_line += f" | size_bytes: {meta.get('size_bytes')}"
+                            lines.append(path_line)
+                        if physical_path:
+                            lines.append("physical_path: exists (derive)")
+                        header_text = "\n".join([l for l in lines if l]).strip()
                         extra_text_blocks.append(self._tool_result_payload_text_for_prompt(
                             raw_text=text,
                             payload=None,
@@ -6344,6 +6373,7 @@ class Timeline:
                             preview_label="[ARTIFACT PREVIEW TRUNCATED]",
                             recovery_lines=self._large_text_recovery_lines(path=path, physical_path=physical_path),
                             line_number_visible_text=True,
+                            display_path=path,
                         ))
                         text = header_text
                     else:

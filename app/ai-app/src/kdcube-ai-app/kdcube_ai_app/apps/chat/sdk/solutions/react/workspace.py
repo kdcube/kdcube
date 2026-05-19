@@ -15,8 +15,10 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
     ARTIFACT_NAMESPACE_FILES,
     ARTIFACT_NAMESPACE_OUTPUTS,
     build_physical_artifact_path,
+    is_turn_id,
     physical_path_to_logical_path,
     split_logical_artifact_path,
+    split_physical_artifact_path,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.workspace import artifact_outdir_for, resolve_artifact_path
 
@@ -33,11 +35,12 @@ _TEXT_MIMES = {
     "application/sql", "text/x-sql",
 }
 
-_CODE_PATH_RE = re.compile(r"(turn_[A-Za-z0-9_]+/(files|outputs|attachments)/[^\s'\"\)\];,]+)")
+_TURN_ID_PATTERN = r"(?:turn_[A-Za-z0-9_]+|telegram_turn_[A-Za-z0-9_]+|\d{4}-\d{2}-\d{2}-\d{2}-\d{2}(?:-\d{2})?(?:-\d{3,6})?)"
+_CODE_PATH_RE = re.compile(rf"({_TURN_ID_PATTERN}/(files|outputs|attachments)/[^\s'\"\)\];,]+)")
 _PATH_TOKEN_RE = re.compile(r"[^\s'\"\)\];,]+")
 _UNQUALIFIED_ARTIFACT_PREFIXES = ("files/", "outputs/", "attachments/")
 _FETCH_CTX_PATH_RE = re.compile(r"([a-z]{2}:[A-Za-z0-9_./\\-]+)")
-_TURN_ROOT_RE = re.compile(r"\b(turn_[A-Za-z0-9_]+)\b")
+_TURN_ROOT_RE = re.compile(rf"\b({_TURN_ID_PATTERN})\b")
 
 
 def normalize_workspace_implementation(value: Any) -> str:
@@ -79,6 +82,9 @@ def extract_code_file_paths(code: str, *, turn_id: str = "") -> tuple[List[str],
         if p in seen:
             continue
         seen.add(p)
+        tid, namespace, rel = split_physical_artifact_path(p)
+        if not (tid and namespace and rel):
+            continue
         if (current_files_prefix and p.startswith(current_files_prefix)) or (
             current_outputs_prefix and p.startswith(current_outputs_prefix)
         ) or (
@@ -110,7 +116,7 @@ def extract_workspace_turn_roots(code: str) -> List[str]:
     seen = set()
     for m in _TURN_ROOT_RE.finditer(code):
         turn_id = m.group(1)
-        if not turn_id or turn_id in seen:
+        if not is_turn_id(turn_id) or turn_id in seen:
             continue
         seen.add(turn_id)
         out.append(turn_id)
@@ -266,7 +272,7 @@ def list_materialized_turn_roots(*, runtime_ctx: Any) -> List[str]:
         if not child.is_dir():
             continue
         name = child.name
-        if not name.startswith("turn_"):
+        if not is_turn_id(name):
             continue
         names.append(name)
     names.sort()
@@ -509,7 +515,7 @@ def normalize_checkout_requests(
             if not parsed:
                 invalid.append({
                     "path": raw,
-                    "reason": "react.checkout accepts fi:<turn_id>.files/<scope-or-path> refs only",
+                    "reason": "react.checkout accepts fi:turn_<id>.files/<scope-or-path> refs only",
                 })
                 continue
             if current_turn_id and parsed["turn_id"] == current_turn_id:

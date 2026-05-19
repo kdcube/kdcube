@@ -52,14 +52,14 @@ FILE_PATH_RE = re.compile(
     r'^cb/tenants/(?P<tenant>[^/]+)/projects/(?P<project>[^/]+)/attachments/'
     r'(?P<user_id>[^/]+)/'
     r'(?P<conversation_id>[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12})/'
-    r'(?P<turn_id>turn_[^/]+)/(?P<filename>[^/]+)$'
+    r'(?P<turn_id>[^/]+)/(?P<filename>[^/]+)$'
 )
 
 LEGACY_FILE_PATH_RE = re.compile(
     r'^cb/tenants/(?P<tenant>[^/]+)/projects/(?P<project>[^/]+)/attachments/(?P<role>[^/]+)/'
     r'(?P<user_id>[^/]+)/'
     r'(?P<conversation_id>[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12})/'
-    r'(?P<turn_id>turn_[^/]+)/(?P<filename>[^/]+)$'
+    r'(?P<turn_id>[^/]+)/(?P<filename>[^/]+)$'
 )
 
 def parse_file_path(path: str) -> dict:

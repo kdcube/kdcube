@@ -345,6 +345,7 @@ Common reserved paths:
 | `role_models` | platform entrypoint/runtime | model-role routing |
 | `embedding` | platform entrypoint/runtime | embedding provider/model override |
 | `economics.reservation_amount_dollars` | economics entrypoint/runtime | reservation floor |
+| `react.line_numbers_mode` | ReAct runtime | rendered text preview line numbering mode: `disabled`, `lines`, or `sparsed`; global/default value is `lines` |
 | `execution.runtime` | runtime/exec subsystem | bundle-level execution routing and per-run ISO limits |
 | `exec_runtime` | runtime/exec subsystem | legacy alias for `execution.runtime` |
 | `mcp.services` | MCP runtime/bootstrap | MCP transport/auth config |

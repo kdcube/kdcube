@@ -46,7 +46,8 @@ from kdcube_ai_app.apps.chat.sdk.tools import citations as citations_module
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.util import (truncate_text_by_tokens, _to_jsonable,
                                               ensure_event_markdown, _to_json_safe, _jd,  _now_ms,
-                                              _tstart, _tend)
+                                              _tstart, _tend,
+                                              LINE_NUMBERS_LINES, normalize_line_numbers_mode)
 from kdcube_ai_app.infra.accounting import with_accounting
 from kdcube_ai_app.infra.service_hub.errors import ServiceException, ServiceError, is_context_limit_error
 
@@ -136,6 +137,15 @@ def _react_render_thinking(bundle_props: Dict[str, Any], settings: Any) -> bool:
     if configured is not None:
         return configured
     return bool(getattr(settings, "AI_REACT_RENDER_THINKING", True))
+
+
+def _react_line_numbers_mode(bundle_props: Dict[str, Any], settings: Any) -> str:
+    configured = _get_prop_path(bundle_props or {}, "react.line_numbers_mode")
+    if configured is None:
+        configured = _get_prop_path(bundle_props or {}, "config.react.line_numbers_mode")
+    if configured is None:
+        configured = getattr(settings, "AI_REACT_LINE_NUMBERS_MODE", LINE_NUMBERS_LINES)
+    return normalize_line_numbers_mode(configured, default=LINE_NUMBERS_LINES)
 
 
 def _react_debug_timeline_enabled(bundle_props: Dict[str, Any], settings: Any, *, default: bool = False) -> bool:
@@ -326,6 +336,7 @@ class BaseWorkflow():
         runtime_max_tokens = _react_context_max_tokens(self.config, settings)
         runtime_max_iterations = _react_max_iterations(self.bundle_props, settings)
         runtime_render_thinking = _react_render_thinking(self.bundle_props, settings)
+        runtime_line_numbers_mode = _react_line_numbers_mode(self.bundle_props, settings)
         runtime_debug_timeline_root = _react_debug_timeline_root(settings)
         runtime_debug_timeline_keep_files = _react_debug_timeline_keep_files(settings)
         try:
@@ -350,6 +361,7 @@ class BaseWorkflow():
                 exec_text_preview_max_symbols=_positive_int(getattr(settings, "AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS", None)),
                 tool_result_preview_max_text_symbols=_positive_int(getattr(settings, "AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS", None)),
                 render_thinking=runtime_render_thinking,
+                line_numbers_mode=runtime_line_numbers_mode,
                 debug_timeline_root=runtime_debug_timeline_root,
                 debug_timeline_keep_files=runtime_debug_timeline_keep_files,
                 bundle_storage=self._resolve_runtime_ctx_bundle_storage(),
@@ -381,6 +393,7 @@ class BaseWorkflow():
                 exec_text_preview_max_symbols=_positive_int(getattr(settings, "AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS", None)),
                 tool_result_preview_max_text_symbols=_positive_int(getattr(settings, "AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS", None)),
                 render_thinking=runtime_render_thinking,
+                line_numbers_mode=runtime_line_numbers_mode,
                 debug_timeline_root=runtime_debug_timeline_root,
                 debug_timeline_keep_files=runtime_debug_timeline_keep_files,
                 workspace_implementation=settings.REACT_WORKSPACE_IMPLEMENTATION,
@@ -452,6 +465,7 @@ class BaseWorkflow():
         try:
             settings = get_settings()
             runtime_ctx.render_thinking = _react_render_thinking(self.bundle_props, settings)
+            runtime_ctx.line_numbers_mode = _react_line_numbers_mode(self.bundle_props, settings)
             runtime_ctx.debug_timeline_root = _react_debug_timeline_root(settings)
             runtime_ctx.debug_timeline_keep_files = _react_debug_timeline_keep_files(settings)
         except Exception:

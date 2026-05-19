@@ -24,6 +24,7 @@ from kdcube_ai_app.apps.chat.sdk.config_scopes import (
 )
 from kdcube_ai_app.infra.props import get_props_manager
 from kdcube_ai_app.infra.secrets import get_secrets_manager
+from kdcube_ai_app.apps.chat.sdk.util import LINE_NUMBERS_LINES, normalize_line_numbers_mode
 
 _SECRET_LOG = logging.getLogger("kdcube.settings.secrets")
 _SECRET_LOGGED: set[str] = set()
@@ -706,6 +707,7 @@ class Settings(PLATFORM_CONFIG):
     AI_REACT_READ_VISIBLE_MAX_TOKENS: int = Field(default=12000)
     AI_REACT_READ_VISIBLE_MAX_BYTES: int = Field(default=10 * 1024 * 1024)
     AI_REACT_READ_VISIBLE_CONTEXT_FRACTION: float = Field(default=0.15)
+    AI_REACT_LINE_NUMBERS_MODE: str = Field(default=LINE_NUMBERS_LINES)
     AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_TEXT_SYMBOLS: int | None = Field(default=None)
     AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_TOKENS: int | None = Field(default=None)
     AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_BYTES: int | None = Field(default=None)
@@ -1212,6 +1214,14 @@ class Settings(PLATFORM_CONFIG):
             "AI_REACT_READ_VISIBLE_CONTEXT_FRACTION",
             "ai.react.read_visible_context_fraction",
             self.AI_REACT_READ_VISIBLE_CONTEXT_FRACTION,
+        )
+        self.AI_REACT_LINE_NUMBERS_MODE = normalize_line_numbers_mode(
+            self._resolve_str(
+                "AI_REACT_LINE_NUMBERS_MODE",
+                "ai.react.line_numbers_mode",
+                self.AI_REACT_LINE_NUMBERS_MODE,
+            ),
+            default=LINE_NUMBERS_LINES,
         )
         self.AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_TEXT_SYMBOLS = self._resolve_int(
             "AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_TEXT_SYMBOLS",

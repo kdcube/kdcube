@@ -32,7 +32,7 @@ TOOL_SPEC = {
         "topic inside date range -> query+from/to with semantic/default mode. "
         "Do not pass generic queries like 'conversation topics discussed' in catalog modes; they are ignored. "
         "Recovery path: memsearch -> read returned refs; if refs are incomplete, "
-        "read ar:<turn_id>.react.turn.index, then batch-read/pull exact ar:/tc:/fi:/so: refs."
+        "read ar:turn_<id>.react.turn.index, then batch-read/pull exact ar:/tc:/fi:/so: refs."
     ),
     "args": {
         "query": "str (FIRST FIELD). Natural-language query. Required in semantic mode. Omit in ordinal/temporal/timeline catalog modes.",

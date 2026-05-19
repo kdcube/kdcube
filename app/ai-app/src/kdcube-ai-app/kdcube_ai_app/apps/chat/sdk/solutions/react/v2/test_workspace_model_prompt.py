@@ -29,7 +29,7 @@ def test_get_workspace_implementation_guide_git_mentions_git_backed_mode():
     assert 'react.checkout(mode="replace", paths=[...])' in guide or 'react.checkout(mode="replace", paths=["fi:' in guide
     assert "runnable/searchable/testable project snapshot" in guide
     assert "mode=\"overlay\"" in guide
-    assert "<current_turn_id>/files/..." in guide
+    assert "turn_<current>/files/..." in guide
     assert "previous saved workspace paths" in guide
     assert "current editable workspace" in guide
     assert "existing top-level scope" in guide
@@ -50,7 +50,7 @@ def test_build_decision_system_text_uses_selected_workspace_implementation():
     assert 'react.checkout(mode="replace", paths=[fi:...])' in text or 'react.checkout(mode="replace", paths=["fi:' in text
     assert "runnable/searchable/testable project snapshot" in text
     assert "mode=\"overlay\"" in text
-    assert "<current_turn_id>/files/..." in text
+    assert "turn_<current>/files/..." in text
     assert "existing top-level scope" in text
     assert "previous saved workspace paths" in text
     assert "current editable workspace" in text

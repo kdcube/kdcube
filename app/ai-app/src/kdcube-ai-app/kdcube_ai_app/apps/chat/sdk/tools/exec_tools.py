@@ -38,12 +38,16 @@ from kdcube_ai_app.apps.chat.sdk.runtime.workspace import (
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.snapshot import build_portable_spec
 from kdcube_ai_app.apps.chat.sdk.runtime.exec_runtime_config import resolve_exec_runtime_profile
+from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.util import (
+    LINE_NUMBERS_DISABLED,
+    LINE_NUMBERS_LINES,
     count_text_lines,
     count_text_symbols,
     guess_mime_type,
     format_visible_line_window,
     line_number_text,
+    normalize_line_numbers_mode,
     normalize_artifact_visibility,
     visible_line_window,
 )
@@ -393,7 +397,7 @@ def _normalize_artifacts_spec(artifacts: Any) -> Tuple[Optional[List[Dict[str, A
         if "/attachments/" in safe_filename:
             return None, {
                 "code": "invalid_filename",
-                "message": "Contract filename must be under turn_<id>/files/ or turn_<id>/outputs/ (attachments not allowed)",
+                "message": "Contract filename must be under the current turn files/ or outputs/ namespace (attachments not allowed)",
             }
         qualified = _split_turn_artifact_path(safe_filename)
         if not qualified or qualified[1] not in {"files", "outputs"}:
@@ -401,7 +405,7 @@ def _normalize_artifacts_spec(artifacts: Any) -> Tuple[Optional[List[Dict[str, A
                 "code": "invalid_filename",
                 "message": (
                     "filename must be OUTPUT_DIR-relative and start with "
-                    "'turn_<id>/files/' or 'turn_<id>/outputs/': "
+                    "'turn_<current>/files/' or 'turn_<current>/outputs/': "
                     f"{filename}"
                 ),
             }
@@ -463,7 +467,7 @@ def normalize_exec_contract_for_turn(
 ) -> Tuple[Optional[List[Dict[str, Any]]], List[Dict[str, str]], Optional[Dict[str, Any]]]:
     """
     Normalize exec contract to current turn:
-    - contract entries must target <current_turn_id>/files/<name> or <current_turn_id>/outputs/<name>
+    - contract entries must target turn_<current>/files/<name> or turn_<current>/outputs/<name>
     - if turn_id is missing in filename, rewrite to current turn
     - attachments are forbidden in contract
     Returns (normalized_list, rewrites, error)
@@ -514,7 +518,7 @@ def normalize_exec_contract_for_turn(
         ):
             return None, [], {
                 "code": "invalid_filename",
-                "message": "Contract filename must be under turn_<id>/files/ or turn_<id>/outputs/ (attachments not allowed)",
+                "message": "Contract filename must be under the current turn files/ or outputs/ namespace (attachments not allowed)",
             }
         rewritten = None
         if qualified:
@@ -568,7 +572,7 @@ def rewrite_exec_code_paths(
     turn_id: str,
 ) -> Tuple[str, List[Dict[str, str]]]:
     """
-    Rewrite unqualified files/, outputs/, or attachments/ paths in code to current turn_id.
+    Best-effort recovery for legacy current-turn artifact paths in generated code.
     Leaves already qualified turn_<id>/files|outputs|attachments paths intact.
     Returns (rewritten_code, rewrites).
     """
@@ -724,8 +728,7 @@ class ExecTools:
             "[INPUTS]\n"
             "- When called from React decision, the code is provided in <channel:code> (not in params).\n"
             "1) `contract` (list or JSON string, REQUIRED): list of output files specs with fields:\n"
-            "   - filename (OUTPUT_DIR-relative; MUST start with the current turn_<id>/files/ or turn_<id>/outputs/, or use concise files/... / outputs/...)\n"
-            "     If filename is unqualified for compatibility, it is treated as outputs/<filename>; use files/... explicitly for durable workspace/project state.\n"
+            "   - filename (OUTPUT_DIR-relative; canonical form is turn_<current>/files/<scope>/... or turn_<current>/outputs/<scope>/...)\n"
             "   - description (what this file contains / why it was produced)\n"
             "   - visibility (optional: `external` or `internal`; default `external`)\n"
             "   These are outputs of this program that it promises to produce.\n"
@@ -745,8 +748,8 @@ class ExecTools:
             "  import json\n"
             "  resp = await agent_io_tools.tool_call(\n"
             "      fn=ctx_tools.fetch_ctx,\n"
-            "      params={\"path\": \"ar:turn_123.user.prompt\"},\n"
-            "      call_reason=\"Load user message for turn_123\",\n"
+            "      params={\"path\": \"ar:turn_<id>.user.prompt\"},\n"
+            "      call_reason=\"Load user message for turn_<id>\",\n"
             "      tool_id=\"ctx_tools.fetch_ctx\"\n"
             "  )\n"
             "  if resp.get(\"err\"):\n"
@@ -759,15 +762,14 @@ class ExecTools:
             "FILES & PATHS\n"
             "- `OUTPUT_DIR` is the output data/artifact root.\n"
             "- `OUT_DIR` is also available as `Path(OUTPUT_DIR)` if you prefer Path operations.\n"
-            "- Input workspace artifacts from context are available by their filenames under OUTPUT_DIR/turn_<id>/files/.\n"
-            "- Historical or generated non-workspace artifacts may also be under OUTPUT_DIR/turn_<id>/outputs/.\n"
+            "- Input workspace artifacts from context are available by their filenames under OUTPUT_DIR/turn_<id>/files/<scope>/.\n"
+            "- Historical or generated non-workspace artifacts may also be under OUTPUT_DIR/turn_<id>/outputs/<scope>/.\n"
             "- User attachments are available under OUTPUT_DIR/turn_<id>/attachments/.\n"
-            "- Write durable project/workspace state to OUTPUT_DIR/turn_<id>/files/.\n"
-            "- Write reports, test results, and other non-workspace deliverables to OUTPUT_DIR/turn_<id>/outputs/.\n"
-            "- Unqualified contracted filenames are treated as outputs/<filename>; choose files/... or outputs/... explicitly when semantics matter.\n"
+            "- Write durable project/workspace state to OUTPUT_DIR/turn_<current>/files/<scope>/.\n"
+            "- Write reports, test results, and other non-workspace deliverables to OUTPUT_DIR/turn_<current>/outputs/<scope>/.\n"
             "- Build paths like:\n"
-            "  `Path(OUTPUT_DIR) / \"turn_<id>/files/my_file.ext\"` or `Path(OUTPUT_DIR) / \"turn_<id>/outputs/report.txt\"`.\n"
-            "- Do not invent or rename the current turn id. It starts with `turn_`; use the exact current id or the concise `files/...` / `outputs/...` form.\n"
+            "  `Path(OUTPUT_DIR) / \"turn_<current>/files/app/my_file.ext\"` or `Path(OUTPUT_DIR) / \"turn_<current>/outputs/report/report.txt\"`.\n"
+            "- Use the exact current turn id shown in the runtime context.\n"
             "- Network access is disabled in the sandbox; any network calls will fail.\n"
             "- Read/write outside OUTPUT_DIR or the current workdir is not permitted.\n"
             "- The runtime filesystem view is restricted; do not inspect, list, copy, archive, or report system/runtime paths.\n"
@@ -826,8 +828,8 @@ class ExecTools:
     #         "Example:\n"
     #         "  resp = await agent_io_tools.tool_call(\n"
     #         "      fn=ctx_tools.fetch_ctx,\n"
-    #         "      params={\"path\": \"ar:turn_123.user.prompt\"},\n"
-    #         "      call_reason=\"Load user message for turn_123\",\n"
+    #         "      params={\"path\": \"ar:turn_<id>.user.prompt\"},\n"
+    #         "      call_reason=\"Load user message for turn_<id>\",\n"
     #         "      tool_id=\"ctx_tools.fetch_ctx\"\n"
     #         "  )\n"
     #         "  if resp.get(\"err\"):\n"
@@ -836,9 +838,9 @@ class ExecTools:
     #         "FILES & PATHS\n"
     #         "- Input artifacts from context are available by their filenames under OUTPUT_DIR/turn_<id>/files/.\n"
     #         "- User attachments are available under OUTPUT_DIR/turn_<id>/attachments/.\n"
-    #         "- Write your outputs to OUTPUT_DIR/turn_<id>/files/.\n"
+    #         "- Write your outputs to OUTPUT_DIR/turn_<current>/files/ or OUTPUT_DIR/turn_<current>/outputs/.\n"
     #         "- `OUTPUT_DIR` is a global string path in the runtime; build paths like:\n"
-    #         "  `os.path.join(OUTPUT_DIR, \"turn_<id>/files/my_file.ext\")` or `Path(OUTPUT_DIR) / \"turn_<id>/attachments/user_file.ext\"`.\n"
+    #         "  `os.path.join(OUTPUT_DIR, \"turn_<current>/files/app/my_file.ext\")` or `Path(OUTPUT_DIR) / \"turn_<id>/attachments/user_file.ext\"`.\n"
     #         "- Network access is disabled in the sandbox; any network calls will fail.\n"
     #         "- Read/write outside OUTPUT_DIR or the current workdir is not permitted.\n"
     #         "\n"
@@ -1082,6 +1084,10 @@ async def run_exec_tool(
                     text_truncated = len(raw_preview) > preview_max_symbols
                 line_count = count_text_lines(p)
                 if text_content:
+                    line_numbers_mode = normalize_line_numbers_mode(
+                        getattr(get_settings(), "AI_REACT_LINE_NUMBERS_MODE", LINE_NUMBERS_LINES),
+                        default=LINE_NUMBERS_LINES,
+                    )
                     line_window = visible_line_window(
                         text_content,
                         source_truncated=bool(text_truncated),
@@ -1091,7 +1097,11 @@ async def run_exec_tool(
                     end = line_window.get("line_end")
                     text_preview_line_start = start
                     text_preview_line_end = end
-                    numbered = line_number_text(text_content)
+                    numbered = (
+                        line_number_text(text_content, line_numbers=line_numbers_mode)
+                        if line_numbers_mode != LINE_NUMBERS_DISABLED
+                        else text_content
+                    )
                     header = [
                         "[TEXT FILE PREVIEW]",
                         f"path: {rel}",
@@ -1105,7 +1115,7 @@ async def run_exec_tool(
                         header.append(f"text_symbols: {text_symbols}")
                     header.append(f"visible_text_symbols: {len(text_content)}")
                     header.append(f"preview_cap_text_symbols: {preview_max_symbols}")
-                    header.append("line_numbers: true")
+                    header.append(f"line_numbers: {line_numbers_mode if line_count else LINE_NUMBERS_DISABLED}")
                     text_preview = "\n".join(header + ["", numbered]).strip()
                 if text_truncated:
                     if text_preview:

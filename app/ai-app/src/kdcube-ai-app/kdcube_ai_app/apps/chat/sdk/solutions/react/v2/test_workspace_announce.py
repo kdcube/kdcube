@@ -120,8 +120,8 @@ def test_build_announce_text_includes_lineage_scopes_even_when_current_turn_is_s
     outdir = tmp_path / "out"
     artifact_outdir = artifact_outdir_for(outdir)
     turn_root = artifact_outdir / "turn_123"
-    (turn_root / "files" / "customer_portal" / "src").mkdir(parents=True, exist_ok=True)
-    (turn_root / "files" / "customer_portal" / "src" / "app.py").write_text("print('hi')\n", encoding="utf-8")
+    (turn_root / "files" / "workspace_app" / "src").mkdir(parents=True, exist_ok=True)
+    (turn_root / "files" / "workspace_app" / "src" / "app.py").write_text("print('hi')\n", encoding="utf-8")
 
     subprocess.run(["git", "init", str(turn_root)], check=True, capture_output=True)
     subprocess.run(["git", "-C", str(turn_root), "config", "user.name", "Test User"], check=True, capture_output=True)
@@ -157,7 +157,7 @@ def test_build_announce_text_includes_lineage_scopes_even_when_current_turn_is_s
 
     assert "current editable workspace: none" in announce_text
     assert "previous saved workspace paths (pull to bring local; checkout to edit):" in announce_text
-    assert "- files/customer_portal/ (1 git-tracked file)" in announce_text
+    assert "- files/workspace_app/ (1 git-tracked file)" in announce_text
 
 
 def test_build_announce_text_includes_current_turn_live_events(tmp_path):

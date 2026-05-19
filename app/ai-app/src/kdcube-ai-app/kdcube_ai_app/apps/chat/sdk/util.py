@@ -85,11 +85,49 @@ def count_text_lines(path: Union[str, pathlib.Path]) -> Optional[int]:
         return None
 
 
-def line_number_text(text: str, *, line_start: int = 1, width: int = 6) -> str:
+LINE_NUMBERS_DISABLED = "disabled"
+LINE_NUMBERS_LINES = "lines"
+LINE_NUMBERS_SPARSED = "sparsed"
+
+
+def normalize_line_numbers_mode(value: Any, *, default: str = LINE_NUMBERS_DISABLED) -> str:
+    default_mode = str(default or LINE_NUMBERS_DISABLED).strip().lower()
+    if default_mode not in {LINE_NUMBERS_DISABLED, LINE_NUMBERS_LINES, LINE_NUMBERS_SPARSED}:
+        default_mode = LINE_NUMBERS_DISABLED
+    if isinstance(value, bool):
+        return LINE_NUMBERS_LINES if value else LINE_NUMBERS_DISABLED
+    raw = str(value or "").strip().lower()
+    if raw in {"", "none", "0", "false", "no", "off", "disable", "disabled"}:
+        return LINE_NUMBERS_DISABLED
+    if raw in {"1", "true", "yes", "on", "line", "lines", "full", "enabled"}:
+        return LINE_NUMBERS_LINES
+    if raw in {"sparse", "sparsed"}:
+        return LINE_NUMBERS_SPARSED
+    return default_mode
+
+
+def line_number_text(text: str, *, line_start: int = 1, width: int = 6, line_numbers: Any = LINE_NUMBERS_LINES) -> str:
     start = max(1, int(line_start or 1))
+    lines = (text or "").splitlines()
+    mode = normalize_line_numbers_mode(line_numbers, default=LINE_NUMBERS_LINES)
+    if mode == LINE_NUMBERS_DISABLED:
+        return "\n".join(lines)
+    if mode == LINE_NUMBERS_LINES:
+        numbered_indexes = set(range(len(lines)))
+    else:
+        line_count = len(lines)
+        mid_start = max(0, (line_count - 2) // 2)
+        numbered_indexes = {
+            0,
+            1,
+            mid_start,
+            mid_start + 1,
+            line_count - 2,
+            line_count - 1,
+        }
     return "\n".join(
-        f"{lineno:>{width}}\t{line}"
-        for lineno, line in enumerate((text or "").splitlines(), start=start)
+        f"{lineno:>{width}}\t{line}" if idx in numbered_indexes else line
+        for idx, (lineno, line) in enumerate(zip(range(start, start + len(lines)), lines))
     )
 
 

@@ -25,6 +25,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
     build_physical_artifact_path,
     physical_path_to_logical_path,
     split_logical_artifact_path,
+    split_physical_artifact_path,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.workspace import artifact_outdir_for
 from kdcube_ai_app.tools.content_type import is_text_mime_type
@@ -47,8 +48,8 @@ TOOL_SPEC = {
     "args": {
         "root": (
             "optional root selector. Omit to search the full materialized artifact workspace. "
-            "Use files/<path>, outputs/<path>, attachments/<path>, turn_<id>/files/<path>, "
-            "turn_<id>/outputs/<path>, turn_<id>/attachments/<path>, or fi:<turn_id>.* artifact paths "
+            "Use canonical turn_<id>/files/<path>, turn_<id>/outputs/<path>, "
+            "turn_<id>/attachments/<path>, or fi:turn_<id>.* artifact paths "
             "to search a file or subtree. "
             "Legacy outdir/<path> is accepted but should not be used in new calls."
         ),
@@ -185,8 +186,7 @@ def _resolve_root(
     if root_sel_lc == "outdir":
         return artifact_outdir, root_kind, "outdir", root_virtual_prefix
     if root_sel_lc.startswith("outdir/"):
-        # Backwards compatibility only. Prefer files/..., outputs/..., turn_...,
-        # or fi:... so the root matches the visible timeline path model.
+        # Backwards compatibility only.
         rel = root_sel[len("outdir/"):].lstrip("/")
     elif root_sel.startswith("fi:"):
         logical_turn, namespace, logical_rel = split_logical_artifact_path(root_sel)
@@ -203,34 +203,35 @@ def _resolve_root(
         else:
             code = "rg_invalid_root"
             message = (
-                "invalid fi: root selector. Use fi:<turn_id>.files/<path>, "
-                "fi:<turn_id>.outputs/<path>, or fi:<turn_id>.user.attachments/<path>."
+                "invalid fi: root selector. Use fi:turn_<id>.files/<path>, "
+                "fi:turn_<id>.outputs/<path>, or fi:turn_<id>.user.attachments/<path>."
             )
             rel = ""
-    elif root_sel.startswith("turn_"):
-        rel = root_sel.lstrip("/")
-    elif (
-        root_sel.startswith(f"{ARTIFACT_NAMESPACE_FILES}/")
-        or root_sel.startswith(f"{ARTIFACT_NAMESPACE_OUTPUTS}/")
-        or root_sel.startswith(f"{ARTIFACT_NAMESPACE_ATTACHMENTS}/")
-    ):
-        if not turn_id:
-            code = "rg_invalid_root"
-            message = "current-turn root selector requires a turn id."
-            rel = ""
-        else:
-            namespace, namespace_rel = root_sel.split("/", 1)
-            rel = build_physical_artifact_path(
-                turn_id=turn_id,
-                namespace=namespace,
-                relpath=namespace_rel,
-            )
     else:
-        code = "rg_invalid_root"
-        message = (
-            "invalid root selector. Omit root, or use files/<path>, outputs/<path>, attachments/<path>, "
-            "turn_<id>/files/<path>, turn_<id>/outputs/<path>, turn_<id>/attachments/<path>, or fi:<turn_id>.* artifact paths."
-        )
+        physical_turn, physical_namespace, physical_rel = split_physical_artifact_path(root_sel)
+        if physical_turn and physical_namespace and physical_rel:
+            rel = root_sel.lstrip("/")
+        elif (
+            root_sel.startswith(f"{ARTIFACT_NAMESPACE_FILES}/")
+            or root_sel.startswith(f"{ARTIFACT_NAMESPACE_OUTPUTS}/")
+            or root_sel.startswith(f"{ARTIFACT_NAMESPACE_ATTACHMENTS}/")
+        ):
+            if not turn_id:
+                code = "rg_invalid_root"
+                message = "current-turn root selector requires a turn id."
+                rel = ""
+            else:
+                namespace, namespace_rel = root_sel.split("/", 1)
+                rel = build_physical_artifact_path(
+                    turn_id=turn_id,
+                    namespace=namespace,
+                    relpath=namespace_rel,
+                )
+        else:
+            code = "rg_invalid_root"
+            message = (
+                "invalid root selector. Omit root, or use canonical turn_<id>/files|outputs|attachments paths or fi:turn_<id>.* artifact paths."
+            )
 
     if rel:
         if not _safe_relpath(rel):
