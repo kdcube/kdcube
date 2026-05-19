@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 # chat/sdk/util.py
-import time, orjson, hashlib, re, json, unicodedata, mimetypes
+import time, hashlib, re, json, unicodedata, mimetypes
 from typing import Any, List, Dict, Optional, Union, Tuple
 from datetime import datetime, timezone
 import datetime as dt
@@ -187,11 +187,38 @@ def normalize_artifact_visibility(value: Any, *, default: str = "internal") -> s
 def now_ms() -> int:
     return int(time.time() * 1000)
 
+def _json_default(value: Any) -> Any:
+    if isinstance(value, BaseModel):
+        try:
+            return value.model_dump(mode="json")
+        except Exception:
+            return value.dict()
+    if dataclasses.is_dataclass(value):
+        return dataclasses.asdict(value)
+    if isinstance(value, (datetime, dt.date, dt.time)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, pathlib.Path):
+        return str(value)
+    if isinstance(value, bytes):
+        return base64.b64encode(value).decode("ascii")
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
 def json_dumps(data: Any) -> str:
-    return orjson.dumps(
-        data,
-        option=orjson.OPT_NON_STR_KEYS | orjson.OPT_SERIALIZE_NUMPY
-    ).decode()
+    try:
+        import orjson
+        return orjson.dumps(
+            data,
+            option=orjson.OPT_NON_STR_KEYS | orjson.OPT_SERIALIZE_NUMPY
+        ).decode()
+    except ModuleNotFoundError:
+        pass
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":"), default=_json_default)
 
 def sha1(s: str) -> str:
     return hashlib.sha1(s.encode("utf-8")).hexdigest()
