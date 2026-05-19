@@ -2,6 +2,7 @@ import {Middleware, UnknownAction} from "@reduxjs/toolkit";
 import {ChatBase, ChatEventHandlers, ChatMessage, ChatRequest,} from "../chatController/chatBase.ts";
 import {AppDispatch, AppStore, RootState} from "../../app/store.ts";
 import SocketIOChat from "../chatController/socketIOChat.ts";
+import {createClientTurnId} from "../../utils/clientIds.ts";
 import {
     chatCompleted,
     chatConnected,
@@ -393,7 +394,7 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
                     const continuationKind = request.continuationKind ?? (activeTurn ? "followup" : "regular")
                     const isContinuation = continuationKind === "followup" || continuationKind === "steer"
                     const targetTurnId = request.targetTurnId ?? activeTurn?.id ?? undefined
-                    const turnId = `turn_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+                    const turnId = createClientTurnId();
                     const sentAt = new Date().getTime();
 
                     const message = request.message ?? selectUserMessage(state)

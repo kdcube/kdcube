@@ -30,7 +30,7 @@ import type {
   RateLimitPayload,
   StepStatus,
 } from './service'
-import { BUILT_BUNDLE_ID, createLocalId, settings } from './settings'
+import { BUILT_BUNDLE_ID, createLocalId, createTurnId, settings } from './settings'
 
 type ConnectionState = 'booting' | 'connecting' | 'connected' | 'disconnected'
 type TurnState = 'pending' | 'running' | 'completed' | 'error'
@@ -3294,7 +3294,7 @@ export default function App() {
     const draftFiles = isSteer || textOverride !== undefined ? [] : snapshot.composerFiles
     if (!draftText && draftFiles.length === 0 && !isSteer) return
 
-    const turnId = createLocalId('turn')
+    const turnId = createTurnId()
     const sentAt = Date.now()
     const existingConversationId = snapshot.conversationId
     const draftAttachments = draftFiles.map((file, index) =>

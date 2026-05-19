@@ -13,6 +13,7 @@ import {
 
 import {v4 as uuidv4} from "uuid";
 import {ChatServiceEnvelope} from "../chat/serviceEventTypes.ts";
+import {createClientTurnId} from "../../utils/clientIds.ts";
 
 interface SSEChatOptions extends ChatOptions {
     baseUrl: string;
@@ -129,7 +130,7 @@ class SSEChat extends ChatBase {
                 chat_history: req.chat_history || [],
                 project: req.project || this.project,
                 tenant: req.tenant || this.tenant,
-                turn_id: req.turn_id || `turn_${Date.now()}`,
+                turn_id: req.turn_id || createClientTurnId(),
                 ...(conversationId ? {conversation_id: conversationId} : {}),
                 ...(req.bundle_id ? {bundle_id: req.bundle_id} : {}),
                 ...(req.message_kind ? {message_kind: req.message_kind} : {}),

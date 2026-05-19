@@ -23,6 +23,19 @@ type EventHandlers = {
     onError?: (e: any) => void;
 };
 
+const pad = (value: number, width = 2): string => String(value).padStart(width, "0");
+
+const createClientTurnId = (now: Date = new Date()): string => {
+    return [
+        `turn_${now.getUTCFullYear()}`,
+        pad(now.getUTCMonth() + 1),
+        pad(now.getUTCDate()),
+        pad(now.getUTCHours()),
+        pad(now.getUTCMinutes()),
+        pad(now.getUTCSeconds()),
+    ].join("-") + `-${pad(now.getUTCMilliseconds(), 3)}`;
+};
+
 export type WireChatMessage = {
     role: "user" | "assistant";
     content: string;
@@ -170,7 +183,7 @@ export class SseChatService {
                 chat_history: req.chat_history || [],
                 project: req.project || this.project,
                 tenant: req.tenant || this.tenant,
-                turn_id: req.turn_id || `turn_${Date.now()}`,
+                turn_id: req.turn_id || createClientTurnId(),
                 conversation_id: req.conversation_id,
                 ...(req.bundle_id ? { bundle_id: req.bundle_id } : {}),
             },

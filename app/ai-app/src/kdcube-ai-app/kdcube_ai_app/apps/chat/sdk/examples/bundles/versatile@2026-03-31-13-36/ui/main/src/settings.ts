@@ -282,3 +282,16 @@ export function createLocalId(prefix: string): string {
   const random = globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2, 10)
   return `${prefix}_${random}`
 }
+
+const padIdPart = (value: number, width = 2): string => String(value).padStart(width, '0')
+
+export function createTurnId(now = new Date()): string {
+  return [
+    `turn_${now.getUTCFullYear()}`,
+    padIdPart(now.getUTCMonth() + 1),
+    padIdPart(now.getUTCDate()),
+    padIdPart(now.getUTCHours()),
+    padIdPart(now.getUTCMinutes()),
+    padIdPart(now.getUTCSeconds()),
+  ].join('-') + `-${padIdPart(now.getUTCMilliseconds(), 3)}`
+}
