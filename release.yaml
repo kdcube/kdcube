@@ -1,57 +1,36 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.5.19.2320"
+  ref: "2026.5.20.042"
   description: |
-    This release stabilizes React turn identity, artifact lifecycle handling,
-    skill discovery, and timeline compaction after the 2026.5.19.350 runtime
-    release. It focuses on preventing expensive invalid action chains, keeping
-    artifact paths consistent, and making tool-dependent guidance discoverable
-    only when the matching tools are active.
+    This patch release fixes isolated Python execution in split Docker runtime
+    deployments. It targets EC2/ECS deployments where chat-proc creates the
+    execution workspace inside the proc-visible /exec-workspace mount and then
+    starts sibling py-code-exec containers through Docker.
 
     Highlights
 
-    - Enforces server-owned chat turn ids while returning the accepted turn id
-      in submit acknowledgements, so clients and bundle UIs can align on the
-      runtime identity without inventing incompatible ids.
-    - Repairs artifact output-root handling and filters local artifact links
-      from presentation source lists, reducing bad references in generated
-      documents.
-    - Clarifies the React action lifecycle and strengthens dependency/review
-      barriers so later actions do not consume files, ids, URLs, code, or data
-      produced earlier in the same unreviewed decision response.
-    - Adds skill registry support for required tool gates and hidden disclosure,
-      with bundle-author documentation for how skills are discovered, filtered,
-      and rendered.
-    - Updates built-in bundle skill descriptors to use the current role names
-      and rely on registry-level tool gating instead of stale per-agent filters.
-    - Improves React timeline rendering, compaction, source payload handling,
-      path derivation hints, and finalization blocks to reduce prompt churn and
-      preserve cacheable context.
-    - Expands v2/v3 regression coverage for timeline compaction, rendering,
-      multi-action planning, path reads, and skill discovery.
+    - Normalizes split executor workspace permissions on the proc-visible
+      /exec-workspace tree before launching sibling py-code-exec containers.
+    - Prevents executor containers with dropped capabilities from failing to
+      read generated main.py files with Permission denied.
+    - Keeps the fix scoped to split container execution while preserving the
+      existing host-path translation and mount preflight behavior.
 
     Runtime and deployment notes:
 
-    - Deployments must point the platform ref at 2026.5.19.2320 to receive
-      these runtime, React, skill-registry, and documentation updates.
+    - Deployments must point the platform ref at 2026.5.20.042 to receive the
+      split runtime permission fix.
     - No descriptor shape migration is required for existing deployments.
     - No organization-specific content is part of this OSS release.
 
     Validation and regression coverage:
 
-    - Python syntax validation passed for changed Python files.
-    - Focused React and skills regression suite passed: 161 tests.
-    - Staged OSS private-name scan passed.
+    - Python syntax validation passed for the changed runtime file.
+    - Staged OSS private-name scan passed before commit.
 
     Changelog
 
-    - Added server-owned turn id behavior and submit acknowledgement turn ids.
-    - Fixed artifact output-root handling and local source-link filtering.
-    - Tightened React action lifecycle and dependency-review instructions.
-    - Added tool-gated skill discovery and hidden skill disclosure support.
-    - Updated bundle authoring docs for widgets, frontend awareness, platform
-      integration, agent integration, and skill discovery.
-    - Improved React timeline compaction, source payload rendering, path reads,
-      and test coverage.
+    - Fixed split Docker isolated runtime permission normalization for
+      /exec-workspace workdir and outdir paths.
 config:
-    version: "2026.5.19.2320"
+    version: "2026.5.20.042"

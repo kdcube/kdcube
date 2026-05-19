@@ -1163,6 +1163,12 @@ async def run_py_in_docker(
 
     if _is_split_container_strategy(container_strategy):
         log.log("[docker.exec] using split container strategy", level="INFO")
+        # In Docker-in-Docker deployments the translated host path can be a host-only
+        # absolute path that is not visible from inside chat-proc. The proc-visible
+        # /exec-workspace mount is still the same backing tree, so normalize
+        # permissions there before the sibling executor container mounts it.
+        _prepare_split_executor_tree(workdir)
+        _prepare_split_executor_tree(outdir)
         return await _run_py_in_split_docker_prepared(
             img=img,
             to=to,
