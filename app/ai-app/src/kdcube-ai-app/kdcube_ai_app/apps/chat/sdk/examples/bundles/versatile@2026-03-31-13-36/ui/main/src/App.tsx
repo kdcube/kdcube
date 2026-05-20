@@ -863,7 +863,11 @@ function applyChatComplete(state: ChatState, env: ChatCompleteEnvelope): ChatSta
   return updateTurn(syncedState, env.conversation.turn_id, (turn) => ({
     ...turn,
     state: env.data?.error_message ? 'error' : 'completed',
-    answer: (env.data?.final_answer as string | undefined) || turn.answer,
+    // The visible answer comes from streamed `marker="answer"` deltas, where citation tokens
+    // [[S:n]] are replaced into resolved links live. The chat.complete envelope may still
+    // carry `data.final_answer` in raw token form; reading it here would arrive after the
+    // stream completes and clobber the rendered text. Keep `turn.answer` (streamed text).
+    answer: turn.answer,
     error: (env.data?.error_message as string | undefined) || turn.error,
     followups: Array.isArray(env.data?.followups) ? (env.data?.followups as string[]) : turn.followups,
     timeline: [

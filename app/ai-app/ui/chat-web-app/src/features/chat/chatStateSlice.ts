@@ -515,15 +515,11 @@ const chatStateSlice = createSlice({
                 return
             }
 
-            if (action.payload.data.final_answer) {
-                state.turns[turnId].answer = action.payload.data.final_answer;
-                if (!state.turns[turnId].assistantMessages || state.turns[turnId].assistantMessages.length === 0) {
-                    state.turns[turnId].assistantMessages = [{
-                        text: action.payload.data.final_answer,
-                        timestamp,
-                    }];
-                }
-            }
+            // The visible answer comes from streamed `marker="answer"` deltas, where citation
+            // tokens [[S:n]] are replaced into resolved links live. The chat.complete envelope
+            // may still carry `data.final_answer` in raw token form; reading it here would
+            // arrive after the stream completes and clobber the rendered text. For replay /
+            // reload, the persisted assistant.completion artifact is the source of truth.
         },
         setUserMessage(state, action: PayloadAction<string>) {
             state.userMessage = action.payload;
