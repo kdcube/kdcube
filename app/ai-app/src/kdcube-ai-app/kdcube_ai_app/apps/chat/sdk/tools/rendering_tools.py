@@ -341,12 +341,11 @@ class RenderingTools:
         title: Annotated[Optional[str], "Optional deck title (title slide)."] = None,
         format: Annotated[str, "Content format: 'html'"] = "html",
         include_sources_slide: Annotated[bool, "Append a 'Sources' slide if sources are given."] = False,
-        base_dir: Annotated[Optional[str], "Base dir for resolving relative images in HTML. Defaults to OUTPUT_DIR."] = None,
     ) -> Annotated[dict, "Result envelope: {ok: bool, error: null|{code,message,where,managed}}."]:
         try:
             outdir = resolve_output_dir()
             fname = _basename_only(path, "deck.pptx")
-            base_dir = base_dir or str(outdir)
+            base_dir = str(outdir)
             workdir = str(resolve_workdir())
             out_path = outdir / fname
             out_path.parent.mkdir(parents=True, exist_ok=True)

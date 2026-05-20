@@ -121,6 +121,94 @@ def test_write_pptx_embeds_image_from_artifact_root(tmp_path):
     assert any(name.startswith("ppt/media/") for name in names)
 
 
+def test_write_pptx_embeds_outputs_image_from_later_slide(tmp_path):
+    runtime_outdir = tmp_path / "out"
+    workdir = tmp_path / "work"
+    runtime_outdir.mkdir()
+    workdir.mkdir()
+
+    OUTDIR_CV.set(str(runtime_outdir))
+    WORKDIR_CV.set(str(workdir))
+
+    artifact_outdir = resolve_output_dir()
+    image_rel = "turn_2026-05-20-00-48-20-887/outputs/science_news/trend_chart.png"
+    image_path = artifact_outdir / image_rel
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    image_path.write_bytes(_ONE_PIXEL_PNG)
+
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <body>
+      <section id="slide-1"><h1>Title</h1></section>
+      <section id="slide-2"><h1>Stories</h1></section>
+      <section id="slide-3">
+        <h1>Research Significance Scores</h1>
+        <img src="{image_rel}" style="width:9in; height:4.8in;" alt="Research Significance Chart">
+      </section>
+    </body>
+    </html>
+    """
+
+    result = asyncio.run(
+        RenderingTools().write_pptx(
+            path="turn_2026-05-20-00-48-20-887/outputs/science_news/science_news.pptx",
+            content=html,
+        )
+    )
+
+    assert result.get("ok") is True, result
+    pptx_path = artifact_outdir / "turn_2026-05-20-00-48-20-887/outputs/science_news/science_news.pptx"
+    assert pptx_path.exists()
+    with zipfile.ZipFile(pptx_path) as zf:
+        names = zf.namelist()
+
+    assert any(name.startswith("ppt/media/") for name in names)
+
+
+def test_write_pptx_embeds_full_artifact_path_without_base_dir_param(tmp_path):
+    runtime_outdir = tmp_path / "out"
+    workdir = tmp_path / "work"
+    runtime_outdir.mkdir()
+    workdir.mkdir()
+
+    OUTDIR_CV.set(str(runtime_outdir))
+    WORKDIR_CV.set(str(workdir))
+
+    artifact_outdir = resolve_output_dir()
+    image_rel = "turn_2026-05-20-00-48-20-887/outputs/science_news/trend_chart.png"
+    image_path = artifact_outdir / image_rel
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    image_path.write_bytes(_ONE_PIXEL_PNG)
+
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <body>
+      <section id="slide-3">
+        <h1>Research Significance Scores</h1>
+        <img src="{image_rel}" style="width:9in; height:4.8in;" alt="Research Significance Chart">
+      </section>
+    </body>
+    </html>
+    """
+
+    result = asyncio.run(
+        RenderingTools().write_pptx(
+            path="turn_2026-05-20-00-48-20-887/outputs/science_news/science_news.pptx",
+            content=html,
+        )
+    )
+
+    assert result.get("ok") is True, result
+    pptx_path = artifact_outdir / "turn_2026-05-20-00-48-20-887/outputs/science_news/science_news.pptx"
+    assert pptx_path.exists()
+    with zipfile.ZipFile(pptx_path) as zf:
+        names = zf.namelist()
+
+    assert any(name.startswith("ppt/media/") for name in names)
+
+
 def test_pptx_sources_slide_omits_local_artifact_file_links(tmp_path):
     runtime_outdir = tmp_path / "out"
     workdir = tmp_path / "work"

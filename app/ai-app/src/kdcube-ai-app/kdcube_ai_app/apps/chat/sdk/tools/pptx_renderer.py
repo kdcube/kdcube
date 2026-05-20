@@ -698,10 +698,25 @@ def _resolve_image_path(src: str, base_dir: Optional[str], workdir: Optional[str
         candidates.append(path)
     else:
         if base_dir:
-            candidates.append(Path(base_dir) / src)
+            base_path = Path(base_dir)
+            candidates.append(base_path / src)
+            if not base_path.is_absolute():
+                try:
+                    candidates.append(resolve_output_dir() / base_path / src)
+                except Exception:
+                    pass
+        try:
+            candidates.append(resolve_output_dir() / src)
+        except Exception:
+            pass
         if workdir and (not base_dir or Path(base_dir).resolve() != Path(workdir).resolve()):
             candidates.append(Path(workdir) / src)
+    seen: set[str] = set()
     for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
         if candidate.exists():
             return candidate
     logger.warning(
