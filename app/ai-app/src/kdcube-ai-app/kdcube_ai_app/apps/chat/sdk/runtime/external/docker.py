@@ -829,7 +829,7 @@ async def _run_py_in_split_docker_prepared(
             "EXEC_REQUIRE_AF_ALG_BLOCK": executor_env.get("EXEC_REQUIRE_AF_ALG_BLOCK") or "1",
             "LOG_DIR": _EXECUTOR_LOG_CONTAINER,
             "EXECUTOR_LOG_DIR": _EXECUTOR_LOG_CONTAINER,
-            "LOG_FILE_PREFIX": "executor",
+            "LOG_FILE_PREFIX": "executor-entry",
             ARTIFACT_OUTPUT_ENV: _ARTIFACT_OUT_CONTAINER,
             "PLAYWRIGHT_BROWSERS_PATH": "/opt/ms-playwright",
             "RUNTIME_GLOBALS_JSON": json.dumps(exec_runtime_globals, ensure_ascii=False, default=str),

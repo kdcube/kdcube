@@ -7,7 +7,7 @@ import pytest
 
 from kdcube_ai_app.apps.chat.sdk.runtime.external import docker as docker_runtime
 from kdcube_ai_app.apps.chat.sdk.runtime import iso_runtime
-from kdcube_ai_app.apps.chat.sdk.runtime.diagnose import merge_infra_logs
+from kdcube_ai_app.apps.chat.sdk.runtime.diagnose import collect_exec_diagnostics, merge_infra_logs
 from kdcube_ai_app.infra.rendering import shared_browser
 
 
@@ -149,6 +149,7 @@ def test_split_executor_argv_is_networkless_and_does_not_mount_supervisor_data(t
             "RUNTIME_GLOBALS_JSON": "{}",
             "SUPERVISOR_AUTH_TOKEN": "secret",
             "EXECUTION_ID": "exec-1",
+            "LOG_FILE_PREFIX": "executor-entry",
             "PLAYWRIGHT_BROWSERS_PATH": "/opt/ms-playwright",
         },
         timeout_s=60,
@@ -175,6 +176,7 @@ def test_split_executor_argv_is_networkless_and_does_not_mount_supervisor_data(t
     assert any(item == "EXEC_BLOCK_AF_ALG=1" for item in argv)
     assert any(item == "EXEC_REQUIRE_AF_ALG_BLOCK=1" for item in argv)
     assert any(item == "KDCUBE_ARTIFACT_OUTPUT_DIR=/workspace/out" for item in argv)
+    assert any(item == "LOG_FILE_PREFIX=executor-entry" for item in argv)
     assert all("/tmp/kdcube-supervisor/bundles" not in item for item in argv)
     assert all("KDCUBE_RUNTIME_SECRETS_YAML_B64=" not in item for item in argv)
 
@@ -266,7 +268,8 @@ def test_split_supervisor_argv_uses_writable_home_and_playwright_path(tmp_path):
 
 def test_split_runtime_logs_are_merged_for_requestor_feedback(tmp_path):
     log_dir = tmp_path / "out" / "logs"
-    log_dir.mkdir(parents=True)
+    executor_log_dir = log_dir / "executor"
+    executor_log_dir.mkdir(parents=True)
     exec_id = "exec-split-logs"
     header = f"===== EXECUTION {exec_id} START 2026-04-30 10:00:00 =====\n"
     (log_dir / "docker.err.log").write_text(
@@ -281,13 +284,67 @@ def test_split_runtime_logs_are_merged_for_requestor_feedback(tmp_path):
         header + "runtime wrapped traceback line\n",
         encoding="utf-8",
     )
+    (executor_log_dir / "executor-entry.log").write_text(
+        header + "executor entry bootstrap line\n",
+        encoding="utf-8",
+    )
+    (executor_log_dir / "executor.log").write_text(
+        header + "dropped executor infra line\n",
+        encoding="utf-8",
+    )
+    (executor_log_dir / "user.log").write_text(
+        header + "program print should stay out of infra\n",
+        encoding="utf-8",
+    )
 
     merged = merge_infra_logs(log_dir=log_dir, exec_id=exec_id, max_chars=4000)
 
     assert "supervisor tool failed loudly" in merged
     assert "executor user code failed loudly" in merged
     assert "runtime wrapped traceback line" in merged
+    assert "executor entry bootstrap line" in merged
+    assert "dropped executor infra line" in merged
+    assert "program print should stay out of infra" not in merged
     assert (log_dir / "infra.log").exists()
+
+
+def test_split_executor_user_log_is_read_separately_from_infra(tmp_path):
+    sandbox_root = tmp_path / "sandbox"
+    outdir = sandbox_root / "out"
+    log_dir = outdir / "logs"
+    executor_log_dir = log_dir / "executor"
+    workdir = sandbox_root / "work"
+    executor_log_dir.mkdir(parents=True)
+    workdir.mkdir(parents=True)
+    (workdir / "main.py").write_text("# === USER CODE START ===\nprint('hello')\n", encoding="utf-8")
+
+    exec_id = "exec-split-user-log"
+    header = f"===== EXECUTION {exec_id} START 2026-04-30 10:00:00 =====\n"
+    (executor_log_dir / "executor-entry.log").write_text(
+        header + "entry process diagnostic\n",
+        encoding="utf-8",
+    )
+    (executor_log_dir / "executor.log").write_text(
+        header + "executor diagnostic\n",
+        encoding="utf-8",
+    )
+    (executor_log_dir / "user.log").write_text(
+        header + "program output visible to agent\n",
+        encoding="utf-8",
+    )
+
+    diagnostics = collect_exec_diagnostics(
+        sandbox_root=sandbox_root,
+        outdir=outdir,
+        exec_id=exec_id,
+        tree_max_chars=4000,
+        log_max_chars=4000,
+    )
+
+    assert "program output visible to agent" in diagnostics["info_log"]
+    assert "entry process diagnostic" in diagnostics["runtime_error_log"]
+    assert "executor diagnostic" in diagnostics["runtime_error_log"]
+    assert "program output visible to agent" not in diagnostics["runtime_error_log"]
 
 
 def test_executor_payload_strips_privileged_runtime_globals():
