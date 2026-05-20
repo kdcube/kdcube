@@ -8,6 +8,7 @@ see_also:
   - ks:docs/arch/architecture-long.md
   - ks:docs/arch/proc/longrun-protection-README.md
   - ks:docs/arch/proc/design/conversation-scheduler-streams-README.md
+  - ks:docs/service/streams/conversation-scheduler-README.md
   - ks:docs/ops/ecs/components/proc-README.md
   - ks:docs/service/maintenance/connection-pooling-README.md
   - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
@@ -660,6 +661,11 @@ Steer/followup does not change the non-idempotent nature of an already-started t
 The detailed design note for this target model now lives in:
 
 - [design/conversation-scheduler-streams-README.md](design/conversation-scheduler-streams-README.md)
+
+For the service-level distinction between conversation scheduler streams,
+background job streams, telemetry streams, and relay/pubsub, see:
+
+- [../../service/streams/README.md](../../service/streams/README.md)
 
 That note uses Redis Streams as the primary target because it matches current
 platform infrastructure, and it also documents how the same scheduler semantics

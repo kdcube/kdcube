@@ -13,7 +13,8 @@ see_also:
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/sdk/bundle/bundle-venv-README.md
   - ks:docs/sdk/bundle/bundle-client-communication-README.md
-  - ks:docs/service/jobs/jobs-stream-README.md
+  - ks:docs/service/streams/background-jobs-README.md
+  - ks:docs/sdk/bundle/build/design/@longrun-README.md
 ---
 # Bundle Lifecycle
 
@@ -24,6 +25,8 @@ Read it together with:
 - [Bundle Runtime](bundle-runtime-README.md) for request/tool runtime surfaces
 - [Bundle Interfaces](bundle-interfaces-README.md) for streaming/widgets/operations
 - [Client Communication](bundle-client-communication-README.md) when the bundle also ships client code
+- [Bundle Longrun Design](build/design/@longrun-README.md) for the proposed
+  future lifecycle for supervised bundle-owned long-running tasks
 
 ## Mental model
 
@@ -244,7 +247,7 @@ Lifecycle implications:
 
 See:
 
-- [jobs-stream-README.md](../../service/jobs/jobs-stream-README.md)
+- [background-jobs-README.md](../../service/streams/background-jobs-README.md)
 
 ## What changes apply to new requests
 

@@ -15,8 +15,8 @@ see_also:
   - ks:docs/sdk/bundle/bundle-transports-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
   - ks:docs/sdk/bundle/bundle-delivery-and-update-README.md
-  - ks:docs/service/jobs/jobs-stream-README.md
-  - ks:docs/service/fs/file-lock-README.md
+  - ks:docs/service/streams/background-jobs-README.md
+  - ks:docs/service/synch-mechanisms/critical-section-README.md
 ---
 # Bundle Developer Guide
 
@@ -278,7 +278,7 @@ Background job rule:
 - when deriving from SDK mixins, call `await super().handle_job(**kwargs)` first
   and return immediately if it reports `handled=true`; this lets mixins consume
   their own `work_kind` values without adding another `@on_job`
-- use [jobs-stream-README.md](../../service/jobs/jobs-stream-README.md) for the platform queue contract
+- use [background-jobs-README.md](../../service/streams/background-jobs-README.md) for the platform queue contract
 
 Visibility rule:
 
@@ -542,7 +542,7 @@ Pattern:
 
 Detailed helper usage:
 
-- [../../service/fs/file-lock-README.md](../../service/fs/file-lock-README.md)
+- [../../service/synch-mechanisms/critical-section-README.md](../../service/synch-mechanisms/critical-section-README.md)
 
 ## Local Development Loop
 

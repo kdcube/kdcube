@@ -34,6 +34,7 @@ Curated index of platform, service, and SDK documentation.
 * Service Runtime Configuration Mapping: [service-runtime-configuration-mapping-README.md](configuration/service-runtime-configuration-mapping-README.md)
 * Monitoring & Observability: [README-monitoring-observability.md](service/README-monitoring-observability.md)
 * Service and Infrastructure Index: [service-and-infrastructure-index-README.md](service/service-and-infrastructure-index-README.md)
+* Service Streams: [streams/README.md](service/streams/README.md)
 
 ## Communication & Relay
 

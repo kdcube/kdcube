@@ -15,7 +15,7 @@ see_also:
   - ks:docs/sdk/tools/tool-subsystem-README.md
   - ks:docs/sdk/bundle/bundle-client-communication-README.md
   - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
-  - ks:docs/service/fs/file-lock-README.md
+  - ks:docs/service/synch-mechanisms/critical-section-README.md
 ---
 # Bundle Runtime
 
@@ -502,7 +502,7 @@ waiters, a source signature, and an output readiness check.
 
 Detailed runtime lifecycle:
 
-- [Observed File Locks](../../service/fs/file-lock-README.md)
+- [Synchronization Mechanisms](../../service/synch-mechanisms/critical-section-README.md)
 
 ## Async props and secrets access
 

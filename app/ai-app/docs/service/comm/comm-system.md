@@ -7,6 +7,7 @@ keywords: ["redis relay", "channels", "fanout", "transport layer"]
 see_also:
   - ks:docs/service/comm/CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md
   - ks:docs/service/comm/README-comm.md
+  - ks:docs/service/streams/telemetry-README.md
   - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
   - ks:docs/sdk/bundle/bundle-firewall-README.md
 ---
@@ -121,6 +122,7 @@ Transports (SSE / Socket.IO) hook into the chat relay to dynamically subscribe/u
     * route selection
     * filters
     * delta sniffing/recording
+    * optional telemetry promotion to configured buses
 
 **Core responsibilities**
 
@@ -144,6 +146,57 @@ It receives the event metadata and user/session details and decides whether
 the package should be **emitted or suppressed**.
 
 See: [docs/sdk/bundle/bundle-firewall-README.md](../../sdk/bundle/bundle-firewall-README.md)
+
+---
+
+## Telemetry Promotion Boundary
+
+`ChatCommunicator` is already the widely used bundle-facing path for chat,
+progress, custom typed, service, completion, and error events. Telemetry should
+reuse that choke point where possible instead of asking bundles to emit a second
+parallel event for every user-visible signal.
+
+Proposed generic flow:
+
+```text
+bundle code
+  |
+  | self.comm.start / step / delta / event / service_event / complete / error
+  v
+ChatCommunicator
+  |
+  | build normal client envelope
+  | apply outbound filter/firewall
+  | publish to chat relay when client-visible
+  |
+  +--> optional telemetry promoter
+          |
+          | normalize to kdcube.telemetry.v1
+          | remove content by default
+          | add stable event_id
+          v
+      configured telemetry bus / ingest endpoint
+```
+
+The promoter is a side effect of the existing comm path. It should be
+configurable per environment and should not change the client-visible relay
+contract.
+
+Rules:
+
+- promotion must be non-blocking or bounded so chat delivery is not held by
+  telemetry storage;
+- promoted telemetry must follow the telemetry privacy contract and avoid raw
+  prompt/answer text by default;
+- event ids must be stable enough for retry dedupe;
+- comm filtering/firewall decisions must be respected or explicitly modeled in
+  the telemetry policy;
+- non-comm sources, such as lower-level MCP/accounting hooks, may still use a
+  direct telemetry emitter when there is no comm envelope.
+
+See:
+
+- [Telemetry Streams](../streams/telemetry-README.md)
 
 ---
 

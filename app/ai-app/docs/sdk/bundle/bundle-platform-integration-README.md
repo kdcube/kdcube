@@ -11,7 +11,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-scheduled-jobs-README.md
   - ks:docs/sdk/bundle/bundle-developer-guide-README.md
   - ks:docs/sdk/bundle/bundle-venv-README.md
-  - ks:docs/service/jobs/jobs-stream-README.md
+  - ks:docs/service/streams/background-jobs-README.md
   - ks:docs/sdk/bundle/bundle-index-README.md
   - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
 ---
@@ -732,7 +732,7 @@ async def on_job(self, **kwargs) -> dict:
 
 See:
 
-- [docs/service/jobs/jobs-stream-README.md](../../service/jobs/jobs-stream-README.md)
+- [docs/service/streams/background-jobs-README.md](../../service/streams/background-jobs-README.md)
 
 ### 1.10 `@cron(...)`
 

@@ -89,7 +89,7 @@ Older `docs/sdk/example-bundle` sample docs are no longer part of the bundle pat
 | Knowledge space (`ks:`) | [bundle-knowledge-space-README.md](bundle-knowledge-space-README.md) |
 | Bundle storage and cache | [bundle-storage-and-cache-README.md](bundle-storage-and-cache-README.md) |
 | Scheduled jobs (`@cron`) and job handoff (`@on_job`) | [bundle-scheduled-jobs-README.md](bundle-scheduled-jobs-README.md) |
-| Background jobs stream | [../../service/jobs/jobs-stream-README.md](../../service/jobs/jobs-stream-README.md) |
+| Background jobs stream | [../../service/streams/background-jobs-README.md](../../service/streams/background-jobs-README.md) |
 | Mixin job dispatch (`super().handle_job(...)`) | [bundle-interfaces-README.md](bundle-interfaces-README.md), [bundle-platform-integration-README.md](bundle-platform-integration-README.md) |
 | SDK integrations | [../integrations/README.md](../integrations/README.md) |
 | Tasks SDK solution | [../solutions/tasks-README.md](../solutions/tasks-README.md) |

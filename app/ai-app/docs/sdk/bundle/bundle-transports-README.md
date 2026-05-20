@@ -12,7 +12,7 @@ see_also:
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
-  - ks:docs/service/jobs/jobs-stream-README.md
+  - ks:docs/service/streams/background-jobs-README.md
 ---
 # Bundle Transports
 
@@ -75,7 +75,7 @@ So:
 Background jobs are intentionally not URL-addressable. A producer writes a
 ready job to the Redis Stream with tenant/project/bundle/user routing metadata.
 Proc claims it fairly, constructs a normal bundle runtime context, and calls the
-bundle's async `@on_job` handler. Use [jobs-stream-README.md](../../service/jobs/jobs-stream-README.md)
+bundle's async `@on_job` handler. Use [background-jobs-README.md](../../service/streams/background-jobs-README.md)
 for the queue/envelope contract.
 
 A bundle still has only one decorated `@on_job` method. If the entrypoint derives

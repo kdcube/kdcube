@@ -13,7 +13,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-transports-README.md
   - ks:docs/sdk/bundle/bundle-client-communication-README.md
   - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
-  - ks:docs/service/jobs/jobs-stream-README.md
+  - ks:docs/service/streams/background-jobs-README.md
 ---
 # Bundle Interfaces (Streaming + Widgets + Operations)
 
@@ -224,7 +224,7 @@ Mixin rule:
 
 See:
 
-- [jobs-stream-README.md](../../service/jobs/jobs-stream-README.md)
+- [background-jobs-README.md](../../service/streams/background-jobs-README.md)
 
 ---
 
