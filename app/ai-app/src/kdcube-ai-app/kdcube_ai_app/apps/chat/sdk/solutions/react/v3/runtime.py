@@ -866,17 +866,40 @@ class ReactSolverV2:
         return wf.compile()
 
     def _mk_mainstream(self, phase: str) -> Callable[..., Awaitable[None]]:
-        counters: Dict[str, int] = {}
+        # In multi-action rounds the model may emit several <channel:thinking>
+        # blocks interleaved with the actions. The versatile streamer assigns
+        # each block a distinct channel_instance, but the wire delta strips
+        # everything except (text, index, marker, agent, completed). To keep
+        # the UI's per-agent aggregation from concatenating all instances into
+        # one continuous block we suffix the agent with the instance index and
+        # use a separate index counter per (marker, instance). Instance is None
+        # in single-action paths; behaviour there is unchanged.
+        counters: Dict[tuple[str, Optional[int]], int] = {}
 
         async def emit_delta(**kwargs):
             text = kwargs.get("text") or ""
-            if not text:
+            completed = bool(kwargs.get("completed"))
+            if not text and not completed:
                 return
             marker = kwargs.get("marker") or kwargs.get("channel") or "thinking"
-            i = counters.get(marker, 0)
-            counters[marker] = i + 1
+            instance = kwargs.get("channel_instance")
+            try:
+                instance_i = int(instance) if instance is not None else None
+            except Exception:
+                instance_i = None
+            key = (marker, instance_i)
+            i = counters.get(key, 0)
+            counters[key] = i + 1
             author = f"{self.MODULE_AGENT_NAME}.{phase}"
-            await self.comm.delta(text=text, index=i, marker=marker, agent=author, completed=bool(kwargs.get("completed")))
+            if instance_i is not None:
+                author = f"{author}.i{instance_i}"
+            await self.comm.delta(
+                text=text,
+                index=i,
+                marker=marker,
+                agent=author,
+                completed=completed,
+            )
 
         return emit_delta
 
