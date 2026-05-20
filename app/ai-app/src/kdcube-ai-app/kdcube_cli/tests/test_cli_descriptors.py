@@ -13,6 +13,7 @@ from kdcube_cli.cli import (
     _collect_runtime_info,
     _compose_running_services,
     _descriptor_fast_path_reasons,
+    _compose_logs_dir_from_env,
     _load_bundle_ids_from_descriptor,
     _load_cli_defaults,
     _parse_init_secret_pairs,
@@ -107,6 +108,15 @@ def test_ensure_local_dirs_creates_metrics_logs_dir(tmp_path: Path):
     assert (logs_dir / "chat-ingress").is_dir()
     assert (logs_dir / "chat-proc").is_dir()
     assert (logs_dir / "metrics").is_dir()
+
+
+def test_compose_logs_dir_from_env_uses_generated_compose_transport(tmp_path: Path):
+    env_file = tmp_path / ".env"
+    logs_dir = tmp_path / "runtime" / "logs"
+    fallback = tmp_path / "fallback"
+    env_file.write_text(f"KDCUBE_LOGS_DIR={logs_dir}\n", encoding="utf-8")
+
+    assert _compose_logs_dir_from_env(env_file, fallback) == logs_dir.resolve()
 
 
 def test_resolve_frontend_routes_prefix_reads_generated_config(tmp_path: Path):

@@ -147,6 +147,17 @@ def _run_compose_optional(console: Console, cmd: list[str], *, cwd: Path, label:
     return True
 
 
+def _compose_logs_dir_from_env(env_file: Path, fallback_workdir: Path) -> Path:
+    try:
+        env_main = installer_mod.load_env_file(env_file)
+        value = str(env_main.entries.get("KDCUBE_LOGS_DIR", (None, None))[1] or "").strip()
+        if value:
+            return Path(value).expanduser().resolve()
+    except Exception:
+        pass
+    return fallback_workdir / "logs"
+
+
 def stop_compose_stack(
     console: Console,
     *,
@@ -199,6 +210,7 @@ def start_compose_stack(
             "  kdcube init"
         )
     env_main = installer_mod.load_env_file(env_file)
+    installer_mod.ensure_compose_log_dirs(_compose_logs_dir_from_env(env_file, ctx.workdir))
     token_overrides = installer_mod.generate_runtime_tokens()
     runtime_env = installer_mod.write_env_overlay(env_file, token_overrides)
     _tenant, _project = _parse_workdir_namespace(workdir)

@@ -1254,6 +1254,10 @@ def ensure_local_dirs(data_dir: Path, logs_dir: Path) -> None:
         data_dir / "clamav-db",
     ]:
         path.mkdir(parents=True, exist_ok=True)
+    ensure_compose_log_dirs(logs_dir)
+
+
+def ensure_compose_log_dirs(logs_dir: Path) -> None:
     logs_dir.mkdir(parents=True, exist_ok=True)
     for subdir in ("chat-ingress", "chat-proc", "metrics"):
         (logs_dir / subdir).mkdir(parents=True, exist_ok=True)
