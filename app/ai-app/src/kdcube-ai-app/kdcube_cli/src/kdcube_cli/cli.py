@@ -136,6 +136,51 @@ def _run_compose(console: Console, cmd: list[str], *, cwd: Path) -> None:
         raise SystemExit(f"Command failed with exit code {proc.returncode}.")
 
 
+def _tail_process_text(text: str, *, max_lines: int = 40, max_chars: int = 6000) -> str:
+    lines = [line.rstrip() for line in str(text or "").splitlines() if line.rstrip()]
+    if max_lines > 0 and len(lines) > max_lines:
+        lines = ["... output truncated ...", *lines[-max_lines:]]
+    value = "\n".join(lines).strip()
+    if max_chars > 0 and len(value) > max_chars:
+        return "... output truncated ...\n" + value[-max_chars:]
+    return value
+
+
+def _run_compose_capture(
+    console: Console,
+    cmd: list[str],
+    *,
+    cwd: Path,
+    label: str,
+    verbose: bool = False,
+) -> str:
+    if verbose:
+        console.print(f"[dim]$ {shlex.join(cmd)}[/dim]")
+    proc = subprocess.run(
+        cmd,
+        cwd=cwd,
+        env=_compose_env_from_cmd(cmd),
+        capture_output=True,
+        text=True,
+    )
+    stdout = (proc.stdout or "").strip()
+    stderr = (proc.stderr or "").strip()
+    if verbose:
+        if stdout:
+            console.print(stdout)
+        if stderr:
+            console.print(stderr)
+    if proc.returncode != 0:
+        details = _tail_process_text("\n".join([part for part in [stdout, stderr] if part]))
+        message = f"{label} failed with exit code {proc.returncode}."
+        if details:
+            message += f"\n{details}"
+        if not verbose:
+            message += "\nRerun with --verbose to see the raw docker compose command and full proc output."
+        raise SystemExit(message)
+    return stdout
+
+
 def _run_compose_optional(console: Console, cmd: list[str], *, cwd: Path, label: str) -> bool:
     console.print(f"[dim]$ {' '.join(cmd)}[/dim]")
     proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=_compose_env_from_cmd(cmd))
@@ -1185,12 +1230,55 @@ def print_bundle_status(console: Console, status: dict[str, object]) -> None:
         console.print(f"[dim]Scheduled jobs:[/dim] {', '.join(str(j.get('alias')) for j in scheduled if isinstance(j, dict)) or '<none>'}")
 
 
+def _bundle_reload_summary_lines(
+    result: dict[str, object],
+    *,
+    descriptor_path: Path,
+    bundle_id: str,
+) -> list[str]:
+    lines = [
+        "Bundle reload accepted.",
+        f"Bundle: {bundle_id}",
+        f"Descriptor: {descriptor_path}",
+    ]
+    authority = str(result.get("authority") or "").strip()
+    if authority:
+        lines.append(f"Authority: {authority}")
+    receivers = result.get("broadcast_receivers")
+    if receivers is not None:
+        lines.append(f"Broadcast receivers: {receivers}")
+    eviction = result.get("eviction")
+    if isinstance(eviction, dict) and eviction:
+        parts = [f"{key}={value}" for key, value in sorted(eviction.items())]
+        lines.append("Eviction: " + ", ".join(parts))
+    elif eviction is not None:
+        lines.append(f"Eviction: {eviction}")
+    lines.append("The next request will re-import that bundle from the runtime workspace descriptor path.")
+    return lines
+
+
+def _print_bundle_reload_summary(
+    console: Console,
+    result: dict[str, object],
+    *,
+    descriptor_path: Path,
+    bundle_id: str,
+) -> None:
+    lines = _bundle_reload_summary_lines(result, descriptor_path=descriptor_path, bundle_id=bundle_id)
+    if not lines:
+        return
+    console.print(f"[green]{lines[0]}[/green]")
+    for line in lines[1:]:
+        console.print(f"[dim]{line}[/dim]")
+
+
 def reload_bundle_from_descriptor(
     console: Console,
     *,
     repo_root: Path,
     workdir: Path,
     bundle_id: str,
+    verbose: bool = False,
 ) -> None:
     ctx = _build_paths_for_repo(repo_root, workdir)
     env_main_path = ctx.config_dir / ".env"
@@ -1245,13 +1333,37 @@ def reload_bundle_from_descriptor(
     ]
 
     console.print(
-        f"[dim]Reapplying descriptor from[/dim] {descriptor_path}\n"
-        f"[dim]Requested bundle[/dim] {bundle_id}"
+        f"[dim]Reloading bundle[/dim] {bundle_id}\n"
+        f"[dim]Descriptor[/dim] {descriptor_path}"
     )
-    _run_compose(console, cmd, cwd=ctx.docker_dir)
-    console.print(
-        "[green]Bundle descriptor reapplied and target bundle evicted from proc caches.[/green]\n"
-        "[dim]The next request will re-import that bundle from the runtime workspace descriptor path.[/dim]"
+    raw = _run_compose_capture(
+        console,
+        cmd,
+        cwd=ctx.docker_dir,
+        label="Bundle reload",
+        verbose=verbose,
+    )
+    try:
+        result = json.loads(raw) if raw else {}
+    except json.JSONDecodeError as exc:
+        if verbose and raw:
+            raise SystemExit("Bundle reload returned non-JSON output.") from exc
+        detail = _tail_process_text(raw)
+        message = "Bundle reload returned non-JSON output."
+        if detail:
+            message += f"\n{detail}"
+        message += "\nRerun with --verbose to see the raw docker compose command and full proc output."
+        raise SystemExit(message) from exc
+    if not isinstance(result, dict):
+        raise SystemExit("Bundle reload returned an unexpected response shape.")
+    if result.get("status") != "ok":
+        detail = json.dumps(result, ensure_ascii=False, indent=2)
+        raise SystemExit(f"Bundle reload failed.\n{detail}")
+    _print_bundle_reload_summary(
+        console,
+        result,
+        descriptor_path=descriptor_path,
+        bundle_id=bundle_id,
     )
 
 
@@ -2249,6 +2361,11 @@ def main() -> None:
     _sp.add_argument("bundle_id", help="Bundle ID to reload")
     _sp.add_argument("--workdir", default=None, help="Namespaced runtime workdir")
     _sp.add_argument("--path", default=str(DEFAULT_DIR), help="Platform repo path")
+    _sp.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Show the raw docker compose command and proc response",
+    )
 
     _sp = subparsers.add_parser("bundle", help="Create, update, delete, or inspect a staged bundle entry")
     _sp.add_argument("bundle_id", nargs="?", help="Bundle ID to patch, or 'status'")
@@ -2560,6 +2677,7 @@ def main() -> None:
                 repo_root=_repo,
                 workdir=_resolve_cli_workdir(_workdir),
                 bundle_id=str(args.bundle_id).strip(),
+                verbose=bool(args.verbose),
             )
             return
         if args.command == "bundle":

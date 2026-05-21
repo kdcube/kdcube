@@ -978,6 +978,13 @@ Reload a bundle after descriptor changes:
 kdcube reload <bundle_id> --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
 ```
 
+Normal reload output is concise and hides the inner Docker Compose call. Use
+`--verbose` when debugging reload internals:
+
+```bash
+kdcube reload <bundle_id> --verbose --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+```
+
 Export live bundle descriptors:
 
 ```bash

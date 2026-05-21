@@ -12,6 +12,7 @@ from kdcube_cli.cli import (
     _check_before_start,
     _collect_runtime_info,
     _collect_bundle_status,
+    _bundle_reload_summary_lines,
     _compose_running_services,
     _descriptor_fast_path_reasons,
     _compose_logs_dir_from_env,
@@ -239,6 +240,26 @@ def test_bundle_apply_command_quotes_values_with_spaces(tmp_path: Path):
     assert _bundle_apply_command("bundle with space", tmp_path / "runtime dir") == (
         f"kdcube reload 'bundle with space' --workdir '{tmp_path / 'runtime dir'}'"
     )
+
+
+def test_bundle_reload_summary_hides_inner_compose_command(tmp_path: Path):
+    lines = _bundle_reload_summary_lines(
+        {
+            "status": "ok",
+            "authority": "file:/config/bundles.yaml",
+            "broadcast_receivers": 1,
+            "eviction": {"modules_removed": 3},
+        },
+        descriptor_path=tmp_path / "config" / "bundles.yaml",
+        bundle_id="demo.bundle",
+    )
+    rendered = "\n".join(lines)
+
+    assert "Bundle reload accepted." in rendered
+    assert "demo.bundle" in rendered
+    assert "docker compose" not in rendered
+    assert "python -c" not in rendered
+    assert "internal/bundles/reload-authority" not in rendered
 
 
 def test_collect_bundle_status_reports_one_explicit_bundle_without_listing_others(tmp_path: Path):

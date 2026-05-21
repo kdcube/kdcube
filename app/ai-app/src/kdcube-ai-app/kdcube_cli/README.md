@@ -191,6 +191,9 @@ kdcube start --workdir ~/.kdcube/kdcube-runtime/<tenant>__<project>
 # After editing a bundle's config or code — reload without a full restart
 kdcube reload <bundle_id> --workdir ~/.kdcube/kdcube-runtime/<tenant>__<project>
 
+# Show the raw compose/proc call when debugging reload internals
+kdcube reload <bundle_id> --verbose --workdir ~/.kdcube/kdcube-runtime/<tenant>__<project>
+
 # Stop the stack
 kdcube stop --workdir ~/.kdcube/kdcube-runtime/<tenant>__<project>
 ```
@@ -285,6 +288,9 @@ kdcube bundle <bundle_id> \
 # Apply all staged changes
 kdcube reload <bundle_id>
 ```
+
+Normal reload output is concise and operator-facing. Use `--verbose` only when
+you need the raw Docker Compose command and full proc response.
 
 ```bash
 # Delete a bundle entry (also removes its secrets entry)
