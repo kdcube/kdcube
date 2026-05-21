@@ -15,6 +15,7 @@ see_also:
   - ks:docs/sdk/tools/tool-subsystem-README.md
   - ks:docs/sdk/bundle/bundle-client-communication-README.md
   - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
+  - ks:docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
   - ks:docs/service/synch-mechanisms/critical-section-README.md
 ---
 # Bundle Runtime
@@ -745,6 +746,11 @@ For actual event names, `chat.delta` shape, and built-in markers such as
 `answer`, `thinking`, `canvas`, `timeline_text`, and `subsystem`, read:
 
 - [bundle-chat-stream-events-README.md](bundle-chat-stream-events-README.md)
+
+For recording selected comm events into a bounded buffer and sending the batch
+to a bundle/platform sink, read:
+
+- [bundle-event-recording-and-sinks-README.md](bundle-event-recording-and-sinks-README.md)
 
 ## Shared browser, cache, and retrieval from tools
 

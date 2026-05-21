@@ -9,6 +9,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-transports-README.md
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/sdk/bundle/bundle-scheduled-jobs-README.md
+  - ks:docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
   - ks:docs/sdk/bundle/bundle-developer-guide-README.md
   - ks:docs/sdk/bundle/bundle-venv-README.md
   - ks:docs/service/streams/background-jobs-README.md
@@ -494,6 +495,9 @@ Important current rule:
   - `bind_current_bundle_call_context_patch(...)`
 - for entrypoints based on `BaseEntrypoint`, prefer `self.comm` /
   `self.comm_context`
+- if the method needs to record selected comm events and send them to a sink,
+  use the scoped recording pattern in
+  [Bundle Event Recording And Sinks](bundle-event-recording-and-sinks-README.md)
 - use `bundle_call_context` for JSON-safe bundle-owned metadata that must
   follow the current API/widget invocation into tools, nested agents, or
   isolated runtimes; for request-scoped model routing, set

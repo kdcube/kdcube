@@ -9,6 +9,7 @@ see_also:
   - ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
   - ks:docs/sdk/bundle/bundle-transports-README.md
+  - ks:docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
   - ks:docs/sdk/bundle/bundle-reserved-platform-properties-README.md
   - ks:docs/sdk/tools/mcp-README.md
   - ks:docs/sdk/agents/claude/claude-code-README.md
@@ -82,6 +83,10 @@ different:
 The model should not be asked to invent runtime ids or paths. Those must come
 from runtime context, job payload, bundle props, secret lookups, or prior tool
 results.
+
+For recording selected events emitted by React, tools, skills, MCP endpoints,
+or Claude Code wrapper flows, use
+[Bundle Event Recording And Sinks](bundle-event-recording-and-sinks-README.md).
 
 ### ReAct Preview Line Numbering
 

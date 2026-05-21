@@ -7,6 +7,7 @@ keywords: ["chat stream event catalog", "socketio event catalog", "sse event cat
 see_also:
   - ks:docs/sdk/bundle/bundle-client-ui-README.md
   - ks:docs/sdk/bundle/bundle-client-communication-README.md
+  - ks:docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
   - ks:docs/sdk/bundle/bundle-frontend-awareness-README.md
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/service/comm/comm-system.md
@@ -30,6 +31,10 @@ It is intended for:
 - Frontend developers integrating the chat UI.
 - Adapter developers (Telegram/Slack/etc.) who need to consume the stream.
 - Anyone building a sniffer/aggregator for chat activity.
+
+For bundle code that records selected comm events and sends bounded batches to
+a sink, use
+[Bundle Event Recording And Sinks](bundle-event-recording-and-sinks-README.md).
 
 It reflects the current server implementation (ingress + processor split) and the default client implementation in `ChatService.ts`.
 

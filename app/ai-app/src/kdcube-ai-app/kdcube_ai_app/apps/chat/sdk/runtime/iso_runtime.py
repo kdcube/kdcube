@@ -1431,11 +1431,25 @@ def _rebuild_communicator_from_spec(spec: dict) -> ChatCommunicator:
     )
     recording = (spec or {}).get("recording") or {}
     if isinstance(recording, dict) and recording.get("enabled"):
-        comm.record(
-            recording.get("filter"),
-            mode="replace",
-            max_events=recording.get("max_events"),
-        )
+        scopes = recording.get("scopes")
+        if isinstance(scopes, list) and scopes:
+            first = True
+            for rule in scopes:
+                if not isinstance(rule, dict):
+                    continue
+                comm.record(
+                    rule.get("filter"),
+                    scope=rule.get("scope"),
+                    mode="replace" if first else "append",
+                    max_events=recording.get("max_events"),
+                )
+                first = False
+        else:
+            comm.record(
+                recording.get("filter"),
+                mode="replace",
+                max_events=recording.get("max_events"),
+            )
     return comm
 
 try:

@@ -354,6 +354,91 @@ class TestCommRecording:
         assert items[0]["socket_event"] == "chat_service"
 
     @pytest.mark.anyio
+    async def test_record_calls_are_additive_and_tag_matching_scopes(self):
+        relay = _RecordingRelay()
+        comm = _make_comm(relay)
+        workflow_selector = {"include": {"types": ["chat.start"]}}
+        tool_selector = {"include": {"types": ["accounting.usage"]}}
+
+        comm.record(workflow_selector, scope={"owner": "workflow"}, mode="replace")
+        comm.record(tool_selector, scope={"owner": "tool", "name": "search"})
+
+        await comm.start(message="recorded by workflow")
+        await comm.service_event(
+            type="accounting.usage",
+            step="accounting",
+            status="completed",
+            data={"breakdown": {"model": "x"}},
+        )
+
+        items = comm.export_recorded_events()
+        assert [item["type"] for item in items] == ["chat.start", "accounting.usage"]
+        assert items[0]["recording"]["scopes"] == [{"owner": "workflow"}]
+        assert items[1]["recording"]["scopes"] == [{"owner": "tool", "name": "search"}]
+
+    @pytest.mark.anyio
+    async def test_record_replace_clears_buffer_and_replaces_scopes(self):
+        relay = _RecordingRelay()
+        comm = _make_comm(relay)
+
+        comm.record({"include": {"types": ["chat.start"]}}, scope="workflow", mode="replace")
+        await comm.start(message="cleared")
+
+        comm.record({"include": {"types": ["accounting.usage"]}}, scope="tool", mode="replace")
+        await comm.start(message="not recorded")
+        await comm.service_event(type="accounting.usage", step="accounting", status="completed", data={})
+
+        items = comm.export_recorded_events()
+        assert len(items) == 1
+        assert items[0]["type"] == "accounting.usage"
+        assert items[0]["recording"]["scopes"] == ["tool"]
+
+    @pytest.mark.anyio
+    async def test_recording_context_adds_scope_and_restores_previous_config(self):
+        relay = _RecordingRelay()
+        comm = _make_comm(relay)
+        workflow_selector = {"include": {"types": ["chat.start"]}}
+        tool_selector = {"include": {"types": ["accounting.usage"]}}
+
+        comm.record(workflow_selector, scope="workflow", mode="replace", max_events=9)
+
+        with comm.recording(tool_selector, scope="tool", max_events=3):
+            assert comm.recording_config()["max_events"] == 3
+            await comm.service_event(type="accounting.usage", step="accounting", status="completed", data={})
+
+        assert comm.recording_config()["max_events"] == 9
+        assert comm.recording_config()["scopes"] == [{"scope": "workflow", "filter": workflow_selector}]
+
+        await comm.service_event(type="accounting.usage", step="accounting", status="completed", data={})
+        await comm.start(message="still workflow")
+
+        items = comm.export_recorded_events()
+        assert [item["type"] for item in items] == ["accounting.usage", "chat.start"]
+        assert items[0]["recording"]["scopes"] == ["tool"]
+        assert items[1]["recording"]["scopes"] == ["workflow"]
+
+    @pytest.mark.anyio
+    async def test_recording_async_context_can_send_on_exit_and_restore_sink(self):
+        relay = _RecordingRelay()
+        comm = _make_comm(relay)
+        selector = {"include": {"types": ["chat.start"]}}
+        seen = []
+
+        async def _sink(batch, **kwargs):
+            seen.extend(batch)
+            return {"sent": len(batch)}
+
+        async with comm.recording(selector, scope="workflow", sink=_sink, send_on_exit=True) as rec:
+            await comm.start(message="send me")
+
+        assert rec.result["ok"] is True
+        assert rec.result["sent"] == 1
+        assert len(seen) == 1
+        assert comm.export_recorded_events() == []
+        assert comm.recording_config()["enabled"] is False
+        assert comm.event_sink is None
+
+    @pytest.mark.anyio
     async def test_record_redacts_delta_text_by_default(self):
         relay = _RecordingRelay()
         comm = _make_comm(relay)
@@ -431,15 +516,57 @@ class TestCommRecording:
         relay = _RecordingRelay()
         comm = _make_comm(relay)
         selector = {"include": {"types": ["chat.start"]}}
-        comm.record(selector, max_events=7)
+        comm.record(selector, scope={"owner": "workflow"}, max_events=7)
 
         spec = comm._export_comm_spec_for_runtime()
 
         assert spec["recording"] == {
             "enabled": True,
             "filter": selector,
+            "scopes": [{"scope": {"owner": "workflow"}, "filter": selector}],
             "max_events": 7,
         }
+
+    def test_runtime_comm_spec_exports_additive_scoped_selectors(self):
+        relay = _RecordingRelay()
+        comm = _make_comm(relay)
+        selector1 = {"include": {"types": ["chat.start"]}}
+        selector2 = {"include": {"types": ["accounting.usage"]}}
+        comm.record(selector1, scope="workflow", mode="replace", max_events=7)
+        comm.record(selector2, scope={"tool": "search"})
+
+        spec = comm._export_comm_spec_for_runtime()
+
+        assert spec["recording"] == {
+            "enabled": True,
+            "filter": {"any": [selector1, selector2]},
+            "scopes": [
+                {"scope": "workflow", "filter": selector1},
+                {"scope": {"tool": "search"}, "filter": selector2},
+            ],
+            "max_events": 7,
+        }
+
+    def test_runtime_comm_spec_exports_active_recording_context_scope(self):
+        relay = _RecordingRelay()
+        comm = _make_comm(relay)
+        selector = {"include": {"types": ["chat.start"]}}
+
+        with comm.recording(selector, scope={"owner": "tool", "runtime": "iso"}, max_events=5):
+            spec = comm._export_comm_spec_for_runtime()
+
+        assert spec["recording"] == {
+            "enabled": True,
+            "filter": selector,
+            "scopes": [
+                {
+                    "scope": {"owner": "tool", "runtime": "iso"},
+                    "filter": selector,
+                }
+            ],
+            "max_events": 5,
+        }
+        assert comm._export_comm_spec_for_runtime()["recording"] is None
 
     def test_runtime_comm_spec_skips_nonportable_recording_selector(self):
         relay = _RecordingRelay()
@@ -450,8 +577,15 @@ class TestCommRecording:
 
         assert spec["recording"] is None
 
+    def test_recording_scope_must_be_serializable(self):
+        relay = _RecordingRelay()
+        comm = _make_comm(relay)
+
+        with pytest.raises(ValueError):
+            comm.record({"include": {"types": ["chat.start"]}}, scope=object())
+
     @pytest.mark.anyio
-    async def test_send_telemetry_uses_configured_sink_and_clears_sent_items(self):
+    async def test_send_recorded_events_uses_configured_sink_and_clears_sent_items(self):
         relay = _RecordingRelay()
         comm = _make_comm(relay)
         comm.record()
@@ -464,7 +598,7 @@ class TestCommRecording:
         comm.set_event_sink(_sink)
 
         await comm.start(message="hello")
-        result = await comm.send_telemetry({"include": {"types": ["chat.start"]}})
+        result = await comm.send_recorded_events({"include": {"types": ["chat.start"]}})
 
         assert result["ok"] is True
         assert result["sent"] == 1
@@ -472,7 +606,7 @@ class TestCommRecording:
         assert comm.export_recorded_events() == []
 
     @pytest.mark.anyio
-    async def test_send_telemetry_clears_only_sent_snapshot(self):
+    async def test_send_recorded_events_clears_only_sent_snapshot(self):
         relay = _RecordingRelay()
         comm = _make_comm(relay)
         comm.record()
@@ -484,7 +618,7 @@ class TestCommRecording:
         comm.set_event_sink(_sink)
 
         await comm.start(message="before")
-        result = await comm.send_telemetry()
+        result = await comm.send_recorded_events()
 
         assert result["ok"] is True
         remaining = comm.export_recorded_events()
@@ -492,14 +626,14 @@ class TestCommRecording:
         assert remaining[0]["event"]["step"] == "during-sink"
 
     @pytest.mark.anyio
-    async def test_send_telemetry_partial_acceptance_keeps_buffer(self):
+    async def test_send_recorded_events_partial_acceptance_keeps_buffer(self):
         relay = _RecordingRelay()
         comm = _make_comm(relay)
         comm.record()
         comm.set_event_sink(lambda batch, **kwargs: {"accepted": 0})
 
         await comm.start(message="retry me")
-        result = await comm.send_telemetry()
+        result = await comm.send_recorded_events()
 
         assert result["ok"] is True
         assert result["sent"] == 0

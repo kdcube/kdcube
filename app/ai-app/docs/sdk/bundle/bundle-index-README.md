@@ -17,6 +17,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
   - ks:docs/sdk/bundle/bundle-transports-README.md
+  - ks:docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
 ---
 # Bundle Docs Index
 
@@ -51,15 +52,17 @@ Older `docs/sdk/example-bundle` sample docs are no longer part of the bundle pat
    - the concrete reference bundle to study
 8. [bundle-runtime-README.md](bundle-runtime-README.md)
    - runtime surfaces available to bundle code
-9. [bundle-agent-integration-README.md](bundle-agent-integration-README.md)
+9. [bundle-event-recording-and-sinks-README.md](bundle-event-recording-and-sinks-README.md)
+   - how bundles record selected comm events and send bounded batches to sinks
+10. [bundle-agent-integration-README.md](bundle-agent-integration-README.md)
    - React tools/skills, MCP connector/server patterns, and Claude Code subagent requirements
-10. [bundle-platform-integration-README.md](bundle-platform-integration-README.md)
+11. [bundle-platform-integration-README.md](bundle-platform-integration-README.md)
    - exact decorator and route contract
-11. [bundle-transports-README.md](bundle-transports-README.md)
+12. [bundle-transports-README.md](bundle-transports-README.md)
    - canonical inbound/outbound protocol and transport map
-12. [../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../configuration/bundle-runtime-configuration-and-secrets-README.md)
+13. [../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../configuration/bundle-runtime-configuration-and-secrets-README.md)
    - platform/global, bundle-scoped, and user-scoped configuration and secrets
-13. [bundle-delivery-and-update-README.md](bundle-delivery-and-update-README.md)
+14. [bundle-delivery-and-update-README.md](bundle-delivery-and-update-README.md)
    - local reload, registry updates, delivery modes, and deployment-side changes
 
 ## Core Doc Map
@@ -74,6 +77,7 @@ Older `docs/sdk/example-bundle` sample docs are no longer part of the bundle pat
 | Testing playbook | [build/how-to-test-bundle-README.md](build/how-to-test-bundle-README.md) |
 | Study the reference bundle | [versatile-reference-bundle-README.md](versatile-reference-bundle-README.md) |
 | Runtime surfaces | [bundle-runtime-README.md](bundle-runtime-README.md) |
+| Record and sink selected comm events | [bundle-event-recording-and-sinks-README.md](bundle-event-recording-and-sinks-README.md) |
 | React, tools/skills, MCP, Claude Code, and file-producing tool integration | [bundle-agent-integration-README.md](bundle-agent-integration-README.md) |
 | Decorators, widget/API/public integration, `@on_job` | [bundle-platform-integration-README.md](bundle-platform-integration-README.md) |
 | Inbound/outbound transports and protocols | [bundle-transports-README.md](bundle-transports-README.md) |

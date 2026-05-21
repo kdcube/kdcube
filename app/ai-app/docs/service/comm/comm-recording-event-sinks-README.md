@@ -1,79 +1,74 @@
 ---
 id: ks:docs/service/comm/comm-recording-event-sinks-README.md
 title: "Comm Recording And Event Sinks"
-summary: "Design and implementation notes for recording selected comm envelopes and forwarding bounded batches from ChatCommunicator to telemetry or other event sinks across host and isolated runtimes."
-tags: ["service", "comm", "recording", "event-sinks", "telemetry", "sdk", "runtime"]
-keywords: ["comm record", "send telemetry", "ChatCommunicator recording", "comm event sink", "comm event selector", "iso runtime recorded events merge", "kdcube telemetry"]
+summary: "Reference for recording selected ChatCommunicator envelopes and handing bounded batches to event sinks across host and isolated runtimes."
+tags: ["service", "comm", "recording", "event-sinks", "sdk", "runtime"]
+keywords: ["comm record", "send recorded events", "ChatCommunicator recording", "comm event sink", "comm event selector", "iso runtime recorded events merge"]
 see_also:
   - ks:docs/service/comm/README-comm.md
   - ks:docs/service/comm/comm-system.md
   - ks:docs/service/comm/CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md
   - ks:docs/service/streams/telemetry-README.md
+  - ks:docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
   - ks:docs/sdk/bundle/bundle-firewall-README.md
   - ks:docs/exec/README-iso-runtime.md
 ---
 # Comm Recording And Event Sinks
 
-Status: initial implementation.
+`ChatCommunicator` can record selected post-firewall comm envelopes into a
+bounded in-memory buffer and hand selected batches to an event sink. Telemetry
+is one possible sink. The comm feature itself is generic and can also feed
+diagnostics, artifacts, tests, operational summaries, or bundle-specific
+forwarding.
 
-This document defines the OSS platform feature for recording selected
-`ChatCommunicator` envelopes and making those records available to bounded
-event sinks. Telemetry is one important sink, but it is not the feature
-boundary. The same recorded buffer can also feed local diagnostics, artifacts,
-tests, operational summaries, or bundle-specific forwarding.
-
-Applications and bundles decide which events are useful. Sinks decide how a
-selected batch is delivered: local callback, REST endpoint, stream, artifact
-file, or bundle-provided adapter.
-
-## Problem
-
-Bundles already emit most operational signals through `self.comm`:
-
-- `start`
-- `step`
-- `delta`
-- `event`
-- `service_event`
-- `complete`
-- `error`
-
-Today those events are primarily client-facing. Some are also useful as
-telemetry or other operational records, but producers should not emit a second
-parallel event for every signal and should not synchronously wait for an
-external sink on every low-level event.
-
-The platform needs a small SDK primitive:
+The core API is:
 
 ```python
-comm.record(filter=None)
-await comm.send_telemetry(filter=None)
+comm.record(filter=None, scope=None)
+with comm.recording(filter=None, scope=None):
+    ...
+comm.set_event_sink(sink)
+result = await comm.send_recorded_events(filter=None)
 ```
 
-The primitive should:
+Applications and bundles choose which envelopes to record. The sink chooses how
+to deliver a batch: REST endpoint, stream, local artifact, debug collector, or a
+bundle-provided adapter.
 
-- record selected already-enveloped comm activity in memory during a
-  request/workflow/tool run
-- keep the recording bounded
-- allow a second filter at send time
-- send or expose a batch to a configurable sink
-- preserve and merge recordings from isolated runtimes back into the host
-  communicator
-- let bundles override or wrap the sink behavior
+## Quick Start
 
-`send_telemetry(...)` is the telemetry-oriented convenience method over the
-generic recorded-event buffer. It should not be described as the whole feature
-in platform docs. A telemetry sink may choose to normalize recorded items to
-`kdcube.telemetry.v1`, but recording itself is not telemetry-specific.
+```python
+EVENT_SELECTOR = {
+    "include": {
+        "types": ["accounting.usage", "chat.conversation.turn.completed"],
+        "socket_events": ["chat_service", "chat_complete", "chat_error"],
+    },
+    "privacy": {
+        "include_data": False,
+    },
+}
 
-## Existing Concepts To Reuse
 
-### Outbound Firewall: `IEventFilter`
+async def event_sink(batch: list[dict], *, comm, filter=None) -> dict:
+    # Forward the batch to the bundle or platform collector.
+    return {"sent": len(batch)}
 
-The current bundle event filter is an outbound firewall. It runs inside
-`ChatCommunicator.emit(...)` before the event is published to Redis/SSE/Socket.IO.
 
-It receives:
+comm.record(EVENT_SELECTOR, scope={"owner": "workflow"}, mode="replace", max_events=200)
+comm.set_event_sink(event_sink)
+
+...
+
+result = await comm.send_recorded_events(EVENT_SELECTOR)
+```
+
+With no configured sink, `send_recorded_events(...)` returns a disabled no-op
+result and leaves the buffer intact.
+
+## Filter Boundaries
+
+Recording and send selectors reuse the same `EventFilterInput` vocabulary that
+the outbound comm firewall already uses:
 
 ```text
 user_type
@@ -90,187 +85,249 @@ EventFilterInput:
 data
 ```
 
-This vocabulary is good and should be reused for recording filters. The
-semantics are not the same:
+The vocabulary is shared. The boundaries are different:
 
 | Filter | Boundary | Result |
 | --- | --- | --- |
-| `event_filter` / `IEventFilter` | bundle -> client relay | allow or suppress client-visible delivery |
-| `record(filter=...)` | comm envelope -> in-memory recording buffer | keep or skip a recorded item |
-| `send_telemetry(filter=...)` | recorded buffer -> telemetry-oriented sink batch | include or skip from a send batch |
+| `event_filter` / `IEventFilter` | bundle -> client relay | allows or suppresses client-visible delivery |
+| `record(filter=...)` | post-firewall comm envelope -> in-memory buffer | keeps or skips a recorded item |
+| `send_recorded_events(filter=...)` | recorded buffer -> configured event sink batch | includes or skips an item from a send batch |
 
-The first implementation should record post-firewall events only. That keeps
-recording aligned with current activity listener behavior: events blocked by
-the outbound firewall do not become recorded telemetry by accident. If a later
-use case needs pre-firewall observability, it must be an explicit policy mode.
+Recording is post-firewall. Events blocked by the outbound firewall are not
+recorded.
 
-### Activity Listeners
+## API Reference
 
-`ChatCommunicator` already supports in-process activity listeners:
+### `record`
 
 ```python
-comm.add_activity_listener(cb)
-comm.remove_activity_listener(cb)
+comm.record(filter=None, *, scope=None, mode="append", max_events=None)
 ```
 
-Listeners receive already-enveloped activity after `emit(...)` passes the
-outbound firewall. Tests verify that listeners do not see filtered events.
+Enables bounded recording of future post-firewall comm envelopes on this
+communicator.
 
-The recording feature should use the same envelope point in the pipeline, but
-should be first-class state on `ChatCommunicator` rather than asking every
-bundle to install a listener.
+Parameters:
 
-### Delta Cache Export And Merge
+| Parameter | Meaning |
+| --- | --- |
+| `filter` | Selector, callable, `IEventFilter`, string shorthand, or list shorthand. `None` records all post-firewall envelopes. |
+| `scope` | JSON-serializable owner tag for this recording selector. It is copied to matching recorded items and propagated to portable runtimes. Nonserializable scopes raise `ValueError`. |
+| `mode` | `"append"` adds another scoped selector and keeps existing recorded items. `"replace"` clears existing scoped selectors and clears the buffer before recording continues. |
+| `max_events` | Maximum retained events. When omitted, the communicator uses the runtime default. When the buffer exceeds the limit, oldest items are dropped and the dropped counter is incremented. |
 
-`ChatCommunicator` already records deltas in `_delta_cache` and exposes:
+Serializable selector values propagate into portable and isolated runtimes.
+Python callables and `IEventFilter` instances are process-local.
+
+Multiple `record(...)` calls are additive by default. An event is recorded when
+it matches at least one active selector. The recorded item lists every matching
+scope.
+
+### `stop_recording`
 
 ```python
-get_delta_aggregates(...)
-clear_delta_aggregates(...)
-export_delta_cache(...)
-dump_delta_cache(path)
-merge_delta_cache(items)
-merge_delta_cache_from_file(path)
+comm.stop_recording()
 ```
 
-Isolated runtimes write `delta_aggregates.json` into the runtime output
-directory. The host merges it back:
+Disables future recording on this communicator. Existing recorded items remain
+available until cleared or sent successfully.
+
+### `recording`
 
 ```python
-tool_manager.comm.merge_delta_cache_from_file(outdir / "delta_aggregates.json")
+with comm.recording(filter=None, scope=None, mode="append", max_events=None):
+    ...
 ```
 
-The recorded-event buffer should follow the same pattern:
+Temporarily adds a scoped recording selector and restores the previous
+recording configuration on exit. Events recorded inside the block remain in the
+buffer.
+
+The context manager also supports `async with`:
 
 ```python
-export_recorded_events(...)
-dump_recorded_events(path)
-merge_recorded_events(items)
-merge_recorded_events_from_file(path)
+async with comm.recording(
+    selector,
+    scope={"owner": "workflow"},
+    sink=sink,
+    send_on_exit=True,
+) as rec:
+    ...
+
+result = rec.result
 ```
 
-Suggested file name:
+`send_on_exit=True` is only useful with `async with`; it calls
+`send_recorded_events(...)` before restoring the previous sink and recording
+configuration.
 
-```text
-comm_recorded_events.json
-```
+Context parameters:
 
-## Implemented Baseline
+| Parameter | Meaning |
+| --- | --- |
+| `filter`, `scope`, `mode`, `max_events` | Same meaning as `record(...)`. |
+| `sink` | Optional temporary sink installed for the scope and restored on exit. |
+| `send_on_exit` | When used with `async with`, sends the selected recorded batch on exit. |
+| `send_filter` | Optional send-time filter. Defaults to the scope's `filter`. |
+| `clear_on_success` | Passed to `send_recorded_events(...)` when `send_on_exit=True`. |
 
-The first implementation adds:
-
-- `comm.record(filter=None, mode="append", max_events=None)`
-- `comm.stop_recording()`
-- `comm.export_recorded_events(filter=None)`
-- `comm.clear_recorded_events(filter=None)`
-- `comm.dump_recorded_events(path)`
-- `comm.merge_recorded_events(items)`
-- `comm.merge_recorded_events_from_file(path)`
-- `comm.set_event_sink(sink)`
-- `comm.set_telemetry_sink(sink)`
-- `await comm.send_telemetry(filter=None, clear_on_success=True, sink=None)`
-
-The recorded buffer is generic. `send_telemetry(...)` is the telemetry-named
-convenience over that buffer and uses the configured event sink callback. With
-no configured sink it returns a disabled/no-op result and leaves the buffer
-intact.
-
-Serializable recording selectors are propagated into portable/isolated
-runtimes through `CommSpec.recording`. Isolated runtimes dump
-`comm_recorded_events.json` next to `delta_aggregates.json`, and the host
-merges it back into the host communicator.
-
-## API
-
-### Start Recording
+### `recording_config`
 
 ```python
-comm.record(filter=None, *, mode="append", max_events=None)
+config = comm.recording_config()
 ```
 
-Meaning:
+Returns:
 
-- enables recording on this `ChatCommunicator`
-- optionally installs a recording selector
-- records future comm envelopes that pass the selector
-- keeps existing recorded items when `mode="append"`
-- clears existing recorded items first when `mode="replace"`
-- uses communicator/runtime default maximum when `max_events` is omitted
-
-The method should be synchronous and cheap. Recording happens later in
-`emit(...)` after the outbound firewall allows the event.
-
-Examples:
-
-```python
-# Record all post-firewall comm envelopes with default redaction and bounds.
-comm.record()
-
-# Record only selected logical types.
-comm.record({
+```json
+{
+  "enabled": true,
+  "filter": {
     "include": {
-        "types": ["accounting.usage", "chat.conversation.turn.completed"],
-        "socket_events": ["chat_service", "chat_complete", "chat_error"],
+      "types": ["accounting.usage"]
     }
-})
-```
-
-### Send Telemetry Convenience
-
-```python
-result = await comm.send_telemetry(filter=None, *, clear_on_success=True, sink=None)
-```
-
-Meaning:
-
-- snapshots recorded items
-- applies the optional send filter
-- sends the resulting batch through a telemetry-oriented sink
-- clears sent items on success when `clear_on_success=True`
-- returns a structured result such as accepted/skipped/sent/error counts
-
-The method should not recompute or block on rollups. It is a batch handoff.
-The default sink may be disabled/no-op. Bundles can override behavior by:
-
-- passing `sink=...` for a call
-- setting a communicator event sink callback
-- subclassing/wrapping `send_telemetry(...)`
-
-Example:
-
-```python
-await comm.send_telemetry({
-    "include": {
-        "types": ["accounting.usage", "workflow.step", "tool.invoke"],
+  },
+  "scopes": [
+    {
+      "scope": {
+        "owner": "workflow"
+      },
+      "filter": {
+        "include": {
+          "types": ["accounting.usage"]
+        }
+      }
     }
-})
+  ],
+  "max_events": 1000,
+  "recorded": 12,
+  "dropped": 0
+}
 ```
 
-Other sink helpers can be added later without changing `record(...)`, for
-example a future generic `send_records(...)` if multiple first-class sink
-families appear.
+`filter` contains the combined portable selector form. `scopes` contains the
+portable scoped selector list. Nonportable process-local selectors are omitted
+from runtime propagation.
 
-### Export And Merge
+### `export_recorded_events`
 
 ```python
 items = comm.export_recorded_events(filter=None)
-comm.clear_recorded_events(filter=None)
-ok = comm.dump_recorded_events(outdir / "comm_recorded_events.json")
-comm.merge_recorded_events(items)
-comm.merge_recorded_events_from_file(outdir / "comm_recorded_events.json")
 ```
 
-These are required for host/isolated runtime parity.
+Returns a filtered snapshot of recorded items without clearing the buffer.
 
-## Filter Shape
+### `clear_recorded_events`
 
-Recording and send filters should use a serializable selector first. A Python
-callable may be accepted for in-process use, but it cannot be propagated across
-isolated runtimes.
+```python
+removed = comm.clear_recorded_events(filter=None)
+```
 
-Proposed selector:
+Clears all recorded items when `filter` is `None`. With a filter, only matching
+items are removed. The return value is the number of removed items.
+
+### `dump_recorded_events`
+
+```python
+ok = comm.dump_recorded_events(path)
+```
+
+Writes a JSON side file:
+
+```json
+{
+  "items": [],
+  "dropped": 0
+}
+```
+
+The standard isolated-runtime file name is `comm_recorded_events.json`.
+
+### `merge_recorded_events`
+
+```python
+comm.merge_recorded_events(items)
+```
+
+Merges recorded items into the communicator buffer and deduplicates by
+`record_id`.
+
+### `merge_recorded_events_from_file`
+
+```python
+comm.merge_recorded_events_from_file(path)
+```
+
+Reads a JSON side file with an `items` array and merges it into the communicator
+buffer. Missing files and invalid files are ignored.
+
+### `set_event_sink`
+
+```python
+comm.set_event_sink(sink)
+```
+
+Installs a batch sink used by `send_recorded_events(...)`.
+
+Sink callable shape:
+
+```python
+async def sink(batch: list[dict], *, comm: ChatCommunicator, filter=None) -> dict:
+    ...
+```
+
+The callable may also be synchronous. Return `{"sent": n}` or `{"accepted": n}`
+to report the number of accepted items. When the sink returns no count, the
+whole batch is treated as sent.
+
+### `send_recorded_events`
+
+```python
+result = await comm.send_recorded_events(
+    filter=None,
+    *,
+    clear_on_success=True,
+    sink=None,
+)
+```
+
+Snapshots the recorded buffer, applies the optional send filter, and sends the
+resulting batch through the provided sink or the configured communicator sink.
+
+Result shape:
+
+```json
+{
+  "ok": true,
+  "sent": 2,
+  "skipped": 0,
+  "disabled": false,
+  "sink_result": {
+    "sent": 2
+  }
+}
+```
+
+Behavior:
+
+| Case | Result |
+| --- | --- |
+| Empty selected batch | `ok=true`, `sent=0`, `disabled=false` |
+| No configured sink | `ok=true`, `sent=0`, `disabled=true`, buffer remains intact |
+| Sink accepts full batch and `clear_on_success=True` | Sent items are cleared from the buffer |
+| Sink accepts partial batch | Buffer remains intact |
+| Sink raises | `ok=false`, error is returned, buffer remains intact |
+
+Sink failures are logged and converted into a result. They do not raise through
+the user-facing chat or tool path.
+
+## Selector Shape
+
+Serializable selectors use this shape:
 
 ```yaml
+any:
+  - include: {}
 include:
   types: []
   routes: []
@@ -295,34 +352,69 @@ limits:
   max_events: null
 ```
 
-Matching uses the existing `EventFilterInput` vocabulary:
+Matching fields:
 
-- `type`
-- `route`
-- `socket_event`
-- `route_key`
-- `agent`
-- `step`
-- `status`
-- `broadcast`
+| Selector key | Event field |
+| --- | --- |
+| `types`, `type` | `EventFilterInput.type` |
+| `routes`, `route` | `EventFilterInput.route` |
+| `socket_events`, `socket_event` | `EventFilterInput.socket_event` |
+| `route_keys`, `route_key` | `EventFilterInput.route_key` |
+| `agents`, `agent` | `EventFilterInput.agent` |
+| `steps`, `step` | `EventFilterInput.step` |
+| `statuses`, `status` | `EventFilterInput.status` |
+| `broadcast` | `EventFilterInput.broadcast` |
 
-Default match behavior:
+Matching rules:
 
-- if `include` is empty, include all post-firewall events
-- apply `exclude` after `include`
-- `broadcast: null` means either broadcast value
-- list values are exact string matches in the first implementation
+| Rule | Behavior |
+| --- | --- |
+| Empty `include` | Includes all post-firewall events |
+| Non-empty `include` | Includes only events matching every populated include criterion |
+| Non-empty `exclude` | Removes events matching every populated exclude criterion |
+| `broadcast: null` | Matches either broadcast value |
+| List values | Exact string/value match |
 
-The implementation should keep the selector compact and deterministic. Regex or
-callable policies can be added later if needed, but the cross-runtime path
-should remain serializable.
+String shorthand:
+
+```python
+comm.record("accounting.usage")
+```
+
+is equivalent to:
+
+```python
+comm.record({"include": {"types": ["accounting.usage"]}})
+```
+
+List shorthand:
+
+```python
+comm.record(["accounting.usage", "chat.conversation.turn.completed"])
+```
+
+is equivalent to:
+
+```python
+comm.record({
+    "include": {
+        "types": ["accounting.usage", "chat.conversation.turn.completed"]
+    }
+})
+```
+
+Combined selectors use `any`:
+
+```python
+comm.record({"any": [
+    {"include": {"types": ["accounting.usage"]}},
+    {"include": {"types": ["chat.conversation.turn.completed"]}},
+]})
+```
 
 ## Recorded Item Shape
 
-The recorded buffer should store compact, privacy-filtered items, not raw
-client payload copies.
-
-Recommended shape:
+Recorded items are compact, privacy-filtered copies of comm envelope metadata:
 
 ```json
 {
@@ -351,6 +443,13 @@ Recommended shape:
     "status": "completed",
     "title": "..."
   },
+  "recording": {
+    "scopes": [
+      {
+        "owner": "workflow"
+      }
+    ]
+  },
   "data": {},
   "metrics": {},
   "privacy": {
@@ -360,147 +459,192 @@ Recommended shape:
 }
 ```
 
-Rules:
+Privacy behavior:
 
-- `record_id` should be stable enough for merge dedupe inside one run. A hash
-  over timestamp/type/route/context/event metadata is acceptable for MVP.
-- raw delta text is excluded by default; keep marker/index/completed/text length
-  if useful.
-- `accounting.usage` may preserve bounded `data.breakdown` because that is
-  accounting telemetry, not prompt/answer content.
-- error events must avoid stack traces and raw prompt/answer content.
-- high-cardinality values such as user prompt text, file names, tool arguments,
-  or exception bodies must not become dimensions.
+| Source | Recorded by default |
+| --- | --- |
+| Envelope service/conversation/event metadata | Yes |
+| Arbitrary `data` payload | No |
+| Delta text | No |
+| Delta marker/index/completion metadata | Yes, when present |
+| Numeric fields from `data` | Yes, in `metrics` |
+| `accounting.usage` bounded accounting payload | Yes, for the accounting fields supported by the recorder |
 
-## Sink Contract
-
-The comm layer should not know every collector or sink API. It should call a
-small sink interface.
-
-Suggested callable:
+Use selector privacy controls to include additional bounded data:
 
 ```python
-async def sink(batch: list[dict], *, comm: ChatCommunicator, filter=None) -> dict:
-    ...
+comm.record({
+    "include": {"types": ["workflow.step"]},
+    "privacy": {"data_keys": ["duration_ms", "result_code"]},
+})
 ```
 
-Possible sinks:
-
-- no-op disabled sink
-- HTTP REST batch sink
-- Redis/Kafka stream sink
-- local artifact/debug sink
-- bundle-provided wrapper that enriches and forwards to another sink
-
-`send_telemetry(...)` should suppress or bound sink failures by default. A
-sink failure must not crash or hang a user-facing chat/tool path.
+Avoid high-cardinality or content-bearing dimensions such as raw prompts, file
+names, tool arguments, stack traces, and answer text.
 
 ## Runtime Propagation
 
 ### Host Runtime
 
-The host `ChatCommunicator` owns the recording buffer. Bundles call:
+The host communicator owns the primary recording buffer:
 
 ```python
 comm.record(...)
 ...
-await comm.send_telemetry(...)
+await comm.send_recorded_events(...)
 ```
 
-### Isolated Python Runtime
+### Portable And Isolated Runtimes
 
-The iso runtime rebuilds a communicator from `COMM_SPEC`. Today this preserves
-basic comm identity and relay delivery. The recording feature should add:
+When recording is enabled with a portable selector, the runtime comm spec
+contains:
 
-- serializable recording selector in `CommSpec`
-- recording enabled/max-events state in `CommSpec`
-- `dump_recorded_events(OUT_DIR / "comm_recorded_events.json")` at the same
-  safe boundaries where `delta_aggregates.json` is dumped
-- host-side `merge_recorded_events_from_file(...)` after isolated execution
+```json
+{
+  "recording": {
+    "enabled": true,
+    "filter": {},
+    "scopes": [
+      {
+        "scope": {
+          "owner": "workflow"
+        },
+        "filter": {}
+      }
+    ],
+    "max_events": 1000
+  }
+}
+```
 
-The existing delta path is the model:
+Runtime bootstrap reconstructs the communicator and calls `comm.record(...)`
+for each scoped selector. Nonportable selectors, such as Python callables, do
+not cross the runtime boundary.
+
+The context manager object and event sink callback are live Python objects and
+are not serialized. What serializes is the active recording state:
+
+- portable selector
+- JSON-serializable scope
+- `max_events`
+
+If that state is active when the host exports `COMM_SPEC`, the isolated runtime
+rebuilds the same scoped recording policy. The child records into its own
+buffer and writes `comm_recorded_events.json`; the host merges that file and
+sends through the host sink.
+
+A platform child runtime, such as a tool launched with
+`TOOL_RUNTIME[tool_id] = "local"`, can also call `comm.record(...)` or
+`async with comm.recording(...)` itself. Those child-added scopes are local to
+the child communicator, but matching recorded items are written to
+`comm_recorded_events.json` and merged by the host.
+
+`send_recorded_events(...)` inside the child only sends when the child has a
+sink configured there. Host sink callbacks are not serialized into the child.
+
+Isolated runtimes write `comm_recorded_events.json` next to
+`delta_aggregates.json`. The write is best-effort and occurs at the same safe
+side-file boundaries used for delta aggregates. The host merges the side file
+after isolated execution:
 
 ```text
 host comm
-  -> export COMM_SPEC
-  -> iso runtime rebuilds ChatCommunicator
-  -> iso comm records deltas/events
-  -> iso dumps delta_aggregates.json / comm_recorded_events.json
-  -> host merges files into host comm
+  -> export COMM_SPEC with recording state
+  -> runtime rebuilds ChatCommunicator
+  -> runtime comm records selected envelopes
+  -> runtime dumps comm_recorded_events.json
+  -> host merges comm_recorded_events.json into host comm
 ```
 
-For the exact supervisor write, cancellation, and host-merge semantics, see
+For supervisor write, cancellation, and host-merge details, see
 [ISO Runtime: Comm State Side-File Handoff](../../exec/README-iso-runtime.md#comm-state-side-file-handoff).
 
 ### External/Docker/Fargate Runtimes
 
 Any runtime that copies the output directory back to the host can use the same
-file handoff. This avoids requiring a direct telemetry connection from sandboxed
-or remote runtimes.
+side-file handoff. The isolated runtime does not need a direct event-sink
+connection.
 
 ## Pipeline Placement
 
-First implementation placement:
+Recording happens inside `ChatCommunicator.emit(...)` after outbound firewall
+approval and relay publish, before activity listeners:
 
 ```text
 ChatCommunicator.emit(...)
   -> build EventFilterInput
-  -> outbound firewall allow_event(...)
+  -> event_filter.allow_event(...)
   -> publish to relay
   -> touch task activity
   -> record selected privacy-filtered item
   -> notify activity listeners
 ```
 
-Recording after relay publish means telemetry does not change client delivery.
-Recording before activity listeners keeps listeners and recorders observing the
-same post-firewall envelope stream.
+This keeps recording aligned with the client-visible comm stream and with
+activity listeners. Events suppressed by the outbound firewall are absent from
+the recording buffer.
 
-If implementation needs stricter "record even if relay publish failed" behavior,
-that should be a separate policy flag.
+## Examples
 
-## Implementation Checklist
+### Record all post-firewall metadata
 
-1. Done: add serializable selector helpers in the comm SDK package.
-2. Done: add recording state and bounded buffer counters to
-   `ChatCommunicator`.
-3. Done: implement record/export/clear/dump/merge APIs.
-4. Done: add `_record_activity(...)` inside `emit(...)` after successful
-   outbound filter/publish.
-5. Done: add `send_telemetry(...)` with configurable event sink callback and
-   no-op default.
-6. Done: extend `CommSpec` and `_export_comm_spec_for_runtime()` with
-   serializable recording state.
-7. Done: rebuild recording state in runtime bootstrap/iso runtime.
-8. Done: dump `comm_recorded_events.json` wherever `delta_aggregates.json` is
-   dumped.
-9. Done: merge `comm_recorded_events.json` in host execution code after
-   isolated runtime completion.
-10. Done: add focused tests for filters, bounded recording, send filtering,
-    sink override, outbound-firewall interaction, and export/merge.
+```python
+comm.record(scope={"owner": "workflow"}, mode="replace", max_events=500)
+```
 
-## Test Cases
+### Record selected accounting and turn completion events
 
-Required unit tests:
+```python
+selector = {
+    "include": {
+        "types": ["accounting.usage", "chat.conversation.turn.completed"],
+    }
+}
 
-- `comm.record()` records post-firewall `start/step/delta/event/service_event`
-  metadata.
-- denied outbound events are not recorded by default.
-- selector include/exclude filters by `type`, `route`, `socket_event`, `agent`,
-  `step`, `status`, and `broadcast`.
-- default privacy redacts delta text and arbitrary data.
-- `accounting.usage` can preserve bounded breakdown data.
-- recording buffer respects `max_events` and increments dropped counters.
-- `send_telemetry(filter=...)` sends only selected recorded items.
-- a provided sink callback is used and can be wrapped by bundles.
-- no-op sink returns disabled/skipped without raising.
-- export/merge dedupes by `record_id`.
-- `comm_recorded_events.json` is dumped in iso runtime and merged by host.
+comm.record(selector, scope={"owner": "workflow"}, mode="replace", max_events=200)
+```
 
-## Open Decisions
+### Send only a subset of recorded events
 
-- Whether the default recording selector should remain "all post-firewall
-  metadata" or narrow to `event`, `service_event`, `complete`, and `error`.
-- Whether to add a pre-firewall recording mode later.
-- Whether the first telemetry sink should normalize to
-  `kdcube.telemetry.v1` inside comm or leave normalization to the sink.
+```python
+await comm.send_recorded_events({
+    "include": {
+        "types": ["accounting.usage"],
+    }
+})
+```
+
+### Override the sink for one send
+
+```python
+result = await comm.send_recorded_events(selector, sink=debug_sink)
+```
+
+### Use a bundle wrapper sink
+
+```python
+async def sink(batch: list[dict], *, comm, filter=None) -> dict:
+    payload = {
+        "source": "bundle",
+        "events": batch,
+    }
+    await bundle_api.post("/events/batch", json=payload)
+    return {"sent": len(batch)}
+
+
+comm.set_event_sink(sink)
+```
+
+## Tests
+
+Focused coverage lives in
+`kdcube_ai_app/apps/chat/sdk/tests/bundle/test_event_streaming.py` and verifies:
+
+- post-firewall recording
+- selector include/exclude matching
+- privacy defaults
+- bounded buffers and dropped counters
+- sink handoff and no-op sink behavior
+- send-time filtering
+- export, dump, merge, and dedupe
+- runtime comm spec propagation for portable selectors

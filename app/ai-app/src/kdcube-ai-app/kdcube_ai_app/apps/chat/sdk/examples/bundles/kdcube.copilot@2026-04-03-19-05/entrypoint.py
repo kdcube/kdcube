@@ -115,7 +115,7 @@ TELEGRAM_WEBHOOK_PUBLIC_AUTH = {
 }
 TELEGRAM_WEBAPP_PUBLIC_AUTH = "none"
 COPILOT_WEBAPP_ALIAS = "copilot_webapp"
-COPILOT_EVENT_RECORD_SELECTOR = {
+EVENT_RECORD_SELECTOR = {
     "include": {
         "types": [
             "kdcube.copilot.workflow.turn.started",
@@ -131,7 +131,7 @@ COPILOT_EVENT_RECORD_SELECTOR = {
         ],
     }
 }
-COPILOT_EVENT_RECORD_MAX = 200
+EVENT_RECORD_MAX = 200
 COPILOT_EVENT_RETENTION = 500
 
 
@@ -496,7 +496,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
 
     async def pre_run_hook(self, *, state: Dict[str, Any], econ_ctx: Optional[Dict[str, Any]] = None) -> None:
         """Reconcile knowledge space only if load-time prep did not happen or config changed."""
-        self._configure_copilot_event_recording()
+        self._configure_event_recording()
         await self._emit_copilot_workflow_event(
             status="started",
             title="Copilot Turn Started",
@@ -529,9 +529,9 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
                 "followup_count": len((result or {}).get("followups") or []),
             },
         )
-        await self._flush_copilot_recorded_events()
+        await self._send_recorded_events()
 
-    def _copilot_event_context(self) -> Dict[str, Any]:
+    def _event_context(self) -> Dict[str, Any]:
         actor = getattr(self.comm_context, "actor", None)
         user = getattr(self.comm_context, "user", None)
         routing = getattr(self.comm_context, "routing", None)
@@ -546,18 +546,23 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
             "turn_id": getattr(routing, "turn_id", None),
         }
 
-    def _copilot_bundle_id(self) -> str:
+    def _bundle_id(self) -> str:
         return str(getattr(getattr(self.config, "ai_bundle_spec", None), "id", None) or BUNDLE_ID)
 
-    def _configure_copilot_event_recording(self) -> None:
+    def _configure_event_recording(self) -> None:
         try:
             comm = self.comm
-            comm.record(COPILOT_EVENT_RECORD_SELECTOR, mode="replace", max_events=COPILOT_EVENT_RECORD_MAX)
-            comm.set_event_sink(self._copilot_event_sink)
+            comm.record(
+                EVENT_RECORD_SELECTOR,
+                scope={"owner": "workflow", "bundle": self._bundle_id()},
+                mode="replace",
+                max_events=EVENT_RECORD_MAX,
+            )
+            comm.set_event_sink(self._event_sink)
         except Exception:
             self.logger.log(traceback.format_exc(), "WARNING")
 
-    async def _copilot_event_sink(self, batch: list[dict], **kwargs) -> Dict[str, Any]:
+    async def _event_sink(self, batch: list[dict], **kwargs) -> Dict[str, Any]:
         del kwargs
         storage_root = self.bundle_storage_root()
         if storage_root is None:
@@ -565,7 +570,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
         accepted = await asyncio.to_thread(
             copilot_evidence.append_comm_records,
             storage_root=storage_root,
-            bundle_id=self._copilot_bundle_id(),
+            bundle_id=self._bundle_id(),
             records=batch,
             retention=COPILOT_EVENT_RETENTION,
         )
@@ -590,9 +595,9 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
         except Exception:
             self.logger.log(traceback.format_exc(), "WARNING")
 
-    async def _flush_copilot_recorded_events(self) -> Dict[str, Any]:
+    async def _send_recorded_events(self) -> Dict[str, Any]:
         try:
-            return await self.comm.send_telemetry(COPILOT_EVENT_RECORD_SELECTOR)
+            return await self.comm.send_recorded_events(EVENT_RECORD_SELECTOR)
         except Exception:
             self.logger.log(traceback.format_exc(), "WARNING")
             return {"ok": False, "error": "Unable to flush recorded copilot events."}
@@ -602,7 +607,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
         if storage_root is None:
             return
         event = copilot_evidence.direct_event(
-            bundle_id=self._copilot_bundle_id(),
+            bundle_id=self._bundle_id(),
             source="mcp.doc_reader",
             event_type="kdcube.copilot.mcp.call",
             status=str(payload.get("status") or "completed"),
@@ -619,7 +624,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
                 "path": payload.get("path"),
                 "error": payload.get("error"),
             },
-            context=self._copilot_event_context(),
+            context=self._event_context(),
         )
         await asyncio.to_thread(
             copilot_evidence.append_events,
@@ -628,10 +633,10 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
             retention=COPILOT_EVENT_RETENTION,
         )
 
-    def _copilot_events_payload(self, *, limit: int = 100) -> Dict[str, Any]:
+    def _events_payload(self, *, limit: int = 100) -> Dict[str, Any]:
         return copilot_evidence.build_widget_payload(
             storage_root=self.bundle_storage_root(),
-            bundle_id=self._copilot_bundle_id(),
+            bundle_id=self._bundle_id(),
             limit=limit,
         )
 
@@ -744,13 +749,13 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
         requested_path = str(widget_path or path or "").strip("/").lower()
         if requested_path in {"events", "event", "evidence"}:
             payload["active_tab"] = "events"
-        payload["events"] = self._copilot_events_payload(limit=100)
+        payload["events"] = self._events_payload(limit=100)
         return payload
 
     @api(method="GET", alias="copilot_events_data", route="operations", user_types=("registered", "paid", "privileged"))
     def copilot_events_data(self, limit: int = 100, **kwargs) -> Dict[str, Any]:
         del kwargs
-        return self._copilot_events_payload(limit=limit)
+        return self._events_payload(limit=limit)
 
     @api(method="GET", alias="conversations_list", route="operations", user_types=("registered", "paid", "privileged"))
     async def conversations_list(
