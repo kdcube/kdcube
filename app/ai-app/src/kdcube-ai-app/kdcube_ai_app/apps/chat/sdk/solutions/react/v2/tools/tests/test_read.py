@@ -10,6 +10,14 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.read import handle_rea
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.tests.helpers import FakeBrowser
 
 
+class _FakeComm:
+    def __init__(self):
+        self.events = []
+
+    async def service_event(self, **kwargs):
+        self.events.append(kwargs)
+
+
 @pytest.mark.asyncio
 async def test_read_missing_paths_notice(tmp_path):
     runtime = RuntimeCtx(turn_id="turn_read", outdir=str(tmp_path), workdir=str(tmp_path))
@@ -480,6 +488,95 @@ async def test_read_skill_is_not_read_capped(monkeypatch, tmp_path):
     assert "ACTIVE 💡" in skill_block["text"]
     assert "skill-end" in skill_block["text"]
     assert "[READ PREVIEW TRUNCATED]" not in skill_block["text"]
+
+
+@pytest.mark.asyncio
+async def test_read_skill_emits_comm_event(monkeypatch, tmp_path):
+    import kdcube_ai_app.apps.chat.sdk.skills.skills_registry as registry
+
+    runtime = RuntimeCtx(
+        turn_id="turn_read",
+        outdir=str(tmp_path),
+        workdir=str(tmp_path),
+        max_tokens=100,
+    )
+    spec = SimpleNamespace(
+        name="PDF Press",
+        namespace="public",
+        id="pdf-press",
+        instruction_text="PDF generation guidance.",
+        instruction_compact_text="",
+        instruction_paths=None,
+        sources=[],
+    )
+    monkeypatch.setattr(registry, "build_skill_short_id_map", lambda consumer, **kwargs: {})
+    monkeypatch.setattr(registry, "import_skillset", lambda items, short_id_map=None, **kwargs: ["public.pdf-press"])
+    monkeypatch.setattr(registry, "get_skill", lambda sid: spec if sid == "public.pdf-press" else None)
+
+    ctx = FakeBrowser(runtime)
+    comm = _FakeComm()
+    react = SimpleNamespace(comm=comm)
+    state = {"last_decision": {"tool_call": {"params": {"paths": ["sk:public.pdf-press"]}}}}
+
+    await handle_react_read(ctx_browser=ctx, state=state, tool_call_id="r_skill_event", react=react)
+
+    assert len(comm.events) == 1
+    event = comm.events[0]
+    assert event["type"] == "react.skill.read"
+    assert event["step"] == "react.read"
+    assert event["data"]["tool_call_id"] == "r_skill_event"
+    assert event["data"]["requested_count"] == 1
+    assert event["data"]["resolved_count"] == 1
+    assert event["data"]["skills"] == [{
+        "path": "sk:public.pdf-press",
+        "status": "materialized",
+        "materialized": True,
+        "disclosure_hidden": False,
+        "id": "public.pdf-press",
+        "name": "PDF Press",
+        "namespace": "public",
+        "local_id": "pdf-press",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_read_hidden_skill_event_redacts_identity(monkeypatch, tmp_path):
+    import kdcube_ai_app.apps.chat.sdk.skills.skills_registry as registry
+
+    runtime = RuntimeCtx(
+        turn_id="turn_read",
+        outdir=str(tmp_path),
+        workdir=str(tmp_path),
+        max_tokens=100,
+    )
+    spec = SimpleNamespace(
+        name="Secret Skill",
+        namespace="private",
+        id="secret",
+        instruction_text="Hidden guidance.",
+        instruction_compact_text="",
+        instruction_paths=None,
+        sources=[],
+        is_disclosure_hidden=lambda: True,
+    )
+    monkeypatch.setattr(registry, "build_skill_short_id_map", lambda consumer, **kwargs: {})
+    monkeypatch.setattr(registry, "import_skillset", lambda items, short_id_map=None, **kwargs: ["private.secret"])
+    monkeypatch.setattr(registry, "get_skill", lambda sid: spec if sid == "private.secret" else None)
+
+    ctx = FakeBrowser(runtime)
+    comm = _FakeComm()
+    react = SimpleNamespace(comm=comm)
+    state = {"last_decision": {"tool_call": {"params": {"paths": ["sk:private.secret"]}}}}
+
+    await handle_react_read(ctx_browser=ctx, state=state, tool_call_id="r_hidden_skill_event", react=react)
+
+    skill = comm.events[0]["data"]["skills"][0]
+    assert skill["disclosure_hidden"] is True
+    assert skill["path"].startswith("sk:hidden-guidance-")
+    assert "id" not in skill
+    assert "name" not in skill
+    assert "namespace" not in skill
+    assert "local_id" not in skill
 
 
 @pytest.mark.asyncio

@@ -9,9 +9,16 @@ from datetime import datetime
 
 from dataclasses import dataclass, field
 from typing import Any, Optional, Callable, Awaitable, Dict, List, Tuple, Set, Iterable
-import os, logging, time
+import os, logging, time, inspect
 
 from kdcube_ai_app.apps.chat.sdk.comm.event_filter import IEventFilter, EventFilterInput
+from kdcube_ai_app.apps.chat.sdk.comm.recording import (
+    DEFAULT_MAX_RECORDED_EVENTS,
+    filter_recorded_items,
+    make_recorded_item,
+    portable_filter,
+    selector_allows,
+)
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.protocol import (
     ChatEnvelope, ServiceCtx, ConversationCtx, ChatTaskRouting, _iso_now, ChatTaskPayload
@@ -468,6 +475,7 @@ class ChatCommunicator:
     room: Optional[str] = None               # default fan-out room (session_id)
     target_sid: Optional[str] = None         # optional exact socket target
     event_filter: Optional[IEventFilter] = None
+    event_sink: Optional[Callable[..., Any]] = None
     activity_listeners: Set[Callable[[dict], Awaitable[None]]] = field(default_factory=set, init=False, repr=False)
 
     def __post_init__(self):
@@ -475,6 +483,12 @@ class ChatCommunicator:
         self.room = self.room or self.conversation.get("session_id")
         self.target_sid = self.target_sid or self.conversation.get("socket_id")
         self._delta_cache: dict[Tuple[str, str, str, str, str, str, str], _DeltaAggregate] = {}
+        self._recording_enabled: bool = False
+        self._recording_filter: Any = None
+        self._recording_max_events: int = DEFAULT_MAX_RECORDED_EVENTS
+        self._recorded_events: list[dict[str, Any]] = []
+        self._recorded_event_ids: set[str] = set()
+        self._recording_dropped: int = 0
         # self.event_filter: IEventFilter = self.event_filter or DefaultEventFilter()
 
     def add_activity_listener(self, cb: Callable[[dict], Awaitable[None]]) -> None:
@@ -487,6 +501,212 @@ class ChatCommunicator:
             self.activity_listeners.discard(cb)
         except Exception:
             pass
+
+    # ---------- comm recording / event sinks ----------
+    def set_event_sink(self, sink: Optional[Callable[..., Any]]) -> None:
+        """Install a batch sink used by send_telemetry and future sink helpers."""
+        self.event_sink = sink
+
+    def set_telemetry_sink(self, sink: Optional[Callable[..., Any]]) -> None:
+        """Compatibility convenience for callers that only think in telemetry terms."""
+        self.set_event_sink(sink)
+
+    def record(self, filter: Any = None, *, mode: str = "append", max_events: Optional[int] = None) -> "ChatCommunicator":
+        """
+        Enable bounded recording of future post-firewall comm envelopes.
+
+        ``filter`` reuses EventFilterInput vocabulary. Serializable selectors can
+        be propagated into isolated runtimes; callables/IEventFilter instances are
+        process-local.
+        """
+        self._recording_enabled = True
+        self._recording_filter = filter
+        if max_events is not None:
+            try:
+                self._recording_max_events = max(0, int(max_events))
+            except Exception:
+                self._recording_max_events = DEFAULT_MAX_RECORDED_EVENTS
+        if str(mode or "append").lower() == "replace":
+            self.clear_recorded_events()
+        return self
+
+    def stop_recording(self) -> None:
+        self._recording_enabled = False
+
+    def recording_config(self) -> dict[str, Any]:
+        return {
+            "enabled": bool(self._recording_enabled),
+            "filter": portable_filter(self._recording_filter),
+            "max_events": int(self._recording_max_events),
+            "recorded": len(self._recorded_events),
+            "dropped": int(self._recording_dropped),
+        }
+
+    def _trim_recorded_events(self) -> None:
+        max_events = max(0, int(self._recording_max_events or 0))
+        overflow = len(self._recorded_events) - max_events
+        if overflow <= 0:
+            return
+        dropped = self._recorded_events[:overflow]
+        self._recorded_events = self._recorded_events[overflow:]
+        for item in dropped:
+            rid = item.get("record_id")
+            if rid:
+                self._recorded_event_ids.discard(str(rid))
+        self._recording_dropped += len(dropped)
+
+    def _record_activity(self, *, event: str, data: dict, broadcast: bool, filter_input: EventFilterInput) -> None:
+        if not self._recording_enabled:
+            return
+        try:
+            if not selector_allows(
+                self._recording_filter,
+                user_type=self.user_type,
+                user_id=self.user_id,
+                event=filter_input,
+                data=data,
+            ):
+                return
+            item = make_recorded_item(
+                socket_event=event,
+                data=data or {},
+                broadcast=broadcast,
+                event=filter_input,
+                selector=self._recording_filter,
+            )
+            rid = str(item.get("record_id") or "")
+            if rid and rid in self._recorded_event_ids:
+                return
+            self._recorded_events.append(item)
+            if rid:
+                self._recorded_event_ids.add(rid)
+            self._trim_recorded_events()
+        except Exception:
+            logger.debug("Chat communicator recording failed", exc_info=True)
+
+    def export_recorded_events(self, filter: Any = None) -> list[dict[str, Any]]:
+        return filter_recorded_items(
+            self._recorded_events,
+            filter,
+            user_type=self.user_type,
+            user_id=self.user_id,
+        )
+
+    def clear_recorded_events(self, filter: Any = None) -> int:
+        if filter is None:
+            n = len(self._recorded_events)
+            self._recorded_events.clear()
+            self._recorded_event_ids.clear()
+            return n
+
+        selected = self.export_recorded_events(filter)
+        selected_ids = {str(item.get("record_id")) for item in selected if item.get("record_id")}
+        return self._clear_recorded_event_ids(selected_ids)
+
+    def _clear_recorded_event_ids(self, record_ids: set[str]) -> int:
+        if not record_ids:
+            return 0
+        before = len(self._recorded_events)
+        self._recorded_events = [
+            item for item in self._recorded_events
+            if str(item.get("record_id") or "") not in record_ids
+        ]
+        self._recorded_event_ids = {
+            str(item.get("record_id"))
+            for item in self._recorded_events
+            if item.get("record_id")
+        }
+        return before - len(self._recorded_events)
+
+    def dump_recorded_events(self, path) -> bool:
+        try:
+            from pathlib import Path
+            import json as _json
+            p = Path(path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            data = {
+                "items": self.export_recorded_events(),
+                "dropped": int(self._recording_dropped),
+            }
+            p.write_text(_json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            return True
+        except Exception:
+            return False
+
+    def merge_recorded_events(self, items: list[dict]) -> None:
+        for item in (items or []):
+            if not isinstance(item, dict):
+                continue
+            rid = str(item.get("record_id") or "")
+            if rid and rid in self._recorded_event_ids:
+                continue
+            self._recorded_events.append(dict(item))
+            if rid:
+                self._recorded_event_ids.add(rid)
+            self._trim_recorded_events()
+
+    def merge_recorded_events_from_file(self, path) -> None:
+        try:
+            from pathlib import Path
+            import json as _json
+            p = Path(path)
+            if not p.exists():
+                return
+            data = _json.loads(p.read_text(encoding="utf-8"))
+            items = data.get("items") if isinstance(data, dict) else None
+            if isinstance(items, list):
+                self.merge_recorded_events(items)
+        except Exception:
+            return
+
+    async def send_telemetry(
+            self,
+            filter: Any = None,
+            *,
+            clear_on_success: bool = True,
+            sink: Optional[Callable[..., Any]] = None,
+    ) -> dict[str, Any]:
+        """
+        Send a filtered snapshot of recorded comm items through the configured sink.
+
+        The method is telemetry-oriented by name, but the underlying recorded
+        buffer and sink callback are generic. With no configured sink it is a
+        bounded no-op and leaves the buffer untouched.
+        """
+        batch = self.export_recorded_events(filter)
+        if not batch:
+            return {"ok": True, "sent": 0, "skipped": 0, "disabled": False}
+
+        sink_cb = sink or self.event_sink
+        if sink_cb is None:
+            return {"ok": True, "sent": 0, "skipped": len(batch), "disabled": True}
+
+        try:
+            result = sink_cb(batch, comm=self, filter=filter)
+            if inspect.isawaitable(result):
+                result = await result
+            sent = len(batch)
+            if isinstance(result, dict):
+                sent = int(result.get("sent", result.get("accepted", sent)) or 0)
+            if clear_on_success and sent >= len(batch):
+                sent_ids = {str(item.get("record_id")) for item in batch if item.get("record_id")}
+                self._clear_recorded_event_ids(sent_ids)
+            return {
+                "ok": True,
+                "sent": sent,
+                "skipped": max(0, len(batch) - sent),
+                "disabled": False,
+                "sink_result": result if isinstance(result, dict) else None,
+            }
+        except Exception as exc:
+            logger.warning("Chat communicator telemetry/event sink failed: %s", exc, exc_info=True)
+            return {
+                "ok": False,
+                "sent": 0,
+                "skipped": len(batch),
+                "disabled": False,
+                "error": str(exc),
+            }
 
     async def _notify_activity_listeners(self, *, event: str, data: dict, broadcast: bool) -> None:
         if not self.activity_listeners:
@@ -522,10 +742,9 @@ class ChatCommunicator:
         )
     async def emit(self, event: str, data: dict, broadcast: bool = False):
         # Single choke point
+        ev_in = self._build_filter_input(event, data, broadcast)
         try:
             if self.event_filter:
-                ev_in = self._build_filter_input(event, data, broadcast)
-
                 if not self.event_filter.allow_event(
                     user_type=self.user_type,
                     user_id=self.user_id,
@@ -552,6 +771,7 @@ class ChatCommunicator:
         except Exception:
             typ = str(event or "emit")
         _touch_current_task_activity(f"comm.emit:{typ or 'event'}")
+        self._record_activity(event=event, data=data, broadcast=broadcast, filter_input=ev_in)
         await self._notify_activity_listeners(event=event, data=data, broadcast=broadcast)
 
     # ----- internal buffer helpers -----
@@ -929,6 +1149,7 @@ class ChatCommunicator:
         user_type = None
         tenant = None
         project = None
+        recording = None
 
         if comm is not None:
             # payloads for identity
@@ -956,6 +1177,17 @@ class ChatCommunicator:
                     channel = getattr(relay, "_channel", channel)
             except Exception:
                 pass
+            try:
+                if getattr(comm, "_recording_enabled", False):
+                    pf = portable_filter(getattr(comm, "_recording_filter", None))
+                    if getattr(comm, "_recording_filter", None) is None or pf is not None:
+                        recording = {
+                            "enabled": True,
+                            "filter": pf,
+                            "max_events": int(getattr(comm, "_recording_max_events", DEFAULT_MAX_RECORDED_EVENTS)),
+                        }
+            except Exception:
+                recording = None
 
         return {
             "channel": channel,
@@ -967,6 +1199,7 @@ class ChatCommunicator:
             "user_type": user_type,
             "tenant": tenant,
             "project": project,
+            "recording": recording,
         }
 
 def build_relay_from_env() -> ChatRelayCommunicator:

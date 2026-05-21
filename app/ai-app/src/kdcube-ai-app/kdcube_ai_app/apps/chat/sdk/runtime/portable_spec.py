@@ -37,6 +37,7 @@ class CommSpec:
     user_type: Optional[str] = None
     tenant: Optional[str] = None
     project: Optional[str] = None
+    recording: Optional[Dict[str, Any]] = None
 
 @dataclass
 class IntegrationsSpec:

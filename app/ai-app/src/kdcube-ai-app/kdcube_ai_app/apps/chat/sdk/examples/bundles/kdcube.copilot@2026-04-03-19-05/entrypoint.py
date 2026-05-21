@@ -79,6 +79,7 @@ from kdcube_ai_app.storage.observed_file_locks import observed_file_lock, lock_o
 
 from .orchestrator.workflow import WithReactWorkflow
 from .event_filter import BundleEventFilter
+from . import evidence as copilot_evidence
 from .tools import react_tools as doc_reader_tools
 from .knowledge_base_admin import (
     AGENT_NAME as KB_ADMIN_AGENT_NAME,
@@ -114,6 +115,24 @@ TELEGRAM_WEBHOOK_PUBLIC_AUTH = {
 }
 TELEGRAM_WEBAPP_PUBLIC_AUTH = "none"
 COPILOT_WEBAPP_ALIAS = "copilot_webapp"
+COPILOT_EVENT_RECORD_SELECTOR = {
+    "include": {
+        "types": [
+            "kdcube.copilot.workflow.turn.started",
+            "kdcube.copilot.workflow.turn.completed",
+            "kdcube.copilot.workflow.turn.failed",
+            "kdcube.copilot.mcp.call",
+            "react.tool.call",
+            "react.skill.read",
+            "accounting.usage",
+            "chat.conversation.turn.completed",
+            "chat.complete",
+            "chat.error",
+        ],
+    }
+}
+COPILOT_EVENT_RECORD_MAX = 200
+COPILOT_EVENT_RETENTION = 500
 
 
 def _storage_root_or_error(entrypoint: Any) -> pathlib.Path:
@@ -477,9 +496,144 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
 
     async def pre_run_hook(self, *, state: Dict[str, Any], econ_ctx: Optional[Dict[str, Any]] = None) -> None:
         """Reconcile knowledge space only if load-time prep did not happen or config changed."""
+        self._configure_copilot_event_recording()
+        await self._emit_copilot_workflow_event(
+            status="started",
+            title="Copilot Turn Started",
+            data={
+                "thread_id": state.get("conversation_id") or state.get("session_id"),
+                "turn_id": state.get("turn_id"),
+                "user_type": state.get("user_type") or "anonymous",
+            },
+        )
         await super().pre_run_hook(state=state, econ_ctx=econ_ctx or {})
         await asyncio.to_thread(self._reconcile_knowledge_space, reason="pre_run_hook")
         return None
+
+    async def post_run_hook(
+        self,
+        *,
+        state: Dict[str, Any],
+        result: Dict[str, Any],
+        econ_ctx: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        await super().post_run_hook(state=state, result=result, econ_ctx=econ_ctx or {})
+        status = "completed" if result is not None else "failed"
+        await self._emit_copilot_workflow_event(
+            status=status,
+            title="Copilot Turn Completed" if status == "completed" else "Copilot Turn Failed",
+            data={
+                "thread_id": state.get("conversation_id") or state.get("session_id"),
+                "turn_id": state.get("turn_id"),
+                "has_answer": bool((result or {}).get("final_answer") or (result or {}).get("answer")),
+                "followup_count": len((result or {}).get("followups") or []),
+            },
+        )
+        await self._flush_copilot_recorded_events()
+
+    def _copilot_event_context(self) -> Dict[str, Any]:
+        actor = getattr(self.comm_context, "actor", None)
+        user = getattr(self.comm_context, "user", None)
+        routing = getattr(self.comm_context, "routing", None)
+        request = getattr(self.comm_context, "request", None)
+        return {
+            "tenant": getattr(actor, "tenant_id", None),
+            "project": getattr(actor, "project_id", None),
+            "user": getattr(user, "user_id", None) or getattr(user, "fingerprint", None),
+            "request_id": getattr(request, "request_id", None),
+            "session_id": getattr(routing, "session_id", None),
+            "conversation_id": getattr(routing, "conversation_id", None),
+            "turn_id": getattr(routing, "turn_id", None),
+        }
+
+    def _copilot_bundle_id(self) -> str:
+        return str(getattr(getattr(self.config, "ai_bundle_spec", None), "id", None) or BUNDLE_ID)
+
+    def _configure_copilot_event_recording(self) -> None:
+        try:
+            comm = self.comm
+            comm.record(COPILOT_EVENT_RECORD_SELECTOR, mode="replace", max_events=COPILOT_EVENT_RECORD_MAX)
+            comm.set_event_sink(self._copilot_event_sink)
+        except Exception:
+            self.logger.log(traceback.format_exc(), "WARNING")
+
+    async def _copilot_event_sink(self, batch: list[dict], **kwargs) -> Dict[str, Any]:
+        del kwargs
+        storage_root = self.bundle_storage_root()
+        if storage_root is None:
+            return {"accepted": 0, "error": "Bundle storage backend is not configured."}
+        accepted = await asyncio.to_thread(
+            copilot_evidence.append_comm_records,
+            storage_root=storage_root,
+            bundle_id=self._copilot_bundle_id(),
+            records=batch,
+            retention=COPILOT_EVENT_RETENTION,
+        )
+        return {"accepted": len(batch), "stored": accepted}
+
+    async def _emit_copilot_workflow_event(self, *, status: str, title: str, data: Dict[str, Any]) -> None:
+        try:
+            await self.comm.service_event(
+                type=(
+                    "kdcube.copilot.workflow.turn.completed"
+                    if status == "completed"
+                    else "kdcube.copilot.workflow.turn.failed"
+                    if status == "failed"
+                    else "kdcube.copilot.workflow.turn.started"
+                ),
+                step="workflow",
+                status=status,
+                title=title,
+                agent="kdcube.copilot.workflow",
+                data=data,
+            )
+        except Exception:
+            self.logger.log(traceback.format_exc(), "WARNING")
+
+    async def _flush_copilot_recorded_events(self) -> Dict[str, Any]:
+        try:
+            return await self.comm.send_telemetry(COPILOT_EVENT_RECORD_SELECTOR)
+        except Exception:
+            self.logger.log(traceback.format_exc(), "WARNING")
+            return {"ok": False, "error": "Unable to flush recorded copilot events."}
+
+    async def _record_doc_reader_mcp_call(self, payload: Dict[str, Any]) -> None:
+        storage_root = self.bundle_storage_root()
+        if storage_root is None:
+            return
+        event = copilot_evidence.direct_event(
+            bundle_id=self._copilot_bundle_id(),
+            source="mcp.doc_reader",
+            event_type="kdcube.copilot.mcp.call",
+            status=str(payload.get("status") or "completed"),
+            title="Copilot MCP Tool Call",
+            data={
+                "mcp_name": payload.get("mcp_name"),
+                "tool": payload.get("tool"),
+                "duration_ms": payload.get("duration_ms"),
+                "result_count": payload.get("result_count"),
+                "missing": payload.get("missing"),
+                "root": payload.get("root"),
+                "top_k": payload.get("top_k"),
+                "query_len": payload.get("query_len"),
+                "path": payload.get("path"),
+                "error": payload.get("error"),
+            },
+            context=self._copilot_event_context(),
+        )
+        await asyncio.to_thread(
+            copilot_evidence.append_events,
+            storage_root=storage_root,
+            events=[event],
+            retention=COPILOT_EVENT_RETENTION,
+        )
+
+    def _copilot_events_payload(self, *, limit: int = 100) -> Dict[str, Any]:
+        return copilot_evidence.build_widget_payload(
+            storage_root=self.bundle_storage_root(),
+            bundle_id=self._copilot_bundle_id(),
+            limit=limit,
+        )
 
     def _doc_reader_storage_root(self) -> pathlib.Path | None:
         storage_root = self.bundle_storage_root()
@@ -493,6 +647,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
             name=f"{BUNDLE_ID}.{name_suffix}",
             storage_root_provider=self._doc_reader_storage_root,
             refresh_knowledge_space=lambda: self._reconcile_knowledge_space(reason=name_suffix),
+            on_tool_call=self._record_doc_reader_mcp_call,
         )
 
     def _require_doc_reader_mcp_auth(self, request: Request) -> None:
@@ -578,7 +733,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
         **kwargs,
     ) -> Dict[str, Any]:
         del kwargs
-        return await telegram_webapp.payload(
+        payload = await telegram_webapp.payload(
             self,
             user_id=user_id,
             fingerprint=fingerprint,
@@ -586,6 +741,16 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
             widget_path=widget_path or path,
             include_admin=telegram_webapp.user_has_role(self, TELEGRAM_ADMIN_ROLE),
         )
+        requested_path = str(widget_path or path or "").strip("/").lower()
+        if requested_path in {"events", "event", "evidence"}:
+            payload["active_tab"] = "events"
+        payload["events"] = self._copilot_events_payload(limit=100)
+        return payload
+
+    @api(method="GET", alias="copilot_events_data", route="operations", user_types=("registered", "paid", "privileged"))
+    def copilot_events_data(self, limit: int = 100, **kwargs) -> Dict[str, Any]:
+        del kwargs
+        return self._copilot_events_payload(limit=limit)
 
     @api(method="GET", alias="conversations_list", route="operations", user_types=("registered", "paid", "privileged"))
     async def conversations_list(

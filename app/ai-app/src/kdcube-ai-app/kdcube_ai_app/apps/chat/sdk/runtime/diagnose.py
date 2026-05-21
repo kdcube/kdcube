@@ -266,7 +266,7 @@ def build_tree(root: Path, *, skip_dirs: set[str], max_chars: int = DEFAULT_TREE
         if rel.parts:
             lines.append(f"{indent}{rel.name}/")
         for name in sorted(files):
-            if name == "delta_aggregates.json":
+            if name in {"delta_aggregates.json", "comm_recorded_events.json"}:
                 continue
             lines.append(f"{indent}  {name}")
         if sum(len(x) + 1 for x in lines) > max_chars:

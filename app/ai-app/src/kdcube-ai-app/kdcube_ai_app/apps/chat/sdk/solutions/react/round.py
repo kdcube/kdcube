@@ -14,6 +14,142 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.common import add_block
 from kdcube_ai_app.apps.chat.sdk.util import isoz
 
 
+def _path_prefixes(value: Any) -> list[str]:
+    items = value if isinstance(value, list) else [value]
+    prefixes: set[str] = set()
+    for item in items:
+        path = ""
+        if isinstance(item, dict):
+            path = str(item.get("path") or "").strip()
+        elif isinstance(item, str):
+            path = item.strip()
+        if not path:
+            continue
+        if ":" in path:
+            prefixes.add(path.split(":", 1)[0] + ":")
+        else:
+            prefixes.add("plain")
+    return sorted(prefixes)
+
+
+def _tool_params_summary(params: Any) -> Dict[str, Any]:
+    if isinstance(params, dict):
+        keys = sorted(str(key) for key in params.keys())
+        summary: Dict[str, Any] = {
+            "shape": "object",
+            "keys": keys[:40],
+            "key_count": len(keys),
+            "redacted": True,
+        }
+        paths = params.get("paths")
+        if isinstance(paths, list):
+            summary["paths_count"] = len(paths)
+            summary["path_prefixes"] = _path_prefixes(paths)
+        items = params.get("items")
+        if isinstance(items, list):
+            summary["items_count"] = len(items)
+            item_prefixes = _path_prefixes(items)
+            if item_prefixes:
+                summary["item_path_prefixes"] = item_prefixes
+        for key in ("query", "prompt", "message", "text", "content", "code"):
+            value = params.get(key)
+            if isinstance(value, str):
+                summary[f"{key}_len"] = len(value)
+        for key in ("limit", "top_k", "max_hits", "max_results", "line_start", "line_count"):
+            value = params.get(key)
+            if isinstance(value, (int, float, bool)):
+                summary[key] = value
+        return summary
+    if isinstance(params, list):
+        return {
+            "shape": "array",
+            "items_count": len(params),
+            "path_prefixes": _path_prefixes(params),
+            "redacted": True,
+        }
+    if params is None:
+        return {"shape": "none", "redacted": True}
+    return {"shape": type(params).__name__, "redacted": True}
+
+
+def _tool_result_status(result_state: Any) -> tuple[str, int, str]:
+    if not isinstance(result_state, dict):
+        return "completed", 0, ""
+    status = "completed"
+    error_count = 0
+    error_code = ""
+    if result_state.get("exit_reason") == "error" or result_state.get("error"):
+        status = "error"
+        err = result_state.get("error")
+        if isinstance(err, dict):
+            error_code = str(err.get("code") or err.get("error") or "").strip()
+    last_tool_result = result_state.get("last_tool_result")
+    if isinstance(last_tool_result, list):
+        for item in last_tool_result:
+            if not isinstance(item, dict) or not item.get("error"):
+                continue
+            error_count += 1
+            if not error_code:
+                err = item.get("error")
+                if isinstance(err, dict):
+                    error_code = str(err.get("code") or err.get("error") or "").strip()
+                else:
+                    error_code = str(err or "").strip()
+    if error_count:
+        status = "error"
+    return status, error_count, error_code
+
+
+async def _emit_react_tool_call_event(
+    *,
+    react: Any,
+    tool_id: str,
+    tool_call_id: str,
+    params: Any,
+    iteration: Optional[int],
+    status: str,
+    duration_ms: int,
+    result_state: Any = None,
+    exception: Optional[BaseException] = None,
+) -> None:
+    comm = getattr(react, "comm", None)
+    service_event = getattr(comm, "service_event", None) if comm is not None else None
+    if not callable(service_event):
+        return
+    result_status, error_count, error_code = _tool_result_status(result_state)
+    if status == "completed" and result_status == "error":
+        status = "error"
+    data: Dict[str, Any] = {
+        "tool_id": tool_id,
+        "tool_call_id": tool_call_id,
+        "tool_family": "react" if tool_id.startswith("react.") else "external",
+        "params": _tool_params_summary(params),
+        "duration_ms": max(0, int(duration_ms)),
+    }
+    if iteration is not None:
+        data["iteration"] = int(iteration)
+    if error_count:
+        data["error_count"] = error_count
+    if error_code:
+        data["error_code"] = error_code
+    if exception is not None:
+        data["exception_type"] = exception.__class__.__name__
+    try:
+        result = service_event(
+            type="react.tool.call",
+            step="react.tool.call",
+            status=status,
+            title="ReAct Tool Call",
+            agent="react.tool",
+            data=data,
+            auto_markdown=False,
+        )
+        if hasattr(result, "__await__"):
+            await result
+    except Exception:
+        return
+
+
 @dataclass
 class ReactRound:
     tool_id: str = ""
@@ -196,6 +332,7 @@ class ReactRound:
         runtime_ctx = getattr(ctx_browser, "runtime_ctx", None)
         sentinel = object()
         previous_iteration = sentinel
+        tool_iteration: Optional[int] = None
         if runtime_ctx is not None:
             previous_iteration = getattr(runtime_ctx, "_current_react_iteration", sentinel)
             try:
@@ -203,12 +340,14 @@ class ReactRound:
                 if raw_origin_iteration is None:
                     raw_state_iteration = int(state.get("iteration") or 0)
                     raw_origin_iteration = max(0, raw_state_iteration - 1)
-                setattr(runtime_ctx, "_current_react_iteration", int(raw_origin_iteration))
+                tool_iteration = int(raw_origin_iteration)
+                setattr(runtime_ctx, "_current_react_iteration", tool_iteration)
             except Exception:
                 pass
-        try:
+
+        async def _dispatch_tool_call() -> Dict[str, Any]:
             if tool_id == "react.read":
-                return await react_tools.handle_react_read(ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
+                return await react_tools.handle_react_read(react=react, ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
             if tool_id == "react.pull":
                 return await react_tools.handle_react_pull(ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
             if tool_id == "react.checkout":
@@ -225,8 +364,36 @@ class ReactRound:
                 return await react_tools.handle_react_plan(react=react, ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
             if tool_id == "react.write":
                 return await react_tools.handle_react_write(react=react, ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
-
             return await react_tools.handle_external_tool(react=react, ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
+
+        started_ms = int(time.time() * 1000)
+        try:
+            result_state = await _dispatch_tool_call()
+        except Exception as exc:
+            await _emit_react_tool_call_event(
+                react=react,
+                tool_id=tool_id,
+                tool_call_id=tool_call_id,
+                params=tool_call.get("params"),
+                iteration=tool_iteration,
+                status="error",
+                duration_ms=int(time.time() * 1000) - started_ms,
+                exception=exc,
+            )
+            raise
+        else:
+            status, _, _ = _tool_result_status(result_state)
+            await _emit_react_tool_call_event(
+                react=react,
+                tool_id=tool_id,
+                tool_call_id=tool_call_id,
+                params=tool_call.get("params"),
+                iteration=tool_iteration,
+                status=status,
+                duration_ms=int(time.time() * 1000) - started_ms,
+                result_state=result_state,
+            )
+            return result_state
         finally:
             if runtime_ctx is not None:
                 try:

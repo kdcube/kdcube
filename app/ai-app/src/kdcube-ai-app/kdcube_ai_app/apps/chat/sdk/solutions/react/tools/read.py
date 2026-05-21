@@ -234,6 +234,86 @@ def _count_tokens(text: str) -> int:
         return 0
 
 
+def _skill_read_event_item(
+    *,
+    sid: str,
+    spec: Any,
+    skill_path: str,
+    status: str,
+    materialized: bool,
+) -> Dict[str, Any]:
+    hidden_disclosure = bool(
+        spec and getattr(spec, "is_disclosure_hidden", lambda: False)()
+    )
+    item: Dict[str, Any] = {
+        "path": skill_path,
+        "status": status,
+        "materialized": bool(materialized),
+        "disclosure_hidden": hidden_disclosure,
+    }
+    if not hidden_disclosure:
+        item["id"] = sid
+        name = getattr(spec, "name", None) if spec else None
+        namespace = getattr(spec, "namespace", None) if spec else None
+        local_id = getattr(spec, "id", None) if spec else None
+        if name:
+            item["name"] = str(name)
+        if namespace:
+            item["namespace"] = str(namespace)
+        if local_id:
+            item["local_id"] = str(local_id)
+    return item
+
+
+def _comm_for_react_read(*, react: Any = None, ctx_browser: Any = None) -> Any:
+    comm = getattr(react, "comm", None) if react is not None else None
+    if comm is not None:
+        return comm
+    runtime_ctx = getattr(ctx_browser, "runtime_ctx", None) if ctx_browser is not None else None
+    comm = getattr(runtime_ctx, "comm", None) if runtime_ctx is not None else None
+    if comm is not None:
+        return comm
+    return getattr(ctx_browser, "comm", None) if ctx_browser is not None else None
+
+
+async def _emit_skill_read_event(
+    *,
+    react: Any = None,
+    ctx_browser: Any = None,
+    tool_call_id: str,
+    requested_count: int,
+    skill_items: List[Dict[str, Any]],
+    missing_count: int,
+    stats_only: bool,
+) -> None:
+    if stats_only or not skill_items:
+        return
+    comm = _comm_for_react_read(react=react, ctx_browser=ctx_browser)
+    service_event = getattr(comm, "service_event", None) if comm is not None else None
+    if not callable(service_event):
+        return
+    try:
+        result = service_event(
+            type="react.skill.read",
+            step="react.read",
+            status="completed",
+            title="ReAct Skill Read",
+            agent="react.read",
+            data={
+                "tool_id": "react.read",
+                "tool_call_id": tool_call_id,
+                "requested_count": int(requested_count),
+                "resolved_count": len(skill_items),
+                "missing_count": int(missing_count),
+                "skills": skill_items,
+            },
+        )
+        if hasattr(result, "__await__"):
+            await result
+    except Exception:
+        return
+
+
 def _source_rows_for_visible_json(
     rows: List[Dict[str, Any]],
     *,
@@ -408,7 +488,7 @@ def _truncated_read_text(
     ]).strip()
 
 
-async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_call_id: str) -> Dict[str, Any]:
+async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_call_id: str, react: Any = None) -> Dict[str, Any]:
     last_decision = state.get("last_decision") or {}
     tool_call = last_decision.get("tool_call") or {}
     tool_id = "react.read"
@@ -458,6 +538,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             artifact_paths.append(item_path)
     pending_blocks: List[Dict[str, Any]] = []
     missing_skills: List[str] = []
+    skill_read_items: List[Dict[str, Any]] = []
     exists_paths: List[str] = []
     visible_context_refs: Dict[str, Dict[str, Any]] = {}
     def _normalize_block_for_hash(block: Dict[str, Any]) -> Dict[str, Any]:
@@ -749,6 +830,13 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 if sid in loaded and existing_skill:
                     _remember_visible_ref(skill_path, existing_skill)
                     exists_paths.append(skill_path)
+                    skill_read_items.append(_skill_read_event_item(
+                        sid=sid,
+                        spec=spec_for_path,
+                        skill_path=skill_path,
+                        status="exists_in_visible_context",
+                        materialized=False,
+                    ))
                     continue
                 loaded.add(sid)
                 block_ids = import_skillset(
@@ -810,8 +898,32 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 }
                 if not _maybe_add_block(skill_block):
                     exists_paths.append(skill_path)
+                    skill_read_items.append(_skill_read_event_item(
+                        sid=sid,
+                        spec=spec_for_path,
+                        skill_path=skill_path,
+                        status="exists_in_visible_context",
+                        materialized=False,
+                    ))
+                else:
+                    skill_read_items.append(_skill_read_event_item(
+                        sid=sid,
+                        spec=spec_for_path,
+                        skill_path=skill_path,
+                        status="materialized",
+                        materialized=True,
+                    ))
         except Exception:
             pass
+        await _emit_skill_read_event(
+            react=react,
+            ctx_browser=ctx_browser,
+            tool_call_id=tool_call_id,
+            requested_count=len(skill_paths),
+            skill_items=skill_read_items,
+            missing_count=len(missing_skills),
+            stats_only=stats_only,
+        )
 
     missing_artifacts: List[str] = []
     items: List[Dict[str, Any]] = []

@@ -335,6 +335,139 @@ input:focus, select:focus, textarea:focus {
   overflow: hidden;
 }
 
+/* ─── Events page ─── */
+.events-page {
+  display: grid;
+  gap: 10px;
+}
+
+.event-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.event-summary > div {
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  padding: 10px 12px;
+}
+
+.summary-label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.summary-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.metric-chip,
+.muted-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-height: 22px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  color: var(--text-2);
+  padding: 2px 7px;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.metric-chip b {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.muted-chip {
+  color: var(--muted);
+}
+
+.event-list {
+  display: grid;
+  gap: 6px;
+}
+
+.event-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  padding: 10px 12px;
+}
+
+.event-title-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.event-title-line strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.event-type {
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.event-meta,
+.event-data {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.event-data {
+  justify-content: flex-end;
+  margin-top: 0;
+}
+
+.event-data span,
+.event-meta span {
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  padding: 1px 5px;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--muted);
+}
+
+.status-completed { background: var(--green); }
+.status-started,
+.status-running { background: var(--blue); }
+.status-error,
+.status-failed { background: var(--pink); }
+
 /* ─── Telegram admin layout ─── */
 .admin-layout {
   display: grid;
@@ -446,6 +579,9 @@ input:focus, select:focus, textarea:focus {
   .toolbar-actions { width: 100%; }
   .new-row { grid-template-columns: 1fr; }
   .admin-layout { grid-template-columns: 1fr; }
+  .event-summary { grid-template-columns: 1fr; }
+  .event-row { grid-template-columns: 1fr; align-items: stretch; }
+  .event-data { justify-content: flex-start; }
   .list-row { align-items: flex-start; flex-direction: column; gap: 6px; }
   .row-actions { width: 100%; }
 }

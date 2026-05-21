@@ -7,6 +7,7 @@ keywords: ["SSE", "Socket.IO", "REST", "relay", "transports"]
 see_also:
   - ks:docs/service/comm/CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md
   - ks:docs/service/comm/comm-system.md
+  - ks:docs/service/comm/comm-recording-event-sinks-README.md
   - ks:docs/service/streams/telemetry-README.md
   - ks:docs/service/auth/auth-README.md
   - ks:docs/sdk/bundle/bundle-firewall-README.md
@@ -21,8 +22,8 @@ This README is the entry point for **communication integrations**:
 - **Auth/session handling**: token sources, anonymous vs registered, role-based policy
 - **Attachments**: REST/SSE multipart and Socket.IO binary frames
 - **Internal relay**: Redis Pub/Sub fan-out (`ServiceCommunicator` + `ChatRelayCommunicator`)
-- **Telemetry promotion**: optional promotion of comm signals to configured
-  telemetry buses
+- **Comm recording and event sinks**: optional recording of selected comm
+  envelopes and bounded batch dispatch to telemetry or other configured sinks
 
 If you are implementing a UI, API client, or a new transport, start here.
 
@@ -154,8 +155,9 @@ All transports subscribe to the same internal event bus via **session-scoped** R
 ### Why this matters
 - Per-session Redis channels prevent every server from receiving all events.
 - The relay subscribes only when at least one active connection for that session exists.
-- The same producer-facing `ChatCommunicator` path can optionally promote
-  normalized, privacy-filtered telemetry signals to configured buses.
+- The same producer-facing `ChatCommunicator` path can optionally record
+  selected, privacy-filtered envelopes and dispatch bounded batches to telemetry
+  or other configured sinks.
 
 **Docs**
 - System overview: [comm-system.md](comm-system.md)
@@ -287,5 +289,6 @@ await self.comm.event(
 
 If you are a bundle author, see:
 - [comm-system.md](comm-system.md) (producer API + filters)
+- [comm-recording-event-sinks-README.md](comm-recording-event-sinks-README.md) (recording selected comm envelopes and dispatching batches to event sinks)
 - [emitters.py](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/comm/emitters.py) and
   [agentic_app (proc web_app.py)](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/web_app.py)

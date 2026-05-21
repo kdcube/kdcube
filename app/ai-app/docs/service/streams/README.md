@@ -25,7 +25,7 @@ and reliability model.
 | Family | Primary purpose | Producer | Consumer | Current status |
 | --- | --- | --- | --- | --- |
 | Background jobs | Execute ready bundle-owned work fairly through proc | Bundle cron, widget/API action, internal service | Proc, then bundle `@on_job` | Implemented |
-| Telemetry | Collect observations about platform and bundle usage | Comm promotion, runtime hooks, SDK emitters, external client log collector, MCP/API instrumentation | Telemetry collector bundle | Proposed |
+| Telemetry | Collect observations about platform and bundle usage | Comm recording/event sinks, runtime hooks, SDK emitters, external client log collector, MCP/API instrumentation | Telemetry collector bundle | Proposed |
 | Conversation scheduler | Schedule chat turns by conversation ownership | Chat ingress | Proc conversation owner loop | Target design, not implemented as proc backend |
 | Relay/pubsub | Fan out live chat events to connected clients | Proc/bundle communicator | Ingress SSE/Socket.IO holders | Implemented, non-durable |
 

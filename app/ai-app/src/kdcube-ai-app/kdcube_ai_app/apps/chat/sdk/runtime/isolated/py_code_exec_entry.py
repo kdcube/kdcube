@@ -620,10 +620,10 @@ def _bootstrap_supervisor_runtime(
 
 def _dump_delta_cache_file(outdir: pathlib.Path, logger: AgentLogger) -> None:
     """
-    Supervisor-side dump of communicator delta cache.
+    Supervisor-side dump of communicator comm-state side files.
 
-    All deltas are collected in the supervisor process (tools run there), so we must
-    dump from here, NOT from the executor header.
+    All deltas and recorded comm events are collected in the supervisor process
+    (tools run there), so we must dump from here, NOT from the executor header.
     """
     try:
         comm = None
@@ -649,6 +649,19 @@ def _dump_delta_cache_file(outdir: pathlib.Path, logger: AgentLogger) -> None:
                 )
         except Exception as e:
             logger.log(f"[entry] delta cache dump failed: {e}", level="ERROR")
+        try:
+            dump_recorded = getattr(comm, "dump_recorded_events", None)
+            if callable(dump_recorded):
+                dest = outdir / "comm_recorded_events.json"
+                ok = dump_recorded(dest)
+                if not ok:
+                    items = comm.export_recorded_events()
+                    dest.write_text(
+                        json.dumps({"items": items}, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+        except Exception as e:
+            logger.log(f"[entry] recorded comm events dump failed: {e}", level="ERROR")
     except Exception:
         # best-effort only
         pass

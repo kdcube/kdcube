@@ -1146,8 +1146,10 @@ def _refresh_project_log_slot():
 
 def _dump_delta_cache_file():
     """
-    Best-effort: write communicator delta cache to OUT_DIR/delta_aggregates.json.
-    Safe to call multiple times; last write wins.
+    Best-effort: write communicator comm-state side files under OUT_DIR.
+
+    This includes delta_aggregates.json and comm_recorded_events.json when the
+    communicator has those buffers. Safe to call multiple times; last write wins.
     """
     try:
         comm = None
@@ -1165,6 +1167,16 @@ def _dump_delta_cache_file():
                 # fallback: inline export + write
                 aggs = comm.export_delta_cache(merge_text=False)
                 dest.write_text(_json.dumps({"items": aggs}, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+        try:
+            dump_recorded = getattr(comm, "dump_recorded_events", None)
+            if callable(dump_recorded):
+                dest = OUT_DIR / "comm_recorded_events.json"
+                ok = dump_recorded(dest)
+                if not ok:
+                    items = comm.export_recorded_events()
+                    dest.write_text(_json.dumps({"items": items}, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:
             pass
     except Exception:
@@ -1417,6 +1429,13 @@ def _rebuild_communicator_from_spec(spec: dict) -> ChatCommunicator:
         tenant=spec.get("tenant"),
         project=spec.get("project"),
     )
+    recording = (spec or {}).get("recording") or {}
+    if isinstance(recording, dict) and recording.get("enabled"):
+        comm.record(
+            recording.get("filter"),
+            mode="replace",
+            max_events=recording.get("max_events"),
+        )
     return comm
 
 try:

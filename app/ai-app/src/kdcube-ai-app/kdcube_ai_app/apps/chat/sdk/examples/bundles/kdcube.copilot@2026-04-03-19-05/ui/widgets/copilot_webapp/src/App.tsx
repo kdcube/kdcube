@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ConversationsPage } from './pages/ConversationsPage';
+import { EventsPage } from './pages/EventsPage';
 import { MemoryPage } from './pages/MemoryPage';
 import { TelegramAdminPage } from './pages/TelegramAdminPage';
 import { callOperation } from './store/apiClient';
@@ -73,7 +74,7 @@ export default function App() {
         setProfile(null);
       }
       const data = await callOperation<WebAppPayload>('copilot_webapp_data', {
-        widget_path: tab === 'telegram_admin' ? 'telegram-admin' : tab === 'conversations' ? 'chats' : 'memory',
+        widget_path: tab === 'telegram_admin' ? 'telegram-admin' : tab === 'conversations' ? 'chats' : tab === 'events' ? 'events' : 'memory',
         mark_memory_seen: tab === 'memory',
       });
       setPayload(data);
@@ -85,6 +86,8 @@ export default function App() {
         setTab('memory');
       } else if (data.active_tab === 'conversations' && tab !== 'conversations') {
         setTab('conversations');
+      } else if (data.active_tab === 'events' && tab !== 'events') {
+        setTab('events');
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -132,6 +135,13 @@ export default function App() {
             >
               Chats
             </button>
+            <button
+              type="button"
+              className={tab === 'events' ? 'active' : ''}
+              onClick={() => setTab('events')}
+            >
+              Events
+            </button>
             {showAdmin && (
               <button
                 type="button"
@@ -155,6 +165,7 @@ export default function App() {
       )}
       {!loading && !pendingTelegramApproval && tab === 'memory' && <MemoryPage memory={payload.memory} reload={load} callOperation={callOperation} />}
       {!loading && !pendingTelegramApproval && tab === 'conversations' && <ConversationsPage conversations={payload.conversations} reload={load} />}
+      {!loading && !pendingTelegramApproval && tab === 'events' && <EventsPage events={payload.events} reload={load} />}
       {!loading && !pendingTelegramApproval && tab === 'telegram_admin' && showAdmin && <TelegramAdminPage />}
     </main>
   );

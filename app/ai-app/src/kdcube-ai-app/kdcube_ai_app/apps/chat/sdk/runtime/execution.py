@@ -694,6 +694,12 @@ async def execute_tool_in_isolation(
         tool_manager.comm.merge_delta_cache_from_file(outdir / "delta_aggregates.json")
     except Exception:
         pass
+    try:
+        merge_recorded = getattr(tool_manager.comm, "merge_recorded_events_from_file", None)
+        if callable(merge_recorded):
+            merge_recorded(outdir / "comm_recorded_events.json")
+    except Exception:
+        pass
 
     # Check for subprocess-level errors
     subprocess_error = None

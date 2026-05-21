@@ -4,7 +4,7 @@ title: "Telemetry Streams"
 summary: "Design boundary for usage and observability telemetry: event schema, ingestion modes, reliability, privacy, storage, and how collector bundles should consume events."
 status: proposal
 tags: ["service", "streams", "telemetry", "usage", "events", "redis", "kafka", "bundles"]
-keywords: ["telemetry stream", "usage events", "collector bundle", "event ingestion", "mcp analytics", "tool usage", "comm telemetry promotion", "bundle listener"]
+keywords: ["telemetry stream", "usage events", "collector bundle", "event ingestion", "mcp analytics", "tool usage", "comm recording", "comm event sink", "bundle listener"]
 see_also:
   - ks:docs/service/streams/README.md
   - ks:docs/service/streams/background-jobs-README.md
@@ -12,6 +12,7 @@ see_also:
   - ks:docs/service/external-log-collector/Architecture.md
   - ks:docs/service/comm/comm-system.md
   - ks:docs/service/comm/README-comm.md
+  - ks:docs/service/comm/comm-recording-event-sinks-README.md
   - ks:docs/sdk/bundle/build/design/@longrun-README.md
   - ks:docs/accounting/accounting-README.md
 ---
@@ -25,7 +26,7 @@ Examples:
 - `chat.message`
 - `mcp.call`
 - `tool.invoke`
-- `llm.call`
+- `accounting.usage`
 - `workflow.step`
 - `comm.event`
 - `client.log.warning`
@@ -162,7 +163,8 @@ For the documented external metric extension:
 | `value` | `value` and/or `metrics.value` |
 | `tags` | `tags` and/or `dimensions` |
 
-Comm promotion should emit the same normalized envelope directly:
+Comm recording plus a telemetry sink should produce the same normalized
+envelope when records are forwarded to telemetry:
 
 | Comm fact | Normalized telemetry field |
 | --- | --- |
@@ -239,7 +241,7 @@ POST /api/integrations/bundles/{tenant}/{project}/{collector_bundle}/operations/
 ```
 
 This is useful for explicit collector operations and user-visible actions that
-are not already covered by comm promotion.
+are not already covered by comm recording and a configured telemetry sink.
 
 ### Redis Stream ingest
 
@@ -283,7 +285,7 @@ Kafka offsets do not replace event idempotency.
 A collector bundle can start with:
 
 ```text
-comm promotion / runtime hooks / MCP instrumentation
+comm recording and event sinks / runtime hooks / MCP instrumentation
   -> telemetry emit(...)
   -> REST ingest endpoint
   -> raw event store

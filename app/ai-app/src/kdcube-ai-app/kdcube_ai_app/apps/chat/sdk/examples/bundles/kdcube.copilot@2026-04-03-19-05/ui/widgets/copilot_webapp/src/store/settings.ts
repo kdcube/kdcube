@@ -69,6 +69,7 @@ export const ROUTE_CONTEXT = routeContextFromLocation();
 export function activeTabFromPath(widgetPath: string): TabId {
   const first = String(widgetPath || '').trim().replace(/^\/+/, '').split('/', 1)[0].toLowerCase();
   if (first === 'chat' || first === 'chats' || first === 'conversation' || first === 'conversations') return 'conversations';
+  if (first === 'event' || first === 'events' || first === 'evidence') return 'events';
   if (first === 'admin' || first === 'telegram' || first === 'telegram-admin' || first === 'telegram_admin') return 'telegram_admin';
   return 'memory';
 }
@@ -81,7 +82,7 @@ function tabPath(tab: TabId): string {
   const before = path.slice(0, index + marker.length);
   const rest = path.slice(index + marker.length);
   const alias = rest.split('/')[0] || ROUTE_CONTEXT.widgetAlias || 'copilot_webapp';
-  const segment = tab === 'telegram_admin' ? 'telegram-admin' : tab === 'conversations' ? 'chats' : 'memory';
+  const segment = tab === 'telegram_admin' ? 'telegram-admin' : tab === 'conversations' ? 'chats' : tab === 'events' ? 'events' : 'memory';
   return `${before}${alias}/${segment}`;
 }
 

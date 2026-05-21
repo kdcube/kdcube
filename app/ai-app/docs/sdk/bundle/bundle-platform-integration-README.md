@@ -190,7 +190,37 @@ Current behavior:
 - A bundle with no effective `allowed_roles` is always included for any
   authenticated user (backwards-compatible default)
 
-### 1.3.1 Canonical `enabled.*` Contract
+### 1.3.1 YAML Anchors In Descriptor Files
+
+YAML anchors and aliases may be used in descriptor source files such as
+`bundles.yaml`, `bundles.template.yaml`, and `bundles.secrets.yaml` as authoring
+shorthand only:
+
+```yaml
+visibility:
+  api:
+    public_reader: &public_reader_visibility
+      user_types: []
+      roles: []
+    news_data: *public_reader_visibility
+```
+
+The YAML parser resolves the anchor when the descriptor is loaded. After that,
+KDCube works with normal in-memory dictionaries and bundle props. Runtime code
+and `agentic_loader.py` do not see the anchor name or alias syntax.
+
+If bundle props or secrets are edited through the Bundle Admin interface, the
+descriptor may be written back to YAML. That write serializes the resolved
+dictionary values, not the original YAML anchor structure. The first admin edit
+can therefore change the descriptor text from anchored YAML to materialized
+in-place values. This is expected and should not change the effective values,
+but the anchor names and alias links are not preserved.
+
+Do not depend on YAML anchors for linked mutable configuration semantics. If two
+paths must remain linked after runtime edits, the platform needs an explicit
+reference mechanism rather than YAML anchors.
+
+### 1.3.2 Canonical `enabled.*` Contract
 
 The platform-native feature-flag hook for bundle surfaces lives under the
 `enabled.*` section of effective bundle props. The platform derives the

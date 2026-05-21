@@ -13,6 +13,7 @@ ARTIFACT_OUTPUT_ENV = "KDCUBE_ARTIFACT_OUTPUT_DIR"
 
 DEFAULT_IGNORE_NAMES = {
     "delta_aggregates.json",
+    "comm_recorded_events.json",
 }
 
 

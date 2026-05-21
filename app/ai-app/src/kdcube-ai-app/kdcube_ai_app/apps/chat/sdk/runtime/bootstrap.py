@@ -135,7 +135,7 @@ def make_chat_comm(spec: PortableSpec) -> Optional[ChatCommunicator]:
         return None
     # ChatRelayCommunicator will pick redis URL from env (REDIS_URL) if not overridden
     relay = ChatRelayCommunicator(channel=spec.comm.channel)
-    return ChatCommunicator(
+    comm = ChatCommunicator(
         emitter=relay,
         service=spec.comm.service,
         conversation=spec.comm.conversation,
@@ -146,6 +146,14 @@ def make_chat_comm(spec: PortableSpec) -> Optional[ChatCommunicator]:
         tenant=spec.comm.tenant,
         project=spec.comm.project,
     )
+    recording = spec.comm.recording or {}
+    if isinstance(recording, dict) and recording.get("enabled"):
+        comm.record(
+            recording.get("filter"),
+            mode="replace",
+            max_events=recording.get("max_events"),
+        )
+    return comm
 
 def make_registry(spec: PortableSpec) -> Dict[str, Any]:
     """

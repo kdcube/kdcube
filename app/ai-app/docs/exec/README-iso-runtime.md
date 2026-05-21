@@ -8,6 +8,7 @@ see_also:
   - ks:docs/exec/runtime-README.md
   - ks:docs/exec/run-py-README.md
   - ks:docs/exec/README-runtime-modes-builtin-tools.md
+  - ks:docs/service/comm/comm-recording-event-sinks-README.md
 ---
 # Isolated Runtime (ISO) - Design and Operations
 
@@ -332,6 +333,7 @@ side keeps a full diagnostic tree:
     timeline.json              # React timeline (written by chat)
     tool_calls_index.json      # tool call index (shared)
     delta_aggregates.json      # deltas from supervisor
+    comm_recorded_events.json  # recorded comm events from supervisor/runtime
     executed_programs/         # preserved loader + original user program, grouped per execution
       <execution_id>/
         main.py
@@ -364,8 +366,9 @@ Important:
 - `OUTPUT_DIR` points at the artifact workspace. In split Docker mode that is
   `/workspace/out` inside the executor and `out/workdir` on the proc/host side.
 - runtime metadata such as `timeline.json`, `delta_aggregates.json`,
-  `executed_programs/`, supervisor logs, docker logs, and `infra.log` stay
-  outside the executor-visible artifact workspace in split mode.
+  `comm_recorded_events.json`, `executed_programs/`, supervisor logs, docker
+  logs, and `infra.log` stay outside the executor-visible artifact workspace in
+  split mode.
 - `logs/executor/runtime.err.log` is the inner executor process capture. It may
   contain both captured stdout and stderr sections for failed runs so the agent
   can see useful diagnostics even when the program printed the only clue to stdout.
@@ -391,6 +394,46 @@ executions/<user>/<conversation>/<turn>/<ctx_id>/
 
 Keeping one blob avoids slow object-store uploads and large expanded trees. For
 local `file://` storage, unpack `<ctx_id>.zip` when deep inspection is needed.
+
+## Comm State Side-File Handoff
+
+Mechanically, today:
+
+1. Host serializes comm into `COMM_SPEC`.
+2. If `comm.record(...)` was enabled, `_export_comm_spec_for_runtime()` adds:
+
+```python
+"recording": {
+    "enabled": True,
+    "filter": <serializable selector>,
+    "max_events": ...
+}
+```
+
+3. Iso runtime rebuilds comm from `COMM_SPEC`.
+   It calls:
+
+```python
+comm.record(recording["filter"], mode="replace", max_events=...)
+```
+
+So yes, the iso comm knows whether to record and which events through serialized comm data. Only serializable selector filters are propagated; callable filters are not.
+
+4. During iso execution, comm records in memory.
+5. Supervisor/runtime writes side files:
+   - `delta_aggregates.json`
+   - `comm_recorded_events.json`
+
+6. Host always attempts merge after isolated execution returns:
+
+```python
+tool_manager.comm.merge_delta_cache_from_file(outdir / "delta_aggregates.json")
+tool_manager.comm.merge_recorded_events_from_file(outdir / "comm_recorded_events.json")
+```
+
+On cancellation: it is **best effort**, not guaranteed. We write on normal `done()`, managed `fail()`, supervisor shutdown path, and SIGTERM/SIGINT/atexit best-effort paths. If the runtime is hard-killed, the node dies, output dir is lost, or the process gets no cleanup window, the files may not exist and host merge is a no-op.
+
+So the correct doc statement should be: graceful/managed cancellation should usually preserve already dumped/flushable comm state; hard cancellation does not guarantee it.
 
 ## Permissions and ownership model
 
@@ -536,4 +579,5 @@ If parallel execs are added later:
 - `.../out/logs/supervisor/supervisor.log`
 - `.../out/logs/docker.err.log` / `.../out/logs/docker.out.log`
 - `.../out/delta_aggregates.json` (supervisor deltas)
+- `.../out/comm_recorded_events.json` (recorded comm events)
 - `.../out/tool_calls_index.json` (tool call record)

@@ -7,6 +7,7 @@ keywords: ["redis relay", "channels", "fanout", "transport layer"]
 see_also:
   - ks:docs/service/comm/CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md
   - ks:docs/service/comm/README-comm.md
+  - ks:docs/service/comm/comm-recording-event-sinks-README.md
   - ks:docs/service/streams/telemetry-README.md
   - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
   - ks:docs/sdk/bundle/bundle-firewall-README.md
@@ -122,7 +123,7 @@ Transports (SSE / Socket.IO) hook into the chat relay to dynamically subscribe/u
     * route selection
     * filters
     * delta sniffing/recording
-    * optional telemetry promotion to configured buses
+    * optional recording and sink dispatch
 
 **Core responsibilities**
 
@@ -149,12 +150,12 @@ See: [docs/sdk/bundle/bundle-firewall-README.md](../../sdk/bundle/bundle-firewal
 
 ---
 
-## Telemetry Promotion Boundary
+## Comm Recording And Event Sink Boundary
 
 `ChatCommunicator` is already the widely used bundle-facing path for chat,
-progress, custom typed, service, completion, and error events. Telemetry should
-reuse that choke point where possible instead of asking bundles to emit a second
-parallel event for every user-visible signal.
+progress, custom typed, service, completion, and error events. Recording and
+event sinks should reuse that choke point where possible instead of asking
+bundles to emit a second parallel event for every signal.
 
 Proposed generic flow:
 
@@ -169,25 +170,30 @@ ChatCommunicator
   | apply outbound filter/firewall
   | publish to chat relay when client-visible
   |
-  +--> optional telemetry promoter
+  +--> optional recording buffer
           |
-          | normalize to kdcube.telemetry.v1
-          | remove content by default
-          | add stable event_id
-          v
-      configured telemetry bus / ingest endpoint
+          | selected post-filter envelopes
+          | privacy-filtered compact records
+          | bounded in memory
+          |
+          +--> sink dispatch, e.g. send_telemetry(...)
+                 |
+                 | selected batch
+                 | sink-owned normalization / delivery
+                 v
+             configured event sink
 ```
 
-The promoter is a side effect of the existing comm path. It should be
-configurable per environment and should not change the client-visible relay
-contract.
+Recording and sink dispatch are side effects of the existing comm path. They
+should be configurable per environment and should not change the client-visible
+relay contract.
 
 Rules:
 
-- promotion must be non-blocking or bounded so chat delivery is not held by
-  telemetry storage;
-- promoted telemetry must follow the telemetry privacy contract and avoid raw
-  prompt/answer text by default;
+- recording must be bounded so chat delivery is not held by external sinks;
+- sink payloads must follow the relevant privacy contract and avoid raw
+  prompt/answer text by default; telemetry sinks should normalize to the
+  telemetry contract;
 - event ids must be stable enough for retry dedupe;
 - comm filtering/firewall decisions must be respected or explicitly modeled in
   the telemetry policy;
@@ -196,6 +202,7 @@ Rules:
 
 See:
 
+- [Comm Recording And Event Sinks](comm-recording-event-sinks-README.md)
 - [Telemetry Streams](../streams/telemetry-README.md)
 
 ---

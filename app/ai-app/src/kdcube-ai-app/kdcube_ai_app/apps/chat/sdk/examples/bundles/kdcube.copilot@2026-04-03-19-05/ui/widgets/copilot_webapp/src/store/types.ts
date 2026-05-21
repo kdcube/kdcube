@@ -1,4 +1,4 @@
-export type TabId = 'memory' | 'conversations' | 'telegram_admin';
+export type TabId = 'memory' | 'conversations' | 'events' | 'telegram_admin';
 
 export type TelegramWidgetCallOperation = <T>(
   operation: string,
@@ -89,11 +89,51 @@ export interface TelegramProfile {
   };
 }
 
+export interface CopilotEventItem {
+  event_id: string;
+  timestamp?: number;
+  timestamp_iso?: string;
+  bundle_id?: string;
+  source?: string;
+  type?: string;
+  socket_event?: string | null;
+  route?: string | null;
+  agent?: string | null;
+  step?: string | null;
+  status?: string | null;
+  title?: string | null;
+  data?: Record<string, unknown>;
+  metrics?: Record<string, unknown>;
+  context?: {
+    tenant?: string | null;
+    project?: string | null;
+    user?: string | null;
+    request_id?: string | null;
+    session_id?: string | null;
+    conversation_id?: string | null;
+    turn_id?: string | null;
+  };
+  privacy?: Record<string, unknown>;
+}
+
+export interface CopilotEventsPayload {
+  ok?: boolean;
+  bundle_id?: string;
+  events?: CopilotEventItem[];
+  count?: number;
+  limit?: number;
+  by_type?: Record<string, number>;
+  by_source?: Record<string, number>;
+  storage_path?: string;
+  error?: string;
+}
+
 export interface WebAppPayload {
   ok?: boolean;
   active_tab?: string;
   memory?: MemoryPayload;
   conversations?: ConversationsPayload;
+  events?: CopilotEventsPayload;
   telegram_admin?: { roles?: string[] };
   permissions?: { show_admin_component?: boolean };
 }
