@@ -184,6 +184,10 @@ kdcube start
 
 ### Typical day-to-day flow
 
+Use `--quiet` to suppress the banner and routine success chatter. The CLI also
+suppresses the banner automatically when stdout is not a TTY, and when a command
+is run with `--json`.
+
 ```bash
 # Start the stack
 kdcube start --workdir ~/.kdcube/kdcube-runtime/<tenant>__<project>
@@ -193,6 +197,9 @@ kdcube reload <bundle_id> --workdir ~/.kdcube/kdcube-runtime/<tenant>__<project>
 
 # Show the raw compose/proc call when debugging reload internals
 kdcube reload <bundle_id> --verbose --workdir ~/.kdcube/kdcube-runtime/<tenant>__<project>
+
+# Machine-readable reload result
+kdcube reload <bundle_id> --json --workdir ~/.kdcube/kdcube-runtime/<tenant>__<project>
 
 # Stop the stack
 kdcube stop --workdir ~/.kdcube/kdcube-runtime/<tenant>__<project>
@@ -227,7 +234,7 @@ kdcube defaults \
 
 | Command | What it does |
 |---|---|
-| `kdcube reload <bundle_id>` | Reapply bundle config and clear proc caches — no full restart needed |
+| `kdcube reload <bundle_id> [--json] [--quiet]` | Reapply bundle config and clear proc caches — no full restart needed |
 | `kdcube bundle <bundle_id>` | Create, update, or delete a staged bundle entry |
 | `kdcube export` | Export live `bundles.yaml` / `bundles.secrets.yaml` |
 
@@ -290,7 +297,8 @@ kdcube reload <bundle_id>
 ```
 
 Normal reload output is concise and operator-facing. Use `--verbose` only when
-you need the raw Docker Compose command and full proc response.
+you need the raw Docker Compose command and full proc response. Use `--json`
+for scriptable output.
 
 ```bash
 # Delete a bundle entry (also removes its secrets entry)
@@ -313,6 +321,9 @@ kdcube bundle status <bundle_id> --live --json --workdir ~/.kdcube/kdcube-runtim
 
 `--live` is an operator-level check for someone with local workdir and Docker
 access. It does not emulate an end-user session or frontend visibility rules.
+
+For scriptable runtime inspection, `kdcube info --json` emits defaults, the
+running deployment lock, and runtime mount details when a workdir is selected.
 
 When `--local-path` or `--git-repo` is given and the bundle doesn't exist yet,
 the command creates a new entry (upsert). All other flags require an existing

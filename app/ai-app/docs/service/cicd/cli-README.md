@@ -979,11 +979,19 @@ kdcube reload <bundle_id> --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<proje
 ```
 
 Normal reload output is concise and hides the inner Docker Compose call. Use
-`--verbose` when debugging reload internals:
+`--verbose` when debugging reload internals, or `--json` for scriptable output:
 
 ```bash
 kdcube reload <bundle_id> --verbose --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+kdcube reload <bundle_id> --json --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
 ```
+
+Use `--quiet` to suppress the banner and routine success chatter. The banner is
+also suppressed automatically when stdout is not a TTY and when a command uses
+`--json`.
+
+`kdcube info --json` emits defaults, the running deployment lock, and runtime
+mount details when a workdir is selected.
 
 Export live bundle descriptors:
 

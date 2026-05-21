@@ -13,6 +13,7 @@ from kdcube_cli.cli import (
     _collect_runtime_info,
     _collect_bundle_status,
     _bundle_reload_summary_lines,
+    _cli_quiet_requested,
     _compose_running_services,
     _descriptor_fast_path_reasons,
     _compose_logs_dir_from_env,
@@ -240,6 +241,17 @@ def test_bundle_apply_command_quotes_values_with_spaces(tmp_path: Path):
     assert _bundle_apply_command("bundle with space", tmp_path / "runtime dir") == (
         f"kdcube reload 'bundle with space' --workdir '{tmp_path / 'runtime dir'}'"
     )
+
+
+def test_cli_quiet_requested_for_json_quiet_env_and_non_tty(monkeypatch):
+    assert _cli_quiet_requested(["bundle", "--help"], stdout_is_tty=False) is True
+    assert _cli_quiet_requested(["--quiet", "info"], stdout_is_tty=True) is True
+    assert _cli_quiet_requested(["info", "--json"], stdout_is_tty=True) is True
+
+    monkeypatch.setenv("KDCUBE_CLI_QUIET", "1")
+    assert _cli_quiet_requested(["info"], stdout_is_tty=True) is True
+    monkeypatch.setenv("KDCUBE_CLI_QUIET", "0")
+    assert _cli_quiet_requested(["info"], stdout_is_tty=True) is False
 
 
 def test_bundle_reload_summary_hides_inner_compose_command(tmp_path: Path):

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import posixpath
@@ -76,6 +77,37 @@ class _AmbiguousWorkdirError(Exception):
         self.base_workdir = base_workdir
         self.candidates = candidates
         super().__init__(str(base_workdir))
+
+
+class _NullWriter(io.StringIO):
+    def write(self, value: str) -> int:
+        return len(value)
+
+    def flush(self) -> None:
+        return None
+
+    def isatty(self) -> bool:
+        return False
+
+
+def _cli_quiet_requested(argv: list[str], *, stdout_is_tty: bool | None = None) -> bool:
+    if _cli_explicit_quiet_requested(argv):
+        return True
+    args = list(argv or [])
+    if any(arg == "--json" or arg.startswith("--json=") for arg in args):
+        return True
+    is_tty = sys.stdout.isatty() if stdout_is_tty is None else bool(stdout_is_tty)
+    return not is_tty
+
+
+def _cli_explicit_quiet_requested(argv: list[str]) -> bool:
+    raw_env = os.environ.get("KDCUBE_CLI_QUIET", "").strip().lower()
+    if raw_env not in {"", "0", "false", "no"}:
+        return True
+    args = list(argv or [])
+    if any(arg in {"-q", "--quiet"} for arg in args):
+        return True
+    return False
 
 
 def run(cmd: list[str], cwd: Path | None = None) -> None:
@@ -818,6 +850,23 @@ def print_cli_defaults(console: Console, cli_defaults: dict) -> None:
         console.print(f"[dim]Default project:[/dim]  {cli_defaults.get('default_project') or '[not set]'}")
 
 
+def _collect_running_deployment_info() -> dict[str, object]:
+    lock = _read_cli_lock()
+    if lock is None:
+        return {"recorded": False, "running": False}
+    running = _lock_running_services(lock)
+    stale = not bool(running)
+    return {
+        "recorded": True,
+        "running": bool(running),
+        "stale": stale,
+        "tenant": lock.get("tenant"),
+        "project": lock.get("project"),
+        "workdir": lock.get("workdir"),
+        "services": sorted(running),
+    }
+
+
 def print_running_deployment_info(console: Console) -> None:
     lock = _read_cli_lock()
     if lock is None:
@@ -1279,7 +1328,9 @@ def reload_bundle_from_descriptor(
     workdir: Path,
     bundle_id: str,
     verbose: bool = False,
-) -> None:
+    json_output: bool = False,
+    quiet: bool = False,
+) -> dict[str, object]:
     ctx = _build_paths_for_repo(repo_root, workdir)
     env_main_path = ctx.config_dir / ".env"
     env_proc_path = ctx.config_dir / ".env.proc"
@@ -1332,10 +1383,11 @@ def reload_bundle_from_descriptor(
         script,
     ]
 
-    console.print(
-        f"[dim]Reloading bundle[/dim] {bundle_id}\n"
-        f"[dim]Descriptor[/dim] {descriptor_path}"
-    )
+    if not quiet and not json_output:
+        console.print(
+            f"[dim]Reloading bundle[/dim] {bundle_id}\n"
+            f"[dim]Descriptor[/dim] {descriptor_path}"
+        )
     raw = _run_compose_capture(
         console,
         cmd,
@@ -1359,12 +1411,20 @@ def reload_bundle_from_descriptor(
     if result.get("status") != "ok":
         detail = json.dumps(result, ensure_ascii=False, indent=2)
         raise SystemExit(f"Bundle reload failed.\n{detail}")
-    _print_bundle_reload_summary(
-        console,
-        result,
-        descriptor_path=descriptor_path,
-        bundle_id=bundle_id,
+    result.setdefault(
+        "messages",
+        _bundle_reload_summary_lines(result, descriptor_path=descriptor_path, bundle_id=bundle_id),
     )
+    if json_output:
+        console.print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+    elif not quiet:
+        _print_bundle_reload_summary(
+            console,
+            result,
+            descriptor_path=descriptor_path,
+            bundle_id=bundle_id,
+        )
+    return result
 
 
 def _docker_running_names() -> list[str]:
@@ -2209,9 +2269,18 @@ def _bootstrap_repo_for_defaults(
 
 
 def main() -> None:
+    preparse_quiet = _cli_quiet_requested(sys.argv[1:])
     console = Console()
-    print_cli_banner()
+    if not preparse_quiet:
+        print_cli_banner()
     parser = argparse.ArgumentParser(description="KDCube Apps bootstrap CLI")
+    parser.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        default=False,
+        help="Suppress the banner and routine success chatter",
+    )
     parser.add_argument("--repo", default=DEFAULT_REPO, help=argparse.SUPPRESS)
     parser.add_argument(
         "--path",
@@ -2352,15 +2421,27 @@ def main() -> None:
     )
     subparsers = parser.add_subparsers(dest="command")
 
+    def _add_quiet_arg(subparser: argparse.ArgumentParser) -> None:
+        subparser.add_argument(
+            "-q",
+            "--quiet",
+            action="store_true",
+            default=argparse.SUPPRESS,
+            help="Suppress the banner and routine success chatter",
+        )
+
     _sp = subparsers.add_parser("stop", help="Stop the local Docker Compose stack")
+    _add_quiet_arg(_sp)
     _sp.add_argument("--workdir", default=None, help="Namespaced runtime workdir to stop")
     _sp.add_argument("--path", default=str(DEFAULT_DIR), help="Platform repo path")
     _sp.add_argument("--remove-volumes", action="store_true", help="Also pass -v to docker compose down")
 
     _sp = subparsers.add_parser("reload", help="Reload a bundle from its descriptor")
+    _add_quiet_arg(_sp)
     _sp.add_argument("bundle_id", help="Bundle ID to reload")
     _sp.add_argument("--workdir", default=None, help="Namespaced runtime workdir")
     _sp.add_argument("--path", default=str(DEFAULT_DIR), help="Platform repo path")
+    _sp.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
     _sp.add_argument(
         "--verbose",
         action="store_true",
@@ -2368,6 +2449,7 @@ def main() -> None:
     )
 
     _sp = subparsers.add_parser("bundle", help="Create, update, delete, or inspect a staged bundle entry")
+    _add_quiet_arg(_sp)
     _sp.add_argument("bundle_id", nargs="?", help="Bundle ID to patch, or 'status'")
     _sp.add_argument("status_bundle_id", nargs="?", help=argparse.SUPPRESS)
     _sp.add_argument("--workdir", default=None, help="Namespaced runtime workdir")
@@ -2471,6 +2553,7 @@ def main() -> None:
     )
 
     _sp = subparsers.add_parser("export", help="Export live bundle descriptors")
+    _add_quiet_arg(_sp)
     _sp.add_argument("--workdir", default=None, help="Namespaced runtime workdir")
     _sp.add_argument("--path", default=str(DEFAULT_DIR), help="Platform repo path")
     _sp.add_argument("--tenant", default="", help="Tenant for AWS SM export")
@@ -2481,6 +2564,7 @@ def main() -> None:
     _sp.add_argument("--aws-sm-prefix", default="", help="AWS SM prefix override")
 
     _sp = subparsers.add_parser("info", help="Show CLI defaults and runtime info")
+    _add_quiet_arg(_sp)
     _sp.add_argument("--workdir", default="", help="Initialized runtime workdir to inspect")
     _sp.add_argument("--path", default=str(DEFAULT_DIR), help="Platform repo path")
     _sp.add_argument("--tenant", default="", help="Tenant for workdir resolution or disambiguation")
@@ -2491,20 +2575,25 @@ def main() -> None:
         action="store_true",
         help="Show the currently running deployment",
     )
+    _sp.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
 
     _sp = subparsers.add_parser("clean", help="Clean local Docker image/cache artifacts")
+    _add_quiet_arg(_sp)
 
     _sp = subparsers.add_parser("defaults", help="Save persistent operator defaults")
+    _add_quiet_arg(_sp)
     _sp.add_argument("--default-tenant", default="", help="Default tenant to persist")
     _sp.add_argument("--default-project", default="", help="Default project to persist")
     _sp.add_argument("--default-workdir", default="", help="Default workdir to persist")
 
     _sp = subparsers.add_parser("start", help="Start the Docker Compose stack for an initialized workdir")
+    _add_quiet_arg(_sp)
     _sp.add_argument("--workdir", default=None, help="Namespaced runtime workdir to start")
     _sp.add_argument("--path", default=str(DEFAULT_DIR), help="Platform repo path")
     _sp.add_argument("--build", action="store_true", help="Build/rebuild images before starting")
 
     _sp = subparsers.add_parser("init", help="Initialize a workdir (stage descriptors and env files) without starting Docker")
+    _add_quiet_arg(_sp)
     _sp.add_argument("--workdir", default=str(DEFAULT_WORKDIR), help="Base or namespaced runtime workdir")
     _sp.add_argument(
         "--path",
@@ -2556,6 +2645,9 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+    args.quiet = bool(_cli_explicit_quiet_requested(sys.argv[1:]) or getattr(args, "quiet", False))
+    if args.quiet and not bool(getattr(args, "json_output", False)):
+        console = Console(file=_NullWriter())
 
     def _arg_provided(name: str) -> bool:
         return any(arg == name or arg.startswith(f"{name}=") for arg in sys.argv[1:])
@@ -2614,10 +2706,23 @@ def main() -> None:
             _eff_tenant = str(args.tenant or cli_defaults.get("default_tenant", "") or "").strip() or None
             _eff_project = str(args.project or cli_defaults.get("default_project", "") or "").strip() or None
             if args.show_defaults:
+                if args.json_output:
+                    console.print(json.dumps({"defaults": cli_defaults}, ensure_ascii=False, indent=2, sort_keys=True))
+                    return
                 console.print("[bold]KDCube CLI Defaults[/bold]")
                 print_cli_defaults(console, cli_defaults)
                 return
             if args.show_current_running_runtime:
+                if args.json_output:
+                    console.print(
+                        json.dumps(
+                            {"running_deployment": _collect_running_deployment_info()},
+                            ensure_ascii=False,
+                            indent=2,
+                            sort_keys=True,
+                        )
+                    )
+                    return
                 print_running_deployment_info(console)
                 return
             _workdir_str = str(args.workdir or "").strip()
@@ -2630,6 +2735,16 @@ def main() -> None:
                         "Run `kdcube init` to initialize it first."
                     )
                 _repo = _resolve_subcommand_repo(args.path, workdir=_resolved)
+                if args.json_output:
+                    console.print(
+                        json.dumps(
+                            _collect_runtime_info(repo_root=_repo, workdir=_resolved),
+                            ensure_ascii=False,
+                            indent=2,
+                            sort_keys=True,
+                        )
+                    )
+                    return
                 print_runtime_info(console, repo_root=_repo, workdir=_resolved)
             elif _arg_provided("--tenant") or _arg_provided("--project"):
                 _def_base_raw = str(cli_defaults.get("default_workdir", "") or "").strip()
@@ -2641,8 +2756,38 @@ def main() -> None:
                         "Run `kdcube init` to initialize it first."
                     )
                 _repo = _resolve_subcommand_repo(args.path, workdir=_workdir)
+                if args.json_output:
+                    console.print(
+                        json.dumps(
+                            _collect_runtime_info(repo_root=_repo, workdir=_workdir),
+                            ensure_ascii=False,
+                            indent=2,
+                            sort_keys=True,
+                        )
+                    )
+                    return
                 print_runtime_info(console, repo_root=_repo, workdir=_workdir)
             else:
+                if args.json_output:
+                    payload: dict[str, object] = {
+                        "defaults": cli_defaults,
+                        "running_deployment": _collect_running_deployment_info(),
+                    }
+                    _def_base_raw = str(cli_defaults.get("default_workdir", "") or "").strip()
+                    _def_tenant = str(cli_defaults.get("default_tenant", "") or "").strip() or None
+                    _def_project = str(cli_defaults.get("default_project", "") or "").strip() or None
+                    if _def_base_raw or _def_tenant or _def_project:
+                        _def_base = Path(_def_base_raw).expanduser().resolve() if _def_base_raw else DEFAULT_WORKDIR
+                        try:
+                            _def_resolved = _resolve_cli_workdir(_def_base, tenant=_def_tenant, project=_def_project)
+                        except SystemExit:
+                            payload["default_runtime"] = None
+                        else:
+                            if _runtime_env_exists(_def_resolved) or (_def_resolved / "config").exists():
+                                _def_repo = _resolve_subcommand_repo(args.path, workdir=_def_resolved)
+                                payload["default_runtime"] = _collect_runtime_info(repo_root=_def_repo, workdir=_def_resolved)
+                    console.print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+                    return
                 print_global_info(console, cli_defaults)
                 _def_base_raw = str(cli_defaults.get("default_workdir", "") or "").strip()
                 _def_tenant = str(cli_defaults.get("default_tenant", "") or "").strip() or None
@@ -2678,6 +2823,8 @@ def main() -> None:
                 workdir=_resolve_cli_workdir(_workdir),
                 bundle_id=str(args.bundle_id).strip(),
                 verbose=bool(args.verbose),
+                json_output=bool(args.json_output),
+                quiet=bool(args.quiet),
             )
             return
         if args.command == "bundle":
