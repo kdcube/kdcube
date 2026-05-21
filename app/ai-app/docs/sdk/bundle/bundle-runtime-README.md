@@ -8,6 +8,7 @@ updated_at: 2026-05-21
 see_also:
   - ks:docs/sdk/bundle/bundle-developer-guide-README.md
   - ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
+  - ks:docs/sdk/bundle/build/design/bundle-loader-import-isolation-README.md
   - ks:docs/sdk/bundle/bundle-lifecycle-README.md
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
@@ -95,6 +96,18 @@ bundle may then import another bundle's package or fail with
 The bundle loader provides an isolated virtual package for directory bundles.
 Package-relative imports are what keep bundle-local code inside that virtual
 package.
+
+Design note:
+
+- proc intentionally loads many bundles in one worker process to share heavy
+  runtime resources such as Redis/Postgres pools and process-local helpers
+- the loader keeps compatibility with raw module-path descriptor shapes and
+  `@venv` child loads, so it cannot make generic top-level bundle-local names
+  globally safe
+- the shared bundle suite now lints top-level imports of bundle-owned Python
+  roots and reports them as authoring errors
+- see [Bundle Loader Import Isolation](build/design/bundle-loader-import-isolation-README.md)
+  for the history and rationale
 
 Authoring requirements:
 

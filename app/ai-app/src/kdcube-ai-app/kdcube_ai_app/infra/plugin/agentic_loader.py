@@ -154,6 +154,38 @@ class BundleInterfaceManifest:
 _VALID_ENABLED_KINDS: frozenset = frozenset({"bundle", "api", "mcp", "widget", "cron"})
 
 
+def _is_equivalent_decorator_spec(value: Any, cls: type, required_fields: tuple[str, ...]) -> bool:
+    """Accept decorator specs created before a module reload.
+
+    Proc intentionally keeps many bundles in one Python process. During hot
+    reloads or path-collision recovery, a bundle may import decorator classes
+    from a different in-memory instance of this module. The attribute payload is
+    still a dataclass with the same spec name and fields, but `isinstance`
+    against the current class returns false.
+    """
+    if isinstance(value, cls):
+        return True
+    if value is None:
+        return False
+    if type(value).__name__ != cls.__name__:
+        return False
+    if not dataclasses.is_dataclass(value):
+        return False
+    return all(hasattr(value, field) for field in required_fields)
+
+
+def _coerce_public_api_auth_spec(value: Any) -> PublicAPIAuthSpec | None:
+    if value is None:
+        return None
+    if _is_equivalent_decorator_spec(value, PublicAPIAuthSpec, ("mode", "header", "secret_key")):
+        return PublicAPIAuthSpec(
+            mode=str(getattr(value, "mode", "none") or "none"),
+            header=getattr(value, "header", None),
+            secret_key=getattr(value, "secret_key", None),
+        )
+    return value
+
+
 def canonical_enabled_path(
         kind: str,
         *,
@@ -1341,6 +1373,37 @@ _bundle_static_entrypoint_load_tasks: dict[str, asyncio.Task] = {}
 _bundle_static_entrypoint_load_lock = asyncio.Lock()
 
 
+async def _cleanup_bundle_load_task(load_key: str, task: asyncio.Task) -> None:
+    succeeded = False
+    try:
+        exc = task.exception()
+    except BaseException:
+        exc = None
+    else:
+        succeeded = exc is None
+
+    async with _bundle_load_async_lock:
+        if _bundle_load_tasks.get(load_key) is not task:
+            return
+        _bundle_load_tasks.pop(load_key, None)
+        if succeeded:
+            _bundle_load_done.add(load_key)
+    with _bundle_load_lock:
+        _bundle_load_inflight.discard(load_key)
+
+
+def _schedule_bundle_load_cleanup(load_key: str, task: asyncio.Task) -> None:
+    loop = asyncio.get_running_loop()
+
+    def _on_done(done_task: asyncio.Task) -> None:
+        try:
+            loop.create_task(_cleanup_bundle_load_task(load_key, done_task))
+        except RuntimeError:
+            pass
+
+    task.add_done_callback(_on_done)
+
+
 async def _cleanup_static_entrypoint_load_task(load_key: str, task: asyncio.Task) -> None:
     """
     Remove a completed process-local static entrypoint load task.
@@ -1585,24 +1648,17 @@ async def _maybe_run_bundle_on_load(
                 )
             )
             _bundle_load_tasks[key] = task
+            _schedule_bundle_load_cleanup(key, task)
 
     try:
-        await task
+        await asyncio.shield(task)
     except Exception:
         logger = AgentLogger("bundle.on_load", getattr(config, "log_level", "INFO"))
         logger.log("[bundle.on_load] hook failed:\n" + traceback.format_exc(), level="ERROR")
-        async with _bundle_load_async_lock:
-            if _bundle_load_tasks.get(key) is task:
-                _bundle_load_tasks.pop(key, None)
         raise
-    else:
-        async with _bundle_load_async_lock:
-            if _bundle_load_tasks.get(key) is task:
-                _bundle_load_tasks.pop(key, None)
-            _bundle_load_done.add(key)
     finally:
-        with _bundle_load_lock:
-            _bundle_load_inflight.discard(key)
+        if task.done():
+            await _cleanup_bundle_load_task(key, task)
 
 
 def _props_change_comm_context(*, bundle_id: str, tenant: str, project: str) -> ChatTaskPayload:
@@ -1960,17 +2016,21 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
 
     for member_name, fn in _iter_bundle_callable_members(target):
         api_spec = getattr(fn, API_METHOD_ATTR, None)
-        if isinstance(api_spec, APIEndpointSpec):
+        if _is_equivalent_decorator_spec(
+            api_spec,
+            APIEndpointSpec,
+            ("method_name", "alias", "http_method", "route"),
+        ):
             resolved = APIEndpointSpec(
                 method_name=member_name,
-                alias=api_spec.alias,
-                http_method=api_spec.http_method,
-                route=api_spec.route,
-                user_types=tuple(api_spec.user_types or ()),
-                user_types_config=api_spec.user_types_config,
-                roles=tuple(api_spec.roles or ()),
-                roles_config=api_spec.roles_config,
-                public_auth=api_spec.public_auth,
+                alias=str(getattr(api_spec, "alias", "") or ""),
+                http_method=str(getattr(api_spec, "http_method", "POST") or "POST"),
+                route=str(getattr(api_spec, "route", "operations") or "operations"),
+                user_types=tuple(getattr(api_spec, "user_types", ()) or ()),
+                user_types_config=getattr(api_spec, "user_types_config", None),
+                roles=tuple(getattr(api_spec, "roles", ()) or ()),
+                roles_config=getattr(api_spec, "roles_config", None),
+                public_auth=_coerce_public_api_auth_spec(getattr(api_spec, "public_auth", None)),
             )
             api_key = (resolved.alias, resolved.http_method, resolved.route)
             if api_key in seen_api:
@@ -1982,13 +2042,17 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
             api_endpoints.append(resolved)
 
         mcp_spec = getattr(fn, MCP_ENDPOINT_ATTR, None)
-        if isinstance(mcp_spec, MCPEndpointSpec):
+        if _is_equivalent_decorator_spec(
+            mcp_spec,
+            MCPEndpointSpec,
+            ("method_name", "alias", "route", "transport"),
+        ):
             resolved = MCPEndpointSpec(
                 method_name=member_name,
-                alias=mcp_spec.alias,
-                route=mcp_spec.route,
-                transport=mcp_spec.transport,
-                transport_config=mcp_spec.transport_config,
+                alias=str(getattr(mcp_spec, "alias", "") or ""),
+                route=str(getattr(mcp_spec, "route", "operations") or "operations"),
+                transport=str(getattr(mcp_spec, "transport", "streamable-http") or "streamable-http"),
+                transport_config=getattr(mcp_spec, "transport_config", None),
             )
             mcp_key = (resolved.alias, resolved.route)
             if mcp_key in seen_mcp:
@@ -2000,15 +2064,19 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
             mcp_endpoints.append(resolved)
 
         widget_spec = getattr(fn, UI_WIDGET_ATTR, None)
-        if isinstance(widget_spec, UIWidgetSpec):
+        if _is_equivalent_decorator_spec(
+            widget_spec,
+            UIWidgetSpec,
+            ("method_name", "alias", "icon"),
+        ):
             resolved = UIWidgetSpec(
                 method_name=member_name,
-                alias=widget_spec.alias,
-                icon=dict(widget_spec.icon or {}),
-                user_types=tuple(widget_spec.user_types or ()),
-                user_types_config=widget_spec.user_types_config,
-                roles=tuple(widget_spec.roles or ()),
-                roles_config=widget_spec.roles_config,
+                alias=str(getattr(widget_spec, "alias", "") or ""),
+                icon=dict(getattr(widget_spec, "icon", {}) or {}),
+                user_types=tuple(getattr(widget_spec, "user_types", ()) or ()),
+                user_types_config=getattr(widget_spec, "user_types_config", None),
+                roles=tuple(getattr(widget_spec, "roles", ()) or ()),
+                roles_config=getattr(widget_spec, "roles_config", None),
             )
             if resolved.alias in seen_widgets:
                 raise ValueError(f"Duplicate bundle widget alias detected: {resolved.alias}")
@@ -2016,36 +2084,36 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
             ui_widgets.append(resolved)
 
         current_ui_main = getattr(fn, UI_MAIN_ATTR, None)
-        if isinstance(current_ui_main, UIMainSpec):
+        if _is_equivalent_decorator_spec(current_ui_main, UIMainSpec, ("method_name",)):
             resolved = UIMainSpec(method_name=member_name)
             if ui_main_spec and ui_main_spec.method_name != resolved.method_name:
                 raise ValueError("Multiple @ui_main methods detected on bundle entrypoint")
             ui_main_spec = resolved
 
         current_on_message = getattr(fn, ON_MESSAGE_ATTR, None)
-        if isinstance(current_on_message, OnMessageSpec):
+        if _is_equivalent_decorator_spec(current_on_message, OnMessageSpec, ("method_name",)):
             resolved = OnMessageSpec(method_name=member_name)
             if on_message_spec and on_message_spec.method_name != resolved.method_name:
                 raise ValueError("Multiple @on_message methods detected on bundle entrypoint")
             on_message_spec = resolved
 
         current_on_job = getattr(fn, ON_JOB_ATTR, None)
-        if isinstance(current_on_job, OnJobSpec):
+        if _is_equivalent_decorator_spec(current_on_job, OnJobSpec, ("method_name",)):
             resolved = OnJobSpec(method_name=member_name)
             if on_job_spec and on_job_spec.method_name != resolved.method_name:
                 raise ValueError("Multiple @on_job methods detected on bundle entrypoint")
             on_job_spec = resolved
 
         cron_spec = getattr(fn, CRON_JOB_ATTR, None)
-        if isinstance(cron_spec, CronJobSpec):
+        if _is_equivalent_decorator_spec(cron_spec, CronJobSpec, ("method_name", "alias", "span")):
             scheduled_jobs.append(CronJobSpec(
                 method_name=member_name,
-                alias=cron_spec.alias or member_name,
-                cron_expression=cron_spec.cron_expression,
-                expr_config=cron_spec.expr_config,
-                timezone=cron_spec.timezone,
-                tz_config=cron_spec.tz_config,
-                span=cron_spec.span,
+                alias=getattr(cron_spec, "alias", None) or member_name,
+                cron_expression=getattr(cron_spec, "cron_expression", None),
+                expr_config=getattr(cron_spec, "expr_config", None),
+                timezone=getattr(cron_spec, "timezone", None),
+                tz_config=getattr(cron_spec, "tz_config", None),
+                span=str(getattr(cron_spec, "span", "system") or "system"),
             ))
 
     meta = getattr(cls, AGENTIC_META_ATTR, {}) or {}

@@ -5,7 +5,7 @@ import os
 import hashlib
 import sys
 from contextlib import asynccontextmanager
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -129,6 +129,47 @@ def test_direct_bundle_loader_removes_failed_partial_module(tmp_path):
 
     mod = _load_module_from_dir(tmp_path, "entrypoint")
     assert getattr(mod.GoodWorkflow, "__agentic_role__", None) == "workflow_class"
+
+
+def test_bundle_loader_relative_imports_survive_foreign_sibling_package(tmp_path):
+    foreign = tmp_path / "foreign"
+    foreign_services = foreign / "services"
+    foreign_services.mkdir(parents=True)
+    (foreign_services / "__init__.py").write_text("", encoding="utf-8")
+    (foreign_services / "news.py").write_text("VALUE = 'foreign'\n", encoding="utf-8")
+
+    target = tmp_path / "target"
+    target_services = target / "services"
+    target_services.mkdir(parents=True)
+    (target_services / "__init__.py").write_text("", encoding="utf-8")
+    (target_services / "news.py").write_text("VALUE = 'target'\n", encoding="utf-8")
+    (target / "entrypoint.py").write_text(
+        "from .services.news import VALUE\n"
+        "from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow\n\n"
+        "@agentic_workflow(name='target')\n"
+        "class TargetWorkflow:\n"
+        "    marker = VALUE\n",
+        encoding="utf-8",
+    )
+
+    foreign_pkg = ModuleType("services")
+    foreign_pkg.__path__ = [str(foreign_services)]
+    root = str(target.resolve())
+    sys.modules["services"] = foreign_pkg
+    try:
+        mod = _load_from_sys_with_path_on_syspath(target, "entrypoint")
+
+        assert mod.__name__.startswith("kdcube_bundle_")
+        assert mod.VALUE == "target"
+        assert getattr(mod.TargetWorkflow, "marker") == "target"
+        assert sys.modules["services"] is foreign_pkg
+    finally:
+        if root in sys.path:
+            sys.path.remove(root)
+        sys.modules.pop("entrypoint", None)
+        sys.modules.pop("services", None)
+        for name in [name for name in sys.modules if name.startswith("kdcube_bundle_")]:
+            sys.modules.pop(name, None)
 
 
 class _RecordingMCPProvider:
@@ -876,8 +917,10 @@ async def test_static_widget_subpaths_fall_back_to_index_html(monkeypatch, tmp_p
         del args, kwargs
         return SimpleNamespace(id="bundle.demo", path=str(tmp_path), module="entrypoint", singleton=False)
 
+    load_keys = []
+
     async def _run_static_bundle_entrypoint_load_once(**kwargs):
-        del kwargs
+        load_keys.append(kwargs["load_key"])
         return None
 
     storage_root = tmp_path / "bundle-storage"
@@ -914,6 +957,14 @@ async def test_static_widget_subpaths_fall_back_to_index_html(monkeypatch, tmp_p
     assert "contentWidth" in html
     assert "viewportWidth" in html
     assert "<div id=\"root\"></div>" in html
+    assert load_keys == [
+        integrations.static_bundle_entrypoint_load_key(
+            tenant="tenant-a",
+            project="project-a",
+            bundle_id="bundle.demo",
+            storage_root=storage_root,
+        )
+    ]
 
 
 @pytest.mark.asyncio

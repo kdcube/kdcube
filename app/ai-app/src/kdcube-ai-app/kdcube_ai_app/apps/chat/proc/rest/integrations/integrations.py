@@ -1044,6 +1044,7 @@ async def _load_bundle_props_defaults(
         project: str,
         request: Request,
         session: UserSession,
+        evict_before_load: bool = True,
 ) -> Dict[str, Any]:
     spec_resolved = await _resolve_bundle_spec_from_runtime(
         request=request,
@@ -1064,11 +1065,14 @@ async def _load_bundle_props_defaults(
         module=spec_resolved.module,
         singleton=bool(spec_resolved.singleton),
     )
-    # Always reload bundle code for "code defaults" so UI reflects latest code.
-    try:
-        evict_bundle_scope(spec)
-    except Exception:
-        pass
+    if evict_before_load:
+        # Reload bundle code for explicit "code defaults" reads/resets. Static
+        # UI warmups pass evict_before_load=False so concurrent iframe/widget
+        # requests do not cancel an in-flight on_bundle_load build.
+        try:
+            evict_bundle_scope(spec)
+        except Exception:
+            pass
     routing = _build_rest_bundle_routing(
         request=request,
         session_id=session.session_id,
@@ -2352,6 +2356,7 @@ async def serve_static_asset(
                 project=project_id,
                 request=request,
                 session=session,
+                evict_before_load=False,
             ),
         )
         storage_root = storage_for_spec(spec=spec, tenant=tenant_id, project=project_id, ensure=False)
@@ -2361,12 +2366,22 @@ async def serve_static_asset(
         # Build/refresh on HTML entrypoint requests. This triggers
         # on_bundle_load(), which calls BaseEntrypoint._ensure_ui_build() and
         # lets its signature cache decide whether a rebuild is necessary.
-        await _load_bundle_props_defaults(
-            bundle_id=bundle_id,
+        fallback_load_key = static_bundle_entrypoint_load_key(
             tenant=tenant_id,
             project=project_id,
-            request=request,
-            session=session,
+            bundle_id=f"{bundle_id}::main-ui-fallback",
+            storage_root=storage_root,
+        )
+        await run_static_bundle_entrypoint_load_once(
+            load_key=fallback_load_key,
+            load_coro_factory=lambda: _load_bundle_props_defaults(
+                bundle_id=bundle_id,
+                tenant=tenant_id,
+                project=project_id,
+                request=request,
+                session=session,
+                evict_before_load=False,
+            ),
         )
         storage_root = storage_for_spec(spec=spec, tenant=tenant_id, project=project_id, ensure=False)
         ui_root = storage_root / "ui" if storage_root else None
@@ -3090,7 +3105,7 @@ async def _serve_static_widget_app(
     load_key = static_bundle_entrypoint_load_key(
         tenant=tenant_id,
         project=project_id,
-        bundle_id=f"{bundle_id}::widget::{widget_spec.alias}",
+        bundle_id=bundle_id,
         storage_root=storage_root,
     )
     if should_refresh_entrypoint:
@@ -3102,23 +3117,43 @@ async def _serve_static_widget_app(
                 project=project_id,
                 request=request,
                 session=session,
+                evict_before_load=False,
             ),
         )
         storage_root = storage_for_spec(spec=spec, tenant=tenant_id, project=project_id, ensure=False)
         ui_root = storage_root / "ui" / "widgets" / widget_spec.alias if storage_root else None
 
     if not ui_root or not ui_root.exists():
-        await _ensure_widget_ui_build_from_workflow()
+        build_load_key = static_bundle_entrypoint_load_key(
+            tenant=tenant_id,
+            project=project_id,
+            bundle_id=f"{bundle_id}::widget-build::{widget_spec.alias}",
+            storage_root=storage_root,
+        )
+        await run_static_bundle_entrypoint_load_once(
+            load_key=build_load_key,
+            load_coro_factory=_ensure_widget_ui_build_from_workflow,
+        )
         storage_root = storage_for_spec(spec=spec, tenant=tenant_id, project=project_id, ensure=False)
         ui_root = storage_root / "ui" / "widgets" / widget_spec.alias if storage_root else None
 
     if not ui_root or not ui_root.exists():
-        await _load_bundle_props_defaults(
-            bundle_id=bundle_id,
+        fallback_load_key = static_bundle_entrypoint_load_key(
             tenant=tenant_id,
             project=project_id,
-            request=request,
-            session=session,
+            bundle_id=f"{bundle_id}::widget-fallback::{widget_spec.alias}",
+            storage_root=storage_root,
+        )
+        await run_static_bundle_entrypoint_load_once(
+            load_key=fallback_load_key,
+            load_coro_factory=lambda: _load_bundle_props_defaults(
+                bundle_id=bundle_id,
+                tenant=tenant_id,
+                project=project_id,
+                request=request,
+                session=session,
+                evict_before_load=False,
+            ),
         )
         storage_root = storage_for_spec(spec=spec, tenant=tenant_id, project=project_id, ensure=False)
         ui_root = storage_root / "ui" / "widgets" / widget_spec.alias if storage_root else None

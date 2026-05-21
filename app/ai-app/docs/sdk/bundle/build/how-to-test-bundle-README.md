@@ -424,30 +424,14 @@ Use these as the first actionable checks for each bundle surface.
 $PY -m py_compile /abs/path/to/bundle/entrypoint.py
 ```
 
-For bundles that may be delivered from git or from a repo parent directory,
-also prove both loader import shapes:
+`py_compile` is only a syntax check. It does not prove the KDCube bundle-loader
+contract.
 
-```bash
-BUNDLE_PARENT=/abs/path/to/repo/src
-BUNDLE_PACKAGE=my_bundle
-BUNDLE_DIR=$BUNDLE_PARENT/$BUNDLE_PACKAGE
-```
-
-Set `BUNDLE_PACKAGE` to the Python import path used in the descriptor
-`module`, without `.entrypoint`.
-
-```bash
-PYTHONPATH=app/ai-app/src/kdcube-ai-app:$BUNDLE_PARENT \
-  $PY -c "import importlib; importlib.import_module('${BUNDLE_PACKAGE}.entrypoint')"
-```
-
-```bash
-PYTHONPATH=app/ai-app/src/kdcube-ai-app:$BUNDLE_DIR \
-  $PY -c "import importlib; importlib.import_module('entrypoint')"
-```
-
-If the bundle has nested tool modules, import those too. This catches
-bundle-local imports that only work with one descriptor shape.
+Use the shared bundle suite for import validation. The suite loads the bundle
+through the loader contract and lints bundle-local Python imports. Top-level
+imports of Python roots owned by the bundle directory, such as
+`from services...`, `from apps...`, or `import tools`, fail as authoring
+errors. Use package-relative imports instead.
 
 ### Shared bundle contract
 
@@ -456,6 +440,19 @@ PYTHONPATH=app/ai-app/src/kdcube-ai-app \
 $PY -m kdcube_ai_app.apps.chat.sdk.tests.bundle.run_bundle_suite \
   --bundle-path /abs/path/to/bundle
 ```
+
+When working specifically on bundle import isolation, this narrower command
+runs only the import-contract slice:
+
+```bash
+PYTHONPATH=app/ai-app/src/kdcube-ai-app \
+$PY -m kdcube_ai_app.apps.chat.sdk.tests.bundle.run_bundle_suite \
+  --bundle-path /abs/path/to/bundle \
+  --shared-only \
+  -q -k import_contract
+```
+
+This is not a replacement for the full shared suite before release.
 
 ### Bundle-local tests
 
