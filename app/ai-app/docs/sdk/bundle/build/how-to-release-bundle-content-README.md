@@ -19,6 +19,9 @@ see_also:
   - ks:docs/service/cicd/ngrok-README.md
   - ks:docs/sdk/bundle/bundle-delivery-and-update-README.md
   - ks:docs/sdk/bundle/bundle-widget-integration-README.md
+  - ks:docs/sdk/tools/custom-tools-README.md
+  - ks:docs/sdk/tools/tool-subsystem-README.md
+  - ks:docs/sdk/bundle/build/design/bundle-loader-import-isolation-README.md
 ---
 # How To Release Bundle Content
 
@@ -45,6 +48,9 @@ Critical Python import rule:
   such as `from .services.storage import ...`
 - do not bless top-level bundle-local imports such as `from services...`,
   `from apps...`, or `import tools`
+- release validation must include bundle-local tool modules: local
+  `TOOLS_SPECS` entries use `ref: "tools/name.py"` and those tools use
+  package-relative imports such as `from ..services.storage import ...`
 - see [bundle-runtime-README.md#critical-bundle-local-import-rule](../bundle-runtime-README.md#critical-bundle-local-import-rule)
 
 Critical release check for browser surfaces:

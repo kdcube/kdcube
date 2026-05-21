@@ -57,6 +57,55 @@ import utils
 Those imports can resolve to another bundle's already-loaded module or poison
 later imports for another bundle.
 
+## Tool Modules
+
+The same rule applies to bundle tool code.
+
+It covers:
+
+- `tools_descriptor.py` when imported by the workflow
+- Python modules referenced from `TOOLS_SPECS` with `ref`
+- bundle-local helpers imported by those tool modules
+
+For bundle-local tools, prefer `ref` entries:
+
+```python
+TOOLS_SPECS = [
+    {"ref": "tools/report_tools.py", "alias": "report", "use_sk": True},
+]
+```
+
+Then the tool module can import same-bundle helpers with package-relative
+imports:
+
+```python
+from ..services.storage import ReportStore
+from ..resources.prompts import REPORT_PROMPT
+```
+
+Do not write bundle-local tool imports as:
+
+```python
+from services.storage import ReportStore
+from resources.prompts import REPORT_PROMPT
+```
+
+The tool subsystem loads file-based `ref` modules through the shared dynamic
+module loader. That loader gives the file a synthetic package name derived from
+the bundle package root, so relative imports work in both:
+
+- normal in-process tool execution
+- isolated runtime supervisor execution after bundle snapshot restore and path
+  rewriting
+
+The package chain must be a Python package chain. Keep `__init__.py` in the
+bundle root and in package directories such as `tools/`, `services/`, and
+`resources/`.
+
+Use `module` entries only for real installed Python modules, for example SDK
+tools or external packages. A bundle-local tool should be a `ref` entry so the
+runtime can rewrite it for distributed and isolated execution.
+
 ## Loader Behavior
 
 The loader still supports descriptor/module shapes that rely on raw module

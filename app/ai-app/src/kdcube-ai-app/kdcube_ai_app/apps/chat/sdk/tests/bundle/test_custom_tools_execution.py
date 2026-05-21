@@ -112,6 +112,58 @@ class TestToolModuleLoading:
         assert mod_name.endswith(".tools.sample_tool")
         assert mod.EXPORTED_VALUE == 7
 
+    def test_raw_ref_tool_spec_resolves_bundle_relative_and_supports_relative_imports(self, tmp_path):
+        """Bundle raw_tool_specs ref entries load through the same package-safe path."""
+        from kdcube_ai_app.apps.chat.sdk.runtime.tool_subsystem import ToolSubsystem
+        from kdcube_ai_app.infra.plugin.bundle_registry import BundleSpec
+
+        bundle_root = tmp_path / "demo.bundle@2026-05-21"
+        services_dir = bundle_root / "services"
+        tools_dir = bundle_root / "tools"
+        services_dir.mkdir(parents=True)
+        tools_dir.mkdir()
+        (bundle_root / "__init__.py").write_text("", encoding="utf-8")
+        (services_dir / "__init__.py").write_text("", encoding="utf-8")
+        (tools_dir / "__init__.py").write_text("", encoding="utf-8")
+        (services_dir / "storage.py").write_text("VALUE = 11\n", encoding="utf-8")
+        (tools_dir / "sample_tool.py").write_text(
+            "\n".join(
+                [
+                    "from ..services.storage import VALUE",
+                    "",
+                    "def get_value():",
+                    "    return VALUE",
+                    "",
+                    "def list_tools():",
+                    "    return {",
+                    "        'get_value': {",
+                    "            'callable': get_value,",
+                    "            'description': 'Return imported bundle-local value',",
+                    "        }",
+                    "    }",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        subsystem = ToolSubsystem(
+            service=None,
+            comm=None,
+            logger=None,
+            bundle_spec=BundleSpec(id="demo.bundle", path=str(bundle_root), module="entrypoint"),
+            context_rag_client=None,
+            raw_tool_specs=[
+                {"ref": "tools/sample_tool.py", "alias": "sample", "use_sk": False}
+            ],
+        )
+
+        alias_to_module, alias_to_file = subsystem.get_alias_maps()
+
+        assert subsystem.resolve_callable("sample.get_value")() == 11
+        assert alias_to_module["sample"].endswith(".tools.sample_tool")
+        assert alias_to_file["sample"] == str((tools_dir / "sample_tool.py").resolve())
+
 
 class TestToolSubsystemGetToolRuntime:
     """Test ToolSubsystem.get_tool_runtime() return values."""

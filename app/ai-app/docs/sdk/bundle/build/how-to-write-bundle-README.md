@@ -22,6 +22,9 @@ see_also:
   - ks:docs/service/cicd/ngrok-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
   - ks:docs/sdk/bundle/bundle-storage-and-cache-README.md
+  - ks:docs/sdk/tools/custom-tools-README.md
+  - ks:docs/sdk/tools/tool-subsystem-README.md
+  - ks:docs/sdk/bundle/build/design/bundle-loader-import-isolation-README.md
   - ks:docs/sdk/storage/cache-README.md
   - ks:docs/sdk/storage/git-store-README.md
   - ks:docs/sdk/storage/sdk-store-README.md
@@ -99,6 +102,9 @@ Critical Python import rule:
   `from .services.storage import ...`
 - do not import bundle-local folders as top-level packages such as `services`,
   `apps`, `tools`, or `resources`
+- for bundle-local tools, register them in `TOOLS_SPECS` with `ref` and import
+  same-bundle helpers with package-relative imports; use `module` only for
+  installed SDK/external modules
 - see [bundle-runtime-README.md#critical-bundle-local-import-rule](../bundle-runtime-README.md#critical-bundle-local-import-rule)
 
 Critical widget/browser rule:
@@ -446,8 +452,35 @@ Do not add fallback top-level imports such as `from services...`,
 `from apps...`, or `import tools` for bundle-local code. They can collide with
 other bundles in the same processor process.
 
+The same rule applies to tools. In `tools_descriptor.py`, register
+bundle-local tools with file-based `ref` entries:
+
+```python
+TOOLS_SPECS = [
+    {"ref": "tools/user_memory_tools.py", "alias": "user_memory", "use_sk": True},
+]
+```
+
+Inside `tools/user_memory_tools.py`, import same-bundle helpers through the
+synthetic package context:
+
+```python
+from ..services.storage import UserMemoryStorage
+```
+
+Use `module` entries only for installed SDK or external modules:
+
+```python
+TOOLS_SPECS = [
+    {"module": "kdcube_ai_app.apps.chat.sdk.tools.web_tools", "alias": "web_tools", "use_sk": True},
+]
+```
+
 For the canonical runtime rationale and testing rule, see
 [bundle-runtime-README.md#critical-bundle-local-import-rule](../bundle-runtime-README.md#critical-bundle-local-import-rule).
+For tool-specific details, see
+[custom-tools-README.md#bundle-local-imports-from-ref-tools](../../tools/custom-tools-README.md#bundle-local-imports-from-ref-tools)
+and [tool-subsystem-README.md#relative-imports-inside-ref-tools](../../tools/tool-subsystem-README.md#relative-imports-inside-ref-tools).
 
 ## 1C. Bundle Design Decision Matrix
 
@@ -863,6 +896,10 @@ TOOLS_SPECS = [
     {"ref": "tools/user_memory_tools.py", "alias": "user_memory", "use_sk": True},
 ]
 ```
+
+Use `module` for installed SDK/external modules and `ref` for bundle-local
+tool files. A `ref` tool can import same-bundle helpers with package-relative
+imports such as `from ..services.storage import UserMemoryStorage`.
 
 React version:
 

@@ -18,8 +18,11 @@ see_also:
   - ks:docs/sdk/integrations/telegram/telegram-README.md
   - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
   - ks:docs/sdk/integrations/browser/browser-tools-README.md
+  - ks:docs/sdk/tools/custom-tools-README.md
+  - ks:docs/sdk/tools/tool-subsystem-README.md
   - ks:docs/service/cicd/ngrok-README.md
   - ks:docs/sdk/bundle/bundle-widget-integration-README.md
+  - ks:docs/sdk/bundle/build/design/bundle-loader-import-isolation-README.md
 ---
 # Tier 1 Bundle Pack For Build-With-KDCube Plugins
 
@@ -78,8 +81,12 @@ Python import rule that plugins must surface early:
   `from .services.storage import ...`
 - do not import bundle-local folders as top-level packages such as `services`,
   `apps`, `tools`, or `resources`
+- this includes `tools_descriptor.py` and bundle-local tool modules: local
+  tools use `TOOLS_SPECS` `ref` entries and package-relative imports; `module`
+  is for installed SDK/external modules
 - route agents to [bundle-runtime-README.md#critical-bundle-local-import-rule](../bundle-runtime-README.md#critical-bundle-local-import-rule)
-  before they change bundle-local Python imports
+  and [custom-tools-README.md#bundle-local-imports-from-ref-tools](../../tools/custom-tools-README.md#bundle-local-imports-from-ref-tools)
+  before they change bundle-local Python imports or tool descriptors
 
 Widget/API origin rule that plugins must surface early:
 
@@ -182,6 +189,8 @@ The plugin should steer agents away from these recurring mistakes:
 - do not start a new bundle without the skeleton files from `how-to-write-bundle-README.md#1b1-new-bundle-skeleton-checklist`
 - do not reimplement provider/runtime mechanics before checking the SDK
   building-block map
+- do not register bundle-local tools with `module: "tools.name"`; use
+  `ref: "tools/name.py"` and package-relative imports inside the tool module
 - do not write `/bundles/...` into a seed/source descriptor that is also used by host-side IntelliJ/proc runs; first determine whether you are editing a seed descriptor or a staged runtime descriptor
 - do not manually build `ui/main` into runtime bundle storage as the fix for stale bundle UI
 - do not use source folder names or compiled example ids when the host provides `defaultAppBundleId`

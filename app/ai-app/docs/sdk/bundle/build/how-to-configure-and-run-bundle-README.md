@@ -24,6 +24,9 @@ see_also:
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-new-cli-README.md
   - ks:docs/sdk/bundle/bundle-developer-guide-README.md
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
+  - ks:docs/sdk/tools/custom-tools-README.md
+  - ks:docs/sdk/tools/tool-subsystem-README.md
+  - ks:docs/sdk/bundle/build/design/bundle-loader-import-isolation-README.md
   - ks:docs/sdk/bundle/bundle-widget-integration-README.md
 ---
 # How To Configure And Run A Bundle
@@ -64,6 +67,9 @@ Critical Python import rule:
   `from .services.storage import ...`
 - do not import bundle-local folders as top-level packages such as `services`,
   `apps`, `tools`, or `resources`
+- the same applies to `tools_descriptor.py` and bundle-local tools; local tool
+  specs should use `ref: "tools/name.py"`, while `module` is reserved for
+  installed SDK/external modules
 - see [bundle-runtime-README.md#critical-bundle-local-import-rule](../bundle-runtime-README.md#critical-bundle-local-import-rule)
 
 Critical widget/browser runtime rule:
@@ -1012,8 +1018,11 @@ bundles:
 ```
 
 The parent-subdir shape is useful when a repo contains multiple bundles under
-one source parent. Bundle code must use package-relative bundle-local imports
-and must not use top-level package fallbacks for bundle-local folders. The
+one source parent. Bundle code, `tools_descriptor.py`, and bundle-local tool
+modules must use package-relative bundle-local imports and must not use
+top-level package fallbacks for bundle-local folders. Bundle-local tool specs
+should use `ref: "tools/name.py"` so the tool subsystem can keep them tied to
+the bundle root and rewrite them for isolated/distributed execution. The
 authoring rule is in
 [how-to-write-bundle-README.md#1b2-bundle-local-import-rule](how-to-write-bundle-README.md#1b2-bundle-local-import-rule),
 and the runtime rationale is in

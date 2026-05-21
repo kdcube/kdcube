@@ -18,10 +18,13 @@ see_also:
   - ks:docs/sdk/integrations/telegram/telegram-README.md
   - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
   - ks:docs/sdk/integrations/browser/browser-tools-README.md
+  - ks:docs/sdk/tools/custom-tools-README.md
+  - ks:docs/sdk/tools/tool-subsystem-README.md
   - ks:docs/service/cicd/ngrok-README.md
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
   - ks:docs/sdk/bundle/bundle-storage-and-cache-README.md
+  - ks:docs/sdk/bundle/build/design/bundle-loader-import-isolation-README.md
   - ks:docs/sdk/storage/cache-README.md
   - ks:docs/sdk/storage/git-store-README.md
   - ks:docs/sdk/storage/sdk-store-README.md
@@ -73,7 +76,11 @@ Critical Python import rule:
   `from .services.storage import ...`
 - do not import bundle-local folders as top-level packages such as `services`,
   `apps`, `tools`, or `resources`
+- for bundle-local tools, `tools_descriptor.py` should use `ref` entries and
+  tool modules should import same-bundle helpers with package-relative imports;
+  use `module` only for installed SDK/external modules
 - see [bundle-runtime-README.md#critical-bundle-local-import-rule](../bundle-runtime-README.md#critical-bundle-local-import-rule)
+  and [custom-tools-README.md#bundle-local-imports-from-ref-tools](../../tools/custom-tools-README.md#bundle-local-imports-from-ref-tools)
 
 Critical widget/browser rule:
 

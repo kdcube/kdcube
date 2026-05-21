@@ -19,8 +19,11 @@ see_also:
   - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
   - ks:docs/sdk/integrations/browser/browser-tools-README.md
   - ks:docs/service/cicd/ngrok-README.md
+  - ks:docs/sdk/tools/custom-tools-README.md
+  - ks:docs/sdk/tools/tool-subsystem-README.md
   - ks:docs/sdk/bundle/bundle-delivery-and-update-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
+  - ks:docs/sdk/bundle/build/design/bundle-loader-import-isolation-README.md
 ---
 # How To Test A KDCube Bundle
 
@@ -44,6 +47,9 @@ Critical Python import rule:
   `from .services.storage import ...`
 - do not import bundle-local folders as top-level packages such as `services`,
   `apps`, `tools`, or `resources`
+- this includes bundle-local tools referenced from `TOOLS_SPECS`; use
+  `ref: "tools/name.py"` for local tools and `module` only for installed
+  SDK/external modules
 - see [bundle-runtime-README.md#critical-bundle-local-import-rule](../bundle-runtime-README.md#critical-bundle-local-import-rule)
 
 Critical widget/browser test:
@@ -242,6 +248,8 @@ For a React-backed bundle, prove the agent surface before manual testing:
   `kdcube.copilot@2026-04-03-19-05`
 - `orchestrator/workflow.py` calls `BaseWorkflow.build_react(...)`
 - `tools_descriptor.py` exposes only the tool aliases the bundle actually needs
+- bundle-local tool entries in `tools_descriptor.py` use `ref` and the tool
+  modules import same-bundle helpers with package-relative imports
 - `skills_descriptor.py` points to bundle-local skills
 - `skills_descriptor.py` / `job_skills_descriptor.py` visibility filters use
   the real React decision ids `solver.react.v2.decision.v2.strong` and
@@ -431,7 +439,10 @@ Use the shared bundle suite for import validation. The suite loads the bundle
 through the loader contract and lints bundle-local Python imports. Top-level
 imports of Python roots owned by the bundle directory, such as
 `from services...`, `from apps...`, or `import tools`, fail as authoring
-errors. Use package-relative imports instead.
+errors. Use package-relative imports instead. For bundle-local tool modules,
+this means `TOOLS_SPECS` should use `ref: "tools/name.py"` and the tool file
+should import same-bundle helpers with forms such as
+`from ..services.storage import Store`.
 
 ### Shared bundle contract
 

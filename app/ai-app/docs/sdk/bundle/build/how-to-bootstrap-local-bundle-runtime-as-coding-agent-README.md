@@ -16,6 +16,9 @@ see_also:
   - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
   - ks:docs/sdk/integrations/email/email-README.md
   - ks:docs/sdk/integrations/email/email-external-prereq-README.md
+  - ks:docs/sdk/tools/custom-tools-README.md
+  - ks:docs/sdk/tools/tool-subsystem-README.md
+  - ks:docs/sdk/bundle/build/design/bundle-loader-import-isolation-README.md
 ---
 # How To Bootstrap A Local Bundle Runtime As A Coding Agent
 
@@ -54,6 +57,10 @@ Critical Python import rule:
   uses package-relative imports such as `from .services.storage import ...`
 - do not patch around import failures by adding top-level `services`, `apps`,
   `tools`, or `resources` imports for bundle-local modules
+- for bundle-local tools, check `tools_descriptor.py`: local tools should be
+  registered with `ref: "tools/name.py"` and imported with package-relative
+  imports such as `from ..services.storage import ...`; `module` is for
+  installed SDK/external modules
 - see [bundle-runtime-README.md#critical-bundle-local-import-rule](../bundle-runtime-README.md#critical-bundle-local-import-rule)
 
 ## Agent Contract

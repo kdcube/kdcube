@@ -20,9 +20,12 @@ see_also:
   - ks:docs/sdk/integrations/browser/browser-tools-README.md
   - ks:docs/service/cicd/ngrok-README.md
   - ks:docs/sdk/tools/sdk-tools-README.md
+  - ks:docs/sdk/tools/custom-tools-README.md
+  - ks:docs/sdk/tools/tool-subsystem-README.md
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
+  - ks:docs/sdk/bundle/build/design/bundle-loader-import-isolation-README.md
   - ks:docs/sdk/bundle/bundle-widget-integration-README.md
 ---
 # How To Assemble A Bundle With SDK Building Blocks
@@ -56,7 +59,11 @@ Critical Python import rule:
   `from .services.storage import ...`
 - do not import bundle-local folders as top-level packages such as `services`,
   `apps`, `tools`, or `resources`
+- this includes `tools_descriptor.py` and bundle-local tool modules; use
+  `TOOLS_SPECS` `ref` entries for bundle-local tools and `module` entries only
+  for installed SDK/external modules
 - see [Bundle Runtime](../bundle-runtime-README.md#critical-bundle-local-import-rule)
+  and [Custom Tools](../../tools/custom-tools-README.md#bundle-local-imports-from-ref-tools)
 
 Critical widget/browser rule:
 
@@ -100,7 +107,7 @@ Critical widget/browser rule:
 | File or layer | What belongs there |
 | --- | --- |
 | `entrypoint.py` | Decorators, route aliases, SDK module configuration, storage-root and user-scope hooks, product role policy. |
-| `tools_descriptor.py` | Tool aliases for SDK tool modules and bundle-local tool modules used by the agent. |
+| `tools_descriptor.py` | Tool aliases for SDK tool modules and bundle-local tool modules used by the agent. Bundle-local tools should use `ref: "tools/name.py"` and package-relative imports; `module` is for installed modules. |
 | `skills_descriptor.py` | Bundle-local skill root plus `AGENTS_CONFIG` filters for core SDK skills, SDK solution skills such as `task.*`, and bundle-local product skills. |
 | skill `tools.yaml` | Tool metadata for a skill; add `required: true` for tool ids that must exist before that skill is shown or loaded. |
 | `config/bundles.template.yaml` | Deployment-scoped non-secret props that enable/configure the block. |

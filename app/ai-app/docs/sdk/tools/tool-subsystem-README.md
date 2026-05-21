@@ -63,9 +63,17 @@ That means bundle code can look natural:
 
 ```python
 from .. import preferences_store
+from ..services.storage import Store
 ```
 
 instead of manually reconstructing sibling modules with `importlib`.
+
+The bundle-local import-isolation rule still applies. Do not import same-bundle
+helpers from top-level roots such as `services`, `tools`, `apps`, or
+`resources`; those names are process-global in proc and can collide across
+bundles. For bundle-local tools, use `ref` entries rather than `module` entries
+so the runtime can keep the tool tied to the bundle root and rewrite paths for
+distributed isolated execution.
 
 ## Why `ref` works in iso-runtime and Docker
 
