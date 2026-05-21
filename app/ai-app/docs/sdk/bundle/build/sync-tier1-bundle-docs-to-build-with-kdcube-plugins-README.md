@@ -4,7 +4,7 @@ title: "Tier 1 Bundle Pack For Build-With-KDCube Plugins"
 summary: "Short handoff note for Claude Code and Codex plugin engineers describing the Tier 1 bundle-doc pack, the agent task facets it must support, and the minimal integration contract."
 tags: ["sdk", "bundle", "plugins", "claude-code", "codex", "handoff", "tier-1"]
 keywords: ["tier 1 bundle pack", "build with kdcube plugin", "claude code plugin", "codex plugin", "bundle docs pack", "bundle agent facets", "shared sdk widget source", "plugin doc links update"]
-updated_at: 2026-05-19
+updated_at: 2026-05-21
 see_also:
   - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
@@ -12,6 +12,7 @@ see_also:
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
+  - ks:docs/sdk/bundle/build/how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md
   - ks:docs/sdk/bundle/build/how-to-release-bundle-content-README.md
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
   - ks:docs/sdk/integrations/telegram/telegram-README.md
@@ -50,10 +51,22 @@ uses React tools/skills, file-producing tools, MCP, or Claude Code:
 
 8. [../bundle-agent-integration-README.md](../bundle-agent-integration-README.md)
 
-This conditional local-public-runtime doc should be available whenever local
-KDCube must receive provider callbacks or remote calls:
+This conditional local-runtime agent doc should be available whenever the user
+expects the plugin agent to configure and run the local deployment, not only
+describe how it works:
 
-9. [../../../service/cicd/ngrok-README.md](../../../service/cicd/ngrok-README.md)
+9. [how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md](how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md)
+
+It is used when the plugin should let an agent configure and run the local
+runtime end to end: discover paths, initialize the workdir, wire a bundle into
+the staged descriptors, patch bundle props/secrets, start or verify ngrok,
+register Telegram webhooks, prepare Gmail OAuth config, and report only the
+external provider steps it cannot complete.
+
+This lower-level local-public-runtime doc should remain reachable from that
+coding-agent runbook:
+
+10. [../../../service/cicd/ngrok-README.md](../../../service/cicd/ngrok-README.md)
 
 It is used for Telegram webhooks, OAuth/Cognito callbacks, and other
 callback/remote-control flows that need public HTTPS while the runtime is still
@@ -78,6 +91,7 @@ Preferred reading order:
 4. implementation design
 5. configuration ownership
 6. runtime and deployment wiring
+7. local runtime bootstrap, when the coding agent must perform setup
 
 ## Agent Model
 
@@ -98,7 +112,7 @@ They are routing hints for one planning agent.
 
 Recommended:
 
-- expose the 6 docs as one Tier 1 pack
+- expose the 6 docs as one Tier 1 baseline pack
 - use [how-to-navigate-kdcube-docs-README.md](how-to-navigate-kdcube-docs-README.md) as the first router
 - make [how-to-test-bundle-README.md#1a-working-environment-for-agents](how-to-test-bundle-README.md#1a-working-environment-for-agents) the preflight before code or test changes
 - keep [how-to-assemble-bundle-with-sdk-building-blocks-README.md](how-to-assemble-bundle-with-sdk-building-blocks-README.md)
@@ -120,6 +134,9 @@ Recommended:
 - keep [ngrok-README.md](../../../service/cicd/ngrok-README.md) reachable for
   local public HTTPS runtime testing of Telegram webhooks, OAuth callbacks, and
   remote callback/control flows
+- keep [how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md](how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md)
+  reachable when a user expects the agent to perform local setup autonomously
+  instead of only explaining the runtime model
 - keep [Telegram SDK Integration](../../integrations/telegram/telegram-README.md)
   and
   [Telegram External Prerequisites](../../integrations/telegram/telegram-external-prereq-README.md)

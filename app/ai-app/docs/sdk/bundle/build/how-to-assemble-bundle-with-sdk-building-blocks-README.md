@@ -4,12 +4,13 @@ title: "How To Assemble A Bundle With SDK Building Blocks"
 summary: "Tier 1 bundle-builder map for choosing reusable KDCube SDK and platform blocks before writing custom bundle services: tools, agents, storage, widgets, jobs, integrations, and solutions."
 tags: ["sdk", "bundle", "tier-1", "building-blocks", "integrations", "solutions", "tools"]
 keywords: ["bundle building blocks", "sdk integrations", "sdk solutions", "bundle assembly map", "reuse sdk components", "telegram integration", "email integration", "tasks solution", "delivery integration", "shared sdk widget components", "built in tools", "react tools"]
-updated_at: 2026-05-19
+updated_at: 2026-05-21
 see_also:
   - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
+  - ks:docs/sdk/bundle/build/how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md
   - ks:docs/sdk/solutions/tasks-README.md
   - ks:docs/sdk/integrations/README.md
   - ks:docs/sdk/integrations/email/README.md

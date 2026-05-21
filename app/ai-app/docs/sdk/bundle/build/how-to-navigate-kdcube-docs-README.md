@@ -4,12 +4,13 @@ title: "How To Navigate KDCube Bundle Docs"
 summary: "Tier 1 navigation guide for bundle creators, integrators, configurators, deployers, local QA, integration QA, and document readers who need the shortest path through KDCube docs without reading the whole tree."
 tags: ["sdk", "bundle", "docs", "navigation", "tier-1", "authoring"]
 keywords: ["bundle docs navigation", "tier 1 reading order", "new bundle path", "wrap existing app into bundle", "bundle integrator path", "bundle configurator path", "bundle deployer path", "bundle qa path", "integration qa path", "shared sdk widget source", "kdcube docs reading strategy", "which doc to read next"]
-updated_at: 2026-05-16
+updated_at: 2026-05-21
 see_also:
   - ks:docs/sdk/bundle/bundle-index-README.md
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
+  - ks:docs/sdk/bundle/build/how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md
   - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-release-bundle-content-README.md
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
@@ -89,6 +90,15 @@ Use it when the user agrees that the bundle should be committed, tagged,
 pushed, or wired into a git-backed descriptor ref. It is recommended for
 repeatable bundle work, but it is not an automatic step.
 
+There is also one conditional Tier 1 local-runtime procedure:
+
+- [how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md](how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md)
+
+Use it when the agent is expected to configure and run a local KDCube runtime,
+wire a bundle into `bundles.yaml` / `bundles.secrets.yaml`, start ngrok for
+provider callbacks, configure Telegram or Gmail deployment values, and report
+only the external provider steps it cannot complete.
+
 When the bundle defines an agent surface, custom tools/skills,
 file-producing tools, MCP connectors, bundle-served MCP, or Claude Code
 subagents, add this focused page to the Tier 1 pack:
@@ -123,7 +133,8 @@ So the practical Tier 1 reading order is:
 4. bundle design
 5. configuration ownership
 6. local runtime and deployment wiring
-7. optional release lifecycle, only when agreed with the user
+7. coding-agent local-runtime bootstrap, when live setup is part of the task
+8. optional release lifecycle, only when agreed with the user
 
 ## 2. Which Path Fits Your Job
 
@@ -156,7 +167,8 @@ Start here, then complete the rest of the Tier 1 pack:
 6. [../bundle-platform-integration-README.md](../bundle-platform-integration-README.md)
 7. [../bundle-runtime-README.md](../bundle-runtime-README.md)
 8. [../versatile-reference-bundle-README.md](../versatile-reference-bundle-README.md)
-9. [how-to-release-bundle-content-README.md](how-to-release-bundle-content-README.md), only when the user wants a pinned release
+9. [how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md](how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md), when the user wants the agent to run local setup
+10. [how-to-release-bundle-content-README.md](how-to-release-bundle-content-README.md), only when the user wants a pinned release
 
 Interpretation:
 
@@ -223,10 +235,11 @@ Start here, then complete the rest of the Tier 1 pack:
 
 1. [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md)
 2. [../../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../../configuration/bundle-runtime-configuration-and-secrets-README.md)
-3. [../../../configuration/bundles-descriptor-README.md](../../../configuration/bundles-descriptor-README.md)
-4. [../../../configuration/bundles-secrets-descriptor-README.md](../../../configuration/bundles-secrets-descriptor-README.md)
-5. [../bundle-delivery-and-update-README.md](../bundle-delivery-and-update-README.md)
-6. [how-to-test-bundle-README.md](how-to-test-bundle-README.md)
+3. [how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md](how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md), when an agent should perform the local setup
+4. [../../../configuration/bundles-descriptor-README.md](../../../configuration/bundles-descriptor-README.md)
+5. [../../../configuration/bundles-secrets-descriptor-README.md](../../../configuration/bundles-secrets-descriptor-README.md)
+6. [../bundle-delivery-and-update-README.md](../bundle-delivery-and-update-README.md)
+7. [how-to-test-bundle-README.md](how-to-test-bundle-README.md)
 
 This is the right path if your main questions are:
 
@@ -235,6 +248,8 @@ This is the right path if your main questions are:
 - when do I rerun install vs reload
 - what is the real local runtime authority
 - how do I export live deployment-scoped bundle state
+- how can an agent wire the bundle into a local runtime, configure ngrok,
+  Telegram, or Gmail, and report only the provider-side steps it cannot do
 
 ### E. I am doing local QA for a bundle
 
@@ -288,6 +303,7 @@ Then jump only to the row that matches your question.
 | How do I map existing app settings into KDCube settings, bundle props, and user state? | [../../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../../configuration/bundle-runtime-configuration-and-secrets-README.md) | It is the Tier 1 configuration model and ownership map. |
 | How do I choose Haiku/Sonnet/Opus for one agent/API/chat/job call? | [../bundle-agent-integration-README.md#model-selection-for-agent-roles](../bundle-agent-integration-README.md#model-selection-for-agent-roles) and [../bundle-runtime-README.md#request-scoped-role-model-override](../bundle-runtime-README.md#request-scoped-role-model-override) | Use `config.role_models` for bundle/deployment defaults and `bundle_call_context.role_models` for one `@api`, `@mcp`, `@cron`, `@on_message`, or `@on_job` invocation. |
 | How do I run a bundle locally? | [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md) | It documents the current local runtime contract and staged descriptor model. |
+| How does Claude Code, Codex, or a plugin agent configure the runtime, wire my bundle, start ngrok, and set Telegram or Gmail values? | [how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md](how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md) | It is the coding-agent runbook for discovery, CLI setup, staged bundle props/secrets, ngrok, Telegram webhook registration, Gmail OAuth config, and final verification reporting. |
 | How do I expose local KDCube through public HTTPS for Telegram webhooks, OAuth callbacks, or remote callbacks? | [../../../service/cicd/ngrok-README.md](../../../service/cicd/ngrok-README.md) | It documents the one-ngrok-origin local reverse-proxy flow and the descriptor values that must be updated. |
 | Can I run multiple KDCubes on one machine? | [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md) | It explains the difference between many runtime snapshots on disk and one active local compose-backed deployment by default. |
 | Where do props and secrets belong? | [../../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../../configuration/bundle-runtime-configuration-and-secrets-README.md) | It is the canonical author-facing configuration page. |

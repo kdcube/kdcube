@@ -4,7 +4,7 @@ title: "How To Configure And Run A Bundle"
 summary: "Current bundle-development runtime workflow: tenant/project environment setup, descriptor staging, local-path and git bundles, configuration translation, start/stop/reload loop, configuration/secret scopes, and the rule that one machine may hold many local deployment snapshots but should not be treated as running many local compose-backed KDCubes at once."
 tags: ["sdk", "bundle", "configuration", "runtime", "cli", "bundles.yaml"]
 keywords: ["local bundle development workflow", "tenant project environment boundary", "descriptor driven runtime setup", "local path bundle loop", "git bundle loop", "bundle reload workflow", "runtime sandbox selection", "bundle config and secret scopes", "shared sdk widget sources", "bundle configurator workflow", "bundle deployer workflow", "current kdcube cli workflow", "multiple local runtime snapshots", "single active local compose deployment", "run multiple kdcubes on one machine", "kdcube bundle command", "patch bundle config cli", "patch bundle secret cli"]
-updated_at: 2026-05-16
+updated_at: 2026-05-21
 see_also:
   - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/configuration/bundles-descriptor-README.md
@@ -16,6 +16,7 @@ see_also:
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
+  - ks:docs/sdk/bundle/build/how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md
   - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-release-bundle-content-README.md
   - ks:docs/sdk/integrations/telegram/telegram-README.md
@@ -49,6 +50,9 @@ Use it when you need to answer questions like:
 - how do I make a localhost KDCube reachable through public HTTPS for external
   callbacks such as Telegram webhooks, OAuth callbacks, or remote-control style
   integrations
+- how do I hand the repetitive local setup to an agent so it can configure the
+  bundle, staged descriptors, ngrok, Telegram, and Gmail values with minimal
+  questions
 
 This page is not the primary source for bundle design or test strategy.
 It documents the supported local CLI/runtime workflow for descriptor-backed
@@ -80,6 +84,7 @@ Use the companion docs for those:
 - [how-to-write-bundle-README.md](how-to-write-bundle-README.md)
 - [how-to-assemble-bundle-with-sdk-building-blocks-README.md](how-to-assemble-bundle-with-sdk-building-blocks-README.md)
 - [how-to-test-bundle-README.md](how-to-test-bundle-README.md)
+- [how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md](how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md)
 - [bundle-platform-integration-README.md](../bundle-platform-integration-README.md)
 - [bundle-runtime-README.md](../bundle-runtime-README.md)
 - [../../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../../configuration/bundle-runtime-configuration-and-secrets-README.md)
@@ -113,6 +118,10 @@ Tier 1 role of this page:
   or inspecting a bundle in a local KDCube environment
 - use it when the problem is descriptor authority, reload behavior, workdir
   layout, or local runtime staging
+- use [how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md](how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md)
+  when the job is not only understanding the runtime model but actually asking
+  an agent to perform the setup, configure a bundle, run ngrok, register
+  Telegram webhooks, or prepare Gmail OAuth values
 
 For exact descriptor schemas, use:
 

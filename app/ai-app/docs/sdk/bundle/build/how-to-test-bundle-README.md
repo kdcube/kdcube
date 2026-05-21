@@ -4,12 +4,13 @@ title: "How To Test A Bundle"
 summary: "Testing guide for bundle authors and QA: local syntax/suite/pytest validation, runtime reload validation, widget and API checks, scheduled-job verification, and failure diagnosis in the local runtime."
 tags: ["sdk", "bundle", "testing", "pytest", "widget", "runtime", "validation"]
 keywords: ["bundle testing workflow", "shared bundle suite", "local bundle tests", "widget and api validation", "shared sdk widget source validation", "runtime reload verification", "scheduled job checks", "bundle failure diagnosis", "manual and automated test loop", "local qa for bundles", "integration qa for bundles"]
-updated_at: 2026-05-16
+updated_at: 2026-05-21
 see_also:
   - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
+  - ks:docs/sdk/bundle/build/how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md
   - ks:docs/sdk/bundle/build/how-to-release-bundle-content-README.md
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
   - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
@@ -122,6 +123,9 @@ Runtime-shape rule:
 
 - if the runtime itself may be misconfigured, fix `assembly.yaml`, `bundles.yaml`, and `bundles.secrets.yaml` first
 - use [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md) for the exact local runtime contract before debugging widget/API behavior
+- use [how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md](how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md)
+  when an agent must configure the runtime, patch bundle props/secrets, start
+  ngrok, and prepare Telegram or Gmail values before live QA
 - if an external provider must call the local runtime, use
   [Serving Local KDCube With Ngrok](../../../service/cicd/ngrok-README.md)
   before interpreting webhook, OAuth callback, or remote-callback failures
