@@ -5,9 +5,14 @@
  * Code & JSON variants get the dark-theme background and syntax-highlighted
  * HTML via `highlightCode`. Markdown variant defers to `MarkdownBlock`.
  *
- * Moved verbatim from src/App.tsx (Wave 1).
+ * Memoised by `React.memo` (default shallow compare). All props are
+ * scalars or strings — when nothing semantically changed, React skips
+ * the tokenizer pass and the HTML rebuild. `highlightCode(content, lang)`
+ * is also memoised per `[content, lang]` so even when a parent prop
+ * (`label`, `filename`) changes, we don't re-tokenize the code body.
  */
 
+import { memo, useMemo } from 'react'
 import { CopyButton } from './CopyButton.tsx'
 import { DownloadButton } from './DownloadButton.tsx'
 import { MarkdownBlock } from './MarkdownBlock.tsx'
@@ -25,7 +30,7 @@ export interface SnippetProps {
   maxHeight?: number
 }
 
-export function Snippet({
+function SnippetImpl({
   content,
   format,
   language,
@@ -38,7 +43,12 @@ export function Snippet({
 }: SnippetProps) {
   const isCodeFamily = format === 'code' || format === 'json'
   const lang = language || (format === 'json' ? 'json' : inferLanguage(null, content))
-  const html = isCodeFamily ? highlightCode(content, lang) : null
+  /* Cache the syntax-highlighted HTML — by far the most expensive op
+   * inside Snippet — across renders that only change cosmetic props. */
+  const html = useMemo(
+    () => (isCodeFamily ? highlightCode(content, lang) : null),
+    [isCodeFamily, content, lang],
+  )
   const labelText = label || (isCodeFamily ? lang : format)
 
   return (
@@ -76,3 +86,5 @@ export function Snippet({
     </div>
   )
 }
+
+export const Snippet = memo(SnippetImpl)

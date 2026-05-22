@@ -12,7 +12,7 @@
  *
  *  All bodies moved verbatim from App.tsx (Wave 2) — no behaviour change.
  */
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import {
   downloadBlobAsFile,
   downloadHostedFile,
@@ -45,7 +45,7 @@ import type {
   TurnStep,
 } from './chatTypes.ts'
 
-export function StepList({ steps }: { steps: TurnStep[] }) {
+function StepListImpl({ steps }: { steps: TurnStep[] }) {
   if (steps.length === 0) return null
   const statusChip = (status: StepStatus) => {
     switch (status) {
@@ -174,7 +174,7 @@ export function collectTurnLinks(artifacts: Artifact[]): TurnLink[] {
   return links
 }
 
-export function LinksPanel({ links }: { links: TurnLink[] }) {
+function LinksPanelImpl({ links }: { links: TurnLink[] }) {
   if (links.length === 0) {
     return <p className="pt-2 text-[12px] text-[var(--muted)]">No links have been produced for this turn yet.</p>
   }
@@ -212,7 +212,7 @@ export function LinksPanel({ links }: { links: TurnLink[] }) {
     </div>
   )
 }
-export function CanvasPanel({ canvases }: { canvases: CanvasArtifact[] }) {
+function CanvasPanelImpl({ canvases }: { canvases: CanvasArtifact[] }) {
   if (canvases.length === 0) {
     return <p className="pt-2 text-[12px] text-[var(--muted)]">No canvas items in this turn yet.</p>
   }
@@ -251,7 +251,7 @@ export function CanvasPanel({ canvases }: { canvases: CanvasArtifact[] }) {
     </div>
   )
 }
-export function ThinkingBlock({
+function ThinkingBlockImpl({
   entries,
   active,
 }: {
@@ -300,7 +300,7 @@ export function ThinkingBlock({
     </details>
   )
 }
-export function TimelineFeed({ entries }: { entries: TimelineEntry[] }) {
+function TimelineFeedImpl({ entries }: { entries: TimelineEntry[] }) {
   if (entries.length === 0) {
     return <p className="pt-2 text-[12px] text-[var(--muted)]">No timeline events yet.</p>
   }
@@ -370,7 +370,7 @@ export function TimelineFeed({ entries }: { entries: TimelineEntry[] }) {
     </div>
   )
 }
-export function DownloadsPanel({
+function DownloadsPanelImpl({
   attachments,
   files,
   onError,
@@ -500,7 +500,7 @@ export function DownloadsPanel({
     </div>
   )
 }
-export function ArtifactFeed({ artifacts }: { artifacts: Artifact[] }) {
+function ArtifactFeedImpl({ artifacts }: { artifacts: Artifact[] }) {
   if (artifacts.length === 0) return null
 
   const sortedArtifacts = artifacts.slice().sort((left, right) => left.timestamp - right.timestamp)
@@ -812,7 +812,7 @@ export function ArtifactFeed({ artifacts }: { artifacts: Artifact[] }) {
     </div>
   )
 }
-export function FollowupMessageBlock({ message }: { message: AdditionalUserMessage }) {
+function FollowupMessageBlockImpl({ message }: { message: AdditionalUserMessage }) {
   const isSteer = message.continuationKind === 'steer'
   const text = message.text || (isSteer ? 'Stop requested' : '')
   return (
@@ -874,7 +874,7 @@ export function mergeOverviewEvents(
   return events
 }
 
-export function MergedOverviewFeed({
+function MergedOverviewFeedImpl({
   events,
 }: {
   events: OverviewEvent[]
@@ -893,3 +893,23 @@ export function MergedOverviewFeed({
     </div>
   )
 }
+
+/* ---------------------------------------------------------------------- */
+/*  Memoised component exports.                                           */
+/*                                                                        */
+/*  Each tab pane is wrapped in `React.memo` so unchanged turn data (which*/
+/*  Immer keeps reference-stable across most deltas) short-circuits the   */
+/*  React reconciler. Combined with `useStableCallback` on the App-level  */
+/*  handlers, this means a delta that only updates `turn.answer` rebuilds */
+/*  exactly that turn's answer body — not the whole transcript.           */
+/* ---------------------------------------------------------------------- */
+
+export const StepList = memo(StepListImpl)
+export const LinksPanel = memo(LinksPanelImpl)
+export const CanvasPanel = memo(CanvasPanelImpl)
+export const ThinkingBlock = memo(ThinkingBlockImpl)
+export const TimelineFeed = memo(TimelineFeedImpl)
+export const DownloadsPanel = memo(DownloadsPanelImpl)
+export const ArtifactFeed = memo(ArtifactFeedImpl)
+export const FollowupMessageBlock = memo(FollowupMessageBlockImpl)
+export const MergedOverviewFeed = memo(MergedOverviewFeedImpl)

@@ -6,14 +6,18 @@
  * doesn't break the page, and exposes a compact density variant for nested
  * places like the Chat thinking timeline.
  *
- * Moved verbatim from src/App.tsx (Wave 1).
+ * Memoised by `React.memo`: identical `content` + `compact` reuses the
+ * previously-built ReactMarkdown subtree. During streaming, the answer
+ * body still re-renders on each delta (its content actually changed),
+ * but all settled markdown rows — thinking timeline entries, sent user
+ * messages, follow-up notes, canvas markdown — skip the AST rebuild.
  */
 
-import { useMemo } from 'react'
+import { memo, useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { closeStreamingMarkdown, markdownPlugins } from './utils.ts'
 
-export function MarkdownBlock({ content, compact = false }: { content: string; compact?: boolean }) {
+function MarkdownBlockImpl({ content, compact = false }: { content: string; compact?: boolean }) {
   const normalized = useMemo(() => closeStreamingMarkdown(content), [content])
 
   return (
@@ -39,3 +43,5 @@ export function MarkdownBlock({ content, compact = false }: { content: string; c
     </div>
   )
 }
+
+export const MarkdownBlock = memo(MarkdownBlockImpl)

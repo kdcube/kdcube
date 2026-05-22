@@ -9,6 +9,7 @@
  * Moved verbatim from src/App.tsx (Wave 1).
  */
 
+import { memo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import type { CanvasArtifact } from '../features/chat/chatTypes.ts'
 import { Snippet } from './Snippet.tsx'
@@ -44,8 +45,10 @@ export function canvasMime(canvas: CanvasArtifact): string {
 }
 
 /* Canvas content renderer — picks markdown / html-iframe / code-with-highlight
-   based on the canvas format. Falls back to plain pre-text for unknown types. */
-export function CanvasRender({ canvas }: { canvas: CanvasArtifact }) {
+   based on the canvas format. Falls back to plain pre-text for unknown types.
+   Memoised: the canvas artifact reference is stable across deltas that
+   don't touch it, so iframe srcDoc / markdown AST stay reused. */
+function CanvasRenderImpl({ canvas }: { canvas: CanvasArtifact }) {
   const format = String(canvas.format || '').toLowerCase()
   const content = canvas.content || ''
 
@@ -86,3 +89,5 @@ export function CanvasRender({ canvas }: { canvas: CanvasArtifact }) {
     />
   )
 }
+
+export const CanvasRender = memo(CanvasRenderImpl)

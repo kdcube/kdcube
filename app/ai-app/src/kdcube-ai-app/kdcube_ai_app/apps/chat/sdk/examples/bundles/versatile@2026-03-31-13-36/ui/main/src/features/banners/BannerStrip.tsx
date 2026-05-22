@@ -1,8 +1,10 @@
-/** Inline notice strip for transient banners. Moved verbatim from App.tsx (Wave 2). */
+/** Inline notice strip for transient banners. Memoised so an unchanged
+ *  banners array + stable `onDismiss` skips re-render during streaming. */
+import { memo } from 'react'
 import type { BannerTone } from '../../service.ts'
 import type { Banner } from '../chat/chatTypes.ts'
 
-export function BannerStrip({
+function BannerStripImpl({
   banners,
   onDismiss,
 }: {
@@ -45,3 +47,5 @@ export function BannerStrip({
     </div>
   )
 }
+
+export const BannerStrip = memo(BannerStripImpl)

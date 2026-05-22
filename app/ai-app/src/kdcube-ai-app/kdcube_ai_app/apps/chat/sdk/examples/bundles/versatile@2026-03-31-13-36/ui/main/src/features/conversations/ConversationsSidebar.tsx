@@ -7,10 +7,11 @@
  *  bar.
  */
 
+import { memo } from 'react'
 import type { ConversationSummary } from '../../service.ts'
 import { formatConversationTime } from '../../components/utils.ts'
 
-export function ConversationsSidebar({
+function ConversationsSidebarImpl({
   conversations,
   query,
   activeConversationId,
@@ -157,3 +158,5 @@ export function ConversationsSidebar({
     </aside>
   )
 }
+
+export const ConversationsSidebar = memo(ConversationsSidebarImpl)

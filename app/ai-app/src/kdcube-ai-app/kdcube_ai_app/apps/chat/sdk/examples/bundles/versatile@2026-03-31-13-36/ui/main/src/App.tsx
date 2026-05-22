@@ -29,7 +29,7 @@ import {
 } from './features/chat/chatReducers.ts'
 import { messageForError } from './components/utils.ts'
 
-import { useAppDispatch, useAppSelector } from './app/hooks.ts'
+import { useAppDispatch, useAppSelector, useStableCallback } from './app/hooks.ts'
 import { chatActions } from './features/chat/chatSlice.ts'
 
 import { BannerStrip } from './features/banners/BannerStrip.tsx'
@@ -80,10 +80,16 @@ export default function App() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }
 
+  /* Auto-scroll dep tracks a compact signature of "what has visually
+   * grown" — turn count + the active turn's answer length + banner
+   * count + ready. This fires on streaming deltas (so the page keeps
+   * up with the answer) but skips no-op renders that didn't add height. */
+  const lastTurn = state.turns[state.turns.length - 1]
+  const scrollSignature = `${state.turns.length}:${lastTurn?.id ?? ''}:${lastTurn?.answer.length ?? 0}:${lastTurn?.timeline.length ?? 0}:${lastTurn?.artifacts.length ?? 0}:${state.banners.length}:${ready ? 1 : 0}`
   useEffect(() => {
     if (!autoScrollRef.current) return
     bottomRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
-  }, [state.turns, state.banners, ready])
+  }, [scrollSignature])
 
   const hasPendingTurn = state.turns.some((turn) => turn.state === 'pending' || turn.state === 'running')
   const bundleId = settings.getBundleId() || BUILT_BUNDLE_ID
@@ -438,12 +444,76 @@ export default function App() {
     )
   }
 
+  /* Stable per-render handlers — `useStableCallback` returns a function
+   * reference that never changes across renders but always invokes the
+   * latest closure. This is what lets `memo(TurnView)` /
+   * `memo(Composer)` / `memo(ConversationsSidebar)` actually skip work
+   * during streaming, since otherwise every inline `onX={() => …}`
+   * would allocate a fresh function each render and bust memoization. */
+  const handleBannerDismiss = useStableCallback((id: string) => {
+    if (id === 'boot-error') {
+      setBootError(null)
+      return
+    }
+    dispatch(chatActions.dismissBanner(id))
+  })
+  const handleConversationSelect = useStableCallback((conversationId: string) => {
+    void loadConversation(conversationId)
+  })
+  const handleConversationDelete = useStableCallback((conversation: ConversationSummary) => {
+    void deleteConversation(conversation)
+  })
+  const handleConversationRefresh = useStableCallback(() => {
+    void refreshConversationList()
+  })
+  const handleStartNewChat = useStableCallback(() => {
+    startNewChat()
+  })
+  const handleTurnDownloadError = useStableCallback((text: string) => {
+    dispatch(chatActions.pushBanner({ tone: 'error', text: `Download failed: ${text}` }))
+  })
+  const handleTurnFollowup = useStableCallback((text: string) => {
+    const snapshot = stateRef.current
+    if (snapshot.inputLocked || snapshot.connection === 'booting') return
+    const hasPending = snapshot.turns.some(
+      (turn) => turn.state === 'pending' || turn.state === 'running',
+    )
+    void sendMessage(text, hasPending ? 'followup' : 'regular')
+  })
+  const handleComposerTextChange = useStableCallback((value: string) => {
+    dispatch(chatActions.setComposerText(value))
+  })
+  const handleComposerFilesAdd = useStableCallback((files: FileList | null) => {
+    if (files) dispatch(chatActions.addComposerFiles(Array.from(files)))
+  })
+  const handleComposerFileRemove = useStableCallback((index: number) => {
+    dispatch(chatActions.removeComposerFile(index))
+  })
+  const handleComposerSubmit = useStableCallback(() => {
+    const snapshot = stateRef.current
+    if (snapshot.inputLocked || snapshot.connection === 'booting') return
+    const hasPending = snapshot.turns.some(
+      (turn) => turn.state === 'pending' || turn.state === 'running',
+    )
+    void sendMessage(undefined, hasPending ? 'followup' : 'regular')
+  })
+  const handleComposerStop = useStableCallback(() => {
+    const snapshot = stateRef.current
+    if (snapshot.inputLocked || snapshot.connection === 'booting') return
+    void sendMessage('', 'steer')
+  })
+
   const connectionDotClass =
     state.connection === 'connected'
       ? 'k-status'
       : state.connection === 'disconnected'
         ? 'k-status k-crit'
         : 'k-status k-live'
+
+  /* Pre-compute prop values that drive memoised children so JSX doesn't
+   * re-evaluate them inline (and so the dependent components see the
+   * same boolean reference when nothing has changed). */
+  const sendingDisabled = state.inputLocked || state.connection === 'booting'
 
   return (
     <div className="shell-grid">
@@ -503,13 +573,7 @@ export default function App() {
             <div className="pb-3">
               <BannerStrip
                 banners={bootError ? [{ id: 'boot-error', tone: 'error', text: bootError }, ...state.banners] : state.banners}
-                onDismiss={(id) => {
-                  if (id === 'boot-error') {
-                    setBootError(null)
-                    return
-                  }
-                  dispatch(chatActions.dismissBanner(id))
-                }}
+                onDismiss={handleBannerDismiss}
               />
             </div>
           ) : null}
@@ -525,10 +589,10 @@ export default function App() {
               loadingConversationId={state.conversationLoadingId}
               deletingConversationId={state.conversationDeletingId}
               onQueryChange={setConversationQuery}
-              onRefresh={() => void refreshConversationList()}
-              onSelect={(conversationId) => void loadConversation(conversationId)}
-              onStartNew={startNewChat}
-              onDelete={(conversation) => void deleteConversation(conversation)}
+              onRefresh={handleConversationRefresh}
+              onSelect={handleConversationSelect}
+              onStartNew={handleStartNewChat}
+              onDelete={handleConversationDelete}
             />
 
             <div className="glass-panel min-w-0 overflow-hidden flex flex-col">
@@ -571,14 +635,9 @@ export default function App() {
                       <TurnView
                         key={turn.id}
                         turn={turn}
-                        sendingDisabled={state.inputLocked || state.connection === 'booting'}
-                        onDownloadError={(text) =>
-                          dispatch(chatActions.pushBanner({ tone: 'error', text: `Download failed: ${text}` }))
-                        }
-                        onFollowup={(text) => {
-                          if (state.inputLocked || state.connection === 'booting') return
-                          void sendMessage(text, hasPendingTurn ? 'followup' : 'regular')
-                        }}
+                        sendingDisabled={sendingDisabled}
+                        onDownloadError={handleTurnDownloadError}
+                        onFollowup={handleTurnFollowup}
                       />
                     ))}
                   </div>
@@ -590,22 +649,14 @@ export default function App() {
                 <Composer
                   text={state.composerText}
                   files={state.composerFiles}
-                  disabled={state.inputLocked || state.connection === 'booting'}
+                  disabled={sendingDisabled}
                   inProgress={hasPendingTurn}
                   lockedMessage={state.inputLockMessage}
-                  onTextChange={(value) => dispatch(chatActions.setComposerText(value))}
-                  onFilesAdd={(files) => {
-                    if (files) dispatch(chatActions.addComposerFiles(Array.from(files)))
-                  }}
-                  onFileRemove={(index) => dispatch(chatActions.removeComposerFile(index))}
-                  onSubmit={() => {
-                    if (state.inputLocked || state.connection === 'booting') return
-                    void sendMessage(undefined, hasPendingTurn ? 'followup' : 'regular')
-                  }}
-                  onStop={() => {
-                    if (state.inputLocked || state.connection === 'booting') return
-                    void sendMessage('', 'steer')
-                  }}
+                  onTextChange={handleComposerTextChange}
+                  onFilesAdd={handleComposerFilesAdd}
+                  onFileRemove={handleComposerFileRemove}
+                  onSubmit={handleComposerSubmit}
+                  onStop={handleComposerStop}
                 />
               </div>
             </div>

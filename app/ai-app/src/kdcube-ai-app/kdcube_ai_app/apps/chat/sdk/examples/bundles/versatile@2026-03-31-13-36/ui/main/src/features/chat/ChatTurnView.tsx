@@ -5,7 +5,7 @@
  *  primitives this borrows from (FollowupMessageBlock, OverviewEvent +
  *  mergeOverviewEvents).
  */
-import { useMemo, useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 import { downloadResourceByRN } from '../../service.ts'
 import {
   formatBytes,
@@ -89,7 +89,7 @@ export function shortenForPreview(raw: string, max = 120): string {
  *
  *  Visual: dotted timeline, steel-blue dots, faded body text. Light grey
  *  surface when collapsed. */
-export function ChatThinkingTimeline({
+function ChatThinkingTimelineImpl({
   entries,
   streaming,
 }: {
@@ -144,7 +144,7 @@ export function ChatThinkingTimeline({
 /** Web search artifact rendered for the Chat view.
  *  Same shape as ArtifactFeed's web_search render but with real favicons
  *  and "queries · objective" demoted to a single muted line. Open by default. */
-export function ChatWebSearchBlock({ artifact }: { artifact: WebSearchArtifact }) {
+function ChatWebSearchBlockImpl({ artifact }: { artifact: WebSearchArtifact }) {
   return (
     <details className="k-workitem k-tint-sky">
       <summary className="k-workitem-head">
@@ -211,7 +211,7 @@ export function ChatWebSearchBlock({ artifact }: { artifact: WebSearchArtifact }
 
 /** Web fetch artifact rendered for the Chat view (favicons + coloured
  *  per-row status). Collapsed by default — users open it when they care. */
-export function ChatWebFetchBlock({ artifact }: { artifact: WebFetchArtifact }) {
+function ChatWebFetchBlockImpl({ artifact }: { artifact: WebFetchArtifact }) {
   return (
     <details className="k-workitem k-tint-gold">
       <summary className="k-workitem-head">
@@ -258,7 +258,7 @@ export function ChatWebFetchBlock({ artifact }: { artifact: WebFetchArtifact }) 
 }
 
 /** Code exec artifact in Chat view — collapsed by default. */
-export function ChatCodeExecBlock({ artifact }: { artifact: CodeExecArtifact }) {
+function ChatCodeExecBlockImpl({ artifact }: { artifact: CodeExecArtifact }) {
   const statusLabel =
     artifact.status?.status === 'error'
       ? 'Error'
@@ -338,7 +338,7 @@ export function ChatCodeExecBlock({ artifact }: { artifact: CodeExecArtifact }) 
 /** Canvas artifact in Chat view — open, with copy + download tools on
  *  the header bar so the user can grab the content without expanding
  *  Overview. Mirrors `CanvasPanel`'s tool layout from the Canvas tab. */
-export function ChatCanvasBlock({ artifact }: { artifact: CanvasArtifact }) {
+function ChatCanvasBlockImpl({ artifact }: { artifact: CanvasArtifact }) {
   return (
     <details className="k-workitem k-tint-green" open>
       <summary className="k-workitem-head">
@@ -377,7 +377,7 @@ export function ChatCanvasBlock({ artifact }: { artifact: CanvasArtifact }) {
  *  No bordered card, no chip, no timestamp. The note is simply written into
  *  the transcript flow as a markdown block so it reads like the assistant
  *  jotted it down inline. */
-export function ChatTimelineBlock({ artifact }: { artifact: TimelineArtifact }) {
+function ChatTimelineBlockImpl({ artifact }: { artifact: TimelineArtifact }) {
   if (!artifact.markdown || !artifact.markdown.trim()) return null
   return (
     <div className="k-chat-note">
@@ -397,7 +397,7 @@ export function ChatTimelineBlock({ artifact }: { artifact: TimelineArtifact }) 
  *  Click the row to download via the existing `downloadResourceByRN`
  *  helper. The download button mirrors `DownloadsPanel`'s behaviour so
  *  failures surface through the parent's `onError` channel. */
-export function ChatFileBlock({
+function ChatFileBlockImpl({
   artifact,
   onError,
 }: {
@@ -455,7 +455,7 @@ export function ChatFileBlock({
 }
 
 /** Service error artifact in Chat view — inline error notice. */
-export function ChatServiceErrorBlock({ artifact }: { artifact: ServiceErrorArtifact }) {
+function ChatServiceErrorBlockImpl({ artifact }: { artifact: ServiceErrorArtifact }) {
   return (
     <div className="k-notice k-error">
       <span>{artifact.message}</span>
@@ -463,7 +463,7 @@ export function ChatServiceErrorBlock({ artifact }: { artifact: ServiceErrorArti
   )
 }
 
-export function ChatArtifactRow({
+function ChatArtifactRowImpl({
   artifact,
   onDownloadError,
 }: {
@@ -492,7 +492,7 @@ export function ChatArtifactRow({
   }
 }
 
-export function ChatMergedFeed({
+function ChatMergedFeedImpl({
   events,
   onDownloadError,
 }: {
@@ -518,7 +518,7 @@ export function ChatMergedFeed({
   )
 }
 
-export function ChatTurnView({
+function ChatTurnViewImpl({
   turn,
   sendingDisabled,
   onFollowup,
@@ -564,3 +564,25 @@ export function ChatTurnView({
   )
 }
 
+
+/* ---------------------------------------------------------------------- */
+/*  Memoised component exports.                                           */
+/*                                                                        */
+/*  Each Chat-tab block is wrapped in `React.memo`. When a streaming      */
+/*  delta updates only `turn.answer`, the artifact references stay        */
+/*  stable thanks to Immer, so every block above the answer is skipped    */
+/*  by the reconciler. The active turn re-renders only the parts that    */
+/*  actually changed (the answer body or the streaming code-exec block). */
+/* ---------------------------------------------------------------------- */
+
+export const ChatThinkingTimeline = memo(ChatThinkingTimelineImpl)
+export const ChatWebSearchBlock = memo(ChatWebSearchBlockImpl)
+export const ChatWebFetchBlock = memo(ChatWebFetchBlockImpl)
+export const ChatCodeExecBlock = memo(ChatCodeExecBlockImpl)
+export const ChatCanvasBlock = memo(ChatCanvasBlockImpl)
+export const ChatTimelineBlock = memo(ChatTimelineBlockImpl)
+export const ChatFileBlock = memo(ChatFileBlockImpl)
+export const ChatServiceErrorBlock = memo(ChatServiceErrorBlockImpl)
+export const ChatArtifactRow = memo(ChatArtifactRowImpl)
+export const ChatMergedFeed = memo(ChatMergedFeedImpl)
+export const ChatTurnView = memo(ChatTurnViewImpl)

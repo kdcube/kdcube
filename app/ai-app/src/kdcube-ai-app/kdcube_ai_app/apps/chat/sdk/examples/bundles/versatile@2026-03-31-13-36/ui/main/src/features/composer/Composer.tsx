@@ -1,8 +1,11 @@
-/** Send composer (textarea + attach + submit). Moved verbatim from App.tsx (Wave 2). */
-import { useRef } from 'react'
+/** Send composer (textarea + attach + submit). Memoised — composer
+ *  props (text / files / disabled / inProgress / lockedMessage) change
+ *  often but the bulk of the chat transcript doesn't re-render when
+ *  they do, since the transcript is rendered by sibling components. */
+import { memo, useRef } from 'react'
 import { formatBytes } from '../../components/utils.ts'
 
-export function Composer({
+function ComposerImpl({
   text,
   files,
   disabled,
@@ -100,3 +103,5 @@ export function Composer({
     </div>
   )
 }
+
+export const Composer = memo(ComposerImpl)

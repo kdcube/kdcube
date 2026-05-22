@@ -1,6 +1,14 @@
 /** Per-turn tab dispatcher. Renders the user bubble, tab strip, and the
- *  body for whichever tab is active. Moved verbatim from App.tsx (Wave 2). */
-import { useMemo, useState } from 'react'
+ *  body for whichever tab is active.
+ *
+ *  Memoised: the parent (`App`) re-creates the per-turn list on every
+ *  Redux dispatch (composer keystroke, banner, conversation refresh,
+ *  every streaming delta). With Immer's structural sharing, the `turn`
+ *  reference for unchanged turns stays the same — so memoised TurnView
+ *  short-circuits and only the actively-streaming turn re-renders.
+ *  Other props (`sendingDisabled`, callbacks) must also be reference-
+ *  stable; App.tsx wraps the callbacks with `useStableCallback`. */
+import { memo, useMemo, useState } from 'react'
 import { formatBytes, formatTime } from '../../components/utils.ts'
 import { CopyButton } from '../../components/CopyButton.tsx'
 import { MarkdownBlock } from '../../components/MarkdownBlock.tsx'
@@ -25,7 +33,7 @@ import {
 } from './turnTabs.tsx'
 import { ChatTurnView } from './ChatTurnView.tsx'
 
-export function TurnView({
+function TurnViewImpl({
   turn,
   sendingDisabled,
   onFollowup,
@@ -176,3 +184,5 @@ export function TurnView({
     </article>
   )
 }
+
+export const TurnView = memo(TurnViewImpl)
