@@ -96,11 +96,14 @@ function ChatThinkingTimelineImpl({
   entries: TimelineEntry[]
   streaming: boolean
 }) {
-  if (entries.length === 0) return null
+  /* useMemo must run on every render — keep it above any early return
+   * so the hook call order is stable. The empty-entries case is then
+   * handled below as a render-time branch. (React error #310 fix.) */
   const sorted = useMemo(
     () => entries.slice().sort((left, right) => left.timestamp - right.timestamp),
     [entries],
   )
+  if (entries.length === 0) return null
   const latest = sorted[sorted.length - 1]
   const latestPreview = streaming ? shortenForPreview(latest?.body || '', 120) : ''
   /* Default open while streaming, closed once the turn is done. Each render
