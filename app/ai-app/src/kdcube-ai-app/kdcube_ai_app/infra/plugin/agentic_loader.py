@@ -1373,6 +1373,35 @@ _bundle_static_entrypoint_load_tasks: dict[str, asyncio.Task] = {}
 _bundle_static_entrypoint_load_lock = asyncio.Lock()
 
 
+def _is_base_workflow_subclass(target: Any) -> bool:
+    """Best-effort check without importing the heavy workflow module here."""
+    cls = target if inspect.isclass(target) else type(target)
+    try:
+        mro = inspect.getmro(cls)
+    except Exception:
+        return False
+    for base in mro:
+        if (
+            getattr(base, "__name__", "") == "BaseWorkflow"
+            and str(getattr(base, "__module__", "")).endswith(".solutions.chatbot.base_workflow")
+        ):
+            return True
+    return False
+
+
+def _raise_if_singleton_base_workflow(target: Any, *, spec: AgenticBundleSpec) -> None:
+    if not _is_base_workflow_subclass(target):
+        return
+    raise TypeError(
+        "Invalid singleton bundle workflow: BaseWorkflow subclasses are per-message orchestrators, "
+        "not decorated singleton bundle entrypoints. Decorate a BaseEntrypoint-family class "
+        "(BaseEntrypoint, BaseEntrypointWithEconomics, BaseEntrypointWithMemory, or "
+        "BaseEntrypointWithEconomicsAndMemory) and create the BaseWorkflow subclass inside the "
+        "entrypoint turn execution. "
+        f"spec.path={spec.path!r} module={spec.module!r}"
+    )
+
+
 async def _cleanup_bundle_load_task(load_key: str, task: asyncio.Task) -> None:
     succeeded = False
     try:
@@ -2234,6 +2263,7 @@ def get_workflow_instance(
     # singleton cache hit?
     if spec.singleton and key in _singleton_cache:
         inst, mod = _singleton_cache[key]
+        _raise_if_singleton_base_workflow(inst, spec=spec)
         try:
             rebind = getattr(inst, "rebind_request_context", None)
             if callable(rebind):
@@ -2265,8 +2295,12 @@ def get_workflow_instance(
         dec_singleton = bool(meta.get("singleton"))
         final_singleton = bool(spec.singleton or dec_singleton)
     else:
+        if spec.singleton:
+            _raise_if_singleton_base_workflow(symbol, spec=spec)
         instance = _instantiate_symbol("class", symbol, config, extra_kwargs)
         final_singleton = bool(spec.singleton)
+    if final_singleton:
+        _raise_if_singleton_base_workflow(instance, spec=spec)
 
     # Cache interface manifest (once per spec key — path::module)
     if key not in _manifest_cache:

@@ -16,6 +16,7 @@ import re
 import shlex
 import time
 import traceback
+from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
@@ -146,6 +147,35 @@ class BaseEntrypoint:
             self.pg_pool = pg_pool
         if redis is not None:
             self.redis = redis
+
+    @contextmanager
+    def bind_request_context(
+        self,
+        *,
+        comm_context: Optional[ChatTaskPayload] = None,
+        comm: Any = _REQUEST_LOCAL_UNSET,
+    ):
+        """
+        Temporarily bind request-scoped state for this entrypoint instance.
+
+        Use this when bundle code intentionally scopes a nested run to a
+        different user/conversation/turn. Unlike rebind_request_context(), this
+        restores the previous task-local binding when the nested run exits.
+        """
+        comm_context_token = None
+        comm_token = None
+        try:
+            if comm_context is not None:
+                comm_context_token = self._comm_context_cv.set(comm_context)
+                comm_token = self._comm_cv.set(None if comm is _REQUEST_LOCAL_UNSET else comm)
+            elif comm is not _REQUEST_LOCAL_UNSET:
+                comm_token = self._comm_cv.set(comm)
+            yield self
+        finally:
+            if comm_token is not None:
+                self._comm_cv.reset(comm_token)
+            if comm_context_token is not None:
+                self._comm_context_cv.reset(comm_context_token)
 
     async def pending_continuation_count(self) -> int:
         source = self.continuation_source

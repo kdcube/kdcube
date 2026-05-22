@@ -19,7 +19,11 @@ from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bundle_registry import (
     register_config,
     resolve_config,
 )
-from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import get_current_bundle_id, get_current_request_context
+from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import (
+    bind_current_request_context,
+    get_current_bundle_id,
+    get_current_request_context,
+)
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram import (
     TelegramMessage,
     TelegramActivityStreamer,
@@ -662,78 +666,89 @@ async def run_react_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> Dict[st
     scoped_ctx.user.user_id = kdcube_user_id or f"telegram_{telegram_user_id}"
     scoped_ctx.user.username = str(summary.get("username") or scoped_ctx.user.username or "")
     scoped_ctx.user.user_type = role
-    entrypoint.rebind_request_context(comm_context=scoped_ctx)
 
-    if attachments:
-        attachments = await _host_telegram_attachments(
-            entrypoint,
-            attachments=attachments,
-            tenant=scoped_ctx.actor.tenant_id,
-            project=scoped_ctx.actor.project_id,
-            user_id=scoped_ctx.user.user_id,
-            user_type=scoped_ctx.user.user_type,
-            conversation_id=conversation_id,
-            turn_id=turn_id,
+    async def _run_scoped_telegram_turn() -> Dict[str, Any]:
+        nonlocal attachments
+        if attachments:
+            attachments = await _host_telegram_attachments(
+                entrypoint,
+                attachments=attachments,
+                tenant=scoped_ctx.actor.tenant_id,
+                project=scoped_ctx.actor.project_id,
+                user_id=scoped_ctx.user.user_id,
+                user_type=scoped_ctx.user.user_type,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+            )
+            summary["attachments"] = attachments
+
+        state = entrypoint.create_initial_state(
+            {
+                "request_id": scoped_ctx.request.request_id or str(uuid.uuid4()),
+                "tenant": scoped_ctx.actor.tenant_id,
+                "project": scoped_ctx.actor.project_id,
+                "user": scoped_ctx.user.user_id,
+                "user_type": scoped_ctx.user.user_type,
+                "session_id": conversation_id,
+                "conversation_id": conversation_id,
+                "turn_id": turn_id,
+                "text": text,
+                "attachments": attachments,
+            }
         )
-        summary["attachments"] = attachments
-
-    state = entrypoint.create_initial_state(
-        {
-            "request_id": scoped_ctx.request.request_id or str(uuid.uuid4()),
-            "tenant": scoped_ctx.actor.tenant_id,
-            "project": scoped_ctx.actor.project_id,
-            "user": scoped_ctx.user.user_id,
-            "user_type": scoped_ctx.user.user_type,
-            "session_id": conversation_id,
+        state["turn_id"] = turn_id
+        entrypoint.set_state(state)
+        stream_enabled = bool(
+            _bundle_prop(entrypoint, "integrations.telegram.stream_activity", True)
+            and _bundle_prop(entrypoint, "integrations.telegram.send_responses", True)
+        )
+        async with TelegramActivityStreamer(
+            comm=getattr(entrypoint, "comm", None),
+            bot_token=bot_token(entrypoint),
+            chat_id=chat_id,
+            turn_id=turn_id,
+            enabled=stream_enabled,
+        ) as telegram_streamer:
+            result = await entrypoint.run(text=text, attachments=state["attachments"])
+        delivered_file_keys = telegram_streamer.delivered_file_keys() if telegram_streamer else set()
+        progress_message_id = telegram_streamer.progress_message_id() if telegram_streamer else None
+        progress_summary = telegram_streamer.progress_summary() if telegram_streamer else ""
+        turn_log = (result or {}).get("turn_log") if isinstance((result or {}).get("turn_log"), dict) else {}
+        timeline = (result or {}).get("timeline") if isinstance((result or {}).get("timeline"), dict) else {}
+        log.info(
+            "[%s] telegram react turn completed | update_id=%s conversation_id=%s turn_id=%s answer_chars=%s followups=%s turn_log_blocks=%s timeline_blocks=%s timeline_sources=%s",
+            bundle_id,
+            update_id,
+            conversation_id,
+            turn_id,
+            len(str((result or {}).get("final_answer") or "")),
+            len((result or {}).get("followups") or []),
+            len(turn_log.get("blocks") or []) if isinstance(turn_log, dict) else 0,
+            len(timeline.get("blocks") or []) if isinstance(timeline, dict) else 0,
+            len(timeline.get("sources_pool") or []) if isinstance(timeline, dict) else 0,
+        )
+        return {
             "conversation_id": conversation_id,
             "turn_id": turn_id,
-            "text": text,
-            "attachments": attachments,
+            "telegram_identity": telegram_identity,
+            "answer": (result or {}).get("final_answer") or "",
+            "followups": (result or {}).get("followups") or [],
+            "turn_log": turn_log,
+            "timeline": timeline,
+            "telegram_delivered_file_keys": sorted(delivered_file_keys),
+            "telegram_progress_message_id": progress_message_id,
+            "telegram_progress_summary": progress_summary,
         }
-    )
-    state["turn_id"] = turn_id
-    entrypoint.set_state(state)
-    stream_enabled = bool(
-        _bundle_prop(entrypoint, "integrations.telegram.stream_activity", True)
-        and _bundle_prop(entrypoint, "integrations.telegram.send_responses", True)
-    )
-    async with TelegramActivityStreamer(
-        comm=getattr(entrypoint, "comm", None),
-        bot_token=bot_token(entrypoint),
-        chat_id=chat_id,
-        turn_id=turn_id,
-        enabled=stream_enabled,
-    ) as telegram_streamer:
-        result = await entrypoint.run(text=text, attachments=state["attachments"])
-    delivered_file_keys = telegram_streamer.delivered_file_keys() if telegram_streamer else set()
-    progress_message_id = telegram_streamer.progress_message_id() if telegram_streamer else None
-    progress_summary = telegram_streamer.progress_summary() if telegram_streamer else ""
-    turn_log = (result or {}).get("turn_log") if isinstance((result or {}).get("turn_log"), dict) else {}
-    timeline = (result or {}).get("timeline") if isinstance((result or {}).get("timeline"), dict) else {}
-    log.info(
-        "[%s] telegram react turn completed | update_id=%s conversation_id=%s turn_id=%s answer_chars=%s followups=%s turn_log_blocks=%s timeline_blocks=%s timeline_sources=%s",
-        bundle_id,
-        update_id,
-        conversation_id,
-        turn_id,
-        len(str((result or {}).get("final_answer") or "")),
-        len((result or {}).get("followups") or []),
-        len(turn_log.get("blocks") or []) if isinstance(turn_log, dict) else 0,
-        len(timeline.get("blocks") or []) if isinstance(timeline, dict) else 0,
-        len(timeline.get("sources_pool") or []) if isinstance(timeline, dict) else 0,
-    )
-    return {
-        "conversation_id": conversation_id,
-        "turn_id": turn_id,
-        "telegram_identity": telegram_identity,
-        "answer": (result or {}).get("final_answer") or "",
-        "followups": (result or {}).get("followups") or [],
-        "turn_log": turn_log,
-        "timeline": timeline,
-        "telegram_delivered_file_keys": sorted(delivered_file_keys),
-        "telegram_progress_message_id": progress_message_id,
-        "telegram_progress_summary": progress_summary,
-    }
+
+    binder = getattr(entrypoint, "bind_request_context", None)
+    if callable(binder):
+        with binder(comm_context=scoped_ctx):
+            with bind_current_request_context(scoped_ctx, comm=getattr(entrypoint, "comm", None)):
+                return await _run_scoped_telegram_turn()
+
+    entrypoint.rebind_request_context(comm_context=scoped_ctx)
+    with bind_current_request_context(scoped_ctx, comm=getattr(entrypoint, "comm", None)):
+        return await _run_scoped_telegram_turn()
 
 
 def _queued_telegram_meta(entrypoint: Any) -> Dict[str, Any]:

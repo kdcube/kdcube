@@ -7,11 +7,12 @@ import json
 import time
 import uuid
 from contextlib import nullcontext
-from typing import Any, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional
 from urllib.parse import urlencode
 
 from kdcube_ai_app.apps.chat.sdk.config import get_secret
 from kdcube_ai_app.infra.jobs.stream import RedisBackgroundJobStream
+from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_request_context
 from kdcube_ai_app.apps.chat.sdk.runtime.http_ops import BundleBinaryResponse
 from .async_storage import AsyncTaskStorage
 from .execution_artifacts import (
@@ -625,6 +626,43 @@ def _result_status(result: Any) -> str:
     return status if status in {"success", "failed", "cancelled"} else ""
 
 
+def _build_task_scoped_context(
+    entrypoint: Any,
+    *,
+    target_user: str,
+    run_conversation_id: str,
+    turn_id: str,
+    bundle_call_context: Dict[str, Any],
+):
+    comm_context = getattr(entrypoint, "comm_context", None)
+    if comm_context is None or not hasattr(comm_context, "model_copy"):
+        raise RuntimeError("task execution requires a request context with comm_context")
+
+    scoped_ctx = comm_context.model_copy(deep=True)
+    scoped_ctx.routing.session_id = run_conversation_id
+    scoped_ctx.routing.conversation_id = run_conversation_id
+    scoped_ctx.routing.turn_id = turn_id
+    scoped_ctx.user.user_id = target_user
+    scoped_ctx.bundle_call_context = bundle_call_context
+    return scoped_ctx
+
+
+async def _run_with_entrypoint_request_context(
+    entrypoint: Any,
+    scoped_ctx: Any,
+    runner: Callable[[], Awaitable[Dict[str, Any]]],
+) -> Dict[str, Any]:
+    binder = getattr(entrypoint, "bind_request_context", None)
+    if callable(binder):
+        with binder(comm_context=scoped_ctx):
+            with bind_current_request_context(scoped_ctx, comm=getattr(entrypoint, "comm", None)):
+                return await runner()
+
+    entrypoint.rebind_request_context(comm_context=scoped_ctx)
+    with bind_current_request_context(scoped_ctx, comm=getattr(entrypoint, "comm", None)):
+        return await runner()
+
+
 async def _run_default_react_task_job(
     entrypoint: Any,
     *,
@@ -636,49 +674,48 @@ async def _run_default_react_task_job(
     turn_id: str,
     bundle_call_context: Dict[str, Any],
 ) -> Dict[str, Any]:
-    comm_context = getattr(entrypoint, "comm_context", None)
-    if comm_context is None or not hasattr(comm_context, "model_copy"):
-        raise RuntimeError("task execution requires a request context with comm_context")
+    scoped_ctx = _build_task_scoped_context(
+        entrypoint,
+        target_user=target_user,
+        run_conversation_id=run_conversation_id,
+        turn_id=turn_id,
+        bundle_call_context=bundle_call_context,
+    )
 
-    scoped_ctx = comm_context.model_copy(deep=True)
-    scoped_ctx.routing.session_id = run_conversation_id
-    scoped_ctx.routing.conversation_id = run_conversation_id
-    scoped_ctx.routing.turn_id = turn_id
-    scoped_ctx.user.user_id = target_user
-    scoped_ctx.bundle_call_context = bundle_call_context
-    entrypoint.rebind_request_context(comm_context=scoped_ctx)
-
-    state = entrypoint.create_initial_state(
-        {
-            "request_id": getattr(scoped_ctx.request, "request_id", "") or str(uuid.uuid4()),
-            "tenant": scoped_ctx.actor.tenant_id,
-            "project": scoped_ctx.actor.project_id,
-            "user": target_user,
-            "user_type": scoped_ctx.user.user_type,
-            "session_id": run_conversation_id,
+    async def _run_scoped() -> Dict[str, Any]:
+        state = entrypoint.create_initial_state(
+            {
+                "request_id": getattr(scoped_ctx.request, "request_id", "") or str(uuid.uuid4()),
+                "tenant": scoped_ctx.actor.tenant_id,
+                "project": scoped_ctx.actor.project_id,
+                "user": target_user,
+                "user_type": scoped_ctx.user.user_type,
+                "session_id": run_conversation_id,
+                "conversation_id": run_conversation_id,
+                "turn_id": turn_id,
+                "text": _run_prompt(task=task, execution=execution, trigger=trigger),
+                "attachments": [],
+            }
+        )
+        state["turn_id"] = turn_id
+        state["agent_surface"] = "task_job"
+        state["task_execution"] = {
+            "task_id": task.get("id"),
+            "execution_id": execution["id"],
+            "trigger": trigger,
             "conversation_id": run_conversation_id,
             "turn_id": turn_id,
-            "text": _run_prompt(task=task, execution=execution, trigger=trigger),
-            "attachments": [],
+            "task_definition": bundle_call_context["task_definition"],
         }
-    )
-    state["turn_id"] = turn_id
-    state["agent_surface"] = "task_job"
-    state["task_execution"] = {
-        "task_id": task.get("id"),
-        "execution_id": execution["id"],
-        "trigger": trigger,
-        "conversation_id": run_conversation_id,
-        "turn_id": turn_id,
-        "task_definition": bundle_call_context["task_definition"],
-    }
-    run_task_job_turn = getattr(entrypoint, "run_task_job_turn", None)
-    if not callable(run_task_job_turn):
-        raise RuntimeError(
-            "Task execution requires entrypoint.execute_task_job(...) or entrypoint.run_task_job_turn(...)."
-        )
-    result = await run_task_job_turn(state=state)
-    return result if isinstance(result, dict) else {"final_answer": str(result or "")}
+        run_task_job_turn = getattr(entrypoint, "run_task_job_turn", None)
+        if not callable(run_task_job_turn):
+            raise RuntimeError(
+                "Task execution requires entrypoint.execute_task_job(...) or entrypoint.run_task_job_turn(...)."
+            )
+        result = await run_task_job_turn(state=state)
+        return result if isinstance(result, dict) else {"final_answer": str(result or "")}
+
+    return await _run_with_entrypoint_request_context(entrypoint, scoped_ctx, _run_scoped)
 
 
 async def _execute_task_job(
@@ -696,18 +733,33 @@ async def _execute_task_job(
 ) -> Dict[str, Any]:
     executor = getattr(entrypoint, "execute_task_job", None)
     if callable(executor):
-        result = await executor(
-            task=task,
-            execution=execution,
-            storage=storage,
-            user_id=target_user,
-            trigger=trigger,
-            source=source,
-            conversation_id=run_conversation_id,
-            turn_id=turn_id,
-            bundle_call_context=bundle_call_context,
-        )
-        return result if isinstance(result, dict) else {"answer": str(result or "")}
+        async def _run_custom() -> Dict[str, Any]:
+            result = await executor(
+                task=task,
+                execution=execution,
+                storage=storage,
+                user_id=target_user,
+                trigger=trigger,
+                source=source,
+                conversation_id=run_conversation_id,
+                turn_id=turn_id,
+                bundle_call_context=bundle_call_context,
+            )
+            return result if isinstance(result, dict) else {"answer": str(result or "")}
+
+        try:
+            scoped_ctx = _build_task_scoped_context(
+                entrypoint,
+                target_user=target_user,
+                run_conversation_id=run_conversation_id,
+                turn_id=turn_id,
+                bundle_call_context=bundle_call_context,
+            )
+        except RuntimeError:
+            return await _run_custom()
+
+        return await _run_with_entrypoint_request_context(entrypoint, scoped_ctx, _run_custom)
+
     return await _run_default_react_task_job(
         entrypoint,
         task=task,

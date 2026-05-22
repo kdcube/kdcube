@@ -499,6 +499,7 @@ async def process_chat_message(
             user_type=session.user_type.value,
             user_id=session.user_id,
             username=session.username,
+            email=session.email,
             fingerprint=session.fingerprint,
             roles=session.roles,
             permissions=session.permissions,

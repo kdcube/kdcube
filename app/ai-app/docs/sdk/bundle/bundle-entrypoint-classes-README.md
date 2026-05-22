@@ -4,7 +4,7 @@ title: "Bundle Entrypoint Classes"
 summary: "Reference for the SDK bundle entrypoint class family: BaseEntrypoint, economics, memory, memory mixin composition, and when to choose each one."
 tags: ["sdk", "bundle", "entrypoint", "base-entrypoint", "economics", "memory", "mixin", "widgets"]
 keywords: ["BaseEntrypoint", "BaseEntrypointWithEconomics", "MemoryEntrypointMixin", "BaseEntrypointWithMemory", "BaseEntrypointWithEconomicsAndMemory", "bundle entrypoint class", "source folder widget build"]
-updated_at: 2026-05-21
+updated_at: 2026-05-22
 see_also:
   - ks:docs/sdk/bundle/bundle-developer-guide-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
@@ -23,6 +23,62 @@ runtime glue that is otherwise easy to miss: bundle props/secrets handling,
 request context rebinding, communicator setup, bundle storage helpers, static
 UI/widget build hooks, model-role defaults, and optional economics or memory
 capabilities.
+
+## Entrypoint Versus Per-Message Workflow
+
+The decorated bundle object is the **entrypoint**. It is loaded by the platform
+loader, may be cached as a singleton, and owns bundle-level surfaces such as
+`@on_message`, `@api`, `@mcp`, `@ui_widget`, `@cron`, `@on_job`,
+`on_bundle_load`, and bundle props/secrets handling.
+
+`BaseWorkflow` is a **per-message orchestrator**, not the decorated singleton
+bundle entrypoint. The normal pattern is:
+
+```text
+loader
+  |
+  | @agentic_workflow(...)
+  v
+BaseEntrypoint-family instance            may be singleton
+  |
+  | one request / message / job
+  v
+BaseWorkflow subclass instance            create inside the turn
+  |
+  v
+React/tools/agent execution
+```
+
+Rules:
+
+- decorate a `BaseEntrypoint`-family class as the bundle entrypoint
+- create `BaseWorkflow` subclasses inside the entrypoint's per-turn execution
+  path
+- do not expose a `BaseWorkflow` subclass as a singleton bundle entrypoint
+- if a descriptor sets `singleton: true`, the decorated class must not inherit
+  `BaseWorkflow`
+
+The runtime enforces this rule for singleton bundles. A singleton decorated
+`BaseWorkflow` subclass is rejected because `BaseWorkflow` keeps mutable
+per-turn state such as `comm_context`, `comm`, and `runtime_ctx`. That state is
+correct when the object is created per message; it is not a singleton contract.
+
+For request-scoped identity inside bundle APIs, widgets, MCP handlers, tools, or
+nested runtimes, use:
+
+```python
+from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import (
+    get_current_request_context,
+    get_current_user_identity,
+)
+
+ctx = get_current_request_context()
+identity = get_current_user_identity()
+```
+
+`identity` includes tenant/project, bundle/conversation/turn ids, user id,
+username, email, roles, permissions, timezone, and fingerprint when those fields
+are present in the authenticated session.
 
 ## Class Map
 

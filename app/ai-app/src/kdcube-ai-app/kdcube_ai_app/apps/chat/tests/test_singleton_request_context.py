@@ -12,6 +12,10 @@ from kdcube_ai_app.apps.chat.sdk.protocol import (
     ChatTaskRouting,
     ChatTaskUser,
 )
+from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import (
+    bind_current_request_context,
+    get_current_user_identity,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot import entrypoint as entrypoint_mod
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_economic import (
     BaseEntrypointWithEconomics,
@@ -58,7 +62,7 @@ class _DummyConfig:
         return None
 
 
-def _ctx(*, user_type: str, user_id: str = "user-1") -> ChatTaskPayload:
+def _ctx(*, user_type: str, user_id: str = "user-1", email: str = "lena@nestlogic.com") -> ChatTaskPayload:
     return ChatTaskPayload(
         request=ChatTaskRequest(request_id=f"req-{user_type}"),
         routing=ChatTaskRouting(
@@ -75,6 +79,7 @@ def _ctx(*, user_type: str, user_id: str = "user-1") -> ChatTaskPayload:
             user_type=user_type,
             user_id=user_id,
             username="lena@nestlogic.com",
+            email=email,
             roles=["kdcube:role:super-admin"] if user_type == "privileged" else [],
             permissions=[],
             timezone="UTC",
@@ -147,6 +152,42 @@ async def test_singleton_entrypoint_keeps_comm_context_task_local(monkeypatch):
 
     assert first == ("user-a", "user-a", "user-a", "user-a")
     assert second == ("user-b", "user-b", "user-b", "user-b")
+
+
+def test_base_entrypoint_bind_request_context_restores_task_local_binding(monkeypatch):
+    monkeypatch.setattr(entrypoint_mod, "get_settings", lambda: SimpleNamespace(TENANT="demo", PROJECT="demo-project"))
+    monkeypatch.setattr(entrypoint_mod, "create_kv_cache_from_env", lambda: None)
+
+    class _ProbeEntrypoint(entrypoint_mod.BaseEntrypoint):
+        async def execute_core(self, *, state, thread_id, params):
+            del state, thread_id, params
+            return {}
+
+    ep = _ProbeEntrypoint(
+        config=_DummyConfig(bundle_id="bundle.probe"),
+        comm_context=_ctx(user_type="registered", user_id="seed"),
+    )
+    original = _ctx(user_type="registered", user_id="user-a")
+    scoped = _ctx(user_type="privileged", user_id="user-b")
+    ep.rebind_request_context(comm_context=original)
+
+    with ep.bind_request_context(comm_context=scoped):
+        assert ep.comm_context.user.user_id == "user-b"
+
+    assert ep.comm_context.user.user_id == "user-a"
+
+
+def test_get_current_user_identity_includes_email():
+    ctx = _ctx(user_type="registered", user_id="user-a", email="user-a@example.com")
+    with bind_current_request_context(ctx):
+        identity = get_current_user_identity()
+
+    assert identity["tenant_id"] == "demo"
+    assert identity["project_id"] == "demo-project"
+    assert identity["bundle_id"] == "kdcube.admin"
+    assert identity["user_id"] == "user-a"
+    assert identity["username"] == "lena@nestlogic.com"
+    assert identity["email"] == "user-a@example.com"
 
 
 def test_economics_entrypoint_rebind_refreshes_managers(monkeypatch):
@@ -484,7 +525,10 @@ async def test_notify_cached_bundle_props_changed_calls_singleton_hook(monkeypat
             project="demo-project",
             updated_by="tester",
             source="unit-test",
-            redis=object(),
+            redis=SimpleNamespace(
+                get=AsyncMock(return_value=None),
+                set=AsyncMock(return_value=None),
+            ),
         )
         assert changed is True
         assert len(ep.events) == 1

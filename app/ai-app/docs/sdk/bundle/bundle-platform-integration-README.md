@@ -510,11 +510,16 @@ Important current rule:
 - if bundle code needs request-bound execution context, use runtime helpers:
   - `get_current_comm()`
   - `get_current_request_context()`
+  - `get_current_user_identity()`
   - `get_current_bundle_call_context()`
   - `update_current_bundle_call_context(...)`
   - `bind_current_bundle_call_context_patch(...)`
 - for entrypoints based on `BaseEntrypoint`, prefer `self.comm` /
   `self.comm_context`
+- decorated singleton bundle entrypoints should use a `BaseEntrypoint` family
+  class; `BaseWorkflow` subclasses are per-message orchestrators created inside
+  the entrypoint turn execution, not singleton entrypoints. See
+  [Bundle Entrypoint Classes](bundle-entrypoint-classes-README.md).
 - if the method needs to record selected comm events and send them to a sink,
   use the scoped recording pattern in
   [Bundle Event Recording And Sinks](bundle-event-recording-and-sinks-README.md)

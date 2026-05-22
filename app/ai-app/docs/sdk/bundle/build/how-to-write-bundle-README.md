@@ -378,6 +378,9 @@ Skeleton file rules:
   `ui.widgets.<alias>.src_folder` can be present while no static artifacts are
   built or served. The family includes the bare base plus economics and memory
   variants; see [Bundle Entrypoint Classes](../bundle-entrypoint-classes-README.md)
+- do not decorate a `BaseWorkflow` subclass as the singleton bundle entrypoint.
+  `BaseWorkflow` is the per-message orchestrator created inside the
+  `BaseEntrypoint` turn execution.
 
 If the bundle needs external human setup before an integration can work, add an
 operator-facing integration homework doc such as:
@@ -1628,6 +1631,9 @@ Practical rule:
 
 - if the bundle is singleton, assume `self` is process-lifetime state
 - request-specific data must come from the current request context, method arguments, or task-local/context-local surfaces
+- do not make a `BaseWorkflow` subclass the decorated singleton entrypoint.
+  Use the `BaseEntrypoint` family for the bundle surface and create
+  `BaseWorkflow` inside per-message turn execution.
 - shared filesystem or EFS work still needs an explicit shared-storage guard
 
 ### Exclusive operations
@@ -2083,6 +2089,12 @@ In entrypoints derived from `BaseEntrypoint`, prefer:
 - `_ensure_privileged(...)`
 
 This keeps the access check consistent with the rest of the platform.
+
+For request-bound identity in bundle APIs, widgets, MCP handlers, tools, or
+nested runtimes, use `get_current_request_context()` or
+`get_current_user_identity()` from
+`kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx`. The identity helper includes the
+authenticated user's email when the session has one.
 
 ## 13. Scheduled Jobs And Background Pipelines
 

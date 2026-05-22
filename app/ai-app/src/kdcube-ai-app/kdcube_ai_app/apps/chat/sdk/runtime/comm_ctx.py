@@ -64,6 +64,35 @@ def get_current_request_context() -> Optional[ChatTaskPayload]:
     return REQUEST_CONTEXT_CV.get()
 
 
+def get_current_user_identity() -> Dict[str, Any]:
+    """Return request-bound tenant/project/user identity as a JSON-safe dict."""
+    ctx = get_current_request_context()
+    if ctx is None:
+        return {}
+    actor = getattr(ctx, "actor", None)
+    user = getattr(ctx, "user", None)
+    routing = getattr(ctx, "routing", None)
+    roles = getattr(user, "roles", None) or []
+    permissions = getattr(user, "permissions", None) or []
+    return {
+        "tenant_id": getattr(actor, "tenant_id", None),
+        "project_id": getattr(actor, "project_id", None),
+        "bundle_id": getattr(routing, "bundle_id", None),
+        "session_id": getattr(routing, "session_id", None),
+        "conversation_id": getattr(routing, "conversation_id", None),
+        "turn_id": getattr(routing, "turn_id", None),
+        "user_type": getattr(user, "user_type", None),
+        "user_id": getattr(user, "user_id", None),
+        "username": getattr(user, "username", None),
+        "email": getattr(user, "email", None),
+        "fingerprint": getattr(user, "fingerprint", None),
+        "roles": [str(item) for item in roles],
+        "permissions": [str(item) for item in permissions],
+        "timezone": getattr(user, "timezone", None),
+        "utc_offset_min": getattr(user, "utc_offset_min", None),
+    }
+
+
 def set_current_bundle_call_context(context: Mapping[str, Any] | None) -> None:
     """Register bundle-owned call metadata for tools and child runtimes."""
     safe_context = _json_safe_mapping(context)

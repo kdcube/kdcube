@@ -138,6 +138,11 @@ the surface, but the `BaseEntrypoint` family provides the default static
 UI/widget build and refresh path. See
 [Bundle Entrypoint Classes](../bundle-entrypoint-classes-README.md).
 
+Keep the decorated bundle entrypoint and the per-message orchestrator separate:
+decorate the `BaseEntrypoint`-family class, and create `BaseWorkflow`
+subclasses inside the turn execution. Do not use a `BaseWorkflow` subclass as a
+singleton bundle entrypoint.
+
 ## Common Product Recipes
 
 ### Chat Agent With Files, Search, And Reports

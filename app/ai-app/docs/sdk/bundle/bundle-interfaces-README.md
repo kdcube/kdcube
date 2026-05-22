@@ -4,6 +4,7 @@ title: "Bundle Interfaces"
 summary: "Bundle-facing interface surface: communicator streams, background jobs, operations, widgets, panels, artifacts, and other bundle-visible interfaces exposed by the platform runtime."
 tags: ["sdk", "bundle", "interfaces", "streaming", "sse", "widgets", "operations", "communicator", "knowledge", "background-jobs"]
 keywords: ["communicator interface", "background job interface", "on_job interface", "operations interface", "widget and panel interface", "artifact surface", "bundle visible runtime interfaces", "streaming and interaction surfaces", "knowledge and attachment surfaces"]
+updated_at: 2026-05-22
 see_also:
   - ks:docs/sdk/bundle/bundle-developer-guide-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
@@ -157,6 +158,7 @@ Important for bundle REST/public API methods:
 - otherwise use:
   - `kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx.get_current_comm()`
   - `kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx.get_current_request_context()`
+  - `kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx.get_current_user_identity()`
 
 ---
 

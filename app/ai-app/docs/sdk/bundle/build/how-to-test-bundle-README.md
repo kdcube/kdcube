@@ -784,8 +784,14 @@ If the bundle is configured as singleton, test that explicitly too.
 What to validate:
 
 - the bundle reuses the cached instance as intended
+- the decorated singleton entrypoint is a `BaseEntrypoint` family class or an
+  equivalent entrypoint implementation, not a `BaseWorkflow` subclass
 - request-bound behavior still reads the current context correctly
+- request-bound identity includes the expected authenticated email when the
+  session has one
 - request state is not accidentally retained across calls
+- scoped nested execution, such as task or Telegram execution, resets the
+  request context after the scoped run
 
 The question to answer is:
 

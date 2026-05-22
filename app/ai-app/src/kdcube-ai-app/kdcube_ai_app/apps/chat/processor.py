@@ -1508,6 +1508,8 @@ class EnhancedChatRequestProcessor:
             user=ChatTaskUser(
                 user_type=user_type,
                 user_id=user_id,
+                username=str(metadata.get("username") or "") or None,
+                email=str(metadata.get("email") or "") or None,
                 fingerprint=str(metadata.get("fingerprint") or "") or None,
                 roles=self._metadata_list(metadata.get("roles")),
                 permissions=self._metadata_list(metadata.get("permissions")),

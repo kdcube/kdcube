@@ -119,6 +119,13 @@ Critical widget/browser rule:
   panels, also read
   [bundle-widget-integration-README.md#shared-ui-source-materialization](../bundle-widget-integration-README.md#shared-ui-source-materialization)
 
+Entrypoint and request-context changes:
+
+- if you change entrypoint inheritance, singleton behavior, per-turn
+  orchestration, or request-bound identity in APIs/MCP/widgets/tools/tasks,
+  read [bundle-entrypoint-classes-README.md](../bundle-entrypoint-classes-README.md)
+  and [bundle-platform-integration-README.md](../bundle-platform-integration-README.md)
+
 There is also one optional Tier 1 lifecycle procedure:
 
 - [how-to-release-bundle-content-README.md](how-to-release-bundle-content-README.md)
