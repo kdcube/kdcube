@@ -7,15 +7,15 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from kdcube_ai_app.infra.plugin.agentic_loader import (
-    AgenticBundleSpec,
+from kdcube_ai_app.infra.plugin.bundle_loader import (
+    BundleSpec,
     _bundle_load_done,
     _bundle_load_key,
     _bundle_load_tasks,
     _bundle_static_entrypoint_load_done,
     _bundle_static_entrypoint_load_tasks,
     _maybe_run_bundle_on_load,
-    clear_agentic_caches,
+    clear_bundle_loader_caches,
     run_static_bundle_entrypoint_load_once,
 )
 
@@ -30,7 +30,7 @@ async def _wait_until(predicate, *, timeout: float = 1.0) -> None:
 
 @pytest.mark.asyncio
 async def test_static_entrypoint_load_cleanup_marks_done_after_waiter_cancellation():
-    clear_agentic_caches()
+    clear_bundle_loader_caches()
     load_key = "test::static-entrypoint::success"
     started = asyncio.Event()
     finish = asyncio.Event()
@@ -62,13 +62,13 @@ async def test_static_entrypoint_load_cleanup_marks_done_after_waiter_cancellati
     assert load_key in _bundle_static_entrypoint_load_done
     assert calls == 1
 
-    clear_agentic_caches()
+    clear_bundle_loader_caches()
 
 
 @pytest.mark.asyncio
 async def test_bundle_on_load_continues_after_waiter_cancellation():
-    clear_agentic_caches()
-    spec = AgenticBundleSpec(path="/tmp/test-bundle", module="entrypoint")
+    clear_bundle_loader_caches()
+    spec = BundleSpec(path="/tmp/test-bundle", module="entrypoint")
     config = SimpleNamespace(
         log_level="INFO",
         ai_bundle_spec=SimpleNamespace(id="test-bundle"),
@@ -116,11 +116,11 @@ async def test_bundle_on_load_continues_after_waiter_cancellation():
     assert load_key in _bundle_load_done
     assert calls == 1
 
-    clear_agentic_caches()
+    clear_bundle_loader_caches()
 
 @pytest.mark.asyncio
 async def test_static_entrypoint_load_cleanup_allows_retry_after_cancelled_waiter_and_failure():
-    clear_agentic_caches()
+    clear_bundle_loader_caches()
     load_key = "test::static-entrypoint::failure"
     started = asyncio.Event()
     finish = asyncio.Event()
@@ -150,4 +150,4 @@ async def test_static_entrypoint_load_cleanup_allows_retry_after_cancelled_waite
     assert load_key not in _bundle_static_entrypoint_load_done
     assert calls == 1
 
-    clear_agentic_caches()
+    clear_bundle_loader_caches()

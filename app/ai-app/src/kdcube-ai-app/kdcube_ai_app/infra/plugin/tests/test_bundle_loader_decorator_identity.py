@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from kdcube_ai_app.infra.plugin.agentic_loader import (
+from kdcube_ai_app.infra.plugin.bundle_loader import (
     APIEndpointSpec as CurrentAPIEndpointSpec,
     CRON_JOB_ATTR,
     CronJobSpec as CurrentCronJobSpec,

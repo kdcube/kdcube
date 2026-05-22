@@ -1352,7 +1352,7 @@ Minimal pattern:
 ```python
 from langgraph.graph import END, START, StateGraph
 
-from kdcube_ai_app.infra.plugin.agentic_loader import bundle_entrypoint, bundle_id
+from kdcube_ai_app.infra.plugin.bundle_loader import bundle_entrypoint, bundle_id
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint import BaseEntrypoint
 from kdcube_ai_app.infra.service_hub.inventory import BundleState
 
@@ -1484,7 +1484,7 @@ Rules:
 Minimal pattern:
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import cron, on_job
+from kdcube_ai_app.infra.plugin.bundle_loader import cron, on_job
 
 class MyBundle(BaseEntrypoint):
     @cron(alias="due-scan", cron_expression="*/5 * * * *", span="system")

@@ -59,8 +59,8 @@ from kdcube_ai_app.infra.plugin.bundle_store import (
     patch_bundle_props as store_patch_bundle_props,
     put_bundle_props as store_put_bundle_props,
 )
-from kdcube_ai_app.infra.plugin.agentic_loader import (
-    AgenticBundleSpec,
+from kdcube_ai_app.infra.plugin.bundle_loader import (
+    BundleSpec,
     APIEndpointSpec,
     BundleInterfaceManifest,
     MCPEndpointSpec,
@@ -571,7 +571,7 @@ async def _reload_widget_manifest_after_miss(
 ):
     """Recover once from stale in-process bundle code/manifest state."""
     try:
-        spec = AgenticBundleSpec(
+        spec = BundleSpec(
             path=spec_resolved.path,
             module=spec_resolved.module,
             singleton=bool(spec_resolved.singleton),
@@ -1060,7 +1060,7 @@ async def _load_bundle_props_defaults(
     except Exception:
         wf_config = create_workflow_config(ConfigRequest.model_validate({"project": project}))
 
-    spec = AgenticBundleSpec(
+    spec = BundleSpec(
         path=spec_resolved.path,
         module=spec_resolved.module,
         singleton=bool(spec_resolved.singleton),
@@ -1160,7 +1160,7 @@ async def _get_bundle_manifest(
     )
     if not spec_resolved:
         return None
-    spec = AgenticBundleSpec(
+    spec = BundleSpec(
         path=spec_resolved.path,
         module=spec_resolved.module,
         singleton=bool(spec_resolved.singleton),
@@ -1914,7 +1914,7 @@ async def internal_bundle_status(payload: BundleStatusRequest, request: Request)
         }
 
     entry_dict = entry.model_dump()
-    spec = AgenticBundleSpec(
+    spec = BundleSpec(
         path=entry.path,
         module=entry.module,
         singleton=bool(entry.singleton),
@@ -1978,7 +1978,7 @@ async def _do_set_bundles(
         set_registry_async,
         upsert_bundles_async,
     )
-    from kdcube_ai_app.infra.plugin.agentic_loader import clear_agentic_caches
+    from kdcube_ai_app.infra.plugin.bundle_loader import clear_bundle_loader_caches
     from kdcube_ai_app.apps.chat.sdk.runtime.local_sidecars import stop_local_sidecars_for_bundle_ids
     from kdcube_ai_app.infra.plugin.bundle_store import (
         load_registry as store_load,
@@ -2043,7 +2043,7 @@ async def _do_set_bundles(
             )
         reg = {bid: be.model_dump() for bid, be in updated.bundles.items()}
         default_id = updated.default_bundle_id
-        clear_agentic_caches()
+        clear_bundle_loader_caches()
     else:
         reg = {bid: be.model_dump() for bid, be in updated.bundles.items()}
         default_id = updated.default_bundle_id
@@ -2077,9 +2077,9 @@ async def _do_reload_bundles_from_authority(
     settings = get_settings()
     from kdcube_ai_app.infra.plugin.bundle_store import reload_registry_from_authority
     from kdcube_ai_app.infra.plugin.bundle_registry import set_registry_async
-    from kdcube_ai_app.infra.plugin.agentic_loader import (
-        AgenticBundleSpec,
-        clear_agentic_caches,
+    from kdcube_ai_app.infra.plugin.bundle_loader import (
+        BundleSpec,
+        clear_bundle_loader_caches,
         evict_bundle_scope,
         invalidate_static_bundle_entrypoint_loads,
     )
@@ -2150,7 +2150,7 @@ async def _do_reload_bundles_from_authority(
             )
         if target_entry is not None:
             target_payload = target_entry.model_dump()
-            target_spec = AgenticBundleSpec(
+            target_spec = BundleSpec(
                 path=target_payload.get("path"),
                 module=target_payload.get("module"),
                 singleton=bool(target_payload.get("singleton")),
@@ -2170,7 +2170,7 @@ async def _do_reload_bundles_from_authority(
                 eviction_result,
             )
         else:
-            clear_agentic_caches()
+            clear_bundle_loader_caches()
             logger.info(
                 "[bundle.reload] local cache clear complete: tenant=%s project=%s bundle=<all> pid=%s",
                 tenant_id,
@@ -2262,7 +2262,7 @@ async def admin_cleanup_bundles(
     settings = get_settings()
     tenant_id = payload.tenant or settings.TENANT
     project_id = payload.project or settings.PROJECT
-    from kdcube_ai_app.infra.plugin.agentic_loader import evict_inactive_specs, AgenticBundleSpec
+    from kdcube_ai_app.infra.plugin.bundle_loader import evict_inactive_specs, BundleSpec
 
     result = {"status": "ok"}
     redis = _get_app_redis(request)
@@ -2276,7 +2276,7 @@ async def admin_cleanup_bundles(
         for _bid, entry in (current.bundles or {}).items():
             try:
                 active_specs.append(
-                    AgenticBundleSpec(
+                    BundleSpec(
                         path=entry.path,
                         module=entry.module,
                         singleton=bool(entry.singleton),
@@ -2825,7 +2825,7 @@ def _log_bundle_widget_lookup_mismatch(
         widget_alias: str,
         workflow: Any,
 ) -> None:
-    spec = AgenticBundleSpec(
+    spec = BundleSpec(
         path=spec_resolved.path,
         module=spec_resolved.module,
         singleton=bool(spec_resolved.singleton),
@@ -2834,7 +2834,7 @@ def _log_bundle_widget_lookup_mismatch(
     manifest = discover_bundle_interface_manifest(workflow, bundle_id=spec_resolved.id)
     raw_widget_members: list[dict[str, Any]] = []
     try:
-        from kdcube_ai_app.infra.plugin.agentic_loader import UI_WIDGET_ATTR
+        from kdcube_ai_app.infra.plugin.bundle_loader import UI_WIDGET_ATTR
 
         for name, member in inspect.getmembers(workflow.__class__, predicate=callable):
             attr = getattr(member, UI_WIDGET_ATTR, None)
@@ -3764,7 +3764,7 @@ async def _load_bundle_workflow(
     wf_config = create_workflow_config(cfg_req)
     wf_config.ai_bundle_spec = spec_resolved
 
-    spec = AgenticBundleSpec(
+    spec = BundleSpec(
         path=spec_resolved.path,
         module=spec_resolved.module,
         singleton=bool(spec_resolved.singleton),

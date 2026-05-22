@@ -14,7 +14,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import (
     get_current_request_context,
 )
 from kdcube_ai_app.infra.plugin import bundle_storage
-from kdcube_ai_app.infra.plugin.agentic_loader import api
+from kdcube_ai_app.infra.plugin.bundle_loader import api
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.middleware.gateway import (
     STATE_STREAM_ID,

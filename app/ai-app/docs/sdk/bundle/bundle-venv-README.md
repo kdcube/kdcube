@@ -28,7 +28,7 @@ Do **not** use it for:
 ## Minimal pattern
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import venv
+from kdcube_ai_app.infra.plugin.bundle_loader import venv
 
 
 @venv(requirements="requirements.txt", timeout_seconds=120)

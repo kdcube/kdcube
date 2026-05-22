@@ -20,7 +20,7 @@ from typing import Any, Dict, Optional, Sequence
 from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint import BaseEntrypoint
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_economic import BaseEntrypointWithEconomics
-from kdcube_ai_app.infra.plugin.agentic_loader import api, ui_widget
+from kdcube_ai_app.infra.plugin.bundle_loader import api, ui_widget
 from kdcube_ai_app.infra.service_hub.inventory import Config
 
 MEMORY_RECONCILIATION_WORK_KIND = "memory.reconciliation.run"

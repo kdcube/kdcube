@@ -39,7 +39,7 @@ from kdcube_ai_app.apps.chat.sdk.context.vector.conv_ticket_store import ConvTic
 from kdcube_ai_app.apps.chat.sdk.infra.economics.policy import ProviderBudgetPolicy, QuotaPolicy
 from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload
 from kdcube_ai_app.infra.service_hub.inventory import Config, BundleState
-from kdcube_ai_app.infra.plugin.agentic_loader import bundle_entrypoint
+from kdcube_ai_app.infra.plugin.bundle_loader import bundle_entrypoint
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_economic import BaseEntrypointWithEconomics
 
 from .orchestrator.workflow import WithReactWorkflow

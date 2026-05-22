@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
-from kdcube_ai_app.infra.plugin.agentic_loader import discover_bundle_interface_manifest
+from kdcube_ai_app.infra.plugin.bundle_loader import discover_bundle_interface_manifest
 
 
 def _bundle_root() -> Path:

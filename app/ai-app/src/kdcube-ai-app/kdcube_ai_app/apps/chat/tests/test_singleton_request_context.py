@@ -20,11 +20,11 @@ from kdcube_ai_app.apps.chat.sdk.solutions.chatbot import entrypoint as entrypoi
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_economic import (
     BaseEntrypointWithEconomics,
 )
-from kdcube_ai_app.infra.plugin.agentic_loader import (
-    AgenticBundleSpec,
+from kdcube_ai_app.infra.plugin.bundle_loader import (
+    BundleSpec,
     _singleton_cache,
     cache_key_for_spec,
-    clear_agentic_caches,
+    clear_bundle_loader_caches,
     get_workflow_instance,
     notify_cached_bundle_props_changed,
 )
@@ -88,12 +88,12 @@ def _ctx(*, user_type: str, user_id: str = "user-1", email: str = "lena@nestlogi
 
 
 def test_singleton_workflow_rebinds_request_context(monkeypatch):
-    clear_agentic_caches()
+    clear_bundle_loader_caches()
     monkeypatch.setattr(entrypoint_mod, "get_settings", lambda: SimpleNamespace(TENANT="demo", PROJECT="demo-project"))
     monkeypatch.setattr(entrypoint_mod, "create_kv_cache_from_env", lambda: None)
 
     admin = _admin_bundle_entry()
-    spec = AgenticBundleSpec(
+    spec = BundleSpec(
         path=admin.path,
         module=admin.module,
         singleton=bool(admin.singleton),
@@ -107,7 +107,7 @@ def test_singleton_workflow_rebinds_request_context(monkeypatch):
     assert second is first
     assert second.user_type_from_comm_ctx(second.comm) == "privileged"
 
-    clear_agentic_caches()
+    clear_bundle_loader_caches()
 
 
 @pytest.mark.asyncio
@@ -488,7 +488,7 @@ def test_base_entrypoint_npm_install_args_for_ui_build():
 
 @pytest.mark.asyncio
 async def test_notify_cached_bundle_props_changed_calls_singleton_hook(monkeypatch):
-    clear_agentic_caches()
+    clear_bundle_loader_caches()
     monkeypatch.setattr(entrypoint_mod, "get_settings", lambda: SimpleNamespace(TENANT="demo", PROJECT="demo-project"))
     monkeypatch.setattr(entrypoint_mod, "create_kv_cache_from_env", lambda: None)
 
@@ -514,7 +514,7 @@ async def test_notify_cached_bundle_props_changed_calls_singleton_hook(monkeypat
     ep.kv_cache = MagicMock()
     ep.kv_cache.get_json = AsyncMock(return_value={"feature": {"enabled": True}})
 
-    spec = AgenticBundleSpec(path="/tmp/bundle.props", module="entrypoint", singleton=True)
+    spec = BundleSpec(path="/tmp/bundle.props", module="entrypoint", singleton=True)
     _singleton_cache[cache_key_for_spec(spec)] = (ep, SimpleNamespace(__name__="bundle.props.entrypoint"))
 
     try:
@@ -537,4 +537,4 @@ async def test_notify_cached_bundle_props_changed_calls_singleton_hook(monkeypat
         assert ep.events[0]["source"] == "unit-test"
         assert ep.events[0]["current_props"]["feature"]["enabled"] is True
     finally:
-        clear_agentic_caches()
+        clear_bundle_loader_caches()

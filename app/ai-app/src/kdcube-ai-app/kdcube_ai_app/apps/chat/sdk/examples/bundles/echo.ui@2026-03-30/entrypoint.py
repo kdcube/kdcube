@@ -22,7 +22,7 @@ from langgraph.graph import StateGraph, START, END
 
 from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload
 from kdcube_ai_app.infra.service_hub.inventory import Config, BundleState
-from kdcube_ai_app.infra.plugin.agentic_loader import bundle_entrypoint, api, bundle_id, cron
+from kdcube_ai_app.infra.plugin.bundle_loader import bundle_entrypoint, api, bundle_id, cron
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint import BaseEntrypoint
 
 BUNDLE_ID = "echo.ui"

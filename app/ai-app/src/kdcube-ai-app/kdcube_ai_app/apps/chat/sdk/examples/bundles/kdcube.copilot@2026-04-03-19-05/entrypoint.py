@@ -77,7 +77,7 @@ from kdcube_ai_app.apps.chat.sdk.storage.ai_bundle_storage import AIBundleStorag
 from kdcube_ai_app.apps.chat.sdk.viz.patch_platform_dashboard import patch_dashboard
 from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
 from kdcube_ai_app.infra.service_hub.inventory import Config, BundleState
-from kdcube_ai_app.infra.plugin.agentic_loader import bundle_entrypoint, api, mcp, on_job, ui_widget
+from kdcube_ai_app.infra.plugin.bundle_loader import bundle_entrypoint, api, mcp, on_job, ui_widget
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_memory import (
     BaseEntrypointWithEconomicsAndMemory,
 )

@@ -38,14 +38,14 @@ def _load_entrypoint_module():
 
 
 def _discover_bundle_interface_manifest(workflow, *, bundle_id: str):
-    agentic_loader = pytest.importorskip(
-        "kdcube_ai_app.infra.plugin.agentic_loader",
+    bundle_loader = pytest.importorskip(
+        "kdcube_ai_app.infra.plugin.bundle_loader",
         reason=(
             "KDCube platform source is not importable. Run with "
             "PYTHONPATH=<kdcube-ai-app>/app/ai-app/src/kdcube-ai-app or export it before pytest."
         ),
     )
-    return agentic_loader.discover_bundle_interface_manifest(workflow, bundle_id=bundle_id)
+    return bundle_loader.discover_bundle_interface_manifest(workflow, bundle_id=bundle_id)
 
 
 def _make_storage(tmp_path: Path) -> AIBundleStorage:
@@ -108,8 +108,8 @@ def _bind_tool_subsystem(tools_mod, *, user_id: str | None = None, service_user:
 def test_telegram_bot_transport_manifest_and_defaults():
     module = _load_entrypoint_module()
     workflow = module.VersatileEntrypoint.__new__(module.VersatileEntrypoint)
-    agentic_loader = pytest.importorskip(
-        "kdcube_ai_app.infra.plugin.agentic_loader",
+    bundle_loader = pytest.importorskip(
+        "kdcube_ai_app.infra.plugin.bundle_loader",
         reason=(
             "KDCube platform source is not importable. Run with "
             "PYTHONPATH=<kdcube-ai-app>/app/ai-app/src/kdcube-ai-app or export it before pytest."
@@ -122,7 +122,7 @@ def test_telegram_bot_transport_manifest_and_defaults():
     webhook = next(item for item in manifest.api_endpoints if item.alias == "telegram_webhook")
     assert webhook.http_method == "POST"
     assert webhook.route == "public"
-    assert agentic_loader.canonical_enabled_path(
+    assert bundle_loader.canonical_enabled_path(
         "api",
         alias=webhook.alias,
         http_method=webhook.http_method,
@@ -134,7 +134,7 @@ def test_telegram_bot_transport_manifest_and_defaults():
     assert webhook.public_auth.secret_key == "integrations.telegram.webhook_secret"
 
     conversation_list_enabled_paths = {
-        item.route: agentic_loader.canonical_enabled_path(
+        item.route: bundle_loader.canonical_enabled_path(
             "api",
             alias=item.alias,
             http_method=item.http_method,

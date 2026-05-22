@@ -19,7 +19,7 @@ from kdcube_ai_app.auth.sessions import UserType
 from kdcube_ai_app.apps.chat.sdk.runtime.http_ops import BundleBinaryResponse
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint import BaseEntrypoint
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_economic import BaseEntrypointWithEconomics
-from kdcube_ai_app.infra.plugin.agentic_loader import (
+from kdcube_ai_app.infra.plugin.bundle_loader import (
     _BUNDLE_VENV_EXEC_ENV,
     _BUNDLE_VENV_STAMP_FILE,
     _bundle_venv_base_python,
@@ -123,7 +123,7 @@ def test_direct_bundle_loader_removes_failed_partial_module(tmp_path):
     assert module_name not in sys.modules
 
     entrypoint.write_text(
-        "from kdcube_ai_app.infra.plugin.agentic_loader import bundle_entrypoint\n\n"
+        "from kdcube_ai_app.infra.plugin.bundle_loader import bundle_entrypoint\n\n"
         "@bundle_entrypoint(name='good')\n"
         "class GoodWorkflow:\n"
         "    def __init__(self, config=None):\n"
@@ -161,7 +161,7 @@ def test_bundle_loader_relative_imports_survive_foreign_sibling_package(tmp_path
     (target_services / "news.py").write_text("VALUE = 'target'\n", encoding="utf-8")
     (target / "entrypoint.py").write_text(
         "from .services.news import VALUE\n"
-        "from kdcube_ai_app.infra.plugin.agentic_loader import bundle_entrypoint\n\n"
+        "from kdcube_ai_app.infra.plugin.bundle_loader import bundle_entrypoint\n\n"
         "@bundle_entrypoint(name='target')\n"
         "class TargetWorkflow:\n"
         "    marker = VALUE\n",
@@ -428,7 +428,7 @@ def test_venv_decorator_executes_in_cached_bundle_subprocess(monkeypatch, tmp_pa
     (bundle_dir / "entrypoint.py").write_text(
         "\n".join(
             [
-                "from kdcube_ai_app.infra.plugin.agentic_loader import bundle_entrypoint, bundle_id",
+                "from kdcube_ai_app.infra.plugin.bundle_loader import bundle_entrypoint, bundle_id",
                 "",
                 "@bundle_entrypoint(name='Demo Bundle')",
                 "@bundle_id('bundle.demo')",
@@ -444,7 +444,7 @@ def test_venv_decorator_executes_in_cached_bundle_subprocess(monkeypatch, tmp_pa
             [
                 "import os",
                 "import sys",
-                "from kdcube_ai_app.infra.plugin.agentic_loader import venv",
+                "from kdcube_ai_app.infra.plugin.bundle_loader import venv",
                 "",
                 "@venv(requirements='requirements.txt')",
                 "def run_job(payload):",
@@ -492,7 +492,7 @@ def test_venv_decorator_supports_bundle_local_dataclass_arguments(monkeypatch, t
     (bundle_dir / "entrypoint.py").write_text(
         "\n".join(
             [
-                "from kdcube_ai_app.infra.plugin.agentic_loader import bundle_entrypoint, bundle_id",
+                "from kdcube_ai_app.infra.plugin.bundle_loader import bundle_entrypoint, bundle_id",
                 "",
                 "@bundle_entrypoint(name='Dataclass Bundle')",
                 "@bundle_id('bundle.dataclass')",
@@ -507,7 +507,7 @@ def test_venv_decorator_supports_bundle_local_dataclass_arguments(monkeypatch, t
         "\n".join(
             [
                 "from dataclasses import dataclass",
-                "from kdcube_ai_app.infra.plugin.agentic_loader import venv",
+                "from kdcube_ai_app.infra.plugin.bundle_loader import venv",
                 "",
                 "@dataclass",
                 "class SheetUser:",
@@ -544,7 +544,7 @@ def test_venv_decorator_supports_bundle_local_dataclass_arguments_when_module_sp
     (bundle_dir / "entrypoint.py").write_text(
         "\n".join(
             [
-                "from kdcube_ai_app.infra.plugin.agentic_loader import bundle_entrypoint, bundle_id",
+                "from kdcube_ai_app.infra.plugin.bundle_loader import bundle_entrypoint, bundle_id",
                 "",
                 "@bundle_entrypoint(name='User Mgmt Bundle')",
                 "@bundle_id('user-mgmt@1-0')",
@@ -559,7 +559,7 @@ def test_venv_decorator_supports_bundle_local_dataclass_arguments_when_module_sp
         "\n".join(
             [
                 "from dataclasses import dataclass",
-                "from kdcube_ai_app.infra.plugin.agentic_loader import venv",
+                "from kdcube_ai_app.infra.plugin.bundle_loader import venv",
                 "",
                 "@dataclass",
                 "class Payload:",

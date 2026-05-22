@@ -1727,9 +1727,9 @@ class EnhancedChatRequestProcessor:
         import kdcube_ai_app.infra.namespaces as namespaces
         from kdcube_ai_app.apps.chat.sdk.config import get_settings
         from kdcube_ai_app.infra.plugin.bundle_registry import set_registry_async
-        from kdcube_ai_app.infra.plugin.agentic_loader import (
-            AgenticBundleSpec,
-            clear_agentic_caches,
+        from kdcube_ai_app.infra.plugin.bundle_loader import (
+            BundleSpec,
+            clear_bundle_loader_caches,
             evict_bundle_scope,
             invalidate_static_bundle_entrypoint_loads,
         )
@@ -1778,7 +1778,7 @@ class EnhancedChatRequestProcessor:
                         )
                         continue
                     try:
-                        spec = AgenticBundleSpec(
+                        spec = BundleSpec(
                             path=entry.path,
                             module=entry.module,
                             singleton=bool(getattr(entry, "singleton", False)),
@@ -1798,7 +1798,7 @@ class EnhancedChatRequestProcessor:
                         )
             else:
                 try:
-                    clear_agentic_caches()
+                    clear_bundle_loader_caches()
                 except Exception:
                     pass
             if evictions:
@@ -1975,7 +1975,7 @@ class EnhancedChatRequestProcessor:
                         continue
 
                     if evt.get("type") == "bundles.cleanup":
-                        from kdcube_ai_app.infra.plugin.agentic_loader import evict_inactive_specs, AgenticBundleSpec
+                        from kdcube_ai_app.infra.plugin.bundle_loader import evict_inactive_specs, BundleSpec
                         from kdcube_ai_app.apps.chat.sdk.runtime.local_sidecars import stop_inactive_local_sidecars
                         from kdcube_ai_app.infra.plugin.bundle_store import (
                             _discover_example_bundle_ids,
@@ -2002,7 +2002,7 @@ class EnhancedChatRequestProcessor:
                         active_specs = []
                         for _bid, entry in (current_reg.bundles or {}).items():
                             try:
-                                active_specs.append(AgenticBundleSpec(
+                                active_specs.append(BundleSpec(
                                     path=entry.path,
                                     module=entry.module,
                                     singleton=bool(entry.singleton),
@@ -2110,15 +2110,15 @@ class EnhancedChatRequestProcessor:
                         bundle_id = str(evt.get("bundle_id") or "").strip()
                         if bundle_id:
                             try:
-                                from kdcube_ai_app.infra.plugin.agentic_loader import (
-                                    AgenticBundleSpec,
+                                from kdcube_ai_app.infra.plugin.bundle_loader import (
+                                    BundleSpec,
                                     notify_cached_bundle_props_changed,
                                 )
 
                                 current = await store_load(self.redis)
                                 entry = (current.bundles or {}).get(bundle_id) if current else None
                                 if entry is not None:
-                                    spec = AgenticBundleSpec(
+                                    spec = BundleSpec(
                                         path=entry.path,
                                         module=entry.module,
                                         singleton=bool(getattr(entry, "singleton", False)),

@@ -62,7 +62,7 @@ from kdcube_ai_app.infra.gateway.config import (
     gateway_config_cache_key,
 )
 from kdcube_ai_app.infra.gateway.backpressure import create_atomic_chat_queue_manager
-from kdcube_ai_app.infra.plugin.agentic_loader import AgenticBundleSpec
+from kdcube_ai_app.infra.plugin.bundle_loader import BundleSpec
 from kdcube_ai_app.infra.rendering.link_preview import close_shared_link_preview
 from kdcube_ai_app.infra.rendering.shared_browser import close_shared_browser
 
@@ -295,7 +295,7 @@ def _load_authoritative_bundle_props_for_preload(*, tenant: str, project: str, b
 def _validate_preloaded_bundle_manifest(
     *,
     bundle_id: str,
-    spec: AgenticBundleSpec,
+    spec: BundleSpec,
     tenant: str,
     project: str,
 ) -> None:
@@ -306,7 +306,7 @@ def _validate_preloaded_bundle_manifest(
     Descriptor `ui.widgets` only configures static build/serve behavior
     for a widget alias that the bundle actually declares.
     """
-    from kdcube_ai_app.infra.plugin.agentic_loader import (
+    from kdcube_ai_app.infra.plugin.bundle_loader import (
         evict_bundle_scope,
         load_bundle_manifest,
     )
@@ -424,7 +424,7 @@ async def _preload_bundles_loop(app) -> None:
     Every proc still performs local bundle preload; storage-scoped once locks
     inside bundle UI/index builders prevent duplicate shared build work.
     """
-    from kdcube_ai_app.infra.plugin.agentic_loader import preload_bundle_async
+    from kdcube_ai_app.infra.plugin.bundle_loader import preload_bundle_async
     from kdcube_ai_app.infra.plugin.bundle_registry import ADMIN_BUNDLE_ID
 
     # Git repos must be cloned before we can import Python modules from them.
@@ -485,7 +485,7 @@ async def _preload_bundles_loop(app) -> None:
                 logger.warning("[Bundles] Preload skip (no path): id=%s", bid)
                 continue
             total += 1
-            spec = AgenticBundleSpec(
+            spec = BundleSpec(
                 path=path,
                 module=entry.module,
                 singleton=bool(entry.singleton),
@@ -658,7 +658,7 @@ async def lifespan(app: FastAPI):
         Entry-point invoked by the processor.
         """
         import inspect
-        from kdcube_ai_app.infra.plugin.agentic_loader import (
+        from kdcube_ai_app.infra.plugin.bundle_loader import (
             discover_bundle_interface_manifest,
             get_workflow_instance_async,
         )
@@ -680,7 +680,7 @@ async def lifespan(app: FastAPI):
             raise HTTPException(status_code=404, detail=f"Bundle {bundle_id} not found")
 
         wf_config.ai_bundle_spec = spec_resolved
-        spec = AgenticBundleSpec(
+        spec = BundleSpec(
             path=spec_resolved.path,
             module=spec_resolved.module,
             singleton=bool(spec_resolved.singleton),

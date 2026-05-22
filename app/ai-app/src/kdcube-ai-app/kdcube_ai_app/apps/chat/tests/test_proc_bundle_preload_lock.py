@@ -17,7 +17,7 @@ dotenv.find_dotenv = lambda *args, **kwargs: ""
 sdk_config.get_settings.cache_clear()
 
 from kdcube_ai_app.apps.chat.proc import web_app
-from kdcube_ai_app.infra.plugin import agentic_loader, bundle_store
+from kdcube_ai_app.infra.plugin import bundle_loader, bundle_store
 
 
 class _FakeRedis:
@@ -112,8 +112,8 @@ async def test_preload_bundles_loop_acquires_and_releases_leader_lock(monkeypatc
         return _registry({"bundle.demo": {"path": "/tmp/demo", "module": "entrypoint", "singleton": False}})
 
     monkeypatch.setattr(web_app, "load_bundle_runtime_registry", _load_runtime_registry)
-    monkeypatch.setattr(agentic_loader, "preload_bundle_async", _fake_preload)
-    monkeypatch.setattr(agentic_loader, "load_bundle_manifest", lambda *args, **kwargs: _manifest())
+    monkeypatch.setattr(bundle_loader, "preload_bundle_async", _fake_preload)
+    monkeypatch.setattr(bundle_loader, "load_bundle_manifest", lambda *args, **kwargs: _manifest())
 
     await web_app._preload_bundles_loop(app)
 
@@ -141,8 +141,8 @@ async def test_preload_bundles_loop_still_preloads_when_another_instance_holds_l
         return _registry({"bundle.demo": {"path": "/tmp/demo", "module": "entrypoint", "singleton": False}})
 
     monkeypatch.setattr(web_app, "load_bundle_runtime_registry", _load_runtime_registry)
-    monkeypatch.setattr(agentic_loader, "preload_bundle_async", _fake_preload)
-    monkeypatch.setattr(agentic_loader, "load_bundle_manifest", lambda *args, **kwargs: _manifest())
+    monkeypatch.setattr(bundle_loader, "preload_bundle_async", _fake_preload)
+    monkeypatch.setattr(bundle_loader, "load_bundle_manifest", lambda *args, **kwargs: _manifest())
 
     await web_app._preload_bundles_loop(app)
 
@@ -180,9 +180,9 @@ async def test_preload_bundles_loop_reports_static_widget_without_decorator(monk
     monkeypatch.setattr(web_app, "get_settings", _settings)
     monkeypatch.setattr(web_app, "load_bundle_runtime_registry", _load_runtime_registry)
     monkeypatch.setattr(web_app, "_get_bundle_props_from_authority", _props)
-    monkeypatch.setattr(agentic_loader, "preload_bundle_async", _fake_preload)
-    monkeypatch.setattr(agentic_loader, "load_bundle_manifest", lambda *args, **kwargs: _manifest())
-    monkeypatch.setattr(agentic_loader, "evict_bundle_scope", _evict)
+    monkeypatch.setattr(bundle_loader, "preload_bundle_async", _fake_preload)
+    monkeypatch.setattr(bundle_loader, "load_bundle_manifest", lambda *args, **kwargs: _manifest())
+    monkeypatch.setattr(bundle_loader, "evict_bundle_scope", _evict)
 
     await web_app._preload_bundles_loop(app)
 
@@ -212,9 +212,9 @@ async def test_preload_bundles_loop_accepts_static_widget_backed_by_decorator(mo
     monkeypatch.setattr(web_app, "get_settings", _settings)
     monkeypatch.setattr(web_app, "load_bundle_runtime_registry", _load_runtime_registry)
     monkeypatch.setattr(web_app, "_get_bundle_props_from_authority", _props)
-    monkeypatch.setattr(agentic_loader, "preload_bundle_async", _fake_preload)
+    monkeypatch.setattr(bundle_loader, "preload_bundle_async", _fake_preload)
     monkeypatch.setattr(
-        agentic_loader,
+        bundle_loader,
         "load_bundle_manifest",
         lambda *args, **kwargs: _manifest(widgets=("copilot_webapp",)),
     )

@@ -40,7 +40,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.local_sidecars import (
     update_local_sidecar_runtime_metadata as update_runtime_local_sidecar_runtime_metadata,
 )
 from kdcube_ai_app.apps.chat.sdk.viz.patch_platform_dashboard import patch_dashboard
-from kdcube_ai_app.infra.plugin.agentic_loader import api, on_message, ui_widget
+from kdcube_ai_app.infra.plugin.bundle_loader import api, on_message, ui_widget
 from kdcube_ai_app.infra.service_hub.inventory import (
     APP_STATE_KEYS,
     AgentLogger,

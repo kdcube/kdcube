@@ -99,7 +99,7 @@ bundle-owned `work_kind` values when that returns `handled=false`.
 Minimal shape:
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import api
+from kdcube_ai_app.infra.plugin.bundle_loader import api
 
 @api(
     alias="preferences_exec_report",
@@ -269,7 +269,7 @@ What the bundle shares with the client:
 ### 4.1 Minimal shape
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import mcp
+from kdcube_ai_app.infra.plugin.bundle_loader import mcp
 
 @mcp(
     alias="tools",
@@ -412,7 +412,7 @@ from fastapi import HTTPException, Request
 from mcp.server.fastmcp import FastMCP
 
 from kdcube_ai_app.apps.chat.sdk.config import get_secret_async
-from kdcube_ai_app.infra.plugin.agentic_loader import mcp
+from kdcube_ai_app.infra.plugin.bundle_loader import mcp
 
 @mcp(
     alias="partner_tools",
@@ -484,7 +484,7 @@ bundle-authenticated MCP.
 Minimal shape:
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import ui_widget
+from kdcube_ai_app.infra.plugin.bundle_loader import ui_widget
 
 @ui_widget(
     alias="preferences",

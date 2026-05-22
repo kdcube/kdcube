@@ -233,7 +233,7 @@ to make a skill unavailable.
 ```python
 from langgraph.graph import END, START, StateGraph
 
-from kdcube_ai_app.infra.plugin.agentic_loader import bundle_entrypoint, bundle_id
+from kdcube_ai_app.infra.plugin.bundle_loader import bundle_entrypoint, bundle_id
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint import BaseEntrypoint
 from kdcube_ai_app.infra.service_hub.inventory import BundleState
 

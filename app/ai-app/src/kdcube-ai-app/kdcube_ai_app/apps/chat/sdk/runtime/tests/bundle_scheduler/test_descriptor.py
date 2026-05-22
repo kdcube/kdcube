@@ -15,7 +15,7 @@ from kdcube_ai_app.apps.chat.proc.rest.integrations.integrations import (
     _manifest_to_descriptor,
     _manifest_to_descriptor_filtered,
 )
-from kdcube_ai_app.infra.plugin.agentic_loader import (
+from kdcube_ai_app.infra.plugin.bundle_loader import (
     BundleInterfaceManifest,
     CronJobSpec,
     OnJobSpec,

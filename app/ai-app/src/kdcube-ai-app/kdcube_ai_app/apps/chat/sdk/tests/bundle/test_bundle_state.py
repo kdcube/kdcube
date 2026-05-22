@@ -132,12 +132,12 @@ class TestBundleState:
     def test_state_does_not_leak_between_bundle_instances(self, bundle_dir):
         """Two separate bundle instances do not share state."""
         try:
-            from kdcube_ai_app.infra.plugin.agentic_loader import (
-                AgenticBundleSpec,
+            from kdcube_ai_app.infra.plugin.bundle_loader import (
+                BundleSpec,
                 _resolve_module,
                 _discover_decorated,
             )
-            spec = AgenticBundleSpec(path=str(bundle_dir), module="entrypoint")
+            spec = BundleSpec(path=str(bundle_dir), module="entrypoint")
             mod = _resolve_module(spec)
             chosen = _discover_decorated(mod)
             if chosen is None or chosen[0] != "class":

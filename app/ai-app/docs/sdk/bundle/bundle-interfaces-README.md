@@ -199,7 +199,7 @@ Rules:
 Example:
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import on_job
+from kdcube_ai_app.infra.plugin.bundle_loader import on_job
 
 class MyBundle(BaseEntrypoint):
     @on_job
@@ -255,7 +255,7 @@ Example pattern (see `kdcube_ai_app/apps/chat/proc/rest/integrations/AIBundleDas
 - Use `ClientSideTSXTranspiler` to compile TSX into HTML.
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import ui_widget
+from kdcube_ai_app.infra.plugin.bundle_loader import ui_widget
 from kdcube_ai_app.apps.chat.sdk.viz.tsx_transpiler import ClientSideTSXTranspiler
 
 class MyEntrypoint(BaseEntrypoint):
@@ -406,7 +406,7 @@ async def preferences_exec_report(self, recency: int = 10, kwords: str = "", **k
 Example declaration:
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import api, ui_widget
+from kdcube_ai_app.infra.plugin.bundle_loader import api, ui_widget
 
 class MyEntrypoint(BaseEntrypoint):
     @ui_widget(alias="preferences_exec_report", user_types=("registered",))
@@ -428,7 +428,7 @@ This allows UI → backend → bundle round-trips without exposing a separate se
 Recommended pattern for dependency-heavy operations:
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import api, venv
+from kdcube_ai_app.infra.plugin.bundle_loader import api, venv
 
 @venv(requirements="requirements.txt")
 def _build_sheet_snapshot(payload: dict) -> dict:

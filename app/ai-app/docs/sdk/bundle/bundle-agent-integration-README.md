@@ -850,7 +850,7 @@ Entrypoint shape:
 ```python
 from typing import Any
 
-from kdcube_ai_app.infra.plugin.agentic_loader import mcp
+from kdcube_ai_app.infra.plugin.bundle_loader import mcp
 
 
 @mcp(alias="scoped_data", route="public", transport="streamable-http")

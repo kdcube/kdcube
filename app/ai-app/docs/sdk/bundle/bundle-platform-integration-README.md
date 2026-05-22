@@ -59,7 +59,7 @@ In short: `init` creates the runtime, `refresh` changes platform source/images,
 
 All of this is implemented in:
 
-- `src/kdcube-ai-app/kdcube_ai_app/infra/plugin/agentic_loader.py`
+- `src/kdcube-ai-app/kdcube_ai_app/infra/plugin/bundle_loader.py`
 - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/rest/integrations/integrations.py`
 
 Critical import rule:
@@ -110,7 +110,7 @@ These decorators are runtime metadata. They are not deployment config.
 Declares an entrypoint factory function rather than an entrypoint class.
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import bundle_entrypoint_factory
+from kdcube_ai_app.infra.plugin.bundle_loader import bundle_entrypoint_factory
 
 @bundle_entrypoint_factory(name="My Bundle", version="1.0.0")
 def build_bundle(config, **kwargs):
@@ -123,7 +123,7 @@ function. Most bundles should use `@bundle_entrypoint(...)` on a class.
 Side-by-side:
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import (
+from kdcube_ai_app.infra.plugin.bundle_loader import (
     bundle_entrypoint,
     bundle_entrypoint_factory,
     bundle_id,
@@ -152,7 +152,7 @@ In practice:
 Declares the canonical bundle ID on the entrypoint class.
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import bundle_entrypoint, bundle_id
+from kdcube_ai_app.infra.plugin.bundle_loader import bundle_entrypoint, bundle_id
 
 @bundle_entrypoint(name="My Bundle", version="1.0.0")
 @bundle_id("my.bundle@1.0.0")
@@ -233,7 +233,7 @@ visibility:
 
 The YAML parser resolves the anchor when the descriptor is loaded. After that,
 KDCube works with normal in-memory dictionaries and bundle props. Runtime code
-and `agentic_loader.py` do not see the anchor name or alias syntax.
+and `bundle_loader.py` do not see the anchor name or alias syntax.
 
 If bundle props or secrets are edited through the Bundle Admin interface, the
 descriptor may be written back to YAML. That write serializes the resolved
@@ -750,7 +750,7 @@ Marks the bundle handler for ready background jobs claimed by proc from the
 background jobs stream.
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import on_job
+from kdcube_ai_app.infra.plugin.bundle_loader import on_job
 
 @on_job
 async def on_job(self, job: dict, **kwargs) -> dict:
@@ -777,7 +777,7 @@ work that has been enqueued for fair processor claiming.
 Recommended dispatch pattern:
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import on_job
+from kdcube_ai_app.infra.plugin.bundle_loader import on_job
 
 @on_job
 async def on_job(self, **kwargs) -> dict:
@@ -801,7 +801,7 @@ See:
 Marks a method as a recurring scheduled job managed by proc.
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import cron
+from kdcube_ai_app.infra.plugin.bundle_loader import cron
 
 @cron(
     alias="rebuild-indexes",
@@ -864,7 +864,7 @@ For full details on span semantics, cron resolution, and local debug:
 Marks a callable to execute in a cached per-bundle subprocess venv.
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import venv
+from kdcube_ai_app.infra.plugin.bundle_loader import venv
 
 @venv(requirements="requirements.txt", timeout_seconds=120)
 def parse_large_pdf(payload: dict) -> dict:
@@ -1326,7 +1326,7 @@ Smaller custom main-view example:
 Relevant code:
 
 - decorator implementation:
-  `src/kdcube-ai-app/kdcube_ai_app/infra/plugin/agentic_loader.py`
+  `src/kdcube-ai-app/kdcube_ai_app/infra/plugin/bundle_loader.py`
 - integrations controller:
   `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/rest/integrations/integrations.py`
 - base entrypoint widget and `@on_message` usage:

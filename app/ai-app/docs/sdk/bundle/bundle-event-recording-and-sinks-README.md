@@ -252,7 +252,7 @@ finish.
 ### `@api(...)`
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import api
+from kdcube_ai_app.infra.plugin.bundle_loader import api
 
 
 @api(alias="run-report", route="operations", method="POST")
@@ -273,7 +273,7 @@ that operation.
 ### `@mcp(...)`
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import mcp
+from kdcube_ai_app.infra.plugin.bundle_loader import mcp
 
 
 @mcp(alias="docs", route="operations", transport="streamable-http")
@@ -293,7 +293,7 @@ over sending one sink request per tool call.
 ### `@on_message`
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import on_message
+from kdcube_ai_app.infra.plugin.bundle_loader import on_message
 
 
 @on_message
@@ -316,7 +316,7 @@ communicator, the handler cannot use comm recording directly.
 ### `@on_job`
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import on_job
+from kdcube_ai_app.infra.plugin.bundle_loader import on_job
 
 
 @on_job

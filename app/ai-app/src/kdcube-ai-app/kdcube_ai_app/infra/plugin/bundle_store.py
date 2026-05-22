@@ -359,7 +359,7 @@ def _load_example_bundles() -> Dict[str, "BundleEntry"]:
             continue
         bundle_path = _ensure_example_bundle_shared(item)
         try:
-            from kdcube_ai_app.infra.plugin.agentic_loader import get_declared_bundle_id
+            from kdcube_ai_app.infra.plugin.bundle_loader import get_declared_bundle_id
             bid = get_declared_bundle_id(bundle_path, "entrypoint") or item.name
         except Exception:
             bid = item.name
@@ -452,7 +452,7 @@ def _reserved_bundle_entry(bid: str) -> Optional["BundleEntry"]:
         )
     # Fallback: scan all example dirs and check declared @bundle_id.
     try:
-        from kdcube_ai_app.infra.plugin.agentic_loader import get_declared_bundle_id
+        from kdcube_ai_app.infra.plugin.bundle_loader import get_declared_bundle_id
         for item in root.iterdir():
             if not item.is_dir() or item.name in {"data", "__pycache__"}:
                 continue
