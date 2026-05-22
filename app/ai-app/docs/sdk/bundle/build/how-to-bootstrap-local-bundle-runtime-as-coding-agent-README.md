@@ -4,12 +4,13 @@ title: "How To Bootstrap A Local Bundle Runtime As A Coding Agent"
 summary: "Tier 1 coding-agent runbook for Claude Code, Codex, or a build-with-KDCube plugin to configure a local KDCube runtime, wire a bundle through the CLI, start ngrok when public callbacks are needed, set bundle props and secrets, register Telegram webhooks, prepare Gmail OAuth settings, and report only the external steps the agent cannot complete."
 tags: ["sdk", "bundle", "tier-1", "agents", "local-runtime", "cli", "ngrok", "telegram", "gmail", "oauth"]
 keywords: ["agent local bundle setup", "configure bundle with cli", "run kdcube local runtime", "telegram webhook setup", "gmail oauth local setup", "ngrok local kdcube", "bundles yaml staged descriptors", "bundles secrets yaml", "kdcube bundle command", "autonomous runtime smoke test"]
-updated_at: 2026-05-21
+updated_at: 2026-05-22
 see_also:
   - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
+  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - ks:docs/service/cicd/ngrok-README.md
   - ks:docs/sdk/integrations/telegram/telegram-README.md
@@ -123,6 +124,21 @@ them and show the final plan before changing runtime state.
 
 Use this order to avoid unnecessary questions.
 
+Before asking the user where the runtime is, try the machine-readable runtime
+summary when a workdir is known or can be guessed:
+
+```bash
+"$KDCUBE" info --json --workdir "$WORKDIR" | python3 -m json.tool
+"$KDCUBE" bundle status "$BUNDLE_ID" --json --workdir "$WORKDIR" | python3 -m json.tool
+```
+
+Use `kdcube info --json` to discover the concrete staged workdir, descriptor
+directory, local proxy ports, and local-path bundle mount mapping such as
+`host_bundles_path` and `container_bundles_root`. If the proc container sees
+bundles under `/bundles`, do not hand-write that container path into source or
+seed descriptors; configure the host path through the CLI and let the runtime
+stage the container-visible path.
+
 ### 1. KDCube Repo
 
 Prefer:
@@ -176,8 +192,11 @@ export PROJECT="demo-project"
 export WORKDIR="$HOME/.kdcube/kdcube-runtime/${TENANT}__${PROJECT}"
 ```
 
-If the user gives a base workdir such as `~/.kdcube/kdcube-runtime`, remember
-that `kdcube init` may resolve the concrete runtime to:
+For every subcommand other than `kdcube init`'s `--workdir-base` form,
+`--workdir` is the **fully-qualified namespaced runtime path**
+(`<base>/<tenant>__<project>`). If the user gives a base workdir such as
+`~/.kdcube/kdcube-runtime` with no tenant/project, derive the namespaced
+runtime explicitly:
 
 ```text
 <base_workdir>/<tenant>__<project>
@@ -264,15 +283,21 @@ test -f "$WORKDIR/config/bundles.secrets.yaml"
 
 Missing files mean the runtime needs `init`.
 
-## Initialize Or Refresh The Runtime
+## Initialize The Runtime (first-time)
 
-Use this for descriptor-backed local proof with the selected KDCube checkout:
+`kdcube init` is **first-time setup only**. It creates a fresh namespaced
+runtime workdir and refuses if the target already has `install-meta.json`.
+For re-init (rebuild images, refresh env files after platform changes), use
+[`kdcube refresh`](#refresh) — see the next section.
+
+Primary form — pass `--tenant`/`--project`; the CLI creates the runtime
+under the platform default base (`~/.kdcube/kdcube-runtime/<tenant>__<project>/`):
 
 ```bash
 "$KDCUBE" init \
   --path "$KDCUBE_REPO" \
   --descriptors-location "$DESCRIPTORS" \
-  --workdir "$WORKDIR" \
+  --tenant "$TENANT" --project "$PROJECT" \
   --build
 ```
 
@@ -283,7 +308,7 @@ stage CORS during init:
 "$KDCUBE" init \
   --path "$KDCUBE_REPO" \
   --descriptors-location "$DESCRIPTORS" \
-  --workdir "$WORKDIR" \
+  --tenant "$TENANT" --project "$PROJECT" \
   --cors-origin "https://$NGROK_DOMAIN" \
   --build
 ```
@@ -295,7 +320,7 @@ or replace in this runtime:
 "$KDCUBE" init \
   --path "$KDCUBE_REPO" \
   --descriptors-location "$DESCRIPTORS" \
-  --workdir "$WORKDIR" \
+  --tenant "$TENANT" --project "$PROJECT" \
   --cors-origin "https://$NGROK_DOMAIN" \
   --build \
   --set-secret services.openai.api_key "$OPENAI_API_KEY" \
@@ -308,62 +333,44 @@ or replace in this runtime:
 Do not invent placeholder secrets. If provider keys are missing, report the
 missing key and continue with the parts of the setup that do not require it.
 
-Start or restart:
+Start, then verify:
 
 ```bash
-"$KDCUBE" start --workdir "$WORKDIR"
-"$KDCUBE" info --workdir "$WORKDIR"
+"$KDCUBE" start --tenant "$TENANT" --project "$PROJECT"
+"$KDCUBE" info  --workdir "$WORKDIR"
 ```
 
-Use `stop/start` when runtime descriptors changed. Use `init --build` again
-after platform source changes that must be baked into local Docker images.
+## Refresh An Already-Initialized Runtime<a id="refresh"></a>
 
-### Re-Running Init
-
-Before re-running `kdcube init` against an existing workdir, decide whether the
-staged runtime descriptors under `<WORKDIR>/config` should be preserved or
-reseeded.
-
-To keep local staged patches made by `kdcube bundle --set-config`,
-`kdcube bundle --set-secret`, admin UI edits, or manual runtime descriptor
-edits, do not point init back at the original seed descriptor directory. Use the
-staged runtime config itself as the descriptor source:
+Use `kdcube refresh` whenever the **descriptors should be preserved** but the
+platform side needs to pick up changes (rebuild Docker images after editing
+platform source, regenerate env files, restart):
 
 ```bash
-"$KDCUBE" init \
-  --path "$KDCUBE_REPO" \
-  --descriptors-location "$WORKDIR/config" \
-  --workdir "$WORKDIR" \
-  --build
+"$KDCUBE" refresh --tenant "$TENANT" --project "$PROJECT" --build
 ```
 
-Use this form when the runtime needs regenerated env files, refreshed compose
-files, rebuilt images, or an added CORS origin, but the current staged bundle
-props/secrets should remain the authority.
+If a deployment is currently recorded as running (`~/.kdcube/cli-lock.json`),
+`kdcube refresh --build` with no flags targets it automatically.
 
-To intentionally discard staged local patches and return to seed descriptors,
-run init with the seed descriptor directory:
-
-```bash
-"$KDCUBE" init \
-  --path "$KDCUBE_REPO" \
-  --descriptors-location "$DESCRIPTORS" \
-  --workdir "$WORKDIR" \
-  --build
-```
-
-This restages descriptor files from `$DESCRIPTORS` into `<WORKDIR>/config`.
-Any staged-only changes not copied back to the seed descriptors can be
-overwritten. Use this only when reseeding is the intended outcome.
+`refresh` never modifies `assembly.yaml`, `secrets.yaml`, `bundles.yaml`,
+`bundles.secrets.yaml`, or `gateway.yaml`. To change those, edit them directly
+under `<WORKDIR>/config/` (or use `kdcube bundle --set-config / --set-secret`
+for bundle-scoped patches) and then call `kdcube reload <bundle_id>` — no
+refresh required for bundle reload.
 
 Agent rule:
 
-- if the user says "keep my current runtime config", use
-  `--descriptors-location "$WORKDIR/config"` or avoid init and use
-  `kdcube bundle`, `kdcube reload`, `kdcube stop`, and `kdcube start`
-- if the user says "start from descriptors", use the seed descriptor directory
-- if unsure, inspect `git diff` or compare `<WORKDIR>/config` with the seed
-  descriptors and ask before reseeding
+- if the user wants to **rebuild platform images** or **restart** after editing
+  platform source: `kdcube refresh --tenant T --project P --build`.
+- if the user wants to **reseed descriptors** from a fresh seed directory: the
+  current workdir must first be deleted (`rm -rf <WORKDIR>`), then re-run
+  `kdcube init --tenant T --project P --descriptors-location <seed> ...`.
+- if the user wants to **change a single bundle's config / secrets**:
+  `kdcube bundle <id> --tenant T --project P --set-config k v --set-secret k v`,
+  then `kdcube reload <id> --tenant T --project P`.
+- never re-run `kdcube init` on an existing initialized workdir — it refuses
+  with a clear error pointing at the right command.
 
 ## Configure The Bundle
 
@@ -622,7 +629,7 @@ Do not claim live validation unless each required layer was checked.
 ### Runtime
 
 ```bash
-"$KDCUBE" info --workdir "$WORKDIR"
+"$KDCUBE" info --json --workdir "$WORKDIR" | python3 -m json.tool
 docker ps
 curl -I "http://localhost:${KDCUBE_LOCAL_PORT}/platform/chat"
 ```
@@ -637,6 +644,7 @@ curl -s http://127.0.0.1:4040/api/tunnels
 ### Bundle Descriptor
 
 ```bash
+"$KDCUBE" bundle status "$BUNDLE_ID" --json --workdir "$WORKDIR" | python3 -m json.tool
 grep -n "$BUNDLE_ID" -A40 "$WORKDIR/config/bundles.yaml"
 grep -n "$BUNDLE_ID" -A40 "$WORKDIR/config/bundles.secrets.yaml"
 ```
@@ -657,6 +665,13 @@ docker logs --since 20m "$(docker ps --format '{{.Names}}' | grep chat-proc | he
 ```
 
 Use focused `rg` filters only after confirming the logs exist.
+
+### Bundle Smoke Probes
+
+After reload, run the route-level smoke probes from
+[how-to-test-bundle-README.md#e-bundle-smoke-probes](how-to-test-bundle-README.md#e-bundle-smoke-probes).
+Do not stop at `npm run build`, `docker ps`, or a successful CLI reload if the
+user asked for live widget/API validation.
 
 ### Backend Tests
 
@@ -754,9 +769,10 @@ meaningful.
 - asking the user for paths that are already inferable from cwd, env, or
   descriptors
 - editing seed descriptors and expecting a running runtime to see them without
-  `kdcube init`
-- re-running `kdcube init --descriptors-location <seed>` when the intent was to
-  preserve staged runtime config under `<WORKDIR>/config`
+  first re-creating the workdir (delete + `kdcube init` again) — staged
+  descriptors under `<WORKDIR>/config/` are authoritative once init has run
+- re-running `kdcube init` on an existing workdir to "refresh" — it now
+  refuses; use `kdcube refresh --tenant T --project P --build` instead
 - patching staged descriptors and forgetting `kdcube reload`
 - hardcoding `/Users/...` host paths into Docker-runtime descriptors by hand
 - registering a Telegram webhook before ngrok and the bundle public route are

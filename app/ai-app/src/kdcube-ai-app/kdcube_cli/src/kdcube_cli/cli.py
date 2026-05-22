@@ -548,6 +548,155 @@ def _read_install_meta_raw(workdir: Path) -> dict | None:
         return None
 
 
+def _resolve_namespaced_runtime_target(
+    *,
+    workdir_arg: str,
+    workdir_base_arg: str,
+    tenant_arg: str,
+    project_arg: str,
+    cli_defaults: dict,
+    prefer_existing: bool = False,
+) -> tuple[Path, str, str]:
+    """Resolve the fully-qualified namespaced runtime path for ``init`` /
+    ``refresh``.
+
+    Returns ``(resolved_runtime_path, tenant, project)``. Raises
+    ``SystemExit`` with a clear message on bad flag combinations.
+
+    Resolution precedence (each flag has exactly one meaning):
+
+    1. ``--workdir <full>``: use as the namespaced runtime path. The trailing
+       segment must contain ``__``. If ``--tenant`` / ``--project`` are also
+       given they must match the trailing segment.
+    2. ``--workdir-base <B> --tenant T --project P``: compose under ``<B>``.
+       Mutually exclusive with ``--workdir``.
+    3. ``--tenant T --project P`` (no --workdir / --workdir-base): compose
+       under ``$DEFAULT_WORKDIR`` (the platform-wide default base
+       ``~/.kdcube/kdcube-runtime``).
+    4. ``cli_defaults["default_workdir"]`` (must be a full namespaced path):
+       use as the namespaced runtime path.
+
+    No other resolution path is considered. ``cli_defaults["default_workdir"]``
+    is **never** treated as a base; use the bare ``--tenant``/``--project``
+    form for that.
+
+    Naming convention when composing from ``--tenant`` / ``--project``:
+
+    - The directory is named **literally** ``<tenant>__<project>`` (preserves
+      hyphens, dots, mixed case — anything filesystem-safe). This matches the
+      tenant/project the user typed.
+    - If ``prefer_existing=True`` (used by ``refresh``) and the literal path
+      is not an initialized runtime, the resolver also tries the
+      ``safe_workspace_name``-normalized form (``demo-tenant`` →
+      ``demo_tenant``) for backward compatibility with older workdirs created
+      via that path. The literal form wins if both are initialized.
+    """
+    workdir_arg = (workdir_arg or "").strip()
+    workdir_base_arg = (workdir_base_arg or "").strip()
+    tenant_arg = (tenant_arg or "").strip()
+    project_arg = (project_arg or "").strip()
+
+    if workdir_arg and workdir_base_arg:
+        raise SystemExit(
+            "Choose either --workdir <full-path> OR --workdir-base <base> + "
+            "--tenant + --project. They are mutually exclusive."
+        )
+
+    def _compose_namespaced(base: Path, t: str, p: str) -> Path:
+        """Primary form: literal `<base>/<tenant>__<project>`."""
+        return (base / f"{t}__{p}").resolve()
+
+    def _compose_namespaced_safe(base: Path, t: str, p: str) -> Path:
+        """Fallback form: safe-normalized via workspace_runtime_dir."""
+        return installer_mod.workspace_runtime_dir(base, t, p).resolve()
+
+    def _pick_target(base: Path, t: str, p: str) -> Path:
+        """Return the namespaced runtime path. If ``prefer_existing`` is set
+        and the literal form is not an initialized runtime, fall back to the
+        safe-normalized form when *that* one is initialized.
+        """
+        literal = _compose_namespaced(base, t, p)
+        if not prefer_existing:
+            return literal
+        if _read_install_meta_raw(literal) is not None:
+            return literal
+        safe = _compose_namespaced_safe(base, t, p)
+        if safe != literal and _read_install_meta_raw(safe) is not None:
+            return safe
+        return literal
+
+    # Shape 2: --workdir-base + tenant + project
+    if workdir_base_arg:
+        if not (tenant_arg and project_arg):
+            raise SystemExit(
+                "--workdir-base requires both --tenant and --project to compose "
+                "the namespaced runtime path."
+            )
+        base = Path(os.path.expanduser(workdir_base_arg)).resolve()
+        return _pick_target(base, tenant_arg, project_arg), tenant_arg, project_arg
+
+    # Shape 1: --workdir <full>
+    if workdir_arg:
+        resolved = Path(os.path.expanduser(workdir_arg)).resolve()
+        name = resolved.name
+        if "__" not in name:
+            raise SystemExit(
+                f"--workdir must be a fully-qualified namespaced runtime "
+                f"(its name must contain '__'): {resolved}\n"
+                "Either pass `--workdir <base>/<tenant>__<project>` directly, "
+                "use `--workdir-base <base> --tenant T --project P` to have the "
+                "CLI compose the namespaced path, or pass `--tenant T --project P` "
+                "alone to compose under the platform default base "
+                f"({DEFAULT_WORKDIR})."
+            )
+        ns_t, ns_p = name.split("__", 1)
+        if tenant_arg and tenant_arg != ns_t:
+            raise SystemExit(
+                f"--tenant '{tenant_arg}' disagrees with the trailing segment "
+                f"of --workdir ('{ns_t}__{ns_p}'). Either remove --tenant or use "
+                "--workdir-base + --tenant + --project."
+            )
+        if project_arg and project_arg != ns_p:
+            raise SystemExit(
+                f"--project '{project_arg}' disagrees with the trailing segment "
+                f"of --workdir ('{ns_t}__{ns_p}'). Either remove --project or use "
+                "--workdir-base + --tenant + --project."
+            )
+        return resolved, ns_t, ns_p
+
+    # Shape 3: bare --tenant + --project, default base.
+    if tenant_arg and project_arg:
+        base = Path(DEFAULT_WORKDIR).expanduser().resolve()
+        return _pick_target(base, tenant_arg, project_arg), tenant_arg, project_arg
+
+    # Shape 4: cli_defaults["default_workdir"] (must be fully-qualified).
+    default_workdir = str(cli_defaults.get("default_workdir", "") or "").strip()
+    if default_workdir:
+        resolved = Path(os.path.expanduser(default_workdir)).resolve()
+        name = resolved.name
+        if "__" not in name:
+            raise SystemExit(
+                f"cli_defaults.default_workdir is not a fully-qualified namespaced "
+                f"runtime (its name must contain '__'): {resolved}\n"
+                "Either reset it with `kdcube defaults --default-workdir <full-path>`, "
+                "or invoke this command with --tenant T --project P to compose under "
+                f"the platform default base ({DEFAULT_WORKDIR})."
+            )
+        ns_t, ns_p = name.split("__", 1)
+        return resolved, ns_t, ns_p
+
+    raise SystemExit(
+        "No target workdir specified.\n"
+        "Pass one of:\n"
+        "  --tenant T --project P                            # primary form; "
+        f"composes under {DEFAULT_WORKDIR}\n"
+        "  --workdir-base <base> --tenant T --project P      # compose under <base>\n"
+        "  --workdir <full-path>                             # explicit namespaced runtime\n"
+        "or configure cli_defaults via:\n"
+        "  kdcube defaults --default-workdir <full-path>"
+    )
+
+
 def _repo_path_from_install_meta(workdir: Path) -> Path | None:
     meta = _read_install_meta_raw(workdir)
     if not isinstance(meta, dict):
@@ -2200,15 +2349,63 @@ def _check_before_stop(workdir: Path, env_file: Path, docker_dir: Path) -> None:
             )
 
 
-def _resolve_subcommand_workdir(workdir_arg: str | None, cli_defaults: dict) -> Path:
-    if workdir_arg is not None:
+def _resolve_subcommand_workdir(
+    workdir_arg: str | None,
+    cli_defaults: dict,
+    *,
+    tenant_arg: str = "",
+    project_arg: str = "",
+) -> Path:
+    """Resolve the namespaced runtime workdir for non-init subcommands.
+
+    Precedence:
+      1. ``--workdir <full-path>`` (explicit, takes precedence over everything).
+      2. ``--tenant T --project P`` → compose under ``$DEFAULT_WORKDIR``
+         (the platform-wide default base). Falls back to the
+         ``safe_workspace_name`` form when the literal form is not initialized,
+         for backward compatibility with older workdirs.
+      3. ``cli_defaults["default_workdir"]`` (must be a full namespaced path).
+      4. ``cli_defaults["default_tenant"]`` + ``["default_project"]`` →
+         compose under ``$DEFAULT_WORKDIR``.
+      5. Error.
+    """
+    if workdir_arg is not None and str(workdir_arg).strip():
         return Path(os.path.expanduser(workdir_arg)).resolve()
-    if "default_workdir" in cli_defaults:
-        return Path(cli_defaults["default_workdir"]).resolve()
+
+    tenant_arg = (tenant_arg or "").strip()
+    project_arg = (project_arg or "").strip()
+
+    def _compose_under_default(t: str, p: str) -> Path:
+        base = Path(DEFAULT_WORKDIR).expanduser().resolve()
+        literal = (base / f"{t}__{p}").resolve()
+        if _read_install_meta_raw(literal) is not None:
+            return literal
+        safe = installer_mod.workspace_runtime_dir(base, t, p).resolve()
+        if safe != literal and _read_install_meta_raw(safe) is not None:
+            return safe
+        return literal
+
+    if tenant_arg and project_arg:
+        return _compose_under_default(tenant_arg, project_arg)
+
+    default_workdir = str(cli_defaults.get("default_workdir", "") or "").strip()
+    if default_workdir:
+        return Path(os.path.expanduser(default_workdir)).resolve()
+
+    default_tenant = str(cli_defaults.get("default_tenant", "") or "").strip()
+    default_project = str(cli_defaults.get("default_project", "") or "").strip()
+    if default_tenant and default_project:
+        return _compose_under_default(default_tenant, default_project)
+
     raise SystemExit(
         "No target workdir specified.\n"
-        "Pass --workdir explicitly or configure a default:\n"
-        "  kdcube defaults --default-workdir <path>"
+        "Pass one of:\n"
+        "  --tenant T --project P                            # primary form; "
+        f"composes under {DEFAULT_WORKDIR}\n"
+        "  --workdir <full-path>                             # explicit namespaced runtime\n"
+        "or configure cli_defaults via:\n"
+        "  kdcube defaults --default-tenant T --default-project P\n"
+        "  kdcube defaults --default-workdir <full-path>"
     )
 
 
@@ -2438,14 +2635,18 @@ def main() -> None:
 
     _sp = subparsers.add_parser("stop", help="Stop the local Docker Compose stack")
     _add_quiet_arg(_sp)
-    _sp.add_argument("--workdir", default=None, help="Namespaced runtime workdir to stop")
+    _sp.add_argument("--tenant", default="", help="Tenant of the runtime to stop. With --project, composes under the platform default base.")
+    _sp.add_argument("--project", default="", help="Project of the runtime to stop. Pair with --tenant.")
+    _sp.add_argument("--workdir", default=None, help="(Advanced) Fully-qualified namespaced runtime workdir to stop")
     _sp.add_argument("--path", default=str(DEFAULT_DIR), help="Platform repo path")
     _sp.add_argument("--remove-volumes", action="store_true", help="Also pass -v to docker compose down")
 
     _sp = subparsers.add_parser("reload", help="Reload a bundle from its descriptor")
     _add_quiet_arg(_sp)
     _sp.add_argument("bundle_id", help="Bundle ID to reload")
-    _sp.add_argument("--workdir", default=None, help="Namespaced runtime workdir")
+    _sp.add_argument("--tenant", default="", help="Tenant of the runtime. With --project, composes under the platform default base.")
+    _sp.add_argument("--project", default="", help="Project of the runtime. Pair with --tenant.")
+    _sp.add_argument("--workdir", default=None, help="(Advanced) Fully-qualified namespaced runtime workdir")
     _sp.add_argument("--path", default=str(DEFAULT_DIR), help="Platform repo path")
     _sp.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
     _sp.add_argument(
@@ -2458,7 +2659,9 @@ def main() -> None:
     _add_quiet_arg(_sp)
     _sp.add_argument("bundle_id", nargs="?", help="Bundle ID to patch, or 'status'")
     _sp.add_argument("status_bundle_id", nargs="?", help=argparse.SUPPRESS)
-    _sp.add_argument("--workdir", default=None, help="Namespaced runtime workdir")
+    _sp.add_argument("--tenant", default="", help="Tenant of the runtime. With --project, composes under the platform default base.")
+    _sp.add_argument("--project", default="", help="Project of the runtime. Pair with --tenant.")
+    _sp.add_argument("--workdir", default=None, help="(Advanced) Fully-qualified namespaced runtime workdir")
     _sp.add_argument("--path", default=str(DEFAULT_DIR), help="Platform repo path")
     _sp.add_argument("--json", action="store_true", dest="json_output", help="With `bundle status`, print JSON")
     _sp.add_argument(
@@ -2594,13 +2797,53 @@ def main() -> None:
 
     _sp = subparsers.add_parser("start", help="Start the Docker Compose stack for an initialized workdir")
     _add_quiet_arg(_sp)
-    _sp.add_argument("--workdir", default=None, help="Namespaced runtime workdir to start")
+    _sp.add_argument("--tenant", default="", help="Tenant of the runtime to start. With --project, composes under the platform default base.")
+    _sp.add_argument("--project", default="", help="Project of the runtime to start. Pair with --tenant.")
+    _sp.add_argument("--workdir", default=None, help="(Advanced) Fully-qualified namespaced runtime workdir to start")
     _sp.add_argument("--path", default=str(DEFAULT_DIR), help="Platform repo path")
     _sp.add_argument("--build", action="store_true", help="Build/rebuild images before starting")
 
-    _sp = subparsers.add_parser("init", help="Initialize a workdir (stage descriptors and env files) without starting Docker")
+    _sp = subparsers.add_parser(
+        "init",
+        help=(
+            "First-time setup of a runtime workdir. Refuses if the target workdir is already initialized; "
+            "use `kdcube refresh` for re-init."
+        ),
+    )
     _add_quiet_arg(_sp)
-    _sp.add_argument("--workdir", default=str(DEFAULT_WORKDIR), help="Base or namespaced runtime workdir")
+    _sp.add_argument(
+        "--tenant",
+        default="",
+        help=(
+            "Tenant name for the new runtime. With --project, composes the "
+            "runtime path under the platform default base "
+            "(~/.kdcube/kdcube-runtime/<tenant>__<project>). This is the "
+            "recommended primary form."
+        ),
+    )
+    _sp.add_argument(
+        "--project",
+        default="",
+        help="Project name for the new runtime. Pair with --tenant.",
+    )
+    _sp.add_argument(
+        "--workdir",
+        default="",
+        help=(
+            "(Advanced) Fully-qualified namespaced runtime workdir to create "
+            "(e.g. /opt/kdcube/<tenant>__<project>). Use when the runtime "
+            "should live outside the default base."
+        ),
+    )
+    _sp.add_argument(
+        "--workdir-base",
+        default="",
+        help=(
+            "(Advanced) Parent directory under which to create a new namespaced "
+            "runtime. Requires --tenant and --project. Use only when the runtime "
+            "should live outside the platform default base."
+        ),
+    )
     _sp.add_argument(
         "--path",
         default=str(DEFAULT_DIR),
@@ -2611,8 +2854,6 @@ def main() -> None:
     _sp.add_argument("--upstream", action="store_true", help="Use upstream repo state instead of assembly platform.ref")
     _sp.add_argument("--release", default="", help="Use a specific platform release ref")
     _sp.add_argument("--build", action="store_true", help="Build images after staging the runtime, without starting containers")
-    _sp.add_argument("--tenant", default="", help="Tenant for the deployment namespace")
-    _sp.add_argument("--project", default="", help="Project for the deployment namespace")
     _sp.add_argument(
         "--reset-config",
         action="store_true",
@@ -2648,6 +2889,58 @@ def main() -> None:
         "--interactive",
         action="store_true",
         help="Prompt for required fields missing in the assembly instead of failing",
+    )
+
+    _sp = subparsers.add_parser(
+        "refresh",
+        help=(
+            "Refresh an already-initialized runtime: rebuild images (with --build) "
+            "and restart the stack. Never modifies staged descriptors."
+        ),
+    )
+    _add_quiet_arg(_sp)
+    _sp.add_argument(
+        "--tenant",
+        default="",
+        help=(
+            "Tenant name of the runtime to refresh. With --project, composes "
+            "the runtime path under the platform default base "
+            "(~/.kdcube/kdcube-runtime/<tenant>__<project>). This is the "
+            "recommended primary form."
+        ),
+    )
+    _sp.add_argument(
+        "--project",
+        default="",
+        help="Project name of the runtime to refresh. Pair with --tenant.",
+    )
+    _sp.add_argument(
+        "--workdir",
+        default="",
+        help=(
+            "(Advanced) Fully-qualified namespaced runtime workdir to refresh. "
+            "Use when the runtime lives outside the default base."
+        ),
+    )
+    _sp.add_argument(
+        "--workdir-base",
+        default="",
+        help=(
+            "(Advanced) Parent directory under which the runtime lives. "
+            "Requires --tenant and --project. Use only when the runtime is "
+            "not under the platform default base."
+        ),
+    )
+    _sp.add_argument(
+        "--path",
+        default=str(DEFAULT_DIR),
+        help="Local platform repo path (used for rebuilding images). Defaults to install-meta.json's repo_root when omitted.",
+    )
+    _sp.add_argument("--build", action="store_true", help="Rebuild platform Docker images before restarting.")
+    _sp.add_argument(
+        "--no-restart",
+        action="store_true",
+        help="Do not restart the stack after refresh (useful for build-only invocations).",
     )
 
     args = parser.parse_args()
@@ -2790,7 +3083,37 @@ def main() -> None:
                             print_runtime_info(console, repo_root=_def_repo, workdir=_def_resolved)
             return
         if args.command == "stop":
-            _workdir = _resolve_subcommand_workdir(args.workdir, cli_defaults)
+            # `kdcube stop` always targets a single deployment. When no flags
+            # are given and there is no usable default, fall back to the
+            # currently-recorded deployment in ~/.kdcube/cli-lock.json — it
+            # is by definition the one that's running, so "stop with no args"
+            # has the obvious meaning "stop what's running."
+            _stop_tenant_arg = (getattr(args, "tenant", "") or "").strip()
+            _stop_project_arg = (getattr(args, "project", "") or "").strip()
+            _stop_workdir_arg = args.workdir
+            _have_explicit_target = bool(
+                (_stop_workdir_arg and str(_stop_workdir_arg).strip())
+                or (_stop_tenant_arg and _stop_project_arg)
+                or str(cli_defaults.get("default_workdir", "") or "").strip()
+                or (
+                    str(cli_defaults.get("default_tenant", "") or "").strip()
+                    and str(cli_defaults.get("default_project", "") or "").strip()
+                )
+            )
+            if not _have_explicit_target:
+                _lock = _read_cli_lock()
+                _lock_workdir = str((_lock or {}).get("workdir", "") or "").strip()
+                if _lock_workdir:
+                    console.print(
+                        f"[dim]No --workdir/--tenant/--project passed; "
+                        f"stopping currently-recorded deployment:[/dim] {_lock_workdir}"
+                    )
+                    _stop_workdir_arg = _lock_workdir
+            _workdir = _resolve_subcommand_workdir(
+                _stop_workdir_arg, cli_defaults,
+                tenant_arg=_stop_tenant_arg,
+                project_arg=_stop_project_arg,
+            )
             _repo = _resolve_subcommand_repo(args.path, workdir=_workdir)
             stop_compose_stack(
                 console,
@@ -2800,7 +3123,11 @@ def main() -> None:
             )
             return
         if args.command == "reload":
-            _workdir = _resolve_subcommand_workdir(args.workdir, cli_defaults)
+            _workdir = _resolve_subcommand_workdir(
+                args.workdir, cli_defaults,
+                tenant_arg=getattr(args, "tenant", "") or "",
+                project_arg=getattr(args, "project", "") or "",
+            )
             _repo = _resolve_subcommand_repo(args.path, workdir=_workdir)
             reload_bundle_from_descriptor(
                 console,
@@ -2813,7 +3140,11 @@ def main() -> None:
             )
             return
         if args.command == "bundle":
-            _workdir = _resolve_subcommand_workdir(args.workdir, cli_defaults)
+            _workdir = _resolve_subcommand_workdir(
+                args.workdir, cli_defaults,
+                tenant_arg=getattr(args, "tenant", "") or "",
+                project_arg=getattr(args, "project", "") or "",
+            )
             _resolved = _resolve_cli_workdir(_workdir)
             _bundle_arg = str(args.bundle_id or "").strip()
             _status_bundle_arg = str(args.status_bundle_id or "").strip()
@@ -3064,7 +3395,11 @@ def main() -> None:
             _print_bundle_apply_hint(console, _bundle_id, _resolved)
             return
         if args.command == "export":
-            _workdir = _resolve_subcommand_workdir(args.workdir, cli_defaults)
+            _workdir = _resolve_subcommand_workdir(
+                args.workdir, cli_defaults,
+                tenant_arg=getattr(args, "tenant", "") or "",
+                project_arg=getattr(args, "project", "") or "",
+            )
             _repo = _resolve_subcommand_repo(args.path, workdir=_workdir)
             _resolved = _resolve_cli_workdir(_workdir)
             _out_dir = Path(os.path.expanduser(args.out_dir or os.getcwd())).resolve()
@@ -3098,15 +3433,107 @@ def main() -> None:
             )
             return
         if args.command == "start":
-            _workdir = _resolve_subcommand_workdir(args.workdir, cli_defaults)
+            _workdir = _resolve_subcommand_workdir(
+                args.workdir, cli_defaults,
+                tenant_arg=getattr(args, "tenant", "") or "",
+                project_arg=getattr(args, "project", "") or "",
+            )
             _resolved = _resolve_cli_workdir(_workdir)
             _repo = _resolve_subcommand_repo(args.path, workdir=_resolved)
             _t, _p = _parse_workdir_namespace(_resolved)
             _check_before_start(console, tenant=_t, project=_p)
             start_compose_stack(console, repo_root=_repo, workdir=_resolved, build=args.build)
             return
+        if args.command == "refresh":
+            # `kdcube refresh` is the re-init / pick-up-platform-changes
+            # command. It operates only on an already-initialized runtime
+            # workdir and NEVER touches staged descriptors.
+            #
+            # Primary invocation (uses platform default base):
+            #   kdcube refresh --tenant T --project P --build
+            #
+            # When no flags and no defaults are present, refresh falls back
+            # to the currently-recorded deployment in ~/.kdcube/cli-lock.json
+            # so `kdcube refresh --build` after editing platform code "just
+            # works" against the running runtime.
+            #
+            # Behaviour:
+            #   1. Resolve the target workdir (--tenant/--project compose
+            #      under DEFAULT_WORKDIR; or --workdir / --workdir-base for
+            #      explicit non-default forms; or cli-lock fallback).
+            #   2. Refuse if the workdir is not initialized
+            #      (no install-meta.json or missing canonical descriptors).
+            #   3. Stop the stack if it is running.
+            #   4. If --build, rebuild platform Docker images from the staged
+            #      repo (or from --path).
+            #   5. Unless --no-restart, start the stack again.
+            _refresh_workdir_arg = args.workdir or ""
+            _refresh_tenant_arg = (args.tenant or "").strip()
+            _refresh_project_arg = (args.project or "").strip()
+            _refresh_workdir_base_arg = (getattr(args, "workdir_base", "") or "").strip()
+            _have_explicit_target = bool(
+                str(_refresh_workdir_arg).strip()
+                or _refresh_workdir_base_arg
+                or (_refresh_tenant_arg and _refresh_project_arg)
+                or str(cli_defaults.get("default_workdir", "") or "").strip()
+                or (
+                    str(cli_defaults.get("default_tenant", "") or "").strip()
+                    and str(cli_defaults.get("default_project", "") or "").strip()
+                )
+            )
+            if not _have_explicit_target:
+                _lock = _read_cli_lock()
+                _lock_workdir = str((_lock or {}).get("workdir", "") or "").strip()
+                if _lock_workdir:
+                    console.print(
+                        f"[dim]No --workdir/--tenant/--project passed; "
+                        f"refreshing currently-recorded deployment:[/dim] {_lock_workdir}"
+                    )
+                    _refresh_workdir_arg = _lock_workdir
+            _resolved, _refresh_tenant, _refresh_project = (
+                _resolve_namespaced_runtime_target(
+                    workdir_arg=_refresh_workdir_arg,
+                    workdir_base_arg=_refresh_workdir_base_arg,
+                    tenant_arg=_refresh_tenant_arg,
+                    project_arg=_refresh_project_arg,
+                    cli_defaults=cli_defaults,
+                    prefer_existing=True,
+                )
+            )
+            _refresh_reuse_config = _canonical_descriptor_dir_from_initialized_workdir(_resolved)
+            if _refresh_reuse_config is None:
+                raise SystemExit(
+                    f"Workdir is not initialized: {_resolved}\n"
+                    "`kdcube refresh` only operates on a runtime that was previously created "
+                    "by `kdcube init`. Either:\n"
+                    "  - run `kdcube init --tenant T --project P` to set this workdir up, or\n"
+                    "  - target a different existing initialized runtime."
+                )
+            _repo = _resolve_subcommand_repo(args.path, workdir=_resolved)
+            _t, _p = _parse_workdir_namespace(_resolved)
+            # Stop if running (no-op if already stopped).
+            try:
+                stop_compose_stack(console, repo_root=_repo, workdir=_resolved)
+            except SystemExit:
+                # stop_compose_stack already prints; re-raise so the user sees it.
+                raise
+            except Exception as _stop_exc:
+                console.print(
+                    f"[yellow]Refresh: stop_compose_stack reported {_stop_exc}; "
+                    "continuing anyway.[/yellow]"
+                )
+            if args.build:
+                build_compose_images(console, repo_root=_repo, workdir=_resolved)
+            if not args.no_restart:
+                _check_before_start(console, tenant=_t, project=_p)
+                start_compose_stack(console, repo_root=_repo, workdir=_resolved, build=False)
+            else:
+                console.print(
+                    "[dim]Refresh: --no-restart set; not starting the stack. "
+                    f"Run `kdcube start --workdir {_resolved}` when ready.[/dim]"
+                )
+            return
         if args.command == "init":
-            _init_workdir = Path(os.path.expanduser(args.workdir)).resolve()
             _init_path_provided = bool(_arg_provided("--path"))
             _init_repo = Path(os.path.expanduser(args.path)).resolve()
             _init_descriptors_location: Path | None = None
@@ -3114,46 +3541,66 @@ def main() -> None:
             if sum([bool(args.latest), bool(args.upstream), bool(str(args.release or "").strip())]) > 1:
                 raise SystemExit("Choose only one of --latest, --upstream, or --release.")
             _init_local_source_copy = _init_path_provided and not _init_version_selector
-            # Pre-declare; may be set early in the no-descriptors path below.
-            _init_preset_tenant: str | None = None
-            _init_preset_project: str | None = None
-            _init_resolved: Path | None = None
+
+            # === Resolve target workdir under the strict contract. ===
+            #
+            # `kdcube init` is *first-time setup only*. It always lands on a
+            # fully-qualified namespaced runtime path
+            # `<base>/<tenant>__<project>`. See _resolve_namespaced_runtime_target
+            # for the four supported input shapes. The most common shape is
+            #
+            #   kdcube init --tenant T --project P
+            #
+            # which composes the path under the platform default base
+            # (~/.kdcube/kdcube-runtime). `--workdir <full>` and
+            # `--workdir-base <base> --tenant T --project P` are advanced
+            # forms for non-default placement.
+            #
+            # If the resolved target already has `install-meta.json` (i.e. a
+            # previous successful init), `init` refuses with a clear error
+            # pointing the user at `kdcube refresh`. This prevents the
+            # silent-clobber bug where `init` would reseed descriptors on top
+            # of a working runtime.
+            _init_resolved, _init_preset_tenant, _init_preset_project = (
+                _resolve_namespaced_runtime_target(
+                    workdir_arg=args.workdir or "",
+                    workdir_base_arg=getattr(args, "workdir_base", "") or "",
+                    tenant_arg=args.tenant or "",
+                    project_arg=args.project or "",
+                    cli_defaults=cli_defaults,
+                )
+            )
+            console.print(
+                f"[dim]Target runtime workdir:[/dim] {_init_resolved}"
+            )
+
+            # Refusal guard: if the resolved workdir is already an initialized
+            # runtime (has install-meta.json), `kdcube init` will NOT reseed
+            # descriptors over it. This is the load-bearing fix for N9.
+            _existing_meta = _read_install_meta_raw(_init_resolved) if _init_resolved.exists() else None
+            if _existing_meta is not None:
+                raise SystemExit(
+                    f"An initialized runtime already exists at:\n"
+                    f"  {_init_resolved}\n"
+                    "`kdcube init` is for first-time setup only and refuses to overwrite "
+                    "staged descriptors.\n\n"
+                    "If you want to rebuild platform images / restart on this workdir, run:\n"
+                    f"  kdcube refresh --workdir {_init_resolved}{' --build' if args.build else ''}\n\n"
+                    "If you really want to recreate from scratch, remove the workdir first:\n"
+                    f"  rm -rf {_init_resolved}\n"
+                    "and then re-run kdcube init."
+                )
+
+            # Initial workdir is created from here on.
+            _init_workdir = _init_resolved
             if str(args.descriptors_location or "").strip():
                 _init_descriptors_location = Path(
                     os.path.expanduser(args.descriptors_location)
                 ).resolve()
             else:
-                # No --descriptors-location: determine tenant/project, create the
-                # scoped workdir, then clone the platform repo into <workdir>/repo
-                # and use its deployment/ directory as the descriptor source.
-                # Applies to plain init, --latest, --upstream, --release, and --build.
-                if "__" in _init_workdir.name:
-                    # --workdir already encodes tenant__project; use it directly
-                    # and derive the namespace from the directory name.
-                    _init_resolved = _init_workdir.resolve()
-                    _ns = _init_workdir.name.split("__", 1)
-                    _init_preset_tenant = _ns[0]
-                    _init_preset_project = _ns[1]
-                elif args.interactive:
-                    _init_preset_tenant = installer_mod.ask(
-                        console,
-                        "Tenant ID",
-                        default=str(args.tenant or "").strip() or "default",
-                    )
-                    _init_preset_project = installer_mod.ask(
-                        console,
-                        "Project name",
-                        default=str(args.project or "").strip() or "default",
-                    )
-                    _init_resolved = installer_mod.workspace_runtime_dir(
-                        _init_workdir, _init_preset_tenant, _init_preset_project
-                    ).resolve()
-                else:
-                    _init_preset_tenant = str(args.tenant or "").strip() or "default"
-                    _init_preset_project = str(args.project or "").strip() or "default"
-                    _init_resolved = installer_mod.workspace_runtime_dir(
-                        _init_workdir, _init_preset_tenant, _init_preset_project
-                    ).resolve()
+                # Fresh init without descriptors: bootstrap the platform repo
+                # under <workdir>/repo and use its deployment/ directory as the
+                # descriptor source.
                 _init_resolved.mkdir(parents=True, exist_ok=True)
                 _repo_target = _init_repo if _init_path_provided else _init_resolved / DEFAULT_REPO_DIRNAME
                 _init_repo, _init_descriptors_location = _bootstrap_repo_for_defaults(

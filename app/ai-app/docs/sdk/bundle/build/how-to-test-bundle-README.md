@@ -4,7 +4,7 @@ title: "How To Test A Bundle"
 summary: "Testing guide for bundle authors and QA: local syntax/suite/pytest validation, runtime reload validation, widget and API checks, scheduled-job verification, and failure diagnosis in the local runtime."
 tags: ["sdk", "bundle", "testing", "pytest", "widget", "runtime", "validation"]
 keywords: ["bundle testing workflow", "shared bundle suite", "local bundle tests", "widget and api validation", "shared sdk widget source validation", "runtime reload verification", "scheduled job checks", "bundle failure diagnosis", "manual and automated test loop", "local qa for bundles", "integration qa for bundles"]
-updated_at: 2026-05-21
+updated_at: 2026-05-22
 see_also:
   - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
@@ -13,6 +13,8 @@ see_also:
   - ks:docs/sdk/bundle/build/how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md
   - ks:docs/sdk/bundle/build/how-to-release-bundle-content-README.md
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
+  - ks:docs/sdk/bundle/bundle-entrypoint-classes-README.md
+  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
   - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
   - ks:docs/sdk/bundle/bundle-widget-integration-README.md
   - ks:docs/sdk/integrations/telegram/telegram-README.md
@@ -330,6 +332,40 @@ Good React smoke tests:
 
 Do not add a gate-agent test unless the bundle intentionally has a gate.
 For simple React bundles, a deterministic prepare step plus solver is enough.
+
+## 1C.1 Unit-Testing BaseEntrypoint-Family Bundles
+
+Many bundles inherit a concrete `BaseEntrypoint` family class only to get
+common runtime behavior such as configuration refresh, widget builds,
+communicator binding, storage helpers, economics, memory, and model-role
+defaults. That is correct for runtime, but it can make narrow unit tests
+unnecessarily heavy. See
+[Bundle Entrypoint Classes](../bundle-entrypoint-classes-README.md).
+
+Use the real constructor when the test is validating runtime initialization.
+For pure helper, payload-shape, route-body, or policy tests that do not need
+the full chatbot base, instantiate with `__new__` and populate only the fields
+the method under test reads:
+
+```python
+entrypoint = MyEntrypoint.__new__(MyEntrypoint)
+entrypoint.bundle_props = {}
+entrypoint.config = SimpleNamespace(bundle_props={}, bundle_secrets={})
+entrypoint.pg_pool = None
+entrypoint.redis = None
+entrypoint.comm_context = None
+entrypoint.logger = logging.getLogger("test.bundle")
+```
+
+Then add bundle-specific fields explicitly, for example a storage root,
+service instance, or feature flag. Do not satisfy unit tests by weakening the
+entrypoint constructor or removing the selected `BaseEntrypoint` family base
+when the bundle needs source-folder UI/widget builds, economics, memory, or
+other inherited SDK behavior.
+
+This pattern is for local unit scope only. It does not prove that chat-proc can
+load the bundle. The loadability check is the shared bundle suite plus a real
+`kdcube reload <bundle_id>` / route probe in a running runtime.
 
 ## 1D. Runtime Log And Timeline Checks
 
@@ -670,6 +706,39 @@ If the bundle or its tools may execute in isolated runtime, test that path expli
 What to validate:
 
 - code does not depend on arbitrary host-process globals
+
+### E. Bundle Smoke Probes
+
+After local tests and `kdcube reload <bundle_id>`, run a small route-level
+smoke table. The goal is to prove that the staged descriptor, proc loader,
+manifest discovery, operation routing, and static widget serving agree.
+
+Use the active runtime values:
+
+```bash
+BASE="${BASE:-http://localhost:5173}"
+TP="$TENANT/$PROJECT"
+BID="$BUNDLE_ID"
+```
+
+| Surface | Probe | Expected without auth | What it proves |
+| --- | --- | --- | --- |
+| Authenticated operation | `curl -s -o /dev/null -w "%{http_code}\n" "$BASE/api/integrations/bundles/$TP/$BID/operations/<alias>"` | `401` or `403` | Route exists and auth boundary runs before handler work. |
+| Public operation | `curl -s "$BASE/api/integrations/bundles/$TP/$BID/public/<alias>"` | Product-specific `401`/`403` body, for example missing Telegram `initData` | Public route is registered and bundle-owned auth code is executing. |
+| Static widget | `curl -s -o /dev/null -w "%{http_code}\n" "$BASE/api/integrations/bundles/$TP/$BID/widgets/<widget_alias>"` | `401`/`403` for authenticated widgets, or `200` when the route is public in the current session | Widget alias is discovered and route wiring exists. |
+| Public static widget | `curl -s -o /dev/null -w "%{http_code}\n" "$BASE/api/integrations/bundles/$TP/$BID/public/widgets/<widget_alias>"` | `200` when the widget is intended for public/Mini App launch | Built static artifacts are present and public serving is active. |
+| Widget asset | `curl -s -o /dev/null -w "%{http_code}\n" "$BASE/api/integrations/bundles/$TP/$BID/public/widgets/<widget_alias>/assets/<file>"` | `200` for a real built asset | Subpath/asset serving works, not only `index.html`. |
+
+Interpretation:
+
+- a bundle-load error should be treated as the root cause before alias-level
+  widget or operation errors
+- `404` for a buildable widget usually means the alias, descriptor static
+  config, or built artifacts are missing
+- `500` / `503` means inspect proc logs before editing frontend code
+- for Telegram or OAuth public routes, a missing-provider-token response can
+  still be a successful smoke result if it comes from the bundle-owned auth
+  code
 
 ## 4. Git-Backed Bundle Checks
 
@@ -1084,6 +1153,9 @@ Important:
 
 - if a bundle import fails, the bundle may appear partially but with missing APIs/widgets
 - if manifest discovery looks wrong, check import errors first
+- bundle-local pytest helpers may load `entrypoint.py` differently than
+  chat-proc; passing unit tests does not prove the proc loader, manifest cache,
+  widget build path, or staged descriptor path is healthy
 
 For POST operations, widget clients should send:
 
@@ -1146,7 +1218,7 @@ If the bundle updates deployment-scoped config, verify:
 
 ### Artifact storage
 
-If the bundle uses `AIBundleStorage`, verify:
+If the bundle uses `BundleArtifactStorage`, verify:
 
 - the correct artifact path is written
 - local working state is not incorrectly stored there
@@ -1158,14 +1230,20 @@ If you are testing a locally mounted bundle, verify the actual reload path.
 Typical loop:
 
 ```bash
-kdcube init --descriptors-location <dir> --workdir <base-workdir>
-kdcube start --workdir <runtime-workdir>
+kdcube init  --tenant <t> --project <p> --descriptors-location <dir>
+kdcube start --tenant <t> --project <p>
 ```
 
 Then after code/descriptor changes:
 
 ```bash
-kdcube reload <bundle_id> --workdir <runtime-workdir>
+kdcube reload <bundle_id> --tenant <t> --project <p>
+```
+
+After platform-source changes that need rebuilt images:
+
+```bash
+kdcube refresh --tenant <t> --project <p> --build
 ```
 
 This is important because a bundle may pass tests but still fail during descriptor-driven runtime resolution.

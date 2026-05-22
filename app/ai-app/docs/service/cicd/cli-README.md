@@ -231,40 +231,35 @@ Repo field contract:
 
 ### 2.3a Plain init (no descriptor source required)
 
-`kdcube init` can be run with no additional flags. The CLI clones the platform
-repo directly into the scoped runtime directory and uses its bundled
-`app/ai-app/deployment/` as the descriptor source:
+`kdcube init` is **first-time setup only**. It refuses if the target workdir
+already has `install-meta.json`. To rebuild platform images / restart on an
+existing workdir, use [`kdcube refresh`](#refresh) (see §2.4).
+
+Primary form — pass a tenant and a project; the CLI creates the runtime under
+the platform default base `~/.kdcube/kdcube-runtime/<tenant>__<project>/`:
 
 ```bash
-kdcube init
-```
-
-This is equivalent to `kdcube init --latest`. The runtime is created under:
-
-```text
-~/.kdcube/kdcube-runtime/default__default/repo
-```
-
-Pass `--tenant` / `--project` (or `-i` for interactive prompts) to use a
-non-default namespace. Interactive prompts happen **before** cloning so the
-directory is created with the correct namespace from the start:
-
-```bash
-kdcube init -i
 kdcube init --tenant acme --project prod
+```
+
+`-i` enables interactive prompting for fields missing from the assembly:
+
+```bash
+kdcube init --tenant acme --project prod -i
 ```
 
 To stage common local service secrets without editing YAML:
 
 ```bash
-kdcube init --prompt-secrets
+kdcube init --tenant acme --project prod --prompt-secrets
 ```
 
 To add a public HTTPS origin, for example an ngrok origin, to
 `assembly.yaml -> cors.allow_origins` during init:
 
 ```bash
-kdcube init --cors-origin https://<stable-ngrok-domain>
+kdcube init --tenant acme --project prod \
+  --cors-origin https://<stable-ngrok-domain>
 ```
 
 `--cors-origin` is repeatable and accepts either a full origin or a hostname.
@@ -273,7 +268,7 @@ If the scheme is omitted, the CLI assumes `https://`.
 To provide known secret values non-interactively, use dotted descriptor keys:
 
 ```bash
-kdcube init \
+kdcube init --tenant acme --project prod \
   --set-secret services.openai.api_key "sk-..." \
   --set-secret services.anthropic.api_key "sk-ant-..." \
   --set-secret services.git.http_token "ghp_..."
@@ -282,47 +277,51 @@ kdcube init \
 These values are written to the staged runtime `config/secrets.yaml`; they are
 not written to `.env` files.
 
-`--workdir` sets the base directory. If the value already contains `__`
-(i.e. it is itself a namespaced runtime path), it is used directly without
-appending a tenant/project subdirectory:
-
-```bash
-# base dir → creates ~/.kdcube/kdcube-runtime/default__default/
-kdcube init --workdir ~/.kdcube/kdcube-runtime
-
-# namespaced dir → used as-is
-kdcube init --workdir ~/.kdcube/kdcube-runtime/acme__prod
-```
-
 All version selectors work the same way without `--descriptors-location`:
 
 ```bash
-kdcube init --latest
-kdcube init --upstream
-kdcube init --release 2026.4.30.317
-kdcube init --build
+kdcube init --tenant acme --project prod --latest
+kdcube init --tenant acme --project prod --upstream
+kdcube init --tenant acme --project prod --release 2026.4.30.317
+kdcube init --tenant acme --project prod --build
 ```
 
 `--latest`, `--upstream`, and `--release` are mutually exclusive — combining
 any two raises an error.
 
-### 2.3b Descriptor folder fast path
+#### Advanced placement: `--workdir` / `--workdir-base`
 
-The CLI also supports a descriptor-folder driven install path:
+For runtimes that must live outside the default base
+(`~/.kdcube/kdcube-runtime`), `init` and `refresh` accept two additional
+forms:
 
 ```bash
-kdcube init \
-  --descriptors-location /path/to/descriptors \
-  --workdir ~/.kdcube/kdcube-runtime
+# Explicit fully-qualified namespaced runtime path:
+kdcube init --workdir /opt/kdcube/acme__prod
+
+# Non-default base + tenant + project:
+kdcube init --workdir-base /opt/kdcube --tenant acme --project prod
 ```
 
-`--workdir` controls where the runtime is installed. In descriptor mode the CLI
-reads `assembly.yaml -> context.tenant/project` and creates the concrete runtime
-under:
+With `--workdir-base`, both `--tenant` and `--project` are required. With
+`--workdir`, the trailing path segment must contain `__`; if
+`--tenant`/`--project` are also passed they must match the trailing segment.
+`--workdir` and `--workdir-base` are mutually exclusive.
 
-```text
-<workdir>/<safe_tenant>__<safe_project>
+### 2.3b Descriptor folder fast path
+
+The CLI also supports a descriptor-folder driven install path. Primary form
+uses the default base — just specify the tenant and project:
+
+```bash
+kdcube init --tenant <t> --project <p> \
+  --descriptors-location /path/to/descriptors
 ```
+
+In descriptor mode the CLI reads `assembly.yaml -> context.tenant/project`. If
+those values are set, they must agree with the `--tenant`/`--project` you pass
+(or with the trailing segment of `--workdir` when using the advanced form);
+otherwise `init` refuses.
 
 `--path` controls the local platform source tree only when you explicitly pass
 it to `init`. Without `--upstream`, `--latest`, or `--release`, explicit
@@ -331,9 +330,8 @@ use that staged copy. The copy includes tracked files plus untracked files that
 are not ignored by git, and excludes `.git` plus gitignored runtime/data files.
 
 ```bash
-kdcube init \
+kdcube init --tenant <t> --project <p> \
   --descriptors-location /path/to/descriptors \
-  --workdir ~/.kdcube/kdcube-runtime \
   --path /path/to/kdcube-ai-app \
   --cors-origin https://<stable-ngrok-domain> \
   --build
@@ -357,7 +355,7 @@ Use `--latest` to resolve the platform release from the platform repo instead
 of using `assembly.yaml -> platform.ref`:
 
 ```bash
-kdcube init \
+kdcube init --tenant <t> --project <p> \
   --descriptors-location /path/to/descriptors \
   --latest
 ```
@@ -366,7 +364,7 @@ Use `--upstream` to initialize from the latest upstream repo state
 (`origin/main`) instead of a released ref:
 
 ```bash
-kdcube init \
+kdcube init --tenant <t> --project <p> \
   --descriptors-location /path/to/descriptors \
   --upstream
 ```
@@ -375,7 +373,7 @@ Use `init --build` when you also want the runtime prepared with freshly built
 local images before the stack is started:
 
 ```bash
-kdcube init \
+kdcube init --tenant <t> --project <p> \
   --descriptors-location /path/to/descriptors \
   --upstream \
   --build
@@ -384,10 +382,36 @@ kdcube init \
 Use `--release` to pin a specific released platform ref explicitly:
 
 ```bash
-kdcube init \
+kdcube init --tenant <t> --project <p> \
   --descriptors-location /path/to/descriptors \
   --release 2026.4.11.012
 ```
+
+### 2.4 Refresh (re-init) — `kdcube refresh`<a id="refresh"></a>
+
+`kdcube refresh` is the command to use when you want to **rebuild platform
+images / restart the stack on an already-initialized workdir** without
+touching any staged descriptors. Primary form:
+
+```bash
+kdcube refresh --tenant <t> --project <p> --build
+```
+
+If a deployment is currently recorded as running (`~/.kdcube/cli-lock.json`),
+`kdcube refresh --build` with no flags targets it automatically.
+
+Behaviour:
+
+- refuses if the workdir is not initialized (no `install-meta.json`);
+- stops the stack if it is running;
+- rebuilds platform Docker images when `--build` is given;
+- restarts the stack (unless `--no-restart` is passed);
+- never modifies `assembly.yaml`, `secrets.yaml`, `bundles.yaml`,
+  `bundles.secrets.yaml`, or `gateway.yaml`.
+
+This replaces the older pattern of re-running `kdcube init` on an existing
+workdir, which used to silently reseed descriptors under some flag
+combinations.
 
 Choose at most one source selector (`--latest`, `--upstream`, `--release` are
 mutually exclusive — combining any two raises an error):
@@ -906,18 +930,16 @@ kdcube info --tenant <tenant_id> --project <project_id>
 Initialize a workdir without starting Docker (clones platform repo automatically):
 
 ```bash
-kdcube init
-kdcube init --latest
+kdcube init --tenant acme --project prod
 kdcube init --tenant acme --project prod --latest
-kdcube init --prompt-secrets
-kdcube init --cors-origin https://<stable-ngrok-domain>
+kdcube init --tenant acme --project prod --prompt-secrets
+kdcube init --tenant acme --project prod --cors-origin https://<stable-ngrok-domain>
 ```
 
 Initialize from a prepared descriptor folder:
 
 ```bash
-kdcube init \
-  --workdir ~/.kdcube/kdcube-runtime \
+kdcube init --tenant acme --project prod \
   --descriptors-location /path/to/descriptors \
   --cors-origin https://<stable-ngrok-domain> \
   --latest
@@ -926,8 +948,7 @@ kdcube init \
 Initialize and build images without starting Docker:
 
 ```bash
-kdcube init \
-  --workdir ~/.kdcube/kdcube-runtime \
+kdcube init --tenant acme --project prod \
   --descriptors-location /path/to/descriptors \
   --upstream \
   --build
@@ -936,8 +957,7 @@ kdcube init \
 Initialize and build from dirty local platform sources:
 
 ```bash
-kdcube init \
-  --workdir ~/.kdcube/kdcube-runtime \
+kdcube init --tenant acme --project prod \
   --descriptors-location /path/to/descriptors \
   --path /path/to/kdcube-ai-app \
   --cors-origin https://<stable-ngrok-domain> \
@@ -947,26 +967,35 @@ kdcube init \
 Use this for uncommitted platform changes. The CLI copies the local checkout
 into the concrete runtime workdir and builds from that staged copy.
 
+Refresh after editing platform source (rebuilds images, restarts):
+
+```bash
+kdcube refresh --tenant acme --project prod --build
+```
+
+If a deployment is currently recorded as running, `kdcube refresh --build`
+with no flags targets it automatically.
+
 Start the stack for an already-initialized workdir:
 
 ```bash
-kdcube start --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+kdcube start --tenant acme --project prod
 ```
 
 Patch staged bundle config or secrets without editing YAML by hand:
 
 ```bash
 kdcube bundle <bundle_id> \
-  --set-config key.path value \
-  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+  --tenant acme --project prod \
+  --set-config key.path value
 
 kdcube bundle <bundle_id> \
-  --set-secret key.path value \
-  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+  --tenant acme --project prod \
+  --set-secret key.path value
 
 kdcube bundle <bundle_id> \
-  --del-config key.path \
-  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+  --tenant acme --project prod \
+  --del-config key.path
 ```
 
 Multiple `--set-config`, `--set-secret`, `--del-config`, `--del-secret` flags can be combined in one call.
@@ -975,15 +1004,15 @@ After patching, reload the bundle to apply the change.
 Reload a bundle after descriptor changes:
 
 ```bash
-kdcube reload <bundle_id> --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+kdcube reload <bundle_id> --tenant acme --project prod
 ```
 
 Normal reload output is concise and hides the inner Docker Compose call. Use
 `--verbose` when debugging reload internals, or `--json` for scriptable output:
 
 ```bash
-kdcube reload <bundle_id> --verbose --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
-kdcube reload <bundle_id> --json --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+kdcube reload <bundle_id> --tenant acme --project prod --verbose
+kdcube reload <bundle_id> --tenant acme --project prod --json
 ```
 
 Use `--quiet` to suppress the banner and routine success chatter. The banner is
@@ -996,19 +1025,21 @@ mount details when a workdir is selected.
 Export live bundle descriptors:
 
 ```bash
-kdcube export --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id> --out-dir /tmp/export
+kdcube export --tenant acme --project prod --out-dir /tmp/export
 ```
 
-Stop the local workdir stack:
+Stop the local workdir stack (no flags ⇒ stop whatever is currently recorded
+as running):
 
 ```bash
-kdcube stop --workdir ~/.kdcube/kdcube-runtime
+kdcube stop
 ```
 
-Stop and remove volumes too:
+Or be explicit:
 
 ```bash
-kdcube stop --workdir ~/.kdcube/kdcube-runtime --remove-volumes
+kdcube stop --tenant acme --project prod
+kdcube stop --tenant acme --project prod --remove-volumes
 ```
 
 Save operator defaults:

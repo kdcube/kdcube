@@ -4,7 +4,7 @@ title: "How To Configure And Run A Bundle"
 summary: "Current bundle-development runtime workflow: tenant/project environment setup, descriptor staging, local-path and git bundles, configuration translation, start/stop/reload loop, configuration/secret scopes, and the rule that one machine may hold many local deployment snapshots but should not be treated as running many local compose-backed KDCubes at once."
 tags: ["sdk", "bundle", "configuration", "runtime", "cli", "bundles.yaml"]
 keywords: ["local bundle development workflow", "tenant project environment boundary", "descriptor driven runtime setup", "local path bundle loop", "git bundle loop", "bundle reload workflow", "runtime sandbox selection", "bundle config and secret scopes", "shared sdk widget sources", "bundle configurator workflow", "bundle deployer workflow", "current kdcube cli workflow", "multiple local runtime snapshots", "single active local compose deployment", "run multiple kdcubes on one machine", "kdcube bundle command", "patch bundle config cli", "patch bundle secret cli"]
-updated_at: 2026-05-21
+updated_at: 2026-05-22
 see_also:
   - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/configuration/bundles-descriptor-README.md
@@ -14,6 +14,7 @@ see_also:
   - ks:docs/service/cicd/design/cli--as-control-plane-README.md
   - ks:docs/service/cicd/ngrok-README.md
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
+  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
   - ks:docs/sdk/bundle/build/how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md
@@ -105,6 +106,10 @@ Use the companion docs for those:
 
 Configuration rule:
 
+- [bundle-properties-and-secrets-lifecycle-README.md](../bundle-properties-and-secrets-lifecycle-README.md)
+  is the concise bundle-author page for how `configuration_defaults()`,
+  descriptor/admin props, effective runtime props, bundle secrets, and
+  materialization/export relate to each other
 - [bundle-runtime-configuration-and-secrets-README.md](../../../configuration/bundle-runtime-configuration-and-secrets-README.md) is the
   canonical author-facing page for all props and secrets across all scopes:
   platform/global, deployment-scoped bundle, and user-scoped
@@ -537,6 +542,22 @@ The processor/bundle-loader infra builds the source folder into shared bundle
 storage and serves widget subpaths from the built app. Do not configure widgets
 by pointing the platform directly at a built file.
 
+Important descriptor/default boundary:
+
+- `configuration_defaults()` is the right place for bundle-owned stable
+  defaults used by `BaseEntrypoint` and workflow-side rebuild logic
+- the current route-time static widget serving path evaluates effective bundle
+  props after code defaults and descriptor/admin props are merged
+- `bundles.yaml` still stores only descriptor/admin props; code defaults are
+  not materialized into the descriptor unless an operator explicitly writes or
+  resets them
+- descriptors may repeat `src_folder` and `build_command` when a seed file must
+  be self-documenting or support an older runtime, but the current runtime
+  contract does not require repeating intrinsic widget defaults there
+- if `/widgets/<alias>` or `/public/widgets/<alias>` says the widget has no
+  built/static app, inspect effective props and bundle load/build logs before
+  assuming descriptor values are missing
+
 For React/Vite widgets, use the build command contract from
 [bundle-widget-integration-README.md#source-folder-widget-apps](../bundle-widget-integration-README.md#source-folder-widget-apps):
 
@@ -741,17 +762,20 @@ environment checklist in
 Recommended command shape:
 
 ```bash
-kdcube init \
-  --workdir ~/.kdcube/kdcube-runtime \
+kdcube init --tenant <t> --project <p> \
   --descriptors-location /abs/path/to/descriptors
 ```
+
+`--tenant`/`--project` is the primary form — the CLI composes the runtime
+path under the platform default base
+(`~/.kdcube/kdcube-runtime/<tenant>__<project>/`). For non-default placements,
+use `--workdir <full-path>` or `--workdir-base <base> --tenant T --project P`.
 
 When the local run needs platform service keys, stage them during init with
 dotted descriptor keys:
 
 ```bash
-kdcube init \
-  --workdir ~/.kdcube/kdcube-runtime \
+kdcube init --tenant <t> --project <p> \
   --descriptors-location /abs/path/to/descriptors \
   --set-secret services.openai.api_key "sk-..." \
   --set-secret services.anthropic.api_key "sk-ant-..." \
@@ -763,13 +787,17 @@ kdcube init \
 For guided secret entry, use:
 
 ```bash
-kdcube init --prompt-secrets
+kdcube init --tenant <t> --project <p> --prompt-secrets
 ```
 
 These values are written to the active runtime `config/secrets.yaml`, not to
 `.env` files. They are applied to the staged runtime descriptor copy during
-`init`; rerunning `init` with `--set-secret` must preserve those explicit
-values instead of restaging a pristine `secrets.yaml` over them.
+`init`. To set or rotate secrets on an *existing* runtime later, use
+`kdcube bundle <id> --set-secret KEY VALUE` for bundle-scoped secrets, or
+edit `<workdir>/config/secrets.yaml` directly for platform-global secrets.
+Re-running `kdcube init` on an existing workdir is refused (it would be
+ambiguous about whether to reseed); for a clean reseed, remove the workdir
+first.
 
 For delegated/proxy-login or hosted descriptors, the CLI stages concrete
 runtime descriptors from seed descriptors. Placeholders such as tenant,
@@ -777,7 +805,7 @@ project, and domain values must be resolved in the staged runtime config before
 the services start. After init, verify the active target with:
 
 ```bash
-kdcube info --workdir ~/.kdcube/kdcube-runtime/<tenant>__<project>
+kdcube info --tenant <t> --project <p>
 ```
 
 ReAct round limits can be set globally or per bundle:
@@ -808,7 +836,7 @@ can override with `config.react.debug_timeline` or `react.debug_timeline`.
 Then start the initialized runtime:
 
 ```bash
-kdcube start --workdir ~/.kdcube/kdcube-runtime/<tenant>__<project>
+kdcube start --tenant <t> --project <p>
 ```
 
 Without `--build`, `init` stages descriptors and generates runtime env files.
@@ -821,26 +849,28 @@ The platform source/ref is selected using:
 - or explicit `--path /abs/path/to/kdcube-ai-app` when you intentionally want
   to test a dirty local platform checkout
 
-`--workdir` answers where the runtime should be installed. `--path` answers
-which local platform source tree should be staged for this runtime. In
-descriptor-driven `init`, explicit `--path` without `--upstream`, `--latest`,
-or `--release` copies tracked files plus untracked-but-not-ignored files into
-the namespaced runtime workdir and uses that staged copy. Gitignored
-runtime/data files are not copied.
+`--tenant`/`--project` (or `--workdir`/`--workdir-base` in advanced placements)
+answers where the runtime should be installed. `--path` answers which local
+platform source tree should be staged for this runtime. In descriptor-driven
+`init`, explicit `--path` without `--upstream`, `--latest`, or `--release`
+copies tracked files plus untracked-but-not-ignored files into the namespaced
+runtime workdir and uses that staged copy. Gitignored runtime/data files are
+not copied.
 
-Use `init --build` when you want images prepared before starting. `start
---build` remains available as a convenience rebuild before start, but normal
-operator flow is:
+Use `init --build` when you want images prepared before starting. After the
+runtime exists, to rebuild images on platform-source updates, use
+`kdcube refresh --tenant <t> --project <p> --build` — it never touches staged
+descriptors. Normal operator flow is:
 
-1. `init` prepares the runtime
-2. `init --build` optionally prebuilds images
+1. `init` prepares the runtime (once)
+2. `init --build` optionally prebuilds images on the first run
 3. `start` starts containers
+4. `refresh --build` re-runs the build/restart cycle on later platform updates
 
 ### Initialize from `assembly.platform.ref`
 
 ```bash
-kdcube init \
-  --workdir ~/.kdcube/kdcube-runtime \
+kdcube init --tenant <t> --project <p> \
   --descriptors-location /abs/path/to/descriptors
 ```
 
@@ -849,8 +879,7 @@ Use this when you want the normal local runtime based on a released platform ver
 ### Initialize from an explicit release
 
 ```bash
-kdcube init \
-  --workdir ~/.kdcube/kdcube-runtime \
+kdcube init --tenant <t> --project <p> \
   --descriptors-location /abs/path/to/descriptors \
   --release 2026.4.23.17
 ```
@@ -858,8 +887,7 @@ kdcube init \
 ### Initialize from the latest known platform release
 
 ```bash
-kdcube init \
-  --workdir ~/.kdcube/kdcube-runtime \
+kdcube init --tenant <t> --project <p> \
   --descriptors-location /abs/path/to/descriptors \
   --latest
 ```
@@ -867,8 +895,7 @@ kdcube init \
 ### Prebuild images from a released platform ref
 
 ```bash
-kdcube init \
-  --workdir ~/.kdcube/kdcube-runtime \
+kdcube init --tenant <t> --project <p> \
   --descriptors-location /abs/path/to/descriptors \
   --build
 ```
@@ -879,9 +906,8 @@ starting containers.
 ### Prebuild images from dirty local platform sources
 
 ```bash
-kdcube init \
+kdcube init --tenant <t> --project <p> \
   --path /abs/path/to/kdcube-ai-app \
-  --workdir ~/.kdcube/kdcube-runtime \
   --descriptors-location /abs/path/to/descriptors \
   --build
 ```
@@ -893,8 +919,7 @@ copy.
 ### Initialize from upstream `origin/main`
 
 ```bash
-kdcube init \
-  --workdir ~/.kdcube/kdcube-runtime \
+kdcube init --tenant <t> --project <p> \
   --descriptors-location /abs/path/to/descriptors \
   --upstream
 ```
@@ -902,8 +927,7 @@ kdcube init \
 ### Prebuild images from upstream `origin/main`
 
 ```bash
-kdcube init \
-  --workdir ~/.kdcube/kdcube-runtime \
+kdcube init --tenant <t> --project <p> \
   --descriptors-location /abs/path/to/descriptors \
   --upstream \
   --build
@@ -913,8 +937,11 @@ Important:
 
 - `--upstream` selects the upstream source/ref and does not require `--build`
 - `--build` on `init` builds images after staging the runtime and does not start containers
-- `--upstream` requires either `--descriptors-location` or an already initialized runtime
+- `--upstream` requires `--descriptors-location` for fresh init
 - explicit `--path` without `--upstream`, `--latest`, or `--release` is the dirty-local-source flow
+- to rebuild images on an *already-initialized* runtime later, run
+  `kdcube refresh --tenant <t> --project <p> --build` (descriptors are
+  preserved)
 
 Use this when you are validating current platform source, not when you only need to update bundle descriptors.
 
@@ -923,7 +950,7 @@ Use this when you are validating current platform source, not when you only need
 ### Show active runtime info
 
 ```bash
-kdcube info --workdir ~/.kdcube/kdcube-runtime/mytenant__myproject
+kdcube info --tenant mytenant --project myproject
 ```
 
 This prints:
