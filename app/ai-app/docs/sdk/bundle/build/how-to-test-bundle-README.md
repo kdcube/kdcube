@@ -4,7 +4,7 @@ title: "How To Test A Bundle"
 summary: "Testing guide for bundle authors and QA: local syntax/suite/pytest validation, runtime reload validation, widget and API checks, scheduled-job verification, and failure diagnosis in the local runtime."
 tags: ["sdk", "bundle", "testing", "pytest", "widget", "runtime", "validation"]
 keywords: ["bundle testing workflow", "shared bundle suite", "local bundle tests", "widget and api validation", "shared sdk widget source validation", "runtime reload verification", "scheduled job checks", "bundle failure diagnosis", "manual and automated test loop", "local qa for bundles", "integration qa for bundles"]
-updated_at: 2026-05-22
+updated_at: 2026-05-23
 see_also:
   - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
@@ -590,6 +590,7 @@ PYTHONPATH=app/ai-app/src/kdcube-ai-app $PY -m pytest -q /abs/path/to/bundle/tes
 Reference map:
 - [bundle-platform-integration-README.md](../bundle-platform-integration-README.md)
 - [bundle-widget-integration-README.md](../bundle-widget-integration-README.md)
+- [bundle-client-communication-README.md](../bundle-client-communication-README.md)
 - [bundle-transports-README.md](../bundle-transports-README.md)
 - [bundle-scheduled-jobs-README.md](../bundle-scheduled-jobs-README.md)
 
@@ -689,6 +690,16 @@ What to validate:
 - request-bound `self.comm` / `self.comm_context` are usable
 - operation body parsing works with the expected payload shape
 - widget-triggered operations are treated as request-bound entrypoint calls, not as detached background jobs
+- when an operation emits live non-chat events, the browser has an open
+  `/sse/stream` or Socket.IO connection, passes `KDC-Stream-ID` on the REST
+  operation, and receives `chat_service` envelopes from
+  `comm.service_event(...)`
+- verify both direct peer delivery (`broadcast=False`) and session fanout
+  (`broadcast=True`) when the bundle depends on both modes
+
+Reference:
+
+- [bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream](../bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream)
 
 ### C. Cron / scheduled-job path
 

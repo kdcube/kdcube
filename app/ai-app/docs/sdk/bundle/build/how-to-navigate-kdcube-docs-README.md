@@ -4,7 +4,7 @@ title: "How To Navigate KDCube Bundle Docs"
 summary: "Tier 1 navigation guide for bundle creators, integrators, configurators, deployers, local QA, integration QA, and document readers who need the shortest path through KDCube docs without reading the whole tree."
 tags: ["sdk", "bundle", "docs", "navigation", "tier-1", "authoring"]
 keywords: ["bundle docs navigation", "tier 1 reading order", "new bundle path", "wrap existing app into bundle", "bundle integrator path", "bundle configurator path", "bundle deployer path", "bundle qa path", "integration qa path", "shared sdk widget source", "kdcube docs reading strategy", "which doc to read next"]
-updated_at: 2026-05-22
+updated_at: 2026-05-23
 see_also:
   - ks:docs/sdk/bundle/bundle-index-README.md
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
@@ -14,6 +14,8 @@ see_also:
   - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-release-bundle-content-README.md
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
+  - ks:docs/sdk/bundle/bundle-client-communication-README.md
+  - ks:docs/sdk/bundle/bundle-transports-README.md
   - ks:docs/sdk/bundle/bundle-widget-integration-README.md
   - ks:docs/sdk/bundle/bundle-entrypoint-classes-README.md
   - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
@@ -118,6 +120,17 @@ Critical widget/browser rule:
 - if the widget reuses SDK UI such as User Memory or Telegram admin/channels
   panels, also read
   [bundle-widget-integration-README.md#shared-ui-source-materialization](../bundle-widget-integration-README.md#shared-ui-source-materialization)
+
+Critical browser event-stream rule:
+
+- the existing SSE and Socket.IO streams can carry non-chat bundle events
+- a widget or bundle UI should open `/sse/stream` or Socket.IO, call the bundle
+  operation through `/api/integrations/...`, and pass the connected peer id as
+  `KDC-Stream-ID` when it needs direct peer delivery
+- the bundle operation emits with the request-bound communicator, typically
+  `comm.service_event(...)`
+- read the short recipe before implementing this:
+  [bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream](../bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream)
 
 Entrypoint and request-context changes:
 
@@ -384,6 +397,7 @@ Then jump only to the row that matches your question.
 | How do I start, stop, reload, and descriptor-wire a bundle into a project? | [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md) | It is the Tier 1 deployer and integrator page for current local runtime operations. |
 | How do I expose widget, API, MCP, cron, or `@on_job`? | [../bundle-platform-integration-README.md](../bundle-platform-integration-README.md) | It is the exact decorator and surface contract. |
 | What runtime helpers exist inside bundle code? | [../bundle-runtime-README.md](../bundle-runtime-README.md) | It explains the bundle runtime objects and capabilities. |
+| How can a non-chat bundle UI get live progress/events from a bundle operation? | [../bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream](../bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream) and [../bundle-transports-README.md#71-communicator-output](../bundle-transports-README.md#71-communicator-output) | Open `/sse/stream` or Socket.IO, pass `KDC-Stream-ID` on the REST operation, and emit `comm.service_event(...)` from request-bound bundle code. |
 | How do I use storage, cache, local bundle storage, or git-backed helpers? | [how-to-write-bundle-README.md](how-to-write-bundle-README.md) | It now contains the compact SDK cheat sheet and points to the deeper storage docs only when needed. |
 | How should a bundle tool return files or hosted attachments? | [../bundle-agent-integration-README.md](../bundle-agent-integration-README.md) and [../../tools/custom-tools-README.md](../../tools/custom-tools-README.md) | Use the strict `ret.artifact_type == "files"` protocol or trusted tool-side `host_files(...)`; `host_files(...)` requires prepared tool context from `BaseWorkflow.build_react(...)` or isolated `bootstrap_bind_all(...)`; generated executor code should call a catalog tool through `agent_io_tools.tool_call(...)`. |
 | How do I talk to the browser correctly? | [../bundle-client-ui-README.md](../bundle-client-ui-README.md) | It routes you to widget, browser, and transport-facing docs. |

@@ -320,6 +320,126 @@ Session-scoped broadcast means:
 - all connected peers on that session receive the event
 - if no peer is listening for that session, nobody receives it
 
+### Non-chat bundle events over the shared stream
+
+The SSE and Socket.IO streams are not limited to chat turns. A bundle UI can
+reuse the same authenticated stream for peer-to-peer or session-broadcast
+events from a bundle operation, widget call, MCP route, or background-triggered
+bundle code as long as the call is executed with a bound communicator context.
+
+Use this shape when the UI does **not** want to start a chat turn but still
+wants live events from bundle code.
+
+Client-side SSE:
+
+```ts
+const streamId = crypto.randomUUID();
+
+const streamUrl = new URL(`${baseUrl}/sse/stream`);
+streamUrl.searchParams.set("user_session_id", sessionId);
+streamUrl.searchParams.set("stream_id", streamId);
+streamUrl.searchParams.set("tenant", tenant);
+streamUrl.searchParams.set("project", project);
+
+const events = new EventSource(streamUrl.toString(), { withCredentials: true });
+
+events.addEventListener("ready", event => {
+  console.log("stream ready", JSON.parse(event.data));
+});
+
+events.addEventListener("chat_service", event => {
+  const envelope = JSON.parse(event.data);
+  if (envelope.type === "bundle.job.progress") {
+    renderProgress(envelope.data);
+  }
+});
+```
+
+Client-side Socket.IO:
+
+```ts
+const socket = io(baseUrl, {
+  path: "/socket.io",
+  auth: {
+    user_session_id: sessionId,
+    tenant,
+    project,
+    bearer_token: accessToken,
+    id_token: idToken,
+  },
+});
+
+socket.on("chat_service", envelope => {
+  if (envelope.type === "bundle.job.progress") {
+    renderProgress(envelope.data);
+  }
+});
+```
+
+Then call the bundle operation. For a direct reply to the current browser peer,
+send the connected peer id as `KDC-Stream-ID`:
+
+```ts
+await fetch(
+  `${baseUrl}/api/integrations/bundles/${tenant}/${project}/${bundleId}/operations/run_job`,
+  {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      "KDC-Stream-ID": streamId, // for Socket.IO use socket.id
+    },
+    body: JSON.stringify({ data: { job_id: "job-1" } }),
+  },
+);
+```
+
+Bundle-side operation:
+
+```python
+from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import get_current_comm
+from kdcube_ai_app.infra.plugin.bundle_loader import api
+
+@api(alias="run_job", route="operations", user_types=("registered",))
+async def run_job(self, job_id: str, **kwargs):
+    comm = get_current_comm()
+
+    if comm is not None:
+        await comm.service_event(
+            type="bundle.job.progress",
+            step="job",
+            status="running",
+            title="Job running",
+            data={"job_id": job_id, "pct": 25},
+            broadcast=False,
+        )
+
+    # Do the work here.
+
+    if comm is not None:
+        await comm.service_event(
+            type="bundle.job.completed",
+            step="job",
+            status="completed",
+            title="Job completed",
+            data={"job_id": job_id},
+            broadcast=True,
+        )
+
+    return {"ok": True, "job_id": job_id}
+```
+
+Delivery semantics:
+
+- `broadcast=False` targets the peer from `KDC-Stream-ID` when it was provided;
+  otherwise it falls back to the current session route.
+- `broadcast=True` sends to all connected SSE/Socket.IO peers in the same
+  authenticated session.
+- this is not tenant-wide or project-wide broadcast. The current relay is
+  intentionally session-scoped.
+- use namespaced semantic event types such as `bundle.job.progress`,
+  `memory.snapshot.completed`, or `admin.import.failed`.
+
 ## 9. Response Headers Clients Should Use
 
 | Header | Meaning |

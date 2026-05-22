@@ -4,7 +4,7 @@ title: "Tier 1 Bundle Pack For Build-With-KDCube Plugins"
 summary: "Short handoff note for Claude Code and Codex plugin engineers describing the Tier 1 bundle-doc pack, the agent task facets it must support, and the minimal integration contract."
 tags: ["sdk", "bundle", "plugins", "claude-code", "codex", "handoff", "tier-1"]
 keywords: ["tier 1 bundle pack", "build with kdcube plugin", "claude code plugin", "codex plugin", "bundle docs pack", "bundle agent facets", "shared sdk widget source", "plugin doc links update"]
-updated_at: 2026-05-22
+updated_at: 2026-05-23
 see_also:
   - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
@@ -16,6 +16,8 @@ see_also:
   - ks:docs/sdk/bundle/build/how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md
   - ks:docs/sdk/bundle/build/how-to-release-bundle-content-README.md
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
+  - ks:docs/sdk/bundle/bundle-client-communication-README.md
+  - ks:docs/sdk/bundle/bundle-transports-README.md
   - ks:docs/sdk/integrations/telegram/telegram-README.md
   - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
   - ks:docs/sdk/integrations/browser/browser-tools-README.md
@@ -122,6 +124,18 @@ Widget/API origin rule that plugins must surface early:
 - route agents to [bundle-widget-integration-README.md#frame-origin-and-api-base-url](../bundle-widget-integration-README.md#frame-origin-and-api-base-url)
   before they write widget or generated-static HTML networking code
 
+Widget/API live-event rule that plugins must surface early:
+
+- bundles are backend plus frontend applications; frontend progress from a
+  non-chat operation should use the existing platform event stream
+- browser code opens `/sse/stream` or Socket.IO, calls
+  `/api/integrations/.../operations/...`, and passes the connected peer id as
+  `KDC-Stream-ID`
+- bundle backend code emits through the request-bound communicator with
+  `comm.service_event(...)`
+- route agents to [bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream](../bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream)
+  before they add raw bundle WebSocket/SSE endpoints or custom relay plumbing
+
 Preferred reading order:
 
 1. navigation
@@ -163,6 +177,11 @@ Recommended:
   reachable for source-folder widget work, especially the `OUTDIR` /
   `<VI_BUILD_DEST_ABSOLUTE_PATH>` build command contract and shared SDK UI
   materialization via `shared_sources`
+- keep [bundle-client-communication-README.md](../bundle-client-communication-README.md)
+  and [bundle-transports-README.md](../bundle-transports-README.md) reachable
+  for browser/backend communication, especially non-chat bundle events over
+  `/sse/stream` or Socket.IO with `KDC-Stream-ID` and
+  `comm.service_event(...)`
 - keep [bundle-agent-integration-README.md](../bundle-agent-integration-README.md)
   reachable for React descriptors, file-producing tool contracts, MCP
   connector/server wiring, Claude Code subprocess agents, and the common
@@ -255,6 +274,9 @@ The plugin should steer agents away from these recurring mistakes:
 - do not duplicate SDK-owned widget panels such as User Memory or Telegram
   admin/channels in every bundle; use `shared_sources` plus a host wrapper that
   injects the bundle operation caller
+- do not create raw bundle-owned WebSocket/SSE endpoints just to stream live
+  progress from a bundle operation; use the existing SSE/Socket.IO session
+  stream plus `KDC-Stream-ID` and the request-bound communicator
 - do not use removed resource-level `enabled_config` decorator arguments for
   APIs or MCP; use bundle props/Admin resource overrides and configurable
   role/user-type paths where supported

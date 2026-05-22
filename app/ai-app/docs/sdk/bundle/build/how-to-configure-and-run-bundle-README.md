@@ -4,7 +4,7 @@ title: "How To Configure And Run A Bundle"
 summary: "Current bundle-development runtime workflow: tenant/project environment setup, descriptor staging, local-path and git bundles, configuration translation, start/stop/reload loop, configuration/secret scopes, and the rule that one machine may hold many local deployment snapshots but should not be treated as running many local compose-backed KDCubes at once."
 tags: ["sdk", "bundle", "configuration", "runtime", "cli", "bundles.yaml"]
 keywords: ["local bundle development workflow", "tenant project environment boundary", "descriptor driven runtime setup", "local path bundle loop", "git bundle loop", "bundle reload workflow", "runtime sandbox selection", "bundle config and secret scopes", "shared sdk widget sources", "bundle configurator workflow", "bundle deployer workflow", "current kdcube cli workflow", "multiple local runtime snapshots", "single active local compose deployment", "run multiple kdcubes on one machine", "kdcube bundle command", "patch bundle config cli", "patch bundle secret cli"]
-updated_at: 2026-05-22
+updated_at: 2026-05-23
 see_also:
   - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/configuration/bundles-descriptor-README.md
@@ -20,6 +20,8 @@ see_also:
   - ks:docs/sdk/bundle/build/how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md
   - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-release-bundle-content-README.md
+  - ks:docs/sdk/bundle/bundle-client-communication-README.md
+  - ks:docs/sdk/bundle/bundle-transports-README.md
   - ks:docs/sdk/integrations/telegram/telegram-README.md
   - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-new-cli-README.md
@@ -84,6 +86,11 @@ Critical widget/browser runtime rule:
   and `/api/integrations/...`
 - do not fix widget networking by hardcoding local ports or external host
   application URLs
+- if a widget or bundle UI needs live updates from a non-chat operation, reuse
+  `/sse/stream` or Socket.IO and pass `KDC-Stream-ID` on the
+  `/api/integrations/.../operations/...` call; backend code emits with the
+  request-bound communicator
+- see [bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream](../bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream)
 
 Important:
 
@@ -100,6 +107,7 @@ Use the companion docs for those:
 - [how-to-assemble-bundle-with-sdk-building-blocks-README.md](how-to-assemble-bundle-with-sdk-building-blocks-README.md)
 - [how-to-test-bundle-README.md](how-to-test-bundle-README.md)
 - [how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md](how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md)
+- [bundle-client-communication-README.md](../bundle-client-communication-README.md)
 - [bundle-platform-integration-README.md](../bundle-platform-integration-README.md)
 - [bundle-runtime-README.md](../bundle-runtime-README.md)
 - [../../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../../configuration/bundle-runtime-configuration-and-secrets-README.md)

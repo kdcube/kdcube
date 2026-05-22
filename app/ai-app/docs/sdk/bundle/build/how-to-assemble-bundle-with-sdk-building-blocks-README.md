@@ -4,7 +4,7 @@ title: "How To Assemble A Bundle With SDK Building Blocks"
 summary: "Tier 1 bundle-builder map for choosing reusable KDCube SDK and platform blocks before writing custom bundle services: tools, agents, storage, widgets, jobs, integrations, and solutions."
 tags: ["sdk", "bundle", "tier-1", "building-blocks", "integrations", "solutions", "tools"]
 keywords: ["bundle building blocks", "sdk integrations", "sdk solutions", "bundle assembly map", "reuse sdk components", "telegram integration", "email integration", "tasks solution", "delivery integration", "shared sdk widget components", "built in tools", "react tools"]
-updated_at: 2026-05-22
+updated_at: 2026-05-23
 see_also:
   - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
@@ -23,10 +23,12 @@ see_also:
   - ks:docs/sdk/tools/custom-tools-README.md
   - ks:docs/sdk/tools/tool-subsystem-README.md
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
+  - ks:docs/sdk/bundle/bundle-client-communication-README.md
   - ks:docs/sdk/bundle/bundle-entrypoint-classes-README.md
   - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
+  - ks:docs/sdk/bundle/bundle-transports-README.md
   - ks:docs/sdk/bundle/build/design/bundle-loader-import-isolation-README.md
   - ks:docs/sdk/bundle/bundle-widget-integration-README.md
 ---
@@ -90,6 +92,18 @@ Critical widget/browser rule:
 - see [Bundle Widget Integration](../bundle-widget-integration-README.md#frame-origin-and-api-base-url)
   before implementing any browser-facing API client
 
+Critical live-event rule:
+
+- do not create bundle-owned raw WebSocket or raw SSE endpoints just to stream
+  progress from a bundle operation
+- reuse the platform SSE or Socket.IO session stream; the browser passes the
+  connected peer id as `KDC-Stream-ID` on the `/api/integrations/...`
+  operation call
+- bundle code emits via the request-bound communicator
+  (`get_current_comm()` / `self.comm`) with `comm.service_event(...)`
+- read the exact client and bundle recipe:
+  [Bundle Client Communication: non-chat bundle events over the shared stream](../bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream)
+
 ## Current Reusable Blocks
 
 | Need | Use | Primary docs |
@@ -110,6 +124,7 @@ Critical widget/browser rule:
 | Bundle-served MCP endpoint | `@mcp(...)` | [Bundle Platform Integration](../bundle-platform-integration-README.md), [MCP Tools](../../tools/mcp-README.md) |
 | Claude Code subagent with scoped MCP/tools | `ClaudeCodeAgent`, `ClaudeCodeWorkspaceConfig` | [Bundle Agent Integration](../bundle-agent-integration-README.md) |
 | Browser widget or Mini App | `@ui_widget(...)`, source-folder widget build, operations/public APIs | [Bundle Widget Integration](../bundle-widget-integration-README.md) |
+| Live events from a non-chat widget/API operation to the browser | `/sse/stream` or Socket.IO plus `KDC-Stream-ID`; bundle emits `comm.service_event(...)` from request-bound context | [Bundle Client Communication](../bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream), [Bundle Transports](../bundle-transports-README.md#71-communicator-output) |
 | Shared widget UI pieces such as User Memory and Telegram admin/channels panels | `ui.widgets.<alias>.shared_sources` with `sdk://context/memory/ui/widget/memories` or `sdk://integrations/telegram/ui/widget.telegram` | [Shared UI Source Materialization](../bundle-widget-integration-README.md#shared-ui-source-materialization) |
 | Scheduled scan and background execution | `@cron(...)`, `@on_job`, jobs stream; use Tasks Solution for saved task execution | [Scheduled Jobs](../bundle-scheduled-jobs-README.md), [Tasks SDK Solution](../../solutions/tasks-README.md) |
 | Local mutable files, generated indexes, git working copies, runtime caches | bundle storage helpers, `BundleArtifactStorage`, KV cache, git helpers | [Bundle Storage And Cache](../bundle-storage-and-cache-README.md) |

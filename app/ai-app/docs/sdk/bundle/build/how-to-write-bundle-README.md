@@ -4,7 +4,7 @@ title: "How To Write A Bundle"
 summary: "Authoring guide for bundle creators and integrators: bundle shape, lifecycle, decorators, runtime surfaces, configuration and storage decisions, and how to turn a product idea or existing app into a deployable bundle."
 tags: ["sdk", "bundle", "authoring", "workflow", "widget", "api", "testing"]
 keywords: ["bundle authoring guide", "bundle creator path", "bundle integrator path", "end to end bundle design", "decorator selection", "runtime surface selection", "widget api mcp cron on_job choices", "shared sdk widget components", "configuration and storage decisions", "bundle lifecycle design", "reference authoring patterns"]
-updated_at: 2026-05-22
+updated_at: 2026-05-23
 see_also:
   - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
@@ -18,6 +18,8 @@ see_also:
   - ks:docs/sdk/bundle/bundle-entrypoint-classes-README.md
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
+  - ks:docs/sdk/bundle/bundle-client-communication-README.md
+  - ks:docs/sdk/bundle/bundle-transports-README.md
   - ks:docs/sdk/bundle/bundle-widget-integration-README.md
   - ks:docs/sdk/integrations/telegram/telegram-README.md
   - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
@@ -127,6 +129,22 @@ Critical widget/browser rule:
   page URL as the API base
 - read [bundle-widget-integration-README.md#frame-origin-and-api-base-url](../bundle-widget-integration-README.md#frame-origin-and-api-base-url)
   before writing widget networking code
+
+Critical bundle-to-browser event rule:
+
+- SSE and Socket.IO streams are reusable session event transports, not only
+  chat-turn transports
+- if a widget or bundle UI calls a non-chat `/api/integrations/.../operations`
+  endpoint and expects live updates, keep an open `/sse/stream` or Socket.IO
+  connection and pass the connected peer id as `KDC-Stream-ID`
+- in the bundle operation, use the request-bound communicator from
+  `get_current_comm()` or `self.comm`, then emit `comm.service_event(...)`
+- `broadcast=False` targets that peer when `KDC-Stream-ID` was supplied;
+  `broadcast=True` sends to all connected peers in the same authenticated
+  session
+- this is session-scoped delivery, not tenant-wide or project-wide broadcast
+- read the concrete client and bundle recipe before implementing this:
+  [bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream](../bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream)
 
 Shared widget rule:
 
@@ -1426,6 +1444,10 @@ So the practical rule is:
 
 - chat/SSE path: request-bound comm context exists
 - REST operations path: request-bound comm context also exists
+- REST operations can emit live non-chat events over the already-open
+  `/sse/stream` or Socket.IO connection when the client passes
+  `KDC-Stream-ID`; use the recipe in
+  [bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream](../bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream)
 
 If a widget or host-embedded UI calls a bundle operation, do not treat it as a detached background job.
 

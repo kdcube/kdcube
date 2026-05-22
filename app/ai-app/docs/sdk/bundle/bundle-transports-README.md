@@ -559,6 +559,13 @@ Transports to the client:
 - SSE
 - Socket.IO
 
+This path can be used by non-chat bundle operations too. A browser can open the
+normal `/sse/stream` or Socket.IO connection, call a bundle REST operation, and
+pass the connected peer id through the configured stream-id header so
+`comm.service_event(...)` can reply to that exact peer or broadcast to the
+current session. See the concrete recipe in
+[Bundle Client Communication](bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream).
+
 ### 7.2 Who owns outbound auth
 
 For communicator delivery:

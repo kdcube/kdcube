@@ -4,12 +4,14 @@ title: "How To Bootstrap A Local Bundle Runtime As A Coding Agent"
 summary: "Tier 1 coding-agent runbook for Claude Code, Codex, or a build-with-KDCube plugin to configure a local KDCube runtime, wire a bundle through the CLI, start ngrok when public callbacks are needed, set bundle props and secrets, register Telegram webhooks, prepare Gmail OAuth settings, and report only the external steps the agent cannot complete."
 tags: ["sdk", "bundle", "tier-1", "agents", "local-runtime", "cli", "ngrok", "telegram", "gmail", "oauth"]
 keywords: ["agent local bundle setup", "configure bundle with cli", "run kdcube local runtime", "telegram webhook setup", "gmail oauth local setup", "ngrok local kdcube", "bundles yaml staged descriptors", "bundles secrets yaml", "kdcube bundle command", "autonomous runtime smoke test"]
-updated_at: 2026-05-22
+updated_at: 2026-05-23
 see_also:
   - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
+  - ks:docs/sdk/bundle/bundle-client-communication-README.md
+  - ks:docs/sdk/bundle/bundle-transports-README.md
   - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - ks:docs/service/cicd/ngrok-README.md
@@ -69,6 +71,17 @@ Critical Python import rule:
   imports such as `from ..services.storage import ...`; `module` is for
   installed SDK/external modules
 - see [bundle-runtime-README.md#critical-bundle-local-import-rule](../bundle-runtime-README.md#critical-bundle-local-import-rule)
+
+Critical live-event smoke rule:
+
+- if a bundle UI expects live progress from a non-chat bundle operation, verify
+  the shared stream path instead of inventing a raw bundle SSE/WebSocket route
+- the client opens `/sse/stream` or Socket.IO, calls
+  `/api/integrations/.../operations/...`, passes `KDC-Stream-ID`, and listens
+  for `chat_service`
+- backend code emits with the request-bound communicator, usually
+  `comm.service_event(...)`
+- see [bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream](../bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream)
 
 ## Agent Contract
 
