@@ -32,6 +32,7 @@ import { CopyButton } from '../../components/CopyButton.tsx'
 import { DownloadButton } from '../../components/DownloadButton.tsx'
 import { Snippet } from '../../components/Snippet.tsx'
 import { CanvasRender, canvasFilename, canvasMime } from '../../components/CanvasRender.tsx'
+import { CanvasExpandButton, CanvasModal } from '../../components/CanvasModal.tsx'
 import { FaviconImg } from '../../components/Favicon.tsx'
 import { FileExtIcon, fileExtension, fileKind } from '../../components/FileExtIcon.tsx'
 import type {
@@ -212,6 +213,47 @@ function LinksPanelImpl({ links }: { links: TurnLink[] }) {
     </div>
   )
 }
+/** One row inside `CanvasPanel`. Extracted to a sub-component so each
+ *  row can own its own `modalOpen` state — hooks can't live inside a
+ *  `.map()` callback in the parent. */
+function CanvasPanelRow({ canvas }: { canvas: CanvasArtifact }) {
+  const [modalOpen, setModalOpen] = useState(false)
+  return (
+    <>
+      <details className="k-workitem k-tint-green" open>
+        <summary className="k-workitem-head">
+          <span className="k-workitem-icon">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <path d="M3 9h18M9 21V9" />
+            </svg>
+          </span>
+          <span className="k-workitem-title">
+            <span className="k-text">{canvas.title || canvas.name}</span>
+            <span className="k-micro">{canvas.format || 'text'}</span>
+          </span>
+          <span className="k-workitem-meta">{formatTime(canvas.timestamp)}</span>
+          <span className="k-snippet-tools" onClick={(e) => e.stopPropagation()}>
+            <CanvasExpandButton onClick={() => setModalOpen(true)} />
+            <CopyButton value={canvas.content} title="Copy canvas" />
+            <DownloadButton
+              data={canvas.content}
+              filename={canvasFilename(canvas)}
+              mime={canvasMime(canvas)}
+              title="Download canvas"
+            />
+          </span>
+          <CaretIcon />
+        </summary>
+        <div className="k-workitem-body">
+          <CanvasRender canvas={canvas} />
+        </div>
+      </details>
+      {modalOpen ? <CanvasModal canvas={canvas} onClose={() => setModalOpen(false)} /> : null}
+    </>
+  )
+}
+
 function CanvasPanelImpl({ canvases }: { canvases: CanvasArtifact[] }) {
   if (canvases.length === 0) {
     return <p className="pt-2 text-[12px] text-[var(--muted)]">No canvas items in this turn yet.</p>
@@ -219,34 +261,10 @@ function CanvasPanelImpl({ canvases }: { canvases: CanvasArtifact[] }) {
   return (
     <div className="flex flex-col gap-2 pt-1">
       {canvases.map((canvas) => (
-        <details key={`${canvas.kind}-${canvas.name}-${canvas.timestamp}`} className="k-workitem k-tint-green" open>
-          <summary className="k-workitem-head">
-            <span className="k-workitem-icon">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="3" y="3" width="18" height="18" rx="2" />
-                <path d="M3 9h18M9 21V9" />
-              </svg>
-            </span>
-            <span className="k-workitem-title">
-              <span className="k-text">{canvas.title || canvas.name}</span>
-              <span className="k-micro">{canvas.format || 'text'}</span>
-            </span>
-            <span className="k-workitem-meta">{formatTime(canvas.timestamp)}</span>
-            <span className="k-snippet-tools" onClick={(e) => e.stopPropagation()}>
-              <CopyButton value={canvas.content} title="Copy canvas" />
-              <DownloadButton
-                data={canvas.content}
-                filename={canvasFilename(canvas)}
-                mime={canvasMime(canvas)}
-                title="Download canvas"
-              />
-            </span>
-            <CaretIcon />
-          </summary>
-          <div className="k-workitem-body">
-            <CanvasRender canvas={canvas} />
-          </div>
-        </details>
+        <CanvasPanelRow
+          key={`${canvas.kind}-${canvas.name}-${canvas.timestamp}`}
+          canvas={canvas}
+        />
       ))}
     </div>
   )

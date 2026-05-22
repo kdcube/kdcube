@@ -1262,3 +1262,84 @@ a { color: inherit; }
 .k-fetch-status--error {
   color: var(--red);
 }
+
+/* ---------------------------------------------------------------------- */
+/*  Canvas expand modal — portal-mounted overlay for the Expand button.   */
+/*  Opens when the user clicks the expand icon in a canvas header. ESC,   */
+/*  backdrop click, and the close button all dismiss it. The modal body   */
+/*  reuses <CanvasRender>, so the iframe sandbox + srcDoc debounce        */
+/*  behaviour is consistent with the inline view.                         */
+/* ---------------------------------------------------------------------- */
+.k-canvas-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 24, 42, 0.55);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.k-canvas-modal {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: 0 8px 30px rgba(15, 24, 42, 0.25);
+  width: 100%;
+  max-width: min(1280px, 95vw);
+  height: 100%;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.k-canvas-modal-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--surface-2);
+  flex: 0 0 auto;
+}
+.k-canvas-modal-title {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.k-canvas-modal-title .k-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.k-canvas-modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  overflow: auto;
+}
+/* In the modal context, let the canvas iframe and markdown body fill the
+ * available space rather than the inline 420px constraint. */
+.k-canvas-modal-body > * {
+  flex: 1 1 auto;
+}
+.k-canvas-modal-body .k-canvas-frame {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.k-canvas-modal-body .k-canvas-markdown {
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+}

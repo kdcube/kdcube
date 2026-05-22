@@ -21,6 +21,7 @@ import { CopyButton } from '../../components/CopyButton.tsx'
 import { DownloadButton } from '../../components/DownloadButton.tsx'
 import { Snippet } from '../../components/Snippet.tsx'
 import { CanvasRender, canvasFilename, canvasMime } from '../../components/CanvasRender.tsx'
+import { CanvasExpandButton, CanvasModal } from '../../components/CanvasModal.tsx'
 import type {
   Artifact,
   CanvasArtifact,
@@ -338,40 +339,45 @@ function ChatCodeExecBlockImpl({ artifact }: { artifact: CodeExecArtifact }) {
   )
 }
 
-/** Canvas artifact in Chat view — open, with copy + download tools on
- *  the header bar so the user can grab the content without expanding
- *  Overview. Mirrors `CanvasPanel`'s tool layout from the Canvas tab. */
+/** Canvas artifact in Chat view — open, with expand + copy + download
+ *  tools on the header bar. Expand opens a full-window `CanvasModal`
+ *  for non-trivial HTML canvases. Mirrors `CanvasPanel`'s tool layout. */
 function ChatCanvasBlockImpl({ artifact }: { artifact: CanvasArtifact }) {
+  const [modalOpen, setModalOpen] = useState(false)
   return (
-    <details className="k-workitem k-tint-green" open>
-      <summary className="k-workitem-head">
-        <span className="k-workitem-icon" aria-hidden="true">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <rect x="3" y="3" width="18" height="18" rx="2" />
-            <path d="M3 9h18M9 21V9" />
-          </svg>
-        </span>
-        <span className="k-workitem-title">
-          <span className="k-text">{artifact.title || artifact.name}</span>
-          <span className="k-micro">{artifact.format || 'text'}</span>
-        </span>
-        {/* Stop propagation so clicking copy/download doesn't toggle the
-            <details> open/closed state. */}
-        <span className="k-snippet-tools" onClick={(e) => e.stopPropagation()}>
-          <CopyButton value={artifact.content} title="Copy canvas" />
-          <DownloadButton
-            data={artifact.content}
-            filename={canvasFilename(artifact)}
-            mime={canvasMime(artifact)}
-            title="Download canvas"
-          />
-        </span>
-        <CaretIcon />
-      </summary>
-      <div className="k-workitem-body">
-        <CanvasRender canvas={artifact} />
-      </div>
-    </details>
+    <>
+      <details className="k-workitem k-tint-green" open>
+        <summary className="k-workitem-head">
+          <span className="k-workitem-icon" aria-hidden="true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <path d="M3 9h18M9 21V9" />
+            </svg>
+          </span>
+          <span className="k-workitem-title">
+            <span className="k-text">{artifact.title || artifact.name}</span>
+            <span className="k-micro">{artifact.format || 'text'}</span>
+          </span>
+          {/* Stop propagation so clicking the tools doesn't toggle the
+              <details> open/closed state. */}
+          <span className="k-snippet-tools" onClick={(e) => e.stopPropagation()}>
+            <CanvasExpandButton onClick={() => setModalOpen(true)} />
+            <CopyButton value={artifact.content} title="Copy canvas" />
+            <DownloadButton
+              data={artifact.content}
+              filename={canvasFilename(artifact)}
+              mime={canvasMime(artifact)}
+              title="Download canvas"
+            />
+          </span>
+          <CaretIcon />
+        </summary>
+        <div className="k-workitem-body">
+          <CanvasRender canvas={artifact} />
+        </div>
+      </details>
+      {modalOpen ? <CanvasModal canvas={artifact} onClose={() => setModalOpen(false)} /> : null}
+    </>
   )
 }
 
