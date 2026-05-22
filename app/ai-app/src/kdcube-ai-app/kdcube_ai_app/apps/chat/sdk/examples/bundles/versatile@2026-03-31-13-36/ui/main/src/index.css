@@ -1384,3 +1384,31 @@ a { color: inherit; }
   from { opacity: 0; }
   to { opacity: 1; }
 }
+
+/* ---------------------------------------------------------------------- */
+/*  Bundle widget iframe (memories / settings panel).                     */
+/*                                                                        */
+/*  Lives in the left column (`<WebappPane>`) or full-screen modal        */
+/*  (`<WebappModal>`). Same-origin — no `sandbox` attribute so the        */
+/*  widget can authenticate via cookies and call back into bundle APIs.   */
+/* ---------------------------------------------------------------------- */
+.k-webapp-frame {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 480px;
+  border: 0;
+  background: var(--surface);
+}
+.k-canvas-modal-body .k-webapp-frame {
+  height: 100%;
+  min-height: 0;
+}
+
+/* Active state for icon buttons (e.g. the gear when the webapp pane is
+   currently shown). Uses --accent-soft so it pairs with the existing
+   tag/chip families. */
+.k-iconbtn.k-iconbtn-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: rgba(217, 229, 99, 0.6);
+}

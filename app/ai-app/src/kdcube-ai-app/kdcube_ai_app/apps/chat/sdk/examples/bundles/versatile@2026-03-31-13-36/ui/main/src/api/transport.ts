@@ -10,7 +10,7 @@
  *  - fetchProfileSessionId (lazy session id resolver)
  */
 
-import { getClientTimezone, makeAuthHeaders, settings } from '../settings.ts'
+import { BUILT_BUNDLE_ID, getClientTimezone, makeAuthHeaders, settings } from '../settings.ts'
 
 export function buildRequestHeaders(base?: HeadersInit): Headers {
   const headers = makeAuthHeaders(base)
@@ -45,6 +45,16 @@ export function requireScope(): { tenant: string; project: string } {
     throw new Error('Tenant/project is not configured for this bundle UI.')
   }
   return { tenant, project }
+}
+
+/** Compose the canonical URL the platform serves a bundle widget at:
+ *  `GET /api/integrations/bundles/{tenant}/{project}/{bundle_id}/widgets/{alias}`.
+ *  Used by the main UI to iframe its own `versatile_webapp` widget in
+ *  the side pane. */
+export function bundleWidgetUrl(alias: string): string {
+  const { tenant, project } = requireScope()
+  const bundleId = settings.getBundleId() || BUILT_BUNDLE_ID
+  return `${settings.getBaseUrl()}/api/integrations/bundles/${encodeURIComponent(tenant)}/${encodeURIComponent(project)}/${encodeURIComponent(bundleId)}/widgets/${encodeURIComponent(alias)}`
 }
 
 export async function fetchProfileSessionId(sessionId?: string | null): Promise<string> {

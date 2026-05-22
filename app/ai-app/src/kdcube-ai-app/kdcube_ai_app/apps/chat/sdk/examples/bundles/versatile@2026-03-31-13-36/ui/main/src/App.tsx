@@ -37,6 +37,8 @@ import { ConversationsSidebar } from './features/conversations/ConversationsSide
 import { Composer } from './features/composer/Composer.tsx'
 import { TurnView } from './features/chat/TurnView.tsx'
 import { FileDropZone } from './components/FileDropZone.tsx'
+import { WebappPane, WebappModal } from './components/WebappPane.tsx'
+import { bundleWidgetUrl } from './api/transport.ts'
 
 export default function App() {
   const state = useAppSelector((s) => s.chat)
@@ -44,6 +46,12 @@ export default function App() {
   const [ready, setReady] = useState(false)
   const [bootError, setBootError] = useState<string | null>(null)
   const [conversationQuery, setConversationQuery] = useState('')
+  /* Left-column mode. `chats` shows ConversationsSidebar (default).
+   * `webapp` shows the bundle's `versatile_webapp` widget in the same
+   * column. `collapsed` hides the column entirely so the chat takes
+   * full width. */
+  const [leftPaneMode, setLeftPaneMode] = useState<'chats' | 'webapp' | 'collapsed'>('chats')
+  const [webappModalOpen, setWebappModalOpen] = useState(false)
 
   const stateRef = useRef<ChatState>(state)
   const eventSourceRef = useRef<EventSource | null>(null)
@@ -488,6 +496,11 @@ export default function App() {
   const handleDropFiles = useStableCallback((files: File[]) => {
     if (files.length > 0) dispatch(chatActions.addComposerFiles(files))
   })
+  const handleOpenWebapp = useStableCallback(() => setLeftPaneMode('webapp'))
+  const handleBackToChats = useStableCallback(() => setLeftPaneMode('chats'))
+  const handleCollapseLeftPane = useStableCallback(() => setLeftPaneMode('collapsed'))
+  const handleExpandWebapp = useStableCallback(() => setWebappModalOpen(true))
+  const handleCloseWebappModal = useStableCallback(() => setWebappModalOpen(false))
   const handleComposerFileRemove = useStableCallback((index: number) => {
     dispatch(chatActions.removeComposerFile(index))
   })
@@ -526,6 +539,17 @@ export default function App() {
    * re-evaluate them inline (and so the dependent components see the
    * same boolean reference when nothing has changed). */
   const sendingDisabled = state.inputLocked || state.connection === 'booting'
+  /* Resolve the URL the platform serves our `versatile_webapp` widget
+   * at. Memoised on the bundleId so unrelated re-renders don't bust
+   * the WebappPane's iframe (changing src would reload the widget). */
+  const webappWidgetUrl = useMemo(() => {
+    try {
+      return bundleWidgetUrl('versatile_webapp')
+    } catch {
+      return ''
+    }
+  }, [bundleId])
+  const leftPaneVisible = leftPaneMode !== 'collapsed'
 
   return (
     <div className="shell-grid">
@@ -554,6 +578,42 @@ export default function App() {
                 ? `${settings.getTenant() || 'tenant'} / ${settings.getProject() || 'project'}`
                 : state.connection}
             </span>
+            <button
+              type="button"
+              onClick={() =>
+                setLeftPaneMode(leftPaneMode === 'collapsed' ? 'chats' : 'collapsed')
+              }
+              className="k-iconbtn"
+              aria-label={leftPaneMode === 'collapsed' ? 'Show side panel' : 'Hide side panel'}
+              title={leftPaneMode === 'collapsed' ? 'Show side panel' : 'Hide side panel'}
+              aria-pressed={leftPaneMode !== 'collapsed'}
+            >
+              {/* Sidebar-toggle icon — a panel with a chevron pointing in
+                  the direction the panel would move when toggled. */}
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="3" y="4" width="18" height="16" rx="2" />
+                <path d="M9 4v16" />
+                {leftPaneMode === 'collapsed' ? (
+                  <path d="M14 9l3 3-3 3" />
+                ) : (
+                  <path d="M17 9l-3 3 3 3" />
+                )}
+              </svg>
+            </button>
+            <button
+              type="button"
+              onClick={handleOpenWebapp}
+              className={`k-iconbtn ${leftPaneMode === 'webapp' ? 'k-iconbtn-active' : ''}`}
+              aria-label="Open settings widget"
+              title="Settings (memories)"
+              aria-pressed={leftPaneMode === 'webapp'}
+            >
+              {/* Gear icon. */}
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+              </svg>
+            </button>
             <button
               type="button"
               onClick={handleReconnect}
@@ -590,22 +650,40 @@ export default function App() {
             </div>
           ) : null}
 
-          <div className="grid gap-3 lg:gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
-            <ConversationsSidebar
-              conversations={filteredConversations}
-              query={conversationQuery}
-              activeConversationId={state.conversationId}
-              disabled={hasPendingTurn}
-              loading={state.conversationsLoading}
-              error={state.conversationsError}
-              loadingConversationId={state.conversationLoadingId}
-              deletingConversationId={state.conversationDeletingId}
-              onQueryChange={setConversationQuery}
-              onRefresh={handleConversationRefresh}
-              onSelect={handleConversationSelect}
-              onStartNew={handleStartNewChat}
-              onDelete={handleConversationDelete}
-            />
+          <div
+            className={`grid gap-3 lg:gap-4 ${
+              leftPaneVisible
+                ? 'lg:grid-cols-[260px_minmax(0,1fr)]'
+                : 'lg:grid-cols-[minmax(0,1fr)]'
+            }`}
+          >
+            {leftPaneVisible && leftPaneMode === 'chats' ? (
+              <ConversationsSidebar
+                conversations={filteredConversations}
+                query={conversationQuery}
+                activeConversationId={state.conversationId}
+                disabled={hasPendingTurn}
+                loading={state.conversationsLoading}
+                error={state.conversationsError}
+                loadingConversationId={state.conversationLoadingId}
+                deletingConversationId={state.conversationDeletingId}
+                onQueryChange={setConversationQuery}
+                onRefresh={handleConversationRefresh}
+                onSelect={handleConversationSelect}
+                onStartNew={handleStartNewChat}
+                onDelete={handleConversationDelete}
+              />
+            ) : null}
+
+            {leftPaneVisible && leftPaneMode === 'webapp' && webappWidgetUrl ? (
+              <WebappPane
+                src={webappWidgetUrl}
+                title="Memories"
+                onBackToChats={handleBackToChats}
+                onExpand={handleExpandWebapp}
+                onCollapse={handleCollapseLeftPane}
+              />
+            ) : null}
 
             <FileDropZone
               onFiles={handleDropFiles}
@@ -681,6 +759,13 @@ export default function App() {
           </div>
         </main>
       </div>
+      {webappModalOpen && webappWidgetUrl ? (
+        <WebappModal
+          src={webappWidgetUrl}
+          title="Memories"
+          onClose={handleCloseWebappModal}
+        />
+      ) : null}
     </div>
   )
 }
