@@ -42,6 +42,7 @@ DEFAULT_WORKDIR = Path.home() / ".kdcube" / "kdcube-runtime"
 DEFAULT_DEFAULTS_FILE = Path.home() / ".kdcube" / "cli-defaults.json"
 CLI_LOCK_FILE = Path.home() / ".kdcube" / "cli-lock.json"
 DEFAULT_REPO_DIRNAME = "repo"
+DOCKER_STATUS_TIMEOUT_SECONDS = 20
 STANDARD_INIT_SECRET_PROMPTS: tuple[tuple[str, str], ...] = (
     ("services.openai.api_key", "OpenAI API key"),
     ("services.anthropic.api_key", "Anthropic API key"),
@@ -125,6 +126,7 @@ def _docker_output(
     env: dict[str, str] | None = None,
     *,
     cwd: Path | None = None,
+    timeout: float | None = None,
 ) -> str:
     try:
         return subprocess.run(
@@ -134,12 +136,28 @@ def _docker_output(
             text=True,
             env=env,
             cwd=str(cwd) if cwd else None,
+            timeout=timeout,
         ).stdout
+    except subprocess.TimeoutExpired as exc:
+        timeout_label = f"{timeout:g}" if timeout is not None else "unknown"
+        raise SystemExit(
+            f"Docker command timed out after {timeout_label}s: {shlex.join(cmd)}\n"
+            "Docker Desktop or the Docker daemon is not responding. This is often caused by "
+            "severe disk pressure, a stuck Docker VM, or a daemon lock. Free disk space and/or "
+            "restart Docker Desktop, then retry."
+        ) from exc
     except subprocess.CalledProcessError as exc:
         stderr = (exc.stderr or "").strip()
         stdout = (exc.stdout or "").strip()
         details = "\n".join([line for line in [stdout, stderr] if line])
         raise SystemExit(f"Docker command failed: {' '.join(cmd)}\n{details}") from exc
+
+
+def _ensure_docker_responsive() -> None:
+    _docker_output(
+        ["docker", "info", "--format", "{{.ServerVersion}}"],
+        timeout=DOCKER_STATUS_TIMEOUT_SECONDS,
+    )
 
 
 def _docker_output_soft(cmd: list[str]) -> str | None:
@@ -258,6 +276,7 @@ def stop_compose_stack(
             "Pass --workdir for the runtime you want to stop or re-run the installer first."
         )
 
+    _ensure_docker_responsive()
     _check_before_stop(workdir, env_file, ctx.docker_dir)
 
     cmd = [
@@ -294,6 +313,7 @@ def start_compose_stack(
             "Initialize the workdir first:\n"
             "  kdcube init"
         )
+    _ensure_docker_responsive()
     env_main = installer_mod.load_env_file(env_file)
     installer_mod.ensure_compose_log_dirs(_compose_logs_dir_from_env(env_file, ctx.workdir))
     token_overrides = installer_mod.generate_runtime_tokens()
@@ -341,6 +361,7 @@ def build_compose_images(
             "Initialize the workdir before building images:\n"
             "  kdcube init --build"
         )
+    _ensure_docker_responsive()
 
     env_main = installer_mod.load_env_file(env_file)
     missing = installer_mod.missing_build_keys(env_main)
@@ -786,13 +807,14 @@ def _compose_services(docker_dir: Path, env_file: Path) -> set[str]:
             ],
             env=env,
             cwd=docker_dir,
+            timeout=DOCKER_STATUS_TIMEOUT_SECONDS,
         )
         return {line.strip() for line in output.splitlines() if line.strip()}
     except SystemExit:
         return set()
 
 
-def _compose_running_services(docker_dir: Path, env_file: Path) -> set[str]:
+def _compose_running_services(docker_dir: Path, env_file: Path, *, strict: bool = False) -> set[str]:
     try:
         env = os.environ.copy()
         env["COMPOSE_ENV_FILES"] = str(env_file)
@@ -809,9 +831,12 @@ def _compose_running_services(docker_dir: Path, env_file: Path) -> set[str]:
             ],
             env=env,
             cwd=docker_dir,
+            timeout=DOCKER_STATUS_TIMEOUT_SECONDS,
         )
         return {line.strip() for line in output.splitlines() if line.strip()}
     except SystemExit:
+        if strict:
+            raise
         return set()
 
 
@@ -2632,7 +2657,7 @@ def _check_before_stop(workdir: Path, env_file: Path, docker_dir: Path) -> None:
     """Raise SystemExit if the target deployment is not running or a different one is."""
     running = set()
     try:
-        running = _compose_running_services(docker_dir, env_file)
+        running = _compose_running_services(docker_dir, env_file, strict=True)
     except Exception:
         pass
 
