@@ -43,6 +43,7 @@ DEFAULT_DEFAULTS_FILE = Path.home() / ".kdcube" / "cli-defaults.json"
 CLI_LOCK_FILE = Path.home() / ".kdcube" / "cli-lock.json"
 DEFAULT_REPO_DIRNAME = "repo"
 DOCKER_STATUS_TIMEOUT_SECONDS = 20
+DOCKER_CLEAN_TIMEOUT_SECONDS = 120
 STANDARD_INIT_SECRET_PROMPTS: tuple[tuple[str, str], ...] = (
     ("services.openai.api_key", "OpenAI API key"),
     ("services.anthropic.api_key", "Anthropic API key"),
@@ -117,8 +118,8 @@ def _print_json(payload: object) -> None:
     sys.stdout.flush()
 
 
-def run(cmd: list[str], cwd: Path | None = None) -> None:
-    subprocess.run(cmd, cwd=cwd, check=True)
+def run(cmd: list[str], cwd: Path | None = None, *, timeout: float | None = None) -> None:
+    subprocess.run(cmd, cwd=cwd, check=True, timeout=timeout)
 
 
 def _docker_output(
@@ -160,16 +161,23 @@ def _ensure_docker_responsive() -> None:
     )
 
 
-def _docker_output_soft(cmd: list[str]) -> str | None:
+def _docker_output_soft(cmd: list[str], *, timeout: float | None = None) -> str | None:
     try:
-        return subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
-    except subprocess.CalledProcessError:
+        return subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=timeout).stdout
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return None
 
 
-def _docker_run(cmd: list[str]) -> None:
+def _docker_run(cmd: list[str], *, timeout: float | None = None) -> None:
     try:
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        timeout_label = f"{timeout:g}" if timeout is not None else "unknown"
+        raise SystemExit(
+            f"Docker command timed out after {timeout_label}s: {shlex.join(cmd)}\n"
+            "Docker Desktop or the Docker daemon is not responding. Free disk space and/or "
+            "restart Docker Desktop, then retry."
+        ) from exc
     except subprocess.CalledProcessError as exc:
         raise SystemExit(f"Docker command failed: {' '.join(cmd)} (exit {exc.returncode})") from exc
 
@@ -401,21 +409,29 @@ def build_compose_images(
 def clean_docker_images(console: Console) -> None:
     console.print("[bold]Cleaning Docker cache and unused KDCube images...[/bold]")
     try:
+        _ensure_docker_responsive()
         # Remove dangling images + build cache
-        _docker_run(["docker", "image", "prune", "-f"])
-        _docker_run(["docker", "builder", "prune", "-f"])
+        _docker_run(["docker", "image", "prune", "-f"], timeout=DOCKER_CLEAN_TIMEOUT_SECONDS)
+        _docker_run(["docker", "builder", "prune", "-f"], timeout=DOCKER_CLEAN_TIMEOUT_SECONDS)
 
         used_refs: set[str] = set()
-        out = _docker_output_soft(["docker", "ps", "-a", "--format", "{{.ImageID}}"])
+        out = _docker_output_soft(
+            ["docker", "ps", "-a", "--format", "{{.ImageID}}"],
+            timeout=DOCKER_STATUS_TIMEOUT_SECONDS,
+        )
         if out is None:
-            out = _docker_output(["docker", "ps", "-a", "--format", "{{.Image}}"])
+            out = _docker_output(
+                ["docker", "ps", "-a", "--format", "{{.Image}}"],
+                timeout=DOCKER_STATUS_TIMEOUT_SECONDS,
+            )
         for line in out.splitlines():
             value = line.strip()
             if value:
                 used_refs.add(value)
 
         images = _docker_output(
-            ["docker", "image", "ls", "--no-trunc", "--format", "{{.ID}} {{.Repository}} {{.Tag}}"]
+            ["docker", "image", "ls", "--no-trunc", "--format", "{{.ID}} {{.Repository}} {{.Tag}}"],
+            timeout=DOCKER_STATUS_TIMEOUT_SECONDS,
         ).splitlines()
 
         to_remove: list[str] = []
@@ -440,7 +456,15 @@ def clean_docker_images(console: Console) -> None:
             console.print("[dim]Removing old KDCube image tags:[/dim]")
             for ref in to_remove:
                 console.print(f"  {ref}")
-            subprocess.run(["docker", "rmi", *to_remove], check=False)
+            try:
+                subprocess.run(["docker", "rmi", *to_remove], check=False, timeout=DOCKER_CLEAN_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired as exc:
+                raise SystemExit(
+                    f"Docker command timed out after {DOCKER_CLEAN_TIMEOUT_SECONDS}s: "
+                    f"docker rmi <{len(to_remove)} image tags>\n"
+                    "Docker Desktop or the Docker daemon is not responding. Free disk space and/or "
+                    "restart Docker Desktop, then retry."
+                ) from exc
         else:
             console.print("[dim]No old KDCube image tags to remove.[/dim]")
     except FileNotFoundError:
