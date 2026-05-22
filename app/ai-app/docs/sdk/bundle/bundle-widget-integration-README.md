@@ -763,7 +763,51 @@ The widget should request these fields from the runtime display environment:
 - `defaultProject`
 - `defaultAppBundleId`
 
-The widget must accept both response event types:
+### Tolerated Alternate Keys
+
+A widget loaded in different host contexts (control plane, embedded
+iframe, Telegram Mini App, public widget route) can receive the runtime
+config payload under slightly different key names. The widget **must**
+accept all of the following alternates when reading the payload, falling
+back left-to-right within each group:
+
+| Logical field | Canonical key | Alternates accepted |
+| --- | --- | --- |
+| Tenant | `defaultTenant` | `tenant`, `tenant_id` |
+| Project | `defaultProject` | `project`, `project_id` |
+| ID-token header name | `idTokenHeader` | `idTokenHeaderName`, `auth.idTokenHeaderName` |
+| Base URL | `baseUrl` | (no alternate) |
+| Access token | `accessToken` | (no alternate; preserve explicit `null`) |
+| ID token | `idToken` | (no alternate; preserve explicit `null`) |
+| App bundle id | `defaultAppBundleId` | (no alternate in the runtime-config payload; URL params accept `bundle_id` or `bundleId`) |
+
+The reference implementation lives in
+`sdk/examples/bundles/kdcube.copilot@2026-04-03-19-05/ui/widgets/copilot_webapp/src/store/settings.ts`
+and reads:
+
+```ts
+const tenant  = config.defaultTenant  || config.tenant  || config.tenant_id;
+const project = config.defaultProject || config.project || config.project_id;
+const idHdr   = config.idTokenHeader
+             || config.idTokenHeaderName
+             || config.auth?.idTokenHeaderName
+             || existing;
+// access/id tokens use `??` so explicit null is preserved
+const accessToken = config.accessToken ?? existing;
+const idToken     = config.idToken     ?? existing;
+```
+
+When the widget is launched via a route that encodes the bundle id as a URL
+query param, accept either spelling:
+
+```ts
+const bundleId = params.get('bundle_id') || params.get('bundleId');
+```
+
+### Tolerated Response Event Types
+
+The widget must accept both response event types from the `postMessage`
+runtime-config handshake:
 
 - `CONN_RESPONSE`
 - `CONFIG_RESPONSE`
