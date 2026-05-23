@@ -13,6 +13,7 @@ import { formatBytes, formatTime } from '../../components/utils.ts'
 import { CopyButton } from '../../components/CopyButton.tsx'
 import { MarkdownBlock } from '../../components/MarkdownBlock.tsx'
 import { SuggestedQuestions } from '../../components/SuggestedQuestions.tsx'
+import { AttachmentChip } from '../../components/AttachmentChip.tsx'
 import type {
   CanvasArtifact,
   ChatTurn,
@@ -69,6 +70,17 @@ function TurnViewImpl({
     () => mergeOverviewEvents(turn.artifacts, turn.additionalUserMessages),
     [turn.artifacts, turn.additionalUserMessages],
   )
+  /* All user-side attachments for this turn — main message + every
+   * followup. Feeds the Files tab count badge and the DownloadsPanel
+   * so users can re-download anything they sent, including attachments
+   * that came in with followups. */
+  const allUserAttachments = useMemo(
+    () => [
+      ...turn.userAttachments,
+      ...turn.additionalUserMessages.flatMap((message) => message.attachments),
+    ],
+    [turn.userAttachments, turn.additionalUserMessages],
+  )
 
   const stateChipClass =
     turn.state === 'error'
@@ -77,33 +89,44 @@ function TurnViewImpl({
         ? 'k-chip k-green'
         : 'k-chip k-teal'
 
+  /* Hide the user-bubble entirely when the turn has no text AND no
+   * attachments — that's a phantom turn (e.g. a server-side spurious
+   * `chat.start` for a queued continuation id) and showing a placeholder
+   * "You" bubble would be misleading. */
+  const hasUserContent = Boolean(turn.userMessage) || turn.userAttachments.length > 0
+
   return (
     <article className="flex flex-col gap-3">
       {/* User turn */}
-      <div className="flex flex-col gap-1 self-end max-w-[760px]">
-        <div className="flex items-center gap-2 text-[11px] text-[var(--muted)]">
-          <span className="font-semibold text-[var(--text-2)]">You</span>
-          <span>{formatTime(turn.createdAt)}</span>
-        </div>
-        <div className="k-msg rounded-md border border-[var(--line-soft)] bg-[var(--surface-2)] px-3 py-2 text-[14px] leading-6 whitespace-pre-wrap">
-          {turn.userMessage || 'Sent attachments only'}
-          {turn.userMessage ? (
-            <span className="k-msg-toolbar">
-              <CopyButton value={turn.userMessage} title="Copy message" />
-            </span>
-          ) : null}
-        </div>
-        {turn.userAttachments.length > 0 ? (
-          <div className="flex flex-wrap gap-1.5 pt-1">
-            {turn.userAttachments.map((attachment) => (
-              <span key={attachment.id} className="k-chip">
-                {attachment.name}
-                {typeof attachment.size === 'number' ? ` · ${formatBytes(attachment.size)}` : ''}
-              </span>
-            ))}
+      {hasUserContent ? (
+        <div className="flex flex-col gap-1 self-end max-w-[760px]">
+          <div className="flex items-center gap-2 text-[11px] text-[var(--muted)]">
+            <span className="font-semibold text-[var(--text-2)]">You</span>
+            <span>{formatTime(turn.createdAt)}</span>
           </div>
-        ) : null}
-      </div>
+          <div className="k-msg rounded-md border border-[var(--line-soft)] bg-[var(--surface-2)] px-3 py-2 text-[14px] leading-6">
+            {turn.userMessage ? (
+              <div className="whitespace-pre-wrap">{turn.userMessage}</div>
+            ) : null}
+            {turn.userAttachments.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5 pt-1.5">
+                {turn.userAttachments.map((attachment) => (
+                  <AttachmentChip
+                    key={attachment.id}
+                    attachment={attachment}
+                    onError={onDownloadError}
+                  />
+                ))}
+              </div>
+            ) : null}
+            {turn.userMessage ? (
+              <span className="k-msg-toolbar">
+                <CopyButton value={turn.userMessage} title="Copy message" />
+              </span>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
 
       {/* Assistant turn */}
       <div className="flex flex-col gap-2">
@@ -123,7 +146,7 @@ function TurnViewImpl({
             ['steps', 'Steps', steps.length || null],
             ['canvases', 'Canvas', canvases.length || null],
             ['links', 'Links', turnLinks.length || null],
-            ['files', 'Files', (turn.userAttachments.length + assistantFiles.length) || null],
+            ['files', 'Files', (allUserAttachments.length + assistantFiles.length) || null],
           ] as Array<[TurnTab, string, number | null]>).map(([tab, label, count]) => (
             <button
               key={tab}
@@ -150,7 +173,7 @@ function TurnViewImpl({
           {activeTab === 'overview' ? (
             <>
               <ThinkingBlock entries={thinkingEntries} active={turn.state === 'pending' || turn.state === 'running'} />
-              <MergedOverviewFeed events={overviewEvents} />
+              <MergedOverviewFeed events={overviewEvents} onDownloadError={onDownloadError} />
               {turn.answer ? (
                 <div className="k-msg mt-1 rounded-md border border-[var(--line-soft)] bg-[var(--surface)] px-3 py-2">
                   <MarkdownBlock content={turn.answer} />
@@ -177,7 +200,7 @@ function TurnViewImpl({
           {activeTab === 'canvases' ? <CanvasPanel canvases={canvases} /> : null}
           {activeTab === 'links' ? <LinksPanel links={turnLinks} /> : null}
           {activeTab === 'files' ? (
-            <DownloadsPanel attachments={turn.userAttachments} files={assistantFiles} onError={onDownloadError} />
+            <DownloadsPanel attachments={allUserAttachments} files={assistantFiles} onError={onDownloadError} />
           ) : null}
         </div>
       </div>

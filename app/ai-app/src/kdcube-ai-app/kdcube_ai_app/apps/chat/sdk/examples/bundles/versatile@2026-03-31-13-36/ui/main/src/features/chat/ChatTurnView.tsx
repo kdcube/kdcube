@@ -513,7 +513,13 @@ function ChatMergedFeedImpl({
     <div className="flex flex-col gap-2 pt-1">
       {events.map((event) => {
         if (event.kind === 'followup') {
-          return <FollowupMessageBlock key={event.key} message={event.message} />
+          return (
+            <FollowupMessageBlock
+              key={event.key}
+              message={event.message}
+              onDownloadError={onDownloadError}
+            />
+          )
         }
         return (
           <ChatArtifactRow

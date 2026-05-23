@@ -33,6 +33,7 @@ import { DownloadButton } from '../../components/DownloadButton.tsx'
 import { Snippet } from '../../components/Snippet.tsx'
 import { CanvasRender, canvasFilename, canvasMime } from '../../components/CanvasRender.tsx'
 import { CanvasExpandButton, CanvasModal } from '../../components/CanvasModal.tsx'
+import { AttachmentChip } from '../../components/AttachmentChip.tsx'
 import { FaviconImg } from '../../components/Favicon.tsx'
 import { FileExtIcon, fileExtension, fileKind } from '../../components/FileExtIcon.tsx'
 import type {
@@ -830,7 +831,13 @@ function ArtifactFeedImpl({ artifacts }: { artifacts: Artifact[] }) {
     </div>
   )
 }
-function FollowupMessageBlockImpl({ message }: { message: AdditionalUserMessage }) {
+function FollowupMessageBlockImpl({
+  message,
+  onDownloadError,
+}: {
+  message: AdditionalUserMessage
+  onDownloadError?: (text: string) => void
+}) {
   const isSteer = message.continuationKind === 'steer'
   const text = message.text || (isSteer ? 'Stop requested' : '')
   return (
@@ -841,22 +848,23 @@ function FollowupMessageBlockImpl({ message }: { message: AdditionalUserMessage 
         </span>
         <span>{formatTime(message.timestamp)}</span>
       </div>
-      <div className="k-msg rounded-md border border-[var(--line-soft)] bg-[var(--surface-2)] px-3 py-2 text-[14px] leading-6 whitespace-pre-wrap">
-        {text}
+      <div className="k-msg rounded-md border border-[var(--line-soft)] bg-[var(--surface-2)] px-3 py-2 text-[14px] leading-6">
+        {text ? <div className="whitespace-pre-wrap">{text}</div> : null}
+        {message.attachments.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5 pt-1.5">
+            {message.attachments.map((attachment) => (
+              <AttachmentChip
+                key={attachment.id}
+                attachment={attachment}
+                onError={onDownloadError}
+              />
+            ))}
+          </div>
+        ) : null}
         {text ? (
           <span className="k-msg-toolbar">
             <CopyButton value={text} title="Copy follow-up" />
           </span>
-        ) : null}
-        {message.attachments.length > 0 ? (
-          <div className="flex flex-wrap gap-1.5 pt-1.5">
-            {message.attachments.map((attachment) => (
-              <span key={attachment.id} className="k-chip">
-                {attachment.name}
-                {typeof attachment.size === 'number' ? ` · ${formatBytes(attachment.size)}` : ''}
-              </span>
-            ))}
-          </div>
         ) : null}
       </div>
     </div>
@@ -894,8 +902,10 @@ export function mergeOverviewEvents(
 
 function MergedOverviewFeedImpl({
   events,
+  onDownloadError,
 }: {
   events: OverviewEvent[]
+  onDownloadError?: (text: string) => void
 }) {
   if (events.length === 0) return null
   /* Each artifact pass goes through ArtifactFeed with a one-element list so
@@ -904,7 +914,13 @@ function MergedOverviewFeedImpl({
     <div className="flex flex-col gap-2 pt-1">
       {events.map((event) => {
         if (event.kind === 'followup') {
-          return <FollowupMessageBlock key={event.key} message={event.message} />
+          return (
+            <FollowupMessageBlock
+              key={event.key}
+              message={event.message}
+              onDownloadError={onDownloadError}
+            />
+          )
         }
         return <ArtifactFeed key={event.key} artifacts={[event.artifact]} />
       })}
