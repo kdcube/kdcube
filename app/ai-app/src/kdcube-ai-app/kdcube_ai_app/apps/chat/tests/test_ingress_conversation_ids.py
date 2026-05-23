@@ -29,6 +29,25 @@ class _ConversationBrowserMissing:
         return False
 
 
+class _ConversationStateIndex:
+    def __init__(self, row=None):
+        self.row = row
+        self.calls = []
+
+    async def get_conversation_state_row(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.row
+
+
+class _ConversationBrowserStateOnly:
+    def __init__(self):
+        self.idx = _ConversationStateIndex(row={"state": "in_progress"})
+
+    async def conversation_exists(self, **kwargs):
+        del kwargs
+        return False
+
+
 def test_resolve_ingress_conversation_id_generates_uuid_when_missing():
     app = SimpleNamespace(state=SimpleNamespace())
     session = SimpleNamespace(user_id="user-1", fingerprint="fp-1")
@@ -63,6 +82,28 @@ def test_resolve_ingress_conversation_id_rejects_unknown_supplied_id():
 
     assert exc.value.status_code == 404
     assert exc.value.detail == "Conversation not found"
+
+
+def test_resolve_ingress_conversation_id_accepts_state_row_before_turn_artifacts():
+    browser = _ConversationBrowserStateOnly()
+    app = SimpleNamespace(state=SimpleNamespace(conversation_browser=browser))
+    session = SimpleNamespace(user_id="user-1", fingerprint="fp-1")
+    message_data = {"conversation_id": "conv-in-flight"}
+
+    conversation_id, created = asyncio.run(
+        chat_core.resolve_ingress_conversation_id(
+            app=app,
+            session=session,
+            message_data=message_data,
+        )
+    )
+
+    assert conversation_id == "conv-in-flight"
+    assert created is False
+    assert message_data["conversation_id"] == "conv-in-flight"
+    assert browser.idx.calls == [
+        {"user_id": "user-1", "conversation_id": "conv-in-flight"}
+    ]
 
 
 def test_sse_chat_ack_includes_server_generated_conversation_id(monkeypatch):

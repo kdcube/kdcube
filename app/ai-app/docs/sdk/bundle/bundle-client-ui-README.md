@@ -9,6 +9,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-widget-integration-README.md
   - ks:docs/sdk/bundle/bundle-client-communication-README.md
   - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
+  - ks:docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
   - ks:docs/sdk/bundle/bundle-frontend-awareness-README.md
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/service/auth/auth-README.md
@@ -124,6 +125,31 @@ Use these docs when you need to know:
 - which response headers and retry signals the client should honor
 
 This is no longer a separate top-level client namespace. These docs live under bundle because bundle code now owns widgets, main UI apps, and custom frontend interactions.
+
+## Sending External Events to the Active Turn
+
+Bundle main UIs, platform chat clients, and customer clients use the same chat
+send contract for followups and steers:
+
+```text
+client intent
+  -> /sse/chat or Socket.IO chat_message
+  -> ingress writes conversation external event
+  -> live React owner consumes it, or proc promotes it later as one fallback turn
+```
+
+Client-side rules:
+
+- send `message_kind` / `continuation_kind` as `followup` or `steer`
+- include `target_turn_id` when the user is aiming at the currently visible turn
+- treat the synchronous `followup_accepted` / `steer_accepted` response as admission, not as a new turn
+- only render an immediate same-turn followup bubble when `live_owner_detected !== false`
+- use `event_id || queued_turn_id || turn_id` as the optimistic bubble dedupe key
+
+For the field-level contract, read
+[bundle-client-communication-README.md](bundle-client-communication-README.md).
+For stream behavior after admission, read
+[bundle-chat-stream-events-README.md](bundle-chat-stream-events-README.md).
 
 ## External Embedding
 

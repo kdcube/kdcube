@@ -190,7 +190,6 @@ class ReactSolverV2:
         if not current_turn_id:
             return True
         turn_ids = [
-            str(getattr(event, "target_turn_id", "") or "").strip(),
             str(getattr(event, "active_turn_id_at_ingress", "") or "").strip(),
             str(getattr(event, "owner_turn_id", "") or "").strip(),
         ]

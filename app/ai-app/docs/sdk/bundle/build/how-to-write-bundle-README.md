@@ -4,7 +4,7 @@ title: "How To Write A Bundle"
 summary: "Authoring guide for bundle creators and integrators: bundle shape, lifecycle, decorators, runtime surfaces, configuration and storage decisions, and how to turn a product idea or existing app into a deployable bundle."
 tags: ["sdk", "bundle", "authoring", "workflow", "widget", "api", "testing"]
 keywords: ["bundle authoring guide", "bundle creator path", "bundle integrator path", "end to end bundle design", "decorator selection", "runtime surface selection", "widget api mcp cron on_job choices", "shared sdk widget components", "configuration and storage decisions", "bundle lifecycle design", "reference authoring patterns"]
-updated_at: 2026-05-19
+updated_at: 2026-05-23
 see_also:
   - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
@@ -12,16 +12,23 @@ see_also:
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-release-bundle-content-README.md
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
+  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
   - ks:docs/sdk/bundle/bundle-developer-guide-README.md
   - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
+  - ks:docs/sdk/bundle/bundle-entrypoint-classes-README.md
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
+  - ks:docs/sdk/bundle/bundle-client-communication-README.md
+  - ks:docs/sdk/bundle/bundle-transports-README.md
   - ks:docs/sdk/bundle/bundle-widget-integration-README.md
   - ks:docs/sdk/integrations/telegram/telegram-README.md
   - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
   - ks:docs/service/cicd/ngrok-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
   - ks:docs/sdk/bundle/bundle-storage-and-cache-README.md
+  - ks:docs/sdk/tools/custom-tools-README.md
+  - ks:docs/sdk/tools/tool-subsystem-README.md
+  - ks:docs/sdk/bundle/build/design/bundle-loader-import-isolation-README.md
   - ks:docs/sdk/storage/cache-README.md
   - ks:docs/sdk/storage/git-store-README.md
   - ks:docs/sdk/storage/sdk-store-README.md
@@ -35,6 +42,12 @@ It is the working instruction set for doing the job correctly.
 
 If you are not yet sure where this page fits in the full reading order, start
 with [how-to-navigate-kdcube-docs-README.md](how-to-navigate-kdcube-docs-README.md).
+
+For the local runtime command lifecycle, use
+[how-to-configure-and-run-bundle-README.md#canonical-cli-flow-schemas](how-to-configure-and-run-bundle-README.md#canonical-cli-flow-schemas).
+Bundle authors should know this split early: `init` creates the runtime,
+`refresh` changes platform source/images, and `bundle reload` applies bundle
+code/config changes.
 
 Tier 1 rule:
 
@@ -59,6 +72,7 @@ Use this document together with:
 - [versatile-reference-bundle-README.md](../versatile-reference-bundle-README.md)
 - [bundle-platform-integration-README.md](../bundle-platform-integration-README.md)
 - [bundle-widget-integration-README.md](../bundle-widget-integration-README.md)
+- [bundle-properties-and-secrets-lifecycle-README.md](../bundle-properties-and-secrets-lifecycle-README.md)
 - [bundle-runtime-README.md](../bundle-runtime-README.md)
 - [../../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../../configuration/bundle-runtime-configuration-and-secrets-README.md)
 
@@ -91,7 +105,18 @@ Practical rule:
 Configuration/runtime rule:
 
 - use this page for how to structure the bundle code
-- use [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md) for `assembly.yaml`, `bundles.yaml`, `bundles.secrets.yaml`, `kdcube --build --upstream`, and `kdcube --info`
+- use [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md) for `assembly.yaml`, `bundles.yaml`, `bundles.secrets.yaml`, `kdcube refresh --upstream --build`, and `kdcube info`
+
+Critical Python import rule:
+
+- bundle-local code must use package-relative imports such as
+  `from .services.storage import ...`
+- do not import bundle-local folders as top-level packages such as `services`,
+  `apps`, `tools`, or `resources`
+- for bundle-local tools, register them in `TOOLS_SPECS` with `ref` and import
+  same-bundle helpers with package-relative imports; use `module` only for
+  installed SDK/external modules
+- see [bundle-runtime-README.md#critical-bundle-local-import-rule](../bundle-runtime-README.md#critical-bundle-local-import-rule)
 
 Critical widget/browser rule:
 
@@ -105,6 +130,22 @@ Critical widget/browser rule:
 - read [bundle-widget-integration-README.md#frame-origin-and-api-base-url](../bundle-widget-integration-README.md#frame-origin-and-api-base-url)
   before writing widget networking code
 
+Critical bundle-to-browser event rule:
+
+- SSE and Socket.IO streams are reusable session event transports, not only
+  chat-turn transports
+- if a widget or bundle UI calls a non-chat `/api/integrations/.../operations`
+  endpoint and expects live updates, keep an open `/sse/stream` or Socket.IO
+  connection and pass the connected peer id as `KDC-Stream-ID`
+- in the bundle operation, use the request-bound communicator from
+  `get_current_comm()` or `self.comm`, then emit `comm.service_event(...)`
+- `broadcast=False` targets that peer when `KDC-Stream-ID` was supplied;
+  `broadcast=True` sends to all connected peers in the same authenticated
+  session
+- this is session-scoped delivery, not tenant-wide or project-wide broadcast
+- read the concrete client and bundle recipe before implementing this:
+  [bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream](../bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream)
+
 Shared widget rule:
 
 - do not copy SDK-owned UI panels into every bundle
@@ -112,7 +153,7 @@ Shared widget rule:
   inside its own webapp, configure `ui.widgets.<alias>.shared_sources`
   and import `@kdcube/memory-widget` or `@kdcube/telegram-widget`
 - keep that source wiring in `configuration_defaults()` for built-in/reference
-  bundles so descriptors can usually say only `enabled: true`
+  bundles so descriptors can usually carry only deployment overrides
 - keep product policy and authorization in bundle APIs; shared components are
   presentation code with injected operation callers
 - when inheriting an SDK/base widget, use `enabled.widget.<alias>: false` to
@@ -240,12 +281,12 @@ When a bundle exists in a real environment, its lifecycle is:
    - background job stream / `@on_job`
 6. During execution, the bundle reads:
    - effective bundle props via `bundle_prop(...)`
-   - secrets via async helpers such as `get_secret_async(...)` and
-     `get_user_secret_async(...)`
+   - secrets via async helpers such as `get_secret(...)` and
+     `get_secret("u:...")`
    - typed platform settings via `get_settings()`
 7. Mutable state goes to the right tier:
    - bundle local storage for instance-local filesystem state
-   - `AIBundleStorage` for bundle artifacts
+   - `BundleArtifactStorage` for bundle artifacts
    - DB/Redis/external systems for runtime/business state
 8. Config changes are applied by reload/reconcile:
    - `bundles.yaml` / `bundles.secrets.yaml` changes
@@ -276,9 +317,9 @@ Async rule:
 - lifecycle hooks should be `async def`
 - prefer `async def` for `@api`, `@mcp`, `@ui_widget`, and `@cron` methods
 - `@on_job` must be `async def`
-- in async bundle code, use async secret helpers:
-  `get_secret_async(...)`, `get_user_secret_async(...)`,
-  `set_user_secret_async(...)`, and `delete_user_secret_async(...)`
+- in bundle code, use awaited secret helpers:
+  `get_secret(...)`, `get_secret("u:...")`,
+  `set_user_secret(...)`, and `delete_user_secret(...)`
 - do not run blocking setup in a request path
 - if expensive work is only needed once for shared bundle storage, make it idempotent and guard it with a storage signature plus a cross-process lock
 
@@ -349,6 +390,15 @@ Skeleton file rules:
 - update `docs/journal/journal.md` in the same change that alters runtime
   behavior, tool/skill contracts, storage semantics, user-scope mapping,
   release shape, or Tier 1 builder guidance
+- if the bundle has source-folder main UI or widgets, the entrypoint class
+  should inherit a concrete `BaseEntrypoint` family class unless it explicitly
+  implements the same UI build contract; otherwise `ui.main_view` /
+  `ui.widgets.<alias>.src_folder` can be present while no static artifacts are
+  built or served. The family includes the bare base plus economics and memory
+  variants; see [Bundle Entrypoint Classes](../bundle-entrypoint-classes-README.md)
+- do not decorate a `BaseWorkflow` subclass as the singleton bundle entrypoint.
+  `BaseWorkflow` is the per-message orchestrator created inside the
+  `BaseEntrypoint` turn execution.
 
 If the bundle needs external human setup before an integration can work, add an
 operator-facing integration homework doc such as:
@@ -411,36 +461,85 @@ literal characters in a directory name. If the bundle directory name contains a
 dot, prefer the bundle-root descriptor shape unless the filesystem layout
 intentionally mirrors the dotted package path.
 
-So bundle-local imports must not assume that only the bundle root is on
-`sys.path`.
+So bundle-local imports must be package-relative and must not depend on the
+bundle root being the first `sys.path` entry.
 
-In `entrypoint.py`, use package-relative imports for bundle-local modules and
-import reusable SDK components from their SDK package:
+In `entrypoint.py`, import bundle-local modules through the bundle package:
+
+```python
+from .subsystems.common import storage_root_or_error
+from .services.storage import UserMemoryStorage
+```
+
+In nested bundle modules, use the matching relative form:
+
+```python
+from ..services.storage import UserMemoryStorage
+from .helpers import normalize_payload
+```
+
+Import reusable SDK components by their real SDK package:
 
 ```python
 from kdcube_ai_app.apps.chat.sdk.solutions.tasks import AsyncTaskStorage
-
-try:
-    from .subsystems.common import storage_root_or_error
-except ImportError:
-    from subsystems.common import storage_root_or_error
 ```
 
-In a nested bundle module, use the matching relative form for bundle-local code
-and SDK imports for shared pieces:
+Do not add fallback top-level imports such as `from services...`,
+`from apps...`, or `import tools` for bundle-local code. They can collide with
+other bundles in the same processor process.
+
+The same rule applies to tools. In `tools_descriptor.py`, register
+bundle-local tools with file-based `ref` entries:
 
 ```python
-from kdcube_ai_app.apps.chat.sdk.solutions.tasks import TaskStorage
-
-try:
-    from ..services.storage import UserMemoryStorage
-except ImportError:
-    from services.storage import UserMemoryStorage
+TOOLS_SPECS = [
+    {"ref": "tools/user_memory_tools.py", "alias": "user_memory", "use_sk": True},
+]
 ```
 
-Do not write imports that only work from the processor cwd or only work when the
-bundle root itself is on `sys.path`, such as unconditional
-`from services.storage import UserMemoryStorage`.
+Inside `tools/user_memory_tools.py`, import same-bundle helpers through the
+synthetic package context:
+
+```python
+from ..services.storage import UserMemoryStorage
+```
+
+Use `module` entries only for installed SDK or external modules:
+
+```python
+TOOLS_SPECS = [
+    {"module": "kdcube_ai_app.apps.chat.sdk.tools.web_tools", "alias": "web_tools", "use_sk": True},
+]
+```
+
+For the canonical runtime rationale and testing rule, see
+[bundle-runtime-README.md#critical-bundle-local-import-rule](../bundle-runtime-README.md#critical-bundle-local-import-rule).
+For tool-specific details, see
+[custom-tools-README.md#bundle-local-imports-from-ref-tools](../../tools/custom-tools-README.md#bundle-local-imports-from-ref-tools)
+and [tool-subsystem-README.md#relative-imports-inside-ref-tools](../../tools/tool-subsystem-README.md#relative-imports-inside-ref-tools).
+
+## 1B.3 Bundle Identity Rule
+
+Treat bundle identity as a release contract, not as a casual string.
+
+The same bundle id normally appears in:
+
+- the bundle directory name
+- `release.yaml`
+- `entrypoint.py` / `@bundle_id(...)`
+- `config/bundles.template.yaml`
+- `config/bundles.secrets.template.yaml`
+- interface files such as OpenAPI descriptions
+- staged or deployment `bundles.yaml`
+
+Choose one canonical value before implementation and keep the others aligned.
+For content/application bundles, prefer `release.yaml` plus the bundle folder
+name as the human-visible source of truth. `entrypoint.py` may still define a
+constant for decorators, but it must match the release/config/interface value.
+
+If a bundle is renamed, update identity-bearing files in one change and run the
+shared bundle suite plus a real `kdcube bundle reload <bundle_id>` check. A mismatch
+can look like a manifest miss, widget miss, or wrong bundle operation path.
 
 ## 1C. Bundle Design Decision Matrix
 
@@ -448,7 +547,7 @@ Before writing code, classify the product surface and state model.
 
 | Product need | Primary surface | Typical runtime path | Typical state/storage | Notes |
 | --- | --- | --- | --- | --- |
-| Copilot/chat experience | `@agentic_workflow` / `@on_message` | request-bound chat path | conversation stores, retrieval systems, bundle props | start here for assistant-style products |
+| Copilot/chat experience | `@bundle_entrypoint` / `@on_message` | request-bound chat path | conversation stores, retrieval systems, bundle props | start here for assistant-style products |
 | Admin console | `@ui_widget` + `@api(route="operations")` | widget -> operations | descriptor-backed config, bundle local storage, DB/Redis | keep admin separate from public/user surface |
 | External webhook/integration | `@api(route="public")` | public HTTP path | bundle props + secrets, external systems | auth boundary must be explicit |
 | Tool-serving integration | `@mcp(...)` | MCP dispatch path | bundle props + secrets, external systems | bundle owns MCP auth |
@@ -461,7 +560,7 @@ State-placement rule:
   deployment-scoped configuration
 - bundle local storage:
   instance-local mutable files/workspaces/caches
-- `AIBundleStorage`:
+- `BundleArtifactStorage`:
   persisted bundle artifacts
 - DB/Redis/external APIs:
   runtime or business state
@@ -505,11 +604,11 @@ Use this quick map while writing code:
 | What you need | Read | Write |
 | --- | --- | --- |
 | platform/global props | `get_settings()` | none |
-| platform/global secrets | `await get_secret_async("canonical.key")` | none |
+| platform/global secrets | `await get_secret("canonical.key")` | none |
 | deployment-scoped bundle props | `self.bundle_prop("path", default=...)`, `self.bundle_props` | `await set_bundle_prop(...)` |
-| deployment-scoped bundle secrets | `await get_secret_async("b:...")` | `await set_bundle_secret(...)` |
+| deployment-scoped bundle secrets | `await get_secret("b:...")` | `await set_bundle_secret(...)` |
 | user-scoped bundle props | `get_user_prop(...)`, `get_user_props()` | `set_user_prop(...)`, `delete_user_prop(...)` |
-| user-scoped bundle secrets | `await get_user_secret_async(...)` | `await set_user_secret_async(...)`, `await delete_user_secret_async(...)` |
+| user-scoped bundle secrets | `await get_secret("u:...")` | `await set_user_secret(...)`, `await delete_user_secret(...)` |
 
 Bundle user-scope rule:
 
@@ -528,8 +627,7 @@ Hard rule:
 - bundle code reads all scopes
 - bundle code writes bundle-scoped and user-scoped values only
 - bundle code does not write platform/global props or secrets
-- sync secret helpers still exist for compatibility, but new async request
-  paths should use the async helpers
+- request, tool, cron, and job paths use the awaited secret helpers directly
 
 If long-lived helpers depend on bundle props:
 
@@ -549,14 +647,14 @@ Use this compact map while writing bundle code:
 | --- | --- | --- |
 | local mutable files on this instance | `self.bundle_storage_root()` | workspaces, cloned repos, local indexes, generated files |
 | same local root outside entrypoint code | `bundle_storage_dir(...)` | helper code that has no `self` |
-| persisted bundle artifacts | `AIBundleStorage` | artifact read/write/list/delete through the storage backend |
+| persisted bundle artifacts | `BundleArtifactStorage` | artifact read/write/list/delete through the storage backend |
 | lightweight Redis cache | `create_kv_cache()` or namespaced cache helpers | small runtime cache, flags, lightweight transient state |
 | git subprocess auth/transport | `build_git_env(...)`, `normalize_git_remote_url(...)` | PAT/SSH-safe git commands without mutating process-global env |
 
 Hard rule:
 
 - local mutable filesystem state -> bundle storage helper
-- persisted bundle artifacts -> `AIBundleStorage`
+- persisted bundle artifacts -> `BundleArtifactStorage`
 - lightweight transient cache -> KV cache
 - git auth/transport -> shared git helper, not custom `os.environ` mutation
 
@@ -610,7 +708,7 @@ That means:
 
 For git-backed helpers in particular:
 
-- read git configuration through `get_settings()` / `get_secret_async()`
+- read git configuration through `get_settings()` / `get_secret()`
 - build a subprocess env dict for git commands
 - pass that env only to the git subprocess
 - do not write `GIT_HTTP_TOKEN`, `GIT_SSH_COMMAND`, or similar values back into the processor process env
@@ -621,12 +719,12 @@ Correct pattern:
 import asyncio
 import subprocess
 
-from kdcube_ai_app.apps.chat.sdk.config import get_secret_async
+from kdcube_ai_app.apps.chat.sdk.config import get_secret
 
 async def fetch_repo():
     env = build_git_env(
-        git_http_token=await get_secret_async("services.git.http_token"),
-        git_http_user=await get_secret_async("services.git.http_user"),
+        git_http_token=await get_secret("services.git.http_token"),
+        git_http_user=await get_secret("services.git.http_user"),
     )
     await asyncio.to_thread(
         subprocess.run,
@@ -704,6 +802,10 @@ If the bundle ships a React widget/web app:
 
 - put the widget app source under a stable widget folder such as `ui/widgets/<widget-alias>`
 - declare `ui.widgets.<alias>.src_folder` and `build_command`
+- inherit from the `BaseEntrypoint` family, for example
+  `BaseEntrypointWithMemory` or `BaseEntrypointWithEconomicsAndMemory`, or
+  implement the same `_ensure_ui_build(...)` contract so source-folder widget
+  artifacts are built and refreshed
 - use the standard build command shape:
   `npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build`
 - make Vite write to `process.env.OUTDIR`; do not pass the output directory as
@@ -805,7 +907,7 @@ Entrypoint responsibilities:
 
 - register the bundle
 - build the one-node graph that initializes SDK services
-- instantiate the bundle workflow
+- instantiate the bundle entrypoint
 - pass the turn state to `workflow.process(...)`
 - keep public/operations APIs thin
 
@@ -856,6 +958,10 @@ TOOLS_SPECS = [
     {"ref": "tools/user_memory_tools.py", "alias": "user_memory", "use_sk": True},
 ]
 ```
+
+Use `module` for installed SDK/external modules and `ref` for bundle-local
+tool files. A `ref` tool can import same-bundle helpers with package-relative
+imports such as `from ..services.storage import UserMemoryStorage`.
 
 React version:
 
@@ -983,12 +1089,12 @@ Reference:
 
 ```python
 from fastapi import HTTPException, Request
-from kdcube_ai_app.apps.chat.sdk.config import get_secret_async
+from kdcube_ai_app.apps.chat.sdk.config import get_secret
 
 @api(alias="incoming_webhook", route="public", method="POST", public_auth="bundle")
 async def incoming_webhook(self, request: Request, **kwargs):
     header_name = self.bundle_prop("integrations.vendor.webhook_header", "X-Webhook-Secret")
-    expected_token = await get_secret_async("b:integrations.vendor.webhook_secret")
+    expected_token = await get_secret("b:integrations.vendor.webhook_secret")
     if request.headers.get(header_name) != expected_token:
         raise HTTPException(status_code=401, detail="Unauthorized")
     return {"ok": True}
@@ -1058,12 +1164,12 @@ Reference:
 
 ```python
 from fastapi import HTTPException, Request
-from kdcube_ai_app.apps.chat.sdk.config import get_secret_async
+from kdcube_ai_app.apps.chat.sdk.config import get_secret
 
 @mcp(alias="docs", route="operations", transport="streamable-http")
 async def docs_mcp(self, request: Request, **kwargs):
     header_name = self.bundle_prop("mcp.docs.auth.header_name", "X-Docs-MCP-Token")
-    expected_token = await get_secret_async("b:mcp.docs.auth.shared_token")
+    expected_token = await get_secret("b:mcp.docs.auth.shared_token")
     if request.headers.get(header_name) != expected_token:
         raise HTTPException(status_code=401, detail=f"Missing or invalid {header_name}")
     return build_docs_mcp_app()
@@ -1103,20 +1209,21 @@ bundles:
       config:
         enabled:
           widget:
-            task-board: true
+            task-board: false
 ```
 
 The platform derives the canonical bundle-props path from decorator metadata
 (see section 4.2 for the full mapping). Use this when the platform should hide
 or suppress the surface directly instead of the bundle method deciding at
-runtime.
+runtime. Missing `enabled.*` keys are enabled by default, so descriptors should
+not mirror all available surfaces as `true`.
 
 ### Bundle props and secrets
 
 ```python
 async def sync_external(self):
     enabled = self.bundle_prop("features.auto_sync", False)
-    api_key = await get_secret_async("b:external.api_key")
+    api_key = await get_secret("b:external.api_key")
     ...
 ```
 
@@ -1180,7 +1287,7 @@ Canonical bundle-props shape:
 enabled:
   bundle: true|false
   api:
-    "<api-alias>.<METHOD>": true|false   # flat key with literal dot
+    "<route>.<api-alias>.<METHOD>": true|false   # flat key under enabled.api
   mcp:
     <mcp-alias>: true|false
   widget:
@@ -1193,16 +1300,16 @@ Mapping per decorator:
 
 | Decorator | Canonical path |
 | --- | --- |
-| `@agentic_workflow(...)` | `enabled.bundle` |
-| `@api(alias=A, method=M, ...)` | `enabled.api["A.M"]` (flat key, literal dot) |
+| `@bundle_entrypoint(...)` | `enabled.bundle` |
+| `@api(alias=A, method=M, route=R, ...)` | `enabled.api["R.A.M"]` (flat key) |
 | `@mcp(alias=A, ...)` | `enabled.mcp.A` |
 | `@ui_widget(alias=A, ...)` | `enabled.widget.A` |
 | `@cron(alias=A, ...)` | `enabled.cron.A` |
 
-Aliases must not contain `.`; the validator rejects them at decoration time.
-For `@api` the flat key `<alias>.<METHOD>` is the only place a literal dot
-appears inside a section key. For `@mcp` / `@ui_widget` / `@cron` the alias is
-a normal nested map key.
+For API gates, the route-aware flat key `<route>.<alias>.<METHOD>` lives under
+`enabled.api`; the legacy `<alias>.<METHOD>` key remains a fallback for
+persisted descriptors. For `@mcp` / `@ui_widget` / `@cron`, the alias is a
+normal nested map key.
 
 Resolution rules:
 
@@ -1252,7 +1359,7 @@ Every bundle should make the entrypoint simple and explicit.
 
 Core requirements:
 
-- register the bundle with `@agentic_workflow(...)`
+- register the bundle with `@bundle_entrypoint(...)`
 - declare bundle identity with `@bundle_id(...)` when code-level identity matters
 - compile the graph once in `__init__`
 - keep route methods thin
@@ -1263,12 +1370,12 @@ Minimal pattern:
 ```python
 from langgraph.graph import END, START, StateGraph
 
-from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow, bundle_id
+from kdcube_ai_app.infra.plugin.bundle_loader import bundle_entrypoint, bundle_id
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint import BaseEntrypoint
 from kdcube_ai_app.infra.service_hub.inventory import BundleState
 
 
-@agentic_workflow(name="my.bundle", version="1.0.0")
+@bundle_entrypoint(name="my.bundle", version="1.0.0")
 @bundle_id("my.bundle@1.0.0")
 class MyEntrypoint(BaseEntrypoint):
     def __init__(self, **kwargs):
@@ -1318,7 +1425,7 @@ In this path, entrypoint code has request-bound runtime context:
 - `self.pg_pool`
 - `self.redis`
 - storage helpers
-- `get_secret_async(...)` / `get_user_secret_async(...)`
+- `await get_secret(...)`
 
 This is the path where communicator behavior is request-bound and peer/session-aware.
 
@@ -1337,6 +1444,10 @@ So the practical rule is:
 
 - chat/SSE path: request-bound comm context exists
 - REST operations path: request-bound comm context also exists
+- REST operations can emit live non-chat events over the already-open
+  `/sse/stream` or Socket.IO connection when the client passes
+  `KDC-Stream-ID`; use the recipe in
+  [bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream](../bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream)
 
 If a widget or host-embedded UI calls a bundle operation, do not treat it as a detached background job.
 
@@ -1395,7 +1506,7 @@ Rules:
 Minimal pattern:
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import cron, on_job
+from kdcube_ai_app.infra.plugin.bundle_loader import cron, on_job
 
 class MyBundle(BaseEntrypoint):
     @cron(alias="due-scan", cron_expression="*/5 * * * *", span="system")
@@ -1516,7 +1627,7 @@ A bundle can be configured as `singleton`.
 
 Meaning:
 
-- the workflow instance is cached and reused inside the proc process
+- the entrypoint instance is cached and reused inside the proc process
 - subsequent requests reuse that same entrypoint instance instead of creating a fresh one each time
 
 What singleton is good for:
@@ -1542,6 +1653,9 @@ Practical rule:
 
 - if the bundle is singleton, assume `self` is process-lifetime state
 - request-specific data must come from the current request context, method arguments, or task-local/context-local surfaces
+- do not make a `BaseWorkflow` subclass the decorated singleton entrypoint.
+  Use the `BaseEntrypoint` family for the bundle surface and create
+  `BaseWorkflow` inside per-message turn execution.
 - shared filesystem or EFS work still needs an explicit shared-storage guard
 
 ### Exclusive operations
@@ -1624,11 +1738,11 @@ For non-secret deployment config:
 
 For bundle-scoped secrets:
 
-- `await get_secret_async("b:...")`
+- `await get_secret("b:...")`
 
 For platform/global secrets:
 
-- `await get_secret_async("...")` or `await get_secret_async("a:...")`
+- `await get_secret("...")` or `await get_secret("a:...")`
 
 For descriptor-file reads only when absolutely necessary:
 
@@ -1661,7 +1775,7 @@ Exception:
 If you add a standalone helper script for local debugging:
 
 - load `.env` into the platform settings path
-- then read through `get_settings()` / `get_secret_async()`
+- then read through `get_settings()` / `get_secret()`
 - do not let the runtime bundle depend on bundle-local `.env` files
 
 ### Do not call the secrets provider directly
@@ -1671,8 +1785,7 @@ Bundle or feature code must not call secrets-provider internals such as
 
 Use:
 
-- `get_secret_async(...)` in async code
-- `get_secret(...)` only in legacy sync-only code
+- `await get_secret(...)` in async code
 - `get_settings()` for promoted secret-backed settings
 
 Reason:
@@ -1742,12 +1855,12 @@ Use local bundle storage for:
 - cron workspaces
 - temporary generated files that belong to this instance
 
-This is separate from `AIBundleStorage`.
+This is separate from `BundleArtifactStorage`.
 
 Mental model:
 
 - local bundle storage = instance-visible filesystem
-- `AIBundleStorage` = backend storage API for bundle artifacts
+- `BundleArtifactStorage` = backend storage API for bundle artifacts
 - hosted conversation files = current-turn user-visible artifacts; use
   `ret.artifact_type == "files"` with `ret.files[]` or `host_files(...)`
   instead of treating bundle storage paths as deliverable links
@@ -1952,7 +2065,7 @@ When Bundle Admin should be able to change the default visibility without a code
 release, declare config paths in the decorators:
 
 ```python
-@agentic_workflow(
+@bundle_entrypoint(
     name="My Bundle",
     version="1.0.0",
     allowed_roles=("kdcube:role:viewer",),
@@ -1998,6 +2111,12 @@ In entrypoints derived from `BaseEntrypoint`, prefer:
 
 This keeps the access check consistent with the rest of the platform.
 
+For request-bound identity in bundle APIs, widgets, MCP handlers, tools, or
+nested runtimes, use `get_current_request_context()` or
+`get_current_user_identity()` from
+`kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx`. The identity helper includes the
+authenticated user's email when the session has one.
+
 ## 13. Scheduled Jobs And Background Pipelines
 
 If the bundle runs background work through `@cron(...)` and `@on_job`, treat it as an operational subsystem.
@@ -2035,7 +2154,7 @@ That is acceptable, but only under these rules:
 
 - standalone mode is for local development/debugging
 - operational runtime must still work entirely through KDCube wiring
-- standalone env must be loaded into `get_settings()` / `get_secret_async()`
+- standalone env must be loaded into `get_settings()` / `get_secret()`
 - operational config must still come from descriptors/bundle props in real runtime
 
 Do not let a successful standalone path hide a broken runtime path.
@@ -2122,7 +2241,7 @@ Symptom:
 
 Fix:
 
-- use `bundle_prop(...)`, `get_settings()`, `get_secret_async(...)`, `get_plain(...)`
+- use `bundle_prop(...)`, `get_settings()`, `get_secret(...)`, `get_plain(...)`
 
 ### Pitfall: direct descriptor file reads through hardcoded paths
 
@@ -2145,7 +2264,7 @@ Symptom:
 
 Fix:
 
-- use `get_secret_async(...)` in async code
+- use `get_secret(...)` in async code
 - use `get_settings()` for promoted secret-backed settings
 
 ### Pitfall: writing cron logic as if it were a request-bound widget/API call

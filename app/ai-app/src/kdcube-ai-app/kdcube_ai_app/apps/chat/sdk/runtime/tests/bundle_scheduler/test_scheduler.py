@@ -74,7 +74,7 @@ def _patches(manifest, props=None):
     """
     return (
         patch(
-            "kdcube_ai_app.infra.plugin.agentic_loader.load_bundle_manifest",
+            "kdcube_ai_app.infra.plugin.bundle_loader.load_bundle_manifest",
             return_value=manifest,
         ),
         patch(
@@ -276,7 +276,7 @@ def test_shutdown_cancels_all_tasks():
 def test_reconcile_manifest_load_failure_skips_bundle():
     async def _t():
         with patch(
-            "kdcube_ai_app.infra.plugin.agentic_loader.load_bundle_manifest",
+            "kdcube_ai_app.infra.plugin.bundle_loader.load_bundle_manifest",
             side_effect=RuntimeError("cannot load"),
         ):
             mgr = BundleSchedulerManager(redis=None, tenant="t", project="p", instance_id="i1")

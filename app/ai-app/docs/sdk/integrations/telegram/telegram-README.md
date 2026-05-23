@@ -27,7 +27,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations import telegram
 The SDK owns Telegram protocol mechanics and the reusable Telegram user
 registry store. The bundle still owns application policy: where the registry is
 stored, which roles are allowed, which conversation a Telegram chat is bound to,
-and which workflow handles the submitted message.
+and which entrypoint/message handler handles the submitted message.
 
 External BotFather, webhook, public URL, and Mini App setup is documented
 separately in `telegram-external-prereq-README.md`. Keep this article focused
@@ -250,7 +250,7 @@ as a separate public URL.
 
 Before calling the bundle done, prove:
 
-- `enabled.api.telegram_webhook.POST` and any `telegram_*` Mini App APIs are
+- `enabled.api.public.telegram_webhook.POST` and any `telegram_*` Mini App APIs are
   explicitly enabled for the test deployment
 - the webhook rejects missing or wrong `X-Telegram-Bot-Api-Secret-Token`
 - `setWebhook` points at the active public URL
@@ -597,7 +597,7 @@ KDCube public bundle operation route
   /api/integrations/bundles/<tenant>/<project>/<bundle_id>/public/
     telegram_task_execution_artifact_download
     |
-    | loads bundle workflow and invokes operation alias
+    | loads bundle entrypoint and invokes operation alias
     v
 Bundle entrypoint
   telegram_task_execution_artifact_download(...)
@@ -662,7 +662,7 @@ The protocol helpers do not decide:
 - which KDCube user id a Telegram user maps to
 - which conversation is connected to a Telegram chat
 - whether a message should be ignored as duplicate
-- which bundle workflow handles the submitted chat event
+- which bundle entrypoint handles the submitted chat event
 
 The configurable subsystem modules call the hooks that a bundle provides for
 those decisions. That keeps the reusable transport and workflow glue in the SDK

@@ -4,21 +4,28 @@ title: "Tier 1 Bundle Pack For Build-With-KDCube Plugins"
 summary: "Short handoff note for Claude Code and Codex plugin engineers describing the Tier 1 bundle-doc pack, the agent task facets it must support, and the minimal integration contract."
 tags: ["sdk", "bundle", "plugins", "claude-code", "codex", "handoff", "tier-1"]
 keywords: ["tier 1 bundle pack", "build with kdcube plugin", "claude code plugin", "codex plugin", "bundle docs pack", "bundle agent facets", "shared sdk widget source", "plugin doc links update"]
-updated_at: 2026-05-19
+updated_at: 2026-05-23
 see_also:
   - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
+  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
+  - ks:docs/sdk/bundle/build/how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md
   - ks:docs/sdk/bundle/build/how-to-release-bundle-content-README.md
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
+  - ks:docs/sdk/bundle/bundle-client-communication-README.md
+  - ks:docs/sdk/bundle/bundle-transports-README.md
   - ks:docs/sdk/integrations/telegram/telegram-README.md
   - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
   - ks:docs/sdk/integrations/browser/browser-tools-README.md
+  - ks:docs/sdk/tools/custom-tools-README.md
+  - ks:docs/sdk/tools/tool-subsystem-README.md
   - ks:docs/service/cicd/ngrok-README.md
   - ks:docs/sdk/bundle/bundle-widget-integration-README.md
+  - ks:docs/sdk/bundle/build/design/bundle-loader-import-isolation-README.md
 ---
 # Tier 1 Bundle Pack For Build-With-KDCube Plugins
 
@@ -27,20 +34,42 @@ Use this note as the handoff contract for the Build-with-KDCube plugins.
 The current plugin code in the repo may be outdated.
 This doc is the contract, not the old tree.
 
+The plugin should treat
+[how-to-configure-and-run-bundle-README.md#canonical-cli-flow-schemas](how-to-configure-and-run-bundle-README.md#canonical-cli-flow-schemas)
+as the canonical CLI command map. Do not duplicate that map across plugin
+prompts; point agents there and let task-specific docs explain only what is
+different for the current role.
+
+## Link Conventions For Plugins
+
+The plugin should preserve logical links instead of baking in one developer's
+absolute paths:
+
+- `ks:docs/...` is a KDCube knowledge-space doc id. In a local checkout it
+  resolves under `repo:kdcube-ai-app/app/ai-app/docs/...`.
+- `repo:kdcube-ai-app/...` resolves to the local KDCube platform repository.
+- `repo:applications/...` resolves to the local applications/content
+  repository.
+- `repo:website/...` resolves to the local website repository.
+
+If the plugin cannot resolve a repo alias, it should infer the checkout from
+the workspace or ask the user for the repo path before editing files.
+
 ## Tier 1 Pack
 
-These 6 docs form the compact Tier 1 build baseline and should be available together:
+These 7 docs form the compact Tier 1 build baseline and should be available together:
 
 1. [how-to-navigate-kdcube-docs-README.md](how-to-navigate-kdcube-docs-README.md)
 2. [how-to-test-bundle-README.md](how-to-test-bundle-README.md)
 3. [how-to-assemble-bundle-with-sdk-building-blocks-README.md](how-to-assemble-bundle-with-sdk-building-blocks-README.md)
 4. [how-to-write-bundle-README.md](how-to-write-bundle-README.md)
-5. [../../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../../configuration/bundle-runtime-configuration-and-secrets-README.md)
-6. [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md)
+5. [../bundle-properties-and-secrets-lifecycle-README.md](../bundle-properties-and-secrets-lifecycle-README.md)
+6. [../../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../../configuration/bundle-runtime-configuration-and-secrets-README.md)
+7. [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md)
 
 This optional lifecycle doc should also be available:
 
-7. [how-to-release-bundle-content-README.md](how-to-release-bundle-content-README.md)
+8. [how-to-release-bundle-content-README.md](how-to-release-bundle-content-README.md)
 
 It is used only after the user agrees to release, commit, tag, push, or update
 a git-backed descriptor ref.
@@ -48,16 +77,41 @@ a git-backed descriptor ref.
 This conditional agent-integration doc should be available whenever the bundle
 uses React tools/skills, file-producing tools, MCP, or Claude Code:
 
-8. [../bundle-agent-integration-README.md](../bundle-agent-integration-README.md)
+9. [../bundle-agent-integration-README.md](../bundle-agent-integration-README.md)
 
-This conditional local-public-runtime doc should be available whenever local
-KDCube must receive provider callbacks or remote calls:
+This conditional local-runtime agent doc should be available whenever the user
+expects the plugin agent to configure and run the local deployment, not only
+describe how it works:
 
-9. [../../../service/cicd/ngrok-README.md](../../../service/cicd/ngrok-README.md)
+10. [how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md](how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md)
+
+It is used when the plugin should let an agent configure and run the local
+runtime end to end: discover paths, initialize the workdir, wire a bundle into
+the staged descriptors, patch bundle props/secrets, start or verify ngrok,
+register Telegram webhooks, prepare Gmail OAuth config, and report only the
+external provider steps it cannot complete.
+
+This lower-level local-public-runtime doc should remain reachable from that
+coding-agent runbook:
+
+11. [../../../service/cicd/ngrok-README.md](../../../service/cicd/ngrok-README.md)
 
 It is used for Telegram webhooks, OAuth/Cognito callbacks, and other
 callback/remote-control flows that need public HTTPS while the runtime is still
 on localhost.
+
+Python import rule that plugins must surface early:
+
+- bundle-local code must use package-relative imports such as
+  `from .services.storage import ...`
+- do not import bundle-local folders as top-level packages such as `services`,
+  `apps`, `tools`, or `resources`
+- this includes `tools_descriptor.py` and bundle-local tool modules: local
+  tools use `TOOLS_SPECS` `ref` entries and package-relative imports; `module`
+  is for installed SDK/external modules
+- route agents to [bundle-runtime-README.md#critical-bundle-local-import-rule](../bundle-runtime-README.md#critical-bundle-local-import-rule)
+  and [custom-tools-README.md#bundle-local-imports-from-ref-tools](../../tools/custom-tools-README.md#bundle-local-imports-from-ref-tools)
+  before they change bundle-local Python imports or tool descriptors
 
 Widget/API origin rule that plugins must surface early:
 
@@ -70,6 +124,18 @@ Widget/API origin rule that plugins must surface early:
 - route agents to [bundle-widget-integration-README.md#frame-origin-and-api-base-url](../bundle-widget-integration-README.md#frame-origin-and-api-base-url)
   before they write widget or generated-static HTML networking code
 
+Widget/API live-event rule that plugins must surface early:
+
+- bundles are backend plus frontend applications; frontend progress from a
+  non-chat operation should use the existing platform event stream
+- browser code opens `/sse/stream` or Socket.IO, calls
+  `/api/integrations/.../operations/...`, and passes the connected peer id as
+  `KDC-Stream-ID`
+- bundle backend code emits through the request-bound communicator with
+  `comm.service_event(...)`
+- route agents to [bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream](../bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream)
+  before they add raw bundle WebSocket/SSE endpoints or custom relay plumbing
+
 Preferred reading order:
 
 1. navigation
@@ -78,6 +144,7 @@ Preferred reading order:
 4. implementation design
 5. configuration ownership
 6. runtime and deployment wiring
+7. local runtime bootstrap, when the coding agent must perform setup
 
 ## Agent Model
 
@@ -98,7 +165,7 @@ They are routing hints for one planning agent.
 
 Recommended:
 
-- expose the 6 docs as one Tier 1 pack
+- expose the 7 baseline docs as one Tier 1 pack
 - use [how-to-navigate-kdcube-docs-README.md](how-to-navigate-kdcube-docs-README.md) as the first router
 - make [how-to-test-bundle-README.md#1a-working-environment-for-agents](how-to-test-bundle-README.md#1a-working-environment-for-agents) the preflight before code or test changes
 - keep [how-to-assemble-bundle-with-sdk-building-blocks-README.md](how-to-assemble-bundle-with-sdk-building-blocks-README.md)
@@ -110,6 +177,11 @@ Recommended:
   reachable for source-folder widget work, especially the `OUTDIR` /
   `<VI_BUILD_DEST_ABSOLUTE_PATH>` build command contract and shared SDK UI
   materialization via `shared_sources`
+- keep [bundle-client-communication-README.md](../bundle-client-communication-README.md)
+  and [bundle-transports-README.md](../bundle-transports-README.md) reachable
+  for browser/backend communication, especially non-chat bundle events over
+  `/sse/stream` or Socket.IO with `KDC-Stream-ID` and
+  `comm.service_event(...)`
 - keep [bundle-agent-integration-README.md](../bundle-agent-integration-README.md)
   reachable for React descriptors, file-producing tool contracts, MCP
   connector/server wiring, Claude Code subprocess agents, and the common
@@ -120,6 +192,9 @@ Recommended:
 - keep [ngrok-README.md](../../../service/cicd/ngrok-README.md) reachable for
   local public HTTPS runtime testing of Telegram webhooks, OAuth callbacks, and
   remote callback/control flows
+- keep [how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md](how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md)
+  reachable when a user expects the agent to perform local setup autonomously
+  instead of only explaining the runtime model
 - keep [Telegram SDK Integration](../../integrations/telegram/telegram-README.md)
   and
   [Telegram External Prerequisites](../../integrations/telegram/telegram-external-prereq-README.md)
@@ -156,6 +231,8 @@ The plugin should steer agents away from these recurring mistakes:
 - do not start a new bundle without the skeleton files from `how-to-write-bundle-README.md#1b1-new-bundle-skeleton-checklist`
 - do not reimplement provider/runtime mechanics before checking the SDK
   building-block map
+- do not register bundle-local tools with `module: "tools.name"`; use
+  `ref: "tools/name.py"` and package-relative imports inside the tool module
 - do not write `/bundles/...` into a seed/source descriptor that is also used by host-side IntelliJ/proc runs; first determine whether you are editing a seed descriptor or a staged runtime descriptor
 - do not manually build `ui/main` into runtime bundle storage as the fix for stale bundle UI
 - do not use source folder names or compiled example ids when the host provides `defaultAppBundleId`
@@ -197,6 +274,9 @@ The plugin should steer agents away from these recurring mistakes:
 - do not duplicate SDK-owned widget panels such as User Memory or Telegram
   admin/channels in every bundle; use `shared_sources` plus a host wrapper that
   injects the bundle operation caller
+- do not create raw bundle-owned WebSocket/SSE endpoints just to stream live
+  progress from a bundle operation; use the existing SSE/Socket.IO session
+  stream plus `KDC-Stream-ID` and the request-bound communicator
 - do not use removed resource-level `enabled_config` decorator arguments for
   APIs or MCP; use bundle props/Admin resource overrides and configurable
   role/user-type paths where supported
@@ -246,7 +326,7 @@ config:
 
 The plugin handoff is clean when:
 
-- the 6 Tier 1 docs are exposed as one pack
+- the 7 Tier 1 baseline docs are exposed as one pack
 - the optional release lifecycle doc is available for user-approved releases
 - the working environment preflight is visible before any test command
 - the source-folder widget build contract is discoverable from Tier 1 routing

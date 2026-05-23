@@ -23,10 +23,10 @@ from kdcube_ai_app.auth.sessions import SessionManager
 from kdcube_ai_app.infra.availability.health_and_heartbeat import MultiprocessDistributedMiddleware, \
     ProcessHeartbeatManager
 from kdcube_ai_app.infra.embedding.faiss_manager import FaissProjectCache
-from kdcube_ai_app.infra.llm.util import get_service_key_fn
 from kdcube_ai_app.infra.orchestration.orchestration import IOrchestrator, OrchestratorFactory
 from kdcube_ai_app.storage.storage import create_storage_backend
 from kdcube_ai_app.infra.llm.llm_data_model import AIProvider, ModelRecord, AIProviderName
+from kdcube_ai_app.apps.chat.sdk.config import get_secret
 
 logger = logging.getLogger(__name__)
 
@@ -60,10 +60,10 @@ def kb_workdir(tenant: str, project: str):
     print(f"Project workdir: {w}")
     return w
 
-def metadata_model() -> ModelRecord:
+async def metadata_model() -> ModelRecord:
     provider = AIProviderName.open_ai
     provider = AIProvider(provider=provider,
-                          apiToken=get_service_key_fn(provider))
+                          apiToken=await get_secret("services.openai.api_key", default="") or "")
     model_config = MODEL_CONFIGS.get("gpt-4o", {})
     model_name = model_config.get("model_name")
 
@@ -73,10 +73,10 @@ def metadata_model() -> ModelRecord:
                                systemName=model_name)
     return model_record
 
-def embedding_model() -> ModelRecord:
+async def embedding_model() -> ModelRecord:
     provider = AIProviderName.open_ai
     provider = AIProvider(provider=provider,
-                          apiToken=get_service_key_fn(provider))
+                          apiToken=await get_secret("services.openai.api_key", default="") or "")
     model_config = EMBEDDERS.get("openai-text-embedding-3-small")
     model_name = model_config.get("model_name")
     return ModelRecord(
@@ -142,11 +142,24 @@ def get_tenant_db() -> TenantDB:
     return _tenant_db
 
 # Tenant projects setup
+def _embedding_model_without_provider_secret() -> ModelRecord:
+    provider = AIProviderName.open_ai
+    provider_record = AIProvider(provider=provider, apiToken=os.getenv("OPENAI_API_KEY") or _settings.OPENAI_API_KEY or "")
+    model_config = EMBEDDERS.get("openai-text-embedding-3-small")
+    model_name = model_config.get("model_name")
+    return ModelRecord(
+        modelType="base",
+        status="active",
+        provider=provider_record,
+        systemName=model_name,
+    )
+
+
 _tenant_projects = TenantProjects(
     storage_backend=storage_backend,
     tenant_db=_tenant_db,
     tenant_id=TENANT_ID,
-    embedding_model_factory=embedding_model
+    embedding_model_factory=_embedding_model_without_provider_secret
 )
 
 def get_tenant_projects() -> TenantProjects:
@@ -221,18 +234,14 @@ def get_heartbeats_mgr_and_middleware(service_type: str = "kb",
     heartbeat_manager = ProcessHeartbeatManager(middleware, service_type, service_name, process_id, port=port)
     return middleware, heartbeat_manager
 
-kbs = {
-    DEFAULT_PROJECT: KnowledgeBase(get_tenant(),
-                                   DEFAULT_PROJECT,
-                                   kb_workdir(get_tenant(), DEFAULT_PROJECT),
-                                   embedding_model=embedding_model()),
-}
+kbs = {}
 
 
-def get_kb_for_project(project: str) -> 'KnowledgeBase':
+async def get_kb_for_project(project: str) -> 'KnowledgeBase':
     kb = kbs.get(project)
     if not kb:
-        kb = KnowledgeBase(get_tenant(), project, kb_workdir(get_tenant(), project), embedding_model=embedding_model())
+        kb = KnowledgeBase(get_tenant(), project, kb_workdir(get_tenant(), project), embedding_model=await embedding_model())
+        kbs[project] = kb
         # raise HTTPException(status_code=404, detail=f"Knowledge base for project '{project}' not found")
     return kb
 

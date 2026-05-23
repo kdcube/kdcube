@@ -74,7 +74,7 @@ class PythonSDKMCPAdapter:
 
     async def list_tools(self) -> List[MCPToolSchema]:
         logger.info("MCP adapter list_tools: server=%s transport=%s opening session", self.server.server_id, self.server.transport)
-        async with self._session() as session:
+        async with await self._session() as session:
             logger.info("MCP adapter list_tools: server=%s session ready, sending ListToolsRequest", self.server.server_id)
             resp = await session.list_tools()
             tools = [self._tool_from_sdk(t) for t in (getattr(resp, "tools", []) or [])]
@@ -89,7 +89,7 @@ class PythonSDKMCPAdapter:
         trace_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         logger.info("MCP adapter call_tool: server=%s tool=%s opening session", self.server.server_id, tool_id)
-        async with self._session() as session:
+        async with await self._session() as session:
             logger.info("MCP adapter call_tool: server=%s tool=%s session ready, calling", self.server.server_id, tool_id)
             result = await session.call_tool(tool_id, params or {})
             logger.info("MCP adapter call_tool: server=%s tool=%s call completed", self.server.server_id, tool_id)
@@ -120,7 +120,7 @@ class PythonSDKMCPAdapter:
             tags=None,
         )
 
-    def _auth_headers(self) -> Dict[str, str]:
+    async def _auth_headers(self) -> Dict[str, str]:
         auth = self.server.auth_profile or {}
         if not isinstance(auth, dict):
             return {}
@@ -135,13 +135,13 @@ class PythonSDKMCPAdapter:
         if secret_key:
             try:
                 from kdcube_ai_app.apps.chat.sdk.config import get_secret
-                token = get_secret(secret_key)
+                token = await get_secret(secret_key)
             except Exception:
                 pass
         if not token and env_key:
             try:
                 from kdcube_ai_app.apps.chat.sdk.config import get_secret
-                token = get_secret(env_key)
+                token = await get_secret(env_key)
             except Exception:
                 token = os.environ.get(env_key)
         if not token:
@@ -154,15 +154,15 @@ class PythonSDKMCPAdapter:
             return {str(header): str(token)}
         return {}
 
-    def _session(self):
+    async def _session(self):
         transport = (self.server.transport or "stdio").strip().lower()
         if transport in {"stdio", "local"}:
-            return _stdio_session(self.server)
+            return _stdio_session(self.server, env=await _resolve_stdio_env(self.server))
         if transport in {"sse"}:
-            return _sse_session(self.server, headers=self._auth_headers())
+            return _sse_session(self.server, headers=await self._auth_headers())
         if transport in {"streamable-http", "streamable_http", "http"}:
-            return _streamable_http_session(self.server, headers=self._auth_headers())
-        return _stdio_session(self.server)
+            return _streamable_http_session(self.server, headers=await self._auth_headers())
+        return _stdio_session(self.server, env=await _resolve_stdio_env(self.server))
 
 
 def _supports_kwarg(fn, name: str) -> bool:
@@ -172,7 +172,7 @@ def _supports_kwarg(fn, name: str) -> bool:
         return False
 
 
-def _resolve_secret_ref(value: str) -> str:
+async def _resolve_secret_ref(value: str) -> str:
     """
     Resolve ``${secret:dot.path.key}`` references in env values via get_secret().
     If the value does not match the pattern, it is returned as-is.
@@ -184,13 +184,13 @@ def _resolve_secret_ref(value: str) -> str:
         return value
     try:
         from kdcube_ai_app.apps.chat.sdk.config import get_secret
-        resolved = get_secret(key)
+        resolved = await get_secret(key)
         return resolved or value
     except Exception:
         return value
 
 
-def _resolve_stdio_env(server: MCPServerSpec) -> dict | None:
+async def _resolve_stdio_env(server: MCPServerSpec) -> dict | None:
     """
     Build environment dict for a stdio MCP subprocess.
 
@@ -214,7 +214,7 @@ def _resolve_stdio_env(server: MCPServerSpec) -> dict | None:
 
     # Resolve ${secret:...} references in env values
     for k, v in env.items():
-        env[k] = _resolve_secret_ref(v)
+        env[k] = await _resolve_secret_ref(v)
 
     # Inherit PYTHONPATH from the parent process so that
     # `python -m kdcube_ai_app.…` resolves without manual config.
@@ -232,7 +232,7 @@ def _resolve_stdio_env(server: MCPServerSpec) -> dict | None:
     return env
 
 
-def _stdio_session(server: MCPServerSpec):
+def _stdio_session(server: MCPServerSpec, *, env: dict | None):
     from contextlib import asynccontextmanager
 
     @asynccontextmanager
@@ -242,7 +242,7 @@ def _stdio_session(server: MCPServerSpec):
         params = StdioServerParameters(
             command=server.command or "",
             args=server.args or [],
-            env=_resolve_stdio_env(server),
+            env=env,
         )
         async with stdio_client(params) as (read, write):
             async with ClientSession(read, write) as session:

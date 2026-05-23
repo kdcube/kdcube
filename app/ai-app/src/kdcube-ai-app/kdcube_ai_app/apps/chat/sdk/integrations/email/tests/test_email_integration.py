@@ -180,45 +180,40 @@ async def test_email_claude_accepts_recorded_result_when_process_times_out(tmp_p
     assert result["warnings"][0]["code"] == "claude_code_mcp_result_recorded_but_process_failed"
 
 
-def test_email_account_store_keeps_tokens_out_of_metadata(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_email_account_store_keeps_tokens_out_of_metadata(tmp_path, monkeypatch):
     email_mod = email_accounts
     secrets = {}
 
-    def fake_set_user_secret(key, value, *, user_id=None, bundle_id=None):
+    async def fake_set_user_secret(key, value, *, user_id=None, bundle_id=None):
         secrets[(user_id, bundle_id, key)] = value
 
-    async def fake_set_user_secret_async(key, value, *, user_id=None, bundle_id=None):
-        fake_set_user_secret(key, value, user_id=user_id, bundle_id=bundle_id)
 
-    def fake_get_user_secret(key, *, user_id=None, bundle_id=None):
-        return secrets.get((user_id, bundle_id, key))
+    async def fake_get_secret(key, *, user_id=None, bundle_id=None):
+        lookup_key = str(key or "")
+        if lookup_key.startswith(("u:", "user:")):
+            lookup_key = lookup_key.split(":", 1)[1]
+        return secrets.get((user_id, bundle_id, lookup_key))
 
-    async def fake_get_user_secret_async(key, *, user_id=None, bundle_id=None):
-        return fake_get_user_secret(key, user_id=user_id, bundle_id=bundle_id)
 
-    def fake_delete_user_secret(key, *, user_id=None, bundle_id=None):
+    async def fake_delete_user_secret(key, *, user_id=None, bundle_id=None):
         secrets.pop((user_id, bundle_id, key), None)
 
-    async def fake_delete_user_secret_async(key, *, user_id=None, bundle_id=None):
-        fake_delete_user_secret(key, user_id=user_id, bundle_id=bundle_id)
 
     monkeypatch.setattr(email_mod, "set_user_secret", fake_set_user_secret)
-    monkeypatch.setattr(email_mod, "set_user_secret_async", fake_set_user_secret_async)
-    monkeypatch.setattr(email_mod, "get_user_secret", fake_get_user_secret)
-    monkeypatch.setattr(email_mod, "get_user_secret_async", fake_get_user_secret_async)
+    monkeypatch.setattr(email_mod, "get_secret", fake_get_secret)
     monkeypatch.setattr(email_mod, "delete_user_secret", fake_delete_user_secret)
-    monkeypatch.setattr(email_mod, "delete_user_secret_async", fake_delete_user_secret_async)
 
     store = email_mod.EmailAccountStore(tmp_path, user_id="user-a", bundle_id="task-and-memo-app@1-0")
     account = store.upsert_account({"provider": "google", "email": "user@example.test"})
-    store.set_tokens(account["account_id"], {"access_token": "secret-access", "refresh_token": "secret-refresh"})
+    await store.set_tokens_async(account["account_id"], {"access_token": "secret-access", "refresh_token": "secret-refresh"})
 
-    accounts = store.list_accounts()
+    accounts = await store.list_accounts_async()
 
     assert accounts[0]["email"] == "user@example.test"
     assert accounts[0]["has_token"] is True
     assert "secret-access" not in store.accounts_path.read_text(encoding="utf-8")
-    assert store.get_tokens(account["account_id"])["refresh_token"] == "secret-refresh"
+    assert (await store.get_tokens_async(account["account_id"]))["refresh_token"] == "secret-refresh"
 
 
 @pytest.mark.asyncio
@@ -226,22 +221,19 @@ async def test_icloud_account_uses_user_secret_and_shared_provider_dispatch(tmp_
     email_mod = email_accounts
     secrets = {}
 
-    def fake_set_user_secret(key, value, *, user_id=None, bundle_id=None):
+    async def fake_set_user_secret(key, value, *, user_id=None, bundle_id=None):
         secrets[(user_id, bundle_id, key)] = value
 
-    async def fake_set_user_secret_async(key, value, *, user_id=None, bundle_id=None):
-        fake_set_user_secret(key, value, user_id=user_id, bundle_id=bundle_id)
 
-    def fake_get_user_secret(key, *, user_id=None, bundle_id=None):
-        return secrets.get((user_id, bundle_id, key))
+    async def fake_get_secret(key, *, user_id=None, bundle_id=None):
+        lookup_key = str(key or "")
+        if lookup_key.startswith(("u:", "user:")):
+            lookup_key = lookup_key.split(":", 1)[1]
+        return secrets.get((user_id, bundle_id, lookup_key))
 
-    async def fake_get_user_secret_async(key, *, user_id=None, bundle_id=None):
-        return fake_get_user_secret(key, user_id=user_id, bundle_id=bundle_id)
 
     monkeypatch.setattr(email_mod, "set_user_secret", fake_set_user_secret)
-    monkeypatch.setattr(email_mod, "set_user_secret_async", fake_set_user_secret_async)
-    monkeypatch.setattr(email_mod, "get_user_secret", fake_get_user_secret)
-    monkeypatch.setattr(email_mod, "get_user_secret_async", fake_get_user_secret_async)
+    monkeypatch.setattr(email_mod, "get_secret", fake_get_secret)
 
     store = email_mod.EmailAccountStore(tmp_path, user_id="user-a", bundle_id="task-and-memo-app@1-0")
     account = store.upsert_account(
@@ -251,14 +243,14 @@ async def test_icloud_account_uses_user_secret_and_shared_provider_dispatch(tmp_
             "settings": {"imap_host": "imap.mail.me.com", "smtp_host": "smtp.mail.me.com"},
         }
     )
-    store.set_tokens(account["account_id"], {"username": "name@icloud.com", "password": "app-specific"})
+    await store.set_tokens_async(account["account_id"], {"username": "name@icloud.com", "password": "app-specific"})
 
     result = await email_mod.ensure_email_account_access(store=store, entrypoint=object(), account=account)
 
     assert result["ok"] is True
     assert result["username"] == "name@icloud.com"
     assert "app-specific" not in store.accounts_path.read_text(encoding="utf-8")
-    assert store.list_accounts()[0]["provider"] == "icloud"
+    assert (await store.list_accounts_async())[0]["provider"] == "icloud"
 
 
 def test_icloud_search_criteria_supports_sender_recipient_and_dates():
@@ -284,7 +276,8 @@ def test_icloud_search_criteria_supports_sender_recipient_and_dates():
     assert '"urgent"' in criteria
 
 
-def test_google_oauth_authorize_url_uses_signed_state(tmp_path):
+@pytest.mark.asyncio
+async def test_google_oauth_authorize_url_uses_signed_state(tmp_path):
     email_mod = email_accounts
 
     class _Entry:
@@ -309,7 +302,7 @@ def test_google_oauth_authorize_url_uses_signed_state(tmp_path):
             return cursor
 
     store = email_mod.EmailAccountStore(tmp_path, user_id="user-a")
-    result = email_mod.build_google_authorize_url(entrypoint=_Entry(), store=store, source="settings")
+    result = await email_mod.build_google_authorize_url(entrypoint=_Entry(), store=store, source="settings")
 
     assert result["provider"] == "google"
     assert "client_id=google-client-id" in result["authorize_url"]
@@ -318,7 +311,8 @@ def test_google_oauth_authorize_url_uses_signed_state(tmp_path):
     assert any((tmp_path / "email" / "_oauth_states").glob("*.json"))
 
 
-def test_google_oauth_authorize_url_merges_required_scopes_when_descriptor_is_old(tmp_path):
+@pytest.mark.asyncio
+async def test_google_oauth_authorize_url_merges_required_scopes_when_descriptor_is_old(tmp_path):
     email_mod = email_accounts
 
     class _Entry:
@@ -351,7 +345,7 @@ def test_google_oauth_authorize_url_merges_required_scopes_when_descriptor_is_ol
             return cursor
 
     store = email_mod.EmailAccountStore(tmp_path, user_id="user-a")
-    result = email_mod.build_google_authorize_url(entrypoint=_Entry(), store=store, source="settings")
+    result = await email_mod.build_google_authorize_url(entrypoint=_Entry(), store=store, source="settings")
 
     assert "https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fgmail.readonly" in result["authorize_url"]
     assert "https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fgmail.send" in result["authorize_url"]
@@ -362,22 +356,19 @@ async def test_process_user_emails_keeps_run_metadata_without_processed_id_ledge
     email_mod = email_accounts
     secrets = {}
 
-    def fake_set_user_secret(key, value, *, user_id=None, bundle_id=None):
+    async def fake_set_user_secret(key, value, *, user_id=None, bundle_id=None):
         secrets[(user_id, bundle_id, key)] = value
 
-    async def fake_set_user_secret_async(key, value, *, user_id=None, bundle_id=None):
-        fake_set_user_secret(key, value, user_id=user_id, bundle_id=bundle_id)
 
-    def fake_get_user_secret(key, *, user_id=None, bundle_id=None):
-        return secrets.get((user_id, bundle_id, key))
+    async def fake_get_secret(key, *, user_id=None, bundle_id=None):
+        lookup_key = str(key or "")
+        if lookup_key.startswith(("u:", "user:")):
+            lookup_key = lookup_key.split(":", 1)[1]
+        return secrets.get((user_id, bundle_id, lookup_key))
 
-    async def fake_get_user_secret_async(key, *, user_id=None, bundle_id=None):
-        return fake_get_user_secret(key, user_id=user_id, bundle_id=bundle_id)
 
     monkeypatch.setattr(email_mod, "set_user_secret", fake_set_user_secret)
-    monkeypatch.setattr(email_mod, "set_user_secret_async", fake_set_user_secret_async)
-    monkeypatch.setattr(email_mod, "get_user_secret", fake_get_user_secret)
-    monkeypatch.setattr(email_mod, "get_user_secret_async", fake_get_user_secret_async)
+    monkeypatch.setattr(email_mod, "get_secret", fake_get_secret)
 
     class _Entry:
         def bundle_prop(self, path, default=None):
@@ -389,7 +380,7 @@ async def test_process_user_emails_keeps_run_metadata_without_processed_id_ledge
 
     store = email_mod.EmailAccountStore(tmp_path, user_id="user-a", bundle_id="task-and-memo-app@1-0")
     account = store.upsert_account({"provider": "google", "email": "user@example.test"})
-    store.set_tokens(account["account_id"], {"access_token": "access"})
+    await store.set_tokens_async(account["account_id"], {"access_token": "access"})
     observed_queries = []
 
     async def fake_fetch_google_messages(**kwargs):
@@ -446,22 +437,19 @@ async def test_process_user_emails_does_not_hide_previous_messages_by_default(tm
     email_mod = email_accounts
     secrets = {}
 
-    def fake_set_user_secret(key, value, *, user_id=None, bundle_id=None):
+    async def fake_set_user_secret(key, value, *, user_id=None, bundle_id=None):
         secrets[(user_id, bundle_id, key)] = value
 
-    async def fake_set_user_secret_async(key, value, *, user_id=None, bundle_id=None):
-        fake_set_user_secret(key, value, user_id=user_id, bundle_id=bundle_id)
 
-    def fake_get_user_secret(key, *, user_id=None, bundle_id=None):
-        return secrets.get((user_id, bundle_id, key))
+    async def fake_get_secret(key, *, user_id=None, bundle_id=None):
+        lookup_key = str(key or "")
+        if lookup_key.startswith(("u:", "user:")):
+            lookup_key = lookup_key.split(":", 1)[1]
+        return secrets.get((user_id, bundle_id, lookup_key))
 
-    async def fake_get_user_secret_async(key, *, user_id=None, bundle_id=None):
-        return fake_get_user_secret(key, user_id=user_id, bundle_id=bundle_id)
 
     monkeypatch.setattr(email_mod, "set_user_secret", fake_set_user_secret)
-    monkeypatch.setattr(email_mod, "set_user_secret_async", fake_set_user_secret_async)
-    monkeypatch.setattr(email_mod, "get_user_secret", fake_get_user_secret)
-    monkeypatch.setattr(email_mod, "get_user_secret_async", fake_get_user_secret_async)
+    monkeypatch.setattr(email_mod, "get_secret", fake_get_secret)
 
     class _Entry:
         def bundle_prop(self, path, default=None):
@@ -473,7 +461,7 @@ async def test_process_user_emails_does_not_hide_previous_messages_by_default(tm
 
     store = email_mod.EmailAccountStore(tmp_path, user_id="user-a", bundle_id="task-and-memo-app@1-0")
     account = store.upsert_account({"provider": "google", "email": "user@example.test"})
-    store.set_tokens(account["account_id"], {"access_token": "access"})
+    await store.set_tokens_async(account["account_id"], {"access_token": "access"})
 
     async def fake_fetch_google_messages(**kwargs):
         return {
@@ -521,22 +509,19 @@ async def test_fetch_google_messages_classifies_structured_google_403(tmp_path, 
     email_mod = email_accounts
     secrets = {}
 
-    def fake_set_user_secret(key, value, *, user_id=None, bundle_id=None):
+    async def fake_set_user_secret(key, value, *, user_id=None, bundle_id=None):
         secrets[(user_id, bundle_id, key)] = value
 
-    async def fake_set_user_secret_async(key, value, *, user_id=None, bundle_id=None):
-        fake_set_user_secret(key, value, user_id=user_id, bundle_id=bundle_id)
 
-    def fake_get_user_secret(key, *, user_id=None, bundle_id=None):
-        return secrets.get((user_id, bundle_id, key))
+    async def fake_get_secret(key, *, user_id=None, bundle_id=None):
+        lookup_key = str(key or "")
+        if lookup_key.startswith(("u:", "user:")):
+            lookup_key = lookup_key.split(":", 1)[1]
+        return secrets.get((user_id, bundle_id, lookup_key))
 
-    async def fake_get_user_secret_async(key, *, user_id=None, bundle_id=None):
-        return fake_get_user_secret(key, user_id=user_id, bundle_id=bundle_id)
 
     monkeypatch.setattr(email_mod, "set_user_secret", fake_set_user_secret)
-    monkeypatch.setattr(email_mod, "set_user_secret_async", fake_set_user_secret_async)
-    monkeypatch.setattr(email_mod, "get_user_secret", fake_get_user_secret)
-    monkeypatch.setattr(email_mod, "get_user_secret_async", fake_get_user_secret_async)
+    monkeypatch.setattr(email_mod, "get_secret", fake_get_secret)
 
     class _Entry:
         def bundle_prop(self, path, default=None):
@@ -546,7 +531,7 @@ async def test_fetch_google_messages_classifies_structured_google_403(tmp_path, 
 
     store = email_mod.EmailAccountStore(tmp_path, user_id="user-a", bundle_id="task-and-memo-app@1-0")
     account = store.upsert_account({"provider": "google", "email": "user@example.test"})
-    store.set_tokens(account["account_id"], {"access_token": "access"})
+    await store.set_tokens_async(account["account_id"], {"access_token": "access"})
 
     async def fake_google_get(url, *, access_token):
         raise email_mod.ProviderHttpError(
@@ -597,22 +582,19 @@ async def test_process_user_emails_selects_account_by_email_when_multiple_connec
     email_mod = email_accounts
     secrets = {}
 
-    def fake_set_user_secret(key, value, *, user_id=None, bundle_id=None):
+    async def fake_set_user_secret(key, value, *, user_id=None, bundle_id=None):
         secrets[(user_id, bundle_id, key)] = value
 
-    async def fake_set_user_secret_async(key, value, *, user_id=None, bundle_id=None):
-        fake_set_user_secret(key, value, user_id=user_id, bundle_id=bundle_id)
 
-    def fake_get_user_secret(key, *, user_id=None, bundle_id=None):
-        return secrets.get((user_id, bundle_id, key))
+    async def fake_get_secret(key, *, user_id=None, bundle_id=None):
+        lookup_key = str(key or "")
+        if lookup_key.startswith(("u:", "user:")):
+            lookup_key = lookup_key.split(":", 1)[1]
+        return secrets.get((user_id, bundle_id, lookup_key))
 
-    async def fake_get_user_secret_async(key, *, user_id=None, bundle_id=None):
-        return fake_get_user_secret(key, user_id=user_id, bundle_id=bundle_id)
 
     monkeypatch.setattr(email_mod, "set_user_secret", fake_set_user_secret)
-    monkeypatch.setattr(email_mod, "set_user_secret_async", fake_set_user_secret_async)
-    monkeypatch.setattr(email_mod, "get_user_secret", fake_get_user_secret)
-    monkeypatch.setattr(email_mod, "get_user_secret_async", fake_get_user_secret_async)
+    monkeypatch.setattr(email_mod, "get_secret", fake_get_secret)
 
     class _Entry:
         def bundle_prop(self, path, default=None):
@@ -625,8 +607,8 @@ async def test_process_user_emails_selects_account_by_email_when_multiple_connec
     store = email_mod.EmailAccountStore(tmp_path, user_id="user-a", bundle_id="task-and-memo-app@1-0")
     work = store.upsert_account({"provider": "google", "email": "work@example.test"})
     personal = store.upsert_account({"provider": "google", "email": "personal@example.test"})
-    store.set_tokens(work["account_id"], {"access_token": "work-access"})
-    store.set_tokens(personal["account_id"], {"access_token": "personal-access"})
+    await store.set_tokens_async(work["account_id"], {"access_token": "work-access"})
+    await store.set_tokens_async(personal["account_id"], {"access_token": "personal-access"})
     selected = []
 
     async def fake_fetch_google_messages(**kwargs):
@@ -667,22 +649,19 @@ async def test_process_user_emails_marks_seen_after_claude_mcp_success(tmp_path,
     email_mod = email_accounts
     secrets = {}
 
-    def fake_set_user_secret(key, value, *, user_id=None, bundle_id=None):
+    async def fake_set_user_secret(key, value, *, user_id=None, bundle_id=None):
         secrets[(user_id, bundle_id, key)] = value
 
-    async def fake_set_user_secret_async(key, value, *, user_id=None, bundle_id=None):
-        fake_set_user_secret(key, value, user_id=user_id, bundle_id=bundle_id)
 
-    def fake_get_user_secret(key, *, user_id=None, bundle_id=None):
-        return secrets.get((user_id, bundle_id, key))
+    async def fake_get_secret(key, *, user_id=None, bundle_id=None):
+        lookup_key = str(key or "")
+        if lookup_key.startswith(("u:", "user:")):
+            lookup_key = lookup_key.split(":", 1)[1]
+        return secrets.get((user_id, bundle_id, lookup_key))
 
-    async def fake_get_user_secret_async(key, *, user_id=None, bundle_id=None):
-        return fake_get_user_secret(key, user_id=user_id, bundle_id=bundle_id)
 
     monkeypatch.setattr(email_mod, "set_user_secret", fake_set_user_secret)
-    monkeypatch.setattr(email_mod, "set_user_secret_async", fake_set_user_secret_async)
-    monkeypatch.setattr(email_mod, "get_user_secret", fake_get_user_secret)
-    monkeypatch.setattr(email_mod, "get_user_secret_async", fake_get_user_secret_async)
+    monkeypatch.setattr(email_mod, "get_secret", fake_get_secret)
 
     class _Entry:
         def bundle_prop(self, path, default=None):
@@ -696,7 +675,7 @@ async def test_process_user_emails_marks_seen_after_claude_mcp_success(tmp_path,
 
     store = email_mod.EmailAccountStore(tmp_path, user_id="user-a", bundle_id="task-and-memo-app@1-0")
     account = store.upsert_account({"provider": "google", "email": "user@example.test"})
-    store.set_tokens(account["account_id"], {"access_token": "access"})
+    await store.set_tokens_async(account["account_id"], {"access_token": "access"})
 
     async def fake_fetch_google_messages(**kwargs):
         return {
@@ -795,22 +774,19 @@ async def test_process_user_emails_delegates_gmail_scope_to_claude_when_enabled(
     email_mod = email_accounts
     secrets = {}
 
-    def fake_set_user_secret(key, value, *, user_id=None, bundle_id=None):
+    async def fake_set_user_secret(key, value, *, user_id=None, bundle_id=None):
         secrets[(user_id, bundle_id, key)] = value
 
-    async def fake_set_user_secret_async(key, value, *, user_id=None, bundle_id=None):
-        fake_set_user_secret(key, value, user_id=user_id, bundle_id=bundle_id)
 
-    def fake_get_user_secret(key, *, user_id=None, bundle_id=None):
-        return secrets.get((user_id, bundle_id, key))
+    async def fake_get_secret(key, *, user_id=None, bundle_id=None):
+        lookup_key = str(key or "")
+        if lookup_key.startswith(("u:", "user:")):
+            lookup_key = lookup_key.split(":", 1)[1]
+        return secrets.get((user_id, bundle_id, lookup_key))
 
-    async def fake_get_user_secret_async(key, *, user_id=None, bundle_id=None):
-        return fake_get_user_secret(key, user_id=user_id, bundle_id=bundle_id)
 
     monkeypatch.setattr(email_mod, "set_user_secret", fake_set_user_secret)
-    monkeypatch.setattr(email_mod, "set_user_secret_async", fake_set_user_secret_async)
-    monkeypatch.setattr(email_mod, "get_user_secret", fake_get_user_secret)
-    monkeypatch.setattr(email_mod, "get_user_secret_async", fake_get_user_secret_async)
+    monkeypatch.setattr(email_mod, "get_secret", fake_get_secret)
 
     class _Entry:
         def bundle_prop(self, path, default=None):
@@ -824,7 +800,7 @@ async def test_process_user_emails_delegates_gmail_scope_to_claude_when_enabled(
 
     store = email_mod.EmailAccountStore(tmp_path, user_id="user-a", bundle_id="task-and-memo-app@1-0")
     account = store.upsert_account({"provider": "google", "email": "user@example.test"})
-    store.set_tokens(account["account_id"], {"access_token": "access"})
+    await store.set_tokens_async(account["account_id"], {"access_token": "access"})
     fetch_calls = []
 
     async def fake_fetch_google_messages(**kwargs):
@@ -879,22 +855,19 @@ async def test_process_user_emails_returns_messages_when_claude_mcp_did_not_reco
     email_mod = email_accounts
     secrets = {}
 
-    def fake_set_user_secret(key, value, *, user_id=None, bundle_id=None):
+    async def fake_set_user_secret(key, value, *, user_id=None, bundle_id=None):
         secrets[(user_id, bundle_id, key)] = value
 
-    async def fake_set_user_secret_async(key, value, *, user_id=None, bundle_id=None):
-        fake_set_user_secret(key, value, user_id=user_id, bundle_id=bundle_id)
 
-    def fake_get_user_secret(key, *, user_id=None, bundle_id=None):
-        return secrets.get((user_id, bundle_id, key))
+    async def fake_get_secret(key, *, user_id=None, bundle_id=None):
+        lookup_key = str(key or "")
+        if lookup_key.startswith(("u:", "user:")):
+            lookup_key = lookup_key.split(":", 1)[1]
+        return secrets.get((user_id, bundle_id, lookup_key))
 
-    async def fake_get_user_secret_async(key, *, user_id=None, bundle_id=None):
-        return fake_get_user_secret(key, user_id=user_id, bundle_id=bundle_id)
 
     monkeypatch.setattr(email_mod, "set_user_secret", fake_set_user_secret)
-    monkeypatch.setattr(email_mod, "set_user_secret_async", fake_set_user_secret_async)
-    monkeypatch.setattr(email_mod, "get_user_secret", fake_get_user_secret)
-    monkeypatch.setattr(email_mod, "get_user_secret_async", fake_get_user_secret_async)
+    monkeypatch.setattr(email_mod, "get_secret", fake_get_secret)
 
     class _Entry:
         def bundle_prop(self, path, default=None):
@@ -906,7 +879,7 @@ async def test_process_user_emails_returns_messages_when_claude_mcp_did_not_reco
 
     store = email_mod.EmailAccountStore(tmp_path, user_id="user-a", bundle_id="task-and-memo-app@1-0")
     account = store.upsert_account({"provider": "google", "email": "user@example.test"})
-    store.set_tokens(account["account_id"], {"access_token": "access"})
+    await store.set_tokens_async(account["account_id"], {"access_token": "access"})
 
     async def fake_fetch_google_messages(**kwargs):
         return {
@@ -953,22 +926,19 @@ async def test_process_user_emails_saved_task_fails_closed_when_claude_mcp_did_n
     email_mod = email_accounts
     secrets = {}
 
-    def fake_set_user_secret(key, value, *, user_id=None, bundle_id=None):
+    async def fake_set_user_secret(key, value, *, user_id=None, bundle_id=None):
         secrets[(user_id, bundle_id, key)] = value
 
-    async def fake_set_user_secret_async(key, value, *, user_id=None, bundle_id=None):
-        fake_set_user_secret(key, value, user_id=user_id, bundle_id=bundle_id)
 
-    def fake_get_user_secret(key, *, user_id=None, bundle_id=None):
-        return secrets.get((user_id, bundle_id, key))
+    async def fake_get_secret(key, *, user_id=None, bundle_id=None):
+        lookup_key = str(key or "")
+        if lookup_key.startswith(("u:", "user:")):
+            lookup_key = lookup_key.split(":", 1)[1]
+        return secrets.get((user_id, bundle_id, lookup_key))
 
-    async def fake_get_user_secret_async(key, *, user_id=None, bundle_id=None):
-        return fake_get_user_secret(key, user_id=user_id, bundle_id=bundle_id)
 
     monkeypatch.setattr(email_mod, "set_user_secret", fake_set_user_secret)
-    monkeypatch.setattr(email_mod, "set_user_secret_async", fake_set_user_secret_async)
-    monkeypatch.setattr(email_mod, "get_user_secret", fake_get_user_secret)
-    monkeypatch.setattr(email_mod, "get_user_secret_async", fake_get_user_secret_async)
+    monkeypatch.setattr(email_mod, "get_secret", fake_get_secret)
 
     class _Entry:
         def bundle_prop(self, path, default=None):
@@ -980,7 +950,7 @@ async def test_process_user_emails_saved_task_fails_closed_when_claude_mcp_did_n
 
     store = email_mod.EmailAccountStore(tmp_path, user_id="user-a", bundle_id="task-and-memo-app@1-0")
     account = store.upsert_account({"provider": "google", "email": "user@example.test"})
-    store.set_tokens(account["account_id"], {"access_token": "access"})
+    await store.set_tokens_async(account["account_id"], {"access_token": "access"})
 
     fetch_called = False
 
@@ -1031,7 +1001,8 @@ async def test_process_user_emails_saved_task_fails_closed_when_claude_mcp_did_n
     assert "last_new_count" not in state
 
 
-def test_email_mcp_token_is_task_scoped_and_verifiable(tmp_path):
+@pytest.mark.asyncio
+async def test_email_mcp_token_is_task_scoped_and_verifiable(tmp_path):
     mcp_mod = email_mcp
 
     class _Entry:
@@ -1040,7 +1011,7 @@ def test_email_mcp_token_is_task_scoped_and_verifiable(tmp_path):
                 return "mcp-secret"
             return default
 
-    prepared = mcp_mod.create_email_mcp_run(
+    prepared = await mcp_mod.create_email_mcp_run(
         entrypoint=_Entry(),
         storage_root=tmp_path,
         user_id="user-a",
@@ -1068,7 +1039,7 @@ def test_email_mcp_token_is_task_scoped_and_verifiable(tmp_path):
     assert "mcp__task_memo_email__get_message_attachment" in prepared["allowed_tools"]
     assert "mcp__task_memo_email__store_current_task_state" in prepared["allowed_tools"]
 
-    mcp_app = mcp_mod.build_email_mcp_app(
+    mcp_app = await mcp_mod.build_email_mcp_app(
         entrypoint=_Entry(),
         request=SimpleNamespace(headers={mcp_mod.EMAIL_MCP_TOKEN_HEADER: prepared["token"]}),
         storage_root=tmp_path,
@@ -1143,22 +1114,19 @@ async def test_fetch_google_attachment_returns_text_and_base64(tmp_path, monkeyp
     email_mod = email_accounts
     secrets = {}
 
-    def fake_set_user_secret(key, value, *, user_id=None, bundle_id=None):
+    async def fake_set_user_secret(key, value, *, user_id=None, bundle_id=None):
         secrets[(user_id, bundle_id, key)] = value
 
-    async def fake_set_user_secret_async(key, value, *, user_id=None, bundle_id=None):
-        fake_set_user_secret(key, value, user_id=user_id, bundle_id=bundle_id)
 
-    def fake_get_user_secret(key, *, user_id=None, bundle_id=None):
-        return secrets.get((user_id, bundle_id, key))
+    async def fake_get_secret(key, *, user_id=None, bundle_id=None):
+        lookup_key = str(key or "")
+        if lookup_key.startswith(("u:", "user:")):
+            lookup_key = lookup_key.split(":", 1)[1]
+        return secrets.get((user_id, bundle_id, lookup_key))
 
-    async def fake_get_user_secret_async(key, *, user_id=None, bundle_id=None):
-        return fake_get_user_secret(key, user_id=user_id, bundle_id=bundle_id)
 
     monkeypatch.setattr(email_mod, "set_user_secret", fake_set_user_secret)
-    monkeypatch.setattr(email_mod, "set_user_secret_async", fake_set_user_secret_async)
-    monkeypatch.setattr(email_mod, "get_user_secret", fake_get_user_secret)
-    monkeypatch.setattr(email_mod, "get_user_secret_async", fake_get_user_secret_async)
+    monkeypatch.setattr(email_mod, "get_secret", fake_get_secret)
 
     class _Entry:
         def bundle_prop(self, path, default=None):
@@ -1168,7 +1136,7 @@ async def test_fetch_google_attachment_returns_text_and_base64(tmp_path, monkeyp
 
     store = email_mod.EmailAccountStore(tmp_path, user_id="user-a", bundle_id="task-and-memo-app@1-0")
     account = store.upsert_account({"provider": "google", "email": "user@example.test"})
-    store.set_tokens(account["account_id"], {"access_token": "access"})
+    await store.set_tokens_async(account["account_id"], {"access_token": "access"})
 
     async def fake_google_get(url, *, access_token):
         assert access_token == "access"
@@ -1209,22 +1177,19 @@ async def test_fetch_google_attachment_tries_endpoint_when_refetched_metadata_mi
     email_mod = email_accounts
     secrets = {}
 
-    def fake_set_user_secret(key, value, *, user_id=None, bundle_id=None):
+    async def fake_set_user_secret(key, value, *, user_id=None, bundle_id=None):
         secrets[(user_id, bundle_id, key)] = value
 
-    async def fake_set_user_secret_async(key, value, *, user_id=None, bundle_id=None):
-        fake_set_user_secret(key, value, user_id=user_id, bundle_id=bundle_id)
 
-    def fake_get_user_secret(key, *, user_id=None, bundle_id=None):
-        return secrets.get((user_id, bundle_id, key))
+    async def fake_get_secret(key, *, user_id=None, bundle_id=None):
+        lookup_key = str(key or "")
+        if lookup_key.startswith(("u:", "user:")):
+            lookup_key = lookup_key.split(":", 1)[1]
+        return secrets.get((user_id, bundle_id, lookup_key))
 
-    async def fake_get_user_secret_async(key, *, user_id=None, bundle_id=None):
-        return fake_get_user_secret(key, user_id=user_id, bundle_id=bundle_id)
 
     monkeypatch.setattr(email_mod, "set_user_secret", fake_set_user_secret)
-    monkeypatch.setattr(email_mod, "set_user_secret_async", fake_set_user_secret_async)
-    monkeypatch.setattr(email_mod, "get_user_secret", fake_get_user_secret)
-    monkeypatch.setattr(email_mod, "get_user_secret_async", fake_get_user_secret_async)
+    monkeypatch.setattr(email_mod, "get_secret", fake_get_secret)
 
     class _Entry:
         def bundle_prop(self, path, default=None):
@@ -1234,7 +1199,7 @@ async def test_fetch_google_attachment_tries_endpoint_when_refetched_metadata_mi
 
     store = email_mod.EmailAccountStore(tmp_path, user_id="user-a", bundle_id="task-and-memo-app@1-0")
     account = store.upsert_account({"provider": "google", "email": "user@example.test"})
-    store.set_tokens(account["account_id"], {"access_token": "access"})
+    await store.set_tokens_async(account["account_id"], {"access_token": "access"})
 
     calls = []
 

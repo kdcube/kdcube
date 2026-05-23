@@ -15,7 +15,7 @@ from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_memory import (
     BaseEntrypointWithEconomicsAndMemory,
 )
-from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow, api, on_job, ui_widget
+from kdcube_ai_app.infra.plugin.bundle_loader import bundle_entrypoint, api, on_job, ui_widget
 from kdcube_ai_app.infra.service_hub.inventory import BundleState, Config
 
 from .event_filter import BundleEventFilter
@@ -156,7 +156,7 @@ telegram_widget_ops.configure_telegram_widget_ops(
 )
 
 
-@agentic_workflow(
+@bundle_entrypoint(
     name=WORKFLOW_NAME,
     version="1.0.0",
     priority=100,

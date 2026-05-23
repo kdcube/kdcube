@@ -29,7 +29,7 @@ It answers operational questions such as:
 On ECS it is a long-lived service task that:
 
 - consumes queued chat turns from Redis
-- runs bundle workflows
+- runs bundle entrypoints
 - emits relay/SSE events
 - manages conversation state transitions
 - may launch isolated code execution runtimes

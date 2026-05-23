@@ -27,13 +27,14 @@ export function EventsPage({ events, reload }: EventsPageProps) {
   const items = events?.events || [];
   const bySource = Object.entries(events?.by_source || {}).sort((a, b) => b[1] - a[1]);
   const byType = Object.entries(events?.by_type || {}).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const sinkConfigured = Boolean(events?.external_sink?.configured);
 
   return (
     <section className="page page-wide events-page">
       <div className="page-header">
         <div>
           <h1>Events</h1>
-          <p>{events?.bundle_id || 'kdcube.copilot'} - {events?.count || 0} retained</p>
+          <p>{events?.bundle_id || 'kdcube.copilot'} - {sinkConfigured ? 'external sink configured' : 'sink not configured'}</p>
         </div>
         <button type="button" className="ghost-button" onClick={reload}>Refresh</button>
       </div>
@@ -63,7 +64,7 @@ export function EventsPage({ events, reload }: EventsPageProps) {
 
       <div className="event-list">
         {items.length === 0 && (
-          <div className="empty-state">No copilot events have been recorded yet.</div>
+          <div className="empty-state">Events are sent to the configured telemetry sink and are not retained locally.</div>
         )}
         {items.map((item) => (
           <article key={item.event_id} className="event-row">

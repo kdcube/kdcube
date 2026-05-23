@@ -49,6 +49,40 @@ Notes:
 - `ref` is relative to bundle root (portable across host and isolated runtimes).
 - `alias` becomes the tool ID prefix.
 
+### Bundle-local imports from `ref` tools
+
+Bundle-local tool modules may import same-bundle helpers with package-relative
+imports:
+
+```python
+# tools/local_tools.py
+from ..services.storage import MemoryStore
+from ..resources.prompts import SEARCH_PROMPT
+```
+
+Do not use top-level bundle-local imports such as `from services...`,
+`from tools...`, or `import resources`. Proc loads multiple bundles in one
+Python process, so those top-level names are process-global and can collide
+with another bundle.
+
+Keep the bundle root and package directories importable by including
+`__init__.py` files, for example:
+
+```text
+my-bundle@1-0/
+  __init__.py
+  tools/
+    __init__.py
+    local_tools.py
+  services/
+    __init__.py
+    storage.py
+```
+
+The `ref` loader preserves this package context in normal in-process execution
+and in isolated supervisor execution. Use `module` only for installed Python
+modules outside the bundle.
+
 ## 3) Wire descriptor in workflow
 
 Your workflow must pass descriptor values into subsystem creation:
@@ -243,7 +277,7 @@ Runtime context required:
 - the model should not pass those runtime ids as tool parameters; they must be
   prepared by the SDK runtime before the tool runs.
 
-Normal bundle workflows get this preparation when `BaseWorkflow.build_react(...)`
+Normal ReAct workflows get this preparation when `BaseWorkflow.build_react(...)`
 creates the `ToolSubsystem` with the workflow `ApplicationHostingService`.
 Cached workflows refresh the request-bound communicator through
 `BaseWorkflow.rebind_request_context(...)`.

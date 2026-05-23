@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
+import posixpath
+import shlex
 import shutil
 import subprocess
 import sys
@@ -39,6 +42,8 @@ DEFAULT_WORKDIR = Path.home() / ".kdcube" / "kdcube-runtime"
 DEFAULT_DEFAULTS_FILE = Path.home() / ".kdcube" / "cli-defaults.json"
 CLI_LOCK_FILE = Path.home() / ".kdcube" / "cli-lock.json"
 DEFAULT_REPO_DIRNAME = "repo"
+DOCKER_STATUS_TIMEOUT_SECONDS = 20
+DOCKER_CLEAN_TIMEOUT_SECONDS = 120
 STANDARD_INIT_SECRET_PROMPTS: tuple[tuple[str, str], ...] = (
     ("services.openai.api_key", "OpenAI API key"),
     ("services.anthropic.api_key", "Anthropic API key"),
@@ -76,8 +81,45 @@ class _AmbiguousWorkdirError(Exception):
         super().__init__(str(base_workdir))
 
 
-def run(cmd: list[str], cwd: Path | None = None) -> None:
-    subprocess.run(cmd, cwd=cwd, check=True)
+class _NullWriter(io.StringIO):
+    def write(self, value: str) -> int:
+        return len(value)
+
+    def flush(self) -> None:
+        return None
+
+    def isatty(self) -> bool:
+        return False
+
+
+def _cli_quiet_requested(argv: list[str], *, stdout_is_tty: bool | None = None) -> bool:
+    if _cli_explicit_quiet_requested(argv):
+        return True
+    args = list(argv or [])
+    if any(arg == "--json" or arg.startswith("--json=") for arg in args):
+        return True
+    is_tty = sys.stdout.isatty() if stdout_is_tty is None else bool(stdout_is_tty)
+    return not is_tty
+
+
+def _cli_explicit_quiet_requested(argv: list[str]) -> bool:
+    raw_env = os.environ.get("KDCUBE_CLI_QUIET", "").strip().lower()
+    if raw_env not in {"", "0", "false", "no"}:
+        return True
+    args = list(argv or [])
+    if any(arg in {"-q", "--quiet"} for arg in args):
+        return True
+    return False
+
+
+def _print_json(payload: object) -> None:
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+
+
+def run(cmd: list[str], cwd: Path | None = None, *, timeout: float | None = None) -> None:
+    subprocess.run(cmd, cwd=cwd, check=True, timeout=timeout)
 
 
 def _docker_output(
@@ -85,6 +127,7 @@ def _docker_output(
     env: dict[str, str] | None = None,
     *,
     cwd: Path | None = None,
+    timeout: float | None = None,
 ) -> str:
     try:
         return subprocess.run(
@@ -94,7 +137,16 @@ def _docker_output(
             text=True,
             env=env,
             cwd=str(cwd) if cwd else None,
+            timeout=timeout,
         ).stdout
+    except subprocess.TimeoutExpired as exc:
+        timeout_label = f"{timeout:g}" if timeout is not None else "unknown"
+        raise SystemExit(
+            f"Docker command timed out after {timeout_label}s: {shlex.join(cmd)}\n"
+            "Docker Desktop or the Docker daemon is not responding. This is often caused by "
+            "severe disk pressure, a stuck Docker VM, or a daemon lock. Free disk space and/or "
+            "restart Docker Desktop, then retry."
+        ) from exc
     except subprocess.CalledProcessError as exc:
         stderr = (exc.stderr or "").strip()
         stdout = (exc.stdout or "").strip()
@@ -102,16 +154,30 @@ def _docker_output(
         raise SystemExit(f"Docker command failed: {' '.join(cmd)}\n{details}") from exc
 
 
-def _docker_output_soft(cmd: list[str]) -> str | None:
+def _ensure_docker_responsive() -> None:
+    _docker_output(
+        ["docker", "info", "--format", "{{.ServerVersion}}"],
+        timeout=DOCKER_STATUS_TIMEOUT_SECONDS,
+    )
+
+
+def _docker_output_soft(cmd: list[str], *, timeout: float | None = None) -> str | None:
     try:
-        return subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
-    except subprocess.CalledProcessError:
+        return subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=timeout).stdout
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return None
 
 
-def _docker_run(cmd: list[str]) -> None:
+def _docker_run(cmd: list[str], *, timeout: float | None = None) -> None:
     try:
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        timeout_label = f"{timeout:g}" if timeout is not None else "unknown"
+        raise SystemExit(
+            f"Docker command timed out after {timeout_label}s: {shlex.join(cmd)}\n"
+            "Docker Desktop or the Docker daemon is not responding. Free disk space and/or "
+            "restart Docker Desktop, then retry."
+        ) from exc
     except subprocess.CalledProcessError as exc:
         raise SystemExit(f"Docker command failed: {' '.join(cmd)} (exit {exc.returncode})") from exc
 
@@ -132,6 +198,51 @@ def _run_compose(console: Console, cmd: list[str], *, cwd: Path) -> None:
     proc = subprocess.run(cmd, cwd=cwd, env=_compose_env_from_cmd(cmd))
     if proc.returncode != 0:
         raise SystemExit(f"Command failed with exit code {proc.returncode}.")
+
+
+def _tail_process_text(text: str, *, max_lines: int = 40, max_chars: int = 6000) -> str:
+    lines = [line.rstrip() for line in str(text or "").splitlines() if line.rstrip()]
+    if max_lines > 0 and len(lines) > max_lines:
+        lines = ["... output truncated ...", *lines[-max_lines:]]
+    value = "\n".join(lines).strip()
+    if max_chars > 0 and len(value) > max_chars:
+        return "... output truncated ...\n" + value[-max_chars:]
+    return value
+
+
+def _run_compose_capture(
+    console: Console,
+    cmd: list[str],
+    *,
+    cwd: Path,
+    label: str,
+    verbose: bool = False,
+) -> str:
+    if verbose:
+        console.print(f"[dim]$ {shlex.join(cmd)}[/dim]")
+    proc = subprocess.run(
+        cmd,
+        cwd=cwd,
+        env=_compose_env_from_cmd(cmd),
+        capture_output=True,
+        text=True,
+    )
+    stdout = (proc.stdout or "").strip()
+    stderr = (proc.stderr or "").strip()
+    if verbose:
+        if stdout:
+            console.print(stdout)
+        if stderr:
+            console.print(stderr)
+    if proc.returncode != 0:
+        details = _tail_process_text("\n".join([part for part in [stdout, stderr] if part]))
+        message = f"{label} failed with exit code {proc.returncode}."
+        if details:
+            message += f"\n{details}"
+        if not verbose:
+            message += "\nRerun with --verbose to see the raw docker compose command and full proc output."
+        raise SystemExit(message)
+    return stdout
 
 
 def _run_compose_optional(console: Console, cmd: list[str], *, cwd: Path, label: str) -> bool:
@@ -173,6 +284,7 @@ def stop_compose_stack(
             "Pass --workdir for the runtime you want to stop or re-run the installer first."
         )
 
+    _ensure_docker_responsive()
     _check_before_stop(workdir, env_file, ctx.docker_dir)
 
     cmd = [
@@ -209,6 +321,7 @@ def start_compose_stack(
             "Initialize the workdir first:\n"
             "  kdcube init"
         )
+    _ensure_docker_responsive()
     env_main = installer_mod.load_env_file(env_file)
     installer_mod.ensure_compose_log_dirs(_compose_logs_dir_from_env(env_file, ctx.workdir))
     token_overrides = installer_mod.generate_runtime_tokens()
@@ -256,6 +369,7 @@ def build_compose_images(
             "Initialize the workdir before building images:\n"
             "  kdcube init --build"
         )
+    _ensure_docker_responsive()
 
     env_main = installer_mod.load_env_file(env_file)
     missing = installer_mod.missing_build_keys(env_main)
@@ -295,21 +409,29 @@ def build_compose_images(
 def clean_docker_images(console: Console) -> None:
     console.print("[bold]Cleaning Docker cache and unused KDCube images...[/bold]")
     try:
+        _ensure_docker_responsive()
         # Remove dangling images + build cache
-        _docker_run(["docker", "image", "prune", "-f"])
-        _docker_run(["docker", "builder", "prune", "-f"])
+        _docker_run(["docker", "image", "prune", "-f"], timeout=DOCKER_CLEAN_TIMEOUT_SECONDS)
+        _docker_run(["docker", "builder", "prune", "-f"], timeout=DOCKER_CLEAN_TIMEOUT_SECONDS)
 
         used_refs: set[str] = set()
-        out = _docker_output_soft(["docker", "ps", "-a", "--format", "{{.ImageID}}"])
+        out = _docker_output_soft(
+            ["docker", "ps", "-a", "--format", "{{.ImageID}}"],
+            timeout=DOCKER_STATUS_TIMEOUT_SECONDS,
+        )
         if out is None:
-            out = _docker_output(["docker", "ps", "-a", "--format", "{{.Image}}"])
+            out = _docker_output(
+                ["docker", "ps", "-a", "--format", "{{.Image}}"],
+                timeout=DOCKER_STATUS_TIMEOUT_SECONDS,
+            )
         for line in out.splitlines():
             value = line.strip()
             if value:
                 used_refs.add(value)
 
         images = _docker_output(
-            ["docker", "image", "ls", "--no-trunc", "--format", "{{.ID}} {{.Repository}} {{.Tag}}"]
+            ["docker", "image", "ls", "--no-trunc", "--format", "{{.ID}} {{.Repository}} {{.Tag}}"],
+            timeout=DOCKER_STATUS_TIMEOUT_SECONDS,
         ).splitlines()
 
         to_remove: list[str] = []
@@ -334,7 +456,15 @@ def clean_docker_images(console: Console) -> None:
             console.print("[dim]Removing old KDCube image tags:[/dim]")
             for ref in to_remove:
                 console.print(f"  {ref}")
-            subprocess.run(["docker", "rmi", *to_remove], check=False)
+            try:
+                subprocess.run(["docker", "rmi", *to_remove], check=False, timeout=DOCKER_CLEAN_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired as exc:
+                raise SystemExit(
+                    f"Docker command timed out after {DOCKER_CLEAN_TIMEOUT_SECONDS}s: "
+                    f"docker rmi <{len(to_remove)} image tags>\n"
+                    "Docker Desktop or the Docker daemon is not responding. Free disk space and/or "
+                    "restart Docker Desktop, then retry."
+                ) from exc
         else:
             console.print("[dim]No old KDCube image tags to remove.[/dim]")
     except FileNotFoundError:
@@ -463,6 +593,155 @@ def _read_install_meta_raw(workdir: Path) -> dict | None:
         return None
 
 
+def _resolve_namespaced_runtime_target(
+    *,
+    workdir_arg: str,
+    workdir_base_arg: str,
+    tenant_arg: str,
+    project_arg: str,
+    cli_defaults: dict,
+    prefer_existing: bool = False,
+) -> tuple[Path, str, str]:
+    """Resolve the fully-qualified namespaced runtime path for ``init`` /
+    ``refresh``.
+
+    Returns ``(resolved_runtime_path, tenant, project)``. Raises
+    ``SystemExit`` with a clear message on bad flag combinations.
+
+    Resolution precedence (each flag has exactly one meaning):
+
+    1. ``--workdir <full>``: use as the namespaced runtime path. The trailing
+       segment must contain ``__``. If ``--tenant`` / ``--project`` are also
+       given they must match the trailing segment.
+    2. ``--workdir-base <B> --tenant T --project P``: compose under ``<B>``.
+       Mutually exclusive with ``--workdir``.
+    3. ``--tenant T --project P`` (no --workdir / --workdir-base): compose
+       under ``$DEFAULT_WORKDIR`` (the platform-wide default base
+       ``~/.kdcube/kdcube-runtime``).
+    4. ``cli_defaults["default_workdir"]`` (must be a full namespaced path):
+       use as the namespaced runtime path.
+
+    No other resolution path is considered. ``cli_defaults["default_workdir"]``
+    is **never** treated as a base; use the bare ``--tenant``/``--project``
+    form for that.
+
+    Naming convention when composing from ``--tenant`` / ``--project``:
+
+    - The directory is named **literally** ``<tenant>__<project>`` (preserves
+      hyphens, dots, mixed case — anything filesystem-safe). This matches the
+      tenant/project the user typed.
+    - If ``prefer_existing=True`` (used by ``refresh``) and the literal path
+      is not an initialized runtime, the resolver also tries the
+      ``safe_workspace_name``-normalized form (``demo-tenant`` →
+      ``demo_tenant``) for backward compatibility with older workdirs created
+      via that path. The literal form wins if both are initialized.
+    """
+    workdir_arg = (workdir_arg or "").strip()
+    workdir_base_arg = (workdir_base_arg or "").strip()
+    tenant_arg = (tenant_arg or "").strip()
+    project_arg = (project_arg or "").strip()
+
+    if workdir_arg and workdir_base_arg:
+        raise SystemExit(
+            "Choose either --workdir <full-path> OR --workdir-base <base> + "
+            "--tenant + --project. They are mutually exclusive."
+        )
+
+    def _compose_namespaced(base: Path, t: str, p: str) -> Path:
+        """Primary form: literal `<base>/<tenant>__<project>`."""
+        return (base / f"{t}__{p}").resolve()
+
+    def _compose_namespaced_safe(base: Path, t: str, p: str) -> Path:
+        """Fallback form: safe-normalized via workspace_runtime_dir."""
+        return installer_mod.workspace_runtime_dir(base, t, p).resolve()
+
+    def _pick_target(base: Path, t: str, p: str) -> Path:
+        """Return the namespaced runtime path. If ``prefer_existing`` is set
+        and the literal form is not an initialized runtime, fall back to the
+        safe-normalized form when *that* one is initialized.
+        """
+        literal = _compose_namespaced(base, t, p)
+        if not prefer_existing:
+            return literal
+        if _read_install_meta_raw(literal) is not None:
+            return literal
+        safe = _compose_namespaced_safe(base, t, p)
+        if safe != literal and _read_install_meta_raw(safe) is not None:
+            return safe
+        return literal
+
+    # Shape 2: --workdir-base + tenant + project
+    if workdir_base_arg:
+        if not (tenant_arg and project_arg):
+            raise SystemExit(
+                "--workdir-base requires both --tenant and --project to compose "
+                "the namespaced runtime path."
+            )
+        base = Path(os.path.expanduser(workdir_base_arg)).resolve()
+        return _pick_target(base, tenant_arg, project_arg), tenant_arg, project_arg
+
+    # Shape 1: --workdir <full>
+    if workdir_arg:
+        resolved = Path(os.path.expanduser(workdir_arg)).resolve()
+        name = resolved.name
+        if "__" not in name:
+            raise SystemExit(
+                f"--workdir must be a fully-qualified namespaced runtime "
+                f"(its name must contain '__'): {resolved}\n"
+                "Either pass `--workdir <base>/<tenant>__<project>` directly, "
+                "use `--workdir-base <base> --tenant T --project P` to have the "
+                "CLI compose the namespaced path, or pass `--tenant T --project P` "
+                "alone to compose under the platform default base "
+                f"({DEFAULT_WORKDIR})."
+            )
+        ns_t, ns_p = name.split("__", 1)
+        if tenant_arg and tenant_arg != ns_t:
+            raise SystemExit(
+                f"--tenant '{tenant_arg}' disagrees with the trailing segment "
+                f"of --workdir ('{ns_t}__{ns_p}'). Either remove --tenant or use "
+                "--workdir-base + --tenant + --project."
+            )
+        if project_arg and project_arg != ns_p:
+            raise SystemExit(
+                f"--project '{project_arg}' disagrees with the trailing segment "
+                f"of --workdir ('{ns_t}__{ns_p}'). Either remove --project or use "
+                "--workdir-base + --tenant + --project."
+            )
+        return resolved, ns_t, ns_p
+
+    # Shape 3: bare --tenant + --project, default base.
+    if tenant_arg and project_arg:
+        base = Path(DEFAULT_WORKDIR).expanduser().resolve()
+        return _pick_target(base, tenant_arg, project_arg), tenant_arg, project_arg
+
+    # Shape 4: cli_defaults["default_workdir"] (must be fully-qualified).
+    default_workdir = str(cli_defaults.get("default_workdir", "") or "").strip()
+    if default_workdir:
+        resolved = Path(os.path.expanduser(default_workdir)).resolve()
+        name = resolved.name
+        if "__" not in name:
+            raise SystemExit(
+                f"cli_defaults.default_workdir is not a fully-qualified namespaced "
+                f"runtime (its name must contain '__'): {resolved}\n"
+                "Either reset it with `kdcube defaults --default-workdir <full-path>`, "
+                "or invoke this command with --tenant T --project P to compose under "
+                f"the platform default base ({DEFAULT_WORKDIR})."
+            )
+        ns_t, ns_p = name.split("__", 1)
+        return resolved, ns_t, ns_p
+
+    raise SystemExit(
+        "No target workdir specified.\n"
+        "Pass one of:\n"
+        "  --tenant T --project P                            # primary form; "
+        f"composes under {DEFAULT_WORKDIR}\n"
+        "  --workdir-base <base> --tenant T --project P      # compose under <base>\n"
+        "  --workdir <full-path>                             # explicit namespaced runtime\n"
+        "or configure cli_defaults via:\n"
+        "  kdcube defaults --default-workdir <full-path>"
+    )
+
+
 def _repo_path_from_install_meta(workdir: Path) -> Path | None:
     meta = _read_install_meta_raw(workdir)
     if not isinstance(meta, dict):
@@ -552,13 +831,14 @@ def _compose_services(docker_dir: Path, env_file: Path) -> set[str]:
             ],
             env=env,
             cwd=docker_dir,
+            timeout=DOCKER_STATUS_TIMEOUT_SECONDS,
         )
         return {line.strip() for line in output.splitlines() if line.strip()}
     except SystemExit:
         return set()
 
 
-def _compose_running_services(docker_dir: Path, env_file: Path) -> set[str]:
+def _compose_running_services(docker_dir: Path, env_file: Path, *, strict: bool = False) -> set[str]:
     try:
         env = os.environ.copy()
         env["COMPOSE_ENV_FILES"] = str(env_file)
@@ -575,9 +855,12 @@ def _compose_running_services(docker_dir: Path, env_file: Path) -> set[str]:
             ],
             env=env,
             cwd=docker_dir,
+            timeout=DOCKER_STATUS_TIMEOUT_SECONDS,
         )
         return {line.strip() for line in output.splitlines() if line.strip()}
     except SystemExit:
+        if strict:
+            raise
         return set()
 
 
@@ -586,6 +869,19 @@ def _strip_env_value(raw: str | None) -> str:
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
         value = value[1:-1]
     return value.strip()
+
+
+def _runtime_env_value(workdir: Path, name: str) -> str | None:
+    env_path = workdir / "config" / ".env"
+    if not env_path.exists():
+        return None
+    try:
+        env_main = installer_mod.load_env_file(env_path)
+    except Exception:
+        return None
+    raw = env_main.entries.get(name, (None, None))[1]
+    value = _strip_env_value(raw)
+    return value or None
 
 
 def _runtime_config_dir(env_main: installer_mod.EnvFile) -> Path:
@@ -655,6 +951,7 @@ def _collect_runtime_info(*, repo_root: Path, workdir: Path) -> dict[str, object
         "workdir": str(ctx.workdir),
         "config_dir": str(ctx.config_dir),
         "data_dir": str(ctx.data_dir),
+        "logs_dir": _env_value("KDCUBE_LOGS_DIR") or str(ctx.workdir / "logs"),
         "docker_dir": str(ctx.docker_dir),
         "repo_root": str(repo_root),
         "install_meta": install_meta,
@@ -669,6 +966,7 @@ def _collect_runtime_info(*, repo_root: Path, workdir: Path) -> dict[str, object
         "host_bundle_storage_path": _env_value("HOST_BUNDLE_STORAGE_PATH"),
         "container_bundle_storage_root": _env_value("BUNDLE_STORAGE_ROOT"),
         "host_exec_workspace_path": _env_value("HOST_EXEC_WORKSPACE_PATH"),
+        "container_exec_workspace_root": _env_value("EXEC_WORKSPACE_ROOT"),
         "host_react_debug_path": _env_value("HOST_REACT_DEBUG_PATH"),
         "container_react_debug_root": _env_value("REACT_DEBUG_ROOT"),
         "compose_mode": _env_value("KDCUBE_COMPOSE_MODE"),
@@ -684,6 +982,7 @@ def print_runtime_info(console: Console, *, repo_root: Path, workdir: Path) -> N
     console.print(f"[dim]Workdir:[/dim] {info['workdir']}")
     console.print(f"[dim]Config dir:[/dim] {info['config_dir']}")
     console.print(f"[dim]Data dir:[/dim] {info['data_dir']}")
+    console.print(f"[dim]Logs dir:[/dim] {info['logs_dir']}")
     console.print(f"[dim]Docker dir:[/dim] {info['docker_dir']}")
     console.print(f"[dim]Repo root:[/dim] {info['repo_root']}")
 
@@ -702,6 +1001,8 @@ def print_runtime_info(console: Console, *, repo_root: Path, workdir: Path) -> N
     )
 
     console.print("\n[bold]Bundle Mounts[/bold]")
+    console.print(f"[dim]Host config:[/dim] {info['config_dir']}")
+    console.print("[dim]Container config root:[/dim] /config")
     console.print(f"[dim]Host non-managed bundles:[/dim] {info['host_bundles_path'] or 'unset'}")
     console.print(f"[dim]Container non-managed bundles root:[/dim] {info['container_bundles_root'] or 'unset'}")
     console.print(f"[dim]Host managed bundles:[/dim] {info['host_managed_bundles_path'] or 'unset'}")
@@ -709,8 +1010,11 @@ def print_runtime_info(console: Console, *, repo_root: Path, workdir: Path) -> N
     console.print(f"[dim]Host bundle storage:[/dim] {info['host_bundle_storage_path'] or 'unset'}")
     console.print(f"[dim]Container bundle storage root:[/dim] {info['container_bundle_storage_root'] or 'unset'}")
     console.print(f"[dim]Host exec workspace:[/dim] {info['host_exec_workspace_path'] or 'unset'}")
+    console.print(f"[dim]Container exec workspace root:[/dim] {info['container_exec_workspace_root'] or 'unset'}")
     console.print(f"[dim]Host React debug:[/dim] {info['host_react_debug_path'] or 'unset'}")
     console.print(f"[dim]Container React debug root:[/dim] {info['container_react_debug_root'] or 'unset'}")
+    console.print(f"[dim]Host logs:[/dim] {info['logs_dir'] or 'unset'}")
+    console.print("[dim]Container logs root:[/dim] /logs")
 
     host_bundles_path = str(info["host_bundles_path"] or "").strip()
     container_bundles_root = str(info["container_bundles_root"] or "").strip()
@@ -748,6 +1052,23 @@ def print_cli_defaults(console: Console, cli_defaults: dict) -> None:
         console.print(f"[dim]Default workdir:[/dim]  {cli_defaults.get('default_workdir') or '[not set]'}")
         console.print(f"[dim]Default tenant:[/dim]   {cli_defaults.get('default_tenant') or '[not set]'}")
         console.print(f"[dim]Default project:[/dim]  {cli_defaults.get('default_project') or '[not set]'}")
+
+
+def _collect_running_deployment_info() -> dict[str, object]:
+    lock = _read_cli_lock()
+    if lock is None:
+        return {"recorded": False, "running": False}
+    running = _lock_running_services(lock)
+    stale = not bool(running)
+    return {
+        "recorded": True,
+        "running": bool(running),
+        "stale": stale,
+        "tenant": lock.get("tenant"),
+        "project": lock.get("project"),
+        "workdir": lock.get("workdir"),
+        "services": sorted(running),
+    }
 
 
 def print_running_deployment_info(console: Console) -> None:
@@ -815,13 +1136,646 @@ def _load_bundle_ids_from_descriptor(path: Path) -> set[str]:
     raise SystemExit(f"Descriptor {path} does not contain supported bundle declarations")
 
 
+def _bundle_runtime_roots(workdir: Path) -> tuple[Path | None, str]:
+    config_dir = workdir / "config"
+    assembly_path = config_dir / "assembly.yaml"
+    assembly = installer_mod.load_release_descriptor_soft(assembly_path)
+
+    host_root_raw = _get_nested(assembly, "paths", "host_bundles_path")
+    if not isinstance(host_root_raw, str) or not host_root_raw.strip():
+        host_root_raw = _runtime_env_value(workdir, "HOST_BUNDLES_PATH")
+    host_root: Path | None = None
+    if isinstance(host_root_raw, str) and host_root_raw.strip():
+        host_root = Path(host_root_raw).expanduser().resolve()
+
+    container_root_raw = _get_nested(
+        assembly,
+        "platform",
+        "services",
+        "proc",
+        "bundles",
+        "bundles_root",
+    )
+    if not isinstance(container_root_raw, str) or not container_root_raw.strip():
+        container_root_raw = _runtime_env_value(workdir, "BUNDLES_ROOT")
+    container_root = str(container_root_raw or "/bundles").strip() or "/bundles"
+    if not container_root.startswith("/"):
+        container_root = "/" + container_root
+    return host_root, container_root.rstrip("/") or "/"
+
+
+def _is_container_visible_path(raw_path: str, container_root: str) -> bool:
+    normalized = posixpath.normpath(raw_path.strip().replace("\\", "/"))
+    root = posixpath.normpath(container_root.rstrip("/") or "/")
+    return normalized == root or normalized.startswith(root + "/")
+
+
+def _resolve_bundle_local_path_for_runtime(raw_path: str, workdir: Path) -> tuple[str, str]:
+    value = str(raw_path or "").strip()
+    if not value:
+        raise SystemExit("--local-path cannot be empty.")
+
+    host_root, container_root = _bundle_runtime_roots(workdir)
+    if _is_container_visible_path(value, container_root):
+        return posixpath.normpath(value.replace("\\", "/")), "container"
+
+    candidate = Path(value).expanduser().resolve()
+    if not candidate.exists():
+        raise SystemExit(f"Bundle local path does not exist on the host: {candidate}")
+    if not candidate.is_dir():
+        raise SystemExit(f"Bundle local path must be a directory: {candidate}")
+    if host_root is None:
+        raise SystemExit(
+            "Cannot translate host bundle path because the initialized runtime does not define "
+            "paths.host_bundles_path or HOST_BUNDLES_PATH."
+        )
+    try:
+        rel = candidate.relative_to(host_root)
+    except ValueError as exc:
+        raise SystemExit(
+            "Bundle local path is not visible inside chat-proc.\n"
+            f"  host path: {candidate}\n"
+            f"  allowed host bundle root: {host_root}\n"
+            f"  runtime bundle root: {container_root}\n"
+            "Move or symlink the bundle under the host bundle root, pass the already "
+            f"container-visible path under {container_root}, or use --git-repo."
+        ) from exc
+
+    return posixpath.join(container_root, rel.as_posix()), "translated"
+
+
+def _bundle_apply_command(bundle_id: str, workdir: Path) -> str:
+    return f"kdcube bundle reload {shlex.quote(bundle_id)} --workdir {shlex.quote(str(workdir))}"
+
+
+def _print_bundle_apply_hint(console: Console, bundle_id: str, workdir: Path) -> None:
+    console.print("[dim]Apply with:[/dim]")
+    console.print(f"  {_bundle_apply_command(bundle_id, workdir)}")
+
+
+def _bundle_items_from_descriptor(data: object) -> tuple[list[dict[str, object]], str | None]:
+    if not isinstance(data, dict):
+        return [], None
+    raw_bundles = data.get("bundles")
+    if isinstance(raw_bundles, dict):
+        default_id = raw_bundles.get("default_bundle_id")
+        raw_items = raw_bundles.get("items")
+        if isinstance(raw_items, list):
+            return [item for item in raw_items if isinstance(item, dict)], str(default_id or "").strip() or None
+        items = []
+        for key, value in raw_bundles.items():
+            if key in {"items", "version", "default_bundle_id"} or not isinstance(value, dict):
+                continue
+            entry = dict(value)
+            entry.setdefault("id", key)
+            items.append(entry)
+        return items, str(default_id or "").strip() or None
+    if isinstance(raw_bundles, list):
+        return [item for item in raw_bundles if isinstance(item, dict)], None
+    return [], None
+
+
+def _bundle_items_by_id(data: object) -> dict[str, dict[str, object]]:
+    items, _default_id = _bundle_items_from_descriptor(data)
+    result: dict[str, dict[str, object]] = {}
+    for item in items:
+        bundle_id = str(item.get("id", "") or "").strip()
+        if bundle_id:
+            result[bundle_id] = item
+    return result
+
+
+def _bundle_descriptor_default_id(data: object) -> str | None:
+    _items, default_id = _bundle_items_from_descriptor(data)
+    return default_id
+
+
+def _canonical_descriptor_json(value: object) -> str:
+    return json.dumps(value, sort_keys=True, ensure_ascii=False, default=str, separators=(",", ":"))
+
+
+def _changed_bundle_ids_between_descriptors(current: object, incoming: object) -> tuple[list[str], list[str]]:
+    current_items = _bundle_items_by_id(current)
+    incoming_items = _bundle_items_by_id(incoming)
+    changed: set[str] = set()
+    removed: set[str] = set()
+
+    for bundle_id, incoming_item in incoming_items.items():
+        current_item = current_items.get(bundle_id)
+        if current_item is None or _canonical_descriptor_json(current_item) != _canonical_descriptor_json(incoming_item):
+            changed.add(bundle_id)
+
+    for bundle_id in current_items:
+        if bundle_id not in incoming_items:
+            removed.add(bundle_id)
+
+    if _bundle_descriptor_default_id(current) != _bundle_descriptor_default_id(incoming):
+        changed.update(incoming_items.keys())
+
+    return sorted(changed), sorted(removed)
+
+
+def _descriptor_objects_differ(current: object, incoming: object) -> bool:
+    return _canonical_descriptor_json(current) != _canonical_descriptor_json(incoming)
+
+
+def _normalize_bundle_descriptor_paths_for_runtime(data: object, workdir: Path) -> list[dict[str, str]]:
+    translations: list[dict[str, str]] = []
+    if not isinstance(data, dict):
+        return translations
+    items, _default_id = _bundle_items_from_descriptor(data)
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("repo"):
+            continue
+        raw_path = str(item.get("path") or "").strip()
+        if not raw_path:
+            continue
+        runtime_path, mode = _resolve_bundle_local_path_for_runtime(raw_path, workdir)
+        if runtime_path != raw_path:
+            item["path"] = runtime_path
+            translations.append(
+                {
+                    "bundle_id": str(item.get("id") or ""),
+                    "source_path": raw_path,
+                    "runtime_path": runtime_path,
+                    "mode": mode,
+                }
+            )
+    return translations
+
+
+def apply_bundle_config_descriptors(
+    console: Console,
+    *,
+    workdir: Path,
+    descriptors_location: Path,
+    dry_run: bool = False,
+    reload_changed: bool = False,
+    repo_root: Path | None = None,
+    verbose: bool = False,
+    quiet: bool = False,
+) -> dict[str, object]:
+    """Stage bundle content descriptors into an initialized runtime.
+
+    This intentionally operates only on bundles.yaml and bundles.secrets.yaml.
+    Platform descriptors remain owned by init/refresh.
+    """
+    config_dir = _canonical_descriptor_dir_from_initialized_workdir(workdir)
+    if config_dir is None:
+        raise SystemExit(
+            f"Workdir is not initialized: {workdir}\n"
+            "`kdcube bundle config apply` only operates on an existing runtime created by `kdcube init`."
+        )
+
+    source_dir = Path(descriptors_location).expanduser().resolve()
+    if not source_dir.exists() or not source_dir.is_dir():
+        raise SystemExit(f"Descriptor directory not found: {source_dir}")
+
+    source_bundles_path = source_dir / "bundles.yaml"
+    source_bundles_secrets_path = source_dir / "bundles.secrets.yaml"
+    target_bundles_path = config_dir / "bundles.yaml"
+    target_bundles_secrets_path = config_dir / "bundles.secrets.yaml"
+
+    if not source_bundles_path.exists():
+        raise SystemExit(f"bundles.yaml not found under {source_dir}")
+
+    incoming_bundles = installer_mod.load_release_descriptor(source_bundles_path)
+    path_translations = _normalize_bundle_descriptor_paths_for_runtime(incoming_bundles, workdir)
+    current_bundles = (
+        installer_mod.load_release_descriptor(target_bundles_path)
+        if target_bundles_path.exists()
+        else {"bundles": {"version": "1", "items": []}}
+    )
+    changed_bundle_ids, removed_bundle_ids = _changed_bundle_ids_between_descriptors(
+        current_bundles,
+        incoming_bundles,
+    )
+
+    files: list[dict[str, object]] = []
+    bundles_changed = _descriptor_objects_differ(current_bundles, incoming_bundles)
+    files.append(
+        {
+            "name": "bundles.yaml",
+            "source": str(source_bundles_path),
+            "target": str(target_bundles_path),
+            "changed": bundles_changed,
+            "path_translations": path_translations,
+        }
+    )
+
+    secrets_changed_bundle_ids: list[str] = []
+    secrets_removed_bundle_ids: list[str] = []
+    secrets_will_apply = source_bundles_secrets_path.exists()
+    if secrets_will_apply:
+        incoming_secrets = installer_mod.load_release_descriptor(source_bundles_secrets_path)
+        current_secrets = (
+            installer_mod.load_release_descriptor(target_bundles_secrets_path)
+            if target_bundles_secrets_path.exists()
+            else {"bundles": {"version": "1", "items": []}}
+        )
+        secrets_changed_bundle_ids, secrets_removed_bundle_ids = _changed_bundle_ids_between_descriptors(
+            current_secrets,
+            incoming_secrets,
+        )
+        secrets_changed = _descriptor_objects_differ(current_secrets, incoming_secrets)
+        files.append(
+            {
+                "name": "bundles.secrets.yaml",
+                "source": str(source_bundles_secrets_path),
+                "target": str(target_bundles_secrets_path),
+                "changed": secrets_changed,
+            }
+        )
+    else:
+        files.append(
+            {
+                "name": "bundles.secrets.yaml",
+                "source": str(source_bundles_secrets_path),
+                "target": str(target_bundles_secrets_path),
+                "changed": False,
+                "skipped": True,
+                "reason": "source file is absent; runtime secrets descriptor is preserved",
+            }
+        )
+
+    declared_bundle_ids = set(_bundle_items_by_id(incoming_bundles).keys())
+    secret_only_changed_ids = sorted(set(secrets_changed_bundle_ids).difference(declared_bundle_ids))
+    reload_bundle_ids = sorted(
+        set(changed_bundle_ids).union(
+            bundle_id for bundle_id in secrets_changed_bundle_ids if bundle_id in declared_bundle_ids
+        )
+    )
+    removed_ids = sorted(set(removed_bundle_ids).union(secrets_removed_bundle_ids))
+
+    if dry_run:
+        if not quiet:
+            console.print("[yellow]Dry run: bundle content descriptors were not modified.[/yellow]")
+    else:
+        installer_mod.save_release_descriptor(target_bundles_path, incoming_bundles)
+        if secrets_will_apply:
+            shutil.copyfile(source_bundles_secrets_path, target_bundles_secrets_path)
+        if not quiet:
+            console.print(f"[green]Applied bundle content descriptors:[/green] {source_dir}")
+
+    if not quiet:
+        for item in files:
+            status = "skipped" if item.get("skipped") else ("changed" if item.get("changed") else "unchanged")
+            console.print(f"[dim]{item['name']}:[/dim] {status}")
+            if item.get("skipped") and item.get("reason"):
+                console.print(f"[dim]  {item['reason']}[/dim]")
+            translations = item.get("path_translations")
+            if isinstance(translations, list):
+                for translation in translations:
+                    if not isinstance(translation, dict):
+                        continue
+                    console.print(
+                        f"[dim]  path[/dim] {translation.get('bundle_id')}: "
+                        f"{translation.get('source_path')} -> {translation.get('runtime_path')}"
+                    )
+        if reload_bundle_ids:
+            verb = "would reload" if dry_run and reload_changed else "reload candidates"
+            console.print(f"[dim]{verb}:[/dim] {', '.join(reload_bundle_ids)}")
+        if removed_ids:
+            console.print(
+                "[yellow]Removed bundle ids are not reloaded because they are no longer declared:[/yellow] "
+                + ", ".join(removed_ids)
+            )
+        if secret_only_changed_ids:
+            console.print(
+                "[yellow]Secret-only bundle ids are not reloaded because they are not declared in bundles.yaml:[/yellow] "
+                + ", ".join(secret_only_changed_ids)
+            )
+
+    reload_results: list[dict[str, object]] = []
+    if reload_changed and reload_bundle_ids and not dry_run:
+        if repo_root is None:
+            raise SystemExit("repo_root is required when reload_changed=True")
+        for bundle_id in reload_bundle_ids:
+            result = reload_bundle_from_descriptor(
+                console,
+                repo_root=repo_root,
+                workdir=workdir,
+                bundle_id=bundle_id,
+                verbose=verbose,
+                json_output=False,
+                quiet=quiet,
+            )
+            reload_results.append({"bundle_id": bundle_id, "result": result})
+
+    return {
+        "status": "dry-run" if dry_run else "ok",
+        "source_dir": str(source_dir),
+        "target_dir": str(config_dir),
+        "files": files,
+        "changed_bundle_ids": reload_bundle_ids,
+        "removed_bundle_ids": removed_ids,
+        "secret_only_changed_bundle_ids": secret_only_changed_ids,
+        "reloaded": reload_results,
+    }
+
+
+def _find_bundle_item(data: object, bundle_id: str) -> tuple[dict[str, object] | None, str | None]:
+    items, default_id = _bundle_items_from_descriptor(data)
+    for item in items:
+        if str(item.get("id") or "").strip() == bundle_id:
+            return item, default_id
+    return None, default_id
+
+
+def _host_path_for_runtime_bundle_path(runtime_path: str, workdir: Path) -> str | None:
+    value = str(runtime_path or "").strip()
+    if not value:
+        return None
+    host_root, container_root = _bundle_runtime_roots(workdir)
+    if host_root is None or not _is_container_visible_path(value, container_root):
+        return None
+    normalized = posixpath.normpath(value.replace("\\", "/"))
+    root = posixpath.normpath(container_root.rstrip("/") or "/")
+    if normalized == root:
+        return str(host_root)
+    rel = normalized[len(root):].lstrip("/")
+    if not rel:
+        return str(host_root)
+    return str(host_root.joinpath(*rel.split("/")))
+
+
+def _source_summary(entry: dict[str, object] | None) -> dict[str, object]:
+    if not entry:
+        return {"mode": "missing"}
+    if entry.get("repo"):
+        return {
+            "mode": "git",
+            "repo": entry.get("repo"),
+            "ref": entry.get("ref"),
+            "subdir": entry.get("subdir"),
+            "path": entry.get("path"),
+        }
+    return {
+        "mode": "local-path",
+        "path": entry.get("path"),
+    }
+
+
+def _runtime_proc_status(ctx: installer_mod.PathsContext, env_main_path: Path) -> dict[str, object]:
+    running = _compose_running_services(ctx.docker_dir, env_main_path)
+    return {
+        "chat_proc_running": "chat-proc" in running,
+        "running_services": sorted(running),
+    }
+
+
+def _live_bundle_status(ctx: installer_mod.PathsContext, env_main_path: Path, *, bundle_id: str) -> dict[str, object]:
+    runtime = _runtime_proc_status(ctx, env_main_path)
+    if not runtime.get("chat_proc_running"):
+        return {
+            "available": False,
+            "chat_proc_running": False,
+            "reason": "chat-proc is not running",
+        }
+
+    payload = json.dumps({"bundle_id": bundle_id})
+    script = "\n".join(
+        [
+            "import json,sys,urllib.request,urllib.error",
+            f"data={payload!r}.encode('utf-8')",
+            "req=urllib.request.Request(",
+            "    'http://127.0.0.1:8020/internal/bundles/status',",
+            "    data=data,",
+            "    headers={'content-type':'application/json'},",
+            "    method='POST',",
+            ")",
+            "try:",
+            "    resp=urllib.request.urlopen(req, timeout=15)",
+            "    sys.stdout.write(resp.read().decode('utf-8'))",
+            "except urllib.error.HTTPError as e:",
+            "    sys.stdout.write(e.read().decode('utf-8'))",
+            "    sys.exit(2)",
+        ]
+    )
+    cmd = [
+        "docker",
+        "compose",
+        "--env-file",
+        str(env_main_path),
+        "exec",
+        "-T",
+        "chat-proc",
+        "python",
+        "-c",
+        script,
+    ]
+    try:
+        raw = _docker_output(cmd, env=_compose_env_from_cmd(cmd), cwd=ctx.docker_dir)
+    except SystemExit as exc:
+        return {
+            "available": False,
+            "chat_proc_running": True,
+            "reason": str(exc),
+        }
+    try:
+        payload_obj = json.loads(raw)
+    except Exception:
+        return {
+            "available": False,
+            "chat_proc_running": True,
+            "reason": "status endpoint returned non-JSON output",
+            "raw": raw,
+        }
+    if isinstance(payload_obj, dict):
+        payload_obj.setdefault("available", True)
+        payload_obj.setdefault("chat_proc_running", True)
+        return payload_obj
+    return {
+        "available": False,
+        "chat_proc_running": True,
+        "reason": "status endpoint returned an unexpected JSON shape",
+        "raw": payload_obj,
+    }
+
+
+def _collect_bundle_status(
+    *,
+    repo_root: Path,
+    workdir: Path,
+    bundle_id: str,
+    include_live: bool = True,
+    include_live_manifest: bool = False,
+) -> dict[str, object]:
+    ctx = _build_paths_for_repo(repo_root, workdir)
+    env_main_path = ctx.config_dir / ".env"
+    bundles_path = ctx.config_dir / "bundles.yaml"
+    if not bundles_path.exists():
+        raise SystemExit(
+            f"bundles.yaml not found at {bundles_path}.\n"
+            "Initialize the workdir first."
+        )
+
+    bundles_data = installer_mod.load_release_descriptor(bundles_path)
+    entry, _default_id = _find_bundle_item(bundles_data, bundle_id)
+    source = _source_summary(entry)
+    runtime_path = str((entry or {}).get("path") or "").strip()
+    host_path = _host_path_for_runtime_bundle_path(runtime_path, workdir) if runtime_path else None
+    host_path_exists = None
+    if host_path:
+        host_path_exists = Path(host_path).exists()
+
+    secrets_entry = None
+    bundles_secrets_path = ctx.config_dir / "bundles.secrets.yaml"
+    if bundles_secrets_path.exists():
+        try:
+            secrets_data = installer_mod.load_release_descriptor(bundles_secrets_path)
+            secrets_entry, _ = _find_bundle_item(secrets_data, bundle_id)
+        except Exception:
+            secrets_entry = None
+
+    result: dict[str, object] = {
+        "bundle_id": bundle_id,
+        "workdir": str(workdir),
+        "descriptor": str(bundles_path),
+        "declared": entry is not None,
+        "entry": entry or None,
+        "source": source,
+        "runtime_path": runtime_path or None,
+        "host_path": host_path,
+        "host_path_exists": host_path_exists,
+        "secrets_declared": secrets_entry is not None,
+    }
+
+    if include_live:
+        if not env_main_path.exists():
+            result["runtime"] = {
+                "chat_proc_running": False,
+                "reason": f"runtime env file not found: {env_main_path}",
+            }
+        else:
+            result["runtime"] = _runtime_proc_status(ctx, env_main_path)
+            if include_live_manifest:
+                result["live"] = _live_bundle_status(ctx, env_main_path, bundle_id=bundle_id)
+    return result
+
+
+def _format_bool(value: object) -> str:
+    if value is True:
+        return "yes"
+    if value is False:
+        return "no"
+    return "unknown"
+
+
+def print_bundle_status(console: Console, status: dict[str, object]) -> None:
+    console.print("[bold]Bundle Status[/bold]")
+    console.print(f"[dim]Bundle:[/dim] {status.get('bundle_id')}")
+    console.print(f"[dim]Declared in staged descriptor:[/dim] {_format_bool(status.get('declared'))}")
+    console.print(f"[dim]Descriptor:[/dim] {status.get('descriptor')}")
+
+    source = status.get("source") if isinstance(status.get("source"), dict) else {}
+    console.print(f"[dim]Source mode:[/dim] {source.get('mode') if isinstance(source, dict) else 'unknown'}")
+    if status.get("runtime_path"):
+        console.print(f"[dim]Runtime path:[/dim] {status.get('runtime_path')}")
+    if status.get("host_path"):
+        console.print(f"[dim]Host path:[/dim] {status.get('host_path')}")
+        console.print(f"[dim]Host path exists:[/dim] {_format_bool(status.get('host_path_exists'))}")
+    if isinstance(source, dict) and source.get("repo"):
+        console.print(f"[dim]Git repo:[/dim] {source.get('repo')}")
+        console.print(f"[dim]Git ref:[/dim] {source.get('ref') or 'unset'}")
+        if source.get("subdir"):
+            console.print(f"[dim]Git subdir:[/dim] {source.get('subdir')}")
+    console.print(f"[dim]Secrets entry:[/dim] {_format_bool(status.get('secrets_declared'))}")
+
+    runtime = status.get("runtime") if isinstance(status.get("runtime"), dict) else None
+    if runtime is None:
+        return
+    console.print("\n[bold]Runtime[/bold]")
+    console.print(f"[dim]chat-proc running:[/dim] {_format_bool(runtime.get('chat_proc_running'))}")
+    if runtime.get("reason"):
+        console.print(f"[yellow]Runtime check limited:[/yellow] {runtime.get('reason')}")
+
+    live = status.get("live") if isinstance(status.get("live"), dict) else None
+    if live is None:
+        return
+    console.print("\n[bold]Live Bundle Load[/bold]")
+    if not live.get("available"):
+        console.print(f"[yellow]Live status unavailable:[/yellow] {live.get('reason') or 'unknown'}")
+        return
+    console.print(f"[dim]Declared in live registry:[/dim] {_format_bool(live.get('declared'))}")
+    console.print(f"[dim]Manifest load:[/dim] {'ok' if live.get('loaded') else 'failed'}")
+    console.print(f"[dim]Path exists in proc:[/dim] {_format_bool(live.get('path_exists'))}")
+    if live.get("authority"):
+        console.print(f"[dim]Authority:[/dim] {live.get('authority')}")
+    if live.get("last_error"):
+        err = live.get("last_error")
+        if isinstance(err, dict):
+            console.print(f"[red]Last error:[/red] {err.get('type')}: {err.get('message')}")
+            if err.get("where"):
+                console.print(f"[dim]Where:[/dim] {err.get('where')}")
+        else:
+            console.print(f"[red]Last error:[/red] {err}")
+    interface = live.get("interface")
+    if isinstance(interface, dict):
+        widgets = interface.get("widgets") if isinstance(interface.get("widgets"), list) else []
+        apis = interface.get("apis") if isinstance(interface.get("apis"), list) else []
+        mcps = interface.get("mcp_endpoints") if isinstance(interface.get("mcp_endpoints"), list) else []
+        scheduled = interface.get("scheduled_jobs") if isinstance(interface.get("scheduled_jobs"), list) else []
+        console.print(f"[dim]Widgets:[/dim] {', '.join(str(w.get('alias')) for w in widgets if isinstance(w, dict)) or '<none>'}")
+        console.print(f"[dim]APIs:[/dim] {', '.join(str(a.get('alias')) for a in apis if isinstance(a, dict)) or '<none>'}")
+        console.print(f"[dim]MCP endpoints:[/dim] {', '.join(str(m.get('alias')) for m in mcps if isinstance(m, dict)) or '<none>'}")
+        console.print(f"[dim]Scheduled jobs:[/dim] {', '.join(str(j.get('alias')) for j in scheduled if isinstance(j, dict)) or '<none>'}")
+
+
+def _bundle_reload_summary_lines(
+    result: dict[str, object],
+    *,
+    descriptor_path: Path,
+    bundle_id: str,
+) -> list[str]:
+    lines = [
+        "Bundle reload accepted.",
+        f"Bundle: {bundle_id}",
+        f"Descriptor: {descriptor_path}",
+    ]
+    authority = str(result.get("authority") or "").strip()
+    if authority:
+        lines.append(f"Authority: {authority}")
+    receivers = result.get("broadcast_receivers")
+    if receivers is not None:
+        lines.append(f"Broadcast receivers: {receivers}")
+    eviction = result.get("eviction")
+    if isinstance(eviction, dict) and eviction:
+        parts = [f"{key}={value}" for key, value in sorted(eviction.items())]
+        lines.append("Eviction: " + ", ".join(parts))
+    elif eviction is not None:
+        lines.append(f"Eviction: {eviction}")
+    lines.append("The next request will re-import that bundle from the runtime workspace descriptor path.")
+    return lines
+
+
+def _print_bundle_reload_summary(
+    console: Console,
+    result: dict[str, object],
+    *,
+    descriptor_path: Path,
+    bundle_id: str,
+) -> None:
+    lines = _bundle_reload_summary_lines(result, descriptor_path=descriptor_path, bundle_id=bundle_id)
+    if not lines:
+        return
+    console.print(f"[green]{lines[0]}[/green]")
+    for line in lines[1:]:
+        console.print(f"[dim]{line}[/dim]")
+
+
 def reload_bundle_from_descriptor(
     console: Console,
     *,
     repo_root: Path,
     workdir: Path,
     bundle_id: str,
-) -> None:
+    verbose: bool = False,
+    json_output: bool = False,
+    quiet: bool = False,
+) -> dict[str, object]:
     ctx = _build_paths_for_repo(repo_root, workdir)
     env_main_path = ctx.config_dir / ".env"
     env_proc_path = ctx.config_dir / ".env.proc"
@@ -874,15 +1828,48 @@ def reload_bundle_from_descriptor(
         script,
     ]
 
-    console.print(
-        f"[dim]Reapplying descriptor from[/dim] {descriptor_path}\n"
-        f"[dim]Requested bundle[/dim] {bundle_id}"
+    if not quiet and not json_output:
+        console.print(
+            f"[dim]Reloading bundle[/dim] {bundle_id}\n"
+            f"[dim]Descriptor[/dim] {descriptor_path}"
+        )
+    raw = _run_compose_capture(
+        console,
+        cmd,
+        cwd=ctx.docker_dir,
+        label="Bundle reload",
+        verbose=verbose,
     )
-    _run_compose(console, cmd, cwd=ctx.docker_dir)
-    console.print(
-        "[green]Bundle descriptor reapplied and target bundle evicted from proc caches.[/green]\n"
-        "[dim]The next request will re-import that bundle from the runtime workspace descriptor path.[/dim]"
+    try:
+        result = json.loads(raw) if raw else {}
+    except json.JSONDecodeError as exc:
+        if verbose and raw:
+            raise SystemExit("Bundle reload returned non-JSON output.") from exc
+        detail = _tail_process_text(raw)
+        message = "Bundle reload returned non-JSON output."
+        if detail:
+            message += f"\n{detail}"
+        message += "\nRerun with --verbose to see the raw docker compose command and full proc output."
+        raise SystemExit(message) from exc
+    if not isinstance(result, dict):
+        raise SystemExit("Bundle reload returned an unexpected response shape.")
+    if result.get("status") != "ok":
+        detail = json.dumps(result, ensure_ascii=False, indent=2)
+        raise SystemExit(f"Bundle reload failed.\n{detail}")
+    result.setdefault(
+        "messages",
+        _bundle_reload_summary_lines(result, descriptor_path=descriptor_path, bundle_id=bundle_id),
     )
+    if json_output:
+        _print_json(result)
+    elif not quiet:
+        _print_bundle_reload_summary(
+            console,
+            result,
+            descriptor_path=descriptor_path,
+            bundle_id=bundle_id,
+        )
+    return result
 
 
 def _docker_running_names() -> list[str]:
@@ -1331,11 +2318,58 @@ def _stage_descriptor_set(
     )
 
 
+def _ensure_runtime_repo_build_support_files(console: Console, *, repo_root: Path, workdir: Path) -> None:
+    env_file = workdir / "config" / ".env"
+    if not env_file.exists():
+        return
+    try:
+        env_main = installer_mod.load_env_file(env_file)
+    except Exception:
+        return
+
+    ui_context_raw = str(env_main.entries.get("UI_BUILD_CONTEXT", (None, None))[1] or "").strip()
+    nginx_rel_raw = str(env_main.entries.get("NGINX_UI_CONFIG_FILE_PATH", (None, None))[1] or "").strip()
+    if not ui_context_raw or not nginx_rel_raw:
+        return
+    nginx_rel = Path(nginx_rel_raw)
+    if nginx_rel.is_absolute():
+        return
+
+    ui_context = Path(ui_context_raw).expanduser()
+    if not ui_context.is_absolute():
+        ui_context = repo_root / "app" / "ai-app" / ui_context
+    ui_context = ui_context.resolve()
+    target = (ui_context / nginx_rel).resolve()
+    try:
+        target.relative_to(ui_context)
+    except ValueError:
+        return
+    if target.exists():
+        return
+
+    compose_mode = str(env_main.entries.get("KDCUBE_COMPOSE_MODE", (None, None))[1] or "").strip()
+    if compose_mode == "custom-ui-managed-infra":
+        source_rel = "deployment/docker/custom-ui-managed-infra/nginx/conf/nginx_ui.conf"
+    else:
+        source_rel = "deployment/docker/all_in_one_kdcube/nginx/conf/nginx_ui.conf"
+    source = (repo_root / "app" / "ai-app" / source_rel).resolve()
+    if not source.exists():
+        console.print(f"[yellow]UI nginx config source missing after source restage: {source}[/yellow]")
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, target)
+    console.print(f"[dim]Restored runtime UI nginx build config:[/dim] {target}")
+
+
 def _copy_dirty_local_source(console: Console, *, source_repo: Path, workdir: Path) -> Path:
     if not _is_git_repo(source_repo):
         raise SystemExit(f"init --path requires a local git repo: {source_repo}")
 
     target = _default_repo_path_for_workdir(workdir)
+    if source_repo.resolve() == target.resolve():
+        console.print(f"[dim]Local platform source already staged:[/dim] {target}")
+        return target
+
     console.print(f"[dim]Copying local platform source:[/dim] {source_repo} -> {target}")
 
     try:
@@ -1354,7 +2388,15 @@ def _copy_dirty_local_source(console: Console, *, source_repo: Path, workdir: Pa
     if not files:
         raise SystemExit(f"No source files found to copy from {source_repo}")
 
+    preserve_root = workdir / f".{DEFAULT_REPO_DIRNAME}.preserve-{os.getpid()}"
+    shutil.rmtree(preserve_root, ignore_errors=True)
     if target.exists():
+        for rel in (".kdcube", "app/ai-app/.kdcube"):
+            src_preserve = target / rel
+            if src_preserve.exists():
+                dst_preserve = preserve_root / rel
+                dst_preserve.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(src_preserve, dst_preserve, dirs_exist_ok=True)
         shutil.rmtree(target)
     target.mkdir(parents=True, exist_ok=True)
 
@@ -1376,6 +2418,18 @@ def _copy_dirty_local_source(console: Console, *, source_repo: Path, workdir: Pa
             shutil.copy2(src, dst)
         copied += 1
 
+    if preserve_root.exists():
+        for preserved in preserve_root.rglob("*"):
+            rel = preserved.relative_to(preserve_root)
+            dst = target / rel
+            if preserved.is_dir():
+                dst.mkdir(parents=True, exist_ok=True)
+            elif preserved.is_file() and not dst.exists():
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(preserved, dst)
+        shutil.rmtree(preserve_root, ignore_errors=True)
+
+    _ensure_runtime_repo_build_support_files(console, repo_root=target, workdir=workdir)
     console.print(f"[dim]Copied local platform source files:[/dim] {copied}")
     return target
 
@@ -1627,7 +2681,7 @@ def _check_before_stop(workdir: Path, env_file: Path, docker_dir: Path) -> None:
     """Raise SystemExit if the target deployment is not running or a different one is."""
     running = set()
     try:
-        running = _compose_running_services(docker_dir, env_file)
+        running = _compose_running_services(docker_dir, env_file, strict=True)
     except Exception:
         pass
 
@@ -1652,19 +2706,69 @@ def _check_before_stop(workdir: Path, env_file: Path, docker_dir: Path) -> None:
             )
 
 
-def _resolve_subcommand_workdir(workdir_arg: str | None, cli_defaults: dict) -> Path:
-    if workdir_arg is not None:
+def _resolve_subcommand_workdir(
+    workdir_arg: str | None,
+    cli_defaults: dict,
+    *,
+    tenant_arg: str = "",
+    project_arg: str = "",
+) -> Path:
+    """Resolve the namespaced runtime workdir for non-init subcommands.
+
+    Precedence:
+      1. ``--workdir <full-path>`` (explicit, takes precedence over everything).
+      2. ``--tenant T --project P`` → compose under ``$DEFAULT_WORKDIR``
+         (the platform-wide default base). Falls back to the
+         ``safe_workspace_name`` form when the literal form is not initialized,
+         for backward compatibility with older workdirs.
+      3. ``cli_defaults["default_workdir"]`` (must be a full namespaced path).
+      4. ``cli_defaults["default_tenant"]`` + ``["default_project"]`` →
+         compose under ``$DEFAULT_WORKDIR``.
+      5. Error.
+    """
+    if workdir_arg is not None and str(workdir_arg).strip():
         return Path(os.path.expanduser(workdir_arg)).resolve()
-    if "default_workdir" in cli_defaults:
-        return Path(cli_defaults["default_workdir"]).resolve()
+
+    tenant_arg = (tenant_arg or "").strip()
+    project_arg = (project_arg or "").strip()
+
+    def _compose_under_default(t: str, p: str) -> Path:
+        base = Path(DEFAULT_WORKDIR).expanduser().resolve()
+        literal = (base / f"{t}__{p}").resolve()
+        if _read_install_meta_raw(literal) is not None:
+            return literal
+        safe = installer_mod.workspace_runtime_dir(base, t, p).resolve()
+        if safe != literal and _read_install_meta_raw(safe) is not None:
+            return safe
+        return literal
+
+    if tenant_arg and project_arg:
+        return _compose_under_default(tenant_arg, project_arg)
+
+    default_workdir = str(cli_defaults.get("default_workdir", "") or "").strip()
+    if default_workdir:
+        return Path(os.path.expanduser(default_workdir)).resolve()
+
+    default_tenant = str(cli_defaults.get("default_tenant", "") or "").strip()
+    default_project = str(cli_defaults.get("default_project", "") or "").strip()
+    if default_tenant and default_project:
+        return _compose_under_default(default_tenant, default_project)
+
     raise SystemExit(
         "No target workdir specified.\n"
-        "Pass --workdir explicitly or configure a default:\n"
-        "  kdcube defaults --default-workdir <path>"
+        "Pass one of:\n"
+        "  --tenant T --project P                            # primary form; "
+        f"composes under {DEFAULT_WORKDIR}\n"
+        "  --workdir <full-path>                             # explicit namespaced runtime\n"
+        "or configure cli_defaults via:\n"
+        "  kdcube defaults --default-tenant T --default-project P\n"
+        "  kdcube defaults --default-workdir <full-path>"
     )
 
 
-def _resolve_subcommand_repo(path_arg: str, *, workdir: Path) -> Path:
+def _resolve_subcommand_repo(path_arg: str, *, workdir: Path, path_provided: bool = False) -> Path:
+    if path_provided:
+        return Path(os.path.expanduser(path_arg)).resolve()
     meta_repo = _repo_path_from_install_meta(_resolve_cli_workdir(workdir))
     if meta_repo is not None:
         return meta_repo
@@ -1727,9 +2831,18 @@ def _bootstrap_repo_for_defaults(
 
 
 def main() -> None:
+    preparse_quiet = _cli_quiet_requested(sys.argv[1:])
     console = Console()
-    print_cli_banner()
+    if not preparse_quiet:
+        print_cli_banner()
     parser = argparse.ArgumentParser(description="KDCube Apps bootstrap CLI")
+    parser.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        default=False,
+        help="Suppress the banner and routine success chatter",
+    )
     parser.add_argument("--repo", default=DEFAULT_REPO, help=argparse.SUPPRESS)
     parser.add_argument(
         "--path",
@@ -1870,19 +2983,57 @@ def main() -> None:
     )
     subparsers = parser.add_subparsers(dest="command")
 
+    def _add_quiet_arg(subparser: argparse.ArgumentParser) -> None:
+        subparser.add_argument(
+            "-q",
+            "--quiet",
+            action="store_true",
+            default=argparse.SUPPRESS,
+            help="Suppress the banner and routine success chatter",
+        )
+
     _sp = subparsers.add_parser("stop", help="Stop the local Docker Compose stack")
-    _sp.add_argument("--workdir", default=None, help="Namespaced runtime workdir to stop")
+    _add_quiet_arg(_sp)
+    _sp.add_argument("--tenant", default="", help="Tenant of the runtime to stop. With --project, composes under the platform default base.")
+    _sp.add_argument("--project", default="", help="Project of the runtime to stop. Pair with --tenant.")
+    _sp.add_argument("--workdir", default=None, help="(Advanced) Fully-qualified namespaced runtime workdir to stop")
     _sp.add_argument("--path", default=str(DEFAULT_DIR), help="Platform repo path")
     _sp.add_argument("--remove-volumes", action="store_true", help="Also pass -v to docker compose down")
 
     _sp = subparsers.add_parser("reload", help="Reload a bundle from its descriptor")
+    _add_quiet_arg(_sp)
     _sp.add_argument("bundle_id", help="Bundle ID to reload")
-    _sp.add_argument("--workdir", default=None, help="Namespaced runtime workdir")
+    _sp.add_argument("--tenant", default="", help="Tenant of the runtime. With --project, composes under the platform default base.")
+    _sp.add_argument("--project", default="", help="Project of the runtime. Pair with --tenant.")
+    _sp.add_argument("--workdir", default=None, help="(Advanced) Fully-qualified namespaced runtime workdir")
     _sp.add_argument("--path", default=str(DEFAULT_DIR), help="Platform repo path")
+    _sp.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
+    _sp.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Show the raw docker compose command and proc response",
+    )
 
-    _sp = subparsers.add_parser("bundle", help="Create, update, or delete a staged bundle entry")
-    _sp.add_argument("bundle_id", help="Bundle ID to patch")
-    _sp.add_argument("--workdir", default=None, help="Namespaced runtime workdir")
+    _sp = subparsers.add_parser("bundle", help="Create, update, delete, or inspect a staged bundle entry")
+    _add_quiet_arg(_sp)
+    _sp.add_argument("bundle_id", nargs="?", help="Bundle ID to patch, or 'status'")
+    _sp.add_argument("status_bundle_id", nargs="?", help=argparse.SUPPRESS)
+    _sp.add_argument("--tenant", default="", help="Tenant of the runtime. With --project, composes under the platform default base.")
+    _sp.add_argument("--project", default="", help="Project of the runtime. Pair with --tenant.")
+    _sp.add_argument("--workdir", default=None, help="(Advanced) Fully-qualified namespaced runtime workdir")
+    _sp.add_argument("--path", default=str(DEFAULT_DIR), help="Platform repo path")
+    _sp.add_argument("--json", action="store_true", dest="json_output", help="With `bundle status`, `bundle reload`, or `bundle config apply`, print JSON")
+    _sp.add_argument(
+        "--verbose",
+        action="store_true",
+        help="With `bundle reload` or `bundle config apply --reload`, show the raw docker compose command and proc response",
+    )
+    _sp.add_argument(
+        "--live",
+        action="store_true",
+        dest="live_status",
+        help="With `bundle status`, ask local chat-proc to validate the explicit bundle id",
+    )
     # Source mode (mutually exclusive)
     _src_grp = _sp.add_mutually_exclusive_group()
     _src_grp.add_argument(
@@ -1973,8 +3124,25 @@ def main() -> None:
         default=False,
         help="Remove this bundle entry from bundles.yaml (and its secrets entry if present)",
     )
+    _sp.add_argument(
+        "--descriptors-location",
+        default="",
+        help="With `bundle config apply`, source directory containing bundles.yaml and optional bundles.secrets.yaml",
+    )
+    _sp.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="With `bundle config apply`, show what would change without staging files",
+    )
+    _sp.add_argument(
+        "--reload",
+        action="store_true",
+        dest="reload_changed",
+        help="With `bundle config apply`, reload changed bundle ids after staging descriptors",
+    )
 
     _sp = subparsers.add_parser("export", help="Export live bundle descriptors")
+    _add_quiet_arg(_sp)
     _sp.add_argument("--workdir", default=None, help="Namespaced runtime workdir")
     _sp.add_argument("--path", default=str(DEFAULT_DIR), help="Platform repo path")
     _sp.add_argument("--tenant", default="", help="Tenant for AWS SM export")
@@ -1985,6 +3153,7 @@ def main() -> None:
     _sp.add_argument("--aws-sm-prefix", default="", help="AWS SM prefix override")
 
     _sp = subparsers.add_parser("info", help="Show CLI defaults and runtime info")
+    _add_quiet_arg(_sp)
     _sp.add_argument("--workdir", default="", help="Initialized runtime workdir to inspect")
     _sp.add_argument("--path", default=str(DEFAULT_DIR), help="Platform repo path")
     _sp.add_argument("--tenant", default="", help="Tenant for workdir resolution or disambiguation")
@@ -1995,21 +3164,66 @@ def main() -> None:
         action="store_true",
         help="Show the currently running deployment",
     )
+    _sp.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
 
     _sp = subparsers.add_parser("clean", help="Clean local Docker image/cache artifacts")
+    _add_quiet_arg(_sp)
 
     _sp = subparsers.add_parser("defaults", help="Save persistent operator defaults")
+    _add_quiet_arg(_sp)
     _sp.add_argument("--default-tenant", default="", help="Default tenant to persist")
     _sp.add_argument("--default-project", default="", help="Default project to persist")
     _sp.add_argument("--default-workdir", default="", help="Default workdir to persist")
 
     _sp = subparsers.add_parser("start", help="Start the Docker Compose stack for an initialized workdir")
-    _sp.add_argument("--workdir", default=None, help="Namespaced runtime workdir to start")
+    _add_quiet_arg(_sp)
+    _sp.add_argument("--tenant", default="", help="Tenant of the runtime to start. With --project, composes under the platform default base.")
+    _sp.add_argument("--project", default="", help="Project of the runtime to start. Pair with --tenant.")
+    _sp.add_argument("--workdir", default=None, help="(Advanced) Fully-qualified namespaced runtime workdir to start")
     _sp.add_argument("--path", default=str(DEFAULT_DIR), help="Platform repo path")
     _sp.add_argument("--build", action="store_true", help="Build/rebuild images before starting")
 
-    _sp = subparsers.add_parser("init", help="Initialize a workdir (stage descriptors and env files) without starting Docker")
-    _sp.add_argument("--workdir", default=str(DEFAULT_WORKDIR), help="Base or namespaced runtime workdir")
+    _sp = subparsers.add_parser(
+        "init",
+        help=(
+            "First-time setup of a runtime workdir. Refuses if the target workdir is already initialized; "
+            "use `kdcube refresh` for re-init."
+        ),
+    )
+    _add_quiet_arg(_sp)
+    _sp.add_argument(
+        "--tenant",
+        default="",
+        help=(
+            "Tenant name for the new runtime. With --project, composes the "
+            "runtime path under the platform default base "
+            "(~/.kdcube/kdcube-runtime/<tenant>__<project>). This is the "
+            "recommended primary form."
+        ),
+    )
+    _sp.add_argument(
+        "--project",
+        default="",
+        help="Project name for the new runtime. Pair with --tenant.",
+    )
+    _sp.add_argument(
+        "--workdir",
+        default="",
+        help=(
+            "(Advanced) Fully-qualified namespaced runtime workdir to create "
+            "(e.g. /opt/kdcube/<tenant>__<project>). Use when the runtime "
+            "should live outside the default base."
+        ),
+    )
+    _sp.add_argument(
+        "--workdir-base",
+        default="",
+        help=(
+            "(Advanced) Parent directory under which to create a new namespaced "
+            "runtime. Requires --tenant and --project. Use only when the runtime "
+            "should live outside the platform default base."
+        ),
+    )
     _sp.add_argument(
         "--path",
         default=str(DEFAULT_DIR),
@@ -2020,8 +3234,6 @@ def main() -> None:
     _sp.add_argument("--upstream", action="store_true", help="Use upstream repo state instead of assembly platform.ref")
     _sp.add_argument("--release", default="", help="Use a specific platform release ref")
     _sp.add_argument("--build", action="store_true", help="Build images after staging the runtime, without starting containers")
-    _sp.add_argument("--tenant", default="", help="Tenant for the deployment namespace")
-    _sp.add_argument("--project", default="", help="Project for the deployment namespace")
     _sp.add_argument(
         "--reset-config",
         action="store_true",
@@ -2059,7 +3271,65 @@ def main() -> None:
         help="Prompt for required fields missing in the assembly instead of failing",
     )
 
+    _sp = subparsers.add_parser(
+        "refresh",
+        help=(
+            "Refresh an already-initialized runtime: rebuild images (with --build) "
+            "and restart the stack. Never modifies staged descriptors."
+        ),
+    )
+    _add_quiet_arg(_sp)
+    _sp.add_argument(
+        "--tenant",
+        default="",
+        help=(
+            "Tenant name of the runtime to refresh. With --project, composes "
+            "the runtime path under the platform default base "
+            "(~/.kdcube/kdcube-runtime/<tenant>__<project>). This is the "
+            "recommended primary form."
+        ),
+    )
+    _sp.add_argument(
+        "--project",
+        default="",
+        help="Project name of the runtime to refresh. Pair with --tenant.",
+    )
+    _sp.add_argument(
+        "--workdir",
+        default="",
+        help=(
+            "(Advanced) Fully-qualified namespaced runtime workdir to refresh. "
+            "Use when the runtime lives outside the default base."
+        ),
+    )
+    _sp.add_argument(
+        "--workdir-base",
+        default="",
+        help=(
+            "(Advanced) Parent directory under which the runtime lives. "
+            "Requires --tenant and --project. Use only when the runtime is "
+            "not under the platform default base."
+        ),
+    )
+    _sp.add_argument(
+        "--path",
+        default=str(DEFAULT_DIR),
+        help="Local platform repo path (used for rebuilding images). Defaults to install-meta.json's repo_root when omitted.",
+    )
+    _sp.add_argument("--latest", action="store_true", help="Refresh against the latest platform release advertised by the selected repo.")
+    _sp.add_argument("--upstream", action="store_true", help="Refresh against origin/main of the selected platform repo.")
+    _sp.add_argument("--release", default="", help="Refresh against a specific platform git ref/tag before rebuilding.")
+    _sp.add_argument("--build", action="store_true", help="Rebuild platform Docker images before restarting.")
+    _sp.add_argument(
+        "--no-restart",
+        action="store_true",
+        help="Do not restart the stack after refresh (useful for build-only invocations).",
+    )
+
     args = parser.parse_args()
+    args.quiet = bool(_cli_explicit_quiet_requested(sys.argv[1:]) or getattr(args, "quiet", False))
+    if args.quiet and not bool(getattr(args, "json_output", False)):
+        console = Console(file=_NullWriter())
 
     def _arg_provided(name: str) -> bool:
         return any(arg == name or arg.startswith(f"{name}=") for arg in sys.argv[1:])
@@ -2118,10 +3388,16 @@ def main() -> None:
             _eff_tenant = str(args.tenant or cli_defaults.get("default_tenant", "") or "").strip() or None
             _eff_project = str(args.project or cli_defaults.get("default_project", "") or "").strip() or None
             if args.show_defaults:
+                if args.json_output:
+                    _print_json({"defaults": cli_defaults})
+                    return
                 console.print("[bold]KDCube CLI Defaults[/bold]")
                 print_cli_defaults(console, cli_defaults)
                 return
             if args.show_current_running_runtime:
+                if args.json_output:
+                    _print_json({"running_deployment": _collect_running_deployment_info()})
+                    return
                 print_running_deployment_info(console)
                 return
             _workdir_str = str(args.workdir or "").strip()
@@ -2133,7 +3409,10 @@ def main() -> None:
                         f"Runtime workdir not found or not initialized: {_resolved}\n"
                         "Run `kdcube init` to initialize it first."
                     )
-                _repo = _resolve_subcommand_repo(args.path, workdir=_resolved)
+                _repo = _resolve_subcommand_repo(args.path, workdir=_resolved, path_provided=_arg_provided("--path"))
+                if args.json_output:
+                    _print_json(_collect_runtime_info(repo_root=_repo, workdir=_resolved))
+                    return
                 print_runtime_info(console, repo_root=_repo, workdir=_resolved)
             elif _arg_provided("--tenant") or _arg_provided("--project"):
                 _def_base_raw = str(cli_defaults.get("default_workdir", "") or "").strip()
@@ -2144,9 +3423,32 @@ def main() -> None:
                         f"Runtime workdir not found or not initialized: {_workdir}\n"
                         "Run `kdcube init` to initialize it first."
                     )
-                _repo = _resolve_subcommand_repo(args.path, workdir=_workdir)
+                _repo = _resolve_subcommand_repo(args.path, workdir=_workdir, path_provided=_arg_provided("--path"))
+                if args.json_output:
+                    _print_json(_collect_runtime_info(repo_root=_repo, workdir=_workdir))
+                    return
                 print_runtime_info(console, repo_root=_repo, workdir=_workdir)
             else:
+                if args.json_output:
+                    payload: dict[str, object] = {
+                        "defaults": cli_defaults,
+                        "running_deployment": _collect_running_deployment_info(),
+                    }
+                    _def_base_raw = str(cli_defaults.get("default_workdir", "") or "").strip()
+                    _def_tenant = str(cli_defaults.get("default_tenant", "") or "").strip() or None
+                    _def_project = str(cli_defaults.get("default_project", "") or "").strip() or None
+                    if _def_base_raw or _def_tenant or _def_project:
+                        _def_base = Path(_def_base_raw).expanduser().resolve() if _def_base_raw else DEFAULT_WORKDIR
+                        try:
+                            _def_resolved = _resolve_cli_workdir(_def_base, tenant=_def_tenant, project=_def_project)
+                        except SystemExit:
+                            payload["default_runtime"] = None
+                        else:
+                            if _runtime_env_exists(_def_resolved) or (_def_resolved / "config").exists():
+                                _def_repo = _resolve_subcommand_repo(args.path, workdir=_def_resolved, path_provided=_arg_provided("--path"))
+                                payload["default_runtime"] = _collect_runtime_info(repo_root=_def_repo, workdir=_def_resolved)
+                    _print_json(payload)
+                    return
                 print_global_info(console, cli_defaults)
                 _def_base_raw = str(cli_defaults.get("default_workdir", "") or "").strip()
                 _def_tenant = str(cli_defaults.get("default_tenant", "") or "").strip() or None
@@ -2159,13 +3461,43 @@ def main() -> None:
                         pass
                     else:
                         if _runtime_env_exists(_def_resolved) or (_def_resolved / "config").exists():
-                            _def_repo = _resolve_subcommand_repo(args.path, workdir=_def_resolved)
+                            _def_repo = _resolve_subcommand_repo(args.path, workdir=_def_resolved, path_provided=_arg_provided("--path"))
                             console.print()
                             print_runtime_info(console, repo_root=_def_repo, workdir=_def_resolved)
             return
         if args.command == "stop":
-            _workdir = _resolve_subcommand_workdir(args.workdir, cli_defaults)
-            _repo = _resolve_subcommand_repo(args.path, workdir=_workdir)
+            # `kdcube stop` always targets a single deployment. When no flags
+            # are given and there is no usable default, fall back to the
+            # currently-recorded deployment in ~/.kdcube/cli-lock.json — it
+            # is by definition the one that's running, so "stop with no args"
+            # has the obvious meaning "stop what's running."
+            _stop_tenant_arg = (getattr(args, "tenant", "") or "").strip()
+            _stop_project_arg = (getattr(args, "project", "") or "").strip()
+            _stop_workdir_arg = args.workdir
+            _have_explicit_target = bool(
+                (_stop_workdir_arg and str(_stop_workdir_arg).strip())
+                or (_stop_tenant_arg and _stop_project_arg)
+                or str(cli_defaults.get("default_workdir", "") or "").strip()
+                or (
+                    str(cli_defaults.get("default_tenant", "") or "").strip()
+                    and str(cli_defaults.get("default_project", "") or "").strip()
+                )
+            )
+            if not _have_explicit_target:
+                _lock = _read_cli_lock()
+                _lock_workdir = str((_lock or {}).get("workdir", "") or "").strip()
+                if _lock_workdir:
+                    console.print(
+                        f"[dim]No --workdir/--tenant/--project passed; "
+                        f"stopping currently-recorded deployment:[/dim] {_lock_workdir}"
+                    )
+                    _stop_workdir_arg = _lock_workdir
+            _workdir = _resolve_subcommand_workdir(
+                _stop_workdir_arg, cli_defaults,
+                tenant_arg=_stop_tenant_arg,
+                project_arg=_stop_project_arg,
+            )
+            _repo = _resolve_subcommand_repo(args.path, workdir=_workdir, path_provided=_arg_provided("--path"))
             stop_compose_stack(
                 console,
                 repo_root=_repo,
@@ -2174,18 +3506,153 @@ def main() -> None:
             )
             return
         if args.command == "reload":
-            _workdir = _resolve_subcommand_workdir(args.workdir, cli_defaults)
-            _repo = _resolve_subcommand_repo(args.path, workdir=_workdir)
+            _workdir = _resolve_subcommand_workdir(
+                args.workdir, cli_defaults,
+                tenant_arg=getattr(args, "tenant", "") or "",
+                project_arg=getattr(args, "project", "") or "",
+            )
+            _repo = _resolve_subcommand_repo(args.path, workdir=_workdir, path_provided=_arg_provided("--path"))
             reload_bundle_from_descriptor(
                 console,
                 repo_root=_repo,
                 workdir=_resolve_cli_workdir(_workdir),
                 bundle_id=str(args.bundle_id).strip(),
+                verbose=bool(args.verbose),
+                json_output=bool(args.json_output),
+                quiet=bool(args.quiet),
             )
             return
         if args.command == "bundle":
-            _workdir = _resolve_subcommand_workdir(args.workdir, cli_defaults)
+            _workdir = _resolve_subcommand_workdir(
+                args.workdir, cli_defaults,
+                tenant_arg=getattr(args, "tenant", "") or "",
+                project_arg=getattr(args, "project", "") or "",
+            )
             _resolved = _resolve_cli_workdir(_workdir)
+            _bundle_arg = str(args.bundle_id or "").strip()
+            _status_bundle_arg = str(args.status_bundle_id or "").strip()
+            _has_bundle_patch_flags = any(
+                [
+                    args.local_path is not None,
+                    args.git_repo is not None,
+                    args.git_ref is not None,
+                    args.git_subdir is not None,
+                    args.name is not None,
+                    args.module is not None,
+                    args.singleton is not None,
+                    bool(args.set_config or []),
+                    bool(args.set_secret or []),
+                    bool(args.del_config or []),
+                    bool(args.del_secret or []),
+                    bool(args.delete),
+                ]
+            )
+            if _bundle_arg == "reload":
+                if not _status_bundle_arg:
+                    raise SystemExit("Usage: kdcube bundle reload <bundle_id> --workdir <workdir>")
+                if _has_bundle_patch_flags:
+                    raise SystemExit("`kdcube bundle reload` cannot be combined with bundle mutation flags.")
+                if args.live_status:
+                    raise SystemExit("--live is only supported with `kdcube bundle status <bundle_id>`.")
+                if args.descriptors_location or args.dry_run or args.reload_changed:
+                    raise SystemExit(
+                        "--descriptors-location, --dry-run, and --reload are only supported with "
+                        "`kdcube bundle config apply`."
+                    )
+                _repo = _resolve_subcommand_repo(args.path, workdir=_resolved, path_provided=_arg_provided("--path"))
+                reload_bundle_from_descriptor(
+                    console,
+                    repo_root=_repo,
+                    workdir=_resolved,
+                    bundle_id=_status_bundle_arg,
+                    verbose=bool(args.verbose),
+                    json_output=bool(args.json_output),
+                    quiet=bool(args.quiet),
+                )
+                return
+            if _bundle_arg == "config":
+                if _status_bundle_arg != "apply":
+                    raise SystemExit(
+                        "Usage: kdcube bundle config apply "
+                        "--descriptors-location <dir> --workdir <workdir> [--dry-run] [--reload]"
+                    )
+                if _has_bundle_patch_flags:
+                    raise SystemExit("`kdcube bundle config apply` cannot be combined with bundle mutation flags.")
+                if args.live_status:
+                    raise SystemExit("--live is only supported with `kdcube bundle status <bundle_id>`.")
+                if not str(args.descriptors_location or "").strip():
+                    raise SystemExit("--descriptors-location is required with `kdcube bundle config apply`.")
+                _repo = None
+                if args.reload_changed:
+                    _repo = _resolve_subcommand_repo(args.path, workdir=_resolved, path_provided=_arg_provided("--path"))
+                _result = apply_bundle_config_descriptors(
+                    console,
+                    workdir=_resolved,
+                    descriptors_location=Path(str(args.descriptors_location)),
+                    dry_run=bool(args.dry_run),
+                    reload_changed=bool(args.reload_changed),
+                    repo_root=_repo,
+                    verbose=bool(args.verbose),
+                    quiet=bool(args.quiet or args.json_output),
+                )
+                if args.json_output:
+                    _print_json(_result)
+                return
+            if _bundle_arg == "status":
+                if not _status_bundle_arg:
+                    raise SystemExit("Usage: kdcube bundle status <bundle_id> --workdir <workdir>")
+                if any(
+                    [
+                        args.local_path is not None,
+                        args.git_repo is not None,
+                        args.git_ref is not None,
+                        args.git_subdir is not None,
+                        args.name is not None,
+                        args.module is not None,
+                        args.singleton is not None,
+                        bool(args.set_config or []),
+                        bool(args.set_secret or []),
+                        bool(args.del_config or []),
+                        bool(args.del_secret or []),
+                        bool(args.delete),
+                        bool(args.descriptors_location),
+                        bool(args.dry_run),
+                        bool(args.reload_changed),
+                    ]
+                ):
+                    raise SystemExit("`kdcube bundle status` cannot be combined with mutation flags.")
+                _repo = _resolve_subcommand_repo(args.path, workdir=_resolved, path_provided=_arg_provided("--path"))
+                _status = _collect_bundle_status(
+                    repo_root=_repo,
+                    workdir=_resolved,
+                    bundle_id=_status_bundle_arg,
+                    include_live=True,
+                    include_live_manifest=bool(args.live_status),
+                )
+                if args.json_output:
+                    _print_json(_status)
+                else:
+                    print_bundle_status(console, _status)
+                return
+            if _status_bundle_arg:
+                raise SystemExit(
+                    f"Unexpected extra argument {_status_bundle_arg!r}. "
+                    "Use `kdcube bundle status <bundle_id>` for status checks."
+                )
+            if args.json_output:
+                raise SystemExit("--json is only supported with `kdcube bundle status`, `kdcube bundle reload`, or `kdcube bundle config apply`.")
+            if args.live_status:
+                raise SystemExit("--live is only supported with `kdcube bundle status <bundle_id>`.")
+            if args.descriptors_location or args.dry_run or args.reload_changed:
+                raise SystemExit(
+                    "--descriptors-location, --dry-run, and --reload are only supported with "
+                    "`kdcube bundle config apply`."
+                )
+            if not _bundle_arg:
+                raise SystemExit(
+                    "Bundle ID is required. Use `kdcube bundle <bundle_id> --...` or "
+                    "`kdcube bundle status <bundle_id>`."
+                )
             _config_dir = _resolved / "config"
             _bundles_path = _config_dir / "bundles.yaml"
             _bundles_secrets_path = _config_dir / "bundles.secrets.yaml"
@@ -2196,7 +3663,7 @@ def main() -> None:
                     "Initialize the workdir first."
                 )
 
-            _bundle_id = str(args.bundle_id).strip()
+            _bundle_id = _bundle_arg
             _local_path: str | None = args.local_path
             _git_repo: str | None = args.git_repo
             _git_ref: str | None = args.git_ref
@@ -2243,6 +3710,9 @@ def main() -> None:
                 del _b_items[_b_idx]
                 installer_mod.save_release_descriptor(_bundles_path, _bundles_data)
                 console.print(f"[green]Removed from bundles.yaml:[/green] {_bundle_id!r}")
+                _bs_idx = None
+                _bs_items = []
+                _bs_data = None
                 if _bundles_secrets_path.exists():
                     _bs_data = installer_mod.load_release_descriptor(_bundles_secrets_path)
                     _bs_block = _bs_data.get("bundles") if isinstance(_bs_data, dict) else None
@@ -2251,10 +3721,12 @@ def main() -> None:
                         (i for i, it in enumerate(_bs_items) if isinstance(it, dict) and str(it.get("id", "")) == _bundle_id),
                         None,
                     )
-                    if _bs_idx is not None:
-                        del _bs_items[_bs_idx]
+                if _bs_idx is not None:
+                    del _bs_items[_bs_idx]
+                    if _bs_data is not None:
                         installer_mod.save_release_descriptor(_bundles_secrets_path, _bs_data)
-                        console.print(f"[green]Removed from bundles.secrets.yaml:[/green] {_bundle_id!r}")
+                    console.print(f"[green]Removed from bundles.secrets.yaml:[/green] {_bundle_id!r}")
+                _print_bundle_apply_hint(console, _bundle_id, _resolved)
                 return
 
             # --- bundles.yaml operations (source mode + identity + config) ---
@@ -2278,10 +3750,20 @@ def main() -> None:
                     console.print(f"[dim]creating new bundle entry[/dim] {_bundle_id!r}")
 
                 if _local_path is not None:
-                    _b_item["path"] = _local_path
+                    _runtime_path, _path_mode = _resolve_bundle_local_path_for_runtime(_local_path, _resolved)
+                    _b_item["path"] = _runtime_path
                     for _stale in ("repo", "ref", "subdir"):
                         _b_item.pop(_stale, None)
-                    console.print(f"[dim]set source[/dim] local-path = {_local_path!r}")
+                    if _path_mode == "translated":
+                        console.print(
+                            f"[dim]set source[/dim] local-path = {_runtime_path!r} "
+                            f"[dim](translated from host path {_local_path!r})[/dim]"
+                        )
+                    else:
+                        console.print(
+                            f"[dim]set source[/dim] local-path = {_runtime_path!r} "
+                            "[dim](already runtime-visible)[/dim]"
+                        )
 
                 if _git_repo is not None:
                     _b_item["repo"] = _git_repo
@@ -2368,10 +3850,15 @@ def main() -> None:
                 installer_mod.save_release_descriptor(_bundles_secrets_path, _bs_data)
                 console.print(f"[green]Updated:[/green] {_bundles_secrets_path}")
 
+            _print_bundle_apply_hint(console, _bundle_id, _resolved)
             return
         if args.command == "export":
-            _workdir = _resolve_subcommand_workdir(args.workdir, cli_defaults)
-            _repo = _resolve_subcommand_repo(args.path, workdir=_workdir)
+            _workdir = _resolve_subcommand_workdir(
+                args.workdir, cli_defaults,
+                tenant_arg=getattr(args, "tenant", "") or "",
+                project_arg=getattr(args, "project", "") or "",
+            )
+            _repo = _resolve_subcommand_repo(args.path, workdir=_workdir, path_provided=_arg_provided("--path"))
             _resolved = _resolve_cli_workdir(_workdir)
             _out_dir = Path(os.path.expanduser(args.out_dir or os.getcwd())).resolve()
             _bundles_path: Path | None = None
@@ -2404,15 +3891,149 @@ def main() -> None:
             )
             return
         if args.command == "start":
-            _workdir = _resolve_subcommand_workdir(args.workdir, cli_defaults)
+            _workdir = _resolve_subcommand_workdir(
+                args.workdir, cli_defaults,
+                tenant_arg=getattr(args, "tenant", "") or "",
+                project_arg=getattr(args, "project", "") or "",
+            )
             _resolved = _resolve_cli_workdir(_workdir)
-            _repo = _resolve_subcommand_repo(args.path, workdir=_resolved)
+            _repo = _resolve_subcommand_repo(args.path, workdir=_resolved, path_provided=_arg_provided("--path"))
             _t, _p = _parse_workdir_namespace(_resolved)
             _check_before_start(console, tenant=_t, project=_p)
             start_compose_stack(console, repo_root=_repo, workdir=_resolved, build=args.build)
             return
+        if args.command == "refresh":
+            # `kdcube refresh` is the re-init / pick-up-platform-changes
+            # command. It operates only on an already-initialized runtime
+            # workdir and NEVER touches staged descriptors.
+            #
+            # Primary invocation (uses platform default base):
+            #   kdcube refresh --tenant T --project P --build
+            #
+            # When no flags and no defaults are present, refresh falls back
+            # to the currently-recorded deployment in ~/.kdcube/cli-lock.json
+            # so `kdcube refresh --build` after editing platform code "just
+            # works" against the running runtime.
+            #
+            # Behaviour:
+            #   1. Resolve the target workdir (--tenant/--project compose
+            #      under DEFAULT_WORKDIR; or --workdir / --workdir-base for
+            #      explicit non-default forms; or cli-lock fallback).
+            #   2. Refuse if the workdir is not initialized
+            #      (no install-meta.json or missing canonical descriptors).
+            #   3. Stop the stack if it is running.
+            #   4. If --build, rebuild platform Docker images from the staged
+            #      repo (or from --path).
+            #   5. Unless --no-restart, start the stack again.
+            _refresh_workdir_arg = args.workdir or ""
+            _refresh_tenant_arg = (args.tenant or "").strip()
+            _refresh_project_arg = (args.project or "").strip()
+            _refresh_workdir_base_arg = (getattr(args, "workdir_base", "") or "").strip()
+            _have_explicit_target = bool(
+                str(_refresh_workdir_arg).strip()
+                or _refresh_workdir_base_arg
+                or (_refresh_tenant_arg and _refresh_project_arg)
+                or str(cli_defaults.get("default_workdir", "") or "").strip()
+                or (
+                    str(cli_defaults.get("default_tenant", "") or "").strip()
+                    and str(cli_defaults.get("default_project", "") or "").strip()
+                )
+            )
+            if not _have_explicit_target:
+                _lock = _read_cli_lock()
+                _lock_workdir = str((_lock or {}).get("workdir", "") or "").strip()
+                if _lock_workdir:
+                    console.print(
+                        f"[dim]No --workdir/--tenant/--project passed; "
+                        f"refreshing currently-recorded deployment:[/dim] {_lock_workdir}"
+                    )
+                    _refresh_workdir_arg = _lock_workdir
+            _resolved, _refresh_tenant, _refresh_project = (
+                _resolve_namespaced_runtime_target(
+                    workdir_arg=_refresh_workdir_arg,
+                    workdir_base_arg=_refresh_workdir_base_arg,
+                    tenant_arg=_refresh_tenant_arg,
+                    project_arg=_refresh_project_arg,
+                    cli_defaults=cli_defaults,
+                    prefer_existing=True,
+                )
+            )
+            _refresh_reuse_config = _canonical_descriptor_dir_from_initialized_workdir(_resolved)
+            if _refresh_reuse_config is None:
+                raise SystemExit(
+                    f"Workdir is not initialized: {_resolved}\n"
+                    "`kdcube refresh` only operates on a runtime that was previously created "
+                    "by `kdcube init`. Either:\n"
+                    "  - run `kdcube init --tenant T --project P` to set this workdir up, or\n"
+                    "  - target a different existing initialized runtime."
+                )
+            _refresh_path_provided = _arg_provided("--path")
+            _refresh_release = str(getattr(args, "release", "") or "").strip()
+            _refresh_version_selector = bool(args.latest or args.upstream or _refresh_release)
+            if sum([bool(args.latest), bool(args.upstream), bool(_refresh_release)]) > 1:
+                raise SystemExit("Choose only one of --latest, --upstream, or --release.")
+
+            _repo = _resolve_subcommand_repo(args.path, workdir=_resolved, path_provided=_refresh_path_provided)
+            if _refresh_version_selector:
+                if not _is_git_repo(_repo):
+                    raise SystemExit(
+                        f"Cannot use --latest/--upstream/--release with a non-git platform source tree: {_repo}"
+                    )
+                if args.upstream:
+                    _checkout_repo_upstream(console, _repo)
+                elif args.latest:
+                    _latest_ref = _read_remote_ref(_repo) or _read_local_ref(_repo)
+                    if not _latest_ref:
+                        raise SystemExit(
+                            "Could not resolve the latest platform release. "
+                            "Check platform.repo or pass --release <ref>."
+                        )
+                    _checkout_repo_ref(console, _repo, _latest_ref)
+                else:
+                    _checkout_repo_ref(console, _repo, _refresh_release)
+                if _repo.resolve() != _default_repo_path_for_workdir(_resolved).resolve():
+                    _repo = _copy_dirty_local_source(
+                        console,
+                        source_repo=_repo,
+                        workdir=_resolved,
+                    )
+            elif _refresh_path_provided:
+                _repo = _copy_dirty_local_source(
+                    console,
+                    source_repo=_repo,
+                    workdir=_resolved,
+                )
+            _t, _p = _parse_workdir_namespace(_resolved)
+            # Stop if running (no-op if already stopped).
+            try:
+                stop_compose_stack(console, repo_root=_repo, workdir=_resolved)
+            except SystemExit as _stop_exit:
+                _stop_msg = str(_stop_exit)
+                if "Deployment is not running" in _stop_msg:
+                    _clear_cli_lock()
+                    console.print(
+                        f"[dim]Refresh: deployment was already stopped; continuing. Workdir: {_resolved}[/dim]"
+                    )
+                else:
+                    # stop_compose_stack already prints; re-raise so the user sees it.
+                    raise
+            except Exception as _stop_exc:
+                console.print(
+                    f"[yellow]Refresh: stop_compose_stack reported {_stop_exc}; "
+                    "continuing anyway.[/yellow]"
+                )
+            if args.build:
+                build_compose_images(console, repo_root=_repo, workdir=_resolved)
+            if not args.no_restart:
+                _check_before_start(console, tenant=_t, project=_p)
+                start_compose_stack(console, repo_root=_repo, workdir=_resolved, build=False)
+            else:
+                console.print(
+                    "[dim]Refresh: --no-restart set; not starting the stack. "
+                    f"Run `kdcube start --workdir {_resolved}` when ready.[/dim]"
+                )
+            return
         if args.command == "init":
-            _init_workdir = Path(os.path.expanduser(args.workdir)).resolve()
             _init_path_provided = bool(_arg_provided("--path"))
             _init_repo = Path(os.path.expanduser(args.path)).resolve()
             _init_descriptors_location: Path | None = None
@@ -2420,46 +4041,66 @@ def main() -> None:
             if sum([bool(args.latest), bool(args.upstream), bool(str(args.release or "").strip())]) > 1:
                 raise SystemExit("Choose only one of --latest, --upstream, or --release.")
             _init_local_source_copy = _init_path_provided and not _init_version_selector
-            # Pre-declare; may be set early in the no-descriptors path below.
-            _init_preset_tenant: str | None = None
-            _init_preset_project: str | None = None
-            _init_resolved: Path | None = None
+
+            # === Resolve target workdir under the strict contract. ===
+            #
+            # `kdcube init` is *first-time setup only*. It always lands on a
+            # fully-qualified namespaced runtime path
+            # `<base>/<tenant>__<project>`. See _resolve_namespaced_runtime_target
+            # for the four supported input shapes. The most common shape is
+            #
+            #   kdcube init --tenant T --project P
+            #
+            # which composes the path under the platform default base
+            # (~/.kdcube/kdcube-runtime). `--workdir <full>` and
+            # `--workdir-base <base> --tenant T --project P` are advanced
+            # forms for non-default placement.
+            #
+            # If the resolved target already has `install-meta.json` (i.e. a
+            # previous successful init), `init` refuses with a clear error
+            # pointing the user at `kdcube refresh`. This prevents the
+            # silent-clobber bug where `init` would reseed descriptors on top
+            # of a working runtime.
+            _init_resolved, _init_preset_tenant, _init_preset_project = (
+                _resolve_namespaced_runtime_target(
+                    workdir_arg=args.workdir or "",
+                    workdir_base_arg=getattr(args, "workdir_base", "") or "",
+                    tenant_arg=args.tenant or "",
+                    project_arg=args.project or "",
+                    cli_defaults=cli_defaults,
+                )
+            )
+            console.print(
+                f"[dim]Target runtime workdir:[/dim] {_init_resolved}"
+            )
+
+            # Refusal guard: if the resolved workdir is already an initialized
+            # runtime (has install-meta.json), `kdcube init` will NOT reseed
+            # descriptors over it. This is the load-bearing fix for N9.
+            _existing_meta = _read_install_meta_raw(_init_resolved) if _init_resolved.exists() else None
+            if _existing_meta is not None:
+                raise SystemExit(
+                    f"An initialized runtime already exists at:\n"
+                    f"  {_init_resolved}\n"
+                    "`kdcube init` is for first-time setup only and refuses to overwrite "
+                    "staged descriptors.\n\n"
+                    "If you want to rebuild platform images / restart on this workdir, run:\n"
+                    f"  kdcube refresh --workdir {_init_resolved}{' --build' if args.build else ''}\n\n"
+                    "If you really want to recreate from scratch, remove the workdir first:\n"
+                    f"  rm -rf {_init_resolved}\n"
+                    "and then re-run kdcube init."
+                )
+
+            # Initial workdir is created from here on.
+            _init_workdir = _init_resolved
             if str(args.descriptors_location or "").strip():
                 _init_descriptors_location = Path(
                     os.path.expanduser(args.descriptors_location)
                 ).resolve()
             else:
-                # No --descriptors-location: determine tenant/project, create the
-                # scoped workdir, then clone the platform repo into <workdir>/repo
-                # and use its deployment/ directory as the descriptor source.
-                # Applies to plain init, --latest, --upstream, --release, and --build.
-                if "__" in _init_workdir.name:
-                    # --workdir already encodes tenant__project; use it directly
-                    # and derive the namespace from the directory name.
-                    _init_resolved = _init_workdir.resolve()
-                    _ns = _init_workdir.name.split("__", 1)
-                    _init_preset_tenant = _ns[0]
-                    _init_preset_project = _ns[1]
-                elif args.interactive:
-                    _init_preset_tenant = installer_mod.ask(
-                        console,
-                        "Tenant ID",
-                        default=str(args.tenant or "").strip() or "default",
-                    )
-                    _init_preset_project = installer_mod.ask(
-                        console,
-                        "Project name",
-                        default=str(args.project or "").strip() or "default",
-                    )
-                    _init_resolved = installer_mod.workspace_runtime_dir(
-                        _init_workdir, _init_preset_tenant, _init_preset_project
-                    ).resolve()
-                else:
-                    _init_preset_tenant = str(args.tenant or "").strip() or "default"
-                    _init_preset_project = str(args.project or "").strip() or "default"
-                    _init_resolved = installer_mod.workspace_runtime_dir(
-                        _init_workdir, _init_preset_tenant, _init_preset_project
-                    ).resolve()
+                # Fresh init without descriptors: bootstrap the platform repo
+                # under <workdir>/repo and use its deployment/ directory as the
+                # descriptor source.
                 _init_resolved.mkdir(parents=True, exist_ok=True)
                 _repo_target = _init_repo if _init_path_provided else _init_resolved / DEFAULT_REPO_DIRNAME
                 _init_repo, _init_descriptors_location = _bootstrap_repo_for_defaults(

@@ -163,18 +163,18 @@ def bundle(bundle_dir, bundle_id, redis_client, pg_pool, comm_context):
         Initialized bundle instance ready for testing
     """
     try:
-        from kdcube_ai_app.infra.plugin.agentic_loader import (
-            AgenticBundleSpec,
+        from kdcube_ai_app.infra.plugin.bundle_loader import (
+            BundleSpec,
             _resolve_module,
             _discover_decorated,
         )
 
-        spec = AgenticBundleSpec(path=str(bundle_dir), module="entrypoint")
+        spec = BundleSpec(path=str(bundle_dir), module="entrypoint")
         mod = _resolve_module(spec)
         chosen = _discover_decorated(mod)
 
         if chosen is None:
-            pytest.skip(f"No @agentic_workflow class found in bundle '{bundle_id}'")
+            pytest.skip(f"No @bundle_entrypoint class found in bundle '{bundle_id}'")
 
         kind, meta, symbol = chosen
         if kind != "class":

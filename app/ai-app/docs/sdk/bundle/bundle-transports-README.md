@@ -9,6 +9,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/sdk/bundle/bundle-client-communication-README.md
+  - ks:docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
@@ -72,6 +73,15 @@ So:
 | bundle-authenticated MCP | `@mcp(route="operations")` | MCP over `streamable-http` | `/api/integrations/bundles/{tenant}/{project}/{bundle_id}/mcp/{alias}` | bundle MCP app | MCP client |
 | public MCP | `@mcp(route="public")` | MCP over `streamable-http` | `/api/integrations/bundles/{tenant}/{project}/{bundle_id}/public/mcp/{alias}` | nobody by default | MCP client |
 
+Chat clients can also send external events to the currently active conversation
+turn over the same chat transport. A `followup` or `steer` is not a separate
+bundle transport: it is a normal `/sse/chat` or Socket.IO `chat_message` request
+with continuation intent. Ingress stores it in the shared conversation external
+event source. A live React owner consumes it on the current turn, or proc later
+promotes the stored `task_payload` into one normal ready-queue turn. See
+[Bundle Client Communication](bundle-client-communication-README.md) and
+[Bundle Chat Stream Events](bundle-chat-stream-events-README.md).
+
 Background jobs are intentionally not URL-addressable. A producer writes a
 ready job to the Redis Stream with tenant/project/bundle/user routing metadata.
 Proc claims it fairly, constructs a normal bundle runtime context, and calls the
@@ -89,7 +99,7 @@ bundle-owned `work_kind` values when that returns `handled=false`.
 Minimal shape:
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import api
+from kdcube_ai_app.infra.plugin.bundle_loader import api
 
 @api(
     alias="preferences_exec_report",
@@ -191,7 +201,7 @@ Canonical bundle-authenticated public hook:
 ```python
 from fastapi import HTTPException, Request
 
-from kdcube_ai_app.apps.chat.sdk.config import get_secret_async
+from kdcube_ai_app.apps.chat.sdk.config import get_secret
 
 @api(
     alias="telegram_webhook",
@@ -203,7 +213,7 @@ async def telegram_webhook(self, request: Request, **kwargs):
         "telegram.webhook.auth.header_name",
         "X-Telegram-Bot-Api-Secret-Token",
     )
-    expected_token = await get_secret_async("b:telegram.webhook.auth.shared_token")
+    expected_token = await get_secret("b:telegram.webhook.auth.shared_token")
     provided_token = request.headers.get(header_name)
     if not expected_token or provided_token != expected_token:
         raise HTTPException(status_code=401, detail="Unauthorized")
@@ -259,7 +269,7 @@ What the bundle shares with the client:
 ### 4.1 Minimal shape
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import mcp
+from kdcube_ai_app.infra.plugin.bundle_loader import mcp
 
 @mcp(
     alias="tools",
@@ -401,8 +411,8 @@ Bundle code:
 from fastapi import HTTPException, Request
 from mcp.server.fastmcp import FastMCP
 
-from kdcube_ai_app.apps.chat.sdk.config import get_secret_async
-from kdcube_ai_app.infra.plugin.agentic_loader import mcp
+from kdcube_ai_app.apps.chat.sdk.config import get_secret
+from kdcube_ai_app.infra.plugin.bundle_loader import mcp
 
 @mcp(
     alias="partner_tools",
@@ -414,7 +424,7 @@ async def partner_tools_mcp(self, request: Request, **kwargs):
         "mcp.inbound.auth.header_name",
         "X-Partner-MCP-Token",
     )
-    expected_token = await get_secret_async("b:mcp.inbound.auth.shared_token")
+    expected_token = await get_secret("b:mcp.inbound.auth.shared_token")
     provided_token = request.headers.get(header_name)
 
     if not expected_token:
@@ -474,7 +484,7 @@ bundle-authenticated MCP.
 Minimal shape:
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import ui_widget
+from kdcube_ai_app.infra.plugin.bundle_loader import ui_widget
 
 @ui_widget(
     alias="preferences",
@@ -548,6 +558,13 @@ Transports to the client:
 
 - SSE
 - Socket.IO
+
+This path can be used by non-chat bundle operations too. A browser can open the
+normal `/sse/stream` or Socket.IO connection, call a bundle REST operation, and
+pass the connected peer id through the configured stream-id header so
+`comm.service_event(...)` can reply to that exact peer or broadcast to the
+current session. See the concrete recipe in
+[Bundle Client Communication](bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream).
 
 ### 7.2 Who owns outbound auth
 

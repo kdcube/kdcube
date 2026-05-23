@@ -19,7 +19,12 @@ from kdcube_ai_app.ops.deployment.sql.db_deployment import project_schema as _pr
 from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_rag import ContextRAGClient
 from kdcube_ai_app.apps.chat.sdk.context.vector.conv_index import ConvIndex
 from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore
-from kdcube_ai_app.infra.service_hub.inventory import ConfigRequest, ModelServiceBase, create_workflow_config
+from kdcube_ai_app.infra.service_hub.inventory import (
+    ConfigRequest,
+    ModelServiceBase,
+    create_workflow_config,
+    resolve_config_request_secrets,
+)
 
 try:
     import openpyxl
@@ -68,25 +73,25 @@ async def _get_pg_pool_from_state():
     return await get_pg_pool()
 
 
-def _get_shared_components():
+async def _get_shared_components():
     base_ctx = getattr(router.state, "conversation_browser", None)
     if base_ctx:
         return base_ctx.model_service, base_ctx.store
 
     settings = get_settings()
-    req = ConfigRequest(
+    req = await resolve_config_request_secrets(ConfigRequest(
         openai_api_key=settings.OPENAI_API_KEY,
         claude_api_key=settings.ANTHROPIC_API_KEY,
-    )
+    ))
     model_service = ModelServiceBase(create_workflow_config(req))
     store = ConversationStore(settings.STORAGE_PATH)
     return model_service, store
 
 
-def _build_ctx(pg_pool, tenant: str, project: str) -> ContextRAGClient:
+async def _build_ctx(pg_pool, tenant: str, project: str) -> ContextRAGClient:
     conv_idx = ConvIndex(pool=pg_pool)
     conv_idx.schema = _schema_for(tenant, project)
-    model_service, store = _get_shared_components()
+    model_service, store = await _get_shared_components()
     return ContextRAGClient(conv_idx=conv_idx, store=store, model_service=model_service)
 
 
@@ -408,7 +413,7 @@ async def list_user_conversations(
     session=Depends(auth_without_pressure()),
 ):
     pool = await _get_pg_pool_from_state()
-    ctx = _build_ctx(pool, tenant, project)
+    ctx = await _build_ctx(pool, tenant, project)
     started_after_dt = None
     if started_after:
         try:
@@ -435,7 +440,7 @@ async def get_conversation_details(
     session=Depends(auth_without_pressure()),
 ):
     pool = await _get_pg_pool_from_state()
-    ctx = _build_ctx(pool, tenant, project)
+    ctx = await _build_ctx(pool, tenant, project)
     return await ctx.get_conversation_details(user_id=user_id, conversation_id=conversation_id, ctx={})
 
 
@@ -449,7 +454,7 @@ async def fetch_conversation(
     session=Depends(auth_without_pressure()),
 ):
     pool = await _get_pg_pool_from_state()
-    ctx = _build_ctx(pool, tenant, project)
+    ctx = await _build_ctx(pool, tenant, project)
     return await ctx.fetch_conversation_artifacts(
         user_id=user_id,
         conversation_id=conversation_id,
@@ -473,7 +478,7 @@ async def export_user_conversations(
         raise HTTPException(status_code=500, detail=f"Excel export unavailable: {_OPENPYXL_ERROR}")
 
     pool = await _get_pg_pool_from_state()
-    ctx = _build_ctx(pool, tenant, project)
+    ctx = await _build_ctx(pool, tenant, project)
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
     used_names: set[str] = set()

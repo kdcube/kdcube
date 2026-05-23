@@ -17,9 +17,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.workspace import (
     workspace_version_ref,
 )
 from kdcube_ai_app.infra.git.auth import (
-    build_git_env as _build_git_env,
+    build_git_env,
     ensure_git_commit_identity as _ensure_git_commit_identity,
-    normalize_git_remote_url as _normalize_git_remote_url,
+    normalize_git_remote_url,
 )
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
 from kdcube_ai_app.apps.chat.sdk.runtime.workspace import artifact_outdir_for, runtime_outdir_for_artifact_outdir
@@ -196,21 +196,33 @@ def _run_git_capture(repo_root: pathlib.Path, args: List[str], *, env: Optional[
     )
 
 
-def _ensure_workspace_repo(
+async def _resolve_workspace_git(
     *,
     runtime_ctx: Any,
-    outdir: pathlib.Path,
     logger: Optional[AgentLogger] = None,
-) -> pathlib.Path:
+) -> tuple[str, Dict[str, str]]:
     repo_url = str(getattr(runtime_ctx, "workspace_git_repo", "") or "").strip()
     if not repo_url:
         raise ValueError("missing_workspace_git_repo")
     log = logger or AgentLogger("react.workspace.git")
-    env = _build_git_env()
-    normalized_repo_url = _normalize_git_remote_url(repo_url)
+    normalized_repo_url = await normalize_git_remote_url(repo_url)
     if normalized_repo_url != repo_url:
         log.log(f"[react.workspace.git] using HTTPS for {repo_url}", level="INFO")
-        repo_url = normalized_repo_url
+    env = await build_git_env(logger=log)
+    return normalized_repo_url, env
+
+
+def _ensure_workspace_repo(
+    *,
+    runtime_ctx: Any,
+    outdir: pathlib.Path,
+    repo_url: str,
+    env: Dict[str, str],
+    logger: Optional[AgentLogger] = None,
+) -> pathlib.Path:
+    if not repo_url:
+        raise ValueError("missing_workspace_git_repo")
+    log = logger or AgentLogger("react.workspace.git")
     cache_root = _workspace_cache_root(runtime_ctx=runtime_ctx, outdir=outdir)
     repo_root = _workspace_lineage_repo_root(runtime_ctx=runtime_ctx, outdir=outdir)
     cache_root.mkdir(parents=True, exist_ok=True)
@@ -264,8 +276,13 @@ def _git_has_ref(*, repo_root: pathlib.Path, ref_name: str) -> bool:
         return False
 
 
-def _ensure_local_version_ref(*, repo_root: pathlib.Path, runtime_ctx: Any, version_id: str) -> str:
-    env = _build_git_env()
+def _ensure_local_version_ref(
+    *,
+    repo_root: pathlib.Path,
+    runtime_ctx: Any,
+    version_id: str,
+    env: Dict[str, str],
+) -> str:
     remote_ref = workspace_version_ref(runtime_ctx, version_id)
     if not remote_ref:
         raise ValueError("missing_workspace_version_ref")
@@ -281,8 +298,12 @@ def _ensure_local_version_ref(*, repo_root: pathlib.Path, runtime_ctx: Any, vers
     return local_ref
 
 
-def _ensure_local_lineage_branch_ref(*, repo_root: pathlib.Path, runtime_ctx: Any) -> str:
-    env = _build_git_env()
+def _ensure_local_lineage_branch_ref(
+    *,
+    repo_root: pathlib.Path,
+    runtime_ctx: Any,
+    env: Dict[str, str],
+) -> str:
     remote_ref = workspace_lineage_branch_ref(runtime_ctx)
     if not remote_ref:
         return ""
@@ -324,18 +345,20 @@ def _workspace_commit_identity(runtime_ctx: Any) -> tuple[str, str]:
     return name, email
 
 
-def ensure_current_turn_git_workspace(
+def _ensure_current_turn_git_workspace_sync(
     *,
     runtime_ctx: Any,
     outdir: pathlib.Path,
+    repo_url: str,
+    env: Dict[str, str],
     logger: Optional[AgentLogger] = None,
 ) -> pathlib.Path:
     turn_id = str(getattr(runtime_ctx, "turn_id", "") or "").strip()
     if not turn_id:
         raise ValueError("missing_turn_id")
     log = logger or AgentLogger("react.workspace.git")
-    repo_root = _ensure_workspace_repo(runtime_ctx=runtime_ctx, outdir=outdir, logger=log)
-    lineage_ref = _ensure_local_lineage_branch_ref(repo_root=repo_root, runtime_ctx=runtime_ctx)
+    repo_root = _ensure_workspace_repo(runtime_ctx=runtime_ctx, outdir=outdir, repo_url=repo_url, env=env, logger=log)
+    lineage_ref = _ensure_local_lineage_branch_ref(repo_root=repo_root, runtime_ctx=runtime_ctx, env=env)
 
     turn_root = _artifact_outdir(outdir) / turn_id
     git_dir = turn_root / ".git"
@@ -383,6 +406,24 @@ def ensure_current_turn_git_workspace(
         )
 
     return turn_root
+
+
+async def ensure_current_turn_git_workspace(
+    *,
+    runtime_ctx: Any,
+    outdir: pathlib.Path,
+    logger: Optional[AgentLogger] = None,
+) -> pathlib.Path:
+    log = logger or AgentLogger("react.workspace.git")
+    repo_url, env = await _resolve_workspace_git(runtime_ctx=runtime_ctx, logger=log)
+    return await asyncio.to_thread(
+        _ensure_current_turn_git_workspace_sync,
+        runtime_ctx=runtime_ctx,
+        outdir=outdir,
+        repo_url=repo_url,
+        env=env,
+        logger=log,
+    )
 
 
 def _git_path_is_file(*, repo_root: pathlib.Path, ref_name: str, tree_path: str) -> bool:
@@ -546,10 +587,12 @@ def _stage_current_turn_text_workspace(*, turn_root: pathlib.Path) -> None:
         )
 
 
-def publish_current_turn_git_workspace(
+def _publish_current_turn_git_workspace_sync(
     *,
     runtime_ctx: Any,
     outdir: pathlib.Path,
+    repo_url: str,
+    env: Dict[str, str],
     logger: Optional[AgentLogger] = None,
 ) -> Dict[str, Any]:
     turn_id = str(getattr(runtime_ctx, "turn_id", "") or "").strip()
@@ -567,14 +610,18 @@ def publish_current_turn_git_workspace(
             turn_root=turn_root,
             reason="empty_workspace",
         )
-    turn_root = ensure_current_turn_git_workspace(
+    turn_root = _ensure_current_turn_git_workspace_sync(
         runtime_ctx=runtime_ctx,
         outdir=outdir,
+        repo_url=repo_url,
+        env=env,
         logger=log,
     )
     repo_root = _ensure_workspace_repo(
         runtime_ctx=runtime_ctx,
         outdir=outdir,
+        repo_url=repo_url,
+        env=env,
         logger=log,
     )
     lineage_ref = workspace_lineage_branch_ref(runtime_ctx)
@@ -614,7 +661,6 @@ def publish_current_turn_git_workspace(
         op="push workspace version ref into local lineage repo",
     )
 
-    env = _build_git_env()
     _run_git_checked(
         repo_root,
         ["push", "origin", f"refs/heads/workspace:{lineage_ref}"],
@@ -636,20 +682,42 @@ def publish_current_turn_git_workspace(
     }
 
 
-def checkout_current_turn_git_workspace(
+async def publish_current_turn_git_workspace(
+    *,
+    runtime_ctx: Any,
+    outdir: pathlib.Path,
+    logger: Optional[AgentLogger] = None,
+) -> Dict[str, Any]:
+    log = logger or AgentLogger("react.workspace.git")
+    repo_url, env = await _resolve_workspace_git(runtime_ctx=runtime_ctx, logger=log)
+    return await asyncio.to_thread(
+        _publish_current_turn_git_workspace_sync,
+        runtime_ctx=runtime_ctx,
+        outdir=outdir,
+        repo_url=repo_url,
+        env=env,
+        logger=log,
+    )
+
+
+def _checkout_current_turn_git_workspace_sync(
     *,
     runtime_ctx: Any,
     outdir: pathlib.Path,
     version_id: str,
+    repo_url: str,
+    env: Dict[str, str],
     logger: Optional[AgentLogger] = None,
 ) -> Dict[str, Any]:
     version = str(version_id or "").strip()
     if not version:
         raise ValueError("missing_version_id")
     log = logger or AgentLogger("react.workspace.git")
-    turn_root = ensure_current_turn_git_workspace(
+    turn_root = _ensure_current_turn_git_workspace_sync(
         runtime_ctx=runtime_ctx,
         outdir=outdir,
+        repo_url=repo_url,
+        env=env,
         logger=log,
     )
     if _git_is_dirty(repo_root=turn_root):
@@ -657,12 +725,15 @@ def checkout_current_turn_git_workspace(
     repo_root = _ensure_workspace_repo(
         runtime_ctx=runtime_ctx,
         outdir=outdir,
+        repo_url=repo_url,
+        env=env,
         logger=log,
     )
     local_ref = _ensure_local_version_ref(
         repo_root=repo_root,
         runtime_ctx=runtime_ctx,
         version_id=version,
+        env=env,
     )
     checkout_ref = _fetch_ref_into_turn_repo(
         turn_root=turn_root,
@@ -699,6 +770,26 @@ def checkout_current_turn_git_workspace(
     }
 
 
+async def checkout_current_turn_git_workspace(
+    *,
+    runtime_ctx: Any,
+    outdir: pathlib.Path,
+    version_id: str,
+    logger: Optional[AgentLogger] = None,
+) -> Dict[str, Any]:
+    log = logger or AgentLogger("react.workspace.git")
+    repo_url, env = await _resolve_workspace_git(runtime_ctx=runtime_ctx, logger=log)
+    return await asyncio.to_thread(
+        _checkout_current_turn_git_workspace_sync,
+        runtime_ctx=runtime_ctx,
+        outdir=outdir,
+        version_id=version_id,
+        repo_url=repo_url,
+        env=env,
+        logger=log,
+    )
+
+
 async def hydrate_files_from_git_workspace(
     *,
     ctx_browser: Any,
@@ -709,10 +800,13 @@ async def hydrate_files_from_git_workspace(
     if runtime_ctx is None:
         return {"rehosted": [], "missing": [], "errors": ["missing_runtime_ctx"]}
     try:
+        repo_url, env = await _resolve_workspace_git(runtime_ctx=runtime_ctx)
         repo_root = await asyncio.to_thread(
             _ensure_workspace_repo,
             runtime_ctx=runtime_ctx,
             outdir=outdir,
+            repo_url=repo_url,
+            env=env,
         )
     except Exception as exc:
         return {"rehosted": [], "missing": [], "errors": [f"workspace_git_repo_unavailable:{exc}"]}
@@ -747,6 +841,7 @@ async def hydrate_files_from_git_workspace(
                     repo_root=repo_root,
                     runtime_ctx=runtime_ctx,
                     version_id=turn_id,
+                    env=env,
                 )
                 version_refs[turn_id] = local_ref
             except Exception as exc:

@@ -21,29 +21,20 @@ class _FakeSecretsManager:
             "bundles.bundle.demo.secrets.user_management.cognito_user_pool_id": "pool-123",
         }
 
-    def get_secret(self, key: str):
+    async def get_secret(self, key: str):
         self.get_calls.append(key)
         return self.values.get(key)
 
-    async def get_secret_async(self, key: str):
-        return self.get_secret(key)
-
-    def get_user_secret(self, *, user_id: str, key: str, bundle_id: str | None = None):
+    async def get_user_secret(self, *, user_id: str, key: str, bundle_id: str | None = None):
         values = {
             ("user-1", "bundle.demo", "anthropic.api_key"): "sk-user-anthropic",
         }
         return values.get((user_id, bundle_id, key))
 
-    async def get_user_secret_async(self, *, user_id: str, key: str, bundle_id: str | None = None):
-        return self.get_user_secret(user_id=user_id, key=key, bundle_id=bundle_id)
-
-    def set_secret(self, key: str, value: str):
+    async def set_secret(self, key: str, value: str):
         self.set_calls.append((key, value))
 
-    async def set_secret_async(self, key: str, value: str):
-        self.set_secret(key, value)
-
-    async def set_user_secret_async(self, *, user_id: str, key: str, value: str, bundle_id: str | None = None):
+    async def set_user_secret(self, *, user_id: str, key: str, value: str, bundle_id: str | None = None):
         self.set_calls.append((user_id, bundle_id, key, value))
 
 
@@ -61,7 +52,8 @@ class _FakePropsManager:
         return values.get((user_id, bundle_id), {})
 
 
-def test_settings_reads_secrets_through_provider(monkeypatch, caplog):
+@pytest.mark.asyncio
+async def test_get_secret_reads_through_provider(monkeypatch, caplog):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
@@ -75,40 +67,44 @@ def test_settings_reads_secrets_through_provider(monkeypatch, caplog):
     caplog.set_level(logging.INFO, logger="kdcube.settings.secrets")
 
     settings = sdk_config.Settings()
+    monkeypatch.setattr(sdk_config, "get_settings", lambda: settings)
 
-    assert settings.OPENAI_API_KEY == "sk-openai-test"
-    assert settings.ANTHROPIC_API_KEY == "sk-anthropic-test"
-    assert settings.secret("services.openai.api_key") == "sk-openai-test"
-    assert settings.GIT_HTTP_TOKEN == "gh-token-test"
-    assert settings.GIT_HTTP_USER == "x-access-token"
-    assert "Secret services.git.http_user loaded (default)" in caplog.text
+    assert settings.OPENAI_API_KEY is None
+    assert settings.ANTHROPIC_API_KEY is None
+    assert manager.get_calls == []
+    assert await sdk_config.get_secret("services.openai.api_key") == "sk-openai-test"
+    assert await sdk_config.get_secret("services.git.http_token") == "gh-token-test"
 
 
-def test_settings_secret_canonicalizes_legacy_alias_for_provider(monkeypatch):
+@pytest.mark.asyncio
+async def test_get_secret_canonicalizes_legacy_alias_for_provider(monkeypatch):
     manager = _FakeSecretsManager()
     manager.values["services.git.http_user"] = "git-user-secret"
     monkeypatch.setattr(sdk_config, "get_secrets_manager", lambda _settings: manager)
     sdk_config._SECRET_LOGGED.clear()
 
     settings = sdk_config.Settings()
+    monkeypatch.setattr(sdk_config, "get_settings", lambda: settings)
     manager.get_calls.clear()
 
-    assert settings.secret("GIT_HTTP_USER") == "git-user-secret"
+    assert await sdk_config.get_secret("GIT_HTTP_USER") == "git-user-secret"
     assert manager.get_calls == ["services.git.http_user"]
 
 
-def test_settings_reads_infra_passwords_through_provider_when_env_absent(monkeypatch):
+def test_settings_does_not_read_provider_during_sync_construction(monkeypatch):
     monkeypatch.delenv("POSTGRES_PASSWORD", raising=False)
     monkeypatch.delenv("REDIS_PASSWORD", raising=False)
-    monkeypatch.setattr(sdk_config, "get_secrets_manager", lambda _settings: _FakeSecretsManager())
+    manager = _FakeSecretsManager()
+    monkeypatch.setattr(sdk_config, "get_secrets_manager", lambda _settings: manager)
 
     settings = sdk_config.Settings()
 
-    assert settings.PGPASSWORD == "pg-secret-test"
-    assert settings.REDIS_PASSWORD == "redis-secret-test"
+    assert settings.PGPASSWORD == "postgres"
+    assert settings.REDIS_PASSWORD is None
+    assert manager.get_calls == []
 
 
-def test_settings_prefers_secret_env_over_provider(monkeypatch):
+def test_settings_prefers_sensitive_env_without_provider_lookup(monkeypatch):
     manager = _FakeSecretsManager()
     manager.values.update(
         {
@@ -138,22 +134,8 @@ def test_settings_prefers_secret_env_over_provider(monkeypatch):
     assert "auth.oidc.admin_password" not in manager.get_calls
 
 
-def test_get_user_secret_uses_request_context_scope(monkeypatch):
-    monkeypatch.setattr(sdk_config, "get_secrets_manager", lambda _settings: _FakeSecretsManager())
-    monkeypatch.setattr(
-        comm_ctx,
-        "get_current_request_context",
-        lambda: ChatTaskPayload(
-            routing=ChatTaskRouting(bundle_id="bundle.demo", session_id="s-1"),
-            user=ChatTaskUser(user_type="registered", user_id="user-1"),
-        ),
-    )
-
-    assert sdk_config.get_user_secret("anthropic.api_key") == "sk-user-anthropic"
-
-
 @pytest.mark.asyncio
-async def test_get_user_secret_async_uses_request_context_scope(monkeypatch):
+async def test_get_secret_user_namespace_uses_request_context_scope(monkeypatch):
     monkeypatch.setattr(sdk_config, "get_secrets_manager", lambda _settings: _FakeSecretsManager())
     monkeypatch.setattr(
         comm_ctx,
@@ -164,7 +146,7 @@ async def test_get_user_secret_async_uses_request_context_scope(monkeypatch):
         ),
     )
 
-    assert await sdk_config.get_user_secret_async("anthropic.api_key") == "sk-user-anthropic"
+    assert await sdk_config.get_secret("u:anthropic.api_key") == "sk-user-anthropic"
 
 
 def test_get_user_prop_uses_request_context_scope(monkeypatch):
@@ -182,7 +164,8 @@ def test_get_user_prop_uses_request_context_scope(monkeypatch):
     assert sdk_config.get_user_props() == {"preferences.theme": "dark"}
 
 
-def test_get_secret_bundle_namespace_uses_request_context_scope(monkeypatch):
+@pytest.mark.asyncio
+async def test_get_secret_bundle_namespace_uses_request_context_scope(monkeypatch):
     monkeypatch.setattr(sdk_config, "get_secrets_manager", lambda _settings: _FakeSecretsManager())
     monkeypatch.setattr(
         comm_ctx,
@@ -193,29 +176,31 @@ def test_get_secret_bundle_namespace_uses_request_context_scope(monkeypatch):
         ),
     )
 
-    assert sdk_config.get_secret("b:user_management.cognito_user_pool_id") == "pool-123"
+    assert await sdk_config.get_secret("b:user_management.cognito_user_pool_id") == "pool-123"
 
 
-def test_get_secret_bundle_namespace_uses_explicit_bundle_contextvar(monkeypatch):
+@pytest.mark.asyncio
+async def test_get_secret_bundle_namespace_uses_explicit_bundle_contextvar(monkeypatch):
     monkeypatch.setattr(sdk_config, "get_secrets_manager", lambda _settings: _FakeSecretsManager())
     monkeypatch.setattr(comm_ctx, "get_current_request_context", lambda: None)
 
     with comm_ctx.bind_current_bundle_id("bundle.demo"):
-        assert sdk_config.get_secret("b:user_management.cognito_user_pool_id") == "pool-123"
+        assert await sdk_config.get_secret("b:user_management.cognito_user_pool_id") == "pool-123"
 
 
-def test_get_secret_bundle_namespace_uses_bundle_env_fallback(monkeypatch):
+@pytest.mark.asyncio
+async def test_get_secret_bundle_namespace_uses_bundle_env_fallback(monkeypatch):
     monkeypatch.setattr(sdk_config, "get_secrets_manager", lambda _settings: _FakeSecretsManager())
     monkeypatch.setattr(comm_ctx, "get_current_request_context", lambda: None)
     monkeypatch.setenv("KDCUBE_BUNDLE_ID", "bundle.demo")
 
-    assert sdk_config.get_secret("b:user_management.cognito_user_pool_id") == "pool-123"
+    assert await sdk_config.get_secret("b:user_management.cognito_user_pool_id") == "pool-123"
 
 
-def test_get_secret_bundle_namespace_without_context_does_not_query_provider(monkeypatch, caplog):
+@pytest.mark.asyncio
+async def test_get_secret_bundle_namespace_without_context_does_not_query_provider(monkeypatch, caplog):
     class _SettingsThatMustNotBeUsed:
-        def secret(self, key: str, default=None):  # pragma: no cover - should not be reached
-            raise AssertionError(f"unexpected provider lookup for {key}")
+        pass
 
     monkeypatch.setattr(sdk_config, "get_settings", lambda: _SettingsThatMustNotBeUsed())
     monkeypatch.setattr(comm_ctx, "get_current_request_context", lambda: None)
@@ -226,24 +211,8 @@ def test_get_secret_bundle_namespace_without_context_does_not_query_provider(mon
 
     caplog.set_level(logging.WARNING, logger="kdcube.settings.secrets")
 
-    assert sdk_config.get_secret("b:services.git.http_token", default="fallback") == "fallback"
+    assert await sdk_config.get_secret("b:services.git.http_token", default="fallback") == "fallback"
     assert "Bundle-scoped secret b:services.git.http_token requested without bundle context" in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_get_secret_async_bundle_namespace_without_context_does_not_query_provider(monkeypatch):
-    class _SettingsThatMustNotBeUsed:
-        async def secret_async(self, key: str, default=None):  # pragma: no cover - should not be reached
-            raise AssertionError(f"unexpected provider lookup for {key}")
-
-    monkeypatch.setattr(sdk_config, "get_settings", lambda: _SettingsThatMustNotBeUsed())
-    monkeypatch.setattr(comm_ctx, "get_current_request_context", lambda: None)
-    monkeypatch.setattr(comm_ctx, "get_current_bundle_id", lambda: None)
-    monkeypatch.delenv("KDCUBE_BUNDLE_ID", raising=False)
-    monkeypatch.delenv("AGENTIC_BUNDLE_ID", raising=False)
-    monkeypatch.delenv("BUNDLE_ID", raising=False)
-
-    assert await sdk_config.get_secret_async("b:services.git.http_user") is None
 
 
 @pytest.mark.asyncio

@@ -30,6 +30,10 @@ def configure_due_tasks(
 
 
 def _storage_root(entrypoint: Any) -> str:
+    for method_name in ("task_storage_root", "storage_root_or_error"):
+        resolver = getattr(entrypoint, method_name, None)
+        if callable(resolver):
+            return str(resolver())
     if not callable(_storage_root_or_error):
         raise RuntimeError("task due scheduler is not configured: storage_root_or_error is missing")
     return str(_storage_root_or_error(entrypoint))

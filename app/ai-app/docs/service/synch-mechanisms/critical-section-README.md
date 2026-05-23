@@ -111,6 +111,9 @@ Current runtime users of this guarded-build family are:
 kdcube_ai_app/infra/plugin/git_bundle.py
   raw observed file lock for git checkout/fetch materialization
 
+kdcube_ai_app/infra/plugin/bundle_store.py
+  raw observed file lock for shared example-bundle materialization
+
 kdcube_ai_app/apps/chat/sdk/examples/bundles/kdcube.copilot@2026-04-03-19-05/entrypoint.py
   raw observed file lock for the documentation knowledge registry/index build
 
@@ -582,6 +585,7 @@ lock protects the filesystem mutation itself.
 Observed file locks are currently used for:
 
 - platform-managed git bundle materialization;
+- shared example-bundle materialization into the managed-bundles root;
 - the built-in copilot bundle knowledge-space build lock.
 
 They are not yet the general replacement for:
@@ -602,6 +606,8 @@ Lock locations are subsystem-specific:
 
 - Git bundle materialization uses:
   `<managed-bundles>/.bundle-locks/<bundle-ref>.lock`
+- Shared example-bundle materialization uses:
+  `<managed-bundles>/.example-bundle-locks/<bundle>.lock`
 - The built-in copilot documentation knowledge build uses:
   `<bundle-storage>/.knowledge.lock`
 - UI main/widget builds use the higher-level `bundle_once.py` helper and keep

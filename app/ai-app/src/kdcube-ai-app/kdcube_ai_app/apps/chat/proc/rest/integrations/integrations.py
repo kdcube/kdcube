@@ -16,6 +16,7 @@ import traceback
 import uuid
 from dataclasses import asdict
 from datetime import datetime
+from pathlib import Path
 from typing import Optional, Dict, Any, Set, List, Tuple
 
 import httpx
@@ -34,7 +35,11 @@ from kdcube_ai_app.apps.middleware.gateway import STATE_STREAM_ID, extract_strea
 from kdcube_ai_app.auth.AuthManager import RequireUser
 from kdcube_ai_app.auth.sessions import RequestContext, UserSession, UserType
 from kdcube_ai_app.apps.chat.sdk.config import get_settings, get_secret
-from kdcube_ai_app.infra.service_hub.inventory import ConfigRequest, create_workflow_config
+from kdcube_ai_app.infra.service_hub.inventory import (
+    ConfigRequest,
+    create_workflow_config,
+    resolve_config_request_secrets,
+)
 from kdcube_ai_app.apps.chat.sdk.protocol import (
     ChatTaskPayload,
     ChatTaskRouting,
@@ -58,8 +63,8 @@ from kdcube_ai_app.infra.plugin.bundle_store import (
     patch_bundle_props as store_patch_bundle_props,
     put_bundle_props as store_put_bundle_props,
 )
-from kdcube_ai_app.infra.plugin.agentic_loader import (
-    AgenticBundleSpec,
+from kdcube_ai_app.infra.plugin.bundle_loader import (
+    BundleSpec,
     APIEndpointSpec,
     BundleInterfaceManifest,
     MCPEndpointSpec,
@@ -76,6 +81,7 @@ from kdcube_ai_app.infra.plugin.agentic_loader import (
     get_workflow_instance_async,
     is_static_bundle_entrypoint_path,
     load_bundle_manifest,
+    peek_cached_singleton_for_spec,
     resolve_bundle_api_endpoint,
     resolve_bundle_mcp_endpoint,
     run_static_bundle_entrypoint_load_once,
@@ -570,7 +576,7 @@ async def _reload_widget_manifest_after_miss(
 ):
     """Recover once from stale in-process bundle code/manifest state."""
     try:
-        spec = AgenticBundleSpec(
+        spec = BundleSpec(
             path=spec_resolved.path,
             module=spec_resolved.module,
             singleton=bool(spec_resolved.singleton),
@@ -681,7 +687,7 @@ def _bundle_allowed_for_session(
         session: UserSession,
         props: Optional[Dict[str, Any]] = None,
 ) -> bool:
-    """Bundle-level access check based on allowed_roles declared on @agentic_workflow.
+    """Bundle-level access check based on allowed_roles declared on @bundle_entrypoint.
     No allowed_roles (empty) means the bundle is visible to all authenticated users.
     When props are provided, allowed_roles_config overrides are applied first."""
     if manifest is None:
@@ -938,6 +944,12 @@ class BundleReloadAuthorityRequest(BaseModel):
     bundle_id: Optional[str] = None
 
 
+class BundleStatusRequest(BaseModel):
+    tenant: Optional[str] = None
+    project: Optional[str] = None
+    bundle_id: str
+
+
 def _bundles_channel(fmt: str, *, tenant: str, project: str) -> str:
     return fmt.format(tenant=tenant, project=project)
 
@@ -1037,6 +1049,7 @@ async def _load_bundle_props_defaults(
         project: str,
         request: Request,
         session: UserSession,
+        evict_before_load: bool = True,
 ) -> Dict[str, Any]:
     spec_resolved = await _resolve_bundle_spec_from_runtime(
         request=request,
@@ -1052,16 +1065,19 @@ async def _load_bundle_props_defaults(
     except Exception:
         wf_config = create_workflow_config(ConfigRequest.model_validate({"project": project}))
 
-    spec = AgenticBundleSpec(
+    spec = BundleSpec(
         path=spec_resolved.path,
         module=spec_resolved.module,
         singleton=bool(spec_resolved.singleton),
     )
-    # Always reload bundle code for "code defaults" so UI reflects latest code.
-    try:
-        evict_bundle_scope(spec)
-    except Exception:
-        pass
+    if evict_before_load:
+        # Reload bundle code for explicit "code defaults" reads/resets. Static
+        # UI warmups pass evict_before_load=False so concurrent iframe/widget
+        # requests do not cancel an in-flight on_bundle_load build.
+        try:
+            evict_bundle_scope(spec)
+        except Exception:
+            pass
     routing = _build_rest_bundle_routing(
         request=request,
         session_id=session.session_id,
@@ -1078,6 +1094,7 @@ async def _load_bundle_props_defaults(
             user_type=session.user_type.value,
             user_id=session.user_id,
             username=session.username,
+            email=session.email,
             fingerprint=session.fingerprint,
             roles=session.roles,
             permissions=session.permissions,
@@ -1148,7 +1165,7 @@ async def _get_bundle_manifest(
     )
     if not spec_resolved:
         return None
-    spec = AgenticBundleSpec(
+    spec = BundleSpec(
         path=spec_resolved.path,
         module=spec_resolved.module,
         singleton=bool(spec_resolved.singleton),
@@ -1629,9 +1646,9 @@ async def set_bundle_secrets(
 
     try:
         if mode == "set":
-            await asyncio.to_thread(secrets_manager.set_many, flat)
+            await secrets_manager.set_many(flat)
         else:
-            await asyncio.to_thread(secrets_manager.delete_many, keys)
+            await secrets_manager.delete_many(keys)
     except SecretsManagerWriteError as exc:
         raise HTTPException(status_code=502, detail=f"Failed to store secrets: {exc}") from exc
 
@@ -1651,13 +1668,12 @@ async def set_bundle_secrets(
     metadata_key = f"bundles.{bundle_id}.secrets.__keys"
     try:
         if stored_keys:
-            await asyncio.to_thread(
-                secrets_manager.set_secret,
+            await secrets_manager.set_secret(
                 metadata_key,
                 json.dumps(sorted(stored_keys), ensure_ascii=False),
             )
         else:
-            await asyncio.to_thread(secrets_manager.delete_secret, metadata_key)
+            await secrets_manager.delete_secret(metadata_key)
     except SecretsManagerWriteError as exc:
         raise HTTPException(status_code=502, detail=f"Failed to store secrets metadata: {exc}") from exc
 
@@ -1700,7 +1716,7 @@ async def get_bundle_secrets(
             keys = []
     if not keys:
         # Fallback: keys list stored in the configured secrets provider.
-        raw_keys = get_secret(f"bundles.{bundle_id}.secrets.__keys")
+        raw_keys = await get_secret(f"bundles.{bundle_id}.secrets.__keys")
         if raw_keys:
             try:
                 keys = json.loads(raw_keys) or []
@@ -1764,9 +1780,9 @@ async def set_current_user_bundle_secrets(
 
     try:
         if mode == "set":
-            await asyncio.to_thread(secrets_manager.set_many, flat)
+            await secrets_manager.set_many(flat)
         else:
-            await asyncio.to_thread(secrets_manager.delete_many, keys)
+            await secrets_manager.delete_many(keys)
     except SecretsManagerWriteError as exc:
         raise HTTPException(status_code=502, detail=f"Failed to store user secrets: {exc}") from exc
 
@@ -1791,13 +1807,12 @@ async def set_current_user_bundle_secrets(
     metadata_key = build_user_secret_metadata_key(user_id=user_id, bundle_id=bundle_id)
     try:
         if stored_keys:
-            await asyncio.to_thread(
-                secrets_manager.set_secret,
+            await secrets_manager.set_secret(
                 metadata_key,
                 json.dumps(sorted(stored_keys), ensure_ascii=False),
             )
         else:
-            await asyncio.to_thread(secrets_manager.delete_secret, metadata_key)
+            await secrets_manager.delete_secret(metadata_key)
     except SecretsManagerWriteError as exc:
         raise HTTPException(status_code=502, detail=f"Failed to store user secrets metadata: {exc}") from exc
 
@@ -1850,6 +1865,109 @@ async def internal_set_bundles(payload: AdminBundlesUpdateRequest, request: Requ
     return await _do_set_bundles(payload, request, automation_session)
 
 
+@internal_router.post("/internal/bundles/status", status_code=200)
+async def internal_bundle_status(payload: BundleStatusRequest, request: Request):
+    """
+    Localhost-only bundle status endpoint for CLI diagnostics.
+
+    This is intentionally not a user-facing discovery API. It accepts one
+    explicit bundle id, never lists other bundles, and is guarded by the same
+    localhost-only check as the internal reload endpoint.
+    """
+    client_ip = request.client.host if request.client else ""
+    if client_ip not in _LOCALHOST:
+        raise HTTPException(status_code=403, detail="Internal endpoint: localhost only")
+
+    settings = get_settings()
+    tenant_id = payload.tenant or settings.TENANT
+    project_id = payload.project or settings.PROJECT
+    bundle_id = str(payload.bundle_id or "").strip()
+    if not bundle_id:
+        raise HTTPException(status_code=400, detail="bundle_id is required")
+
+    redis = _get_app_redis(request)
+    try:
+        reg = await load_registry(redis, tenant_id, project_id)
+    except Exception as exc:
+        return {
+            "status": "error",
+            "tenant": tenant_id,
+            "project": project_id,
+            "bundle_id": bundle_id,
+            "declared": False,
+            "loaded": False,
+            "last_error": {
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "where": "load_registry",
+            },
+            "authority": describe_authoritative_bundle_store(tenant_id, project_id),
+        }
+
+    entry = reg.bundles.get(bundle_id)
+    if entry is None:
+        return {
+            "status": "ok",
+            "tenant": tenant_id,
+            "project": project_id,
+            "bundle_id": bundle_id,
+            "declared": False,
+            "loaded": False,
+            "authority": describe_authoritative_bundle_store(tenant_id, project_id),
+        }
+
+    entry_dict = entry.model_dump()
+    spec = BundleSpec(
+        path=entry.path,
+        module=entry.module,
+        singleton=bool(entry.singleton),
+    )
+    try:
+        path_exists = bool(entry.path and Path(entry.path).exists())
+    except Exception:
+        path_exists = False
+
+    cached_before = get_cached_manifest(spec) is not None
+    try:
+        manifest = load_bundle_manifest(spec, bundle_id=bundle_id)
+        props = _authoritative_bundle_props(tenant=tenant_id, project=project_id, bundle_id=bundle_id)
+        descriptor = _manifest_to_descriptor(manifest, props=props)
+        return {
+            "status": "ok",
+            "tenant": tenant_id,
+            "project": project_id,
+            "bundle_id": bundle_id,
+            "declared": True,
+            "loaded": True,
+            "cached_before": cached_before,
+            "cached_after": get_cached_manifest(spec) is not None,
+            "entry": entry_dict,
+            "path_exists": path_exists,
+            "interface": descriptor,
+            "authority": describe_authoritative_bundle_store(tenant_id, project_id),
+        }
+    except Exception as exc:
+        return {
+            "status": "ok",
+            "tenant": tenant_id,
+            "project": project_id,
+            "bundle_id": bundle_id,
+            "declared": True,
+            "loaded": False,
+            "cached_before": cached_before,
+            "cached_after": get_cached_manifest(spec) is not None,
+            "entry": entry_dict,
+            "path_exists": path_exists,
+            "last_error": {
+                "type": type(exc).__name__,
+                "message": str(exc),
+                "where": "load_bundle_manifest",
+                "traceback_tail": traceback.format_exc(limit=8),
+            },
+            "authority": describe_authoritative_bundle_store(tenant_id, project_id),
+        }
+
+
 async def _do_set_bundles(
         payload: AdminBundlesUpdateRequest,
         request: Request,
@@ -1863,7 +1981,7 @@ async def _do_set_bundles(
         set_registry_async,
         upsert_bundles_async,
     )
-    from kdcube_ai_app.infra.plugin.agentic_loader import clear_agentic_caches
+    from kdcube_ai_app.infra.plugin.bundle_loader import clear_bundle_loader_caches
     from kdcube_ai_app.apps.chat.sdk.runtime.local_sidecars import stop_local_sidecars_for_bundle_ids
     from kdcube_ai_app.infra.plugin.bundle_store import (
         load_registry as store_load,
@@ -1928,7 +2046,7 @@ async def _do_set_bundles(
             )
         reg = {bid: be.model_dump() for bid, be in updated.bundles.items()}
         default_id = updated.default_bundle_id
-        clear_agentic_caches()
+        clear_bundle_loader_caches()
     else:
         reg = {bid: be.model_dump() for bid, be in updated.bundles.items()}
         default_id = updated.default_bundle_id
@@ -1962,9 +2080,9 @@ async def _do_reload_bundles_from_authority(
     settings = get_settings()
     from kdcube_ai_app.infra.plugin.bundle_store import reload_registry_from_authority
     from kdcube_ai_app.infra.plugin.bundle_registry import set_registry_async
-    from kdcube_ai_app.infra.plugin.agentic_loader import (
-        AgenticBundleSpec,
-        clear_agentic_caches,
+    from kdcube_ai_app.infra.plugin.bundle_loader import (
+        BundleSpec,
+        clear_bundle_loader_caches,
         evict_bundle_scope,
         invalidate_static_bundle_entrypoint_loads,
     )
@@ -2035,7 +2153,7 @@ async def _do_reload_bundles_from_authority(
             )
         if target_entry is not None:
             target_payload = target_entry.model_dump()
-            target_spec = AgenticBundleSpec(
+            target_spec = BundleSpec(
                 path=target_payload.get("path"),
                 module=target_payload.get("module"),
                 singleton=bool(target_payload.get("singleton")),
@@ -2055,7 +2173,7 @@ async def _do_reload_bundles_from_authority(
                 eviction_result,
             )
         else:
-            clear_agentic_caches()
+            clear_bundle_loader_caches()
             logger.info(
                 "[bundle.reload] local cache clear complete: tenant=%s project=%s bundle=<all> pid=%s",
                 tenant_id,
@@ -2147,7 +2265,7 @@ async def admin_cleanup_bundles(
     settings = get_settings()
     tenant_id = payload.tenant or settings.TENANT
     project_id = payload.project or settings.PROJECT
-    from kdcube_ai_app.infra.plugin.agentic_loader import evict_inactive_specs, AgenticBundleSpec
+    from kdcube_ai_app.infra.plugin.bundle_loader import evict_inactive_specs, BundleSpec
 
     result = {"status": "ok"}
     redis = _get_app_redis(request)
@@ -2161,7 +2279,7 @@ async def admin_cleanup_bundles(
         for _bid, entry in (current.bundles or {}).items():
             try:
                 active_specs.append(
-                    AgenticBundleSpec(
+                    BundleSpec(
                         path=entry.path,
                         module=entry.module,
                         singleton=bool(entry.singleton),
@@ -2242,21 +2360,90 @@ async def serve_static_asset(
                 project=project_id,
                 request=request,
                 session=session,
+                evict_before_load=False,
             ),
         )
         storage_root = storage_for_spec(spec=spec, tenant=tenant_id, project=project_id, ensure=False)
         ui_root = storage_root / "ui" if storage_root else None
 
+        # Signature-aware main-view rebuild on HTML-entrypoint hits.
+        # `_load_bundle_props_defaults` warms the bundle (which runs
+        # `on_bundle_load` → `_ensure_ui_build`) the first time; afterwards
+        # the on-load coalescer would skip the build coro and a source
+        # edit would never trigger a rebuild. The explicit signature-aware
+        # call below sidesteps that: it consults the workflow's
+        # `compute_ui_main_view_signature()` cheaply, and on a mismatch
+        # falls through to the workflow's `_ensure_ui_build()`, which
+        # in turn hits `run_once_for_shared_bundle_storage` for cross-
+        # worker / cross-machine arbitration on EFS.
+        if ui_root is not None:
+            cached_workflow = peek_cached_singleton_for_spec(spec)
+            if cached_workflow is not None and hasattr(cached_workflow, "_ensure_ui_build"):
+                async def _ensure_main_view_ui_build_from_workflow() -> None:
+                    ensure_ui_build = getattr(cached_workflow, "_ensure_ui_build", None)
+                    if not callable(ensure_ui_build):
+                        return
+                    try:
+                        maybe_result = ensure_ui_build()
+                        if inspect.isawaitable(maybe_result):
+                            await maybe_result
+                    except HTTPException:
+                        raise
+                    except Exception as exc:
+                        logger.exception(
+                            "Bundle main-view UI build failed tenant=%s project=%s bundle=%s",
+                            tenant_id,
+                            project_id,
+                            bundle_id,
+                        )
+                        raise HTTPException(
+                            status_code=500,
+                            detail=f"Bundle '{bundle_id}' main-view UI build failed: {exc}",
+                        ) from exc
+
+                def _main_view_source_signature() -> Optional[str]:
+                    compute = getattr(cached_workflow, "compute_ui_main_view_signature", None)
+                    if not callable(compute):
+                        return None
+                    try:
+                        return compute()
+                    except Exception:
+                        return None
+
+                main_view_build_load_key = static_bundle_entrypoint_load_key(
+                    tenant=tenant_id,
+                    project=project_id,
+                    bundle_id=f"{bundle_id}::main-view-build",
+                    storage_root=storage_root,
+                )
+                await run_static_bundle_entrypoint_load_once(
+                    load_key=main_view_build_load_key,
+                    load_coro_factory=_ensure_main_view_ui_build_from_workflow,
+                    signature_provider=_main_view_source_signature,
+                )
+                storage_root = storage_for_spec(spec=spec, tenant=tenant_id, project=project_id, ensure=False)
+                ui_root = storage_root / "ui" if storage_root else None
+
     if not ui_root or not ui_root.exists():
         # Build/refresh on HTML entrypoint requests. This triggers
         # on_bundle_load(), which calls BaseEntrypoint._ensure_ui_build() and
         # lets its signature cache decide whether a rebuild is necessary.
-        await _load_bundle_props_defaults(
-            bundle_id=bundle_id,
+        fallback_load_key = static_bundle_entrypoint_load_key(
             tenant=tenant_id,
             project=project_id,
-            request=request,
-            session=session,
+            bundle_id=f"{bundle_id}::main-ui-fallback",
+            storage_root=storage_root,
+        )
+        await run_static_bundle_entrypoint_load_once(
+            load_key=fallback_load_key,
+            load_coro_factory=lambda: _load_bundle_props_defaults(
+                bundle_id=bundle_id,
+                tenant=tenant_id,
+                project=project_id,
+                request=request,
+                session=session,
+                evict_before_load=False,
+            ),
         )
         storage_root = storage_for_spec(spec=spec, tenant=tenant_id, project=project_id, ensure=False)
         ui_root = storage_root / "ui" if storage_root else None
@@ -2699,7 +2886,7 @@ def _log_bundle_widget_lookup_mismatch(
         widget_alias: str,
         workflow: Any,
 ) -> None:
-    spec = AgenticBundleSpec(
+    spec = BundleSpec(
         path=spec_resolved.path,
         module=spec_resolved.module,
         singleton=bool(spec_resolved.singleton),
@@ -2708,7 +2895,7 @@ def _log_bundle_widget_lookup_mismatch(
     manifest = discover_bundle_interface_manifest(workflow, bundle_id=spec_resolved.id)
     raw_widget_members: list[dict[str, Any]] = []
     try:
-        from kdcube_ai_app.infra.plugin.agentic_loader import UI_WIDGET_ATTR
+        from kdcube_ai_app.infra.plugin.bundle_loader import UI_WIDGET_ATTR
 
         for name, member in inspect.getmembers(workflow.__class__, predicate=callable):
             attr = getattr(member, UI_WIDGET_ATTR, None)
@@ -2976,11 +3163,36 @@ async def _serve_static_widget_app(
                 detail=f"Bundle widget '{widget_alias}' UI build failed: {exc}",
             ) from exc
 
+    def _widget_source_signature() -> Optional[str]:
+        """Source-fingerprint provider for the widget UI build.
+
+        Lets `run_static_bundle_entrypoint_load_once` short-circuit only when
+        the cached signature matches the current source state — so a source
+        edit on disk (e.g. someone touched `styles.css`) causes the next
+        HTML-entrypoint request to rebuild, without requiring a manual
+        `kdcube reload`. Returns `None` if the workflow can't compute the
+        signature, in which case the legacy membership-based short-circuit
+        applies.
+        """
+        compute = getattr(workflow, "compute_ui_widget_signature", None)
+        if not callable(compute):
+            return None
+        try:
+            return compute(widget_spec.alias)
+        except Exception:
+            return None
+
     should_refresh_entrypoint = is_static_bundle_entrypoint_path(cleaned_path)
     load_key = static_bundle_entrypoint_load_key(
         tenant=tenant_id,
         project=project_id,
-        bundle_id=f"{bundle_id}::widget::{widget_spec.alias}",
+        bundle_id=bundle_id,
+        storage_root=storage_root,
+    )
+    build_load_key = static_bundle_entrypoint_load_key(
+        tenant=tenant_id,
+        project=project_id,
+        bundle_id=f"{bundle_id}::widget-build::{widget_spec.alias}",
         storage_root=storage_root,
     )
     if should_refresh_entrypoint:
@@ -2992,23 +3204,57 @@ async def _serve_static_widget_app(
                 project=project_id,
                 request=request,
                 session=session,
+                evict_before_load=False,
             ),
         )
         storage_root = storage_for_spec(spec=spec, tenant=tenant_id, project=project_id, ensure=False)
         ui_root = storage_root / "ui" / "widgets" / widget_spec.alias if storage_root else None
 
-    if not ui_root or not ui_root.exists():
-        await _ensure_widget_ui_build_from_workflow()
+        # Always consult the widget build coordinator on HTML-entrypoint
+        # requests, with a signature-aware short-circuit. When the source
+        # tree is unchanged the call is a fast no-op (string equality on
+        # the cached fingerprint). When the source tree changed since the
+        # last successful build, we fall through to the build coro — which
+        # in turn hits `run_once_for_shared_bundle_storage` for cross-
+        # worker / cross-machine arbitration on EFS.
+        await run_static_bundle_entrypoint_load_once(
+            load_key=build_load_key,
+            load_coro_factory=_ensure_widget_ui_build_from_workflow,
+            signature_provider=_widget_source_signature,
+        )
         storage_root = storage_for_spec(spec=spec, tenant=tenant_id, project=project_id, ensure=False)
         ui_root = storage_root / "ui" / "widgets" / widget_spec.alias if storage_root else None
 
     if not ui_root or not ui_root.exists():
-        await _load_bundle_props_defaults(
-            bundle_id=bundle_id,
+        # Cold-asset fallback: a static-asset request arrived before any
+        # HTML-entrypoint request had a chance to build. Trigger the build
+        # without a signature_provider so the legacy membership-based
+        # short-circuit still keeps repeated asset hits cheap once the
+        # build finishes.
+        await run_static_bundle_entrypoint_load_once(
+            load_key=build_load_key,
+            load_coro_factory=_ensure_widget_ui_build_from_workflow,
+        )
+        storage_root = storage_for_spec(spec=spec, tenant=tenant_id, project=project_id, ensure=False)
+        ui_root = storage_root / "ui" / "widgets" / widget_spec.alias if storage_root else None
+
+    if not ui_root or not ui_root.exists():
+        fallback_load_key = static_bundle_entrypoint_load_key(
             tenant=tenant_id,
             project=project_id,
-            request=request,
-            session=session,
+            bundle_id=f"{bundle_id}::widget-fallback::{widget_spec.alias}",
+            storage_root=storage_root,
+        )
+        await run_static_bundle_entrypoint_load_once(
+            load_key=fallback_load_key,
+            load_coro_factory=lambda: _load_bundle_props_defaults(
+                bundle_id=bundle_id,
+                tenant=tenant_id,
+                project=project_id,
+                request=request,
+                session=session,
+                evict_before_load=False,
+            ),
         )
         storage_root = storage_for_spec(spec=spec, tenant=tenant_id, project=project_id, ensure=False)
         ui_root = storage_root / "ui" / "widgets" / widget_spec.alias if storage_root else None
@@ -3521,7 +3767,7 @@ def _resolve_bundle_secret_key(*, bundle_id: str, secret_key: str) -> str:
     return f"bundles.{bundle_id}.secrets.{key}"
 
 
-def _enforce_public_api_auth(
+async def _enforce_public_api_auth(
         *,
         endpoint_spec: APIEndpointSpec,
         bundle_id: str,
@@ -3565,7 +3811,7 @@ def _enforce_public_api_auth(
         bundle_id=bundle_id,
         secret_key=str(public_auth.secret_key or ""),
     )
-    expected_secret = get_secret(resolved_secret_key)
+    expected_secret = await get_secret(resolved_secret_key)
     if not expected_secret:
         logger.warning(
             "Bundle public operation %s requires missing secret %s",
@@ -3604,6 +3850,7 @@ async def _load_bundle_workflow(
         project=project_id,
     )
     cfg_req.agentic_bundle_id = requested_bundle_id
+    cfg_req = await resolve_config_request_secrets(cfg_req, bundle_id=requested_bundle_id)
     request_id = str(uuid.uuid4())
 
     spec_resolved = await _resolve_bundle_spec_from_runtime(
@@ -3618,7 +3865,7 @@ async def _load_bundle_workflow(
     wf_config = create_workflow_config(cfg_req)
     wf_config.ai_bundle_spec = spec_resolved
 
-    spec = AgenticBundleSpec(
+    spec = BundleSpec(
         path=spec_resolved.path,
         module=spec_resolved.module,
         singleton=bool(spec_resolved.singleton),
@@ -3639,6 +3886,7 @@ async def _load_bundle_workflow(
             user_type=session.user_type.value,
             user_id=session.user_id,
             username=session.username,
+            email=session.email,
             fingerprint=session.fingerprint,
             roles=session.roles,
             permissions=session.permissions,
@@ -3706,7 +3954,7 @@ async def _call_bundle_op_inner(
                 detail=f"Bundle operation {operation} does not support {request_method}. Allowed: {', '.join(allowed_methods)}",
             )
         raise HTTPException(status_code=404, detail=f"Bundle does not support operation {operation}")
-    _enforce_public_api_auth(
+    await _enforce_public_api_auth(
         endpoint_spec=endpoint_spec,
         bundle_id=spec_resolved.id,
         operation=operation,

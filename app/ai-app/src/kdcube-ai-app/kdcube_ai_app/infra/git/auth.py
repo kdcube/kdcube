@@ -7,7 +7,7 @@ import pathlib
 import subprocess
 from typing import Mapping
 
-from kdcube_ai_app.apps.chat.sdk.config import get_service_secret, get_settings
+from kdcube_ai_app.apps.chat.sdk.config import get_secret, get_settings
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
 
 
@@ -20,11 +20,12 @@ def _clean(value: str | None) -> str | None:
     return text or None
 
 
-def _safe_get_service_secret(key: str) -> str | None:
-    try:
-        return get_service_secret(key)
-    except Exception:
-        return None
+async def _configured_git_secret(key: str) -> str | None:
+    if key == "git.http_token":
+        return _clean(await get_secret("services.git.http_token"))
+    if key == "git.http_user":
+        return _clean(await get_secret("services.git.http_user"))
+    return None
 
 
 def ssh_url_to_https_url(git_url: str) -> str:
@@ -44,21 +45,20 @@ def ssh_url_to_https_url(git_url: str) -> str:
     return raw
 
 
-def _resolved_http_credentials(
+async def _resolved_http_credentials(
     *,
     git_http_token: str | None,
     git_http_user: str | None,
     base_env: Mapping[str, str],
 ) -> tuple[str | None, str]:
-    settings = get_settings()
     token = (
         _clean(git_http_token)
-        or _clean(_safe_get_service_secret("git.http_token"))
+        or _clean(await _configured_git_secret("git.http_token"))
         or _clean(base_env.get("GIT_HTTP_TOKEN"))
     )
     user = (
         _clean(git_http_user)
-        or _clean(_safe_get_service_secret("git.http_user"))
+        or _clean(await _configured_git_secret("git.http_user"))
         or _clean(base_env.get("GIT_HTTP_USER"))
         or DEFAULT_GIT_HTTP_USER
     )
@@ -92,27 +92,18 @@ def _resolved_ssh_config(
     return inherited_ssh_command, key_path, known_hosts, strict
 
 
-def build_git_env(
+def _build_git_env_from_values(
     *,
-    git_http_token: str | None = None,
-    git_http_user: str | None = None,
-    git_ssh_key_path: str | None = None,
-    git_ssh_known_hosts: str | None = None,
-    git_ssh_strict_host_key_checking: str | None = None,
-    askpass_script_path: pathlib.Path | None = None,
-    base_env: Mapping[str, str] | None = None,
-    logger: AgentLogger | None = None,
+    token: str | None,
+    user: str,
+    git_ssh_key_path: str | None,
+    git_ssh_known_hosts: str | None,
+    git_ssh_strict_host_key_checking: str | None,
+    askpass_script_path: pathlib.Path | None,
+    base_env: Mapping[str, str],
+    logger: AgentLogger | None,
 ) -> dict[str, str]:
-    """
-    Build a git subprocess environment from descriptor-backed settings, with
-    compatibility fallback to inherited process env when necessary.
-    """
-    env = dict(base_env if base_env is not None else os.environ)
-    token, user = _resolved_http_credentials(
-        git_http_token=git_http_token,
-        git_http_user=git_http_user,
-        base_env=env,
-    )
+    env = dict(base_env)
     inherited_ssh_command, key_path, known_hosts, strict = _resolved_ssh_config(
         git_ssh_key_path=git_ssh_key_path,
         git_ssh_known_hosts=git_ssh_known_hosts,
@@ -171,14 +162,47 @@ def build_git_env(
     return env
 
 
-def normalize_git_remote_url(
+async def build_git_env(
+    *,
+    git_http_token: str | None = None,
+    git_http_user: str | None = None,
+    git_ssh_key_path: str | None = None,
+    git_ssh_known_hosts: str | None = None,
+    git_ssh_strict_host_key_checking: str | None = None,
+    askpass_script_path: pathlib.Path | None = None,
+    base_env: Mapping[str, str] | None = None,
+    logger: AgentLogger | None = None,
+) -> dict[str, str]:
+    """
+    Build a git subprocess environment from descriptor-backed settings, with
+    compatibility fallback to inherited process env when necessary.
+    """
+    env = dict(base_env if base_env is not None else os.environ)
+    token, user = await _resolved_http_credentials(
+        git_http_token=git_http_token,
+        git_http_user=git_http_user,
+        base_env=env,
+    )
+    return _build_git_env_from_values(
+        token=token,
+        user=user,
+        git_ssh_key_path=git_ssh_key_path,
+        git_ssh_known_hosts=git_ssh_known_hosts,
+        git_ssh_strict_host_key_checking=git_ssh_strict_host_key_checking,
+        base_env=env,
+        askpass_script_path=askpass_script_path,
+        logger=logger,
+    )
+
+
+async def normalize_git_remote_url(
     git_url: str,
     *,
     git_http_token: str | None = None,
     base_env: Mapping[str, str] | None = None,
 ) -> str:
     env = dict(base_env if base_env is not None else os.environ)
-    token, _user = _resolved_http_credentials(
+    token, _user = await _resolved_http_credentials(
         git_http_token=git_http_token,
         git_http_user=None,
         base_env=env,

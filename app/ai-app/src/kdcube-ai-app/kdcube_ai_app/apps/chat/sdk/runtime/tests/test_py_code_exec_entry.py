@@ -13,6 +13,8 @@ import shutil
 import sys
 import importlib
 
+import pytest
+
 from kdcube_ai_app.apps.chat.sdk.runtime.isolated.py_code_exec_entry import (
     _bootstrap_supervisor_runtime,
     _build_executor_runtime_globals,
@@ -209,7 +211,8 @@ def test_prepare_runtime_environment_materializes_descriptors_before_settings_ca
         shutil.rmtree(runtime_dir, ignore_errors=True)
 
 
-def test_prepare_runtime_environment_makes_materialized_secrets_visible_to_settings(monkeypatch):
+@pytest.mark.asyncio
+async def test_prepare_runtime_environment_makes_materialized_secrets_visible_to_settings(monkeypatch):
     exec_id = "exec-prepare-env-settings-test"
     runtime_dir = pathlib.Path("/tmp/kdcube-runtime-descriptors") / exec_id
     shutil.rmtree(runtime_dir, ignore_errors=True)
@@ -230,7 +233,8 @@ def test_prepare_runtime_environment_makes_materialized_secrets_visible_to_setti
         sdk_config.get_settings.cache_clear()
         settings = sdk_config.Settings()
 
-        assert settings.BRAVE_API_KEY == "brave-secret"
+        assert settings.BRAVE_API_KEY is None
+        assert await sdk_config.get_secret("services.brave.api_key") == "brave-secret"
     finally:
         sdk_config.get_settings.cache_clear()
         for key in (
@@ -243,7 +247,8 @@ def test_prepare_runtime_environment_makes_materialized_secrets_visible_to_setti
         shutil.rmtree(runtime_dir, ignore_errors=True)
 
 
-def test_prepare_runtime_environment_reads_root_services_secret_descriptor(monkeypatch):
+@pytest.mark.asyncio
+async def test_prepare_runtime_environment_reads_root_services_secret_descriptor(monkeypatch):
     exec_id = "exec-root-services-settings-test"
     runtime_dir = pathlib.Path("/tmp/kdcube-runtime-descriptors") / exec_id
     shutil.rmtree(runtime_dir, ignore_errors=True)
@@ -265,7 +270,8 @@ def test_prepare_runtime_environment_reads_root_services_secret_descriptor(monke
         settings = sdk_config.Settings()
 
         assert settings.GLOBAL_SECRETS_YAML == str((runtime_dir / "secrets.yaml").resolve())
-        assert settings.BRAVE_API_KEY == "brave-secret"
+        assert settings.BRAVE_API_KEY is None
+        assert await sdk_config.get_secret("services.brave.api_key") == "brave-secret"
     finally:
         sdk_config.get_settings.cache_clear()
         for key in (

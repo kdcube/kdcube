@@ -4,11 +4,16 @@ title: "Bundle Platform Integration"
 summary: "Declarative platform contract for exposing bundle capabilities through decorators, manifest metadata, REST operations, widgets, MCP routes, static UI, public routes, scheduled jobs, and background job handlers."
 tags: ["sdk", "bundle", "integration", "decorators", "widgets", "operations", "mcp", "ui", "manifest", "cron", "scheduled-jobs", "background-jobs"]
 keywords: ["decorator based integration", "bundle manifest contract", "rest operations exposure", "widget exposure", "mcp route exposure", "static ui exposure", "public route exposure", "scheduled job exposure", "on_job background job handler"]
+updated_at: 2026-05-22
 see_also:
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
+  - ks:docs/sdk/bundle/bundle-entrypoint-classes-README.md
+  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
+  - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
   - ks:docs/sdk/bundle/bundle-transports-README.md
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/sdk/bundle/bundle-scheduled-jobs-README.md
+  - ks:docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
   - ks:docs/sdk/bundle/bundle-developer-guide-README.md
   - ks:docs/sdk/bundle/bundle-venv-README.md
   - ks:docs/service/streams/background-jobs-README.md
@@ -45,10 +50,26 @@ disclosure for guidance that remains loadable by exact id or import. See
 For the higher-level inbound/outbound transport map, use
 [bundle-transports-README.md](bundle-transports-README.md).
 
+For the CLI lifecycle that makes these integration changes visible in a local
+runtime, use
+[how-to-configure-and-run-bundle-README.md#canonical-cli-flow-schemas](build/how-to-configure-and-run-bundle-README.md#canonical-cli-flow-schemas).
+In short: `init` creates the runtime, `refresh` changes platform source/images,
+`bundle config apply` reapplies seed bundle descriptors, and
+`bundle reload` clears bundle caches for code/config changes.
+
 All of this is implemented in:
 
-- `src/kdcube-ai-app/kdcube_ai_app/infra/plugin/agentic_loader.py`
+- `src/kdcube-ai-app/kdcube_ai_app/infra/plugin/bundle_loader.py`
 - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/rest/integrations/integrations.py`
+
+Critical import rule:
+
+- bundle-local Python imports must be package-relative, for example
+  `from .services.news import build_news_service`
+- do not import bundle-local folders as process-global top-level packages such
+  as `services`, `apps`, `tools`, or `resources`
+- see [Bundle Runtime](bundle-runtime-README.md#critical-bundle-local-import-rule)
+  for the import-isolation contract
 
 ## 1) Supported decorators
 
@@ -56,8 +77,10 @@ Bundles currently support these decorators:
 
 | Decorator | Scope | What it means |
 | --- | --- | --- |
-| `@agentic_workflow(...)` | entrypoint class | Declares the bundle workflow class used by the runtime. |
-| `@agentic_workflow_factory(...)` | factory function | Declares a workflow factory function instead of a workflow class. |
+| `@bundle_entrypoint(...)` | entrypoint class | Declares the bundle entrypoint class used by the runtime. |
+| `@bundle_entrypoint_factory(...)` | factory function | Declares an entrypoint factory function instead of an entrypoint class. |
+| `@agentic_workflow(...)` | entrypoint class | Legacy compatibility alias for `@bundle_entrypoint(...)`. |
+| `@agentic_workflow_factory(...)` | factory function | Legacy compatibility alias for `@bundle_entrypoint_factory(...)`. |
 | `@bundle_id(...)` | entrypoint class | Declares the code-level bundle id used when runtime needs to infer identity from the bundle code itself. |
 | `@api(...)` | entrypoint method | Declares a remotely callable bundle HTTP operation. |
 | `@mcp(...)` | entrypoint method | Declares a remotely callable bundle MCP endpoint. |
@@ -70,54 +93,57 @@ Bundles currently support these decorators:
 
 Important distinction:
 
-- `@agentic_workflow(...)`, `@agentic_workflow_factory(...)`, `@bundle_id(...)`,
+- `@bundle_entrypoint(...)`, `@bundle_entrypoint_factory(...)`, `@bundle_id(...)`,
   `@api(...)`, `@mcp(...)`, `@ui_widget(...)`, `@ui_main`, `@on_message`, `@cron(...)`, and `@on_job`
   participate in bundle manifest and runtime interface discovery
 - `@venv(...)` is an execution decorator, not an HTTP/UI manifest decorator
-- most bundles should use `@agentic_workflow(...)`; `@agentic_workflow_factory(...)`
+- most bundles should use `@bundle_entrypoint(...)`; `@bundle_entrypoint_factory(...)`
   is the exception for custom construction cases
+- `@agentic_workflow(...)` remains supported for existing bundles, but new
+  bundle code should use `@bundle_entrypoint(...)` so non-chat bundles are not
+  mislabeled as workflows
 
 These decorators are runtime metadata. They are not deployment config.
 
-### 1.1 `@agentic_workflow_factory(...)`
+### 1.1 `@bundle_entrypoint_factory(...)`
 
-Declares a workflow factory function rather than a workflow class.
+Declares an entrypoint factory function rather than an entrypoint class.
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow_factory
+from kdcube_ai_app.infra.plugin.bundle_loader import bundle_entrypoint_factory
 
-@agentic_workflow_factory(name="My Bundle", version="1.0.0")
+@bundle_entrypoint_factory(name="My Bundle", version="1.0.0")
 def build_bundle(config, **kwargs):
     ...
 ```
 
 Use this only when the bundle must construct its runtime through a factory
-function. Most bundles should use `@agentic_workflow(...)` on a class.
+function. Most bundles should use `@bundle_entrypoint(...)` on a class.
 
 Side-by-side:
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import (
-    agentic_workflow,
-    agentic_workflow_factory,
+from kdcube_ai_app.infra.plugin.bundle_loader import (
+    bundle_entrypoint,
+    bundle_entrypoint_factory,
     bundle_id,
 )
 
-@agentic_workflow(name="My Bundle", version="1.0.0")
+@bundle_entrypoint(name="My Bundle", version="1.0.0")
 @bundle_id("my.bundle@1.0.0")
-class MyWorkflow:
+class MyBundleEntrypoint:
     ...
 
-@agentic_workflow_factory(name="My Bundle", version="1.0.0")
-def build_workflow(config, **kwargs):
-    return MyWorkflow(config=config, **kwargs)
+@bundle_entrypoint_factory(name="My Bundle", version="1.0.0")
+def build_entrypoint(config, **kwargs):
+    return MyBundleEntrypoint(config=config, **kwargs)
 ```
 
 In practice:
 
-- class form means the runtime instantiates the workflow class directly
+- class form means the runtime instantiates the entrypoint class directly
 - factory form means the runtime calls your function and uses the returned
-  workflow instance
+  entrypoint instance
 - prefer the class form unless you specifically need dynamic selection,
   wrapping, or legacy construction adaptation
 
@@ -126,9 +152,9 @@ In practice:
 Declares the canonical bundle ID on the entrypoint class.
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow, bundle_id
+from kdcube_ai_app.infra.plugin.bundle_loader import bundle_entrypoint, bundle_id
 
-@agentic_workflow(name="My Bundle", version="1.0.0")
+@bundle_entrypoint(name="My Bundle", version="1.0.0")
 @bundle_id("my.bundle@1.0.0")
 class MyBundle:
     ...
@@ -136,14 +162,14 @@ class MyBundle:
 
 Use it when the code should declare its own stable bundle identity.
 
-### 1.3 `@agentic_workflow(...)` — bundle-level `allowed_roles`
+### 1.3 `@bundle_entrypoint(...)` — bundle-level `allowed_roles`
 
-The `@agentic_workflow` decorator accepts optional `allowed_roles` and
+The `@bundle_entrypoint` decorator accepts optional `allowed_roles` and
 `allowed_roles_config` parameters that restrict which users can see the bundle
 in the bundle listing.
 
 ```python
-@agentic_workflow(
+@bundle_entrypoint(
     name="Finance Copilot",
     version="1.0.0",
     allowed_roles=("kdcube:role:finance-team", "kdcube:role:super-admin"),
@@ -207,7 +233,7 @@ visibility:
 
 The YAML parser resolves the anchor when the descriptor is loaded. After that,
 KDCube works with normal in-memory dictionaries and bundle props. Runtime code
-and `agentic_loader.py` do not see the anchor name or alias syntax.
+and `bundle_loader.py` do not see the anchor name or alias syntax.
 
 If bundle props or secrets are edited through the Bundle Admin interface, the
 descriptor may be written back to YAML. That write serializes the resolved
@@ -233,7 +259,7 @@ Canonical bundle-props shape:
 enabled:
   bundle: true|false
   api:
-    "<api-alias>.<METHOD>": true|false   # flat key with literal dot
+    "<route>.<api-alias>.<METHOD>": true|false   # flat key under enabled.api
   mcp:
     <mcp-alias>: true|false
   widget:
@@ -253,20 +279,18 @@ Mapping per decorator:
 
 | Decorator | Canonical path |
 | --- | --- |
-| `@agentic_workflow(...)` | `enabled.bundle` |
-| `@api(alias=A, method=M, ...)` | `enabled.api["A.M"]` (flat key) |
+| `@bundle_entrypoint(...)` | `enabled.bundle` |
+| `@api(alias=A, method=M, route=R, ...)` | `enabled.api["R.A.M"]` (flat key) |
 | `@mcp(alias=A, ...)` | `enabled.mcp.A` |
 | `@ui_widget(alias=A, ...)` | `enabled.widget.A` |
 | `@cron(alias=A, ...)` | `enabled.cron.A` |
 
-Aliases must not contain `.`; the validator rejects them at decoration time.
-The flat `<alias>.<METHOD>` key under `enabled.api` is the only place a
-literal dot appears inside a section key.
+For API gates, the route-aware flat key `<route>.<alias>.<METHOD>` lives under `enabled.api`; the legacy `<alias>.<METHOD>` key remains a fallback for persisted descriptors.
 
 Example:
 
 ```python
-@agentic_workflow(
+@bundle_entrypoint(
     name="News Admin",
     version="1.0.0",
 )
@@ -461,7 +485,7 @@ Current fields:
     - `"bundle"`: proc forwards the request into the bundle method and the
       bundle authenticates it itself
   - default: required for `route="public"`, invalid for `route="operations"`
-- canonical feature gate: `enabled.api["<alias>.<METHOD>"]` (flat key)
+- canonical feature gate: `enabled.api["<route>.<alias>.<METHOD>"]` (flat key)
   - boolean (or string equivalent) under `enabled.api` in bundle props
   - if the resolved value is falsy, this endpoint returns 404
   - absent key means always enabled
@@ -489,11 +513,19 @@ Important current rule:
 - if bundle code needs request-bound execution context, use runtime helpers:
   - `get_current_comm()`
   - `get_current_request_context()`
+  - `get_current_user_identity()`
   - `get_current_bundle_call_context()`
   - `update_current_bundle_call_context(...)`
   - `bind_current_bundle_call_context_patch(...)`
 - for entrypoints based on `BaseEntrypoint`, prefer `self.comm` /
   `self.comm_context`
+- decorated singleton bundle entrypoints should use a `BaseEntrypoint` family
+  class; `BaseWorkflow` subclasses are per-message orchestrators created inside
+  the entrypoint turn execution, not singleton entrypoints. See
+  [Bundle Entrypoint Classes](bundle-entrypoint-classes-README.md).
+- if the method needs to record selected comm events and send them to a sink,
+  use the scoped recording pattern in
+  [Bundle Event Recording And Sinks](bundle-event-recording-and-sinks-README.md)
 - use `bundle_call_context` for JSON-safe bundle-owned metadata that must
   follow the current API/widget invocation into tools, nested agents, or
   isolated runtimes; for request-scoped model routing, set
@@ -596,7 +628,7 @@ Important:
   - put the client-facing header name in bundle props such as
     `self.bundle_prop("mcp.inbound.auth.header_name")`
   - put the verification material in bundle secrets such as
-    `await get_secret_async("b:mcp.inbound.auth.shared_token")`
+    `await get_secret("b:mcp.inbound.auth.shared_token")`
   - read `request.headers[...]` in the provider and reject with
     `HTTPException(status_code=401, ...)` before returning the MCP app
 - full worked example:
@@ -718,7 +750,7 @@ Marks the bundle handler for ready background jobs claimed by proc from the
 background jobs stream.
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import on_job
+from kdcube_ai_app.infra.plugin.bundle_loader import on_job
 
 @on_job
 async def on_job(self, job: dict, **kwargs) -> dict:
@@ -745,7 +777,7 @@ work that has been enqueued for fair processor claiming.
 Recommended dispatch pattern:
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import on_job
+from kdcube_ai_app.infra.plugin.bundle_loader import on_job
 
 @on_job
 async def on_job(self, **kwargs) -> dict:
@@ -769,7 +801,7 @@ See:
 Marks a method as a recurring scheduled job managed by proc.
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import cron
+from kdcube_ai_app.infra.plugin.bundle_loader import cron
 
 @cron(
     alias="rebuild-indexes",
@@ -819,7 +851,7 @@ Current behavior:
 - `BundleSchedulerManager` in proc reconciles job tasks after every registry or props change
 - no proc restart required for schedule changes
 - if Redis is unavailable for `instance`/`system` spans, the tick is skipped and a warning is logged; the job is **not** silently degraded to `process`
-- the method runs headlessly — no user session or SSE stream, but normal bundle runtime access is available (`self.bundle_props`, `self.redis`, `self.pg_pool`, secrets)
+- the method runs headlessly — no user session or SSE stream, but normal bundle runtime access is available (`self.bundle_prop(...)`, `self.redis`, `self.pg_pool`, `await get_secret("b:...")`)
 - async methods are executed directly; sync methods run via `asyncio.to_thread`
 - overlapping runs within the same exclusivity scope are prevented (in-process flag for `process`, Redis lock for `instance`/`system`)
 
@@ -832,7 +864,7 @@ For full details on span semantics, cron resolution, and local debug:
 Marks a callable to execute in a cached per-bundle subprocess venv.
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import venv
+from kdcube_ai_app.infra.plugin.bundle_loader import venv
 
 @venv(requirements="requirements.txt", timeout_seconds=120)
 def parse_large_pdf(payload: dict) -> dict:
@@ -979,10 +1011,10 @@ class BundleInterfaceManifest:
 ```
 
 `allowed_roles` is populated from the `allowed_roles` argument of
-`@agentic_workflow`. Empty tuple means no restriction.
+`@bundle_entrypoint`. Empty tuple means no restriction.
 
 `allowed_roles_config` is the dot-path declared via `allowed_roles_config=` on
-`@agentic_workflow`. When set, `apply_bundle_overrides(manifest, props)` resolves
+`@bundle_entrypoint`. When set, `apply_bundle_overrides(manifest, props)` resolves
 the path against bundle props and returns a new manifest with the effective
 `allowed_roles`. The admin descriptor exposes `allowed_roles_default`,
 `allowed_roles_config`, and `allowed_roles_overridden` alongside the effective
@@ -1210,7 +1242,7 @@ This is the route used for bundle main-view apps embedded in the host UI.
 
 Role visibility is enforced by the platform integration layer at two levels.
 
-### 4.1 Bundle-level filtering (`allowed_roles` on `@agentic_workflow`)
+### 4.1 Bundle-level filtering (`allowed_roles` on `@bundle_entrypoint`)
 
 Applies to the bundle listing endpoint (`GET /api/integrations/bundles`).
 
@@ -1294,7 +1326,7 @@ Smaller custom main-view example:
 Relevant code:
 
 - decorator implementation:
-  `src/kdcube-ai-app/kdcube_ai_app/infra/plugin/agentic_loader.py`
+  `src/kdcube-ai-app/kdcube_ai_app/infra/plugin/bundle_loader.py`
 - integrations controller:
   `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/rest/integrations/integrations.py`
 - base entrypoint widget and `@on_message` usage:
@@ -1332,7 +1364,7 @@ async def telegram_webhook(self, **kwargs):
 
 ```python
 from fastapi import HTTPException, Request
-from kdcube_ai_app.apps.chat.sdk.config import get_secret_async
+from kdcube_ai_app.apps.chat.sdk.config import get_secret
 
 @api(
     alias="telegram_webhook",
@@ -1344,7 +1376,7 @@ async def telegram_webhook(self, request: Request, **kwargs):
         "telegram.webhook.auth.header_name",
         "X-Telegram-Bot-Api-Secret-Token",
     )
-    expected_token = await get_secret_async("b:telegram.webhook.auth.shared_token")
+    expected_token = await get_secret("b:telegram.webhook.auth.shared_token")
     provided_token = request.headers.get(header_name)
     if not expected_token or provided_token != expected_token:
         raise HTTPException(status_code=401, detail="Unauthorized")

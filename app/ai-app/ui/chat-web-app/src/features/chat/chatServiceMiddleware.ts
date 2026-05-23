@@ -465,9 +465,11 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
 
                         dispatch(clearUserInput())
 
+                        const serverTurnId = ack.turn_id || turnId
+
                         if (!isContinuation) {
                             dispatch(newTurn({
-                                id: turnId,
+                                id: serverTurnId,
                                 state: "new",
                                 userMessage: message,
                                 attachments
@@ -477,13 +479,17 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
                             const ackStatus = typeof ack?.status === "string" ? ack.status : null
                             const continuationAccepted = ackStatus === "followup_accepted" || ackStatus === "steer_accepted"
                             const continuationStartedNewTurn = !!ackStatus && !continuationAccepted
-                            if (!continuationStartedNewTurn && continuationKind === "followup" && targetTurnId) {
+                            const liveContinuationAccepted = continuationAccepted && ack.live_owner_detected !== false
+                            const visualTurnId = ack.active_turn_id || targetTurnId
+                            const sourceMessageId = ack.event_id || ack.queued_turn_id || serverTurnId
+                            if (!continuationStartedNewTurn && liveContinuationAccepted && continuationKind === "followup" && visualTurnId) {
                                 dispatch(appendTurnUserMessage({
-                                    turnId: targetTurnId,
+                                    turnId: visualTurnId,
                                     text: message,
                                     attachments,
                                     timestamp: sentAt,
                                     continuationKind: "followup",
+                                    sourceMessageId,
                                 }))
                             }
                             dispatch(pushNotification({

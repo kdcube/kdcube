@@ -1,45 +1,58 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.5.21.145"
+  ref: "2026.5.23.1825"
   description: |
-    This patch release tightens CLI startup behavior, split Docker execution
-    logging, and ReAct timeline/runtime behavior after the 2026.5.20.x
-    isolated-runtime updates.
+    This patch release completes the async secret-resolution migration for
+    bundle and runtime services, improves git-backed runtime authentication,
+    and adds a signature-aware UI widget rebuild path for bundle development
+    after the 2026.5.23.312 release.
 
     Highlights
 
-    - Prepares Docker Compose log bind directories during CLI start, using the
-      generated Compose transport values, so clean installs do not let Docker
-      create root-owned log directories.
-    - Improves split isolated-runtime log feedback while preserving the
-      executor isolation boundary.
-    - Orders generated file timeline entries by emission time and shows them
-      before final answers.
-    - Separates streamed answer content from raw final_answer completion events.
-    - Adds per-action step streaming keys and stronger ReAct causality guards
-      for multi-action planning.
-    - Documents stream families, long-running lifecycle behavior, ECS layout,
-      and Claude Code integration notes.
+    - Migrates service and bundle secret access to async-only resolution so
+      runtime paths, integrations, economics, model routing, web search, email,
+      Telegram, and knowledge-base services can use the same non-blocking
+      secret contract.
+    - Updates git-backed runtime and workspace authentication so secrets are
+      resolved through the shared async manager instead of sync fallbacks.
+    - Tightens bundle runtime context propagation for static entrypoints,
+      managed git bundles, isolated execution, MCP adapters, Claude Code
+      sessions, ReAct workspaces, and task operations.
+    - Adds signature-aware UI widget rebuild coalescing so bundle widget source
+      edits trigger rebuilds without unnecessary repeated builds.
+    - Clarifies descriptor override defaults, bundle properties, bundle
+      secrets, runtime read/write contracts, and secret-provider documentation
+      for bundle builders and operators.
+    - Refreshes tests around secret manager behavior, service key resolution,
+      bundle registry runtime context, git bundle locking, static entrypoint
+      loading, email integration, ReAct workspaces, and UI widget rebuilds.
 
     Runtime and deployment notes:
 
-    - Deployments must point the platform ref at 2026.5.21.145 to receive the
-      CLI start-time Compose log preparation and runtime/timeline fixes.
+    - Deployments must point the platform ref at 2026.5.23.1825 to receive the
+      async secret-resolution, git-backed runtime, and widget rebuild fixes.
     - No descriptor shape migration is required.
+    - Secret-provider implementations must be available in async-capable paths;
+      sync secret lookup fallbacks have been removed from runtime code.
     - No private deployment content is part of this OSS release.
 
     Validation and regression coverage:
 
-    - Focused CLI descriptor tests passed for generated Compose log directory
-      handling.
-    - Python syntax validation passed for changed CLI files.
+    - Focused secret manager and service-key resolution tests passed in the
+      related implementation commits.
+    - Focused bundle registry, static entrypoint, git runtime, ReAct workspace,
+      email integration, and UI widget rebuild tests were updated with the new
+      async contract.
     - Staged OSS private-name scan passed before commit.
 
     Changelog
 
-    - Fixed CLI Compose log bind preparation during start.
-    - Improved isolated execution logging feedback and timeline stream
-      rendering behavior.
-    - Tightened ReAct causality guidance and protocol guards.
+    - Removed sync secret-resolution fallbacks from runtime and integration
+      code.
+    - Updated bundle and service runtime code to await secret resolution.
+    - Improved git-backed bundle, runtime, and workspace authentication.
+    - Added signature-aware UI widget rebuild coalescing.
+    - Updated operator and bundle-builder documentation for properties,
+      secrets, runtime context, and descriptor overrides.
 config:
-    version: "2026.5.21.145"
+    version: "2026.5.23.1825"

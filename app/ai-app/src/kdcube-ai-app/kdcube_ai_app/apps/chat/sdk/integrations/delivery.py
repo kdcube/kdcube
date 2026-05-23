@@ -66,11 +66,11 @@ def _select_account(accounts: Iterable[Mapping[str, Any]], wanted: str) -> dict[
     return rows[0] if len(rows) == 1 else None
 
 
-def _telegram_bot_token(bundle_id: str = "") -> str:
+async def _telegram_bot_token(bundle_id: str = "") -> str:
     resolved_bundle_id = str(bundle_id or DEFAULT_EMAIL_BUNDLE_ID).strip() or DEFAULT_EMAIL_BUNDLE_ID
     return (
-        get_secret("b:integrations.telegram.bot_token")
-        or get_secret(f"bundles.{resolved_bundle_id}.secrets.integrations.telegram.bot_token")
+        await get_secret("b:integrations.telegram.bot_token")
+        or await get_secret(f"bundles.{resolved_bundle_id}.secrets.integrations.telegram.bot_token")
         or ""
     )
 
@@ -515,7 +515,7 @@ async def send_report_to_telegram(
             )
         )
     delivery = await send_telegram_messages(
-        bot_token=_telegram_bot_token(bundle_id),
+        bot_token=await _telegram_bot_token(bundle_id),
         chat_id=chat_id,
         messages=messages,
     )

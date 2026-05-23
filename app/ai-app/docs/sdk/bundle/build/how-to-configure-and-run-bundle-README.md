@@ -4,7 +4,7 @@ title: "How To Configure And Run A Bundle"
 summary: "Current bundle-development runtime workflow: tenant/project environment setup, descriptor staging, local-path and git bundles, configuration translation, start/stop/reload loop, configuration/secret scopes, and the rule that one machine may hold many local deployment snapshots but should not be treated as running many local compose-backed KDCubes at once."
 tags: ["sdk", "bundle", "configuration", "runtime", "cli", "bundles.yaml"]
 keywords: ["local bundle development workflow", "tenant project environment boundary", "descriptor driven runtime setup", "local path bundle loop", "git bundle loop", "bundle reload workflow", "runtime sandbox selection", "bundle config and secret scopes", "shared sdk widget sources", "bundle configurator workflow", "bundle deployer workflow", "current kdcube cli workflow", "multiple local runtime snapshots", "single active local compose deployment", "run multiple kdcubes on one machine", "kdcube bundle command", "patch bundle config cli", "patch bundle secret cli"]
-updated_at: 2026-05-16
+updated_at: 2026-05-23
 see_also:
   - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/configuration/bundles-descriptor-README.md
@@ -14,15 +14,22 @@ see_also:
   - ks:docs/service/cicd/design/cli--as-control-plane-README.md
   - ks:docs/service/cicd/ngrok-README.md
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
+  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
+  - ks:docs/sdk/bundle/build/how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md
   - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-release-bundle-content-README.md
+  - ks:docs/sdk/bundle/bundle-client-communication-README.md
+  - ks:docs/sdk/bundle/bundle-transports-README.md
   - ks:docs/sdk/integrations/telegram/telegram-README.md
   - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-new-cli-README.md
   - ks:docs/sdk/bundle/bundle-developer-guide-README.md
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
+  - ks:docs/sdk/tools/custom-tools-README.md
+  - ks:docs/sdk/tools/tool-subsystem-README.md
+  - ks:docs/sdk/bundle/build/design/bundle-loader-import-isolation-README.md
   - ks:docs/sdk/bundle/bundle-widget-integration-README.md
 ---
 # How To Configure And Run A Bundle
@@ -44,15 +51,29 @@ Use it when you need to answer questions like:
 - what does `--workdir` really point to
 - where are the active descriptor files after install
 - how do I point a bundle at my local source tree
-- when should I rerun install vs `kdcube reload`
+- when should I rerun install vs `kdcube bundle reload`
 - how do I avoid overwriting live bundle props/secrets with stale descriptor copies
 - how do I make a localhost KDCube reachable through public HTTPS for external
   callbacks such as Telegram webhooks, OAuth callbacks, or remote-control style
   integrations
+- how do I hand the repetitive local setup to an agent so it can configure the
+  bundle, staged descriptors, ngrok, Telegram, and Gmail values with minimal
+  questions
 
 This page is not the primary source for bundle design or test strategy.
 It documents the supported local CLI/runtime workflow for descriptor-backed
 bundle development.
+
+Critical Python import rule:
+
+- bundle-local code must use package-relative imports such as
+  `from .services.storage import ...`
+- do not import bundle-local folders as top-level packages such as `services`,
+  `apps`, `tools`, or `resources`
+- the same applies to `tools_descriptor.py` and bundle-local tools; local tool
+  specs should use `ref: "tools/name.py"`, while `module` is reserved for
+  installed SDK/external modules
+- see [bundle-runtime-README.md#critical-bundle-local-import-rule](../bundle-runtime-README.md#critical-bundle-local-import-rule)
 
 Critical widget/browser runtime rule:
 
@@ -65,6 +86,11 @@ Critical widget/browser runtime rule:
   and `/api/integrations/...`
 - do not fix widget networking by hardcoding local ports or external host
   application URLs
+- if a widget or bundle UI needs live updates from a non-chat operation, reuse
+  `/sse/stream` or Socket.IO and pass `KDC-Stream-ID` on the
+  `/api/integrations/.../operations/...` call; backend code emits with the
+  request-bound communicator
+- see [bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream](../bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream)
 
 Important:
 
@@ -80,12 +106,18 @@ Use the companion docs for those:
 - [how-to-write-bundle-README.md](how-to-write-bundle-README.md)
 - [how-to-assemble-bundle-with-sdk-building-blocks-README.md](how-to-assemble-bundle-with-sdk-building-blocks-README.md)
 - [how-to-test-bundle-README.md](how-to-test-bundle-README.md)
+- [how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md](how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md)
+- [bundle-client-communication-README.md](../bundle-client-communication-README.md)
 - [bundle-platform-integration-README.md](../bundle-platform-integration-README.md)
 - [bundle-runtime-README.md](../bundle-runtime-README.md)
 - [../../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../../configuration/bundle-runtime-configuration-and-secrets-README.md)
 
 Configuration rule:
 
+- [bundle-properties-and-secrets-lifecycle-README.md](../bundle-properties-and-secrets-lifecycle-README.md)
+  is the concise bundle-author page for how `configuration_defaults()`,
+  descriptor/admin props, effective runtime props, bundle secrets, and
+  materialization/export relate to each other
 - [bundle-runtime-configuration-and-secrets-README.md](../../../configuration/bundle-runtime-configuration-and-secrets-README.md) is the
   canonical author-facing page for all props and secrets across all scopes:
   platform/global, deployment-scoped bundle, and user-scoped
@@ -113,6 +145,10 @@ Tier 1 role of this page:
   or inspecting a bundle in a local KDCube environment
 - use it when the problem is descriptor authority, reload behavior, workdir
   layout, or local runtime staging
+- use [how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md](how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md)
+  when the job is not only understanding the runtime model but actually asking
+  an agent to perform the setup, configure a bundle, run ngrok, register
+  Telegram webhooks, or prepare Gmail OAuth values
 
 For exact descriptor schemas, use:
 
@@ -139,6 +175,111 @@ For bundle shape, surface choice, and wrapper design, return to:
 
 - [how-to-write-bundle-README.md](how-to-write-bundle-README.md)
 
+## Canonical CLI Flow Schemas
+
+This is the Tier 1 source of truth for the local CLI runtime flow. Other Tier 1
+bundle-builder docs should point here instead of duplicating these diagrams.
+
+### Init Once
+
+Use `init` for first-time runtime creation or intentional reseeding.
+
+```text
+seed descriptors                         platform source
+assembly.yaml / bundles.yaml / ...       --path / --upstream / --latest / --release
+              |                                |
+              +---------------+----------------+
+                              v
+              kdcube init --descriptors-location <dir> --build
+                              |
+                              v
+       ~/.kdcube/kdcube-runtime/<tenant>__<project>/
+       config/*.yaml + repo/ + compose/env files + data/
+                              |
+                              v
+                         kdcube start
+                              |
+                              v
+                  http://localhost:<port>/platform/chat
+```
+
+`init` creates the workdir, stages descriptors into `workdir/config`, prepares
+env/compose files, and optionally builds images. It refuses to silently reuse an
+already initialized workdir.
+
+### Refresh Platform Runtime
+
+Use `refresh` for an already initialized runtime. It preserves staged
+descriptors.
+
+```text
+existing runtime workdir
+config/*.yaml  ----------------------------- preserved
+      |
+      | optional platform source selector
+      | none / --path / --upstream / --latest / --release
+      v
+kdcube refresh [selector] --build
+      |
+      +-- with --path: copy that local checkout into workdir/repo first
+      +-- with --upstream/--latest/--release: update workdir/repo to that ref
+      +-- with no selector: rebuild the already staged/recorded source
+      +-- with --build: rebuild images
+      +-- unless --no-restart: restart the stack
+```
+
+`kdcube refresh --build` does not copy the current shell checkout by itself.
+Pass `--path /path/to/kdcube-ai-app` when the runtime should rebuild from that
+local checkout. Use exactly one of `--path`, `--upstream`, `--latest`, or
+`--release <ref>` when the platform source should change.
+
+### Apply Bundle Config And Reload
+
+Use `bundle config apply` when the user intentionally wants seed
+`bundles.yaml` / `bundles.secrets.yaml` to replace the active runtime bundle
+descriptor copy. Use `bundle reload` when the active runtime descriptor or
+bundle source already changed and proc only needs to reload it.
+
+```text
+seed content descriptors
+bundles.yaml + bundles.secrets.yaml
+              |
+              v
+kdcube bundle config apply --descriptors-location <dir> [--dry-run]
+              |
+              v
+active runtime bundle descriptors
+workdir/config/bundles.yaml + bundles.secrets.yaml
+              |
+              v
+kdcube bundle reload <bundle_id>
+              |
+              v
+proc clears bundle cache and reloads code/config on the next request
+```
+
+`bundle config apply` does not rebuild platform images, restart Docker, or
+touch `assembly.yaml`, `gateway.yaml`, or `secrets.yaml`. With `--reload`, it
+also reloads the changed bundle ids after staging descriptor changes.
+
+### Export Before Replacing Live Bundle State
+
+```text
+live runtime bundle authority
+workdir/config/bundles.yaml + bundles.secrets.yaml
+              |
+              v
+kdcube export --out-dir <dir>
+              |
+              v
+portable bundle descriptors for review
+bundles.yaml + bundles.secrets.yaml
+```
+
+Export writes bundle descriptors only. Local non-git bundle paths are normalized
+back to host paths; git-backed entries keep repo/ref/subdir and drop incidental
+materialized runtime paths.
+
 ## If Your Role Is Configurator Or Deployer
 
 Use this page differently depending on the job.
@@ -163,7 +304,7 @@ Use this page to answer:
 
 - how to point one deployment at one bundle path or git ref
 - how `--workdir` resolves
-- when to rerun install versus using `kdcube reload`
+- when to rerun install versus using `kdcube bundle reload`
 - how to inspect one runtime and how to avoid changing the wrong deployment
 - how to think about one active local deployment versus many runtime snapshots
 
@@ -198,7 +339,10 @@ That means:
 
 - the source descriptor directory is an input to install/update
 - the staged files under `workdir/config/` are the live local runtime authority
-- editing the source directory later does nothing until you rerun install
+- editing the source directory later does nothing by itself; for bundle
+  descriptors only, the user can intentionally reapply seed
+  `bundles.yaml` / `bundles.secrets.yaml` with
+  `kdcube bundle config apply`
 
 This is the main point that older workflow descriptions often got wrong.
 
@@ -414,11 +558,11 @@ For the exact helper contract and cloud-mode differences, use:
 | Scope | Typical examples | Read / write API | Live authority in the local runtime | Export / ejection path |
 |---|---|---|---|---|
 | platform/global props | ports, auth ids, storage backends, path roots | `get_settings()` for effective values; `get_plain("...")` for raw descriptor inspection; no supported write API from bundle code | staged `assembly.yaml` and `gateway.yaml` under `workdir/config/`, plus env | not part of `kdcube export`; manage through the deployment descriptor set |
-| platform/global secrets | deployment-wide API keys, auth secrets | async read: `await get_secret_async("canonical.key")`; no supported write API from bundle code | `secrets.yaml` only when `secrets-file` is active; otherwise the configured secrets provider | not part of `kdcube export`; manage through deployment secret workflows |
+| platform/global secrets | deployment-wide API keys, auth secrets | async read: `await get_secret("canonical.key")`; no supported write API from bundle code | `secrets.yaml` only when `secrets-file` is active; otherwise the configured secrets provider | not part of `kdcube export`; manage through deployment secret workflows |
 | deployment-scoped bundle props | feature flags, cron expressions, model selection, bundle UI config | read: `self.bundle_prop(...)`; write: `await set_bundle_prop(...)` | `workdir/config/bundles.yaml` when file-backed descriptor mode is active, with Redis as runtime cache | exported by `kdcube export` to `bundles.yaml` |
-| deployment-scoped bundle secrets | webhook secrets, shared API tokens, bundle-specific credentials | async read: `await get_secret_async("b:...")`; write: `await set_bundle_secret(...)` | `workdir/config/bundles.secrets.yaml` only in local `secrets-file` mode; otherwise the configured secrets provider | exported by `kdcube export` to `bundles.secrets.yaml` when the provider/export flow can reconstruct them |
+| deployment-scoped bundle secrets | webhook secrets, shared API tokens, bundle-specific credentials | async read: `await get_secret("b:...")`; write: `await set_bundle_secret(...)` | `workdir/config/bundles.secrets.yaml` only in local `secrets-file` mode; otherwise the configured secrets provider | exported by `kdcube export` to `bundles.secrets.yaml` when the provider/export flow can reconstruct them |
 | user-scoped bundle props | one user's preferences or bundle-managed non-secret state | read/write: `get_user_prop(...)`, `set_user_prop(...)`, `delete_user_prop(...)` | PostgreSQL user bundle props table | never exported |
-| user-scoped bundle secrets | one user's personal tokens or credentials managed by the bundle | async read/write: `await get_user_secret_async(...)`, `await set_user_secret_async(...)`, `await delete_user_secret_async(...)` | configured secrets provider; in local `secrets-file` mode this is `secrets.yaml` | never exported |
+| user-scoped bundle secrets | one user's personal tokens or credentials managed by the bundle | read/write: `await get_secret("u:...")`, `await set_user_secret(...)`, `await delete_user_secret(...)` | configured secrets provider; in local `secrets-file` mode this is `secrets.yaml` | never exported |
 
 In the user-scoped rows, "user" means the bundle user scope, not necessarily a
 KDCube control-plane account. A KDCube-authenticated widget may use the KDCube
@@ -431,9 +575,8 @@ Two hard rules:
 
 - `kdcube export` is a bundle-state export only. It exports `bundles.yaml` and `bundles.secrets.yaml`. It does not export `assembly.yaml`, `gateway.yaml`, `secrets.yaml`, user props, or user secrets.
 - Bundle Admin writes live deployment-scoped bundle state only. It does not rewrite platform/global deployment descriptors.
-- Sync secret helpers are compatibility APIs. In async bundle code, use
-  `get_secret_async(...)`, `get_user_secret_async(...)`,
-  `set_user_secret_async(...)`, and `delete_user_secret_async(...)`.
+- In async bundle code, use `get_secret(...)`, `set_user_secret(...)`, and
+  `delete_user_secret(...)` from `kdcube_ai_app.apps.chat.sdk.config`.
 
 ### Agent Role Model Configuration
 
@@ -514,6 +657,22 @@ The processor/bundle-loader infra builds the source folder into shared bundle
 storage and serves widget subpaths from the built app. Do not configure widgets
 by pointing the platform directly at a built file.
 
+Important descriptor/default boundary:
+
+- `configuration_defaults()` is the right place for bundle-owned stable
+  defaults used by `BaseEntrypoint` and workflow-side rebuild logic
+- the current route-time static widget serving path evaluates effective bundle
+  props after code defaults and descriptor/admin props are merged
+- `bundles.yaml` still stores only descriptor/admin props; code defaults are
+  not materialized into the descriptor unless an operator explicitly writes or
+  resets them
+- descriptors may repeat `src_folder` and `build_command` when a seed file must
+  be self-documenting or support an older runtime, but the current runtime
+  contract does not require repeating intrinsic widget defaults there
+- if `/widgets/<alias>` or `/public/widgets/<alias>` says the widget has no
+  built/static app, inspect effective props and bundle load/build logs before
+  assuming descriptor values are missing
+
 For React/Vite widgets, use the build command contract from
 [bundle-widget-integration-README.md#source-folder-widget-apps](../bundle-widget-integration-README.md#source-folder-widget-apps):
 
@@ -538,8 +697,11 @@ package and not a runtime import from the monorepo.
 If the widget imports SDK-owned UI code, the widget config must materialize the
 same source through `shared_sources`. For built-in/reference bundles, this
 should usually live in the bundle's `configuration_defaults()` so descriptors
-only need `enabled: true`. The descriptor can still repeat the values when you
-want the seed file to be self-documenting or to override defaults.
+only need the widget-build setting `ui.widgets.<alias>.enabled: true` when the
+deployment must explicitly expose that built widget. This is not the canonical
+platform surface gate `config.enabled.widget.<alias>`; do not mirror default
+surface gates as `true`. The descriptor can still repeat the build values when
+you want the seed file to be self-documenting or to override defaults.
 
 The required shape is:
 
@@ -718,17 +880,20 @@ environment checklist in
 Recommended command shape:
 
 ```bash
-kdcube init \
-  --workdir ~/.kdcube/kdcube-runtime \
+kdcube init --tenant <t> --project <p> \
   --descriptors-location /abs/path/to/descriptors
 ```
+
+`--tenant`/`--project` is the primary form — the CLI composes the runtime
+path under the platform default base
+(`~/.kdcube/kdcube-runtime/<tenant>__<project>/`). For non-default placements,
+use `--workdir <full-path>` or `--workdir-base <base> --tenant T --project P`.
 
 When the local run needs platform service keys, stage them during init with
 dotted descriptor keys:
 
 ```bash
-kdcube init \
-  --workdir ~/.kdcube/kdcube-runtime \
+kdcube init --tenant <t> --project <p> \
   --descriptors-location /abs/path/to/descriptors \
   --set-secret services.openai.api_key "sk-..." \
   --set-secret services.anthropic.api_key "sk-ant-..." \
@@ -740,13 +905,17 @@ kdcube init \
 For guided secret entry, use:
 
 ```bash
-kdcube init --prompt-secrets
+kdcube init --tenant <t> --project <p> --prompt-secrets
 ```
 
 These values are written to the active runtime `config/secrets.yaml`, not to
 `.env` files. They are applied to the staged runtime descriptor copy during
-`init`; rerunning `init` with `--set-secret` must preserve those explicit
-values instead of restaging a pristine `secrets.yaml` over them.
+`init`. To set or rotate secrets on an *existing* runtime later, use
+`kdcube bundle <id> --set-secret KEY VALUE` for bundle-scoped secrets, or
+edit `<workdir>/config/secrets.yaml` directly for platform-global secrets.
+Re-running `kdcube init` on an existing workdir is refused (it would be
+ambiguous about whether to reseed); for a clean reseed, remove the workdir
+first.
 
 For delegated/proxy-login or hosted descriptors, the CLI stages concrete
 runtime descriptors from seed descriptors. Placeholders such as tenant,
@@ -754,7 +923,7 @@ project, and domain values must be resolved in the staged runtime config before
 the services start. After init, verify the active target with:
 
 ```bash
-kdcube info --workdir ~/.kdcube/kdcube-runtime/<tenant>__<project>
+kdcube info --tenant <t> --project <p>
 ```
 
 ReAct round limits can be set globally or per bundle:
@@ -785,7 +954,7 @@ can override with `config.react.debug_timeline` or `react.debug_timeline`.
 Then start the initialized runtime:
 
 ```bash
-kdcube start --workdir ~/.kdcube/kdcube-runtime/<tenant>__<project>
+kdcube start --tenant <t> --project <p>
 ```
 
 Without `--build`, `init` stages descriptors and generates runtime env files.
@@ -798,26 +967,35 @@ The platform source/ref is selected using:
 - or explicit `--path /abs/path/to/kdcube-ai-app` when you intentionally want
   to test a dirty local platform checkout
 
-`--workdir` answers where the runtime should be installed. `--path` answers
-which local platform source tree should be staged for this runtime. In
-descriptor-driven `init`, explicit `--path` without `--upstream`, `--latest`,
-or `--release` copies tracked files plus untracked-but-not-ignored files into
-the namespaced runtime workdir and uses that staged copy. Gitignored
-runtime/data files are not copied.
+`--tenant`/`--project` (or `--workdir`/`--workdir-base` in advanced placements)
+answers where the runtime should be installed. `--path` answers which local
+platform source tree should be staged for this runtime. In descriptor-driven
+`init`, explicit `--path` without `--upstream`, `--latest`, or `--release`
+copies tracked files plus untracked-but-not-ignored files into the namespaced
+runtime workdir and uses that staged copy. Gitignored runtime/data files are
+not copied.
 
-Use `init --build` when you want images prepared before starting. `start
---build` remains available as a convenience rebuild before start, but normal
-operator flow is:
+Use `init --build` when you want images prepared before starting. After the
+runtime exists, to rebuild images on platform-source updates, use
+`kdcube refresh --tenant <t> --project <p> --build` — it never touches staged
+descriptors. Normal operator flow is:
 
-1. `init` prepares the runtime
-2. `init --build` optionally prebuilds images
+1. `init` prepares the runtime (once)
+2. `init --build` optionally prebuilds images on the first run
 3. `start` starts containers
+4. `refresh --build` re-runs the build/restart cycle on later platform updates
+
+`refresh` accepts the same platform source selectors as `init`. Use
+`kdcube refresh --tenant <t> --project <p> --latest --build`,
+`--upstream --build`, or `--release <ref> --build` when an already-initialized
+runtime should move to another platform ref without restaging descriptors.
+Explicit `--path` without one of those selectors restages dirty local platform
+source into `<workdir>/repo` before rebuilding.
 
 ### Initialize from `assembly.platform.ref`
 
 ```bash
-kdcube init \
-  --workdir ~/.kdcube/kdcube-runtime \
+kdcube init --tenant <t> --project <p> \
   --descriptors-location /abs/path/to/descriptors
 ```
 
@@ -826,8 +1004,7 @@ Use this when you want the normal local runtime based on a released platform ver
 ### Initialize from an explicit release
 
 ```bash
-kdcube init \
-  --workdir ~/.kdcube/kdcube-runtime \
+kdcube init --tenant <t> --project <p> \
   --descriptors-location /abs/path/to/descriptors \
   --release 2026.4.23.17
 ```
@@ -835,8 +1012,7 @@ kdcube init \
 ### Initialize from the latest known platform release
 
 ```bash
-kdcube init \
-  --workdir ~/.kdcube/kdcube-runtime \
+kdcube init --tenant <t> --project <p> \
   --descriptors-location /abs/path/to/descriptors \
   --latest
 ```
@@ -844,8 +1020,7 @@ kdcube init \
 ### Prebuild images from a released platform ref
 
 ```bash
-kdcube init \
-  --workdir ~/.kdcube/kdcube-runtime \
+kdcube init --tenant <t> --project <p> \
   --descriptors-location /abs/path/to/descriptors \
   --build
 ```
@@ -856,9 +1031,8 @@ starting containers.
 ### Prebuild images from dirty local platform sources
 
 ```bash
-kdcube init \
+kdcube init --tenant <t> --project <p> \
   --path /abs/path/to/kdcube-ai-app \
-  --workdir ~/.kdcube/kdcube-runtime \
   --descriptors-location /abs/path/to/descriptors \
   --build
 ```
@@ -870,8 +1044,7 @@ copy.
 ### Initialize from upstream `origin/main`
 
 ```bash
-kdcube init \
-  --workdir ~/.kdcube/kdcube-runtime \
+kdcube init --tenant <t> --project <p> \
   --descriptors-location /abs/path/to/descriptors \
   --upstream
 ```
@@ -879,8 +1052,7 @@ kdcube init \
 ### Prebuild images from upstream `origin/main`
 
 ```bash
-kdcube init \
-  --workdir ~/.kdcube/kdcube-runtime \
+kdcube init --tenant <t> --project <p> \
   --descriptors-location /abs/path/to/descriptors \
   --upstream \
   --build
@@ -890,8 +1062,13 @@ Important:
 
 - `--upstream` selects the upstream source/ref and does not require `--build`
 - `--build` on `init` builds images after staging the runtime and does not start containers
-- `--upstream` requires either `--descriptors-location` or an already initialized runtime
+- `--upstream` requires `--descriptors-location` for fresh init
 - explicit `--path` without `--upstream`, `--latest`, or `--release` is the dirty-local-source flow
+- to rebuild images on an *already-initialized* runtime later, run
+  `kdcube refresh --tenant <t> --project <p> --build` (descriptors are
+  preserved). Add `--latest`, `--upstream`, or `--release <ref>` to refresh the
+  existing runtime to another platform source while still preserving staged
+  descriptors.
 
 Use this when you are validating current platform source, not when you only need to update bundle descriptors.
 
@@ -900,7 +1077,7 @@ Use this when you are validating current platform source, not when you only need
 ### Show active runtime info
 
 ```bash
-kdcube info --workdir ~/.kdcube/kdcube-runtime/mytenant__myproject
+kdcube info --tenant mytenant --project myproject
 ```
 
 This prints:
@@ -995,9 +1172,15 @@ bundles:
 ```
 
 The parent-subdir shape is useful when a repo contains multiple bundles under
-one source parent. Bundle code must use package-relative bundle-local imports
-with a bundle-root fallback so both shapes load. The authoring rule is in
-[how-to-write-bundle-README.md#1b2-bundle-local-import-rule](how-to-write-bundle-README.md#1b2-bundle-local-import-rule).
+one source parent. Bundle code, `tools_descriptor.py`, and bundle-local tool
+modules must use package-relative bundle-local imports and must not use
+top-level package fallbacks for bundle-local folders. Bundle-local tool specs
+should use `ref: "tools/name.py"` so the tool subsystem can keep them tied to
+the bundle root and rewrite them for isolated/distributed execution. The
+authoring rule is in
+[how-to-write-bundle-README.md#1b2-bundle-local-import-rule](how-to-write-bundle-README.md#1b2-bundle-local-import-rule),
+and the runtime rationale is in
+[bundle-runtime-README.md#critical-bundle-local-import-rule](../bundle-runtime-README.md#critical-bundle-local-import-rule).
 
 When cutting a new git-backed bundle ref, use the optional public release
 procedure in
@@ -1067,17 +1250,38 @@ supplying deployment-scoped config for that example.
 
 ## Applying Changes Correctly
 
-### If you changed the canonical descriptor source directory
+### User Flow: Apply Seed Bundle Descriptors
 
-If you edited files in the source descriptor directory passed via `--descriptors-location`, rerun install so those changes are restaged into the runtime:
+This is a user/operator flow. It is not an autonomous agent bootstrap step. Use
+it only when the user intentionally edited `bundles.yaml` or
+`bundles.secrets.yaml` in the source descriptor directory passed via
+`--descriptors-location` and wants to reapply only those bundle content
+descriptors to the existing runtime.
+
+Agents may explain this path and prepare or run a dry-run. They should run the
+write/reload form only when the user explicitly grants permission to apply the
+selected seed descriptors on the user's behalf.
 
 ```bash
-kdcube init \
-  --workdir ~/.kdcube/kdcube-runtime \
-  --descriptors-location /abs/path/to/descriptors
+kdcube bundle config apply \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id> \
+  --descriptors-location /abs/path/to/descriptors \
+  --dry-run
+
+kdcube bundle config apply \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id> \
+  --descriptors-location /abs/path/to/descriptors \
+  --reload
 ```
 
-This is required because `kdcube reload` does not read arbitrary external descriptor directories. It reuses the runtime’s staged descriptor files.
+`bundle config apply` stages only `bundles.yaml` and, when present in the
+source directory, `bundles.secrets.yaml` into the active runtime config
+directory. It does not rebuild images, restart Docker, or modify
+`assembly.yaml`, `secrets.yaml`, or `gateway.yaml`. If the source directory does
+not contain `bundles.secrets.yaml`, the existing runtime secrets descriptor is
+preserved. Host local bundle paths in the source descriptor are translated to
+the runtime-visible `/bundles/...` path before writing the active runtime
+descriptor.
 
 ### If you changed `bundles.yaml` or `bundles.secrets.yaml` inside the active runtime
 
@@ -1108,7 +1312,7 @@ kdcube bundle <bundle_id> \
 Apply either kind of change with:
 
 ```bash
-kdcube reload <bundle_id> --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+kdcube bundle reload <bundle_id> --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
 ```
 
 `reload`:
@@ -1133,7 +1337,7 @@ It does not reload:
 
 ### If you changed platform/runtime topology
 
-Rerun install, not only `kdcube reload`.
+Rerun install or refresh the runtime topology, not only `kdcube bundle reload`.
 
 Typical cases:
 
@@ -1149,7 +1353,7 @@ Typical cases:
 If the bundle is already mounted as a local path bundle, you often only need a reload:
 
 ```bash
-kdcube reload my.bundle@1-0 --workdir ~/.kdcube/kdcube-runtime/mytenant__myproject
+kdcube bundle reload my.bundle@1-0 --workdir ~/.kdcube/kdcube-runtime/mytenant__myproject
 ```
 
 Use a full reinstall only when code changes depend on wider runtime/platform changes.
@@ -1253,7 +1457,8 @@ kdcube bundle <bundle_id> --del-secret key.path \
 ```
 
 `kdcube bundle` only patches the staged files. It does not edit the original
-source descriptor directory. Run `kdcube reload` afterward to apply the change.
+source descriptor directory. Run `kdcube bundle reload` afterward to apply the
+change.
 
 Feature switches for bundle surfaces live under `enabled.*` in bundle props,
 not in secrets. The platform derives the canonical path from decorator
@@ -1261,8 +1466,8 @@ metadata:
 
 | Decorator | Canonical bundle-props path |
 | --- | --- |
-| `@agentic_workflow(...)` | `enabled.bundle` |
-| `@api(alias=A, method=M, ...)` | `enabled.api["A.M"]` (flat key, literal dot) |
+| `@bundle_entrypoint(...)` | `enabled.bundle` |
+| `@api(alias=A, method=M, route=R, ...)` | `enabled.api["R.A.M"]` (flat key) |
 | `@mcp(alias=A, ...)` | `enabled.mcp.A` |
 | `@ui_widget(alias=A, ...)` | `enabled.widget.A` |
 | `@cron(alias=A, ...)` | `enabled.cron.A` |
@@ -1303,7 +1508,7 @@ Operational behavior:
 After changing the prop, apply it with:
 
 ```bash
-kdcube reload my.bundle@1-0 --workdir ~/.kdcube/kdcube-runtime/mytenant__myproject
+kdcube bundle reload my.bundle@1-0 --workdir ~/.kdcube/kdcube-runtime/mytenant__myproject
 ```
 
 ## What Happens When Bundle Admin Changes Props Or Secrets
@@ -1331,12 +1536,25 @@ That is why you should export live bundle state before replacing runtime descrip
 To export the current effective bundle descriptors:
 
 ```bash
+export OUT_DIR=/tmp/live-bundles
+
 kdcube export \
   --workdir ~/.kdcube/kdcube-runtime/mytenant__myproject \
-  --out-dir /tmp/live-bundles
+  --out-dir "$OUT_DIR"
+
+ls -lh "$OUT_DIR"
 ```
 
 In local descriptor-backed mode, this exports from the active runtime workspace descriptor files.
+Export normalizes runtime paths back to seed-descriptor shape:
+
+- local non-git bundle paths such as `/bundles/...` are translated back to host
+  paths using `assembly.yaml` / `.env` bundle mount mappings
+- git-backed bundle descriptors keep `repo` / `ref` / `subdir`; an incidental
+  materialized `path` is removed from the export
+
+This makes the export usable as a reviewed source descriptor update instead of
+leaking container-only paths into reusable host descriptors.
 
 Current export includes:
 
@@ -1417,12 +1635,12 @@ But for normal bundle development, prefer a descriptor-driven initialized runtim
 - Treating `bundles.yaml` example config as the switch that enables built-in examples.
 - Manually building a custom bundle UI into runtime storage instead of letting the bundle UI loader refresh it.
 - Mixing `path` with `repo`/`ref`/`subdir` in the same bundle entry.
-- Using bundle-local imports that only work for one descriptor shape, such as
-  unconditional `from services...` imports when git delivery uses
-  `subdir: "src"` plus `module: "my_bundle.entrypoint"`.
+- Importing bundle-local folders as process-global top-level packages, such as
+  `from services...`, `from apps...`, or `import tools`. Those names can
+  collide across bundles in one processor process.
 - Expecting `--upstream` to rebuild images. It only selects the upstream source/ref; add `init --build` to prebuild images.
 - Assuming the base `--workdir` is the concrete runtime when the CLI has resolved a namespaced runtime under it.
-- Using `kdcube reload` before the stack is running.
+- Using `kdcube bundle reload` before the stack is running.
 - Overwriting live bundle-admin changes with stale descriptor source files.
 
 ## What To Remember
@@ -1440,9 +1658,13 @@ If you only remember the essentials, remember these:
 - custom main-view UI source is rebuilt by the bundle UI loader, not by manual runtime-storage builds
 - file-producing tools use the React/tool runtime file contract, not a
   `bundles.yaml` switch
-- rerun install when you changed the canonical source descriptor set or runtime topology
+- rerun install or refresh runtime topology when platform descriptors changed
+- use `kdcube bundle config apply --descriptors-location <dir> --dry-run`, then
+  `--reload`, when the user intentionally changed source
+  `bundles.yaml` / `bundles.secrets.yaml` and wants to reapply them to an
+  existing runtime without a platform refresh
 - use `kdcube bundle <bundle_id> --set-config / --set-secret / --del-config / --del-secret` for targeted staged config or secret patches
-- use `kdcube reload <bundle_id>` when you changed active runtime bundle descriptors or need proc cache eviction
+- use `kdcube bundle reload <bundle_id>` when you changed active runtime bundle descriptors or need proc cache eviction
 - use `kdcube info --workdir <path>` to inspect the runtime you are actually using
 - use `kdcube export` before overwriting runtime bundle state with older descriptor copies
 

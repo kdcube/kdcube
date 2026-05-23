@@ -10,6 +10,7 @@ see_also:
   - ks:docs/configuration/bundles-secrets-descriptor-README.md
   - ks:docs/configuration/service-runtime-configuration-mapping-README.md
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
+  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
 ---
 # Bundles Descriptor
@@ -81,7 +82,7 @@ Canonical keys:
 | Surface | Key |
 |---|---|
 | bundle | `enabled.bundle` |
-| API | `enabled.api["<alias>.<METHOD>"]` |
+| API | `enabled.api["<route>.<alias>.<METHOD>"]` |
 | MCP | `enabled.mcp.<alias>` |
 | widget | `enabled.widget.<alias>` |
 | cron | `enabled.cron.<alias>` |
@@ -357,7 +358,8 @@ Important local settings:
 Important runtime rule:
 
 - an initialized runtime reuses its existing `workdir/config/*.yaml`
-- running `kdcube --workdir <runtime> --build --upstream` does not reseed default descriptors
+- running `kdcube refresh --tenant <t> --project <p> --upstream --build` does
+  not reseed default descriptors
 - if you want different bundle roots or bundle entries in that runtime, edit `workdir/config/assembly.yaml` and `workdir/config/bundles.yaml` directly
 
 For the step-by-step workflow, use:

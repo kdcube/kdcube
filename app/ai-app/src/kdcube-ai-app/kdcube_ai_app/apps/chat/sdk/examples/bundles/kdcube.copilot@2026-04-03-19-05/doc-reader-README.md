@@ -2,7 +2,7 @@
 title: "KDCube Copilot Bundle — Doc Reader Flow"
 summary: "Reference bundle that exposes docs + code through the ks: knowledge space and React search/read tools."
 tags: ["bundle", "react", "knowledge", "docs", "reader"]
-keywords: ["knowledge space", "ks:", "react.read", "react.search_knowledge", "bundle_storage", "on_bundle_load"]
+keywords: ["knowledge space", "ks:", "react.read", "react.search_knowledge", "bundle_storage", "on_bundle_load", "telemetry sink", "comm.record", "mcp call event"]
 ---
 
 # KDCube Copilot Bundle — Doc Reader Flow
@@ -292,6 +292,60 @@ Boundary:
   browsing inside isolated execution
 - the public MCP endpoint exposes documentation search/read only; it does not
   grant KDCube user identity or access to operations APIs
+
+## Telemetry Sink
+
+The copilot bundle can send selected comm-recorded events to an external
+telemetry collector. The collector is configured as one plain POST endpoint
+plus a bearer token. The copilot bundle does not construct KDCube bundle URLs
+and does not write a local telemetry file.
+
+Config:
+
+```yaml
+telemetry_sink:
+  endpoint_url: "https://stats.example.internal/telemetry/events"
+```
+
+Secret:
+
+```yaml
+telemetry_sink:
+  auth:
+    token: "<bearer-token>"
+```
+
+Implementation:
+- `_configure_event_recording()` installs the SDK `StatsTelemetrySink` on the
+  turn communicator when `telemetry_sink.endpoint_url` and
+  `b:telemetry_sink.auth.token` are both configured.
+- `pre_run_hook()` scopes the recorder to `{"owner": "react", "runtime":
+  "on_message"}` before the ReAct workflow starts.
+- `post_run_hook()` sends the recorded batch with `comm.send_recorded_events(...)`
+  after workflow completion.
+- `_record_doc_reader_mcp_call()` uses `async with comm.recording(...)` so each
+  doc-reader MCP call records and sends only its `kdcube.copilot.mcp.call`
+  event.
+
+Current selected event types come from the SDK stats selector:
+
+| Source | Event types |
+| --- | --- |
+| Copilot workflow | `kdcube.copilot.workflow.turn.started`, `.completed`, `.failed` |
+| React runtime | `react.tool.call`, `react.skill.read` |
+| Accounting | `accounting.usage` |
+| Chat boundary | `chat.conversation.turn.completed`, `chat.complete`, `chat.error` |
+| Copilot MCP | `kdcube.copilot.mcp.call` |
+
+If the endpoint URL or token is missing, event sending is disabled. The WebApp
+events page only reports sink configuration status; actual event inspection
+belongs to the configured receiver, such as the stats bundle dashboard.
+
+See also:
+- `docs/README.md`
+- `config/bundles.template.yaml`
+- `config/bundles.secrets.template.yaml`
+- `ks:docs/sdk/bundle/bundle-event-recording-and-sinks-README.md`
 
 Important:
 - `bundle_data.resolve_namespace(...)` is **not** a normal planning-time browsing tool.

@@ -19,7 +19,7 @@ from uuid import uuid4, UUID
 
 from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint import BaseEntrypoint
-from kdcube_ai_app.infra.plugin.agentic_loader import on_message
+from kdcube_ai_app.infra.plugin.bundle_loader import on_message
 from kdcube_ai_app.infra.service_hub.inventory import Config, _mid
 from kdcube_ai_app.apps.chat.sdk.infra.economics.events_resources import (
     msg_denied_quota_reset,

@@ -69,7 +69,7 @@ export const ROUTE_CONTEXT = routeContextFromLocation();
 export function activeTabFromPath(widgetPath: string): TabId {
   const first = String(widgetPath || '').trim().replace(/^\/+/, '').split('/', 1)[0].toLowerCase();
   if (first === 'chat' || first === 'chats' || first === 'conversation' || first === 'conversations') return 'conversations';
-  if (first === 'event' || first === 'events' || first === 'evidence') return 'events';
+  if (first === 'event' || first === 'events') return 'events';
   if (first === 'admin' || first === 'telegram' || first === 'telegram-admin' || first === 'telegram_admin') return 'telegram_admin';
   return 'memory';
 }

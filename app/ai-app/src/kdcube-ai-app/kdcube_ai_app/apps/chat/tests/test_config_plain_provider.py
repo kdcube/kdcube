@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 import yaml
 
 from kdcube_ai_app.apps.chat.sdk import config as sdk_config
@@ -7,7 +8,7 @@ from kdcube_ai_app.infra.secrets import build_secrets_manager_config
 
 
 class _NoopSecretsManager:
-    def get_secret(self, key: str):
+    async def get_secret(self, key: str):
         return None
 
 
@@ -106,7 +107,8 @@ def test_get_plain_reads_assembly_by_default(monkeypatch, tmp_path):
     assert settings.CLAUDE_CODE_SESSION_GIT_REPO == "https://example.com/sessions.git"
 
 
-def test_settings_infers_descriptor_root_from_explicit_assembly_path(monkeypatch, tmp_path):
+@pytest.mark.asyncio
+async def test_settings_infers_descriptor_root_from_explicit_assembly_path(monkeypatch, tmp_path):
     for key in (
         "PLATFORM_DESCRIPTORS_DIR",
         "GLOBAL_SECRETS_YAML",
@@ -134,7 +136,9 @@ def test_settings_infers_descriptor_root_from_explicit_assembly_path(monkeypatch
 
     assert settings.PLATFORM_DESCRIPTORS_DIR == str(tmp_path)
     assert settings.GLOBAL_SECRETS_YAML == secrets_path.resolve().as_uri()
-    assert settings.BRAVE_API_KEY == "brave-secret"
+    assert settings.BRAVE_API_KEY is None
+    sdk_config.get_settings.cache_clear()
+    assert await sdk_config.get_secret("services.brave.api_key") == "brave-secret"
     assert exported["PLATFORM_DESCRIPTORS_DIR"] == str(tmp_path)
     assert exported["GLOBAL_SECRETS_YAML"] == secrets_path.resolve().as_uri()
 

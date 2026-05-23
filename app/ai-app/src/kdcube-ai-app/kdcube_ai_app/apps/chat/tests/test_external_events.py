@@ -210,6 +210,19 @@ class _FakeRedis:
         return 0
 
 
+def _task_payload(*, task_id: str, turn_id: str, text: str) -> dict:
+    return {
+        "meta": {"task_id": task_id, "created_at": 1.0, "instance_id": "ingress-1"},
+        "routing": {"bundle_id": "bundle.demo", "session_id": "sess-1", "conversation_id": "conv1", "turn_id": turn_id},
+        "actor": {"tenant_id": "t1", "project_id": "p1"},
+        "user": {"user_type": "registered", "user_id": "u1"},
+        "request": {"message": text, "payload": {}},
+        "config": {"values": {}},
+        "accounting": {"envelope": {}},
+        "continuation": {"kind": "followup", "explicit": False},
+    }
+
+
 @pytest.mark.asyncio
 async def test_external_event_source_publish_read_and_owner():
     redis = _FakeRedis()
@@ -340,6 +353,110 @@ async def test_external_event_source_claim_promote_and_consume():
     first_after = await source.get_event(first.message_id)
     assert first_after is not None
     assert first_after.consumed_by_turn_id == "turn-2"
+
+
+@pytest.mark.asyncio
+async def test_external_event_consumed_live_is_not_promoted():
+    redis = _FakeRedis()
+    source = build_conversation_external_event_source(
+        redis=redis,
+        tenant="t1",
+        project="p1",
+        conversation_id="conv1",
+    )
+
+    event = await source.publish(
+        kind="followup",
+        explicit=False,
+        target_turn_id="turn-client-visible",
+        active_turn_id_at_ingress="turn-active",
+        owner_turn_id="turn-active",
+        source="ingress.sse",
+        text="same turn please",
+        payload={"message": "same turn please"},
+        task_payload=_task_payload(task_id="task-followup", turn_id="turn-queued", text="same turn please"),
+    )
+
+    updated = await source.mark_consumed_up_to(max_sequence=event.sequence, turn_id="turn-active")
+    assert updated == 1
+    stored = await source.get_event(event.message_id)
+    assert stored is not None
+    assert stored.consumed_by_turn_id == "turn-active"
+
+    claimed = await source.claim_next_promotable(claimant_id="proc-1", min_idle_ms=1)
+    assert claimed is None
+
+
+@pytest.mark.asyncio
+async def test_external_event_live_owner_defers_promotion_until_owner_releases():
+    redis = _FakeRedis()
+    source = build_conversation_external_event_source(
+        redis=redis,
+        tenant="t1",
+        project="p1",
+        conversation_id="conv1",
+    )
+
+    event = await source.publish(
+        kind="followup",
+        explicit=False,
+        target_turn_id="turn-active",
+        active_turn_id_at_ingress="turn-active",
+        owner_turn_id="turn-active",
+        source="ingress.sse",
+        text="same turn please",
+        payload={"message": "same turn please"},
+        task_payload=_task_payload(task_id="task-followup", turn_id="turn-queued", text="same turn please"),
+    )
+    lease = await source.acquire_owner(turn_id="turn-active", bundle_id="bundle.demo", listener_id="listener-1")
+
+    claimed = await source.claim_next_promotable(claimant_id="proc-1", min_idle_ms=1)
+    assert claimed is None
+    stored = await source.get_event(event.message_id)
+    assert stored is not None
+    assert stored.promoted_at is None
+    assert stored.consumed_at is None
+
+    released = await source.release_owner(listener_id="listener-1", lease_token=lease.lease_token)
+    assert released is True
+    claimed_after_release = await source.claim_next_promotable(claimant_id="proc-2", min_idle_ms=1)
+    assert claimed_after_release is not None
+    assert claimed_after_release.message_id == event.message_id
+
+
+@pytest.mark.asyncio
+async def test_external_event_not_consumed_is_promoted_once():
+    redis = _FakeRedis()
+    source = build_conversation_external_event_source(
+        redis=redis,
+        tenant="t1",
+        project="p1",
+        conversation_id="conv1",
+    )
+
+    event = await source.publish(
+        kind="followup",
+        explicit=False,
+        target_turn_id="turn-client-visible",
+        active_turn_id_at_ingress="turn-active",
+        owner_turn_id="turn-active",
+        source="ingress.sse",
+        text="fallback turn please",
+        payload={"message": "fallback turn please"},
+        task_payload=_task_payload(task_id="task-followup", turn_id="turn-queued", text="fallback turn please"),
+    )
+
+    claimed = await source.claim_next_promotable(claimant_id="proc-1", min_idle_ms=1)
+    assert claimed is not None
+    assert claimed.message_id == event.message_id
+
+    await source.mark_promoted(message_id=claimed.message_id, claimant_id="proc-1", task_id="task-followup")
+    stored = await source.get_event(event.message_id)
+    assert stored is not None
+    assert stored.promoted_task_id == "task-followup"
+
+    claimed_again = await source.claim_next_promotable(claimant_id="proc-2", min_idle_ms=1)
+    assert claimed_again is None
 
 
 @pytest.mark.asyncio

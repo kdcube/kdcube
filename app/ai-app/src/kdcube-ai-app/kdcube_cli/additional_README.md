@@ -99,24 +99,47 @@ That brings up the stack with no local build required.
 We aim for a setup that is simple to try, and easy to explore further using the
 installed admin assistant and bundled tools.
 
+## `kdcube init` is first-time setup only
+
+`kdcube init` creates a brand-new namespaced runtime workdir. It refuses
+when the target workdir already has `install-meta.json` (i.e. a previous
+`init` succeeded there). To rebuild platform images, refresh env files,
+or restart the stack on an already-initialized workdir, use
+[`kdcube refresh`](#kdcube-refresh) instead.
+
+`--workdir` always means **the fully-qualified namespaced runtime path**
+(`<base>/<tenant>__<project>`). The trailing path segment must contain
+`__`. To have the CLI compose this path from a parent directory + tenant
++ project, use `--workdir-base` instead — see below.
+
 ## Quick start (prepared descriptors)
 
-If you already have a descriptor folder, you can skip the wizard:
+If you already have a descriptor folder, you can skip the wizard. Pick
+either form for the workdir argument:
 
 ```bash
+# Form A: explicit fully-qualified namespaced runtime
 kdcube init \
   --descriptors-location /path/to/descriptors \
-  --workdir /path/to/workspace
+  --workdir /path/to/workspace/<tenant>__<project>
+
+# Form B: parent directory + tenant + project (CLI composes the namespaced path)
+kdcube init \
+  --descriptors-location /path/to/descriptors \
+  --workdir-base /path/to/workspace \
+  --tenant <tenant> --project <project>
 ```
 
-With descriptor-driven installs, `--workdir` is the base workspace root. The
-effective runtime is created under:
+`--workdir` and `--workdir-base` are mutually exclusive. The composed/
+provided runtime is created under:
 
 ```text
 <workspace>/<safe_tenant>__<safe_project>/
 ```
 
-using `assembly.yaml -> context.tenant` and `context.project`.
+`safe_tenant` and `safe_project` are produced by the same normalization
+helper that other subcommands use (lowercase, non-alphanumeric characters
+become `_`).
 
 If `--path` is omitted, the CLI clones or reuses the platform checkout under:
 
@@ -125,32 +148,34 @@ If `--path` is omitted, the CLI clones or reuses the platform checkout under:
 ```
 
 You can still pass `--path` explicitly if you want to force a specific local
-checkout. In descriptor-driven `init`, explicit `--path` means “stage this local
-source tree into the runtime workdir and use that staged copy”. The CLI copies
+checkout. In descriptor-driven `init`, explicit `--path` means "stage this local
+source tree into the runtime workdir and use that staged copy". The CLI copies
 tracked files plus untracked files that are not ignored by git, so dirty local
 source changes can be tested without copying `.git`, local runtime data, or
 other gitignored paths.
 
 ```bash
 kdcube init \
+  --workdir-base /path/to/workspace \
+  --tenant <tenant> --project <project> \
   --descriptors-location /path/to/descriptors \
-  --workdir /path/to/workspace \
   --path /path/to/kdcube-ai-app \
   --build
 ```
 
-`--workdir` answers “where should this runtime live?”. `--path` answers “which
-local platform source tree should this runtime use?”. If `--upstream`,
-`--latest`, or `--release` is also provided, that version selector wins and
-`--path` is only the local repo/cache location for the selected source.
+`--workdir` / `--workdir-base` answers "where should this runtime live?".
+`--path` answers "which local platform source tree should this runtime use?".
+If `--upstream`, `--latest`, or `--release` is also provided, that version
+selector wins and `--path` is only the local repo/cache location for the
+selected source.
 
 Or pull the latest platform release from the platform repo instead of
 `assembly.yaml -> platform.ref`:
 
 ```bash
 kdcube init \
+  --workdir-base /path/to/workspace --tenant <t> --project <p> \
   --descriptors-location /path/to/descriptors \
-  --workdir /path/to/workspace \
   --latest
 ```
 
@@ -158,8 +183,8 @@ Or initialize from the latest upstream repo state instead of a released ref:
 
 ```bash
 kdcube init \
+  --workdir-base /path/to/workspace --tenant <t> --project <p> \
   --descriptors-location /path/to/descriptors \
-  --workdir /path/to/workspace \
   --upstream
 ```
 
@@ -168,10 +193,9 @@ init:
 
 ```bash
 kdcube init \
+  --workdir-base /path/to/workspace --tenant <t> --project <p> \
   --descriptors-location /path/to/descriptors \
-  --workdir /path/to/workspace \
-  --upstream \
-  --build
+  --upstream --build
 ```
 
 Use `--upstream` when you want the deployment assets from the latest GitHub
@@ -181,36 +205,46 @@ Use `--upstream` when you want the deployment assets from the latest GitHub
 - nginx templates
 - installer-side deployment templates
 
-If the runtime was already initialized earlier, you can omit
-`--descriptors-location` and reuse the staged descriptors from `workdir/config`
-instead:
+## Re-initialising an existing runtime: `kdcube refresh`
+
+The old `kdcube init` behaviour where omitting `--descriptors-location` would
+silently reuse the staged descriptors of an already-initialized workdir is
+gone. That code path silently overwrote user-added bundle entries and secrets
+under some flag combinations, so it has been replaced by a dedicated
+subcommand:
 
 ```bash
-kdcube init \
-  --workdir /path/to/workspace/<safe_tenant>__<safe_project> \
-  --upstream
+kdcube refresh --workdir /path/to/workspace/<tenant>__<project> --build
+kdcube refresh --workdir /path/to/workspace/<tenant>__<project> --release 2026.5.22.001 --build
 ```
 
-This reuse path requires:
+`refresh` is the safe way to apply platform-side changes (new images, updated
+SDK code) on an existing workdir. It:
 
-- `workdir/config/install-meta.json`
-- the canonical descriptor set already present under `workdir/config`
-  - `assembly.yaml`
-  - `secrets.yaml`
-  - `bundles.yaml`
-  - `bundles.secrets.yaml`
-  - `gateway.yaml`
+- refuses if the workdir is not initialized (no `install-meta.json`);
+- accepts exactly one platform source selector: `--latest`, `--upstream`, or
+  `--release <ref>`;
+- restages explicit local `--path <repo>` into `<workdir>/repo` before
+  rebuilding when no source selector is provided;
+- stops the stack if it is running;
+- rebuilds platform Docker images when `--build` is given;
+- restarts the stack (unless `--no-restart` is passed);
+- never touches staged descriptors (`assembly.yaml`, `secrets.yaml`,
+  `bundles.yaml`, `bundles.secrets.yaml`, `gateway.yaml`).
 
-When those files exist, the CLI treats `workdir/config` as the descriptor
-authority and reuses the repo recorded in `install-meta.json` when possible.
+Reusable contract for staged descriptors (still authoritative — even
+without going through `init`):
 
-Important reused-runtime rule:
-
-- the CLI reuses `workdir/config/assembly.yaml`, `bundles.yaml`, and `bundles.secrets.yaml` as they already exist
-- it does not reseed default descriptors
-- if `bundles.yaml` already contains local path entries under `/bundles/...`, those are treated as container paths and preserved
-- the matching host root is taken from `assembly.yaml -> paths.host_bundles_path`
-- the CLI does not reinterpret `/bundles/...` as a host filesystem path
+- staged `workdir/config/assembly.yaml`, `bundles.yaml`, and
+  `bundles.secrets.yaml` are the live local runtime authority;
+- if `bundles.yaml` contains local path entries under `/bundles/...`,
+  those are treated as container paths and preserved;
+- the matching host root is taken from
+  `assembly.yaml -> paths.host_bundles_path`;
+- the CLI does not reinterpret `/bundles/...` as a host filesystem path;
+- `kdcube bundle <id> --local-path <host-path>` accepts host paths under
+  `assembly.yaml -> paths.host_bundles_path` and writes the matching
+  container-visible `/bundles/...` path into `bundles.yaml`
 
 So for an initialized runtime, change bundle topology by editing:
 
@@ -239,6 +273,11 @@ bundles:
 
 `host_bundles_path` is the host parent root.
 `path` in `bundles.yaml` is the container-visible bundle root.
+For runtime patching, prefer `kdcube bundle --local-path <host-path>` over
+manual YAML edits; the CLI validates the host path and performs this translation.
+Use `kdcube bundle status <bundle_id> --workdir <workdir>` to inspect one
+explicit staged bundle entry. Add `--live` only for local operator diagnostics
+when you want localhost `chat-proc` to validate that same explicit bundle id.
 
 `--latest` is different: it resolves the latest release ref for release-image
 installs. It does not mean “latest source templates from GitHub main”.
@@ -247,6 +286,7 @@ Or pin a specific release explicitly:
 
 ```bash
 kdcube init \
+  --workdir-base /path/to/workspace --tenant <t> --project <p> \
   --descriptors-location /path/to/descriptors \
   --release 2026.4.11.012
 ```
@@ -270,17 +310,24 @@ Full operational recipe:
 app/ai-app/docs/service/cicd/ngrok-README.md
 ```
 
-Short CLI procedure:
+Short CLI procedure (first-time setup):
 
 ```bash
 kdcube init \
+  --workdir-base ~/.kdcube/kdcube-runtime --tenant <t> --project <p> \
   --path /path/to/kdcube-ai-app \
   --descriptors-location /path/to/descriptors \
-  --workdir ~/.kdcube/kdcube-runtime \
   --cors-origin https://<stable-ngrok-domain> \
   --build
 
 kdcube start --workdir ~/.kdcube/kdcube-runtime/<tenant>__<project>
+```
+
+To refresh an already-initialized runtime (e.g. after platform updates) and
+restart Docker:
+
+```bash
+kdcube refresh --workdir ~/.kdcube/kdcube-runtime/<tenant>__<project> --build
 ```
 
 Use the local proxy port printed by `kdcube start`, then start ngrok with the
@@ -312,7 +359,7 @@ For CORS, pass the origin during init:
 
 ```bash
 kdcube init \
-  --workdir ~/.kdcube/kdcube-runtime \
+  --workdir-base ~/.kdcube/kdcube-runtime --tenant <t> --project <p> \
   --cors-origin https://<stable-ngrok-domain>
 ```
 
@@ -340,15 +387,42 @@ integrations:
 After changing `assembly.yaml`, restart the runtime. After changing only bundle
 config, reload the bundle.
 
+When a user intentionally edits seed `bundles.yaml` / `bundles.secrets.yaml`
+and wants to reapply those bundle descriptors to an existing runtime, use the
+bundle descriptor apply flow. It is a user/operator source-of-truth action, not
+a platform refresh:
+
+```bash
+kdcube bundle config apply \
+  --tenant <tenant> \
+  --project <project> \
+  --descriptors-location /path/to/descriptors \
+  --dry-run
+
+kdcube bundle config apply \
+  --tenant <tenant> \
+  --project <project> \
+  --descriptors-location /path/to/descriptors \
+  --reload
+```
+
+This stages only `bundles.yaml` and optional `bundles.secrets.yaml`. Host local
+bundle paths are translated to runtime-visible `/bundles/...` paths before the
+runtime copy is written.
+
 For `aws-sm` deployments, you can also export the current effective live
 deployment-scoped bundle descriptors directly from AWS Secrets Manager:
 
 ```bash
+OUT_DIR=/tmp/kdcube-export
+
 kdcube export \
   --tenant <tenant> \
   --project <project> \
   --aws-region <region> \
-  --out-dir /tmp/kdcube-export
+  --out-dir "$OUT_DIR"
+
+ls -lh "$OUT_DIR"
 ```
 
 Optional:
@@ -362,6 +436,14 @@ This reconstructs:
 from the authoritative grouped AWS SM bundle documents, not from Redis or the
 currently mounted `/config/bundles.yaml`.
 
+For local descriptor-backed export, the exported `bundles.yaml` is normalized
+for seed descriptor reuse: non-git local bundle paths are translated from
+runtime `/bundles/...` paths back to host paths using the runtime mount mapping,
+and git-backed entries do not keep incidental materialized `path` values.
+Use the printed output path or a saved `OUT_DIR` variable when inspecting the
+export. Do not recompute a timestamped `$(date ...)` expression in a later
+command; it will point at a different directory.
+
 Expected descriptor folder:
 
 ```text
@@ -373,23 +455,28 @@ descriptors/
   bundles.secrets.yaml    # optional
 ```
 
-When the descriptor set is complete, the CLI:
-- resolves the effective runtime as `<workspace>/<safe_tenant>__<safe_project>`
+When the descriptor set is complete, `kdcube init` on a fresh workdir:
+- resolves the effective runtime as the `--workdir <full-path>` you passed,
+  or as `<workdir-base>/<safe_tenant>__<safe_project>` when you use
+  `--workdir-base + --tenant + --project`
 - stages the descriptors into `<runtime>/config`
-- clones or reuses the platform repo under `<runtime>/repo` when `--path` is omitted
-- copies the explicit local `--path` repo into `<runtime>/repo` when no version selector is used
+- clones or reuses the platform repo under `<runtime>/repo` when `--path`
+  is omitted
+- copies the explicit local `--path` repo into `<runtime>/repo` when no
+  version selector is used
 - skips interactive prompts
 - runs a release install directly
 
-The same non-interactive path is also used when:
+To re-init an already-initialized runtime (rebuild images, restart, no
+descriptor changes), use [`kdcube refresh`](#kdcube-refresh) instead:
 
-- `--descriptors-location` is omitted
-- `--workdir` points to an existing runtime
-- `config/install-meta.json` exists
-- the canonical descriptor set already exists under `config/`
+```bash
+kdcube refresh --workdir <runtime> --build
+kdcube refresh --workdir <runtime> --latest --build
+```
 
-In that case the CLI reuses the staged runtime descriptors and the repo path
-recorded in `install-meta.json`.
+`kdcube init` refuses on an already-initialized workdir; it prints the
+exact `kdcube refresh` command you should have run instead.
 
 If required fields are missing, it falls back to the guided setup and prints
 what is incomplete.
@@ -404,12 +491,15 @@ what is incomplete.
 
 | Subcommand | Purpose |
 |---|---|
-| `kdcube init [--workdir <path>] [--path <repo>] [--descriptors-location <dir>] [--latest\|--upstream\|--release <ref>] [--build] [-i] [--reset-config] [--prompt-secrets] [--set-secret KEY VALUE]... [--cors-origin ORIGIN]...` | Initialize a workdir (stage descriptors, generate env files). Explicit `--path` stages that local source tree unless a version selector is used. With `--build`, also build images **without** starting containers. `--cors-origin` appends an allowed origin to staged `config/assembly.yaml`. |
-| `kdcube start [--workdir <path>] [--build]` | Start the Docker Compose stack for an already-initialized workdir. `--build` is a convenience rebuild before start, not required if `init --build` was already run. |
+| `kdcube init [--workdir <full-path> \| --workdir-base <base> --tenant T --project P] [--path <repo>] [--descriptors-location <dir>] [--latest\|--upstream\|--release <ref>] [--build] [-i] [--reset-config] [--prompt-secrets] [--set-secret KEY VALUE]... [--cors-origin ORIGIN]...` | **First-time setup only.** Initialize a fresh runtime workdir (stage descriptors, generate env files). Pick one of `--workdir <full-path>` (the trailing segment must be `<tenant>__<project>`) or `--workdir-base <base> --tenant T --project P` (the CLI composes the namespaced path). Refuses if the resolved workdir is already initialized — use `kdcube refresh` for that case. Explicit `--path` stages that local source tree unless a version selector is used. With `--build`, also build images **without** starting containers. `--cors-origin` appends an allowed origin to staged `config/assembly.yaml`. |
+| `kdcube refresh [--workdir <full-path>] [--path <repo>] [--latest\|--upstream\|--release <ref>] [--build] [--no-restart]` | Re-init an already-initialized runtime: stop the stack, optionally select a platform ref, restage explicit local `--path` into `<workdir>/repo`, rebuild platform Docker images when `--build` is given, restart the stack (unless `--no-restart`). **Never** modifies staged descriptors (`assembly.yaml`, `secrets.yaml`, `bundles.yaml`, `bundles.secrets.yaml`, `gateway.yaml`). Refuses if the workdir is not initialized. |
+| `kdcube start [--workdir <path>] [--build]` | Start the Docker Compose stack for an already-initialized workdir. `--build` is a convenience rebuild before start, not required if `init --build` was already run; for a structured re-init after platform changes, prefer `kdcube refresh --build`. |
 | `kdcube stop [--workdir <path>] [--remove-volumes]` | Stop the local Docker Compose stack. |
-| `kdcube reload <bundle_id> [--workdir <path>]` | Reapply `bundles.yaml` from the active runtime and clear proc bundle caches. |
-| `kdcube export [--workdir <path>] [--tenant <id>] [--project <id>] [--out-dir <dir>] [--aws-region <region>]` | Export effective live `bundles.yaml` and `bundles.secrets.yaml`. |
-| `kdcube info [--workdir <path>] [--tenant <t>] [--project <p>] [--show-defaults] [--show-current-running-runtime]` | Show CLI defaults, currently running deployment, and runtime info from defaults when called with no arguments. `--workdir` shows runtime info for a specific workdir; `--tenant`/`--project` disambiguate when multiple runtimes exist under `--workdir`, or construct the target runtime from the default runtime base when `--workdir` is omitted. `--show-defaults` prints only the stored CLI defaults. `--show-current-running-runtime` prints only the currently running deployment. |
+| `kdcube bundle reload <bundle_id> [--workdir <path>] [--json] [--quiet] [--verbose]` | Reapply `bundles.yaml` from the active runtime and clear proc bundle caches. Normal output is concise; `--json` is scriptable; `--verbose` shows the raw Docker Compose command and proc response. |
+| `kdcube reload <bundle_id> [--workdir <path>] [--json] [--quiet] [--verbose]` | Compatibility alias for bundle reload. |
+| `kdcube bundle config apply [--workdir <path>] [--tenant <id>] [--project <id>] --descriptors-location <dir> [--dry-run] [--reload]` | User/operator descriptor-sync flow. Reapply seed `bundles.yaml` and optional `bundles.secrets.yaml` to an existing runtime; with `--reload`, reload changed declared bundle ids. Does not touch platform descriptors, rebuild images, or restart Docker. |
+| `kdcube export [--workdir <path>] [--tenant <id>] [--project <id>] [--out-dir <dir>] [--aws-region <region>]` | Export effective live `bundles.yaml` and `bundles.secrets.yaml`. Local export normalizes runtime paths back to reusable descriptor paths. |
+| `kdcube info [--workdir <path>] [--tenant <t>] [--project <p>] [--show-defaults] [--show-current-running-runtime] [--json]` | Show CLI defaults, currently running deployment, and runtime info from defaults when called with no arguments. `--workdir` shows runtime info for a specific workdir; `--tenant`/`--project` disambiguate when multiple runtimes exist under `--workdir`, or construct the target runtime from the default runtime base when `--workdir` is omitted. `--show-defaults` prints only the stored CLI defaults. `--show-current-running-runtime` prints only the currently running deployment. `--json` prints machine-readable output. |
 | `kdcube clean` | Clean local Docker cache and unused KDCube images. |
 | `kdcube defaults [--default-workdir <path>] [--default-tenant <t>] [--default-project <p>]` | Save persistent operator defaults to `~/.kdcube/cli-defaults.json`. |
 
@@ -423,8 +513,9 @@ what is incomplete.
 | `default_tenant` | `--default-tenant` | Used by `kdcube info` for workdir resolution and display; used by `kdcube export` as fallback tenant |
 | `default_project` | `--default-project` | Used by `kdcube info` for workdir resolution and display; used by `kdcube export` as fallback project |
 
-`kdcube start`, `kdcube stop`, `kdcube reload`, and `kdcube export` resolve the
-target workdir with the following precedence:
+`kdcube start`, `kdcube stop`, `kdcube bundle reload`,
+`kdcube bundle config apply`, and `kdcube export` resolve the target workdir
+with the following precedence:
 
 1. `--workdir` passed explicitly → use it.
 2. `--workdir` omitted, `default_workdir` present in `cli-defaults.json` → use that.
@@ -480,7 +571,9 @@ reported as stale and cleared automatically.
 ### Use a local checkout (dev)
 
 ```bash
-kdcube init --path /Users/you/src/kdcube/kdcube-ai-app
+kdcube init \
+  --workdir-base ~/.kdcube/kdcube-runtime --tenant <t> --project <p> \
+  --path /Users/you/src/kdcube/kdcube-ai-app
 ```
 
 When `--path` is provided, the wizard **uses that repo for templates and local builds**
@@ -491,14 +584,20 @@ platform changes:
 
 ```bash
 kdcube init \
+  --workdir-base ~/.kdcube/kdcube-runtime --tenant <t> --project <p> \
   --descriptors-location /path/to/descriptors \
-  --workdir ~/.kdcube/kdcube-runtime \
   --path /Users/you/src/kdcube/kdcube-ai-app \
   --build
 ```
 
 This copies the dirty local checkout into the namespaced runtime workdir and
 builds from the staged copy.
+
+To rebuild images on a runtime that has already been initialised this way,
+use `kdcube refresh --workdir <fully-qualified> --build` rather than re-running
+`kdcube init` (which now refuses on existing workdirs). Add `--latest`,
+`--upstream`, or `--release <ref>` to refresh the same staged runtime to
+another platform source.
 
 Re-run prompts (edit existing values):
 
@@ -829,7 +928,7 @@ Local bundle root contract:
 
 - `assembly.paths.host_bundles_path` is installer-facing config for non-managed local path bundles and becomes `HOST_BUNDLES_PATH`
 - compose mounts `HOST_BUNDLES_PATH` into proc as `BUNDLES_ROOT` (normally `/bundles`)
-- non-managed local bundle entries in `bundles.yaml` must use the container-visible path, for example:
+- non-managed local bundle entries in `bundles.yaml` use the container-visible path; `kdcube bundle --local-path <host-path>` performs this translation for host paths under `HOST_BUNDLES_PATH`, for example:
   - host folder: `/Users/you/dev/bundles/my.bundle`
   - descriptor path: `/bundles/my.bundle`
 
@@ -894,7 +993,7 @@ For local host-edited bundle development:
 - define the bundle with `path: /bundles/...`
 - set `assembly.paths.host_bundles_path` to the matching host root
 - run KDCube through the CLI compose path
-- use `kdcube reload <bundle_id>` after code changes
+- use `kdcube bundle reload <bundle_id>` after code changes
 
 For AWS deployment:
 

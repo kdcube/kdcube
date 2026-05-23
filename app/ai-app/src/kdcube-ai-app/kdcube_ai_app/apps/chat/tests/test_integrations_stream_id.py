@@ -14,7 +14,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import (
     get_current_request_context,
 )
 from kdcube_ai_app.infra.plugin import bundle_storage
-from kdcube_ai_app.infra.plugin.agentic_loader import api
+from kdcube_ai_app.infra.plugin.bundle_loader import api
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.middleware.gateway import (
     STATE_STREAM_ID,
@@ -354,7 +354,7 @@ def test_serve_static_asset_builds_ui_on_first_request(monkeypatch, tmp_path):
         return SimpleNamespace(id=bundle_id, path=str(bundle_root), module="entrypoint", singleton=False, version="v1")
 
     async def _load_bundle_props_defaults(**kwargs):
-        del kwargs
+        assert kwargs.get("evict_before_load") is False
         ui_root = storage_root / "ui"
         ui_root.mkdir(parents=True, exist_ok=True)
         (ui_root / "index.html").write_text("<html><head></head><body>Echo UI</body></html>", encoding="utf-8")
@@ -403,7 +403,7 @@ def test_serve_static_asset_refreshes_existing_ui_on_entrypoint_request(monkeypa
         return SimpleNamespace(id=bundle_id, path=str(bundle_root), module="entrypoint", singleton=False, version="v1")
 
     async def _load_bundle_props_defaults(**kwargs):
-        load_calls.append(kwargs["bundle_id"])
+        load_calls.append((kwargs["bundle_id"], kwargs.get("evict_before_load")))
         (ui_root / "index.html").write_text("<html><head></head><body>Fresh UI</body></html>", encoding="utf-8")
         return {"ui": {"main_view": {"src_folder": "ui/main"}}}
 
@@ -426,7 +426,7 @@ def test_serve_static_asset_refreshes_existing_ui_on_entrypoint_request(monkeypa
         )
     )
 
-    assert load_calls == ["echo.ui@2026-03-30"]
+    assert load_calls == [("echo.ui@2026-03-30", False)]
     assert isinstance(response, HTMLResponse)
     html = response.body.decode("utf-8")
     assert "Fresh UI" in html
@@ -443,7 +443,7 @@ def test_serve_static_asset_refreshes_existing_ui_on_entrypoint_request(monkeypa
         )
     )
 
-    assert load_calls == ["echo.ui@2026-03-30"]
+    assert load_calls == [("echo.ui@2026-03-30", False)]
     assert isinstance(response, HTMLResponse)
     html = response.body.decode("utf-8")
     assert "Fresh UI" in html

@@ -426,7 +426,7 @@ def test_base_workflow_constructor_binds_external_event_source_when_redis_presen
 async def test_publish_git_workspace_if_needed_calls_publisher_in_git_mode(monkeypatch, tmp_path):
     calls = {}
 
-    def _fake_publish_current_turn_git_workspace(*, runtime_ctx, outdir, logger=None):
+    async def _fake_publish_current_turn_git_workspace(*, runtime_ctx, outdir, logger=None):
         calls["turn_id"] = runtime_ctx.turn_id
         calls["outdir"] = str(outdir)
         return {"commit_sha": "abc123"}
@@ -457,7 +457,7 @@ async def test_publish_git_workspace_if_needed_calls_publisher_in_git_mode(monke
 
 @pytest.mark.asyncio
 async def test_publish_git_workspace_if_needed_skips_custom_mode(monkeypatch, tmp_path):
-    def _unexpected_publish_current_turn_git_workspace(**kwargs):
+    async def _unexpected_publish_current_turn_git_workspace(**kwargs):
         raise AssertionError("publisher should not be called")
 
     monkeypatch.setattr(
@@ -480,7 +480,7 @@ async def test_publish_git_workspace_if_needed_skips_custom_mode(monkeypatch, tm
 
 @pytest.mark.asyncio
 async def test_publish_git_workspace_if_needed_raises_turn_phase_error_on_publish_failure(monkeypatch, tmp_path):
-    def _failing_publish_current_turn_git_workspace(**kwargs):
+    async def _failing_publish_current_turn_git_workspace(**kwargs):
         raise RuntimeError("push failed")
 
     monkeypatch.setattr(

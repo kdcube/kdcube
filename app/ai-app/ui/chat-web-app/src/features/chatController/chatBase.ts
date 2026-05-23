@@ -127,6 +127,13 @@ export interface ChatMessageSendResponse {
     task_id: string;
     session_id: string;
     conversation_id: string;
+    turn_id?: string;
+    active_turn_id?: string | null;
+    target_turn_id?: string | null;
+    queued_turn_id?: string | null;
+    event_id?: string | null;
+    external_event_sequence?: number | null;
+    live_owner_detected?: boolean | null;
     conversation_created: number;
     user_type: string;
     message_kind: string;

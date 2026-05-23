@@ -289,7 +289,8 @@ def test_build_exec_snapshot_workspace_copies_git_turn_root_when_repo_file_is_re
     assert (snap_out / "turn_ctx" / "files" / "projectA" / "src" / "app.py").read_text(encoding="utf-8") == "print('ctx')\n"
 
 
-def test_ensure_current_turn_git_workspace_bootstraps_lineage_branch(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_ensure_current_turn_git_workspace_bootstraps_lineage_branch(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_HTTP_TOKEN", "test-token")
     monkeypatch.setenv("GIT_HTTP_USER", "x-access-token")
     outdir = tmp_path / "out"
@@ -306,7 +307,7 @@ def test_ensure_current_turn_git_workspace_bootstraps_lineage_branch(tmp_path, m
         workspace_git_repo=str(_init_git_workspace_repo(tmp_path)),
     )
 
-    turn_root = ensure_current_turn_git_workspace(runtime_ctx=runtime, outdir=outdir)
+    turn_root = await ensure_current_turn_git_workspace(runtime_ctx=runtime, outdir=outdir)
 
     assert (turn_root / ".git").exists()
     assert not (turn_root / "files" / "projectA" / "src" / "app.py").exists()
@@ -356,7 +357,8 @@ def test_ensure_current_turn_git_workspace_bootstraps_lineage_branch(tmp_path, m
     assert "other-user" not in lineage_refs_output
 
 
-def test_publish_current_turn_git_workspace_pushes_lineage_and_version_refs(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_publish_current_turn_git_workspace_pushes_lineage_and_version_refs(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_HTTP_TOKEN", "test-token")
     monkeypatch.setenv("GIT_HTTP_USER", "x-access-token")
     outdir = tmp_path / "out"
@@ -374,11 +376,11 @@ def test_publish_current_turn_git_workspace_pushes_lineage_and_version_refs(tmp_
         workspace_git_repo=str(remote_repo),
     )
 
-    turn_root = ensure_current_turn_git_workspace(runtime_ctx=runtime, outdir=outdir)
+    turn_root = await ensure_current_turn_git_workspace(runtime_ctx=runtime, outdir=outdir)
     (turn_root / "files" / "projectA" / "src").mkdir(parents=True, exist_ok=True)
     (turn_root / "files" / "projectA" / "src" / "new.py").write_text("print('new')\n", encoding="utf-8")
 
-    result = publish_current_turn_git_workspace(runtime_ctx=runtime, outdir=outdir)
+    result = await publish_current_turn_git_workspace(runtime_ctx=runtime, outdir=outdir)
 
     assert result["version_ref"].endswith("/versions/turn_ctx")
     assert result["committed"] is True
@@ -410,7 +412,8 @@ def test_publish_current_turn_git_workspace_pushes_lineage_and_version_refs(tmp_
     assert (show_version.stdout or "") == "print('new')\n"
 
 
-def test_publish_current_turn_git_workspace_skips_missing_materialized_workspace(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_publish_current_turn_git_workspace_skips_missing_materialized_workspace(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_HTTP_TOKEN", "test-token")
     monkeypatch.setenv("GIT_HTTP_USER", "x-access-token")
     outdir = tmp_path / "out"
@@ -427,7 +430,7 @@ def test_publish_current_turn_git_workspace_skips_missing_materialized_workspace
         workspace_git_repo=str(_init_git_workspace_repo(tmp_path)),
     )
 
-    result = publish_current_turn_git_workspace(runtime_ctx=runtime, outdir=outdir)
+    result = await publish_current_turn_git_workspace(runtime_ctx=runtime, outdir=outdir)
 
     assert result["skipped"] is True
     assert result["reason"] == "workspace_not_materialized"
@@ -436,7 +439,8 @@ def test_publish_current_turn_git_workspace_skips_missing_materialized_workspace
     assert not (outdir.parent / ".react_workspace_git").exists()
 
 
-def test_publish_current_turn_git_workspace_skips_unchanged_workspace_without_version_push(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_publish_current_turn_git_workspace_skips_unchanged_workspace_without_version_push(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_HTTP_TOKEN", "test-token")
     monkeypatch.setenv("GIT_HTTP_USER", "x-access-token")
     outdir = tmp_path / "out"
@@ -453,9 +457,9 @@ def test_publish_current_turn_git_workspace_skips_unchanged_workspace_without_ve
         workspace_implementation="git",
         workspace_git_repo=str(remote_repo),
     )
-    ensure_current_turn_git_workspace(runtime_ctx=runtime, outdir=outdir)
+    await ensure_current_turn_git_workspace(runtime_ctx=runtime, outdir=outdir)
 
-    result = publish_current_turn_git_workspace(runtime_ctx=runtime, outdir=outdir)
+    result = await publish_current_turn_git_workspace(runtime_ctx=runtime, outdir=outdir)
 
     assert result["skipped"] is True
     assert result["reason"] == "workspace_unchanged"
@@ -483,11 +487,12 @@ def test_ensure_workspace_repo_rewrites_ssh_origin_to_https_when_pat_is_configur
         workspace_implementation="git",
         workspace_git_repo="git@github.com:org/workspace.git",
     )
-    monkeypatch.setenv("GIT_HTTP_TOKEN", "pat-token")
-    monkeypatch.setenv("GIT_HTTP_USER", "x-access-token")
-    monkeypatch.setattr(v2_git_workspace, "_build_git_env", lambda: {})
-
-    repo_root = _ensure_workspace_repo(runtime_ctx=runtime, outdir=outdir)
+    repo_root = _ensure_workspace_repo(
+        runtime_ctx=runtime,
+        outdir=outdir,
+        repo_url="https://github.com/org/workspace.git",
+        env={},
+    )
 
     remote_url = subprocess.run(
         ["git", "-C", str(repo_root), "config", "--get", "remote.origin.url"],
@@ -498,7 +503,8 @@ def test_ensure_workspace_repo_rewrites_ssh_origin_to_https_when_pat_is_configur
     assert remote_url == "https://github.com/org/workspace.git"
 
 
-def test_publish_current_turn_git_workspace_skips_transient_and_ignored_files(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_publish_current_turn_git_workspace_skips_transient_and_ignored_files(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_HTTP_TOKEN", "test-token")
     monkeypatch.setenv("GIT_HTTP_USER", "x-access-token")
     outdir = tmp_path / "out"
@@ -516,7 +522,7 @@ def test_publish_current_turn_git_workspace_skips_transient_and_ignored_files(tm
         workspace_git_repo=str(remote_repo),
     )
 
-    turn_root = ensure_current_turn_git_workspace(runtime_ctx=runtime, outdir=outdir)
+    turn_root = await ensure_current_turn_git_workspace(runtime_ctx=runtime, outdir=outdir)
     (turn_root / ".gitignore").write_text(".ignored.txt\n", encoding="utf-8")
     (turn_root / "files" / "demo_proj").mkdir(parents=True, exist_ok=True)
     (turn_root / "files" / "demo_proj" / "LICENSE").write_text("MIT\n", encoding="utf-8")
@@ -524,7 +530,7 @@ def test_publish_current_turn_git_workspace_skips_transient_and_ignored_files(tm
     (turn_root / "files" / "demo_proj" / ".pytest_cache" / "v" / "cache").mkdir(parents=True, exist_ok=True)
     (turn_root / "files" / "demo_proj" / ".pytest_cache" / "README.md").write_text("cache\n", encoding="utf-8")
 
-    result = publish_current_turn_git_workspace(runtime_ctx=runtime, outdir=outdir)
+    result = await publish_current_turn_git_workspace(runtime_ctx=runtime, outdir=outdir)
 
     assert result["committed"] is True
     show_license = subprocess.run(
@@ -568,7 +574,8 @@ def test_publish_current_turn_git_workspace_skips_transient_and_ignored_files(tm
     assert cache_missing.returncode != 0
 
 
-def test_checkout_current_turn_git_workspace_materializes_requested_version(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_checkout_current_turn_git_workspace_materializes_requested_version(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_HTTP_TOKEN", "test-token")
     monkeypatch.setenv("GIT_HTTP_USER", "x-access-token")
     outdir = tmp_path / "out"
@@ -585,10 +592,10 @@ def test_checkout_current_turn_git_workspace_materializes_requested_version(tmp_
         workspace_git_repo=str(_init_git_workspace_repo(tmp_path)),
     )
 
-    turn_root = ensure_current_turn_git_workspace(runtime_ctx=runtime, outdir=outdir)
+    turn_root = await ensure_current_turn_git_workspace(runtime_ctx=runtime, outdir=outdir)
     assert not (turn_root / "files" / "projectA" / "src" / "app.py").exists()
 
-    result = checkout_current_turn_git_workspace(
+    result = await checkout_current_turn_git_workspace(
         runtime_ctx=runtime,
         outdir=outdir,
         version_id="turn_prev",
@@ -670,7 +677,7 @@ async def test_react_checkout_rejects_nonempty_current_workspace(tmp_path, monke
         workspace_git_repo=str(_init_git_workspace_repo(tmp_path)),
     )
     ctx = FakeBrowser(runtime)
-    turn_root = ensure_current_turn_git_workspace(runtime_ctx=runtime, outdir=outdir)
+    turn_root = await ensure_current_turn_git_workspace(runtime_ctx=runtime, outdir=outdir)
     (turn_root / "files" / "projectA").mkdir(parents=True, exist_ok=True)
     (turn_root / "files" / "projectA" / "scratch.md").write_text("dirty\n", encoding="utf-8")
 
@@ -964,9 +971,9 @@ async def test_hydrate_workspace_paths_git_dedupes_version_fetch_per_turn(tmp_pa
     original = gw._ensure_local_version_ref
     calls: list[str] = []
 
-    def _wrapped(*, repo_root, runtime_ctx, version_id):
+    def _wrapped(*, repo_root, runtime_ctx, version_id, env):
         calls.append(version_id)
-        return original(repo_root=repo_root, runtime_ctx=runtime_ctx, version_id=version_id)
+        return original(repo_root=repo_root, runtime_ctx=runtime_ctx, version_id=version_id, env=env)
 
     monkeypatch.setattr(gw, "_ensure_local_version_ref", _wrapped)
 
@@ -1003,8 +1010,13 @@ def test_ensure_local_version_ref_skips_refetch_when_local_ref_exists(tmp_path, 
         workspace_git_repo=str(_init_git_workspace_repo(tmp_path)),
     )
 
-    repo_root = _ensure_workspace_repo(runtime_ctx=runtime, outdir=outdir)
-    local_ref = _ensure_local_version_ref(repo_root=repo_root, runtime_ctx=runtime, version_id="turn_prev")
+    repo_root = _ensure_workspace_repo(
+        runtime_ctx=runtime,
+        outdir=outdir,
+        repo_url=str(runtime.workspace_git_repo),
+        env={},
+    )
+    local_ref = _ensure_local_version_ref(repo_root=repo_root, runtime_ctx=runtime, version_id="turn_prev", env={})
 
     real_run = subprocess.run
     fetch_calls: list[list[str]] = []
@@ -1017,7 +1029,7 @@ def test_ensure_local_version_ref_skips_refetch_when_local_ref_exists(tmp_path, 
 
     monkeypatch.setattr(subprocess, "run", _wrapped_run)
 
-    local_ref_again = _ensure_local_version_ref(repo_root=repo_root, runtime_ctx=runtime, version_id="turn_prev")
+    local_ref_again = _ensure_local_version_ref(repo_root=repo_root, runtime_ctx=runtime, version_id="turn_prev", env={})
 
     assert local_ref_again == local_ref
     assert fetch_calls == []

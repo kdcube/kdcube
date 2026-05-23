@@ -14,7 +14,6 @@ from kdcube_ai_app.apps.chat.sdk.integrations.email import (
     fetch_google_profile,
     google_client_id,
     google_client_secret,
-    google_client_secret_async,
     oauth_state_secret,
 )
 
@@ -68,7 +67,7 @@ def store_for(entrypoint: Any, *, user_id: Optional[str] = None, fingerprint: Op
     return EmailAccountStore(_storage_root(entrypoint), user_id=resolved_user, bundle_id=BUNDLE_ID), resolved_user
 
 
-def status(
+async def status(
     entrypoint: Any,
     *,
     user_id: Optional[str] = None,
@@ -77,8 +76,8 @@ def status(
     store, resolved_user = store_for(entrypoint, user_id=user_id, fingerprint=fingerprint)
     enabled = bool(entrypoint.bundle_prop("integrations.email.enabled", False))
     client_id_configured = _configured(google_client_id(entrypoint))
-    client_secret_configured = _configured(google_client_secret())
-    state_secret_configured = _configured(oauth_state_secret(entrypoint))
+    client_secret_configured = _configured(await google_client_secret())
+    state_secret_configured = _configured(await oauth_state_secret(entrypoint))
     missing = []
     if not enabled:
         missing.append("integrations.email.enabled")
@@ -102,7 +101,7 @@ def status(
             "icloud_app_password_supported": True,
         },
         "configuration_missing": missing,
-        "accounts": store.list_accounts(),
+        "accounts": await store.list_accounts_async(),
         "operations": {
             "start_google_oauth": "email_oauth_start",
             "connect_icloud_app_password": "email_connect_app_password",
@@ -112,7 +111,7 @@ def status(
     }
 
 
-def start_oauth(
+async def start_oauth(
     entrypoint: Any,
     *,
     request: Any = None,
@@ -129,7 +128,7 @@ def start_oauth(
         return {"ok": False, "error": {"code": "email_provider_not_supported", "message": f"Provider {provider!r} is not supported yet."}}
     store, resolved_user = store_for(entrypoint, user_id=user_id, fingerprint=fingerprint)
     try:
-        payload = build_google_authorize_url(
+        payload = await build_google_authorize_url(
             entrypoint=entrypoint,
             store=store,
             request=request,
@@ -141,7 +140,7 @@ def start_oauth(
     return {"ok": True, "user_id": resolved_user, **payload}
 
 
-def disconnect(
+async def disconnect(
     entrypoint: Any,
     *,
     account_id: str,
@@ -149,11 +148,11 @@ def disconnect(
     fingerprint: Optional[str] = None,
 ) -> Dict[str, Any]:
     store, resolved_user = store_for(entrypoint, user_id=user_id, fingerprint=fingerprint)
-    deleted = store.delete_account(account_id)
-    return {"ok": True, "user_id": resolved_user, "deleted": deleted, "accounts": store.list_accounts()}
+    deleted = await store.delete_account_async(account_id)
+    return {"ok": True, "user_id": resolved_user, "deleted": deleted, "accounts": await store.list_accounts_async()}
 
 
-def connect_app_password(
+async def connect_app_password(
     entrypoint: Any,
     *,
     provider: str = "icloud",
@@ -204,7 +203,7 @@ def connect_app_password(
                 "settings": default_icloud_account_settings(),
             }
         )
-        store.set_tokens(
+        await store.set_tokens_async(
             str(account.get("account_id") or ""),
             {
                 "auth_type": "app_password",
@@ -218,7 +217,7 @@ def connect_app_password(
         "ok": True,
         "user_id": resolved_user,
         "account": account,
-        "accounts": store.list_accounts(),
+        "accounts": await store.list_accounts_async(),
         "provider": "icloud",
         "note": "iCloud Mail is connected with an Apple app-specific password stored in user-scoped secret storage.",
     }
@@ -246,7 +245,7 @@ async def callback(entrypoint: Any, *, request: Any = None, code: str = "", stat
     if not code or not state:
         raise HTTPException(status_code=400, detail="code and state are required")
 
-    secret = oauth_state_secret(entrypoint)
+    secret = await oauth_state_secret(entrypoint)
     try:
         payload = EmailAccountStore(_storage_root(entrypoint), user_id="state-reader").consume_oauth_state(
             state=state,
@@ -266,7 +265,7 @@ async def callback(entrypoint: Any, *, request: Any = None, code: str = "", stat
             code=code,
             redirect_uri=callback_url(entrypoint, request=request),
             client_id=google_client_id(entrypoint),
-            client_secret=await google_client_secret_async(),
+            client_secret=await google_client_secret(),
         )
         profile = await fetch_google_profile(access_token=str(token.get("access_token") or ""))
         id_claim_email = str(profile.get("email") or "").strip()
@@ -300,9 +299,9 @@ async def callback(entrypoint: Any, *, request: Any = None, code: str = "", stat
     )
 
 
-def telegram_status(entrypoint: Any, *, request: Any = None, telegram_init_data: str = "") -> Dict[str, Any]:
+async def telegram_status(entrypoint: Any, *, request: Any = None, telegram_init_data: str = "") -> Dict[str, Any]:
     identity = _telegram_identity(entrypoint, request=request, telegram_init_data=telegram_init_data)
-    payload = status(entrypoint, user_id=identity.user_id, fingerprint=identity.fingerprint)
+    payload = await status(entrypoint, user_id=identity.user_id, fingerprint=identity.fingerprint)
     payload["auth_surface"] = "telegram_webapp"
     return payload
 

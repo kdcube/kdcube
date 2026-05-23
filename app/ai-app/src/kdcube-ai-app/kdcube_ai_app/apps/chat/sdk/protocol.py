@@ -145,6 +145,7 @@ class ChatTaskUser(_ProtoBase):
     user_type: str
     user_id: Optional[str] = None
     username: Optional[str] = None
+    email: Optional[str] = None
     fingerprint: Optional[str] = None
     roles: List[str] = []
     permissions: List[str] = []

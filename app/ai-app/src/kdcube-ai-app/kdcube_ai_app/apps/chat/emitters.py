@@ -18,6 +18,7 @@ from kdcube_ai_app.apps.chat.sdk.comm.recording import (
     make_recorded_item,
     portable_filter,
     selector_allows,
+    selector_privacy,
 )
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.protocol import (
@@ -27,6 +28,7 @@ from kdcube_ai_app.apps.chat.sdk.util import ensure_event_markdown
 from kdcube_ai_app.infra.orchestration.app.communicator import ServiceCommunicator
 
 logger = logging.getLogger(__name__)
+_MISSING = object()
 
 # map protocol type → client socket event
 _EVENT_MAP = {
@@ -84,6 +86,83 @@ class _DeltaAggregate:
     def merged_text(self) -> str:
         # preserve original order by idx, then ts
         return "".join([c.text for c in sorted(self.chunks, key=lambda c: (c.idx, c.ts))])
+
+
+class _RecordingScope:
+    def __init__(
+            self,
+            comm: "ChatCommunicator",
+            filter: Any = None,
+            *,
+            scope: Any = None,
+            mode: str = "append",
+            max_events: Optional[int] = None,
+            sink: Optional[Callable[..., Any]] = None,
+            send_on_exit: bool = False,
+            send_filter: Any = _MISSING,
+            clear_on_success: bool = True,
+    ):
+        self.comm = comm
+        self.filter = filter
+        self.scope = scope
+        self.mode = mode
+        self.max_events = max_events
+        self.sink = sink
+        self.send_on_exit = bool(send_on_exit)
+        self.send_filter = send_filter
+        self.clear_on_success = bool(clear_on_success)
+        self.result: Optional[dict[str, Any]] = None
+        self._prev_enabled: Optional[bool] = None
+        self._prev_filter: Any = None
+        self._prev_rules: Optional[list[dict[str, Any]]] = None
+        self._prev_max_events: Optional[int] = None
+        self._prev_sink: Any = _MISSING
+
+    def __enter__(self) -> "_RecordingScope":
+        self._prev_enabled = bool(getattr(self.comm, "_recording_enabled", False))
+        self._prev_filter = getattr(self.comm, "_recording_filter", None)
+        self._prev_rules = [dict(rule) for rule in getattr(self.comm, "_recording_rules", [])]
+        self._prev_max_events = int(getattr(self.comm, "_recording_max_events", DEFAULT_MAX_RECORDED_EVENTS))
+        if self.sink is not None:
+            self._prev_sink = getattr(self.comm, "event_sink", None)
+
+        self.comm.record(
+            self.filter,
+            scope=self.scope,
+            mode=self.mode,
+            max_events=self.max_events,
+        )
+        if self.sink is not None:
+            self.comm.set_event_sink(self.sink)
+        return self
+
+    def _restore(self) -> None:
+        if self._prev_enabled is not None:
+            self.comm._recording_enabled = self._prev_enabled
+        if self._prev_rules is not None:
+            self.comm._recording_rules = [dict(rule) for rule in self._prev_rules]
+        self.comm._recording_filter = self._prev_filter
+        if self._prev_max_events is not None:
+            self.comm._recording_max_events = self._prev_max_events
+        if self._prev_sink is not _MISSING:
+            self.comm.set_event_sink(self._prev_sink)
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self._restore()
+
+    async def __aenter__(self) -> "_RecordingScope":
+        return self.__enter__()
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        try:
+            if self.send_on_exit:
+                filter_arg = self.filter if self.send_filter is _MISSING else self.send_filter
+                self.result = await self.comm.send_recorded_events(
+                    filter_arg,
+                    clear_on_success=self.clear_on_success,
+                )
+        finally:
+            self._restore()
 
 
 class ChatRelayCommunicator:
@@ -485,6 +564,7 @@ class ChatCommunicator:
         self._delta_cache: dict[Tuple[str, str, str, str, str, str, str], _DeltaAggregate] = {}
         self._recording_enabled: bool = False
         self._recording_filter: Any = None
+        self._recording_rules: list[dict[str, Any]] = []
         self._recording_max_events: int = DEFAULT_MAX_RECORDED_EVENTS
         self._recorded_events: list[dict[str, Any]] = []
         self._recorded_event_ids: set[str] = set()
@@ -504,39 +584,154 @@ class ChatCommunicator:
 
     # ---------- comm recording / event sinks ----------
     def set_event_sink(self, sink: Optional[Callable[..., Any]]) -> None:
-        """Install a batch sink used by send_telemetry and future sink helpers."""
+        """Install a batch sink used by send_recorded_events."""
         self.event_sink = sink
 
-    def set_telemetry_sink(self, sink: Optional[Callable[..., Any]]) -> None:
-        """Compatibility convenience for callers that only think in telemetry terms."""
-        self.set_event_sink(sink)
+    def _recording_scope(self, scope: Any = None) -> Any:
+        if scope is None:
+            return None
+        portable = portable_filter(scope)
+        if portable is None:
+            raise ValueError("comm.record scope must be JSON-serializable")
+        return portable
 
-    def record(self, filter: Any = None, *, mode: str = "append", max_events: Optional[int] = None) -> "ChatCommunicator":
+    @staticmethod
+    def _recording_scope_key(scope: Any = None) -> str:
+        import json as _json
+        try:
+            return _json.dumps(scope, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        except Exception:
+            return str(scope)
+
+    def _sync_recording_filter_compat(self) -> None:
+        filters = [rule.get("filter") for rule in self._recording_rules]
+        if not filters:
+            self._recording_filter = None
+        elif len(filters) == 1:
+            self._recording_filter = filters[0]
+        else:
+            self._recording_filter = {"any": filters}
+
+    def _portable_recording_rules(self) -> list[dict[str, Any]]:
+        rules: list[dict[str, Any]] = []
+        for rule in self._recording_rules:
+            selector = rule.get("filter")
+            if selector is None:
+                portable_selector = None
+                portable_ok = True
+            else:
+                portable_selector = portable_filter(selector)
+                portable_ok = portable_selector is not None
+            if not portable_ok:
+                continue
+            rules.append({
+                "scope": rule.get("scope"),
+                "filter": portable_selector,
+            })
+        return rules
+
+    def _portable_recording_filter(self) -> tuple[bool, Any]:
+        rules = self._portable_recording_rules()
+        if not rules:
+            return False, None
+        filters = [rule.get("filter") for rule in rules]
+        if len(filters) == 1:
+            return True, filters[0]
+        return True, {"any": filters}
+
+    @staticmethod
+    def _merge_recording_privacy(rules: list[dict[str, Any]]) -> dict[str, Any]:
+        privacy: dict[str, Any] = {}
+        data_keys: list[str] = []
+        seen_keys: set[str] = set()
+        for rule in rules:
+            p = selector_privacy(rule.get("filter"))
+            if bool(p.get("include_data")):
+                privacy["include_data"] = True
+            if bool(p.get("include_delta_text")):
+                privacy["include_delta_text"] = True
+            value = p.get("data_keys")
+            values = value if isinstance(value, (list, tuple, set)) else ([value] if value is not None else [])
+            for key in values:
+                skey = str(key)
+                if skey not in seen_keys:
+                    seen_keys.add(skey)
+                    data_keys.append(skey)
+        if data_keys:
+            privacy["data_keys"] = data_keys
+        return privacy
+
+    def record(
+            self,
+            filter: Any = None,
+            *,
+            scope: Any = None,
+            mode: str = "append",
+            max_events: Optional[int] = None,
+    ) -> "ChatCommunicator":
         """
         Enable bounded recording of future post-firewall comm envelopes.
 
         ``filter`` reuses EventFilterInput vocabulary. Serializable selectors can
         be propagated into isolated runtimes; callables/IEventFilter instances are
-        process-local.
+        process-local. ``scope`` is JSON-serializable metadata that identifies
+        the owner of this recording selector.
         """
         self._recording_enabled = True
-        self._recording_filter = filter
+        scope_value = self._recording_scope(scope)
+        rule = {
+            "scope": scope_value,
+            "scope_key": self._recording_scope_key(scope_value),
+            "filter": filter,
+        }
         if max_events is not None:
             try:
                 self._recording_max_events = max(0, int(max_events))
             except Exception:
                 self._recording_max_events = DEFAULT_MAX_RECORDED_EVENTS
-        if str(mode or "append").lower() == "replace":
+        mode_name = str(mode or "append").lower()
+        if mode_name == "replace":
+            self._recording_rules = [rule]
             self.clear_recorded_events()
+        else:
+            self._recording_rules.append(rule)
+        self._sync_recording_filter_compat()
         return self
+
+    def recording(
+            self,
+            filter: Any = None,
+            *,
+            scope: Any = None,
+            mode: str = "append",
+            max_events: Optional[int] = None,
+            sink: Optional[Callable[..., Any]] = None,
+            send_on_exit: bool = False,
+            send_filter: Any = _MISSING,
+            clear_on_success: bool = True,
+    ) -> _RecordingScope:
+        """Temporarily add a scoped recording selector and restore it on exit."""
+        return _RecordingScope(
+            self,
+            filter,
+            scope=scope,
+            mode=mode,
+            max_events=max_events,
+            sink=sink,
+            send_on_exit=send_on_exit,
+            send_filter=send_filter,
+            clear_on_success=clear_on_success,
+        )
 
     def stop_recording(self) -> None:
         self._recording_enabled = False
 
     def recording_config(self) -> dict[str, Any]:
+        portable_ok, portable_selector = self._portable_recording_filter()
         return {
             "enabled": bool(self._recording_enabled),
-            "filter": portable_filter(self._recording_filter),
+            "filter": portable_selector if portable_ok else None,
+            "scopes": self._portable_recording_rules(),
             "max_events": int(self._recording_max_events),
             "recorded": len(self._recorded_events),
             "dropped": int(self._recording_dropped),
@@ -559,21 +754,29 @@ class ChatCommunicator:
         if not self._recording_enabled:
             return
         try:
-            if not selector_allows(
-                self._recording_filter,
-                user_type=self.user_type,
-                user_id=self.user_id,
-                event=filter_input,
-                data=data,
-            ):
+            matched_rules = []
+            for rule in self._recording_rules or [{"scope": None, "scope_key": "null", "filter": self._recording_filter}]:
+                if selector_allows(
+                    rule.get("filter"),
+                    user_type=self.user_type,
+                    user_id=self.user_id,
+                    event=filter_input,
+                    data=data,
+                ):
+                    matched_rules.append(rule)
+            if not matched_rules:
                 return
+            privacy_selector = {"privacy": self._merge_recording_privacy(matched_rules)}
             item = make_recorded_item(
                 socket_event=event,
                 data=data or {},
                 broadcast=broadcast,
                 event=filter_input,
-                selector=self._recording_filter,
+                selector=privacy_selector,
             )
+            item["recording"] = {
+                "scopes": [rule.get("scope") for rule in matched_rules],
+            }
             rid = str(item.get("record_id") or "")
             if rid and rid in self._recorded_event_ids:
                 return
@@ -659,7 +862,7 @@ class ChatCommunicator:
         except Exception:
             return
 
-    async def send_telemetry(
+    async def send_recorded_events(
             self,
             filter: Any = None,
             *,
@@ -667,11 +870,9 @@ class ChatCommunicator:
             sink: Optional[Callable[..., Any]] = None,
     ) -> dict[str, Any]:
         """
-        Send a filtered snapshot of recorded comm items through the configured sink.
-
-        The method is telemetry-oriented by name, but the underlying recorded
-        buffer and sink callback are generic. With no configured sink it is a
-        bounded no-op and leaves the buffer untouched.
+        Send a filtered snapshot of recorded comm items through the configured
+        event sink. With no configured sink this is a bounded no-op and leaves
+        the buffer untouched.
         """
         batch = self.export_recorded_events(filter)
         if not batch:
@@ -1179,11 +1380,20 @@ class ChatCommunicator:
                 pass
             try:
                 if getattr(comm, "_recording_enabled", False):
-                    pf = portable_filter(getattr(comm, "_recording_filter", None))
-                    if getattr(comm, "_recording_filter", None) is None or pf is not None:
+                    portable_rules = []
+                    portable_rules_fn = getattr(comm, "_portable_recording_rules", None)
+                    if callable(portable_rules_fn):
+                        portable_rules = portable_rules_fn()
+                    portable_ok = False
+                    portable_selector = None
+                    portable_filter_fn = getattr(comm, "_portable_recording_filter", None)
+                    if callable(portable_filter_fn):
+                        portable_ok, portable_selector = portable_filter_fn()
+                    if portable_rules and portable_ok:
                         recording = {
                             "enabled": True,
-                            "filter": pf,
+                            "filter": portable_selector,
+                            "scopes": portable_rules,
                             "max_events": int(getattr(comm, "_recording_max_events", DEFAULT_MAX_RECORDED_EVENTS)),
                         }
             except Exception:

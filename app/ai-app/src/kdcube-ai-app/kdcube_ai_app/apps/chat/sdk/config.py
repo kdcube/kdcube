@@ -105,7 +105,7 @@ def _resolve_current_bundle_id() -> str | None:
     return None
 
 
-def _normalize_secret_lookup_key(key: str) -> str | None:
+def _normalize_secret_lookup_key(key: str, *, bundle_id: str | None = None) -> str | None:
     raw = str(key or "").strip()
     if not raw:
         return raw
@@ -115,16 +115,43 @@ def _normalize_secret_lookup_key(key: str) -> str | None:
         tail = raw.split(":", 1)[1].strip().strip(".")
         if not tail:
             return raw
-        bundle_id = _resolve_current_bundle_id()
-        if not bundle_id:
+        resolved_bundle_id = str(bundle_id or "").strip() or _resolve_current_bundle_id()
+        if not resolved_bundle_id:
             _SECRET_LOG.warning("Bundle-scoped secret %s requested without bundle context", raw)
             return None
-        return f"bundles.{bundle_id}.secrets.{tail}"
+        return f"bundles.{resolved_bundle_id}.secrets.{tail}"
     return raw
 
 
-def get_secret(key: str, default: str | None = None) -> str | None:
-    normalized_key = _normalize_secret_lookup_key(key)
+async def get_secret(
+    key: str,
+    default: str | None = None,
+    *,
+    user_id: str | None = None,
+    bundle_id: str | None = None,
+) -> str | None:
+    raw_key = str(key or "").strip()
+    if raw_key.startswith("u:") or raw_key.startswith("user:"):
+        tail = raw_key.split(":", 1)[1].strip().strip(".")
+        if not tail:
+            return default
+        resolved_user_id, resolved_bundle_id = _resolve_current_user_bundle_scope(
+            user_id=user_id,
+            bundle_id=bundle_id,
+        )
+        if not resolved_user_id:
+            return default
+        try:
+            value = await get_secrets_manager(get_settings()).get_user_secret(
+                user_id=resolved_user_id,
+                bundle_id=resolved_bundle_id,
+                key=tail,
+            )
+        except Exception:
+            value = None
+        return value or default
+
+    normalized_key = _normalize_secret_lookup_key(key, bundle_id=bundle_id)
     if normalized_key is None:
         return default
     settings = get_settings()
@@ -138,55 +165,14 @@ def get_secret(key: str, default: str | None = None) -> str | None:
                 return value
         if candidate in _LEGACY_SECRET_TO_CANON:
             continue
-        value = settings.secret(candidate, default=None)
+        provider_key = _provider_secret_key(candidate)
+        try:
+            value = await get_secrets_manager(settings).get_secret(provider_key)
+        except Exception:
+            value = None
         if value:
             return value
     return default
-
-
-async def get_secret_async(key: str, default: str | None = None) -> str | None:
-    normalized_key = _normalize_secret_lookup_key(key)
-    if normalized_key is None:
-        return default
-    settings = get_settings()
-    for candidate in _secret_candidates(normalized_key):
-        env_val = os.getenv(candidate)
-        if env_val:
-            return env_val
-        if hasattr(settings, candidate):
-            value = getattr(settings, candidate)
-            if value:
-                return value
-        if candidate in _LEGACY_SECRET_TO_CANON:
-            continue
-        value = await settings.secret_async(candidate, default=None)
-        if value:
-            return value
-    return default
-
-
-def get_service_secret(key: str, default: str | None = None) -> str | None:
-    canonical = f"services.{key.lstrip('.')}"
-    bundle_val = get_secret(f"b:{canonical}")
-    if bundle_val:
-        return bundle_val
-    return get_secret(canonical, default=default)
-
-
-async def get_service_secret_async(key: str, default: str | None = None) -> str | None:
-    canonical = f"services.{key.lstrip('.')}"
-    bundle_val = await get_secret_async(f"b:{canonical}")
-    if bundle_val:
-        return bundle_val
-    return await get_secret_async(canonical, default=default)
-
-
-def read_secret(key: str, default: str | None = None) -> str | None:
-    return get_secret(key, default=default)
-
-
-async def read_secret_async(key: str, default: str | None = None) -> str | None:
-    return await get_secret_async(key, default=default)
 
 
 def get_plain(key: str, default: Any = None) -> Any:
@@ -272,57 +258,7 @@ def _set_nested_value(root: dict[str, Any], path: str, value: Any) -> None:
     cursor[parts[-1]] = value
 
 
-def get_user_secret(
-    key: str,
-    *,
-    bundle_id: str | None = None,
-    user_id: str | None = None,
-    default: str | None = None,
-) -> str | None:
-    resolved_user_id, resolved_bundle_id = _resolve_current_user_bundle_scope(
-        user_id=user_id,
-        bundle_id=bundle_id,
-    )
-    if not resolved_user_id:
-        return default
-    settings = get_settings()
-    try:
-        value = get_secrets_manager(settings).get_user_secret(
-            user_id=resolved_user_id,
-            bundle_id=resolved_bundle_id,
-            key=key,
-        )
-    except Exception:
-        value = None
-    return value or default
-
-
-async def get_user_secret_async(
-    key: str,
-    *,
-    bundle_id: str | None = None,
-    user_id: str | None = None,
-    default: str | None = None,
-) -> str | None:
-    resolved_user_id, resolved_bundle_id = _resolve_current_user_bundle_scope(
-        user_id=user_id,
-        bundle_id=bundle_id,
-    )
-    if not resolved_user_id:
-        return default
-    settings = get_settings()
-    try:
-        value = await get_secrets_manager(settings).get_user_secret_async(
-            user_id=resolved_user_id,
-            bundle_id=resolved_bundle_id,
-            key=key,
-        )
-    except Exception:
-        value = None
-    return value or default
-
-
-def set_user_secret(
+async def set_user_secret(
     key: str,
     value: str,
     *,
@@ -335,28 +271,7 @@ def set_user_secret(
     )
     if not resolved_user_id:
         raise RuntimeError("Current user id is unavailable for user-scoped secret write")
-    get_secrets_manager(get_settings()).set_user_secret(
-        user_id=resolved_user_id,
-        bundle_id=resolved_bundle_id,
-        key=key,
-        value=value,
-    )
-
-
-async def set_user_secret_async(
-    key: str,
-    value: str,
-    *,
-    bundle_id: str | None = None,
-    user_id: str | None = None,
-) -> None:
-    resolved_user_id, resolved_bundle_id = _resolve_current_user_bundle_scope(
-        user_id=user_id,
-        bundle_id=bundle_id,
-    )
-    if not resolved_user_id:
-        raise RuntimeError("Current user id is unavailable for user-scoped secret write")
-    await get_secrets_manager(get_settings()).set_user_secret_async(
+    await get_secrets_manager(get_settings()).set_user_secret(
         user_id=resolved_user_id,
         bundle_id=resolved_bundle_id,
         key=key,
@@ -376,13 +291,13 @@ async def set_bundle_secret(
     tail = str(key or "").strip().strip(".")
     if not tail:
         raise ValueError("Bundle secret key path is empty")
-    await get_secrets_manager(get_settings()).set_secret_async(
+    await get_secrets_manager(get_settings()).set_secret(
         f"bundles.{resolved_bundle_id}.secrets.{tail}",
         value,
     )
 
 
-def delete_user_secret(
+async def delete_user_secret(
     key: str,
     *,
     bundle_id: str | None = None,
@@ -394,26 +309,7 @@ def delete_user_secret(
     )
     if not resolved_user_id:
         raise RuntimeError("Current user id is unavailable for user-scoped secret delete")
-    get_secrets_manager(get_settings()).delete_user_secret(
-        user_id=resolved_user_id,
-        bundle_id=resolved_bundle_id,
-        key=key,
-    )
-
-
-async def delete_user_secret_async(
-    key: str,
-    *,
-    bundle_id: str | None = None,
-    user_id: str | None = None,
-) -> None:
-    resolved_user_id, resolved_bundle_id = _resolve_current_user_bundle_scope(
-        user_id=user_id,
-        bundle_id=bundle_id,
-    )
-    if not resolved_user_id:
-        raise RuntimeError("Current user id is unavailable for user-scoped secret delete")
-    await get_secrets_manager(get_settings()).delete_user_secret_async(
+    await get_secrets_manager(get_settings()).delete_user_secret(
         user_id=resolved_user_id,
         bundle_id=resolved_bundle_id,
         key=key,
@@ -590,16 +486,16 @@ def log_secret_statuses(force: bool = False) -> None:
     env_git_token = os.getenv("GIT_HTTP_TOKEN")
     env_git_user = os.getenv("GIT_HTTP_USER")
     env_openrouter = os.getenv("OPENROUTER_API_KEY")
-    git_user_source = "env" if env_git_user else "secrets"
+    git_user_source = "env" if env_git_user else "settings"
     if not env_git_user and settings.GIT_HTTP_USER == "x-access-token" and settings.GIT_HTTP_TOKEN:
         git_user_source = "default"
-    _log_secret_status("services.openai.api_key", settings.OPENAI_API_KEY, "env" if env_openai else "secrets")
-    _log_secret_status("services.anthropic.api_key", settings.ANTHROPIC_API_KEY, "env" if env_anthropic else "secrets")
-    _log_secret_status("services.google.api_key", settings.GOOGLE_API_KEY, "env" if env_gemini else "secrets")
-    _log_secret_status("services.brave.api_key", settings.BRAVE_API_KEY, "env" if env_brave else "secrets")
-    _log_secret_status("services.git.http_token", settings.GIT_HTTP_TOKEN, "env" if env_git_token else "secrets")
+    _log_secret_status("services.openai.api_key", settings.OPENAI_API_KEY, "env" if env_openai else "settings")
+    _log_secret_status("services.anthropic.api_key", settings.ANTHROPIC_API_KEY, "env" if env_anthropic else "settings")
+    _log_secret_status("services.google.api_key", settings.GOOGLE_API_KEY, "env" if env_gemini else "settings")
+    _log_secret_status("services.brave.api_key", settings.BRAVE_API_KEY, "env" if env_brave else "settings")
+    _log_secret_status("services.git.http_token", settings.GIT_HTTP_TOKEN, "env" if env_git_token else "settings")
     _log_secret_status("services.git.http_user", settings.GIT_HTTP_USER, git_user_source)
-    _log_secret_status("services.openrouter.api_key", settings.OPENROUTER_API_KEY, "env" if env_openrouter else "secrets")
+    _log_secret_status("services.openrouter.api_key", settings.OPENROUTER_API_KEY, "env" if env_openrouter else "settings")
 
 class CorsConfig(BaseModel):
     allow_origins: list[str] = Field(default_factory=lambda: ["*"])
@@ -771,10 +667,9 @@ class Settings(PLATFORM_CONFIG):
     # Solution workspace retention — set True to keep workdir/outdir after turn completes (debug).
     SOLUTION_RETAIN_TURN_WORKSPACE: bool = Field(default=False)
 
-    def _resolve_secret_str(
+    def _resolve_sensitive_str(
         self,
         env_name: str,
-        secret_key: str,
         *,
         plain_path: str | None = None,
         default: str | None = None,
@@ -782,9 +677,6 @@ class Settings(PLATFORM_CONFIG):
         env_val = self._env_str(env_name)
         if env_val is not None:
             return env_val
-        secret_val = self._fetch_secret(secret_key)
-        if secret_val is not None and str(secret_val).strip():
-            return str(secret_val)
         if plain_path:
             raw = _load_assembly_plain(plain_path)
             if raw is not None:
@@ -912,9 +804,8 @@ class Settings(PLATFORM_CONFIG):
             if val:
                 self.PGUSER = val
         if not self._env_present("POSTGRES_PASSWORD"):
-            pg_password = self._resolve_secret_str(
+            pg_password = self._resolve_sensitive_str(
                 "POSTGRES_PASSWORD",
-                "infra.postgres.password",
                 plain_path="infra.postgres.password",
             )
             if pg_password is not None:
@@ -937,9 +828,8 @@ class Settings(PLATFORM_CONFIG):
             if val is not None:
                 self.REDIS_PORT = val
         if not self._env_present("REDIS_PASSWORD"):
-            self.REDIS_PASSWORD = self._resolve_secret_str(
+            self.REDIS_PASSWORD = self._resolve_sensitive_str(
                 "REDIS_PASSWORD",
-                "infra.redis.password",
                 plain_path="infra.redis.password",
             )
 
@@ -1348,7 +1238,8 @@ class Settings(PLATFORM_CONFIG):
             if val is not None:
                 self.EMAIL_USE_TLS = val
 
-        # 12. Populate secrets from provider if not set in env.
+        # 12. Secret-backed service credentials are resolved by await get_secret(...).
+        # Settings construction stays synchronous and only reflects env/plain config.
         env_openai = os.getenv("OPENAI_API_KEY")
         env_anthropic = os.getenv("ANTHROPIC_API_KEY")
         env_gemini = os.getenv("GEMINI_API_KEY")
@@ -1356,43 +1247,20 @@ class Settings(PLATFORM_CONFIG):
         env_git_token = os.getenv("GIT_HTTP_TOKEN")
         env_git_user = os.getenv("GIT_HTTP_USER")
         env_openrouter = os.getenv("OPENROUTER_API_KEY")
-        git_http_user_source = "env" if env_git_user else "secrets"
+        git_http_user_source = "env" if env_git_user else "default"
 
-        if not self.OPENAI_API_KEY:
-            self.OPENAI_API_KEY = self._fetch_secret("services.openai.api_key") or self._fetch_secret("OPENAI_API_KEY")
-        if not self.ANTHROPIC_API_KEY:
-            self.ANTHROPIC_API_KEY = self._fetch_secret("services.anthropic.api_key") or self._fetch_secret("ANTHROPIC_API_KEY")
-        if not self.GOOGLE_API_KEY:
-            self.GOOGLE_API_KEY = (
-                self._fetch_secret("services.google.api_key")
-                or self._fetch_secret("GOOGLE_API_KEY")
-                or self._fetch_secret("GEMINI_API_KEY")
-            )
-        if not self.BRAVE_API_KEY:
-            self.BRAVE_API_KEY = self._fetch_secret("services.brave.api_key") or self._fetch_secret("BRAVE_API_KEY")
-        if not self.GIT_HTTP_TOKEN:
-            self.GIT_HTTP_TOKEN = self._fetch_secret("services.git.http_token") or self._fetch_secret("GIT_HTTP_TOKEN")
         if not self.GIT_HTTP_USER and self.GIT_HTTP_TOKEN:
-            fetched_git_http_user = self._fetch_secret("services.git.http_user")
-            if fetched_git_http_user:
-                self.GIT_HTTP_USER = fetched_git_http_user
-            else:
-                self.GIT_HTTP_USER = "x-access-token"
-                git_http_user_source = "default"
-        if not self.OPENROUTER_API_KEY:
-            self.OPENROUTER_API_KEY = self._fetch_secret("services.openrouter.api_key") or self._fetch_secret("OPENROUTER_API_KEY")
+            self.GIT_HTTP_USER = "x-access-token"
         if not self.OPENROUTER_BASE_URL:
             self.OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
-        if not self.CLAUDE_CODE_KEY:
-            self.CLAUDE_CODE_KEY = self._fetch_secret("services.anthropic.claude_code_key") or self._fetch_secret("CLAUDE_CODE_KEY")
 
-        _log_secret_status("services.openai.api_key", self.OPENAI_API_KEY, "env" if env_openai else "secrets")
-        _log_secret_status("services.anthropic.api_key", self.ANTHROPIC_API_KEY, "env" if env_anthropic else "secrets")
-        _log_secret_status("services.google.api_key", self.GOOGLE_API_KEY, "env" if env_gemini else "secrets")
-        _log_secret_status("services.brave.api_key", self.BRAVE_API_KEY, "env" if env_brave else "secrets")
-        _log_secret_status("services.git.http_token", self.GIT_HTTP_TOKEN, "env" if env_git_token else "secrets")
+        _log_secret_status("services.openai.api_key", self.OPENAI_API_KEY, "env" if env_openai else "settings")
+        _log_secret_status("services.anthropic.api_key", self.ANTHROPIC_API_KEY, "env" if env_anthropic else "settings")
+        _log_secret_status("services.google.api_key", self.GOOGLE_API_KEY, "env" if env_gemini else "settings")
+        _log_secret_status("services.brave.api_key", self.BRAVE_API_KEY, "env" if env_brave else "settings")
+        _log_secret_status("services.git.http_token", self.GIT_HTTP_TOKEN, "env" if env_git_token else "settings")
         _log_secret_status("services.git.http_user", self.GIT_HTTP_USER, git_http_user_source)
-        _log_secret_status("services.openrouter.api_key", self.OPENROUTER_API_KEY, "env" if env_openrouter else "secrets")
+        _log_secret_status("services.openrouter.api_key", self.OPENROUTER_API_KEY, "env" if env_openrouter else "settings")
 
         # 13. Build AUTH config (env > assembly.yaml > default).
         self.AUTH = AuthConfig(
@@ -1405,9 +1273,18 @@ class Settings(PLATFORM_CONFIG):
             ID_TOKEN_COOKIE_NAME=self._resolve_str("ID_TOKEN_COOKIE_NAME", "auth.id_token_cookie_name", "__Secure-LITC"),
             MASQUERADED_TOKEN_COOKIE_NAME=self._resolve_str("MASQUERADED_TOKEN_COOKIE_NAME", "auth.masqueraded_token_cookie_name", "__Secure-LMTC"),
             JWKS_CACHE_TTL_SECONDS=self._resolve_int("JWKS_CACHE_TTL_SECONDS", "auth.jwks_cache_ttl_seconds", 86400),
-            OIDC_SERVICE_USER_EMAIL=self._resolve_secret_str("OIDC_SERVICE_USER_EMAIL", "auth.oidc.admin_email"),
-            OIDC_SERVICE_ADMIN_USERNAME=self._resolve_secret_str("OIDC_SERVICE_ADMIN_USERNAME", "auth.oidc.admin_username"),
-            OIDC_SERVICE_ADMIN_PASSWORD=self._resolve_secret_str("OIDC_SERVICE_ADMIN_PASSWORD", "auth.oidc.admin_password"),
+            OIDC_SERVICE_USER_EMAIL=self._resolve_sensitive_str(
+                "OIDC_SERVICE_USER_EMAIL",
+                plain_path="auth.oidc.admin_email",
+            ),
+            OIDC_SERVICE_ADMIN_USERNAME=self._resolve_sensitive_str(
+                "OIDC_SERVICE_ADMIN_USERNAME",
+                plain_path="auth.oidc.admin_username",
+            ),
+            OIDC_SERVICE_ADMIN_PASSWORD=self._resolve_sensitive_str(
+                "OIDC_SERVICE_ADMIN_PASSWORD",
+                plain_path="auth.oidc.admin_password",
+            ),
             IDP=IDPConfig(
                 local=IDPLocalConfig(
                     IDP_DB_PATH=self._resolve_str("IDP_DB_PATH", f"{svc}.idp.idp_db_path"),
@@ -1427,30 +1304,6 @@ class Settings(PLATFORM_CONFIG):
         # RUNTIME_CONFIG inherits PLATFORM_CONFIG (BaseSettings) so env vars are
         # picked up automatically by Pydantic — no manual resolution needed here.
         self.RUNTIME_CONFIG = RUNTIME_CONFIG()
-
-    def secret(self, key: str, default: str | None = None) -> str | None:
-        normalized_key = _normalize_secret_lookup_key(key)
-        env_val = os.getenv(normalized_key)
-        if env_val:
-            return env_val
-        provider_key = _provider_secret_key(normalized_key)
-        try:
-            value = get_secrets_manager(self).get_secret(provider_key)
-        except Exception:
-            value = None
-        return value or default
-
-    async def secret_async(self, key: str, default: str | None = None) -> str | None:
-        normalized_key = _normalize_secret_lookup_key(key)
-        env_val = os.getenv(normalized_key)
-        if env_val:
-            return env_val
-        provider_key = _provider_secret_key(normalized_key)
-        try:
-            value = await get_secrets_manager(self).get_secret_async(provider_key)
-        except Exception:
-            value = None
-        return value or default
 
     def plain(self, key: str, default: Any = None) -> Any:
         path, dotted_path = _parse_plain_key(key)

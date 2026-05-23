@@ -38,7 +38,7 @@ class _CaptureLogger(AgentLogger):
 
 
 class _NoopSecretsManager:
-    def get_secret(self, key: str):
+    async def get_secret(self, key: str):
         return None
 
 

@@ -16,7 +16,6 @@ from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.infra.git.auth import (
     build_git_env as _build_git_env,
     normalize_git_remote_url,
-    ssh_url_to_https_url as _https_url_for_ssh,
 )
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
 from kdcube_ai_app.storage.observed_file_locks import (
@@ -456,33 +455,6 @@ def _git_depth() -> Optional[int]:
         return None
 
 
-def _run_git(args: list[str], *, logger: Optional[AgentLogger] = None, env: Optional[Dict[str, str]] = None) -> None:
-    log = logger or AgentLogger("git.bundle")
-    try:
-        proc = subprocess.run(
-            args,
-            check=True,
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=_git_command_timeout(),
-        )
-        if proc.stdout:
-            log.log(proc.stdout.strip(), level="INFO")
-        if proc.stderr:
-            log.log(proc.stderr.strip(), level="WARNING")
-    except subprocess.TimeoutExpired as e:
-        log.log(
-            f"[git.bundle] command timed out after {_git_command_timeout()}s: {' '.join(args)}",
-            level="ERROR",
-        )
-        raise TimeoutError(str(e)) from e
-    except subprocess.CalledProcessError as e:
-        msg = (e.stderr or e.stdout or str(e)).strip()
-        log.log(f"[git.bundle] command failed: {' '.join(args)} :: {msg}", level="ERROR")
-        raise
-
-
 async def _run_git_async(
     args: list[str],
     *,
@@ -551,22 +523,6 @@ async def _run_git_capture_async(
     return subprocess.CompletedProcess(args, proc.returncode or 0, stdout=stdout, stderr=stderr)
 
 
-def _current_branch_name(repo_root: pathlib.Path, *, env: Optional[Dict[str, str]] = None) -> Optional[str]:
-    try:
-        proc = subprocess.run(
-            ["git", "-C", str(repo_root), "symbolic-ref", "--quiet", "--short", "HEAD"],
-            check=True,
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=_git_command_timeout(),
-        )
-    except subprocess.CalledProcessError:
-        return None
-    branch = (proc.stdout or "").strip()
-    return branch or None
-
-
 async def _current_branch_name_async(repo_root: pathlib.Path, *, env: Optional[Dict[str, str]] = None) -> Optional[str]:
     try:
         proc = await _run_git_capture_async(
@@ -578,150 +534,6 @@ async def _current_branch_name_async(repo_root: pathlib.Path, *, env: Optional[D
         return None
     branch = (proc.stdout or "").strip()
     return branch or None
-
-
-def ensure_git_bundle(
-    *,
-    bundle_id: Optional[str],
-    git_url: str,
-    git_ref: Optional[str] = None,
-    git_subdir: Optional[str] = None,
-    bundles_root: Optional[pathlib.Path] = None,
-    logger: Optional[AgentLogger] = None,
-    atomic: bool = False,
-) -> GitBundlePaths:
-    """
-    Ensure a git bundle is present locally.
-    Clones the repo if missing, otherwise fetches + checks out git_ref.
-    """
-    log = logger or AgentLogger("git.bundle")
-    bundle_id = (bundle_id or "").strip() or _repo_name_from_url(git_url)
-    normalized_git_url = normalize_git_remote_url(git_url)
-    if normalized_git_url != git_url:
-        log.log(f"[git.bundle] using HTTPS for {git_url}", level="INFO")
-        git_url = normalized_git_url
-    root = bundles_root or resolve_managed_bundles_root()
-    fail_key = _fail_key(git_url=git_url, bundle_id=bundle_id, git_ref=git_ref)
-    _check_fail_cooldown(fail_key)
-    force_pull = get_settings().PLATFORM.APPLICATIONS.GIT.BUNDLE_GIT_ALWAYS_PULL
-    with _redis_bundle_lock(bundle_id=bundle_id, git_ref=git_ref):
-        with _bundle_lock(bundle_id=bundle_id, git_ref=git_ref, bundles_root=root):
-            try:
-                paths = compute_git_bundle_paths(
-                    bundle_id=bundle_id,
-                    git_url=git_url,
-                    git_ref=git_ref,
-                    git_subdir=git_subdir,
-                    bundles_root=root,
-                )
-                repo_root = paths.repo_root
-                repo_root.parent.mkdir(parents=True, exist_ok=True)
-                env = _build_git_env()
-                depth = _git_depth()
-
-                git_dir = repo_root / ".git"
-                if git_dir.exists() and not force_pull:
-                    # Repo already present; skip fetch/checkout unless forced.
-                    if not paths.bundle_root.exists():
-                        raise FileNotFoundError(f"Bundle subdir not found: {paths.bundle_root}")
-                    _clear_fail(fail_key)
-                    return paths
-                if not git_dir.exists():
-                    if atomic:
-                        tmp_root = repo_root.parent / _atomic_dir_name(repo_root.name)
-                        log.log(f"[git.bundle] cloning {git_url} -> {tmp_root}", level="INFO")
-                        clone_args = ["git", "clone"]
-                        if depth:
-                            clone_args += ["--depth", str(depth)]
-                        clone_args += [git_url, str(tmp_root)]
-                        _run_git(clone_args, logger=log, env=env)
-                        try:
-                            tmp_root.rename(repo_root)
-                        except Exception:
-                            # Fallback: if rename fails, keep tmp and point paths to it
-                            repo_root = tmp_root
-                            paths = compute_git_bundle_paths(
-                                bundle_id=repo_root.name,
-                                git_url=git_url,
-                                git_ref=git_ref,
-                                git_subdir=git_subdir,
-                                bundles_root=repo_root.parent,
-                            )
-                    else:
-                        log.log(f"[git.bundle] cloning {git_url} -> {repo_root}", level="INFO")
-                        clone_args = ["git", "clone"]
-                        if depth:
-                            clone_args += ["--depth", str(depth)]
-                        clone_args += [git_url, str(repo_root)]
-                        _run_git(clone_args, logger=log, env=env)
-                else:
-                    try:
-                        # Verify remote URL matches (and fix if needed)
-                        proc = subprocess.run(
-                            ["git", "-C", str(repo_root), "config", "--get", "remote.origin.url"],
-                            check=True, capture_output=True, text=True,
-                            timeout=_git_command_timeout(),
-                        )
-                        remote_url = (proc.stdout or "").strip()
-                        if remote_url and remote_url != git_url:
-                            log.log(
-                                f"[git.bundle] remote mismatch for {repo_root}: {remote_url} != {git_url}",
-                                level="WARNING",
-                            )
-                            _run_git(
-                                ["git", "-C", str(repo_root), "remote", "set-url", "origin", git_url],
-                                logger=log,
-                                env=env,
-                            )
-                    except Exception:
-                        pass
-                    log.log(f"[git.bundle] fetching updates in {repo_root}", level="INFO")
-                    fetch_args = ["git", "-C", str(repo_root), "fetch", "--all", "--tags", "--prune", "--force"]
-                    if depth:
-                        fetch_args += ["--depth", str(depth)]
-                    _run_git(fetch_args, logger=log, env=env)
-
-                if git_ref:
-                    log.log(f"[git.bundle] checkout {git_ref}", level="INFO")
-                    try:
-                        _run_git(["git", "-C", str(repo_root), "checkout", "--force", git_ref], logger=log, env=env)
-                    except Exception:
-                        if depth:
-                            try:
-                                _run_git(["git", "-C", str(repo_root), "fetch", "--unshallow"], logger=log, env=env)
-                                _run_git(["git", "-C", str(repo_root), "checkout", "--force", git_ref], logger=log, env=env)
-                            except Exception:
-                                raise
-                        else:
-                            raise
-                    branch_name = _current_branch_name(repo_root, env=env)
-                    if branch_name:
-                        _run_git(
-                            ["git", "-C", str(repo_root), "reset", "--hard", f"origin/{branch_name}"],
-                            logger=log,
-                            env=env,
-                        )
-
-                # Log current commit (best-effort)
-                try:
-                    proc = subprocess.run(
-                        ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
-                        check=True, capture_output=True, text=True, env=env, timeout=_git_command_timeout(),
-                    )
-                    commit = (proc.stdout or "").strip()
-                    if commit:
-                        log.log(f"[git.bundle] HEAD={commit}", level="INFO")
-                except Exception:
-                    pass
-
-                if not paths.bundle_root.exists():
-                    raise FileNotFoundError(f"Bundle subdir not found: {paths.bundle_root}")
-
-                _clear_fail(fail_key)
-                return paths
-            except Exception as e:
-                _record_fail(fail_key, e)
-                raise
 
 
 def cleanup_old_git_bundles(
@@ -811,7 +623,7 @@ def cleanup_old_git_bundles(
     return removed
 
 
-async def ensure_git_bundle_async(
+async def ensure_git_bundle(
     *,
     bundle_id: Optional[str],
     git_url: str,
@@ -830,7 +642,7 @@ async def ensure_git_bundle_async(
     """
     log = logger or AgentLogger("git.bundle")
     bundle_id = (bundle_id or "").strip() or _repo_name_from_url(git_url)
-    normalized_git_url = normalize_git_remote_url(git_url)
+    normalized_git_url = await normalize_git_remote_url(git_url)
     if normalized_git_url != git_url:
         log.log(f"[git.bundle] using HTTPS for {git_url}", level="INFO")
         git_url = normalized_git_url
@@ -850,7 +662,7 @@ async def ensure_git_bundle_async(
                 )
                 repo_root = paths.repo_root
                 repo_root.parent.mkdir(parents=True, exist_ok=True)
-                env = _build_git_env()
+                env = await _build_git_env()
                 depth = _git_depth()
 
                 git_dir = repo_root / ".git"

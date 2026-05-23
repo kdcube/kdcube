@@ -4,22 +4,28 @@ title: "How To Test A Bundle"
 summary: "Testing guide for bundle authors and QA: local syntax/suite/pytest validation, runtime reload validation, widget and API checks, scheduled-job verification, and failure diagnosis in the local runtime."
 tags: ["sdk", "bundle", "testing", "pytest", "widget", "runtime", "validation"]
 keywords: ["bundle testing workflow", "shared bundle suite", "local bundle tests", "widget and api validation", "shared sdk widget source validation", "runtime reload verification", "scheduled job checks", "bundle failure diagnosis", "manual and automated test loop", "local qa for bundles", "integration qa for bundles"]
-updated_at: 2026-05-16
+updated_at: 2026-05-23
 see_also:
   - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
+  - ks:docs/sdk/bundle/build/how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md
   - ks:docs/sdk/bundle/build/how-to-release-bundle-content-README.md
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
+  - ks:docs/sdk/bundle/bundle-entrypoint-classes-README.md
+  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
   - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
   - ks:docs/sdk/bundle/bundle-widget-integration-README.md
   - ks:docs/sdk/integrations/telegram/telegram-README.md
   - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
   - ks:docs/sdk/integrations/browser/browser-tools-README.md
   - ks:docs/service/cicd/ngrok-README.md
+  - ks:docs/sdk/tools/custom-tools-README.md
+  - ks:docs/sdk/tools/tool-subsystem-README.md
   - ks:docs/sdk/bundle/bundle-delivery-and-update-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
+  - ks:docs/sdk/bundle/build/design/bundle-loader-import-isolation-README.md
 ---
 # How To Test A KDCube Bundle
 
@@ -36,6 +42,23 @@ Tier 1 rule:
 
 The goal is not “run something once”.
 The goal is to prove that the bundle works in the supported KDCube runtime contract.
+
+For the command lifecycle behind runtime tests, use
+[how-to-configure-and-run-bundle-README.md#canonical-cli-flow-schemas](how-to-configure-and-run-bundle-README.md#canonical-cli-flow-schemas).
+The testing loop normally uses `kdcube bundle reload <bundle_id>` after bundle
+source/config changes and `kdcube refresh ... --build` only after platform
+source/image changes.
+
+Critical Python import rule:
+
+- bundle-local code must use package-relative imports such as
+  `from .services.storage import ...`
+- do not import bundle-local folders as top-level packages such as `services`,
+  `apps`, `tools`, or `resources`
+- this includes bundle-local tools referenced from `TOOLS_SPECS`; use
+  `ref: "tools/name.py"` for local tools and `module` only for installed
+  SDK/external modules
+- see [bundle-runtime-README.md#critical-bundle-local-import-rule](../bundle-runtime-README.md#critical-bundle-local-import-rule)
 
 Critical widget/browser test:
 
@@ -122,6 +145,9 @@ Runtime-shape rule:
 
 - if the runtime itself may be misconfigured, fix `assembly.yaml`, `bundles.yaml`, and `bundles.secrets.yaml` first
 - use [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md) for the exact local runtime contract before debugging widget/API behavior
+- use [how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md](how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md)
+  when an agent must configure the runtime, patch bundle props/secrets, start
+  ngrok, and prepare Telegram or Gmail values before live QA
 - if an external provider must call the local runtime, use
   [Serving Local KDCube With Ngrok](../../../service/cicd/ngrok-README.md)
   before interpreting webhook, OAuth callback, or remote-callback failures
@@ -180,7 +206,8 @@ For a brand-new bundle skeleton, prove the contract before adding product logic:
 
 - the bundle has the skeleton files from
   [how-to-write-bundle-README.md#1b1-new-bundle-skeleton-checklist](how-to-write-bundle-README.md#1b1-new-bundle-skeleton-checklist)
-- `entrypoint.py` parses/imports in the project venv
+- `entrypoint.py` parses and loads through the KDCube loader or shared bundle
+  suite in the project venv
 - `config/bundles.template.yaml` makes clear whether `path:` is a seed/source
   descriptor host path or a staged runtime/container path
 - seed/source descriptors used by local CLI setup or IntelliJ/proc host runs
@@ -193,6 +220,12 @@ For a brand-new bundle skeleton, prove the contract before adding product logic:
 
 Do this before building UI, tools, or scheduler logic. A clean skeleton makes
 later failures narrower.
+
+Do not validate bundle-local imports only with
+`sys.path.insert(bundle_root); import entrypoint`. That direct top-level import
+can mask the KDCube loader contract and can also create the same process-global
+package collisions the runtime rule prevents. Use the shared bundle suite or a
+real KDCube loader/runtime check for import validation.
 
 ## 1B.1 Reusable SDK Block Checks
 
@@ -223,6 +256,8 @@ For a React-backed bundle, prove the agent surface before manual testing:
   `kdcube.copilot@2026-04-03-19-05`
 - `orchestrator/workflow.py` calls `BaseWorkflow.build_react(...)`
 - `tools_descriptor.py` exposes only the tool aliases the bundle actually needs
+- bundle-local tool entries in `tools_descriptor.py` use `ref` and the tool
+  modules import same-bundle helpers with package-relative imports
 - `skills_descriptor.py` points to bundle-local skills
 - `skills_descriptor.py` / `job_skills_descriptor.py` visibility filters use
   the real React decision ids `solver.react.v2.decision.v2.strong` and
@@ -303,6 +338,40 @@ Good React smoke tests:
 
 Do not add a gate-agent test unless the bundle intentionally has a gate.
 For simple React bundles, a deterministic prepare step plus solver is enough.
+
+## 1C.1 Unit-Testing BaseEntrypoint-Family Bundles
+
+Many bundles inherit a concrete `BaseEntrypoint` family class only to get
+common runtime behavior such as configuration refresh, widget builds,
+communicator binding, storage helpers, economics, memory, and model-role
+defaults. That is correct for runtime, but it can make narrow unit tests
+unnecessarily heavy. See
+[Bundle Entrypoint Classes](../bundle-entrypoint-classes-README.md).
+
+Use the real constructor when the test is validating runtime initialization.
+For pure helper, payload-shape, route-body, or policy tests that do not need
+the full chatbot base, instantiate with `__new__` and populate only the fields
+the method under test reads:
+
+```python
+entrypoint = MyEntrypoint.__new__(MyEntrypoint)
+entrypoint.bundle_props = {}
+entrypoint.config = SimpleNamespace(bundle_props={})
+entrypoint.pg_pool = None
+entrypoint.redis = None
+entrypoint.comm_context = None
+entrypoint.logger = logging.getLogger("test.bundle")
+```
+
+Then add bundle-specific fields explicitly, for example a storage root,
+service instance, or feature flag. Do not satisfy unit tests by weakening the
+entrypoint constructor or removing the selected `BaseEntrypoint` family base
+when the bundle needs source-folder UI/widget builds, economics, memory, or
+other inherited SDK behavior.
+
+This pattern is for local unit scope only. It does not prove that chat-proc can
+load the bundle. The loadability check is the shared bundle suite plus a real
+`kdcube bundle reload <bundle_id>` / route probe in a running runtime.
 
 ## 1D. Runtime Log And Timeline Checks
 
@@ -405,30 +474,17 @@ Use these as the first actionable checks for each bundle surface.
 $PY -m py_compile /abs/path/to/bundle/entrypoint.py
 ```
 
-For bundles that may be delivered from git or from a repo parent directory,
-also prove both loader import shapes:
+`py_compile` is only a syntax check. It does not prove the KDCube bundle-loader
+contract.
 
-```bash
-BUNDLE_PARENT=/abs/path/to/repo/src
-BUNDLE_PACKAGE=my_bundle
-BUNDLE_DIR=$BUNDLE_PARENT/$BUNDLE_PACKAGE
-```
-
-Set `BUNDLE_PACKAGE` to the Python import path used in the descriptor
-`module`, without `.entrypoint`.
-
-```bash
-PYTHONPATH=app/ai-app/src/kdcube-ai-app:$BUNDLE_PARENT \
-  $PY -c "import importlib; importlib.import_module('${BUNDLE_PACKAGE}.entrypoint')"
-```
-
-```bash
-PYTHONPATH=app/ai-app/src/kdcube-ai-app:$BUNDLE_DIR \
-  $PY -c "import importlib; importlib.import_module('entrypoint')"
-```
-
-If the bundle has nested tool modules, import those too. This catches
-bundle-local imports that only work with one descriptor shape.
+Use the shared bundle suite for import validation. The suite loads the bundle
+through the loader contract and lints bundle-local Python imports. Top-level
+imports of Python roots owned by the bundle directory, such as
+`from services...`, `from apps...`, or `import tools`, fail as authoring
+errors. Use package-relative imports instead. For bundle-local tool modules,
+this means `TOOLS_SPECS` should use `ref: "tools/name.py"` and the tool file
+should import same-bundle helpers with forms such as
+`from ..services.storage import Store`.
 
 ### Shared bundle contract
 
@@ -437,6 +493,19 @@ PYTHONPATH=app/ai-app/src/kdcube-ai-app \
 $PY -m kdcube_ai_app.apps.chat.sdk.tests.bundle.run_bundle_suite \
   --bundle-path /abs/path/to/bundle
 ```
+
+When working specifically on bundle import isolation, this narrower command
+runs only the import-contract slice:
+
+```bash
+PYTHONPATH=app/ai-app/src/kdcube-ai-app \
+$PY -m kdcube_ai_app.apps.chat.sdk.tests.bundle.run_bundle_suite \
+  --bundle-path /abs/path/to/bundle \
+  --shared-only \
+  -q -k import_contract
+```
+
+This is not a replacement for the full shared suite before release.
 
 ### Bundle-local tests
 
@@ -521,6 +590,7 @@ PYTHONPATH=app/ai-app/src/kdcube-ai-app $PY -m pytest -q /abs/path/to/bundle/tes
 Reference map:
 - [bundle-platform-integration-README.md](../bundle-platform-integration-README.md)
 - [bundle-widget-integration-README.md](../bundle-widget-integration-README.md)
+- [bundle-client-communication-README.md](../bundle-client-communication-README.md)
 - [bundle-transports-README.md](../bundle-transports-README.md)
 - [bundle-scheduled-jobs-README.md](../bundle-scheduled-jobs-README.md)
 
@@ -620,6 +690,16 @@ What to validate:
 - request-bound `self.comm` / `self.comm_context` are usable
 - operation body parsing works with the expected payload shape
 - widget-triggered operations are treated as request-bound entrypoint calls, not as detached background jobs
+- when an operation emits live non-chat events, the browser has an open
+  `/sse/stream` or Socket.IO connection, passes `KDC-Stream-ID` on the REST
+  operation, and receives `chat_service` envelopes from
+  `comm.service_event(...)`
+- verify both direct peer delivery (`broadcast=False`) and session fanout
+  (`broadcast=True`) when the bundle depends on both modes
+
+Reference:
+
+- [bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream](../bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream)
 
 ### C. Cron / scheduled-job path
 
@@ -643,6 +723,39 @@ If the bundle or its tools may execute in isolated runtime, test that path expli
 What to validate:
 
 - code does not depend on arbitrary host-process globals
+
+### E. Bundle Smoke Probes
+
+After local tests and `kdcube bundle reload <bundle_id>`, run a small route-level
+smoke table. The goal is to prove that the staged descriptor, proc loader,
+manifest discovery, operation routing, and static widget serving agree.
+
+Use the active runtime values:
+
+```bash
+BASE="${BASE:-http://localhost:5173}"
+TP="$TENANT/$PROJECT"
+BID="$BUNDLE_ID"
+```
+
+| Surface | Probe | Expected without auth | What it proves |
+| --- | --- | --- | --- |
+| Authenticated operation | `curl -s -o /dev/null -w "%{http_code}\n" "$BASE/api/integrations/bundles/$TP/$BID/operations/<alias>"` | `401` or `403` | Route exists and auth boundary runs before handler work. |
+| Public operation | `curl -s "$BASE/api/integrations/bundles/$TP/$BID/public/<alias>"` | Product-specific `401`/`403` body, for example missing Telegram `initData` | Public route is registered and bundle-owned auth code is executing. |
+| Static widget | `curl -s -o /dev/null -w "%{http_code}\n" "$BASE/api/integrations/bundles/$TP/$BID/widgets/<widget_alias>"` | `401`/`403` for authenticated widgets, or `200` when the route is public in the current session | Widget alias is discovered and route wiring exists. |
+| Public static widget | `curl -s -o /dev/null -w "%{http_code}\n" "$BASE/api/integrations/bundles/$TP/$BID/public/widgets/<widget_alias>"` | `200` when the widget is intended for public/Mini App launch | Built static artifacts are present and public serving is active. |
+| Widget asset | `curl -s -o /dev/null -w "%{http_code}\n" "$BASE/api/integrations/bundles/$TP/$BID/public/widgets/<widget_alias>/assets/<file>"` | `200` for a real built asset | Subpath/asset serving works, not only `index.html`. |
+
+Interpretation:
+
+- a bundle-load error should be treated as the root cause before alias-level
+  widget or operation errors
+- `404` for a buildable widget usually means the alias, descriptor static
+  config, or built artifacts are missing
+- `500` / `503` means inspect proc logs before editing frontend code
+- for Telegram or OAuth public routes, a missing-provider-token response can
+  still be a successful smoke result if it comes from the bundle-owned auth
+  code
 
 ## 4. Git-Backed Bundle Checks
 
@@ -682,8 +795,14 @@ If the bundle is configured as singleton, test that explicitly too.
 What to validate:
 
 - the bundle reuses the cached instance as intended
+- the decorated singleton entrypoint is a `BaseEntrypoint` family class or an
+  equivalent entrypoint implementation, not a `BaseWorkflow` subclass
 - request-bound behavior still reads the current context correctly
+- request-bound identity includes the expected authenticated email when the
+  session has one
 - request state is not accidentally retained across calls
+- scoped nested execution, such as task or Telegram execution, resets the
+  request context after the scoped run
 
 The question to answer is:
 
@@ -1057,6 +1176,9 @@ Important:
 
 - if a bundle import fails, the bundle may appear partially but with missing APIs/widgets
 - if manifest discovery looks wrong, check import errors first
+- bundle-local pytest helpers may load `entrypoint.py` differently than
+  chat-proc; passing unit tests does not prove the proc loader, manifest cache,
+  widget build path, or staged descriptor path is healthy
 
 For POST operations, widget clients should send:
 
@@ -1119,7 +1241,7 @@ If the bundle updates deployment-scoped config, verify:
 
 ### Artifact storage
 
-If the bundle uses `AIBundleStorage`, verify:
+If the bundle uses `BundleArtifactStorage`, verify:
 
 - the correct artifact path is written
 - local working state is not incorrectly stored there
@@ -1131,14 +1253,30 @@ If you are testing a locally mounted bundle, verify the actual reload path.
 Typical loop:
 
 ```bash
-kdcube init --descriptors-location <dir> --workdir <base-workdir>
-kdcube start --workdir <runtime-workdir>
+kdcube init  --tenant <t> --project <p> --descriptors-location <dir>
+kdcube start --tenant <t> --project <p>
 ```
 
 Then after code/descriptor changes:
 
 ```bash
-kdcube reload <bundle_id> --workdir <runtime-workdir>
+kdcube bundle reload <bundle_id> --tenant <t> --project <p>
+```
+
+After platform-source changes that need rebuilt images:
+
+```bash
+kdcube refresh --tenant <t> --project <p> --build
+kdcube refresh --tenant <t> --project <p> --path /path/to/kdcube-ai-app --build
+```
+
+To test the same staged runtime against another platform source without
+restaging descriptors, add one selector:
+
+```bash
+kdcube refresh --tenant <t> --project <p> --latest --build
+kdcube refresh --tenant <t> --project <p> --upstream --build
+kdcube refresh --tenant <t> --project <p> --release <ref> --build
 ```
 
 This is important because a bundle may pass tests but still fail during descriptor-driven runtime resolution.

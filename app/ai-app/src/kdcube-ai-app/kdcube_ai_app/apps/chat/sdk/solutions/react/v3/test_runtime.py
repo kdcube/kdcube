@@ -741,6 +741,36 @@ async def test_on_timeline_event_followup_awards_iteration_credit_for_current_tu
 
 
 @pytest.mark.asyncio
+async def test_on_timeline_event_accepts_current_server_owner_with_stale_client_target():
+    solver = _solver_stub()
+    solver._reactive_iteration_credit_cap = 4
+    solver.ctx_browser = SimpleNamespace(
+        runtime_ctx=SimpleNamespace(
+            reactive_event_iteration_credit_enabled=True,
+            reactive_event_iteration_credit_per_event=1,
+        ),
+    )
+
+    handled = await solver.on_timeline_event(
+        type="followup",
+        event=SimpleNamespace(
+            sequence=16,
+            text="the client target was stale",
+            message_id="evt_16",
+            target_turn_id="turn-old",
+            active_turn_id_at_ingress="turn-1",
+            owner_turn_id="turn-1",
+            payload={},
+        ),
+        blocks=[{"type": "user.followup"}],
+    )
+
+    assert handled is True
+    assert solver._reactive_iteration_credit_total == 1
+    assert "evt_16" in solver._credited_external_event_ids
+
+
+@pytest.mark.asyncio
 async def test_decision_node_uses_live_reactive_credit_before_max_iteration_exit():
     solver = _solver_stub()
     solver._reactive_iteration_credit_total = 1

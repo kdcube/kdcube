@@ -831,7 +831,7 @@ async def try_batch():
         systemName="gpt-4o-mini",
         provider=AIProvider(
             provider=AIProviderName.open_ai,
-            apiToken=get_service_key_fn(AIProviderName.open_ai),
+            apiToken=await get_service_key_fn(AIProviderName.open_ai),
         ),
     )
 
@@ -840,7 +840,7 @@ async def try_batch():
         systemName="claude-3-5-haiku-20241022",
         provider=AIProvider(
             provider=AIProviderName.anthropic,
-            apiToken=get_service_key_fn(AIProviderName.anthropic),
+            apiToken=await get_service_key_fn(AIProviderName.anthropic),
         ),
     )
 
@@ -920,7 +920,7 @@ async def try_batch():
     # else:
     #     print("Skipping OpenAI test - no OPENAI_API_KEY found")
 
-    if get_service_key_fn(AIProviderName.anthropic):
+    if await get_service_key_fn(AIProviderName.anthropic):
         await process(model_record_anthropic, "Anthropic")
     else:
         print("Skipping Anthropic test - no ANTHROPIC_API_KEY found")
@@ -939,7 +939,7 @@ async def try_get_batch():
         systemName="gpt-4o-mini",
         provider=AIProvider(
             provider=provider,
-            apiToken=get_service_key_fn(AIProviderName.open_ai),
+            apiToken=await get_service_key_fn(AIProviderName.open_ai),
         ),
     )
 
@@ -948,7 +948,7 @@ async def try_get_batch():
         systemName="claude-3-5-haiku-20241022",
         provider=AIProvider(
             provider=provider,
-            apiToken=get_service_key_fn(AIProviderName.anthropic),
+            apiToken=await get_service_key_fn(AIProviderName.anthropic),
         ),
     )
     batch_id = openai_batch_id

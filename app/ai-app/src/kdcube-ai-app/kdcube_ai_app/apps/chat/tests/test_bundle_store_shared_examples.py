@@ -16,6 +16,7 @@ def test_ensure_example_bundle_shared_uses_versioned_path(monkeypatch, tmp_path)
 
     monkeypatch.setattr(bundle_store, "_shared_bundles_root", lambda: shared)
     monkeypatch.setattr(bundle_store, "_is_running_in_docker", lambda: True)
+    monkeypatch.setattr(bundle_store, "_shared_example_timestamp_suffix", lambda _now=None: "20260522024112003")
     monkeypatch.setenv("PLATFORM_REF", "2026.3.21.410")
 
     first = bundle_store._ensure_example_bundle_shared(src)
@@ -25,6 +26,8 @@ def test_ensure_example_bundle_shared_uses_versioned_path(monkeypatch, tmp_path)
     assert first != src
     assert first.parent == shared
     assert first.name.startswith(f"{src.name}__2026.3.21.410__")
+    assert first.name.endswith("__20260522024112003")
+    assert (first / ".kdcube-managed-bundle.json").exists()
     assert (first / "entrypoint.py").read_text(encoding="utf-8") == 'BUNDLE_ID = "v1"\n'
 
 
@@ -35,6 +38,7 @@ def test_ensure_example_bundle_shared_keeps_old_version_when_source_changes(monk
 
     monkeypatch.setattr(bundle_store, "_shared_bundles_root", lambda: shared)
     monkeypatch.setattr(bundle_store, "_is_running_in_docker", lambda: True)
+    monkeypatch.setattr(bundle_store, "_shared_example_timestamp_suffix", lambda _now=None: "20260522024112003")
     monkeypatch.setenv("PLATFORM_REF", "2026.3.21.410")
 
     first = bundle_store._ensure_example_bundle_shared(src)

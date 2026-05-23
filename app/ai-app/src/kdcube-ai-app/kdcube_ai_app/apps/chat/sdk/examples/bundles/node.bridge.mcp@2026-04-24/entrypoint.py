@@ -7,7 +7,7 @@ from langgraph.graph import END, START, StateGraph
 from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload
 from kdcube_ai_app.apps.chat.sdk.runtime.node import BundleNodeBackendBridge
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint import BaseEntrypoint
-from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow, api, bundle_id, mcp
+from kdcube_ai_app.infra.plugin.bundle_loader import bundle_entrypoint, api, bundle_id, mcp
 from kdcube_ai_app.infra.service_hub.inventory import BundleState, Config
 
 from . import node_mcp_tools
@@ -15,7 +15,7 @@ from . import node_mcp_tools
 BUNDLE_ID = "node.bridge.mcp"
 
 
-@agentic_workflow(name=BUNDLE_ID, version="1.0.0", priority=10)
+@bundle_entrypoint(name=BUNDLE_ID, version="1.0.0", priority=10)
 @bundle_id(id="node.bridge.mcp@2026-04-24")
 class NodeBridgeBundle(BaseEntrypoint):
     """Minimal runnable example for a bundle-local Node/TS backend sidecar."""

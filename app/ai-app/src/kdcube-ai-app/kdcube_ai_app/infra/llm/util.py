@@ -1,38 +1,28 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Elena Viter
 
-import os, time, random
+import time, random
 from kdcube_ai_app.infra.llm.llm_data_model import AIProviderName, Message
 from typing import List, Dict, Optional, Any
 from datetime import datetime, timedelta
 import asyncio
 import logging
 
-def get_service_key_fn(provider: AIProviderName) -> str:
+async def get_service_key_fn(provider: AIProviderName) -> str:
     """
     Get the API key for the given provider.
     """
-    try:
-        from kdcube_ai_app.apps.chat.sdk.config import get_service_secret
-        if provider == AIProviderName.open_ai:
-            return get_service_secret("openai.api_key") or ""
-        elif provider == AIProviderName.hugging_face:
-            return get_service_secret("huggingface.api_key") or ""
-        elif provider == AIProviderName.anthropic:
-            return get_service_secret("anthropic.api_key") or ""
-        elif provider == AIProviderName.open_router:
-            return get_service_secret("openrouter.api_key") or ""
-        return ""
-    except Exception:
-        if provider == AIProviderName.open_ai:
-            return os.environ.get("OPENAI_API_KEY")
-        elif provider == AIProviderName.hugging_face:
-            return os.environ.get("HUGGING_FACE_KEY")
-        elif provider == AIProviderName.anthropic:
-            return os.environ.get("ANTHROPIC_API_KEY")
-        elif provider == AIProviderName.open_router:
-            return os.environ.get("OPENROUTER_API_KEY")
-        return ""
+    from kdcube_ai_app.apps.chat.sdk.config import get_secret
+
+    if provider == AIProviderName.open_ai:
+        return await get_secret("services.openai.api_key", default="") or ""
+    if provider == AIProviderName.hugging_face:
+        return await get_secret("services.huggingface.api_key", default="") or ""
+    if provider == AIProviderName.anthropic:
+        return await get_secret("services.anthropic.api_key", default="") or ""
+    if provider == AIProviderName.open_router:
+        return await get_secret("services.openrouter.api_key", default="") or ""
+    return ""
 
 
 def calculate_cost(prefix_tokens: int, suffix_tokens: list[int], output_tokens: list[int],

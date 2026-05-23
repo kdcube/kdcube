@@ -8,6 +8,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - ks:docs/sdk/bundle/bundle-index-README.md
+  - ks:docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
   - ks:docs/service/streams/background-jobs-README.md
 ---
 # Bundle Scheduled Jobs
@@ -27,7 +28,7 @@ Important split:
 ## Quick start
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import cron
+from kdcube_ai_app.infra.plugin.bundle_loader import cron
 
 class MyBundle(BaseEntrypoint):
 
@@ -199,6 +200,11 @@ What is **not** available:
 - `self.comm` / communicator — there is no user session or SSE stream target
 - `self.comm_context` — not bound in headless mode
 
+For comm event recording, configure and send from the `@on_job` handler that
+executes the due work, or write cron-owned operational facts directly to durable
+bundle storage. See
+[Bundle Event Recording And Sinks](bundle-event-recording-and-sinks-README.md).
+
 ---
 
 ## `expr_config` resolution chain
@@ -304,7 +310,7 @@ descriptor still shows the original `cron_expression` default.
 
 | File | Purpose |
 |---|---|
-| `infra/plugin/agentic_loader.py` | `@cron` decorator, `CronJobSpec`, `BundleInterfaceManifest.scheduled_jobs`, manifest discovery |
+| `infra/plugin/bundle_loader.py` | `@cron` decorator, `CronJobSpec`, `BundleInterfaceManifest.scheduled_jobs`, manifest discovery |
 | `apps/chat/sdk/runtime/bundle_scheduler.py` | `BundleSchedulerManager`, `resolve_effective_cron`, per-job loops, Redis locking |
 | `apps/chat/processor.py` | Creates the manager; calls `reconcile` on startup and after every registry/props change |
 | `apps/chat/proc/rest/integrations/integrations.py` | Exposes `scheduled_jobs` in the bundle descriptor |
@@ -345,7 +351,7 @@ when the work should be claimed fairly across processors.
 
 ```python
 from kdcube_ai_app.infra.jobs.stream import RedisBackgroundJobStream
-from kdcube_ai_app.infra.plugin.agentic_loader import cron, on_job
+from kdcube_ai_app.infra.plugin.bundle_loader import cron, on_job
 
 class MyBundle(BaseEntrypoint):
     @cron(alias="due-scan", cron_expression="*/5 * * * *", span="system")

@@ -44,11 +44,42 @@ Current boundary:
 - a fully blocking tool that does not cooperate with cancellation can still delay final stop until its await boundary
 - idle arbitrary authored events that do not open React are still a future slice; current implementation here is specifically `followup` / `steer`
 
+Implemented flow:
+
+```text
+Client
+  sends followup/steer intent
+  optional target_turn_id = user's visible target
+        |
+        v
+Ingress
+  reads server conversation state
+  active_turn_id_at_ingress = server active turn
+  owner_turn_id = live React owner lease, when present
+  writes durable ConversationExternalEvent
+        |
+        +--> HTTP/Socket ack
+        |      status = followup_accepted / steer_accepted
+        |      event_id = durable event id
+        |      queued_turn_id = fallback task turn id
+        |      live_owner_detected = owner_turn_id == active_turn_id_at_ingress
+        |
+        v
+Live React owner
+  accepts only by owner_turn_id / active_turn_id_at_ingress
+  folds event into current turn
+  marks event consumed
+        |
+        +--> if owner closes before consume
+                proc claims unconsumed event
+                promotes task_payload once as a normal ready-queue turn
+```
+
 ## 1. Problem
 
 Today React owns the timeline correctly for the duration of the turn:
 
-- the bundle workflow creates `ReactSolverV2`
+- the bundle entrypoint creates `ReactSolverV2`
 - the solver creates `ContextBrowser`
 - `ContextBrowser.load_timeline()` materializes an in-memory `Timeline`
 - all further `contribute(...)` calls are local to that in-process owner
@@ -207,17 +238,21 @@ Canonical envelope shape:
   "conversation_id": "...",
   "target_turn_id": "turn_A" | None,
   "active_turn_id_at_ingress": "turn_B" | None,
+  "owner_turn_id": "turn_B" | None,
   "explicit": True | False,
   "source": "ingress.sse" | "ingress.socket" | "system" | "webhook",
   "text": "...",
-  "payload": {...}
+  "payload": {...},
+  "task_payload": {...} | None
 }
 ```
 
 Notes:
 
-- `target_turn_id` is the user’s intended target if they supplied one
-- `active_turn_id_at_ingress` is what ingress observed as currently active
+- `target_turn_id` is the user’s intended target if they supplied one; it is preserved as advisory metadata
+- `active_turn_id_at_ingress` is what ingress observed as currently active from server conversation state
+- `owner_turn_id` is the live owner lease turn id observed by ingress, when a React owner exists
+- `task_payload` is present when proc can promote the event into a normal fallback turn if no live owner consumes it
 - `text` is the user-visible message content when relevant
 - `payload` carries structured event fields
 
@@ -446,7 +481,8 @@ Meaning:
 
 - the event definitely belongs to this conversation
 - the provided `target_turn_id` is advisory history
-- the actual accepting owner is the current active turn if one exists
+- the actual accepting owner is decided by server state: `owner_turn_id` and `active_turn_id_at_ingress`
+- React hook filtering must not use `target_turn_id` as authority; it only uses `owner_turn_id` / `active_turn_id_at_ingress`, and remains permissive for legacy/system events that do not carry either field
 
 Examples:
 
@@ -457,6 +493,11 @@ Examples:
 2. Event targets turn A, but turn B is already active
    - turn B is the live owner
    - event is added to turn B with metadata saying it targeted turn A
+
+3. Event is accepted while busy, but the owner closes before it is folded
+   - the event remains in the durable source with its `task_payload`
+   - proc later claims and promotes it once into the normal ready queue
+   - the UI must wait for the later `chat_start`; the original ack was only admission
 
 3. Event arrives after turn A ended and no live owner exists
    - event remains pending in the shared event log

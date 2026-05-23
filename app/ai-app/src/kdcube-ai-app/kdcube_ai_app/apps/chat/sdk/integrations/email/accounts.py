@@ -19,23 +19,13 @@ import httpx
 try:
     from kdcube_ai_app.apps.chat.sdk.config import (
         delete_user_secret,
-        delete_user_secret_async,
         get_secret,
-        get_secret_async,
-        get_user_secret,
-        get_user_secret_async,
         set_user_secret,
-        set_user_secret_async,
     )
 except Exception:
     delete_user_secret = None  # type: ignore[assignment]
-    delete_user_secret_async = None  # type: ignore[assignment]
     get_secret = None  # type: ignore[assignment]
-    get_secret_async = None  # type: ignore[assignment]
-    get_user_secret = None  # type: ignore[assignment]
-    get_user_secret_async = None  # type: ignore[assignment]
     set_user_secret = None  # type: ignore[assignment]
-    set_user_secret_async = None  # type: ignore[assignment]
 
 
 DEFAULT_EMAIL_BUNDLE_ID = "task-and-memo-app@1-0"
@@ -241,16 +231,6 @@ def _google_error_payload(exc: ProviderHttpError, *, operation: str, account: Ma
     }
 
 
-def _secret_lookup(*keys: str) -> str:
-    if get_secret is None:
-        return ""
-    for key in keys:
-        value = get_secret(key)
-        if value:
-            return value
-    return ""
-
-
 def _entrypoint_bundle_id(entrypoint: Any, default: str = BUNDLE_ID) -> str:
     for candidate in (
         getattr(getattr(getattr(entrypoint, "config", None), "ai_bundle_spec", None), "id", ""),
@@ -264,19 +244,19 @@ def _entrypoint_bundle_id(entrypoint: Any, default: str = BUNDLE_ID) -> str:
 
 
 async def _secret_lookup_async(*keys: str) -> str:
-    if get_secret_async is None:
+    if get_secret is None:
         return ""
     for key in keys:
-        value = await get_secret_async(key)
+        value = await get_secret(key)
         if value:
             return value
     return ""
 
 
-def oauth_state_secret(entrypoint: Any) -> str:
+async def oauth_state_secret(entrypoint: Any) -> str:
     bundle_id = _entrypoint_bundle_id(entrypoint)
     return (
-        _secret_lookup(
+        await _secret_lookup_async(
             "b:integrations.email.oauth_state_secret",
             f"bundles.{bundle_id}.secrets.integrations.email.oauth_state_secret",
             "b:integrations.telegram.webhook_secret",
@@ -292,15 +272,7 @@ def google_client_id(entrypoint: Any) -> str:
     return str(entrypoint.bundle_prop("integrations.email.google.client_id", "") or "").strip()
 
 
-def google_client_secret(bundle_id: str = "") -> str:
-    bundle = str(bundle_id or BUNDLE_ID).strip() or BUNDLE_ID
-    return _secret_lookup(
-        "b:integrations.email.google.client_secret",
-        f"bundles.{bundle}.secrets.integrations.email.google.client_secret",
-    )
-
-
-async def google_client_secret_async(bundle_id: str = "") -> str:
+async def google_client_secret(bundle_id: str = "") -> str:
     bundle = str(bundle_id or BUNDLE_ID).strip() or BUNDLE_ID
     return await _secret_lookup_async(
         "b:integrations.email.google.client_secret",
@@ -523,24 +495,29 @@ class EmailAccountStore:
             self.delete_tokens(wanted)
         return deleted
 
+    async def delete_account_async(self, account_id: str) -> bool:
+        wanted = str(account_id or "").strip()
+        data = await self._read_accounts_doc_async()
+        rows = [item for item in data.get("accounts") or [] if isinstance(item, dict)]
+        kept = [item for item in rows if str(item.get("account_id") or "") != wanted]
+        deleted = len(kept) != len(rows)
+        data["accounts"] = kept
+        await self._write_accounts_doc_async(data)
+        if deleted:
+            await self.delete_tokens_async(wanted)
+        return deleted
+
     @staticmethod
     def token_secret_key(account_id: str) -> str:
         return f"email.accounts.{_safe_segment(account_id, fallback='account')}.tokens"
 
     def set_tokens(self, account_id: str, tokens: Mapping[str, Any]) -> None:
-        if set_user_secret is None:
-            raise RuntimeError("user-scoped secret storage is unavailable")
-        set_user_secret(
-            self.token_secret_key(account_id),
-            json.dumps(dict(tokens), sort_keys=True, ensure_ascii=True),
-            user_id=self.user_id,
-            bundle_id=self.bundle_id,
-        )
+        raise RuntimeError("Email token storage is async-only; use set_tokens_async().")
 
     async def set_tokens_async(self, account_id: str, tokens: Mapping[str, Any]) -> None:
-        if set_user_secret_async is None:
+        if set_user_secret is None:
             raise RuntimeError("async user-scoped secret storage is unavailable")
-        await set_user_secret_async(
+        await set_user_secret(
             self.token_secret_key(account_id),
             json.dumps(dict(tokens), sort_keys=True, ensure_ascii=True),
             user_id=self.user_id,
@@ -548,26 +525,13 @@ class EmailAccountStore:
         )
 
     def get_tokens(self, account_id: str) -> Dict[str, Any]:
-        if get_user_secret is None:
-            return {}
-        raw = get_user_secret(
-            self.token_secret_key(account_id),
-            user_id=self.user_id,
-            bundle_id=self.bundle_id,
-        )
-        if not raw:
-            return {}
-        try:
-            parsed = json.loads(raw)
-        except Exception:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
+        raise RuntimeError("Email token storage is async-only; use get_tokens_async().")
 
     async def get_tokens_async(self, account_id: str) -> Dict[str, Any]:
-        if get_user_secret_async is None:
+        if get_secret is None:
             return {}
-        raw = await get_user_secret_async(
-            self.token_secret_key(account_id),
+        raw = await get_secret(
+            f"u:{self.token_secret_key(account_id)}",
             user_id=self.user_id,
             bundle_id=self.bundle_id,
         )
@@ -580,18 +544,13 @@ class EmailAccountStore:
         return parsed if isinstance(parsed, dict) else {}
 
     def delete_tokens(self, account_id: str) -> None:
+        raise RuntimeError("Email token storage is async-only; use delete_tokens_async().")
+
+    async def delete_tokens_async(self, account_id: str) -> None:
         if delete_user_secret is None:
             return
         try:
-            delete_user_secret(self.token_secret_key(account_id), user_id=self.user_id, bundle_id=self.bundle_id)
-        except Exception:
-            pass
-
-    async def delete_tokens_async(self, account_id: str) -> None:
-        if delete_user_secret_async is None:
-            return
-        try:
-            await delete_user_secret_async(self.token_secret_key(account_id), user_id=self.user_id, bundle_id=self.bundle_id)
+            await delete_user_secret(self.token_secret_key(account_id), user_id=self.user_id, bundle_id=self.bundle_id)
         except Exception:
             pass
 
@@ -691,7 +650,7 @@ class EmailAccountStore:
         return payload
 
 
-def build_google_authorize_url(
+async def build_google_authorize_url(
     *,
     entrypoint: Any,
     store: EmailAccountStore,
@@ -703,7 +662,7 @@ def build_google_authorize_url(
     if not client_id:
         raise ValueError("integrations.email.google.client_id is not configured")
     state = store.create_oauth_state(
-        secret=oauth_state_secret(entrypoint),
+        secret=await oauth_state_secret(entrypoint),
         provider="google",
         source=source,
         return_hint=return_hint,
@@ -884,7 +843,7 @@ async def ensure_google_access_token(
         )
         return {"ok": False, "error": {"code": "email_account_not_connected", "message": "Email account has no stored OAuth token."}}
     client_id = google_client_id(entrypoint)
-    client_secret = await google_client_secret_async()
+    client_secret = await google_client_secret()
     expires_at = int(token.get("expires_at") or 0)
     if expires_at and expires_at < int(time.time()) + 120:
         try:

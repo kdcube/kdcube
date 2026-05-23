@@ -220,7 +220,7 @@ def _sanitize_docker_argv(argv: list[str]) -> list[str]:
     return sanitized
 
 
-def _prepare_split_executor_tree(path: pathlib.Path) -> None:
+def _prepare_split_writable_tree(path: pathlib.Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
     for item in [path, *path.rglob("*")]:
         try:
@@ -230,6 +230,10 @@ def _prepare_split_executor_tree(path: pathlib.Path) -> None:
                 os.chmod(item, 0o666)
         except Exception:
             pass
+
+
+async def _prepare_split_writable_tree_async(path: pathlib.Path) -> None:
+    await asyncio.to_thread(_prepare_split_writable_tree, path)
 
 
 def _build_split_bind_source_prepare_argv(*, image: str, host_paths: list[pathlib.Path]) -> list[str]:
@@ -742,11 +746,11 @@ async def _run_py_in_split_docker_prepared(
         host_supervisor_logdir,
     ]
     if _can_preflight_translated_host_path(host_workdir):
-        _prepare_split_executor_tree(host_workdir)
+        await _prepare_split_writable_tree_async(host_workdir)
     else:
         log.log(f"[docker.exec.split] host workdir is not locally visible; skipping chmod: {host_workdir}", level="INFO")
     if _can_preflight_translated_host_path(host_outdir):
-        _prepare_split_executor_tree(host_outdir)
+        await _prepare_split_writable_tree_async(host_outdir)
     else:
         log.log(f"[docker.exec.split] host outdir is not locally visible; skipping chmod: {host_outdir}", level="INFO")
     for label, path in (
@@ -755,7 +759,7 @@ async def _run_py_in_split_docker_prepared(
             ("supervisor logdir", host_supervisor_logdir),
     ):
         if _can_preflight_translated_host_path(path):
-            _prepare_split_executor_tree(path)
+            await _prepare_split_writable_tree_async(path)
         else:
             log.log(f"[docker.exec.split] host {label} is not locally visible; skipping chmod: {path}", level="INFO")
     if _is_running_in_docker() and not all(
@@ -1238,12 +1242,13 @@ async def run_py_in_docker(
         log.log("[docker.exec] using split container strategy", level="INFO")
         # In Docker-in-Docker deployments the translated host path can be a host-only
         # absolute path that is not visible from inside chat-proc. The proc-visible
-        # /exec-workspace mount is still the same backing tree, so normalize
-        # permissions there before the sibling executor container mounts it.
-        _prepare_split_executor_tree(workdir)
-        _prepare_split_executor_tree(outdir)
-        _prepare_split_executor_tree(artifact_outdir_for(outdir, create=False))
-        _prepare_split_executor_tree(outdir / "logs" / "executor")
+        # /exec-workspace mount is still the same backing tree, so create writable
+        # bind-source directories before the host Docker daemon sees them.
+        await _prepare_split_writable_tree_async(workdir)
+        await _prepare_split_writable_tree_async(outdir)
+        await _prepare_split_writable_tree_async(artifact_outdir_for(outdir, create=False))
+        await _prepare_split_writable_tree_async(outdir / "logs" / "executor")
+        await _prepare_split_writable_tree_async(outdir / "logs" / "supervisor")
         return await _run_py_in_split_docker_prepared(
             img=img,
             to=to,

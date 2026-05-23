@@ -4,12 +4,14 @@ title: "Bundle Developer Guide"
 summary: "High-level entrypoint for bundle authors: what a bundle is, how tenant/project environments work, which runtime surfaces exist, and which docs to follow for authoring, config, testing, and delivery."
 tags: ["sdk", "bundle", "development", "entrypoint", "workflow", "tools", "skills", "configuration", "background-jobs"]
 keywords: ["bundle authoring entrypoint", "what a bundle is", "tenant project environment", "runtime surfaces overview", "configuration model overview", "reference bundle path", "shared sdk widget components", "local authoring loop", "bundle documentation map", "on_job background jobs"]
-updated_at: 2026-05-16
+updated_at: 2026-05-22
 see_also:
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
+  - ks:docs/sdk/bundle/bundle-entrypoint-classes-README.md
+  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
   - ks:docs/sdk/bundle/bundle-transports-README.md
@@ -27,6 +29,8 @@ Use it together with:
 - [build/how-to-configure-and-run-bundle-README.md](build/how-to-configure-and-run-bundle-README.md)
 - [build/how-to-assemble-bundle-with-sdk-building-blocks-README.md](build/how-to-assemble-bundle-with-sdk-building-blocks-README.md)
 - [versatile-reference-bundle-README.md](versatile-reference-bundle-README.md)
+- [bundle-entrypoint-classes-README.md](bundle-entrypoint-classes-README.md)
+- [bundle-properties-and-secrets-lifecycle-README.md](bundle-properties-and-secrets-lifecycle-README.md)
 - [bundle-agent-integration-README.md](bundle-agent-integration-README.md)
 - [bundle-platform-integration-README.md](bundle-platform-integration-README.md)
 - [bundle-transports-README.md](bundle-transports-README.md)
@@ -44,15 +48,25 @@ Read in this order:
 1. this guide
 2. [build/how-to-assemble-bundle-with-sdk-building-blocks-README.md](build/how-to-assemble-bundle-with-sdk-building-blocks-README.md)
 3. the versatile reference doc
-4. `entrypoint.py`
-5. `orchestrator/workflow.py`
-6. `tools_descriptor.py`
-7. `skills_descriptor.py`
-8. [bundle-agent-integration-README.md](bundle-agent-integration-README.md) when the bundle has React tools/skills, MCP, or Claude Code subagents
+4. [bundle-entrypoint-classes-README.md](bundle-entrypoint-classes-README.md)
+5. [bundle-properties-and-secrets-lifecycle-README.md](bundle-properties-and-secrets-lifecycle-README.md)
+6. `entrypoint.py`
+7. `orchestrator/workflow.py`
+8. `tools_descriptor.py`
+9. `skills_descriptor.py`
+10. [bundle-agent-integration-README.md](bundle-agent-integration-README.md) when the bundle has React tools/skills, MCP, or Claude Code subagents
 
 The assembly map is the fastest way to find reusable Tasks, Email, Telegram,
 Delivery, web/rendering/exec tools, storage, widgets, jobs, MCP, and Claude
 Code blocks before writing a bundle-local service.
+
+Critical Python import rule:
+
+- bundle-local code must use package-relative imports such as
+  `from .services.storage import ...`
+- do not import bundle-local folders as top-level packages such as `services`,
+  `apps`, `tools`, or `resources`
+- see [bundle-runtime-README.md#critical-bundle-local-import-rule](bundle-runtime-README.md#critical-bundle-local-import-rule)
 
 If a bundle tool produces user-visible files, read
 [bundle-agent-integration-README.md](bundle-agent-integration-README.md) and
@@ -219,12 +233,12 @@ to make a skill unavailable.
 ```python
 from langgraph.graph import END, START, StateGraph
 
-from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow, bundle_id
+from kdcube_ai_app.infra.plugin.bundle_loader import bundle_entrypoint, bundle_id
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint import BaseEntrypoint
 from kdcube_ai_app.infra.service_hub.inventory import BundleState
 
 
-@agentic_workflow(name="my.bundle", version="1.0.0")
+@bundle_entrypoint(name="my.bundle", version="1.0.0")
 @bundle_id("my.bundle@1.0.0")
 class MyEntrypoint(BaseEntrypoint):
     def __init__(self, **kwargs):
@@ -247,8 +261,10 @@ For the exact decorator contract, route mapping, widget/public endpoints, `@cron
 
 | Decorator | Scope | Use it for |
 | --- | --- | --- |
-| `@agentic_workflow(...)` | entrypoint class | normal bundle registration |
-| `@agentic_workflow_factory(...)` | factory function | custom workflow construction when class registration is not enough |
+| `@bundle_entrypoint(...)` | entrypoint class | normal bundle registration |
+| `@bundle_entrypoint_factory(...)` | factory function | custom entrypoint construction when class registration is not enough |
+| `@agentic_workflow(...)` | entrypoint class | legacy alias for `@bundle_entrypoint(...)` |
+| `@agentic_workflow_factory(...)` | factory function | legacy alias for `@bundle_entrypoint_factory(...)` |
 | `@bundle_id(...)` | entrypoint class | code-level bundle identity |
 | `@api(...)` | entrypoint method | bundle HTTP operations and public endpoints |
 | `@mcp(...)` | entrypoint method | bundle-served MCP endpoints |
@@ -261,7 +277,7 @@ For the exact decorator contract, route mapping, widget/public endpoints, `@cron
 
 Practical rule:
 
-- most bundles need `@agentic_workflow(...)`, `@bundle_id(...)`, and optionally `@api(...)` / `@mcp(...)` / `@ui_widget(...)`
+- most bundles need `@bundle_entrypoint(...)`, `@bundle_id(...)`, and optionally `@api(...)` / `@mcp(...)` / `@ui_widget(...)`
 - use `@cron(...)` only for scheduled work
 - use `@on_job` when work is submitted to the background job stream and must be executed later by proc
 - use `@venv(...)` only for dependency-heavy leaf helpers, not general orchestration
@@ -301,27 +317,23 @@ The important split is:
 
 - platform/global config and secrets:
   - `get_settings()`
-  - `await get_secret_async("canonical.key")` in async code
+  - `await get_secret("canonical.key")` in async code
 - non-secret bundle config:
   - `self.bundle_prop(...)`
   - code defaults -> `bundles.yaml` -> runtime/admin overrides
 - bundle secrets:
-  - `await get_secret_async("b:...")` in async code
+  - `await get_secret("b:...")` in async code
   - provisioned through `bundles.secrets.yaml` or the configured secrets provider
 - user-scoped bundle state:
   - `get_user_prop(...)`
-  - `await get_user_secret_async(...)`
+  - `await get_secret("u:...")`
   - never exported back into descriptors
 - raw mounted descriptor reads:
   - `get_plain(...)`
   - only when bundle code really must inspect descriptor files directly
 
-Compatibility note:
-
-- sync helpers such as `get_secret(...)` and `get_user_secret(...)` still exist
-  for old sync-only code
-- new async bundle paths should use async helpers so provider IO does not block
-  the event loop directly
+Async bundle paths should use the SDK helpers directly so provider IO does not
+block the event loop.
 
 Read the exact model here:
 
@@ -340,20 +352,18 @@ Mapping per decorator:
 
 | Decorator | Canonical path |
 | --- | --- |
-| `@agentic_workflow(...)` | `enabled.bundle` |
-| `@api(alias=A, method=M, ...)` | `enabled.api["A.M"]` (flat key, literal dot) |
+| `@bundle_entrypoint(...)` | `enabled.bundle` |
+| `@api(alias=A, method=M, route=R, ...)` | `enabled.api["R.A.M"]` (flat key) |
 | `@mcp(alias=A, ...)` | `enabled.mcp.A` |
 | `@ui_widget(alias=A, ...)` | `enabled.widget.A` |
 | `@cron(alias=A, ...)` | `enabled.cron.A` |
 
-Aliases must not contain `.`; the validator rejects them at decoration time.
-The flat `<alias>.<METHOD>` key under `enabled.api` is the only place a
-literal dot appears inside a section key.
+For API gates, the route-aware flat key `<route>.<alias>.<METHOD>` lives under `enabled.api`; the legacy `<alias>.<METHOD>` key remains a fallback for persisted descriptors.
 
 Example:
 
 ```python
-@agentic_workflow(name="ops.dashboard", version="1.0.0")
+@bundle_entrypoint(name="ops.dashboard", version="1.0.0")
 @bundle_id("ops.dashboard@1.0.0")
 class OpsDashboard(BaseEntrypoint):
     @ui_widget(
@@ -429,7 +439,7 @@ Required rules for bundle code:
 Use instead:
 
 - `self.bundle_prop(...)` for effective bundle config
-- `get_secret(...)` for deployment-scoped secrets
+- `await get_secret(...)` for deployment-scoped secrets
 - `get_plain(...)` only for raw descriptor inspection
 - `get_settings()` for effective typed platform/runtime settings
 
@@ -504,7 +514,7 @@ Use this for:
 - working state that should survive across requests on the same instance
 
 This is separate from:
-- `AIBundleStorage`
+- `BundleArtifactStorage`
 - descriptor-backed props/secrets
 
 ## Guarded Shared Build Rule
@@ -528,8 +538,9 @@ Use:
   bundle owns the signature and readiness checks
 - `observed_file_lock_async(...)` in async code that must not block while
   waiting
-- the platform UI build configuration for main UI and widgets; `BaseEntrypoint`
-  already uses the higher-level `bundle_once.py` helper for UI outputs
+- the platform UI build configuration for main UI and widgets; the
+  `BaseEntrypoint` family already uses the higher-level `bundle_once.py`
+  helper for UI outputs
 
 Pattern:
 
@@ -559,10 +570,10 @@ kdcube --descriptors-location <dir> --build
 4. after each code or descriptor change, reload:
 
 ```bash
-kdcube reload my.bundle@1.0.0 --workdir <runtime-workdir>
+kdcube bundle reload my.bundle@1.0.0 --workdir <runtime-workdir>
 ```
 
-What `kdcube reload` does:
+What `kdcube bundle reload` does:
 
 - reapplies the bundle registry from descriptor/env state
 - rebuilds descriptor-backed bundle props from `bundles.yaml`
@@ -574,7 +585,7 @@ Use this when you changed:
 - `bundles.yaml`
 - `bundles.secrets.yaml`
 
-If your bundle uses local bundle storage, `kdcube reload` does not wipe that storage automatically.
+If your bundle uses local bundle storage, `kdcube bundle reload` does not wipe that storage automatically.
 Design your subsystem roots intentionally:
 - stable bundle root for all bundle-managed local data
 - explicit `_subsystem` roots for mutable local working state

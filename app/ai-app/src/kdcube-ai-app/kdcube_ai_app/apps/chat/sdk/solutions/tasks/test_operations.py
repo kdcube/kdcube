@@ -27,6 +27,75 @@ def _configure(tmp_path) -> None:
     )
 
 
+def test_storage_for_prefers_entrypoint_scope_methods_over_module_configuration(tmp_path):
+    wrong_root = tmp_path / "wrong"
+    right_root = tmp_path / "right"
+    operations.configure_task_operations(
+        storage_root_or_error=lambda _entrypoint: str(wrong_root),
+        target_user_id=lambda _entrypoint, user_id=None, fingerprint=None: "wrong-user",
+        bundle_id="bundle@1-0",
+    )
+
+    class Entrypoint:
+        def task_storage_root(self):
+            return str(right_root)
+
+        def target_task_user_id(self, *, user_id=None, fingerprint=None):
+            return user_id or fingerprint or "right-user"
+
+    storage, target_user = operations.storage_for(Entrypoint(), user_id="user-a")
+
+    assert storage.root == right_root
+    assert target_user == "user-a"
+
+
+@pytest.mark.asyncio
+async def test_run_task_execution_uses_entrypoint_virtual_executor(tmp_path):
+    _configure(tmp_path)
+    storage = TaskStorage(tmp_path, user_id="user-a")
+    task = storage.create_task(title="Personal news", description="Prepare my AI news brief.")
+    calls = []
+
+    class Entrypoint:
+        config = SimpleNamespace(
+            tenant="demo-tenant",
+            project="demo-project",
+            ai_bundle_spec=SimpleNamespace(id="bundle@1-0"),
+        )
+        settings = SimpleNamespace(TENANT="demo-tenant", PROJECT="demo-project")
+
+        async def execute_task_job(self, **kwargs):
+            calls.append(kwargs)
+            return {
+                "status": "success",
+                "answer": "News issue generated.",
+                "metadata": {"runner": "news_pipeline"},
+                "artifacts": [{"filename": "issue.html", "mime_type": "text/html"}],
+            }
+
+    result = await operations.run_task_execution(
+        Entrypoint(),
+        task_id=task["id"],
+        trigger="manual",
+        source={"surface": "test"},
+        user_id="user-a",
+    )
+
+    assert result["ok"] is True
+    assert result["answer"] == "News issue generated."
+    assert len(calls) == 1
+    assert calls[0]["task"]["id"] == task["id"]
+    assert calls[0]["storage"].user_id == "user-a"
+    assert calls[0]["bundle_call_context"]["kind"] == "task_execution"
+
+    execution = result["execution"]
+    assert execution["status"] == "success"
+    assert execution["summary"] == "News issue generated."
+    assert execution["result"]["answer"] == "News issue generated."
+    assert execution["metadata"]["runner"] == "news_pipeline"
+    assert execution["artifacts"][0]["filename"] == "issue.html"
+
+
 @pytest.mark.asyncio
 async def test_scheduled_execution_skips_task_deleted_after_enqueue(tmp_path):
     _configure(tmp_path)

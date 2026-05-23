@@ -93,7 +93,8 @@ class TestBootstrapBindAllCommmCtxRestore:
         resolved = sdk_config._normalize_secret_lookup_key("b:services.token")
         assert resolved == f"bundles.{_BUNDLE_ID}.secrets.services.token"
 
-    def test_get_secret_b_returns_bundle_value(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_get_secret_b_returns_bundle_value(self, monkeypatch):
         """get_secret('b:services.token') returns the value stored under the bundle-scoped key."""
         _patch_heavy(monkeypatch)
         _comm_ctx.BUNDLE_ID_CV.set(None)
@@ -105,18 +106,17 @@ class TestBootstrapBindAllCommmCtxRestore:
         expected_key = f"bundles.{_BUNDLE_ID}.secrets.services.token"
 
         class _MockSettings:
-            def secret(self, key, default=None):
-                return "sk-bundle-tok" if key == expected_key else default
-
-            async def secret_async(self, key, default=None):
-                return self.secret(key, default)
-
             def __getattr__(self, name):
                 return None
 
-        monkeypatch.setattr(sdk_config, "get_settings", lambda: _MockSettings())
+        class _MockSecretsManager:
+            async def get_secret(self, key):
+                return "sk-bundle-tok" if key == expected_key else None
 
-        assert sdk_config.get_secret("b:services.token") == "sk-bundle-tok"
+        monkeypatch.setattr(sdk_config, "get_settings", lambda: _MockSettings())
+        monkeypatch.setattr(sdk_config, "get_secrets_manager", lambda _settings: _MockSecretsManager())
+
+        assert await sdk_config.get_secret("b:services.token") == "sk-bundle-tok"
 
     def test_no_comm_ctx_in_spec_does_not_crash(self, monkeypatch):
         """bootstrap_bind_all must not crash when spec.contextvars is absent."""

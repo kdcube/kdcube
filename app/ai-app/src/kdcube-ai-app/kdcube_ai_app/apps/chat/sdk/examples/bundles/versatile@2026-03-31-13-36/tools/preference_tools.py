@@ -262,7 +262,7 @@ async def _export_preferences_snapshot_result(
     scope["storage"].write(key, snapshot_text, mime="application/json")
 
     signature_secret_key = _bundle_secret_path(scope, "preferences", "snapshot_hmac_key")
-    signature_value = get_secret(signature_secret_key)
+    signature_value = await get_secret(signature_secret_key)
     signature_key = f"{key}.sig.json"
     signed = False
     if signature_value:

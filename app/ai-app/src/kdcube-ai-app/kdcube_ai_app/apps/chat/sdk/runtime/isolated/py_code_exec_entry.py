@@ -308,7 +308,7 @@ def _restore_snapshot_if_present(
             logger.log(f"[exec.snapshot] Failed to restore outdir: {e}", "ERROR")
 
 
-def _restore_bundle_if_present(
+async def _restore_bundle_if_present(
     runtime_globals: Dict[str, Any],
     logger: AgentLogger,
 ) -> Dict[str, Any]:
@@ -321,7 +321,7 @@ def _restore_bundle_if_present(
 
     uri = runtime_globals.get("BUNDLE_SNAPSHOT_URI")
     if not uri:
-        return _maybe_restore_bundle_from_git(runtime_globals, logger)
+        return await _maybe_restore_bundle_from_git(runtime_globals, logger)
     bundle_spec = runtime_globals.get("BUNDLE_SPEC") or {}
     bundle_id = None
     if isinstance(bundle_spec, dict):
@@ -356,7 +356,7 @@ def _restore_bundle_storage_if_present(
         logger.log(f"[exec.bundle_storage] Failed to restore readonly bundle storage: {e}", "ERROR")
 
 
-def _maybe_restore_bundle_from_git(
+async def _maybe_restore_bundle_from_git(
     runtime_globals: Dict[str, Any],
     logger: AgentLogger,
 ) -> Dict[str, Any]:
@@ -405,7 +405,7 @@ def _maybe_restore_bundle_from_git(
         bundle_dir = runtime_globals.get("BUNDLE_DIR") or bundle_id
         exec_root_env = os.environ.get("EXEC_BUNDLE_ROOT")
         bundles_root = pathlib.Path(exec_root_env).parent if exec_root_env else None
-        paths = ensure_git_bundle(
+        paths = await ensure_git_bundle(
             bundle_id=bundle_dir,
             git_url=repo,
             git_ref=ref or None,
@@ -812,7 +812,7 @@ async def _async_main() -> int:
     outdir.mkdir(parents=True, exist_ok=True)
 
     runtime_globals = _load_runtime_globals()
-    runtime_globals = _restore_bundle_if_present(runtime_globals, logger)
+    runtime_globals = await _restore_bundle_if_present(runtime_globals, logger)
     _restore_bundle_storage_if_present(runtime_globals, logger)
     tool_module_names = _load_tool_module_names()
     spec_str = _portable_spec_str(runtime_globals)

@@ -198,7 +198,7 @@ async def process_kb_file_with_socket(request: Request,
                 #     "use_batch": False
                 # },
                 "embedding": {
-                    "model_record": embedding_model().model_dump()
+                    "model_record": (await embedding_model()).model_dump()
                 },
                 "search_indexing": {
                     "enabled": True
@@ -288,7 +288,7 @@ async def process_kb_url_with_socket(request: Request,
                 #     "use_batch": False
                 # },
                 "embedding": {
-                    "model_record": embedding_model().model_dump()
+                    "model_record": (await embedding_model()).model_dump()
                 },
                 "search_indexing": {
                     "enabled": True

@@ -203,7 +203,8 @@ async def test_ingress_rejects_missing_registry_cache_without_descriptor_load(mo
     assert reg is None
 
 
-def test_apply_git_resolution_warns_once_for_missing_local_path_bundle(monkeypatch, caplog, tmp_path):
+@pytest.mark.asyncio
+async def test_apply_git_resolution_warns_once_for_missing_local_path_bundle(monkeypatch, caplog, tmp_path):
     bundle_registry._MISSING_PATH_WARNED.clear()
     monkeypatch.setenv("GATEWAY_COMPONENT", "proc")
 
@@ -216,8 +217,8 @@ def test_apply_git_resolution_warns_once_for_missing_local_path_bundle(monkeypat
     }
 
     with caplog.at_level("WARNING"):
-        bundle_registry._apply_git_resolution(reg, source="test")
-        bundle_registry._apply_git_resolution(reg, source="test")
+        await bundle_registry._apply_git_resolution(reg, source="test")
+        await bundle_registry._apply_git_resolution(reg, source="test")
 
     matches = [r for r in caplog.records if "local-path bundle" in r.message]
     assert len(matches) == 1

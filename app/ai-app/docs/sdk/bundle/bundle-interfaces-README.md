@@ -4,9 +4,11 @@ title: "Bundle Interfaces"
 summary: "Bundle-facing interface surface: communicator streams, background jobs, operations, widgets, panels, artifacts, and other bundle-visible interfaces exposed by the platform runtime."
 tags: ["sdk", "bundle", "interfaces", "streaming", "sse", "widgets", "operations", "communicator", "knowledge", "background-jobs"]
 keywords: ["communicator interface", "background job interface", "on_job interface", "operations interface", "widget and panel interface", "artifact surface", "bundle visible runtime interfaces", "streaming and interaction surfaces", "knowledge and attachment surfaces"]
+updated_at: 2026-05-22
 see_also:
   - ks:docs/sdk/bundle/bundle-developer-guide-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
+  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
   - ks:docs/sdk/bundle/bundle-delivery-and-update-README.md
   - ks:docs/sdk/bundle/bundle-venv-README.md
   - ks:docs/sdk/bundle/bundle-index-README.md
@@ -156,6 +158,7 @@ Important for bundle REST/public API methods:
 - otherwise use:
   - `kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx.get_current_comm()`
   - `kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx.get_current_request_context()`
+  - `kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx.get_current_user_identity()`
 
 ---
 
@@ -196,7 +199,7 @@ Rules:
 Example:
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import on_job
+from kdcube_ai_app.infra.plugin.bundle_loader import on_job
 
 class MyBundle(BaseEntrypoint):
     @on_job
@@ -252,7 +255,7 @@ Example pattern (see `kdcube_ai_app/apps/chat/proc/rest/integrations/AIBundleDas
 - Use `ClientSideTSXTranspiler` to compile TSX into HTML.
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import ui_widget
+from kdcube_ai_app.infra.plugin.bundle_loader import ui_widget
 from kdcube_ai_app.apps.chat.sdk.viz.tsx_transpiler import ClientSideTSXTranspiler
 
 class MyEntrypoint(BaseEntrypoint):
@@ -403,7 +406,7 @@ async def preferences_exec_report(self, recency: int = 10, kwords: str = "", **k
 Example declaration:
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import api, ui_widget
+from kdcube_ai_app.infra.plugin.bundle_loader import api, ui_widget
 
 class MyEntrypoint(BaseEntrypoint):
     @ui_widget(alias="preferences_exec_report", user_types=("registered",))
@@ -425,7 +428,7 @@ This allows UI → backend → bundle round-trips without exposing a separate se
 Recommended pattern for dependency-heavy operations:
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import api, venv
+from kdcube_ai_app.infra.plugin.bundle_loader import api, venv
 
 @venv(requirements="requirements.txt")
 def _build_sheet_snapshot(payload: dict) -> dict:
@@ -501,9 +504,20 @@ Concrete example:
 - bundle-operation backend:
   `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/rest/integrations/integrations.py`
 
-## 6) Reading bundle props from cache
+## 6) Reading effective bundle props
 
-Bundles can store UI config or parameters in bundle props. The admin UI writes props to Redis (KV cache), and the bundle reads them at runtime. Define defaults in `entrypoint.configuration` and read effective values from `bundle_props` (defaults + overrides).
+Bundles can store UI config or parameters in bundle props. Define defaults in
+`entrypoint.configuration` / `configuration_defaults()` and read effective
+values with `self.bundle_prop(...)`.
+
+Effective bundle props are code defaults deep-merged with descriptor/admin
+props. Descriptor/admin writes persist through the configured bundle descriptor
+authority and update Redis as the runtime cache. For the full lifecycle, see
+[Bundle Properties And Secrets Lifecycle](bundle-properties-and-secrets-lifecycle-README.md).
+
+Use `dict(self.bundle_props or {})` only when a method needs the whole effective
+props snapshot. Deployment-scoped bundle secrets are separate: read them with
+`await get_secret("b:...")`.
 
 See: `kdcube_ai_app/apps/chat/sdk/solutions/chatbot/entrypoint.py`.
 

@@ -982,9 +982,11 @@ const chatStateSlice = createSlice({
                 }
             }
 
-            if (env.event?.step === "followups" && env.event?.status === "completed") {
-                turn.followUpQuestions = env.data?.items as [] || [];
-            }
+            // Note: followups are handled in `stepUpdate` (the `chat.followups`
+            // event is dispatched via the `chat.step` route, not as a delta).
+            // A misplaced followups branch used to live here and could clobber
+            // turn.followUpQuestions back to [] when a chat.delta carried an
+            // echoed event.step === "followups" with no `items` payload.
 
             if (env.event?.step === "conversation_title" && env.event?.status === "completed") {
                 state.conversationTitle = env.data?.title as string || null;

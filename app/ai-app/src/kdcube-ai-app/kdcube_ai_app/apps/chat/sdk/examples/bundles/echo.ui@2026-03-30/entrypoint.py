@@ -5,7 +5,7 @@
 # Minimal echo bundle for testing the bundle UI build pipeline.
 #
 # What it does:
-#   1. Registers the bundle under "echo.ui" (@agentic_workflow)
+#   1. Registers the bundle under "echo.ui" (@bundle_entrypoint)
 #   2. Echoes the user's message back as the final answer (no LLM)
 #   3. Declares `ui.main_view` in configuration_defaults so that
 #      BaseEntrypoint.on_bundle_load() builds the custom frontend via npm
@@ -22,13 +22,13 @@ from langgraph.graph import StateGraph, START, END
 
 from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload
 from kdcube_ai_app.infra.service_hub.inventory import Config, BundleState
-from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow, api, bundle_id, cron
+from kdcube_ai_app.infra.plugin.bundle_loader import bundle_entrypoint, api, bundle_id, cron
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint import BaseEntrypoint
 
 BUNDLE_ID = "echo.ui"
 
 
-@agentic_workflow(name=BUNDLE_ID, version="1.0.0", priority=10)
+@bundle_entrypoint(name=BUNDLE_ID, version="1.0.0", priority=10)
 @bundle_id(id="echo.ui@2026-03-30")
 class EchoUIBundle(BaseEntrypoint):
     """

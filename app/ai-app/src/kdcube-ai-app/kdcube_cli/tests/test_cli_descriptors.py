@@ -11,6 +11,9 @@ from kdcube_cli.cli import (
     _canonical_descriptor_dir_from_initialized_workdir,
     _check_before_start,
     _collect_runtime_info,
+    _collect_bundle_status,
+    _bundle_reload_summary_lines,
+    _cli_quiet_requested,
     _compose_running_services,
     _descriptor_fast_path_reasons,
     _compose_logs_dir_from_env,
@@ -18,8 +21,11 @@ from kdcube_cli.cli import (
     _load_cli_defaults,
     _parse_init_secret_pairs,
     _copy_dirty_local_source,
+    _print_json,
     _repo_path_from_install_meta,
+    _bundle_apply_command,
     _resolve_cli_repo_path,
+    _resolve_bundle_local_path_for_runtime,
     _resolve_subcommand_repo,
     _resolve_subcommand_workdir,
     _resolve_cli_workdir,
@@ -117,6 +123,237 @@ def test_compose_logs_dir_from_env_uses_generated_compose_transport(tmp_path: Pa
     env_file.write_text(f"KDCUBE_LOGS_DIR={logs_dir}\n", encoding="utf-8")
 
     assert _compose_logs_dir_from_env(env_file, fallback) == logs_dir.resolve()
+
+
+def test_resolve_bundle_local_path_translates_host_path_under_runtime_root(tmp_path: Path):
+    workdir = tmp_path / "runtime"
+    host_root = tmp_path / "src"
+    bundle_root = host_root / "apps" / "my-bundle"
+    bundle_root.mkdir(parents=True)
+    config_dir = workdir / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "assembly.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "paths": {"host_bundles_path": str(host_root)},
+                "platform": {
+                    "services": {
+                        "proc": {
+                            "bundles": {
+                                "bundles_root": "/bundles",
+                            }
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    resolved, mode = _resolve_bundle_local_path_for_runtime(str(bundle_root), workdir)
+
+    assert resolved == "/bundles/apps/my-bundle"
+    assert mode == "translated"
+
+
+def test_resolve_bundle_local_path_preserves_container_visible_path(tmp_path: Path):
+    workdir = tmp_path / "runtime"
+    config_dir = workdir / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "assembly.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "paths": {"host_bundles_path": str(tmp_path / "src")},
+                "platform": {"services": {"proc": {"bundles": {"bundles_root": "/bundles"}}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    resolved, mode = _resolve_bundle_local_path_for_runtime("/bundles/apps/my-bundle", workdir)
+
+    assert resolved == "/bundles/apps/my-bundle"
+    assert mode == "container"
+
+
+def test_resolve_bundle_local_path_rejects_escaped_container_path(tmp_path: Path):
+    workdir = tmp_path / "runtime"
+    config_dir = workdir / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "assembly.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "paths": {"host_bundles_path": str(tmp_path / "src")},
+                "platform": {"services": {"proc": {"bundles": {"bundles_root": "/bundles"}}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        _resolve_bundle_local_path_for_runtime("/bundles/../outside", workdir)
+    except SystemExit as exc:
+        assert "does not exist" in str(exc)
+    else:
+        raise AssertionError("escaped container path should not be accepted as runtime-visible")
+
+
+def test_resolve_bundle_local_path_rejects_missing_host_path(tmp_path: Path):
+    workdir = tmp_path / "runtime"
+    config_dir = workdir / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "assembly.yaml").write_text(
+        yaml.safe_dump({"paths": {"host_bundles_path": str(tmp_path / "src")}}),
+        encoding="utf-8",
+    )
+
+    try:
+        _resolve_bundle_local_path_for_runtime(str(tmp_path / "src" / "missing"), workdir)
+    except SystemExit as exc:
+        assert "does not exist" in str(exc)
+    else:
+        raise AssertionError("missing host path should fail")
+
+
+def test_resolve_bundle_local_path_rejects_host_path_outside_runtime_root(tmp_path: Path):
+    workdir = tmp_path / "runtime"
+    host_root = tmp_path / "src"
+    outside = tmp_path / "other" / "my-bundle"
+    outside.mkdir(parents=True)
+    config_dir = workdir / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "assembly.yaml").write_text(
+        yaml.safe_dump({"paths": {"host_bundles_path": str(host_root)}}),
+        encoding="utf-8",
+    )
+
+    try:
+        _resolve_bundle_local_path_for_runtime(str(outside), workdir)
+    except SystemExit as exc:
+        message = str(exc)
+        assert "not visible inside chat-proc" in message
+        assert str(host_root.resolve()) in message
+        assert "/bundles" in message
+    else:
+        raise AssertionError("host path outside runtime root should fail")
+
+
+def test_bundle_apply_command_quotes_values_with_spaces(tmp_path: Path):
+    assert _bundle_apply_command("bundle with space", tmp_path / "runtime dir") == (
+        f"kdcube reload 'bundle with space' --workdir '{tmp_path / 'runtime dir'}'"
+    )
+
+
+def test_cli_quiet_requested_for_json_quiet_env_and_non_tty(monkeypatch):
+    assert _cli_quiet_requested(["bundle", "--help"], stdout_is_tty=False) is True
+    assert _cli_quiet_requested(["--quiet", "info"], stdout_is_tty=True) is True
+    assert _cli_quiet_requested(["info", "--json"], stdout_is_tty=True) is True
+
+    monkeypatch.setenv("KDCUBE_CLI_QUIET", "1")
+    assert _cli_quiet_requested(["info"], stdout_is_tty=True) is True
+    monkeypatch.setenv("KDCUBE_CLI_QUIET", "0")
+    assert _cli_quiet_requested(["info"], stdout_is_tty=True) is False
+
+
+def test_print_json_emits_machine_readable_unwrapped_stdout(capsys):
+    long_path = "/Users/elenaviter/.kdcube/kdcube-runtime/demo-tenant__demo-project/config/assembly.yaml"
+
+    _print_json({"path": long_path, "status": "ok"})
+
+    out = capsys.readouterr().out
+    assert json.loads(out) == {"path": long_path, "status": "ok"}
+    assert "\n" not in json.loads(out)["path"]
+
+
+def test_bundle_reload_summary_hides_inner_compose_command(tmp_path: Path):
+    lines = _bundle_reload_summary_lines(
+        {
+            "status": "ok",
+            "authority": "file:/config/bundles.yaml",
+            "broadcast_receivers": 1,
+            "eviction": {"modules_removed": 3},
+        },
+        descriptor_path=tmp_path / "config" / "bundles.yaml",
+        bundle_id="demo.bundle",
+    )
+    rendered = "\n".join(lines)
+
+    assert "Bundle reload accepted." in rendered
+    assert "demo.bundle" in rendered
+    assert "docker compose" not in rendered
+    assert "python -c" not in rendered
+    assert "internal/bundles/reload-authority" not in rendered
+
+
+def test_collect_bundle_status_reports_one_explicit_bundle_without_listing_others(tmp_path: Path):
+    workdir = tmp_path / "runtime"
+    config_dir = workdir / "config"
+    host_root = tmp_path / "src"
+    bundle_root = host_root / "apps" / "my-bundle"
+    bundle_root.mkdir(parents=True)
+    config_dir.mkdir(parents=True)
+    (config_dir / ".env").write_text(
+        f"HOST_BUNDLES_PATH={host_root}\n"
+        "BUNDLES_ROOT=/bundles\n"
+        "KDCUBE_COMPOSE_MODE=all-in-one\n",
+        encoding="utf-8",
+    )
+    (config_dir / "assembly.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "paths": {"host_bundles_path": str(host_root)},
+                "platform": {"services": {"proc": {"bundles": {"bundles_root": "/bundles"}}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (config_dir / "bundles.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "bundles": {
+                    "default_bundle_id": "hidden.bundle",
+                    "items": [
+                        {
+                            "id": "hidden.bundle",
+                            "path": "/bundles/apps/hidden-bundle",
+                            "module": "entrypoint",
+                        },
+                        {
+                            "id": "my.bundle",
+                            "path": "/bundles/apps/my-bundle",
+                            "module": "entrypoint",
+                            "singleton": False,
+                        },
+                    ],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (config_dir / "bundles.secrets.yaml").write_text(
+        yaml.safe_dump({"bundles": {"items": [{"id": "my.bundle", "secrets": {"token": "x"}}]}}),
+        encoding="utf-8",
+    )
+    repo_root = tmp_path / "repo"
+    ai_app_root = repo_root / "app" / "ai-app"
+    (ai_app_root / "deployment" / "docker" / "all_in_one_kdcube").mkdir(parents=True)
+    (ai_app_root / "deployment" / "docker" / "all_in_one_kdcube" / "docker-compose.yaml").write_text("")
+    (ai_app_root / "src" / "kdcube-ai-app" / "kdcube_ai_app").mkdir(parents=True)
+
+    status = _collect_bundle_status(
+        repo_root=repo_root,
+        workdir=workdir,
+        bundle_id="my.bundle",
+        include_live=False,
+    )
+
+    assert status["declared"] is True
+    assert status["runtime_path"] == "/bundles/apps/my-bundle"
+    assert status["host_path"] == str(bundle_root)
+    assert status["host_path_exists"] is True
+    assert status["secrets_declared"] is True
+    assert "known_bundle_ids" not in status
+    assert "hidden.bundle" not in json.dumps(status)
 
 
 def test_resolve_frontend_routes_prefix_reads_generated_config(tmp_path: Path):
@@ -325,6 +562,21 @@ def test_subcommand_repo_uses_install_meta_after_base_workdir_resolves_to_runtim
     assert resolved_repo == staged_repo.resolve()
 
 
+def test_subcommand_repo_explicit_path_overrides_install_meta(tmp_path: Path):
+    runtime_dir = tmp_path / "workspace" / "demo__project"
+    config_dir = runtime_dir / "config"
+    config_dir.mkdir(parents=True)
+    staged_repo = runtime_dir / "repo"
+    explicit_repo = tmp_path / "source"
+    (staged_repo / "app" / "ai-app" / "deployment").mkdir(parents=True)
+    (explicit_repo / "app" / "ai-app" / "deployment").mkdir(parents=True)
+    (config_dir / "install-meta.json").write_text(json.dumps({"repo_root": str(staged_repo.resolve())}))
+
+    resolved_repo = _resolve_subcommand_repo(str(explicit_repo), workdir=runtime_dir, path_provided=True)
+
+    assert resolved_repo == explicit_repo.resolve()
+
+
 def test_copy_dirty_local_source_copies_tracked_and_untracked_nonignored_files(tmp_path: Path):
     source_repo = tmp_path / "source"
     _init_git_repo(source_repo)
@@ -348,6 +600,53 @@ def test_copy_dirty_local_source_copies_tracked_and_untracked_nonignored_files(t
     assert not (copied_repo / ".git").exists()
     assert not (copied_repo / "ignored.txt").exists()
     assert not (copied_repo / "ignored-dir" / "data.txt").exists()
+
+
+def test_copy_dirty_local_source_noops_when_source_is_runtime_repo(tmp_path: Path):
+    workdir = tmp_path / "runtime"
+    source_repo = workdir / "repo"
+    _init_git_repo(source_repo)
+    tracked = source_repo / "app" / "ai-app" / "deployment" / "assembly.yaml"
+    tracked.parent.mkdir(parents=True)
+    tracked.write_text("context: {}\n", encoding="utf-8")
+    subprocess.run(["git", "add", str(tracked.relative_to(source_repo))], cwd=source_repo, check=True)
+
+    copied_repo = _copy_dirty_local_source(Console(file=None), source_repo=source_repo, workdir=workdir)
+
+    assert copied_repo == source_repo.resolve()
+    assert tracked.exists()
+
+
+def test_copy_dirty_local_source_restores_ui_nginx_build_config(tmp_path: Path):
+    source_repo = tmp_path / "source"
+    _init_git_repo(source_repo)
+    nginx_source = source_repo / "app" / "ai-app" / "deployment" / "docker" / "custom-ui-managed-infra" / "nginx" / "conf" / "nginx_ui.conf"
+    nginx_source.parent.mkdir(parents=True)
+    nginx_source.write_text("events {}\n", encoding="utf-8")
+    tracked = source_repo / "app" / "ai-app" / "deployment" / "assembly.yaml"
+    tracked.write_text("context: {}\n", encoding="utf-8")
+    subprocess.run(["git", "add", str(tracked.relative_to(source_repo)), str(nginx_source.relative_to(source_repo))], cwd=source_repo, check=True)
+
+    workdir = tmp_path / "runtime"
+    config_dir = workdir / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / ".env").write_text(
+        "\n".join(
+            [
+                "KDCUBE_COMPOSE_MODE=custom-ui-managed-infra",
+                f"UI_BUILD_CONTEXT={workdir / 'repo' / 'app' / 'ai-app'}",
+                "NGINX_UI_CONFIG_FILE_PATH=.kdcube/nginx_ui.conf",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    copied_repo = _copy_dirty_local_source(Console(file=None), source_repo=source_repo, workdir=workdir)
+
+    assert (
+        copied_repo / "app" / "ai-app" / ".kdcube" / "nginx_ui.conf"
+    ).read_text(encoding="utf-8") == "events {}\n"
 
 
 def test_copy_dirty_local_source_accepts_git_worktree_with_git_file(tmp_path: Path):
@@ -501,8 +800,10 @@ def test_collect_runtime_info_reports_bundle_mount_mapping(tmp_path: Path):
                 "HOST_BUNDLE_STORAGE_PATH=/host/bundle-storage",
                 "BUNDLE_STORAGE_ROOT=/bundle-storage",
                 "HOST_EXEC_WORKSPACE_PATH=/host/exec-workspace",
+                "EXEC_WORKSPACE_ROOT=/exec-workspace",
                 "HOST_REACT_DEBUG_PATH=/host/react-debug",
                 "REACT_DEBUG_ROOT=/react-debug",
+                "KDCUBE_LOGS_DIR=/host/logs",
                 "KDCUBE_COMPOSE_MODE=all-in-one",
             ]
         )
@@ -524,8 +825,11 @@ def test_collect_runtime_info_reports_bundle_mount_mapping(tmp_path: Path):
     assert info["container_bundles_root"] == "/bundles"
     assert info["host_managed_bundles_path"] == "/host/managed-bundles"
     assert info["container_managed_bundles_root"] == "/managed-bundles"
+    assert info["host_exec_workspace_path"] == "/host/exec-workspace"
+    assert info["container_exec_workspace_root"] == "/exec-workspace"
     assert info["host_react_debug_path"] == "/host/react-debug"
     assert info["container_react_debug_root"] == "/react-debug"
+    assert info["logs_dir"] == "/host/logs"
     assert info["default_bundle_id"] == "demo.bundle"
     assert info["bundle_count"] == 0
     assert info["tenant"] == "demo"

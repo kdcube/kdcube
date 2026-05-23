@@ -67,11 +67,11 @@ def _unb64url_json(data: str) -> Dict[str, Any]:
     return parsed
 
 
-def _secret_lookup(*keys: str) -> str:
+async def _secret_lookup(*keys: str) -> str:
     if get_secret is None:
         return ""
     for key in keys:
-        value = get_secret(key)
+        value = await get_secret(key)
         if value:
             return str(value)
     return ""
@@ -102,10 +102,10 @@ def email_mcp_token_ttl_seconds(entrypoint: Any) -> int:
     return max(60, min(value, 3600))
 
 
-def email_mcp_auth_secret(entrypoint: Any) -> str:
+async def email_mcp_auth_secret(entrypoint: Any) -> str:
     bundle_id = _entrypoint_bundle_id(entrypoint)
     return (
-        _secret_lookup(
+        await _secret_lookup(
             "b:integrations.email.mcp_auth_secret",
             f"bundles.{bundle_id}.secrets.integrations.email.mcp_auth_secret",
             "b:integrations.email.oauth_state_secret",
@@ -289,7 +289,7 @@ class EmailMCPRunStore:
         return payload
 
 
-def create_email_mcp_run(
+async def create_email_mcp_run(
     *,
     entrypoint: Any,
     storage_root: str | Path,
@@ -355,7 +355,7 @@ def create_email_mcp_run(
         "iat": now,
         "exp": now + ttl,
     }
-    token = sign_email_mcp_payload(payload, secret=email_mcp_auth_secret(entrypoint))
+    token = sign_email_mcp_payload(payload, secret=await email_mcp_auth_secret(entrypoint))
     return {
         "run": run_doc,
         "token": token,
@@ -392,8 +392,8 @@ def _email_accounts_api():
     return EmailAccountStore, fetch_email_messages, fetch_email_message, fetch_email_attachment
 
 
-def build_email_mcp_app(*, entrypoint: Any, request: Any, storage_root: str | Path):
-    secret = email_mcp_auth_secret(entrypoint)
+async def build_email_mcp_app(*, entrypoint: Any, request: Any, storage_root: str | Path):
+    secret = await email_mcp_auth_secret(entrypoint)
     header_name = email_mcp_token_header(entrypoint)
     token = ""
     if request is not None:

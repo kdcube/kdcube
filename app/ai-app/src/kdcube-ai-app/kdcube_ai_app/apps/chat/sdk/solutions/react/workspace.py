@@ -604,8 +604,7 @@ async def checkout_workspace_paths(
     if impl == WORKSPACE_IMPLEMENTATION_GIT:
         from kdcube_ai_app.apps.chat.sdk.solutions.react.git_workspace import ensure_current_turn_git_workspace
 
-        await asyncio.to_thread(
-            ensure_current_turn_git_workspace,
+        await ensure_current_turn_git_workspace(
             runtime_ctx=runtime_ctx,
             outdir=outdir,
         )

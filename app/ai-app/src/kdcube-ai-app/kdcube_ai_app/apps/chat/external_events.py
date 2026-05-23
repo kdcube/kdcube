@@ -354,6 +354,20 @@ class RedisConversationExternalEventSource:
                 if latest.stream_id:
                     await self._ack_stream_event(str(latest.stream_id))
                 continue
+            if await self._has_live_owner_for_event(latest):
+                if latest.stream_id:
+                    await self._ack_stream_event(str(latest.stream_id))
+                logger.info(
+                    "[external_events.claim] deferred live-owned event conversation=%s claimant=%s event_id=%s kind=%s seq=%s active_turn=%s owner_turn=%s",
+                    self.conversation_id,
+                    claimant_id,
+                    latest.message_id,
+                    latest.kind,
+                    latest.sequence,
+                    latest.active_turn_id_at_ingress,
+                    latest.owner_turn_id,
+                )
+                return None
             logger.info(
                 "[external_events.claim] conversation=%s claimant=%s event_id=%s kind=%s seq=%s target_turn=%s active_turn=%s owner_turn=%s",
                 self.conversation_id,
@@ -406,6 +420,19 @@ class RedisConversationExternalEventSource:
                     await self._advance_promotion_cursor(str(latest.stream_id))
                 await self.release_claim(message_id=item.message_id, claimant_id=claimant_id)
                 continue
+            if await self._has_live_owner_for_event(latest):
+                await self.release_claim(message_id=item.message_id, claimant_id=claimant_id)
+                logger.info(
+                    "[external_events.claim] deferred live-owned event conversation=%s claimant=%s event_id=%s kind=%s seq=%s active_turn=%s owner_turn=%s",
+                    self.conversation_id,
+                    claimant_id,
+                    latest.message_id,
+                    latest.kind,
+                    latest.sequence,
+                    latest.active_turn_id_at_ingress,
+                    latest.owner_turn_id,
+                )
+                return None
             logger.info(
                 "[external_events.claim] conversation=%s claimant=%s event_id=%s kind=%s seq=%s target_turn=%s active_turn=%s owner_turn=%s",
                 self.conversation_id,
@@ -423,6 +450,21 @@ class RedisConversationExternalEventSource:
             if tail is not None and tail.stream_id:
                 await self._advance_promotion_cursor(str(tail.stream_id))
         return None
+
+    async def _has_live_owner_for_event(self, event: ConversationExternalEvent) -> bool:
+        try:
+            owner = await self.get_owner()
+        except Exception:
+            return False
+        owner_turn_id = str(getattr(owner, "turn_id", "") or "").strip() if owner is not None else ""
+        if not owner_turn_id:
+            return False
+        event_turn_ids = {
+            str(getattr(event, "owner_turn_id", "") or "").strip(),
+            str(getattr(event, "active_turn_id_at_ingress", "") or "").strip(),
+            str(getattr(event, "target_turn_id", "") or "").strip(),
+        }
+        return owner_turn_id in event_turn_ids
 
     async def get_event(self, message_id: str) -> Optional[ConversationExternalEvent]:
         raw = await self.redis.get(self.event_key(message_id))

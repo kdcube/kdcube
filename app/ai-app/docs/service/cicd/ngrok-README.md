@@ -80,7 +80,7 @@ active descriptor set used by the running local stack:
 - `bundles.yaml` controls bundle config, including public integration URLs
 - `bundles.secrets.yaml` or the configured secrets provider controls secrets
 
-When using the CLI, `kdcube init --descriptors-location ... --workdir ...`
+When using the CLI, `kdcube init --tenant <t> --project <p> --descriptors-location ...`
 stages the active descriptor set under:
 
 ```text
@@ -100,8 +100,7 @@ This is the main path for local users.
 Initialize and start the runtime:
 
 ```bash
-kdcube init \
-  --workdir ~/.kdcube/kdcube-runtime \
+kdcube init --tenant <t> --project <p> \
   --descriptors-location /path/to/descriptors \
   --cors-origin https://<stable-ngrok-domain> \
   --set-secret services.openai.api_key "<openai-key>" \
@@ -109,7 +108,7 @@ kdcube init \
   --set-secret services.git.http_token "<github-token>" \
   --set-secret git.http_token "<github-token>"
 
-kdcube start --workdir ~/.kdcube/kdcube-runtime/<tenant>__<project>
+kdcube start --tenant <t> --project <p>
 ```
 
 `kdcube start` prints the local UI URL. Use the port from that URL as the ngrok
@@ -249,12 +248,11 @@ bundles:
 1. Initialize/start with the CLI:
 
 ```bash
-kdcube init \
-  --workdir ~/.kdcube/kdcube-runtime \
+kdcube init --tenant <t> --project <p> \
   --descriptors-location /path/to/descriptors \
   --cors-origin https://<stable-ngrok-domain>
 
-kdcube start --workdir ~/.kdcube/kdcube-runtime/<tenant>__<project>
+kdcube start --tenant <t> --project <p>
 ```
 
 2. Copy the local UI/proxy port printed by `kdcube start`.
@@ -290,14 +288,17 @@ https://<stable-ngrok-domain>
 6. Restart after `assembly.yaml` changes:
 
 ```bash
-kdcube stop --workdir ~/.kdcube/kdcube-runtime/<tenant>__<project>
-kdcube start --workdir ~/.kdcube/kdcube-runtime/<tenant>__<project>
+kdcube refresh --tenant <t> --project <p>
 ```
+
+If the restart should also move the existing runtime to another platform ref,
+add one selector: `--latest`, `--upstream`, or `--release <ref>`. Add `--build`
+when images must be rebuilt.
 
 7. Reload after bundle descriptor/config changes:
 
 ```bash
-kdcube reload <bundle_id> --workdir ~/.kdcube/kdcube-runtime/<tenant>__<project>
+kdcube reload <bundle_id> --tenant <t> --project <p>
 ```
 
 8. Check local proxy first:

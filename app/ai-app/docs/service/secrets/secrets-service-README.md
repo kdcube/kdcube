@@ -80,9 +80,9 @@ These are intended for current-user credentials such as:
 
 Bundles should not build these flat keys manually. Runtime now provides:
 
-- `get_user_secret(...)`
-- `set_user_secret(...)`
-- `delete_user_secret(...)`
+- `await get_secret("u:...")`
+- `await set_user_secret(...)`
+- `await delete_user_secret(...)`
 
 in
 [config.py](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/config.py).

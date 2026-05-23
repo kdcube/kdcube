@@ -750,6 +750,53 @@ a { color: inherit; }
   white-space: nowrap;
 }
 
+/* Row + delete-affordance shell.
+   The shell positions the trash button at the row's right edge without
+   nesting <button> inside the row <button> (invalid HTML). The trash
+   only reveals on hover/focus to keep the resting state calm. */
+.k-row-shell {
+  position: relative;
+  display: block;
+}
+.k-row-shell .k-row {
+  padding-right: 36px;
+}
+.k-row-delete {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+.k-row-shell:hover .k-row-delete,
+.k-row-shell:focus-within .k-row-delete {
+  opacity: 1;
+}
+.k-row-delete:hover:not(:disabled) {
+  color: var(--red);
+  background: var(--surface-2);
+}
+.k-row-delete:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+  opacity: 1;
+}
+.k-row-delete:disabled {
+  cursor: wait;
+  opacity: 0.4;
+}
+
 /* Micro labels */
 .k-micro {
   color: var(--muted);
@@ -974,3 +1021,504 @@ a { color: inherit; }
   vertical-align: top;
 }
 .markdown-body th { color: var(--text-2); font-weight: 600; }
+
+/* ---------------------------------------------------------------------- */
+/*  Chat view — Phase 1 (additive)                                        */
+/*                                                                        */
+/*  A calmer rendering of the same data Overview consumes. Limited to     */
+/*  layout shells around the existing .k-workitem / .k-msg / .k-notice    */
+/*  primitives — no new colours, no new font-sizes, no card-in-card.      */
+/* ---------------------------------------------------------------------- */
+.k-chat-view {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ---------------------------------------------------------------------- */
+/*  Thinking — collapsible, light grey when closed.                       */
+/*  Heading shows a streaming preview while live, "Thinking" when done.   */
+/* ---------------------------------------------------------------------- */
+.k-chat-think {
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  padding: 4px 8px;
+}
+.k-chat-think[open] {
+  background: var(--surface);
+  padding: 6px 10px 8px;
+}
+.k-chat-think-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.k-chat-think-head::-webkit-details-marker { display: none; }
+.k-chat-think-head:hover {
+  color: var(--text-2);
+}
+.k-chat-think-title {
+  font-weight: 600;
+  color: var(--text-2);
+  flex: 0 0 auto;
+}
+.k-chat-think-preview,
+.k-chat-think-count {
+  color: var(--muted);
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.k-chat-think-preview {
+  font-style: italic;
+}
+.k-chat-think-head .k-workitem-caret {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+.k-chat-think[open] .k-chat-think-head .k-workitem-caret {
+  transform: rotate(90deg);
+}
+.k-chat-think-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0 0 0 6px;
+  border-left: 1px solid var(--line-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.k-chat-think-item {
+  position: relative;
+  padding: 2px 0 2px 14px;
+  display: flex;
+  align-items: flex-start;
+}
+.k-chat-think-dot {
+  position: absolute;
+  left: -10px;
+  top: 8px;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--blue);
+  opacity: 0.55;
+  box-shadow: 0 0 0 2px var(--surface);
+}
+.k-chat-think-body {
+  min-width: 0;
+  flex: 1 1 auto;
+  /* Body text is intentionally faded for chat view — keeps the timeline calm. */
+  color: var(--text-2);
+  opacity: 0.85;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.k-chat-think-body .markdown-body {
+  font-size: 12.5px;
+}
+.k-chat-think-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-style: italic;
+}
+
+/* ---------------------------------------------------------------------- */
+/*  Inline notes (timeline_text) — no card, just markdown in flow.        */
+/* ---------------------------------------------------------------------- */
+.k-chat-note {
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.6;
+  padding: 4px 2px;
+}
+.k-chat-note .markdown-body p {
+  margin: 0.1em 0;
+}
+
+/* ---------------------------------------------------------------------- */
+/*  File rows — extension icon + Download button.                         */
+/* ---------------------------------------------------------------------- */
+.k-chat-file {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: 8px 12px;
+  font: inherit;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.k-chat-file:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--line-strong);
+}
+.k-chat-file:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+.k-chat-file:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.k-chat-file-icon {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text-2);
+  flex: 0 0 auto;
+}
+.k-chat-file-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.k-chat-file-name {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.k-chat-file-sub {
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.k-chat-file-ext {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  flex: 0 0 auto;
+}
+.k-chat-file-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--blue-dark);
+  font-size: 12px;
+  font-weight: 500;
+  flex: 0 0 auto;
+}
+.k-chat-file:disabled .k-chat-file-action {
+  color: var(--muted);
+}
+
+/* ---------------------------------------------------------------------- */
+/*  Web-fetch row status tokens — colour the status keyword so success /  */
+/*  paywall / timeout / error read at a glance. The rest of the           */
+/*  `k-result-host` line (mime, size) stays muted. All values use         */
+/*  existing §4 design tokens; no new palette entries.                    */
+/* ---------------------------------------------------------------------- */
+.k-fetch-status {
+  font-weight: 600;
+  color: var(--muted);
+}
+.k-fetch-status--ok {
+  color: var(--green);
+}
+.k-fetch-status--paywall {
+  /* Paywall is treated as an error/blocked state, not a soft warning. */
+  color: var(--red);
+}
+.k-fetch-status--warn {
+  color: var(--gold);
+}
+.k-fetch-status--error {
+  color: var(--red);
+}
+
+/* ---------------------------------------------------------------------- */
+/*  Canvas expand modal — portal-mounted overlay for the Expand button.   */
+/*  Opens when the user clicks the expand icon in a canvas header. ESC,   */
+/*  backdrop click, and the close button all dismiss it. The modal body   */
+/*  reuses <CanvasRender>, so the iframe sandbox + srcDoc debounce        */
+/*  behaviour is consistent with the inline view.                         */
+/* ---------------------------------------------------------------------- */
+.k-canvas-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 24, 42, 0.55);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.k-canvas-modal {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: 0 8px 30px rgba(15, 24, 42, 0.25);
+  width: 100%;
+  max-width: min(1280px, 95vw);
+  height: 100%;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.k-canvas-modal-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--surface-2);
+  flex: 0 0 auto;
+}
+.k-canvas-modal-title {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.k-canvas-modal-title .k-text {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.k-canvas-modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  overflow: auto;
+}
+/* In the modal context, let the canvas iframe and markdown body fill the
+ * available space rather than the inline 420px constraint. */
+.k-canvas-modal-body > * {
+  flex: 1 1 auto;
+}
+.k-canvas-modal-body .k-canvas-frame {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.k-canvas-modal-body .k-canvas-markdown {
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+}
+
+/* ---------------------------------------------------------------------- */
+/*  File drop zone — overlay shown when files are being dragged over the  */
+/*  chat area. The wrapper is positioned: relative so the overlay can     */
+/*  cover it absolutely. `pointer-events: none` on the overlay so the     */
+/*  underlying chat surface stays accessible to the drop event itself     */
+/*  (the global drop listener does the actual work).                      */
+/* ---------------------------------------------------------------------- */
+.k-dropzone {
+  position: relative;
+}
+.k-dropzone-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(218, 238, 255, 0.7);
+  border: 2px dashed var(--blue);
+  border-radius: var(--r-lg);
+  pointer-events: none;
+  animation: k-dropzone-fade-in 0.12s ease;
+}
+.k-dropzone-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: 0 4px 14px rgba(15, 24, 42, 0.12);
+  color: var(--blue-dark);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+@keyframes k-dropzone-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ---------------------------------------------------------------------- */
+/*  Bundle widget iframe (memories / settings panel).                     */
+/*                                                                        */
+/*  Lives in the left column (`<WebappPane>`) or full-screen modal        */
+/*  (`<WebappModal>`). Same-origin — no `sandbox` attribute so the        */
+/*  widget can authenticate via cookies and call back into bundle APIs.   */
+/* ---------------------------------------------------------------------- */
+.k-webapp-frame {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 480px;
+  border: 0;
+  background: var(--surface);
+}
+.k-canvas-modal-body .k-webapp-frame {
+  height: 100%;
+  min-height: 0;
+}
+
+/* Active state for icon buttons (e.g. the gear when the webapp pane is
+   currently shown). Uses --accent-soft so it pairs with the existing
+   tag/chip families. */
+.k-iconbtn.k-iconbtn-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: rgba(217, 229, 99, 0.6);
+}
+
+/* ---------------------------------------------------------------------- */
+/*  Attachment chip — clickable pill shown inside the user-message and    */
+/*  follow-up bubbles. Clicking downloads the attachment via whichever    */
+/*  transport is appropriate (in-memory File, hosted URI, resource RN).   */
+/* ---------------------------------------------------------------------- */
+.k-attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 11.5px;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.k-attach-chip:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--blue-dark);
+  border-color: var(--blue);
+}
+.k-attach-chip:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+.k-attach-chip:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+.k-attach-chip-name {
+  font-weight: 500;
+  color: var(--ink);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.k-attach-chip-size {
+  color: var(--muted);
+}
+.k-attach-chip-state {
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* ---------------------------------------------------------------------- */
+/*  Files tab — section headers + per-row origin tint.                    */
+/*                                                                        */
+/*  `Sent by you` and `Produced by assistant` are visually distinct so a  */
+/*  user can tell at a glance which side produced each file. The row      */
+/*  carries the same origin signal as a chip + a left-edge accent bar so  */
+/*  origin remains readable when section headers scroll out of view.      */
+/* ---------------------------------------------------------------------- */
+.k-files-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+}
+.k-files-section-head--user {
+  border-left: 3px solid var(--blue);
+}
+.k-files-section-head--assistant {
+  border-left: 3px solid var(--green);
+}
+.k-files-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: 0.02em;
+}
+.k-files-section-count {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  padding: 0 6px;
+  line-height: 1.6;
+}
+
+/* Origin accent on each row. Subtle left-edge bar matches the section
+ * head's accent, plus the right-side chip carries the explicit label. */
+.k-chat-file--user {
+  border-left: 3px solid var(--blue);
+}
+.k-chat-file--assistant {
+  border-left: 3px solid var(--green);
+}
+/* Wraps the optional origin chip together with the ext chip so they
+ * occupy a single grid cell of `.k-chat-file` — keeps the 4-column
+ * layout intact (no row wrapping of the Download action). */
+.k-chat-file-tags {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.k-chat-file-origin {
+  flex: 0 0 auto;
+}

@@ -7,14 +7,14 @@ from typing import Any, Dict
 
 from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint import BaseEntrypoint
-from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow
+from kdcube_ai_app.infra.plugin.bundle_loader import bundle_entrypoint
 from kdcube_ai_app.infra.service_hub.inventory import Config
 
 
 BUNDLE_ID = "kdcube.admin"
 
 
-@agentic_workflow(name=BUNDLE_ID, version="1.0.0", priority=100)
+@bundle_entrypoint(name=BUNDLE_ID, version="1.0.0", priority=100)
 class AdminBundleEntrypoint(BaseEntrypoint):
     """Built-in admin-only bundle used as a safe default for UI access."""
 

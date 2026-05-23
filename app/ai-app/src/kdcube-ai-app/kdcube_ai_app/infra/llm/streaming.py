@@ -725,7 +725,7 @@ async def example_with_progress(model_record):
     print("\nAs dictionary:")
     print(json.dumps(result_dict, indent=2, ensure_ascii=False))
 
-def test_platform_streaming():
+async def test_platform_streaming():
     import os
     project = os.environ.get("DEFAULT_PROJECT_NAME", None)
     tenant = os.environ.get("DEFAULT_TENANT", None)
@@ -735,7 +735,7 @@ def test_platform_streaming():
         systemName="gpt-4o-mini",
         provider=AIProvider(
             provider=provider,
-            apiToken=get_service_key_fn(AIProviderName.open_ai),
+            apiToken=await get_service_key_fn(AIProviderName.open_ai),
         ),
     )
 
@@ -744,7 +744,7 @@ def test_platform_streaming():
         systemName="claude-3-5-haiku-20241022",
         provider=AIProvider(
             provider=provider,
-            apiToken=get_service_key_fn(AIProviderName.anthropic),
+            apiToken=await get_service_key_fn(AIProviderName.anthropic),
         ),
     )
 
@@ -772,7 +772,7 @@ def test_platform_streaming():
                          metadata={"purpose": "test"}):
         # model_record = model_record_anthropic
         model_record = model_record_openai
-        asyncio.run(example_with_progress(model_record=model_record))
+        await example_with_progress(model_record=model_record)
         print()
 
 if __name__ == "__main__":

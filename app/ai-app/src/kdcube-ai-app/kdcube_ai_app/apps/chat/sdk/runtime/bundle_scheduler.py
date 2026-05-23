@@ -432,8 +432,8 @@ async def _invoke_job(
     bundle_spec: Any,
     bundle_config: Any,
 ) -> None:
-    """Load the workflow instance and invoke the scheduled method."""
-    from kdcube_ai_app.infra.plugin.agentic_loader import get_workflow_instance_async
+    """Load the bundle entrypoint instance and invoke the scheduled method."""
+    from kdcube_ai_app.infra.plugin.bundle_loader import get_workflow_instance_async
 
     # Resolve pg_pool lazily — same singleton used by the rest of the proc process.
     pg_pool = None
@@ -566,8 +566,8 @@ class BundleSchedulerManager:
         Diff running tasks against the current registry + props, cancel stale
         tasks, and start new ones.  Idempotent — safe to call repeatedly.
         """
-        from kdcube_ai_app.infra.plugin.agentic_loader import (
-            AgenticBundleSpec,
+        from kdcube_ai_app.infra.plugin.bundle_loader import (
+            BundleSpec,
             load_bundle_manifest,
         )
         from kdcube_ai_app.infra.plugin.bundle_store import get_bundle_props
@@ -584,7 +584,7 @@ class BundleSchedulerManager:
             if not path:
                 continue
 
-            spec = AgenticBundleSpec(path=path, module=module, singleton=bool(singleton))
+            spec = BundleSpec(path=path, module=module, singleton=bool(singleton))
 
             try:
                 manifest = load_bundle_manifest(spec, bundle_id=bundle_id)

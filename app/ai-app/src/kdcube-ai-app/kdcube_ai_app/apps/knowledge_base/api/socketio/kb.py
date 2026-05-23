@@ -104,7 +104,7 @@ class SocketIOKBHandler:
                 request_id = (payload or {}).get("request_id")
 
                 from kdcube_ai_app.apps.knowledge_base.api.resolvers import get_kb_for_project, DEFAULT_PROJECT
-                kb = get_kb_for_project(project or DEFAULT_PROJECT)
+                kb = await get_kb_for_project(project or DEFAULT_PROJECT)
                 results = kb.hybrid_search(query=query, resource_id=resource_id, top_k=top_k)
 
                 await self.sio.emit(

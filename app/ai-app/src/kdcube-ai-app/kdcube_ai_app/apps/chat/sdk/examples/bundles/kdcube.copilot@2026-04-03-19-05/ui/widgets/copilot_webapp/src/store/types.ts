@@ -124,7 +124,11 @@ export interface CopilotEventsPayload {
   limit?: number;
   by_type?: Record<string, number>;
   by_source?: Record<string, number>;
-  storage_path?: string;
+  external_sink?: {
+    configured?: boolean;
+    endpoint_configured?: boolean;
+    auth_configured?: boolean;
+  };
   error?: string;
 }
 

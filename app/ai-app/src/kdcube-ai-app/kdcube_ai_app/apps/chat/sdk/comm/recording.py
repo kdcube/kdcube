@@ -140,6 +140,19 @@ def selector_allows(
     if not isinstance(selector, dict):
         return True
 
+    any_selectors = selector.get("any")
+    if isinstance(any_selectors, list):
+        return any(
+            selector_allows(
+                child,
+                user_type=user_type,
+                user_id=user_id,
+                event=event,
+                data=data,
+            )
+            for child in any_selectors
+        )
+
     include = selector.get("include") or {}
     exclude = selector.get("exclude") or {}
 

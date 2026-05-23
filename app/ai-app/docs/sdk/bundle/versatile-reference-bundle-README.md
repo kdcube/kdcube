@@ -7,6 +7,7 @@ keywords: ["reference implementation bundle", "working bundle patterns", "file l
 see_also:
   - ks:docs/sdk/bundle/bundle-developer-guide-README.md
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
+  - ks:docs/sdk/bundle/bundle-entrypoint-classes-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
@@ -25,11 +26,11 @@ This is the bundle to study first.
 | --- | --- |
 | Entry point and graph bootstrap | `entrypoint.py` |
 | React workflow orchestration | `orchestrator/workflow.py` |
-| Economics-enabled entrypoint | `entrypoint.py` via `BaseEntrypointWithEconomics` |
+| Economics + memory entrypoint | `entrypoint.py` via `BaseEntrypointWithEconomicsAndMemory` |
 | Bundle-local tools | `tools/preference_tools.py` |
 | Bundle-local skills | `skills_descriptor.py` and bundle `skills/` tree |
 | Effective bundle props | `entrypoint.py`, `orchestrator/workflow.py` |
-| Bundle secrets; prefer `get_secret_async("b:...")` in new async code | `tools/preference_tools.py` |
+| Bundle secrets; prefer `get_secret("b:...")` in new async code | `tools/preference_tools.py` |
 | Bundle storage backend usage | `preferences_store.py` |
 | Widget + widget operations | `entrypoint.py`, `ui/PreferencesBrowser.tsx` |
 | Iframe main view | `ui/main/src/App.tsx`, `entrypoint.py` |

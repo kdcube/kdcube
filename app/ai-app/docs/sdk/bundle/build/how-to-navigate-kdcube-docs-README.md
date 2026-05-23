@@ -4,23 +4,31 @@ title: "How To Navigate KDCube Bundle Docs"
 summary: "Tier 1 navigation guide for bundle creators, integrators, configurators, deployers, local QA, integration QA, and document readers who need the shortest path through KDCube docs without reading the whole tree."
 tags: ["sdk", "bundle", "docs", "navigation", "tier-1", "authoring"]
 keywords: ["bundle docs navigation", "tier 1 reading order", "new bundle path", "wrap existing app into bundle", "bundle integrator path", "bundle configurator path", "bundle deployer path", "bundle qa path", "integration qa path", "shared sdk widget source", "kdcube docs reading strategy", "which doc to read next"]
-updated_at: 2026-05-16
+updated_at: 2026-05-23
 see_also:
   - ks:docs/sdk/bundle/bundle-index-README.md
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
+  - ks:docs/sdk/bundle/build/how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md
   - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-release-bundle-content-README.md
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
+  - ks:docs/sdk/bundle/bundle-client-communication-README.md
+  - ks:docs/sdk/bundle/bundle-transports-README.md
   - ks:docs/sdk/bundle/bundle-widget-integration-README.md
+  - ks:docs/sdk/bundle/bundle-entrypoint-classes-README.md
+  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
   - ks:docs/sdk/integrations/telegram/telegram-README.md
   - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
   - ks:docs/sdk/integrations/browser/browser-tools-README.md
+  - ks:docs/sdk/tools/custom-tools-README.md
+  - ks:docs/sdk/tools/tool-subsystem-README.md
   - ks:docs/service/cicd/ngrok-README.md
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
   - ks:docs/sdk/bundle/bundle-storage-and-cache-README.md
+  - ks:docs/sdk/bundle/build/design/bundle-loader-import-isolation-README.md
   - ks:docs/sdk/storage/cache-README.md
   - ks:docs/sdk/storage/git-store-README.md
   - ks:docs/sdk/storage/sdk-store-README.md
@@ -29,6 +37,20 @@ see_also:
 
 This page is the Tier 1 entrypoint for people who do not want to read the whole
 SDK tree.
+
+## Link Conventions
+
+KDCube docs use two kinds of logical references:
+
+- `ks:docs/...` is a KDCube knowledge-space doc id. In a local checkout it
+  resolves under `repo:kdcube-ai-app/app/ai-app/docs/...`.
+- `repo:kdcube-ai-app/...`, `repo:applications/...`, and `repo:website/...`
+  are cross-repository aliases used by agent onboarding docs outside this doc
+  tree. Resolve them to the corresponding local checkout before opening files.
+
+Inside this KDCube docs tree, ordinary relative Markdown links resolve relative
+to the current file. Prefer these logical links in reusable docs instead of
+machine-specific absolute paths.
 
 Use it when you are:
 
@@ -49,22 +71,40 @@ Important:
 - the same agent should be able to plan across those roles without resetting
   context
 
+If the immediate question is "which KDCube CLI command should I run now?", use
+[how-to-configure-and-run-bundle-README.md#canonical-cli-flow-schemas](how-to-configure-and-run-bundle-README.md#canonical-cli-flow-schemas).
+That section is the single Tier 1 map for `init`, `refresh`,
+`bundle config apply`, `bundle reload`, and `export`.
+
 ## 1. The Short Answer
 
 Do not start by reading every bundle doc.
 
 Do treat Tier 1 as one compact pack.
 
-Start with these six Tier 1 baseline pages in this order:
+Start with these seven Tier 1 baseline pages in this order:
 
 1. this page
 2. [how-to-test-bundle-README.md](how-to-test-bundle-README.md)
 3. [how-to-assemble-bundle-with-sdk-building-blocks-README.md](how-to-assemble-bundle-with-sdk-building-blocks-README.md)
 4. [how-to-write-bundle-README.md](how-to-write-bundle-README.md)
-5. [../../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../../configuration/bundle-runtime-configuration-and-secrets-README.md)
-6. [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md)
+5. [../bundle-properties-and-secrets-lifecycle-README.md](../bundle-properties-and-secrets-lifecycle-README.md)
+6. [../../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../../configuration/bundle-runtime-configuration-and-secrets-README.md)
+7. [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md)
 
-Read those six together as one bundle-authoring baseline.
+Read those seven together as one bundle-authoring baseline.
+
+Critical Python import rule:
+
+- bundle-local code must use package-relative imports such as
+  `from .services.storage import ...`
+- do not import bundle-local folders as top-level packages such as `services`,
+  `apps`, `tools`, or `resources`
+- for bundle-local tools, `tools_descriptor.py` should use `ref` entries and
+  tool modules should import same-bundle helpers with package-relative imports;
+  use `module` only for installed SDK/external modules
+- see [bundle-runtime-README.md#critical-bundle-local-import-rule](../bundle-runtime-README.md#critical-bundle-local-import-rule)
+  and [custom-tools-README.md#bundle-local-imports-from-ref-tools](../../tools/custom-tools-README.md#bundle-local-imports-from-ref-tools)
 
 Critical widget/browser rule:
 
@@ -81,6 +121,24 @@ Critical widget/browser rule:
   panels, also read
   [bundle-widget-integration-README.md#shared-ui-source-materialization](../bundle-widget-integration-README.md#shared-ui-source-materialization)
 
+Critical browser event-stream rule:
+
+- the existing SSE and Socket.IO streams can carry non-chat bundle events
+- a widget or bundle UI should open `/sse/stream` or Socket.IO, call the bundle
+  operation through `/api/integrations/...`, and pass the connected peer id as
+  `KDC-Stream-ID` when it needs direct peer delivery
+- the bundle operation emits with the request-bound communicator, typically
+  `comm.service_event(...)`
+- read the short recipe before implementing this:
+  [bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream](../bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream)
+
+Entrypoint and request-context changes:
+
+- if you change entrypoint inheritance, singleton behavior, per-turn
+  orchestration, or request-bound identity in APIs/MCP/widgets/tools/tasks,
+  read [bundle-entrypoint-classes-README.md](../bundle-entrypoint-classes-README.md)
+  and [bundle-platform-integration-README.md](../bundle-platform-integration-README.md)
+
 There is also one optional Tier 1 lifecycle procedure:
 
 - [how-to-release-bundle-content-README.md](how-to-release-bundle-content-README.md)
@@ -89,11 +147,25 @@ Use it when the user agrees that the bundle should be committed, tagged,
 pushed, or wired into a git-backed descriptor ref. It is recommended for
 repeatable bundle work, but it is not an automatic step.
 
+There is also one conditional Tier 1 local-runtime procedure:
+
+- [how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md](how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md)
+
+Use it when the agent is expected to configure and run a local KDCube runtime,
+wire a bundle into `bundles.yaml` / `bundles.secrets.yaml`, start ngrok for
+provider callbacks, configure Telegram or Gmail deployment values, and report
+only the external provider steps it cannot complete.
+
 When the bundle defines an agent surface, custom tools/skills,
 file-producing tools, MCP connectors, bundle-served MCP, or Claude Code
 subagents, add this focused page to the Tier 1 pack:
 
 - [../bundle-agent-integration-README.md](../bundle-agent-integration-README.md)
+
+When choosing the Python entrypoint base class, especially for economics,
+memory, inherited widgets, or source-folder UI builds, read:
+
+- [../bundle-entrypoint-classes-README.md](../bundle-entrypoint-classes-README.md)
 
 When the local runtime must be reachable from the public internet for provider
 callbacks, add this service note:
@@ -102,6 +174,26 @@ callbacks, add this service note:
 
 Use it for local Telegram webhooks, OAuth/Cognito callbacks, and other
 callback or remote-control flows that cannot call `localhost` directly.
+
+## 1A. Where To File Builder Assessments
+
+When a builder agent discovers confusing docs, missing runtime guidance, CLI
+friction, or repeated setup pain, write it down in the right place while the
+context is fresh.
+
+Use this placement rule:
+
+- bundle-specific findings go under
+  `<bundle>/docs/instructions/improvements/YY.MM.DD-short-topic.md`
+- bundle implementation decisions go in `<bundle>/docs/journal/journal.md`
+- platform CLI findings go under the CLI/component journal, for example
+  `src/kdcube-ai-app/kdcube_cli/doc/journal/`
+- SDK/runtime findings go in the nearest component or design journal, and the
+  bundle report should link to that platform-side note
+
+Keep these notes short, dated, and actionable. Separate "docs should explain
+this" from "platform code should change this" so later agents can improve the
+right surface without re-reading unrelated logs.
 
 The order helps, but the important rule is:
 
@@ -123,7 +215,8 @@ So the practical Tier 1 reading order is:
 4. bundle design
 5. configuration ownership
 6. local runtime and deployment wiring
-7. optional release lifecycle, only when agreed with the user
+7. coding-agent local-runtime bootstrap, when live setup is part of the task
+8. optional release lifecycle, only when agreed with the user
 
 ## 2. Which Path Fits Your Job
 
@@ -151,12 +244,14 @@ Start here, then complete the rest of the Tier 1 pack:
 1. [how-to-test-bundle-README.md](how-to-test-bundle-README.md)
 2. [how-to-assemble-bundle-with-sdk-building-blocks-README.md](how-to-assemble-bundle-with-sdk-building-blocks-README.md)
 3. [how-to-write-bundle-README.md](how-to-write-bundle-README.md)
-4. [../../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../../configuration/bundle-runtime-configuration-and-secrets-README.md)
-5. [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md)
-6. [../bundle-platform-integration-README.md](../bundle-platform-integration-README.md)
-7. [../bundle-runtime-README.md](../bundle-runtime-README.md)
-8. [../versatile-reference-bundle-README.md](../versatile-reference-bundle-README.md)
-9. [how-to-release-bundle-content-README.md](how-to-release-bundle-content-README.md), only when the user wants a pinned release
+4. [../bundle-properties-and-secrets-lifecycle-README.md](../bundle-properties-and-secrets-lifecycle-README.md)
+5. [../../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../../configuration/bundle-runtime-configuration-and-secrets-README.md)
+6. [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md)
+7. [../bundle-platform-integration-README.md](../bundle-platform-integration-README.md)
+8. [../bundle-runtime-README.md](../bundle-runtime-README.md)
+9. [../versatile-reference-bundle-README.md](../versatile-reference-bundle-README.md)
+10. [how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md](how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md), when the user wants the agent to run local setup
+11. [how-to-release-bundle-content-README.md](how-to-release-bundle-content-README.md), only when the user wants a pinned release
 
 Interpretation:
 
@@ -165,6 +260,8 @@ Interpretation:
 - `how-to-assemble` tells you which SDK/platform blocks already exist before
   you write new services
 - `how-to-write` tells you what to build
+- `bundle-properties-and-secrets-lifecycle` tells you how code defaults,
+  descriptor/admin props, effective props, and bundle secrets flow at runtime
 - `bundle-runtime-configuration-and-secrets` tells you where values belong
 - `how-to-configure-and-run` tells you how the runtime is staged and wired
 - `bundle-platform-integration` tells you how to expose the surfaces
@@ -198,7 +295,7 @@ Practical rule:
   - MCP server -> `@mcp(...)`
   - background sync -> `@cron(...)`
   - ready background job execution -> `@on_job`
-  - assistant workflow -> `@agentic_workflow` / `@on_message`
+  - assistant workflow -> `@bundle_entrypoint` / `@on_message`
 
 ### C. I am configuring a bundle or translating an existing app config
 
@@ -223,10 +320,11 @@ Start here, then complete the rest of the Tier 1 pack:
 
 1. [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md)
 2. [../../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../../configuration/bundle-runtime-configuration-and-secrets-README.md)
-3. [../../../configuration/bundles-descriptor-README.md](../../../configuration/bundles-descriptor-README.md)
-4. [../../../configuration/bundles-secrets-descriptor-README.md](../../../configuration/bundles-secrets-descriptor-README.md)
-5. [../bundle-delivery-and-update-README.md](../bundle-delivery-and-update-README.md)
-6. [how-to-test-bundle-README.md](how-to-test-bundle-README.md)
+3. [how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md](how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md), when an agent should perform the local setup
+4. [../../../configuration/bundles-descriptor-README.md](../../../configuration/bundles-descriptor-README.md)
+5. [../../../configuration/bundles-secrets-descriptor-README.md](../../../configuration/bundles-secrets-descriptor-README.md)
+6. [../bundle-delivery-and-update-README.md](../bundle-delivery-and-update-README.md)
+7. [how-to-test-bundle-README.md](how-to-test-bundle-README.md)
 
 This is the right path if your main questions are:
 
@@ -235,6 +333,8 @@ This is the right path if your main questions are:
 - when do I rerun install vs reload
 - what is the real local runtime authority
 - how do I export live deployment-scoped bundle state
+- how can an agent wire the bundle into a local runtime, configure ngrok,
+  Telegram, or Gmail, and report only the provider-side steps it cannot do
 
 ### E. I am doing local QA for a bundle
 
@@ -286,15 +386,18 @@ Then jump only to the row that matches your question.
 | How do I turn a finished bundle into a release tag and descriptor ref? | [how-to-release-bundle-content-README.md](how-to-release-bundle-content-README.md) | It is the optional, user-approved lifecycle procedure for release notes, validation, commit/tag/push, and descriptor ref updates. |
 | I have existing code. How do I wrap it? | [how-to-write-bundle-README.md](how-to-write-bundle-README.md) | It contains the design matrix and process-boundary guidance. |
 | How do I map existing app settings into KDCube settings, bundle props, and user state? | [../../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../../configuration/bundle-runtime-configuration-and-secrets-README.md) | It is the Tier 1 configuration model and ownership map. |
+| Are bundle code defaults merged with `bundles.yaml` props, and what gets written back? | [../bundle-properties-and-secrets-lifecycle-README.md](../bundle-properties-and-secrets-lifecycle-README.md) | It is the concise bundle-author lifecycle for `configuration_defaults()`, descriptor/admin props, effective props, bundle secrets, and materialization. |
 | How do I choose Haiku/Sonnet/Opus for one agent/API/chat/job call? | [../bundle-agent-integration-README.md#model-selection-for-agent-roles](../bundle-agent-integration-README.md#model-selection-for-agent-roles) and [../bundle-runtime-README.md#request-scoped-role-model-override](../bundle-runtime-README.md#request-scoped-role-model-override) | Use `config.role_models` for bundle/deployment defaults and `bundle_call_context.role_models` for one `@api`, `@mcp`, `@cron`, `@on_message`, or `@on_job` invocation. |
 | How do I run a bundle locally? | [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md) | It documents the current local runtime contract and staged descriptor model. |
+| How does Claude Code, Codex, or a plugin agent configure the runtime, wire my bundle, start ngrok, and set Telegram or Gmail values? | [how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md](how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md) | It is the coding-agent runbook for discovery, CLI setup, staged bundle props/secrets, ngrok, Telegram webhook registration, Gmail OAuth config, and final verification reporting. |
 | How do I expose local KDCube through public HTTPS for Telegram webhooks, OAuth callbacks, or remote callbacks? | [../../../service/cicd/ngrok-README.md](../../../service/cicd/ngrok-README.md) | It documents the one-ngrok-origin local reverse-proxy flow and the descriptor values that must be updated. |
 | Can I run multiple KDCubes on one machine? | [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md) | It explains the difference between many runtime snapshots on disk and one active local compose-backed deployment by default. |
-| Where do props and secrets belong? | [../../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../../configuration/bundle-runtime-configuration-and-secrets-README.md) | It is the canonical author-facing configuration page. |
+| Where do props and secrets belong? | [../../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../../configuration/bundle-runtime-configuration-and-secrets-README.md) | It is the canonical author-facing configuration page. Use [bundle-properties-and-secrets-lifecycle-README.md](../bundle-properties-and-secrets-lifecycle-README.md) for the bundle-specific merge and materialization rules. |
 | What does user-scoped mean for Telegram, public APIs, or other external users? | [how-to-write-bundle-README.md#1e-sdk-configuration-and-secrets-cheat-sheet](how-to-write-bundle-README.md#1e-sdk-configuration-and-secrets-cheat-sheet) and [how-to-configure-and-run-bundle-README.md#config-and-secret-scopes-in-the-local-runtime](how-to-configure-and-run-bundle-README.md#config-and-secret-scopes-in-the-local-runtime) | User-scoped bundle state is keyed by bundle user scope, which may be a mapped external identity, not necessarily a KDCube login. |
 | How do I start, stop, reload, and descriptor-wire a bundle into a project? | [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md) | It is the Tier 1 deployer and integrator page for current local runtime operations. |
 | How do I expose widget, API, MCP, cron, or `@on_job`? | [../bundle-platform-integration-README.md](../bundle-platform-integration-README.md) | It is the exact decorator and surface contract. |
 | What runtime helpers exist inside bundle code? | [../bundle-runtime-README.md](../bundle-runtime-README.md) | It explains the bundle runtime objects and capabilities. |
+| How can a non-chat bundle UI get live progress/events from a bundle operation? | [../bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream](../bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream) and [../bundle-transports-README.md#71-communicator-output](../bundle-transports-README.md#71-communicator-output) | Open `/sse/stream` or Socket.IO, pass `KDC-Stream-ID` on the REST operation, and emit `comm.service_event(...)` from request-bound bundle code. |
 | How do I use storage, cache, local bundle storage, or git-backed helpers? | [how-to-write-bundle-README.md](how-to-write-bundle-README.md) | It now contains the compact SDK cheat sheet and points to the deeper storage docs only when needed. |
 | How should a bundle tool return files or hosted attachments? | [../bundle-agent-integration-README.md](../bundle-agent-integration-README.md) and [../../tools/custom-tools-README.md](../../tools/custom-tools-README.md) | Use the strict `ret.artifact_type == "files"` protocol or trusted tool-side `host_files(...)`; `host_files(...)` requires prepared tool context from `BaseWorkflow.build_react(...)` or isolated `bootstrap_bind_all(...)`; generated executor code should call a catalog tool through `agent_io_tools.tool_call(...)`. |
 | How do I talk to the browser correctly? | [../bundle-client-ui-README.md](../bundle-client-ui-README.md) | It routes you to widget, browser, and transport-facing docs. |

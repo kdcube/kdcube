@@ -421,7 +421,18 @@ const conversationsMiddleware = (): Middleware => {
 
                     previousValue[currentValue.turn_id] = {
                         id: currentValue.turn_id,
-                        state: i < arr.length - 2 ? "finished" : "inProgress",
+                        // Reloaded conversations are historical by definition — every
+                        // turn is finished. If the server says the conversation is still
+                        // in-progress, `requestConversationStatus` (dispatched right
+                        // below) feeds back into the `conversationStatus` reducer, which
+                        // is the single source of truth for flipping a turn back to
+                        // "inProgress" when appropriate. The previous heuristic
+                        // (`i < arr.length - 2 ? "finished" : "inProgress"`) marked the
+                        // last two turns of every reload as in-progress, which made
+                        // ChatLog render a phantom activity-carrier block alongside the
+                        // real assistant message — two "Message/Steps/Sources" tabs per
+                        // turn after reload.
+                        state: "finished",
                         userMessage: userMessage ?? {text: "", attachments: [], timestamp: 0},
                         ...(additionalUserMessages.length > 0 ? {additionalUserMessages} : {}),
                         ...(assistantMessages.length > 0 ? {assistantMessages} : {}),

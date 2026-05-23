@@ -1383,8 +1383,7 @@ class BaseWorkflow():
             "publish_current_turn_git_workspace",
         )
         try:
-            result = await asyncio.to_thread(
-                publish_current_turn_git_workspace,
+            result = await publish_current_turn_git_workspace(
                 runtime_ctx=runtime_ctx,
                 outdir=pathlib.Path(outdir_raw),
                 logger=self.logger,
@@ -1949,7 +1948,7 @@ class BaseWorkflow():
         outdir_raw = (getattr(self.runtime_ctx, "outdir", "") or "").strip()
         if not outdir_raw and self.ctx_browser:
             try:
-                _workdir, outdir = self.ctx_browser._ensure_workspace()
+                _workdir, outdir = await self.ctx_browser._ensure_workspace()
                 outdir_raw = str(outdir)
             except Exception:
                 outdir_raw = ""

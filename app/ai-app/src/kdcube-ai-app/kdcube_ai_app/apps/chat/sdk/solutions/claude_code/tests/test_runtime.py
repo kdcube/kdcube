@@ -67,7 +67,8 @@ def _config(tmp_path: Path, *, git_repo: Path, local_root: Path | None = None) -
     )
 
 
-def test_bootstrap_materializes_remote_session_branch(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_bootstrap_materializes_remote_session_branch(tmp_path: Path):
     remote_repo = _init_bare_repo(tmp_path / "remote.git")
     seed_repo = _init_git_repo(
         tmp_path / "seed",
@@ -80,7 +81,7 @@ def test_bootstrap_materializes_remote_session_branch(tmp_path: Path):
     branch_ref = claude_code_session_branch_ref(config)
     _push_branch(seed_repo, remote_repo, branch_ref)
 
-    result = bootstrap_claude_code_session_store(config=config)
+    result = await bootstrap_claude_code_session_store(config=config)
 
     assert result["bootstrapped"] is True
     assert (config.local_root / "sessions" / "history.json").read_text(encoding="utf-8") == "{\"turns\": 1}\n"
@@ -92,7 +93,8 @@ def test_bootstrap_materializes_remote_session_branch(tmp_path: Path):
     assert remote_url.returncode != 0
 
 
-def test_bootstrap_rerun_reuses_checked_out_workspace_branch(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_bootstrap_rerun_reuses_checked_out_workspace_branch(tmp_path: Path):
     remote_repo = _init_bare_repo(tmp_path / "remote.git")
     seed_repo = _init_git_repo(
         tmp_path / "seed",
@@ -105,35 +107,36 @@ def test_bootstrap_rerun_reuses_checked_out_workspace_branch(tmp_path: Path):
     branch_ref = claude_code_session_branch_ref(config)
     _push_branch(seed_repo, remote_repo, branch_ref)
 
-    first = bootstrap_claude_code_session_store(config=config)
+    first = await bootstrap_claude_code_session_store(config=config)
     assert first["bootstrapped"] is True
     assert (config.local_root / "sessions" / "history.json").read_text(encoding="utf-8") == "{\"turns\": 1}\n"
 
     (config.local_root / "sessions" / "history.json").write_text("{\"turns\": 2}\n", encoding="utf-8")
-    publish = publish_claude_code_session_store(config=config)
+    publish = await publish_claude_code_session_store(config=config)
     assert publish["published"] is True
 
-    second = bootstrap_claude_code_session_store(config=config)
+    second = await bootstrap_claude_code_session_store(config=config)
     assert second["bootstrapped"] is True
     assert (config.local_root / "sessions" / "history.json").read_text(encoding="utf-8") == "{\"turns\": 2}\n"
 
 
-def test_publish_pushes_session_root_to_conversation_branch(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_publish_pushes_session_root_to_conversation_branch(tmp_path: Path):
     remote_repo = _init_bare_repo(tmp_path / "remote.git")
     config = _config(tmp_path, git_repo=remote_repo)
 
-    bootstrap_claude_code_session_store(config=config)
+    await bootstrap_claude_code_session_store(config=config)
     config.local_root.mkdir(parents=True, exist_ok=True)
     (config.local_root / "sessions").mkdir(parents=True, exist_ok=True)
     (config.local_root / "sessions" / "history.json").write_text("{\"turns\": 2}\n", encoding="utf-8")
 
-    result = publish_claude_code_session_store(config=config)
+    result = await publish_claude_code_session_store(config=config)
 
     assert result["published"] is True
     assert _read_remote_file(remote_repo, claude_code_session_branch_ref(config), "sessions/history.json") == "{\"turns\": 2}\n"
 
 
-def test_ensure_session_repo_rewrites_ssh_origin_to_https_when_pat_is_configured(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_ensure_session_repo_uses_resolved_https_origin(tmp_path: Path):
     config = ClaudeCodeSessionStoreConfig(
         implementation="git",
         local_root=tmp_path / "workspace" / ".claude",
@@ -144,10 +147,11 @@ def test_ensure_session_repo_rewrites_ssh_origin_to_https_when_pat_is_configured
         agent_name="knowledge-base-admin",
         git_repo="git@github.com:org/session-store.git",
     )
-    monkeypatch.setenv("GIT_HTTP_TOKEN", "pat-token")
-    monkeypatch.setenv("GIT_HTTP_USER", "x-access-token")
-
-    repo_root = runtime_module._ensure_session_repo(config=config)
+    repo_root = runtime_module._ensure_session_repo(
+        config=config,
+        repo_url="https://github.com/org/session-store.git",
+        env={},
+    )
 
     remote_url = subprocess.run(
         ["git", "-C", str(repo_root), "config", "--get", "remote.origin.url"],

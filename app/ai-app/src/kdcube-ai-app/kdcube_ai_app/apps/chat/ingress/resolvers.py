@@ -30,7 +30,12 @@ from kdcube_ai_app.infra.gateway.gateway import create_gateway_from_config
 
 from kdcube_ai_app.apps.middleware.gateway import FastAPIGatewayAdapter
 from kdcube_ai_app.infra.rendering.link_preview import AsyncLinkPreview, get_shared_link_preview
-from kdcube_ai_app.infra.service_hub.inventory import ConfigRequest, ModelServiceBase, create_workflow_config
+from kdcube_ai_app.infra.service_hub.inventory import (
+    ConfigRequest,
+    ModelServiceBase,
+    create_workflow_config,
+    resolve_config_request_secrets,
+)
 from kdcube_ai_app.infra.redis.client import (
     get_async_redis_client,
     get_sync_redis_client,
@@ -677,10 +682,10 @@ async def get_conversation_system(pg_pool) -> Tuple[ContextRAGClient, ConvIndex,
     _conv_index = ConvIndex(pool=pg_pool)
     await _conv_index.init()
 
-    req = ConfigRequest(
+    req = await resolve_config_request_secrets(ConfigRequest(
         openai_api_key=_settings.OPENAI_API_KEY,
         claude_api_key=_settings.ANTHROPIC_API_KEY,
-    )
+    ))
     model_service = ModelServiceBase(create_workflow_config(req))
     _conv_store = ConversationStore(_settings.STORAGE_PATH)
     _conv_browser = ContextRAGClient(conv_idx=_conv_index,

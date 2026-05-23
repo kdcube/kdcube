@@ -90,4 +90,4 @@ def test_bundle_entrypoint_and_descriptors_import():
         and issubclass(obj, BaseEntrypoint)
         and obj.__module__ == entrypoint_mod.__name__
     ]
-    assert workflow_classes, "entrypoint.py must expose a bundle workflow class derived from BaseEntrypoint"
+    assert workflow_classes, "entrypoint.py must expose a bundle entrypoint class derived from BaseEntrypoint"

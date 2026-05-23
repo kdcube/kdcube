@@ -9,6 +9,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-client-ui-README.md
   - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
   - ks:docs/sdk/bundle/bundle-frontend-awareness-README.md
+  - ks:docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/service/auth/auth-README.md
   - ks:docs/service/comm/README-comm.md
@@ -187,6 +188,8 @@ Important:
 
 - `message_kind` / `continuation_kind` are current routing semantics
 - they do **not** yet represent a general authored event model
+- `turn_id` on the request is a client correlation hint; the server allocates or confirms the authoritative task/turn id in the acknowledgement
+- for continuations, `target_turn_id` is the user/client intent and `active_turn_id` is the client's best known active turn; neither field is authoritative without server state
 - attachments are carried alongside this logical message, not inside it
 
 ### Attachments on SSE
@@ -228,6 +231,26 @@ Known `status` values:
 | `processing_started` | A regular turn was admitted to the normal proc ready queue. |
 | `followup_accepted` | The conversation was busy; the message was accepted into the shared external event source as a followup. |
 | `steer_accepted` | The conversation was busy; the message was accepted into the shared external event source as a steer/control event. |
+
+Continuation acknowledgements may include these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `turn_id` | Server-side task/turn id for the submitted request. For accepted continuations this is the fallback queued turn id if the live owner does not consume the event. |
+| `active_turn_id` | Server-observed active turn at ingress time. Prefer this for immediate same-turn UI rendering. |
+| `target_turn_id` | Client/user intended turn. This is advisory metadata and can be stale. |
+| `queued_turn_id` | Explicit alias for the fallback queued turn id carried in `turn_id`. |
+| `event_id` | Durable external event id in the conversation event source. Use it as the best dedupe key for optimistic continuation bubbles. |
+| `external_event_sequence` | Ordered sequence in the per-conversation external event source. |
+| `live_owner_detected` | `true` when ingress saw a live owner lease for `active_turn_id`; `false` means the event was stored but should not be rendered as already consumed by the live turn. |
+
+Client rules:
+
+- send `followup` / `steer` intent and optionally send `target_turn_id`
+- treat `followup_accepted` / `steer_accepted` as admission only
+- do not create a new visible turn on `followup_accepted` / `steer_accepted`
+- for an immediate optimistic followup bubble, require `live_owner_detected !== false`, attach it to `active_turn_id || target_turn_id`, and dedupe with `event_id || queued_turn_id || turn_id`
+- if the live owner closes before consumption, wait for the later `chat_start`; proc will promote the stored event once as a normal turn
 
 Use:
 
@@ -296,6 +319,126 @@ Session-scoped broadcast means:
 
 - all connected peers on that session receive the event
 - if no peer is listening for that session, nobody receives it
+
+### Non-chat bundle events over the shared stream
+
+The SSE and Socket.IO streams are not limited to chat turns. A bundle UI can
+reuse the same authenticated stream for peer-to-peer or session-broadcast
+events from a bundle operation, widget call, MCP route, or background-triggered
+bundle code as long as the call is executed with a bound communicator context.
+
+Use this shape when the UI does **not** want to start a chat turn but still
+wants live events from bundle code.
+
+Client-side SSE:
+
+```ts
+const streamId = crypto.randomUUID();
+
+const streamUrl = new URL(`${baseUrl}/sse/stream`);
+streamUrl.searchParams.set("user_session_id", sessionId);
+streamUrl.searchParams.set("stream_id", streamId);
+streamUrl.searchParams.set("tenant", tenant);
+streamUrl.searchParams.set("project", project);
+
+const events = new EventSource(streamUrl.toString(), { withCredentials: true });
+
+events.addEventListener("ready", event => {
+  console.log("stream ready", JSON.parse(event.data));
+});
+
+events.addEventListener("chat_service", event => {
+  const envelope = JSON.parse(event.data);
+  if (envelope.type === "bundle.job.progress") {
+    renderProgress(envelope.data);
+  }
+});
+```
+
+Client-side Socket.IO:
+
+```ts
+const socket = io(baseUrl, {
+  path: "/socket.io",
+  auth: {
+    user_session_id: sessionId,
+    tenant,
+    project,
+    bearer_token: accessToken,
+    id_token: idToken,
+  },
+});
+
+socket.on("chat_service", envelope => {
+  if (envelope.type === "bundle.job.progress") {
+    renderProgress(envelope.data);
+  }
+});
+```
+
+Then call the bundle operation. For a direct reply to the current browser peer,
+send the connected peer id as `KDC-Stream-ID`:
+
+```ts
+await fetch(
+  `${baseUrl}/api/integrations/bundles/${tenant}/${project}/${bundleId}/operations/run_job`,
+  {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      "KDC-Stream-ID": streamId, // for Socket.IO use socket.id
+    },
+    body: JSON.stringify({ data: { job_id: "job-1" } }),
+  },
+);
+```
+
+Bundle-side operation:
+
+```python
+from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import get_current_comm
+from kdcube_ai_app.infra.plugin.bundle_loader import api
+
+@api(alias="run_job", route="operations", user_types=("registered",))
+async def run_job(self, job_id: str, **kwargs):
+    comm = get_current_comm()
+
+    if comm is not None:
+        await comm.service_event(
+            type="bundle.job.progress",
+            step="job",
+            status="running",
+            title="Job running",
+            data={"job_id": job_id, "pct": 25},
+            broadcast=False,
+        )
+
+    # Do the work here.
+
+    if comm is not None:
+        await comm.service_event(
+            type="bundle.job.completed",
+            step="job",
+            status="completed",
+            title="Job completed",
+            data={"job_id": job_id},
+            broadcast=True,
+        )
+
+    return {"ok": True, "job_id": job_id}
+```
+
+Delivery semantics:
+
+- `broadcast=False` targets the peer from `KDC-Stream-ID` when it was provided;
+  otherwise it falls back to the current session route.
+- `broadcast=True` sends to all connected SSE/Socket.IO peers in the same
+  authenticated session.
+- this is not tenant-wide or project-wide broadcast. The current relay is
+  intentionally session-scoped.
+- use namespaced semantic event types such as `bundle.job.progress`,
+  `memory.snapshot.completed`, or `admin.import.failed`.
 
 ## 9. Response Headers Clients Should Use
 

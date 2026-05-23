@@ -5,13 +5,16 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from kdcube_ai_app.infra.git import auth as git_auth
 
 
-def test_build_git_env_uses_explicit_http_credentials(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_build_git_env_uses_explicit_http_credentials(tmp_path: Path):
     askpass_path = tmp_path / "git_askpass.sh"
 
-    env = git_auth.build_git_env(
+    env = await git_auth.build_git_env(
         git_http_token="pat-token",
         git_http_user="git-user",
         askpass_script_path=askpass_path,
@@ -25,8 +28,13 @@ def test_build_git_env_uses_explicit_http_credentials(tmp_path: Path):
     assert askpass_path.exists()
 
 
-def test_build_git_env_uses_explicit_ssh_settings_without_key():
-    env = git_auth.build_git_env(
+@pytest.mark.asyncio
+async def test_build_git_env_uses_explicit_ssh_settings_without_key(monkeypatch):
+    async def fake_get_secret(key, default=None, **kwargs):
+        return default
+
+    monkeypatch.setattr(git_auth, "get_secret", fake_get_secret)
+    env = await git_auth.build_git_env(
         git_ssh_known_hosts="/run/secrets/git_known_hosts",
         git_ssh_strict_host_key_checking="yes",
         base_env={},
@@ -37,16 +45,22 @@ def test_build_git_env_uses_explicit_ssh_settings_without_key():
     )
 
 
-def test_normalize_git_remote_url_rewrites_ssh_when_pat_is_present():
-    assert git_auth.normalize_git_remote_url(
+@pytest.mark.asyncio
+async def test_normalize_git_remote_url_rewrites_ssh_when_pat_is_present():
+    assert await git_auth.normalize_git_remote_url(
         "git@github.com:org/workspace.git",
         git_http_token="pat-token",
         base_env={},
     ) == "https://github.com/org/workspace.git"
 
 
-def test_normalize_git_remote_url_leaves_ssh_when_pat_is_absent():
-    assert git_auth.normalize_git_remote_url(
+@pytest.mark.asyncio
+async def test_normalize_git_remote_url_leaves_ssh_when_pat_is_absent(monkeypatch):
+    async def fake_get_secret(key, default=None, **kwargs):
+        return default
+
+    monkeypatch.setattr(git_auth, "get_secret", fake_get_secret)
+    assert await git_auth.normalize_git_remote_url(
         "git@github.com:org/workspace.git",
         base_env={},
     ) == "git@github.com:org/workspace.git"
@@ -109,41 +123,50 @@ def test_ensure_git_commit_identity_updates_existing_repo_local_identity(tmp_pat
 
 
 # ---------------------------------------------------------------------------
-# Service-secret resolution path (bundle-first, global-fallback)
+# Descriptor/settings-backed credential resolution path
 # ---------------------------------------------------------------------------
 
-def test_build_git_env_token_from_service_secret_when_no_explicit_token(monkeypatch, tmp_path):
-    """When no token is passed explicitly, get_service_secret is consulted."""
-    monkeypatch.setattr(git_auth, "get_service_secret",
-                        lambda k, default=None: "gh-bundle-token" if k == "git.http_token" else None)
+@pytest.mark.asyncio
+async def test_build_git_env_token_from_secret_when_no_explicit_token(monkeypatch, tmp_path):
+    async def fake_get_secret(key, default=None, **kwargs):
+        return "gh-bundle-token" if key == "services.git.http_token" else default
+
+    monkeypatch.setattr(git_auth, "get_secret", fake_get_secret)
     askpass = tmp_path / "askpass.sh"
 
-    env = git_auth.build_git_env(askpass_script_path=askpass, base_env={})
+    env = await git_auth.build_git_env(askpass_script_path=askpass, base_env={})
 
     assert env["GIT_HTTP_TOKEN"] == "gh-bundle-token"
     assert env.get("GIT_ASKPASS") == str(askpass)
 
 
-def test_build_git_env_user_from_service_secret_when_no_explicit_user(monkeypatch, tmp_path):
-    """Custom git.http_user from service secret is picked up."""
-    def _secrets(k, default=None):
-        return {"git.http_token": "gh-token", "git.http_user": "custom-user"}.get(k)
+@pytest.mark.asyncio
+async def test_build_git_env_user_from_secret_when_no_explicit_user(monkeypatch, tmp_path):
+    async def fake_get_secret(key, default=None, **kwargs):
+        if key == "services.git.http_token":
+            return "gh-token"
+        if key == "services.git.http_user":
+            return "custom-user"
+        return default
 
-    monkeypatch.setattr(git_auth, "get_service_secret", _secrets)
+    monkeypatch.setattr(git_auth, "get_secret", fake_get_secret)
     askpass = tmp_path / "askpass.sh"
 
-    env = git_auth.build_git_env(askpass_script_path=askpass, base_env={})
+    env = await git_auth.build_git_env(askpass_script_path=askpass, base_env={})
 
     assert env["GIT_HTTP_USER"] == "custom-user"
 
 
-def test_build_git_env_explicit_token_beats_service_secret(monkeypatch, tmp_path):
-    """Explicit git_http_token= parameter has priority over service-secret value."""
-    monkeypatch.setattr(git_auth, "get_service_secret",
-                        lambda k, default=None: "gh-should-not-use")
+@pytest.mark.asyncio
+async def test_build_git_env_explicit_token_beats_service_secret(monkeypatch, tmp_path):
+    """Explicit git_http_token= parameter has priority over settings value."""
+    async def fake_get_secret(key, default=None, **kwargs):
+        return "gh-should-not-use" if key == "services.git.http_token" else default
+
+    monkeypatch.setattr(git_auth, "get_secret", fake_get_secret)
     askpass = tmp_path / "askpass.sh"
 
-    env = git_auth.build_git_env(
+    env = await git_auth.build_git_env(
         git_http_token="gh-explicit",
         askpass_script_path=askpass,
         base_env={},
@@ -152,12 +175,16 @@ def test_build_git_env_explicit_token_beats_service_secret(monkeypatch, tmp_path
     assert env["GIT_HTTP_TOKEN"] == "gh-explicit"
 
 
-def test_build_git_env_no_token_falls_back_to_base_env(monkeypatch, tmp_path):
-    """When service secret returns nothing, GIT_HTTP_TOKEN from base_env is used."""
-    monkeypatch.setattr(git_auth, "get_service_secret", lambda k, default=None: None)
+@pytest.mark.asyncio
+async def test_build_git_env_no_token_falls_back_to_base_env(monkeypatch, tmp_path):
+    """When settings return nothing, GIT_HTTP_TOKEN from base_env is used."""
+    async def fake_get_secret(key, default=None, **kwargs):
+        return default
+
+    monkeypatch.setattr(git_auth, "get_secret", fake_get_secret)
     askpass = tmp_path / "askpass.sh"
 
-    env = git_auth.build_git_env(
+    env = await git_auth.build_git_env(
         askpass_script_path=askpass,
         base_env={"GIT_HTTP_TOKEN": "gh-env-token"},
     )
@@ -165,12 +192,15 @@ def test_build_git_env_no_token_falls_back_to_base_env(monkeypatch, tmp_path):
     assert env["GIT_HTTP_TOKEN"] == "gh-env-token"
 
 
-def test_build_git_env_default_user_when_no_user_secret(monkeypatch, tmp_path):
-    """Falls back to DEFAULT_GIT_HTTP_USER when no http_user in service secrets or base_env."""
-    monkeypatch.setattr(git_auth, "get_service_secret",
-                        lambda k, default=None: "gh-token" if k == "git.http_token" else None)
+@pytest.mark.asyncio
+async def test_build_git_env_default_user_when_no_user_secret(monkeypatch, tmp_path):
+    """Falls back to DEFAULT_GIT_HTTP_USER when no http_user in settings or base_env."""
+    async def fake_get_secret(key, default=None, **kwargs):
+        return "gh-token" if key == "services.git.http_token" else default
+
+    monkeypatch.setattr(git_auth, "get_secret", fake_get_secret)
     askpass = tmp_path / "askpass.sh"
 
-    env = git_auth.build_git_env(askpass_script_path=askpass, base_env={})
+    env = await git_auth.build_git_env(askpass_script_path=askpass, base_env={})
 
     assert env["GIT_HTTP_USER"] == git_auth.DEFAULT_GIT_HTTP_USER

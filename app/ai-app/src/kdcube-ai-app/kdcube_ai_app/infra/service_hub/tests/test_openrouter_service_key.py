@@ -2,7 +2,7 @@
 
 """
 Tests that openrouter_completion resolves its API key through
-get_service_secret (bundle-first, global-fallback).
+the async SDK get_secret helper (bundle-first, global-fallback).
 """
 
 import pytest
@@ -11,10 +11,14 @@ import kdcube_ai_app.infra.service_hub.openrouter as openrouter_mod
 
 class TestOpenrouterServiceKeyResolution:
     async def test_explicit_api_key_bypasses_service_secret(self, monkeypatch):
-        """Caller-supplied api_key is used directly; get_service_secret is not consulted."""
+        """Caller-supplied api_key is used directly; get_secret is not consulted."""
         secret_calls = []
-        monkeypatch.setattr(openrouter_mod, "get_service_secret",
-                            lambda k, default=None: secret_calls.append(k) or "should-not-use")
+
+        async def _get_secret(key, default=None):
+            secret_calls.append(key)
+            return "should-not-use"
+
+        monkeypatch.setattr(openrouter_mod, "get_secret", _get_secret)
 
         captured = {}
 
@@ -32,11 +36,13 @@ class TestOpenrouterServiceKeyResolution:
 
         assert result["success"] is True
         assert captured["auth"] == "Bearer sk-explicit"
-        assert secret_calls == []  # get_service_secret never called
+        assert secret_calls == []  # get_secret never called
 
     async def test_bundle_key_used_when_no_explicit_key(self, monkeypatch):
-        monkeypatch.setattr(openrouter_mod, "get_service_secret",
-                            lambda k, default=None: "sk-bundle-or" if k == "openrouter.api_key" else None)
+        async def _get_secret(key, default=None):
+            return "sk-bundle-or" if key == "b:services.openrouter.api_key" else None
+
+        monkeypatch.setattr(openrouter_mod, "get_secret", _get_secret)
 
         captured = {}
 
@@ -55,9 +61,12 @@ class TestOpenrouterServiceKeyResolution:
         assert captured["auth"] == "Bearer sk-bundle-or"
 
     async def test_global_key_used_when_no_bundle_override(self, monkeypatch):
-        """get_service_secret returns global key when no bundle context sets an override."""
-        monkeypatch.setattr(openrouter_mod, "get_service_secret",
-                            lambda k, default=None: "sk-global-or" if k == "openrouter.api_key" else None)
+        """get_secret returns global key when no bundle context sets an override."""
+
+        async def _get_secret(key, default=None):
+            return "sk-global-or" if key == "services.openrouter.api_key" else None
+
+        monkeypatch.setattr(openrouter_mod, "get_secret", _get_secret)
 
         captured = {}
 
@@ -76,8 +85,10 @@ class TestOpenrouterServiceKeyResolution:
         assert captured["auth"] == "Bearer sk-global-or"
 
     async def test_no_key_returns_error_dict(self, monkeypatch):
-        monkeypatch.setattr(openrouter_mod, "get_service_secret",
-                            lambda k, default=None: None)
+        async def _get_secret(key, default=None):
+            return None
+
+        monkeypatch.setattr(openrouter_mod, "get_secret", _get_secret)
 
         result = await openrouter_mod.openrouter_completion.__wrapped__(
             model="anthropic/claude-3.5-sonnet",

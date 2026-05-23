@@ -135,38 +135,67 @@ The new CLI design fixes that by making the deployment namespace first-class:
 
 The new CLI is intentionally split into phases.
 
-## 1. `kdcube init`
+## 1. `kdcube init` (first-time setup only) + `kdcube refresh` (re-init)
 
-Purpose:
+Purpose of `kdcube init`:
 
 - bootstrap a deployment workdir
 - materialize the descriptor set into it
 - materialize the selected platform snapshot into it
 
-It does not start docker compose.
+It does not start docker compose. It refuses if the target workdir is already
+initialized; use `kdcube refresh` for re-init.
 
-Target shape:
+Target shape (primary form — composes under platform default base
+`~/.kdcube/kdcube-runtime`):
 
 ```bash
 kdcube init \
-  {--project <project> --tenant <tenant>} \
-  | {--descriptors-location <dir>} \
-  [--upstream | --latest | --release <ref>]
+  --tenant <tenant> --project <project> \
+  [--descriptors-location <dir>] \
+  [--upstream | --latest | --release <ref>] \
+  [--build]
+```
+
+Advanced placement (non-default base):
+
+```bash
+kdcube init --workdir <full-namespaced-path> [...]
+kdcube init --workdir-base <base> --tenant <t> --project <p> [...]
 ```
 
 Default source selector:
 
 - `--latest`
 
-If no tenant/project is given, the default namespace is:
-
-- `default/default`
-
 If no descriptor folder is given, `init` uses the selected platform source and
 its bundled default descriptors as the bootstrap input.
 
 If tenant/project is passed without an explicit descriptor folder, the CLI is
 allowed to patch the default descriptor set with that namespace during init.
+
+Purpose of `kdcube refresh`:
+
+- re-init an existing deployment workdir without touching staged descriptors
+- stop the stack if running, optionally rebuild platform images, restart
+
+Target shape:
+
+```bash
+kdcube refresh \
+  {--tenant <t> --project <p>} | {--workdir <full>} \
+  [--latest | --upstream | --release <ref>] \
+  [--path <repo>] [--build] [--no-restart]
+```
+
+`refresh` never modifies `assembly.yaml`, `secrets.yaml`, `bundles.yaml`,
+`bundles.secrets.yaml`, or `gateway.yaml`. When no targeting flags are given
+and no defaults are set, refresh targets the currently-recorded running
+deployment. `--latest`, `--upstream`, and `--release <ref>` reuse the existing
+runtime descriptors but select a new platform source before rebuild/restart.
+Explicit `--path` without one of those selectors restages a dirty local source
+tree into the runtime repo cache before rebuild.
+deployment from `~/.kdcube/cli-lock.json`.
 
 ## 2. `kdcube defaults`
 
@@ -185,14 +214,14 @@ kdcube defaults \
 
 These defaults let normal commands omit repeated targeting flags.
 
-## 3. `kdcube --info`
+## 3. `kdcube info`
 
 Two intended levels:
 
 ### Global info
 
 ```bash
-kdcube --info
+kdcube info
 ```
 
 Shows:
@@ -208,7 +237,7 @@ guessing.
 ### Deployment info
 
 ```bash
-kdcube --info --workdir <deployment-workdir>
+kdcube info --workdir <deployment-workdir>
 ```
 
 Shows:

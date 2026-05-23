@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, Mapping
 
 try:
-    from kdcube_ai_app.apps.chat.sdk.config import get_secret, get_settings, get_user_secret
+    from kdcube_ai_app.apps.chat.sdk.config import get_secret, get_settings
     from kdcube_ai_app.apps.chat.sdk.solutions.claude_code import (
         CLAUDE_CODE_EXECUTIVE_JOURNAL_CODE_PREFIX,
         CLAUDE_CODE_EXECUTIVE_JOURNAL_PREFIX,
@@ -21,7 +21,6 @@ try:
 except Exception:  # pragma: no cover - imported by narrow unit tests without full SDK.
     get_secret = None  # type: ignore[assignment]
     get_settings = None  # type: ignore[assignment]
-    get_user_secret = None  # type: ignore[assignment]
     CLAUDE_CODE_EXECUTIVE_JOURNAL_CODE_PREFIX = "EXECUTIVE_JOURNAL_CODE"
     CLAUDE_CODE_EXECUTIVE_JOURNAL_PREFIX = "EXECUTIVE_JOURNAL"
     ClaudeCodeAgent = None  # type: ignore[assignment]
@@ -72,32 +71,32 @@ def _int_prop(entrypoint: Any, key: str, default: int) -> int:
         return default
 
 
-def _secret_lookup(*keys: str) -> str:
+async def _secret_lookup(*keys: str) -> str:
     if get_secret is None:
         return ""
     for key in keys:
-        value = get_secret(key)
+        value = await get_secret(key)
         if value:
             return str(value)
     return ""
 
 
-def _user_secret_lookup(*, user_id: str, bundle_id: str, key: str) -> str:
-    if get_user_secret is None:
+async def _user_secret_lookup(*, user_id: str, bundle_id: str, key: str) -> str:
+    if get_secret is None:
         return ""
     try:
-        value = get_user_secret(key, user_id=user_id, bundle_id=bundle_id)
+        value = await get_secret(f"u:{key}", user_id=user_id, bundle_id=bundle_id)
     except Exception:
         return ""
     return str(value or "")
 
 
-def _claude_code_env(*, entrypoint: Any, user_id: str, bundle_id: str) -> Dict[str, str]:
+async def _claude_code_env(*, entrypoint: Any, user_id: str, bundle_id: str) -> Dict[str, str]:
     env: Dict[str, str] = {}
-    anthropic_key = _secret_lookup("services.anthropic.api_key", "ANTHROPIC_API_KEY")
+    anthropic_key = await _secret_lookup("services.anthropic.api_key", "ANTHROPIC_API_KEY")
     claude_code_key = (
-        _user_secret_lookup(user_id=user_id, bundle_id=bundle_id, key="anthropic.claude_code_key")
-        or _secret_lookup("services.anthropic.claude_code_key", "CLAUDE_CODE_KEY")
+        await _user_secret_lookup(user_id=user_id, bundle_id=bundle_id, key="anthropic.claude_code_key")
+        or await _secret_lookup("services.anthropic.claude_code_key", "CLAUDE_CODE_KEY")
     )
     if anthropic_key:
         env["ANTHROPIC_API_KEY"] = anthropic_key
@@ -318,7 +317,7 @@ async def run_email_processor_with_claude_code(
             "error": {"code": "claude_code_sdk_unavailable", "message": "Claude Code SDK integration is unavailable in this runtime."},
         }
 
-    mcp_run = create_email_mcp_run(
+    mcp_run = await create_email_mcp_run(
         entrypoint=entrypoint,
         storage_root=storage_root,
         user_id=user_id,
@@ -392,7 +391,7 @@ async def run_email_processor_with_claude_code(
             model=model,
             allowed_tools=list(EMAIL_MCP_ALLOWED_TOOLS),
             workspace_config=workspace_config,
-            env=_claude_code_env(entrypoint=entrypoint, user_id=user_id, bundle_id=bundle_id),
+            env=await _claude_code_env(entrypoint=entrypoint, user_id=user_id, bundle_id=bundle_id),
             command=command,
             permission_mode="acceptEdits",
             timeout_seconds=timeout_seconds,

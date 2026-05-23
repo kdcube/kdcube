@@ -31,9 +31,8 @@ Typical keys:
 
 | Need | API | Notes |
 |---|---|---|
-| platform/global secret in async code | `await get_secret_async("canonical.key")` / `await read_secret_async("canonical.key")` | canonical dot path is the stable contract |
-| platform/global secret in sync compatibility code | `get_secret("canonical.key")` / `read_secret("canonical.key")` | keep for old sync-only code |
-| legacy env compatibility | `get_secret_async("canonical.key")` / `get_secret("canonical.key")` | also accepts the documented env aliases below |
+| platform/global secret | `await get_secret("canonical.key")` | canonical dot path is the stable contract |
+| legacy env alias | `await get_secret("canonical.key")` | also accepts the documented env aliases below |
 
 ### File-resolution env vars
 
@@ -46,24 +45,24 @@ Typical keys:
 
 | Canonical key | Accepted env alias(es) | Primary API |
 |---|---|---|
-| `services.openai.api_key` | `OPENAI_API_KEY` | `get_secret_async(...)` |
-| `services.anthropic.api_key` | `ANTHROPIC_API_KEY` | `get_secret_async(...)` |
-| `services.anthropic.claude_code_key` | `CLAUDE_CODE_KEY` | `get_secret_async(...)` |
-| `services.brave.api_key` | `BRAVE_API_KEY` | `get_secret_async(...)` |
-| `services.brave.api_comm_mid_key` | `BRAVE_API_COMM_MID_KEY` | `get_secret_async(...)` |
-| `services.google.api_key` | `GOOGLE_API_KEY`, `GEMINI_API_KEY` | `get_secret_async(...)` |
-| `services.git.http_token` | `GIT_HTTP_TOKEN` | `get_secret_async(...)` |
-| `services.git.http_user` | `GIT_HTTP_USER` | `get_secret_async(...)` |
-| `services.openrouter.api_key` | `OPENROUTER_API_KEY` | `get_secret_async(...)` |
-| `services.serpapi.api_key` | `SERPAPI_API_KEY` | `get_secret_async(...)` |
-| `services.stripe.secret_key` | `STRIPE_SECRET_KEY`, `STRIPE_API_KEY` | `get_secret_async(...)` |
-| `services.stripe.webhook_secret` | `STRIPE_WEBHOOK_SECRET` | `get_secret_async(...)` |
-| `services.huggingface.api_key` | `HUGGING_FACE_KEY`, `HUGGINGFACE_API_KEY`, `HUGGING_FACE_API_TOKEN` | `get_secret_async(...)` |
-| `services.firecrawl.api_key` | `FIRECRAWL_API_KEY` | `get_secret_async(...)` |
-| `services.email.password` | `EMAIL_PASSWORD` | `get_secret_async(...)` |
-| `auth.oidc.admin_email` | `OIDC_SERVICE_USER_EMAIL` | `get_secret_async(...)` |
-| `auth.oidc.admin_username` | `OIDC_SERVICE_ADMIN_USERNAME` | `get_secret_async(...)` |
-| `auth.oidc.admin_password` | `OIDC_SERVICE_ADMIN_PASSWORD` | `get_secret_async(...)` |
+| `services.openai.api_key` | `OPENAI_API_KEY` | `get_secret(...)` |
+| `services.anthropic.api_key` | `ANTHROPIC_API_KEY` | `get_secret(...)` |
+| `services.anthropic.claude_code_key` | `CLAUDE_CODE_KEY` | `get_secret(...)` |
+| `services.brave.api_key` | `BRAVE_API_KEY` | `get_secret(...)` |
+| `services.brave.api_comm_mid_key` | `BRAVE_API_COMM_MID_KEY` | `get_secret(...)` |
+| `services.google.api_key` | `GOOGLE_API_KEY`, `GEMINI_API_KEY` | `get_secret(...)` |
+| `services.git.http_token` | `GIT_HTTP_TOKEN` | `get_secret(...)` |
+| `services.git.http_user` | `GIT_HTTP_USER` | `get_secret(...)` |
+| `services.openrouter.api_key` | `OPENROUTER_API_KEY` | `get_secret(...)` |
+| `services.serpapi.api_key` | `SERPAPI_API_KEY` | `get_secret(...)` |
+| `services.stripe.secret_key` | `STRIPE_SECRET_KEY`, `STRIPE_API_KEY` | `get_secret(...)` |
+| `services.stripe.webhook_secret` | `STRIPE_WEBHOOK_SECRET` | `get_secret(...)` |
+| `services.huggingface.api_key` | `HUGGING_FACE_KEY`, `HUGGINGFACE_API_KEY`, `HUGGING_FACE_API_TOKEN` | `get_secret(...)` |
+| `services.firecrawl.api_key` | `FIRECRAWL_API_KEY` | `get_secret(...)` |
+| `services.email.password` | `EMAIL_PASSWORD` | `get_secret(...)` |
+| `auth.oidc.admin_email` | `OIDC_SERVICE_USER_EMAIL` | `get_secret(...)` |
+| `auth.oidc.admin_username` | `OIDC_SERVICE_ADMIN_USERNAME` | `get_secret(...)` |
+| `auth.oidc.admin_password` | `OIDC_SERVICE_ADMIN_PASSWORD` | `get_secret(...)` |
 
 ## What it is not for
 
@@ -73,8 +72,8 @@ Use `bundles.secrets.yaml` for bundle secrets.
 
 The `services.*` keys listed above can be overridden per bundle via
 `bundles.secrets.yaml` using the same key path.
-When bundle code reads a service key through `get_service_secret`, the bundle
-value takes precedence over this file.
+When bundle code wants bundle-first service-key lookup, use the explicit pattern
+`await get_secret("b:services.<name>.<key>") or await get_secret("services.<name>.<key>")`.
 See [bundles-secrets-descriptor-README.md](bundles-secrets-descriptor-README.md)
 for the override mechanism and the list of overridable keys.
 

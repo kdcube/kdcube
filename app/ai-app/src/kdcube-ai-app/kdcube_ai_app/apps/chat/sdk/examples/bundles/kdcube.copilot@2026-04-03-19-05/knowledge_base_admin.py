@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -14,12 +15,29 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from kdcube_ai_app.apps.chat.sdk.storage.ai_bundle_storage import AIBundleStorage
-from kdcube_ai_app.infra.git.auth import build_git_env as _build_git_env, normalize_git_remote_url as _normalize_git_remote_url
+from kdcube_ai_app.infra.git.auth import _build_git_env_from_values, ssh_url_to_https_url as _https_url_for_ssh
 
 
 ROOT_KEY = "knowledge_base_admin"
 AGENT_NAME = "knowledge-base-admin"
 DEFAULT_CLAUDE_CODE_MODEL = "default"
+
+
+def _build_git_env(*, git_http_token: str | None = None, git_http_user: str | None = None) -> dict[str, str]:
+    return _build_git_env_from_values(
+        token=git_http_token or os.getenv("GIT_HTTP_TOKEN"),
+        user=git_http_user or os.getenv("GIT_HTTP_USER") or "x-access-token",
+        git_ssh_key_path=None,
+        git_ssh_known_hosts=None,
+        git_ssh_strict_host_key_checking=None,
+        askpass_script_path=None,
+        base_env=os.environ,
+        logger=None,
+    )
+
+
+def _normalize_git_remote_url(git_url: str, *, git_http_token: str | None = None) -> str:
+    return _https_url_for_ssh(git_url) if (git_http_token or os.getenv("GIT_HTTP_TOKEN")) else str(git_url or "").strip()
 
 
 def _utc_now() -> str:

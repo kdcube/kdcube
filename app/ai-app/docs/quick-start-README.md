@@ -89,15 +89,21 @@ platform changes:
 ```bash
 export REPO="/abs/path/to/kdcube-ai-app"
 export DESCRIPTORS="$REPO/app/ai-app/deployment/cicd/kdcube/descriptors/local/oss-cli"
-export WORKDIR="$HOME/.kdcube/kdcube-runtime/demo-tenant__demo-project"
+export TENANT="demo-tenant"
+export PROJECT="demo-project"
 export KDCUBE="$REPO/app/venvs/ai-app/kdcube-cli/bin/kdcube"
 
 "$KDCUBE" init \
   --path "$REPO" \
   --descriptors-location "$DESCRIPTORS" \
-  --workdir "$WORKDIR" \
+  --tenant "$TENANT" --project "$PROJECT" \
   --build
 ```
+
+`--tenant`/`--project` is the primary form — the CLI composes the runtime path
+under the platform default base (`~/.kdcube/kdcube-runtime/<tenant>__<project>/`).
+For non-default placements, see [Advanced workdir
+placement](../src/kdcube-ai-app/kdcube_cli/README.md#advanced-workdir-placement).
 
 Add `--cors-origin https://<stable-ngrok-domain>` when local provider callbacks
 or Telegram Mini Apps must call your local runtime through a public HTTPS
@@ -110,7 +116,7 @@ init:
 "$KDCUBE" init \
   --path "$REPO" \
   --descriptors-location "$DESCRIPTORS" \
-  --workdir "$WORKDIR" \
+  --tenant "$TENANT" --project "$PROJECT" \
   --build \
   --set-secret services.openai.api_key "$OPENAI_API_KEY" \
   --set-secret services.anthropic.api_key "$ANTHROPIC_API_KEY" \
@@ -124,9 +130,9 @@ start containers.
 ## 4. Start, Inspect, Stop
 
 ```bash
-"$KDCUBE" start --workdir "$WORKDIR"
-"$KDCUBE" info --workdir "$WORKDIR"
-"$KDCUBE" stop --workdir "$WORKDIR"
+"$KDCUBE" start --tenant "$TENANT" --project "$PROJECT"
+"$KDCUBE" info  --tenant "$TENANT" --project "$PROJECT"
+"$KDCUBE" stop                                               # stops the deployment recorded as running
 ```
 
 Open the UI URL printed by `start` or `info`.
@@ -137,8 +143,12 @@ Default local descriptor context for the `oss-cli` seed:
 - project: `demo-project`
 
 If you changed only bundle descriptors or bundle source references, reload the
-bundle. If you changed platform code that is baked into images, rerun
-`init --build` and restart.
+bundle. If you changed platform code that is baked into images, run
+`kdcube refresh --tenant "$TENANT" --project "$PROJECT" --build` — it
+rebuilds images and restarts without touching staged descriptors.
+`refresh` accepts the same platform source selectors as `init`: add
+`--latest`, `--upstream`, or `--release <ref>` when the existing runtime should
+move to another platform ref while preserving staged descriptors.
 
 ## 5. Bundle Development Loop
 
@@ -152,7 +162,7 @@ Typical loop:
 Reload:
 
 ```bash
-"$KDCUBE" reload <bundle_id> --workdir "$WORKDIR"
+"$KDCUBE" reload <bundle_id> --tenant "$TENANT" --project "$PROJECT"
 ```
 
 Example built-in bundle ids:
@@ -166,26 +176,26 @@ Local-path bundle registration:
 
 ```bash
 "$KDCUBE" bundle my.bundle@1-0 \
-  --workdir "$WORKDIR" \
+  --tenant "$TENANT" --project "$PROJECT" \
   --local-path "/abs/path/to/my.bundle@1-0" \
   --module entrypoint \
   --no-singleton
 
-"$KDCUBE" reload my.bundle@1-0 --workdir "$WORKDIR"
+"$KDCUBE" reload my.bundle@1-0 --tenant "$TENANT" --project "$PROJECT"
 ```
 
 Git-backed bundle registration:
 
 ```bash
 "$KDCUBE" bundle my.bundle@1-0 \
-  --workdir "$WORKDIR" \
+  --tenant "$TENANT" --project "$PROJECT" \
   --git-repo "https://github.com/org/repo.git" \
   --git-ref "2026.5.16.001" \
   --git-subdir "src/my.bundle@1-0" \
   --module entrypoint \
   --no-singleton
 
-"$KDCUBE" reload my.bundle@1-0 --workdir "$WORKDIR"
+"$KDCUBE" reload my.bundle@1-0 --tenant "$TENANT" --project "$PROJECT"
 ```
 
 Bundle source paths are interpreted by the CLI. For local-path bundles, the CLI

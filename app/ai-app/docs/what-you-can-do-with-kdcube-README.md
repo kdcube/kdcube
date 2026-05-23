@@ -127,7 +127,7 @@ The same product may use several surfaces, for example:
 ```text
 Telegram message
   -> public webhook
-  -> bundle workflow
+  -> bundle entrypoint
   -> ReAct agent/tools
   -> streamed progress
   -> final Telegram response and hosted files

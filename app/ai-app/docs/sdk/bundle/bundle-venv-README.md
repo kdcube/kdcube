@@ -28,7 +28,7 @@ Do **not** use it for:
 ## Minimal pattern
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import venv
+from kdcube_ai_app.infra.plugin.bundle_loader import venv
 
 
 @venv(requirements="requirements.txt", timeout_seconds=120)
@@ -101,7 +101,7 @@ Changing only `requirements.txt`:
 Typical local loop:
 
 ```bash
-kdcube reload <bundle_id> --workdir <runtime-workdir>
+kdcube bundle reload <bundle_id> --workdir <runtime-workdir>
 ```
 
 That reload is for bundle code and descriptor-backed config. The venv cache is separate.

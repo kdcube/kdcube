@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
-from kdcube_ai_app.infra.plugin.agentic_loader import discover_bundle_interface_manifest
+from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
+from kdcube_ai_app.infra.plugin.bundle_loader import discover_bundle_interface_manifest
 
 
 def _bundle_root() -> Path:
@@ -67,6 +69,41 @@ def _request(*, header_name: str, header_value: str | None) -> Request:
             "http_version": "1.1",
         },
         receive=_receive,
+    )
+
+
+class _Relay:
+    async def emit(self, *, event: str, data: dict, **kwargs) -> None:
+        return None
+
+
+class _Logger:
+    def __init__(self):
+        self.lines = []
+
+    def log(self, message, level=None):
+        self.lines.append((level, message))
+
+
+def _comm() -> ChatCommunicator:
+    return ChatCommunicator(
+        emitter=_Relay(),
+        tenant="tenant-a",
+        project="project-a",
+        user_id="user-1",
+        user_type="registered",
+        service={
+            "request_id": "req-1",
+            "tenant": "tenant-a",
+            "project": "project-a",
+            "user": "user-1",
+            "bundle_id": "kdcube.copilot",
+        },
+        conversation={
+            "session_id": "session-1",
+            "conversation_id": "conversation-1",
+            "turn_id": "turn-1",
+        },
     )
 
 
@@ -142,3 +179,65 @@ def test_kdcube_doc_mcp_builds_fresh_stateless_app_per_request():
 
     assert first is not second
     assert [name for name, _app in built] == ["kdcube-doc", "kdcube-doc"]
+
+
+def test_event_recording_configures_react_scope_from_endpoint_and_secret(monkeypatch):
+    mod = _load_entrypoint_module()
+    workflow = object.__new__(mod.ReactWorkflow)
+    workflow._comm = _comm()
+    workflow.logger = _Logger()
+    workflow.config = SimpleNamespace(ai_bundle_spec=SimpleNamespace(id="kdcube.copilot"))
+    workflow.bundle_prop = lambda key, default=None: (
+        "http://stats.local/telemetry/events" if key == "telemetry_sink.endpoint_url" else default
+    )
+    monkeypatch.setattr(
+        mod,
+        "get_secret",
+        lambda key: "telemetry-token" if key == mod.TELEMETRY_SINK_TOKEN_SECRET else None,
+    )
+
+    workflow._configure_event_recording()
+
+    recording = workflow.comm.recording_config()
+    assert workflow.comm.event_sink is not None
+    assert recording["enabled"] is True
+    assert recording["scopes"][0]["scope"] == {
+        "owner": "react",
+        "bundle": "kdcube.copilot",
+        "runtime": "on_message",
+    }
+
+
+@pytest.mark.anyio
+async def test_doc_reader_mcp_call_records_and_sends_scoped_event():
+    mod = _load_entrypoint_module()
+    workflow = object.__new__(mod.ReactWorkflow)
+    workflow._comm = _comm()
+    workflow.logger = _Logger()
+    workflow.config = SimpleNamespace(ai_bundle_spec=SimpleNamespace(id="kdcube.copilot"))
+    sent_batches = []
+
+    async def sink(batch, **kwargs):
+        sent_batches.append((batch, kwargs))
+        return {"accepted": len(batch)}
+
+    workflow._make_event_sink = lambda: sink
+
+    await workflow._record_doc_reader_mcp_call(
+        {
+            "mcp_name": "doc_reader",
+            "tool": "search",
+            "duration_ms": 12,
+            "result_count": 2,
+            "query_len": 40,
+            "status": "completed",
+        }
+    )
+
+    assert len(sent_batches) == 1
+    batch, kwargs = sent_batches[0]
+    assert len(batch) == 1
+    assert batch[0]["type"] == "kdcube.copilot.mcp.call"
+    assert batch[0]["data"]["tool"] == "search"
+    assert kwargs["filter"] == mod.MCP_EVENT_RECORD_SELECTOR
+    assert workflow.comm.export_recorded_events() == []

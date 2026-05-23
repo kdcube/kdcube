@@ -3,12 +3,13 @@ id: ks:docs/configuration/bundles-secrets-descriptor-README.md
 title: "Bundles Secrets Descriptor"
 summary: "Deployment-scoped bundle secret configuration in bundles.secrets.yaml: per-bundle credentials, integration tokens, provider service key overrides, and bundle secrets across local file mode and AWS."
 tags: ["service", "configuration", "bundle", "secrets", "deployment", "descriptor"]
-keywords: ["bundle secret inventory", "per-bundle credentials", "integration tokens", "bundle api keys", "deployment-scoped bundle secrets", "local secrets file mode", "aws secrets manager bundle secrets", "bundle secret provider", "bundle secret export path", "service key override", "per-bundle provider key", "get_service_secret", "bundle openai key", "bundle anthropic key", "bundle stripe key", "bundle git token", "services namespace override"]
+keywords: ["bundle secret inventory", "per-bundle credentials", "integration tokens", "bundle api keys", "deployment-scoped bundle secrets", "local secrets file mode", "aws secrets manager bundle secrets", "bundle secret provider", "bundle secret export path", "service key override", "per-bundle provider key", "get_secret", "bundle openai key", "bundle anthropic key", "bundle stripe key", "bundle git token", "services namespace override"]
 see_also:
   - ks:docs/service/cicd/descriptors-README.md
   - ks:docs/configuration/bundles-descriptor-README.md
   - ks:docs/configuration/secrets-descriptor-README.md
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
+  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
   - ks:docs/configuration/runtime-configuration-and-secrets-store-README.md
 ---
 # Bundles Secrets Descriptor
@@ -84,17 +85,16 @@ bundles:
 
 ### How to read a service key in bundle code
 
-Use `get_service_secret` / `get_service_secret_async` instead of `get_settings()`
-or raw `get_secret_async`:
+Use `await get_secret("b:...")` for the bundle-scoped override and fall back to
+the platform/global key when needed:
 
 ```python
-from kdcube_ai_app.apps.chat.sdk.config import (
-    get_service_secret,
-    get_service_secret_async,
-)
+from kdcube_ai_app.apps.chat.sdk.config import get_secret
 
-api_key = get_service_secret("openai.api_key")
-api_key = await get_service_secret_async("openai.api_key")
+api_key = (
+    await get_secret("b:services.openai.api_key")
+    or await get_secret("services.openai.api_key")
+)
 ```
 
 Resolution order:
@@ -111,9 +111,8 @@ The current bundle id is resolved from the async-task-local request context
 
 | Need | API | Notes |
 |---|---|---|
-| secret for the current bundle in async code | `await get_secret_async("b:group.key")` | Expands to `bundles.<current_bundle_id>.secrets.group.key` |
-| explicit bundle-scoped secret in async code | `await get_secret_async("bundles.<bundle_id>.secrets.group.key")` | Use when bundle id is known explicitly |
-| compatibility sync reads | `get_secret("b:group.key")` | Keep for old sync-only code |
+| secret for the current bundle in async code | `await get_secret("b:group.key")` | Expands to `bundles.<current_bundle_id>.secrets.group.key` |
+| explicit bundle-scoped secret in async code | `await get_secret("bundles.<bundle_id>.secrets.group.key")` | Use when bundle id is known explicitly |
 | write current bundle secret | `await set_bundle_secret("group.key", value)` | Persists into the configured secrets provider |
 
 ### File-resolution env vars
@@ -128,7 +127,7 @@ The current bundle id is resolved from the async-task-local request context
 | `bundles.secrets.yaml` field | Used by | Notes |
 |---|---|---|
 | `bundles.items[].id` | bundle-scoped secret path resolution | must match the bundle id in `bundles.yaml` |
-| `bundles.items[].secrets.*` | `get_secret_async("b:...")` in async code | values are bundle-scoped secret leaves |
+| `bundles.items[].secrets.*` | `get_secret("b:...")` in async code | values are bundle-scoped secret leaves |
 
 ## Authority by mode
 

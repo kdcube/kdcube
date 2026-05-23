@@ -12,19 +12,19 @@ from pathlib import Path
 import logging
 
 from kdcube_ai_app.apps.chat.reg import MODEL_CONFIGS, EMBEDDERS
+from kdcube_ai_app.apps.chat.sdk.config import get_secret
 from kdcube_ai_app.apps.knowledge_base.db.providers.tenant_db import TenantDB
 from kdcube_ai_app.apps.knowledge_base.tenant import TenantProjects
 from kdcube_ai_app.infra.llm.llm_data_model import AIProvider, ModelRecord, AIProviderName
-from kdcube_ai_app.infra.llm.util import get_service_key_fn
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("KB.Debug pipeline")
 
-def metadata_model() -> ModelRecord:
+async def metadata_model() -> ModelRecord:
 
     provider = AIProviderName.open_ai
     provider = AIProvider(provider=provider,
-                          apiToken=get_service_key_fn(provider))
+                          apiToken=await get_secret("services.openai.api_key", default="") or "")
     # model_config = MODEL_CONFIGS.get("gpt-4.1-nano", {})
     model_config = MODEL_CONFIGS.get("gpt-4o", {})
     model_name = model_config.get("model_name")
@@ -36,14 +36,14 @@ def metadata_model() -> ModelRecord:
 
     return model_record
 
-def embedding_model() -> ModelRecord:
+async def embedding_model() -> ModelRecord:
 
     # from kdcube_ai_app.infra.embedding.embedding import embedder_model
     # Use OpenAI embeddings (1536 dimensions)
     # return embedder_model(size=1536, get_key_fn=get_api_key)
     provider = AIProviderName.open_ai
     provider = AIProvider(provider=provider,
-                          apiToken=get_service_key_fn(provider))
+                          apiToken=await get_secret("services.openai.api_key", default="") or "")
     model_config = EMBEDDERS.get("openai-text-embedding-3-small")
     model_name = model_config.get("model_name")
     dim = model_config.get("dim")
@@ -55,6 +55,20 @@ def embedding_model() -> ModelRecord:
         metadata={
             "dim": dim
         }
+    )
+
+def _embedding_model_without_provider_secret() -> ModelRecord:
+    provider = AIProviderName.open_ai
+    provider_record = AIProvider(provider=provider, apiToken=os.getenv("OPENAI_API_KEY") or "")
+    model_config = EMBEDDERS.get("openai-text-embedding-3-small")
+    model_name = model_config.get("model_name")
+    dim = model_config.get("dim")
+    return ModelRecord(
+        modelType="base",
+        status="active",
+        provider=provider_record,
+        systemName=model_name,
+        metadata={"dim": dim},
     )
 
 TENANT_ID = os.environ.get("TENANT_ID", "home")
@@ -112,7 +126,7 @@ async def simple_kb_debug(workdir: str,
         storage_backend=tenant_storage_backend,
         tenant_db=_tenant_db,
         tenant_id=TENANT_ID,
-        embedding_model_factory=embedding_model
+        embedding_model_factory=_embedding_model_without_provider_secret
     )
     logger.info(f"✓ Tenant projects created")
     try:
@@ -128,7 +142,7 @@ async def simple_kb_debug(workdir: str,
             raise
 
     project_storage_backend = create_storage_backend(project_storage_path)
-    kb = KnowledgeBase(tenant, project, project_storage_backend, embedding_model=embedding_model(), processing_mode=processing_mode)
+    kb = KnowledgeBase(tenant, project, project_storage_backend, embedding_model=await embedding_model(), processing_mode=processing_mode)
     logger.info(f"✓ KB created")
 
     # 3. Add resource
@@ -166,7 +180,7 @@ async def simple_kb_debug(workdir: str,
                                   version,
                                   stages=["metadata"], stages_config={
                 "metadata": {
-                    "model_record": metadata_model(),
+                    "model_record": await metadata_model(),
                     "use_batch": False
                 },
             },
@@ -194,7 +208,7 @@ async def simple_kb_debug(workdir: str,
         await kb.process_resource(resource_id, version, stages=["embedding"],
                                   stages_config={
                                       "embedding": {
-                                          "model_record": embedding_model()
+                                          "model_record": await embedding_model()
                                       },
                                   }, force_reprocess=True)
         logger.info(f"  ✓ Embeddings done ({time.time() - start_time:.1f}s)")

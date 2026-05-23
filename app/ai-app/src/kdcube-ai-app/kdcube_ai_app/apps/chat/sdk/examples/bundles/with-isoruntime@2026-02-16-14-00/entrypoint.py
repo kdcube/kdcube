@@ -3,10 +3,10 @@
 #
 # ── entrypoint.py ──
 # Bundle entry point. This file registers the bundle in the plugin system
-# via the @agentic_workflow decorator and defines how the bundle is launched.
+# via the @bundle_entrypoint decorator and defines how the bundle is launched.
 #
 # What it does:
-#   1. Registers the bundle under the name "with-isoruntime" (@agentic_workflow)
+#   1. Registers the bundle under the name "with-isoruntime" (@bundle_entrypoint)
 #   2. Builds a LangGraph StateGraph with a single "orchestrate" node
 #   3. The "orchestrate" node initializes all dependencies (DB, indexes, RAG)
 #      and delegates execution to WithIsoRuntimeWorkflow.process()
@@ -20,7 +20,7 @@
 #
 # To create your own bundle:
 #   - Subclass BaseEntrypoint
-#   - Decorate with @agentic_workflow(name=..., version=..., priority=...)
+#   - Decorate with @bundle_entrypoint(name=..., version=..., priority=...)
 #   - Implement _build_graph() → LangGraph StateGraph
 #   - Implement execute_core() to invoke the graph
 #   - Optionally override configuration (role_models) and suggestions()
@@ -34,7 +34,7 @@ from langgraph.graph import StateGraph, START, END
 from kdcube_ai_app.apps.chat.sdk.context.vector.conv_ticket_store import ConvTicketStore
 from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload
 from kdcube_ai_app.infra.service_hub.inventory import Config, BundleState
-from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow
+from kdcube_ai_app.infra.plugin.bundle_loader import bundle_entrypoint
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint import BaseEntrypoint
 
 from .workflow import WithIsoRuntimeWorkflow
@@ -44,10 +44,10 @@ from .exec import scenarios
 BUNDLE_ID = "with-isoruntime"
 
 
-# @agentic_workflow — registration decorator: on application startup the system
+# @bundle_entrypoint — registration decorator: on application startup the system
 # scans all bundles and auto-loads classes decorated with this.
 # priority=100 — selection order when multiple bundles match (higher = preferred)
-@agentic_workflow(name=BUNDLE_ID, version="1.0.0", priority=100)
+@bundle_entrypoint(name=BUNDLE_ID, version="1.0.0", priority=100)
 class Entrypoint(BaseEntrypoint):
     """Minimal bundle with context search + react + simple answer."""
 

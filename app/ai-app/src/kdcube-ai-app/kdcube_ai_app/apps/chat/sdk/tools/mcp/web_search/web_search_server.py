@@ -28,10 +28,10 @@ _SERVICE: Optional[ModelServiceBase] = None
 _CACHE = None
 
 
-def _get_service() -> ModelServiceBase:
+async def _get_service() -> ModelServiceBase:
     global _SERVICE
     if _SERVICE is None:
-        _SERVICE = _build_model_service_from_env()
+        _SERVICE = await _build_model_service_from_env()
     return _SERVICE
 
 
@@ -53,7 +53,7 @@ async def web_search(
     country: Optional[str] = None,
     safesearch: str = "moderate",
 ) -> List[Dict[str, Any]]:
-    svc = _get_service()
+    svc = await _get_service()
     cache = _get_cache()
     return await search_backends.web_search(
         _SERVICE=svc,

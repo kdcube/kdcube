@@ -2,7 +2,7 @@ bundle:
   repo: "https://github.com/kdcube/kdcube-ai-app.git"
   ref: "2026.5.16.407"
   description: |
-    User-memory, Telegram WebApp, and economics release for kdcube.copilot.
+    User-memory, Telegram WebApp, economics, and telemetry sink release for kdcube.copilot.
 
     Highlights
 
@@ -27,10 +27,15 @@ bundle:
     - Keeps the economics pre-run hook compatible with both legacy
       `pre_run_hook(state=...)` subclasses and newer hooks that accept
       `econ_ctx`.
+    - Adds the SDK stats telemetry sink wiring for copilot ReAct turns and
+      doc-reader MCP calls. The sink uses a configured POST endpoint plus
+      bearer token and does not write local telemetry files.
+    - Adds bundle-local config templates for knowledge, MCP auth, Telegram,
+      `copilot_webapp`, and `telemetry_sink.endpoint_url`.
 
     Known follow-ups
 
     - Validate the Copilot Telegram WebApp with a real BotFather WebApp button
       and deployed public origin.
-    - Add fuller Copilot bundle maintainer docs after the first field test of
-      the Telegram + memory workflow.
+    - Validate telemetry ingestion against the selected stats receiver endpoint
+      in the deployed demo environment.

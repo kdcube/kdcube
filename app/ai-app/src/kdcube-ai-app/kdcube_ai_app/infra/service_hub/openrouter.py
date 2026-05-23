@@ -18,7 +18,7 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
-from kdcube_ai_app.apps.chat.sdk.config import get_service_secret
+from kdcube_ai_app.apps.chat.sdk.config import get_secret
 
 import aiohttp
 
@@ -174,7 +174,12 @@ async def openrouter_completion(
         success : bool
         error : str | None
     """
-    resolved_key = api_key or get_service_secret("openrouter.api_key") or ""
+    resolved_key = (
+        api_key
+        or await get_secret("b:services.openrouter.api_key")
+        or await get_secret("services.openrouter.api_key")
+        or ""
+    )
     if not resolved_key:
         return {
             "text": "",

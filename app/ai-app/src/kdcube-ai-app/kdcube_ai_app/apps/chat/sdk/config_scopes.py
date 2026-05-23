@@ -6,7 +6,6 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
-from kdcube_ai_app.infra.secrets import get_secrets_manager
 
 def _descriptors_dir() -> Path | None:
     raw = str(os.getenv("PLATFORM_DESCRIPTORS_DIR") or "").strip()
@@ -152,21 +151,6 @@ def _parse_plain_key(key: str) -> tuple[Path, str]:
 
 class PLATFORM_CONFIG(BaseSettings):
     GATEWAY_COMPONENT: str | None = None
-
-    # ── secret fetching ───────────────────────────────────────────────────────
-
-    def _fetch_secret(self, key: str) -> str | None:
-        manager_factory = get_secrets_manager
-        try:
-            from kdcube_ai_app.apps.chat.sdk import config as sdk_config
-
-            manager_factory = getattr(sdk_config, "get_secrets_manager", manager_factory)
-        except Exception:
-            pass
-        try:
-            return manager_factory(self).get_secret(key)
-        except Exception:
-            return None
 
     # ── low-level env readers (typed, None when absent / unparseable) ─────────
 

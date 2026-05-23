@@ -167,3 +167,52 @@ async def test_browser_folds_external_events_into_history_and_current_turn(tmp_p
         assert int(browser.timeline.last_external_event_seq or 0) == 2
     finally:
         await browser.stop_external_event_listener()
+
+
+@pytest.mark.asyncio
+async def test_browser_marks_applied_external_events_consumed(tmp_path):
+    redis = _FakeRedis()
+    source = build_conversation_external_event_source(
+        redis=redis,
+        tenant="tenant",
+        project="project",
+        conversation_id="conv_1",
+    )
+    runtime = RuntimeCtx(
+        tenant="tenant",
+        project="project",
+        user_id="user_1",
+        user_type="privileged",
+        conversation_id="conv_1",
+        turn_id="turn_current",
+        bundle_id="bundle@1",
+        started_at="2026-04-11T10:00:00Z",
+        outdir=str(tmp_path / "out"),
+        workdir=str(tmp_path / "work"),
+        external_event_source=source,
+    )
+    browser = ContextBrowser(
+        ctx_client=_FakeCtxClient(),
+        runtime_ctx=runtime,
+    )
+
+    await browser.load_timeline()
+    event = await source.publish(
+        kind="followup",
+        explicit=True,
+        target_turn_id="turn_current",
+        active_turn_id_at_ingress="turn_current",
+        owner_turn_id="turn_current",
+        source="ingress.sse",
+        text="current followup",
+        payload={"message": "current followup"},
+    )
+    try:
+        changed = await browser.apply_external_events([event], call_hooks=False)
+
+        assert changed > 0
+        stored = await source.get_event(event.message_id)
+        assert stored is not None
+        assert stored.consumed_by_turn_id == "turn_current"
+    finally:
+        await browser.stop_external_event_listener()

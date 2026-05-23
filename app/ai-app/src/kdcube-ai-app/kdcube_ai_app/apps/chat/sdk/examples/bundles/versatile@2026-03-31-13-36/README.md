@@ -271,12 +271,6 @@ from kdcube_ai_app.apps.chat.sdk.config import get_secret
 snapshot_hmac_key = get_secret("b:preferences.snapshot_hmac_key")
 ```
 
-The fully qualified form remains valid too:
-
-```python
-get_secret("bundles.versatile@2026-03-31-13-36.secrets.preferences.snapshot_hmac_key")
-```
-
 Secrets-manager configuration:
 
 - local/dev sidecar:

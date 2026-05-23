@@ -31,12 +31,11 @@ from kdcube_ai_app.infra.accounting.usage import (
     ClientConfigHint,
 )
 from kdcube_ai_app.infra.llm.llm_data_model import ModelRecord, AIProvider, AIProviderName
-from kdcube_ai_app.infra.llm.util import get_service_key_fn
 from kdcube_ai_app.infra.embedding.embedding import get_embedding
 from kdcube_ai_app.infra.plugin.bundle_registry import BundleSpec
 import kdcube_ai_app.infra.service_hub.errors as service_errors
 import kdcube_ai_app.apps.chat.sdk.tools.citations as citation_utils
-from kdcube_ai_app.apps.chat.sdk.config import get_settings, get_plain
+from kdcube_ai_app.apps.chat.sdk.config import get_settings, get_plain, get_secret
 from kdcube_ai_app.infra.service_hub.message_utils import (
     extract_message_blocks,
     normalize_blocks,
@@ -524,6 +523,8 @@ class ConfigRequest(BaseModel):
     openai_api_key: Optional[str] = None
     claude_api_key: Optional[str] = None
     google_api_key: Optional[str] = None
+    huggingface_api_key: Optional[str] = None
+    openrouter_api_key: Optional[str] = None
 
 
     # RAG embeddings
@@ -561,6 +562,35 @@ class ConfigRequest(BaseModel):
     project: Optional[str] = None
     assistant_signal_spec: Optional[str] = None
 
+
+async def resolve_config_request_secrets(
+        config_request: ConfigRequest,
+        *,
+        bundle_id: str | None = None,
+) -> ConfigRequest:
+    """Resolve provider-backed model credentials before sync client factories run."""
+    updates: dict[str, str] = {}
+
+    async def _resolve(field: str, canonical_key: str) -> None:
+        if getattr(config_request, field, None):
+            return
+        value = None
+        if bundle_id:
+            value = await get_secret(f"b:{canonical_key}", bundle_id=bundle_id)
+        value = value or await get_secret(canonical_key)
+        if value:
+            updates[field] = value
+
+    await _resolve("openai_api_key", "services.openai.api_key")
+    await _resolve("claude_api_key", "services.anthropic.api_key")
+    await _resolve("google_api_key", "services.google.api_key")
+    await _resolve("huggingface_api_key", "services.huggingface.api_key")
+    await _resolve("openrouter_api_key", "services.openrouter.api_key")
+
+    if not updates:
+        return config_request
+    return config_request.model_copy(update=updates)
+
 class Config:
     """
     Central config: keys, embedding, and ROLE → {provider, model} mapping.
@@ -570,12 +600,16 @@ class Config:
                  openai_api_key: Optional[str] = None,
                  claude_api_key: Optional[str] = None,
                  google_api_key: Optional[str] = None,
+                 huggingface_api_key: Optional[str] = None,
+                 openrouter_api_key: Optional[str] = None,
                  embedding_model: Optional[str] = None,
                  default_llm_model: Optional[str] = None,
                  role_models: Optional[Dict[str, Dict[str, str]]] = None):
         self.openai_api_key = openai_api_key or ""
         self.claude_api_key = claude_api_key or ""
         self.google_api_key = google_api_key or ""
+        self.huggingface_api_key = huggingface_api_key or ""
+        self.openrouter_api_key = openrouter_api_key or ""
 
         # Gemini cache options
         self.gemini_cache_enabled: bool = bool(get_plain("a:services.llm.gemini.gemini_cache_enabled", False))
@@ -748,6 +782,10 @@ def create_workflow_config(config_request: ConfigRequest) -> Config:
         cfg.claude_api_key = config_request.claude_api_key
     if config_request.google_api_key:                    # <<< NEW (google)
         cfg.google_api_key = config_request.google_api_key
+    if config_request.huggingface_api_key:
+        cfg.huggingface_api_key = config_request.huggingface_api_key
+    if config_request.openrouter_api_key:
+        cfg.openrouter_api_key = config_request.openrouter_api_key
 
     # Gemini cache
     if config_request.gemini_cache_enabled is not None:
@@ -789,7 +827,7 @@ def create_workflow_config(config_request: ConfigRequest) -> Config:
     return cfg
 
 
-def _build_model_service_from_env() -> "ModelServiceBase":
+async def _build_model_service_from_env() -> "ModelServiceBase":
     """
     Build ModelServiceBase from environment variables.
     Used by MCP servers and other lightweight entrypoints.
@@ -804,14 +842,15 @@ def _build_model_service_from_env() -> "ModelServiceBase":
         except Exception:
             role_models = None
 
-    req = ConfigRequest(
+    req = await resolve_config_request_secrets(ConfigRequest(
         openai_api_key=settings.OPENAI_API_KEY,
         claude_api_key=settings.ANTHROPIC_API_KEY,
         google_api_key=settings.GOOGLE_API_KEY,
+        openrouter_api_key=settings.OPENROUTER_API_KEY,
         role_models=role_models,
         tenant=settings.TENANT,
         project=settings.PROJECT,
-    )
+    ))
     cfg = create_workflow_config(req)
     return ModelServiceBase(cfg)
 
@@ -848,10 +887,11 @@ class ModelRouter:
         return {"provider": provider, "model": model}
 
     def _mk_openai(self, model: str, temperature: float) -> ChatOpenAI:
-        from kdcube_ai_app.apps.chat.sdk.config import get_service_secret
+        from kdcube_ai_app.apps.chat.sdk.config import get_settings
+        settings = get_settings()
         return make_chat_openai(
             model=model,                      # e.g., "o3-mini" or "gpt-4o"
-            api_key=self.config.openai_api_key or get_service_secret("openai.api_key"),
+            api_key=self.config.openai_api_key or getattr(settings, "OPENAI_API_KEY", None),
             temperature=temperature,          # user knob (may be ignored for reasoning models)
             stream_usage=True
         )
@@ -866,11 +906,12 @@ class ModelRouter:
     def _mk_anthropic(self):
         if self._anthropic_client:
             return self._anthropic_client
-        from kdcube_ai_app.apps.chat.sdk.config import get_service_secret
+        from kdcube_ai_app.apps.chat.sdk.config import get_settings
+        settings = get_settings()
         try:
             import anthropic
             self._anthropic_client = anthropic.Anthropic(
-                api_key=self.config.claude_api_key or get_service_secret("anthropic.api_key")
+                api_key=self.config.claude_api_key or getattr(settings, "ANTHROPIC_API_KEY", None)
             )
             return self._anthropic_client
         except ImportError:
@@ -879,16 +920,18 @@ class ModelRouter:
     def _mk_anthropic_async(self):
         if self._anthropic_async:
             return self._anthropic_async
-        from kdcube_ai_app.apps.chat.sdk.config import get_service_secret
+        from kdcube_ai_app.apps.chat.sdk.config import get_settings
+        settings = get_settings()
         import anthropic
         self._anthropic_async = anthropic.AsyncAnthropic(
-            api_key=self.config.claude_api_key or get_service_secret("anthropic.api_key")
+            api_key=self.config.claude_api_key or getattr(settings, "ANTHROPIC_API_KEY", None)
         )
         return self._anthropic_async
 
     def _mk_gemini(self, model: str, temperature: float) -> "GeminiModelClient":
-        from kdcube_ai_app.apps.chat.sdk.config import get_service_secret
-        google_api_key = self.config.google_api_key or get_service_secret("google.api_key")
+        from kdcube_ai_app.apps.chat.sdk.config import get_settings
+        settings = get_settings()
+        google_api_key = self.config.google_api_key or getattr(settings, "GOOGLE_API_KEY", None)
         if not google_api_key:
             raise ValueError("Gemini provider requires GEMINI_API_KEY or google_api_key in ConfigRequest")
 
@@ -1084,9 +1127,10 @@ Please fix the JSON to match the expected format. Return only the fixed JSON, no
             return {"success": False, "error": str(e), "raw": raw_output}
 
 from kdcube_ai_app.apps.chat.reg import EMBEDDERS
-def embedding_model() -> ModelRecord:
+async def embedding_model() -> ModelRecord:
     provider_name = AIProviderName.open_ai
-    provider = AIProvider(provider=provider_name, apiToken=get_service_key_fn(provider_name))
+    api_token = await get_secret("services.openai.api_key", default="") or ""
+    provider = AIProvider(provider=provider_name, apiToken=api_token)
     model_config = EMBEDDERS.get("openai-text-embedding-3-small")
     model_name = model_config.get("model_name")
     return ModelRecord(
@@ -1118,16 +1162,17 @@ class ModelServiceBase:
         self._init_embeddings()
 
     def _resolve_embedder_api_key(self, provider: AIProviderName) -> str:
+        settings = get_settings()
         if provider == AIProviderName.open_ai:
-            return self.config.openai_api_key or get_service_key_fn(provider)
+            return self.config.openai_api_key or getattr(settings, "OPENAI_API_KEY", None) or ""
         if provider == AIProviderName.anthropic:
-            return self.config.claude_api_key or get_service_key_fn(provider)
+            return self.config.claude_api_key or getattr(settings, "ANTHROPIC_API_KEY", None) or ""
         if provider == AIProviderName.google:
-            return self.config.google_api_key or get_service_key_fn(provider)
+            return self.config.google_api_key or getattr(settings, "GOOGLE_API_KEY", None) or ""
         if provider == AIProviderName.hugging_face:
-            return get_service_key_fn(provider)
+            return self.config.huggingface_api_key or getattr(settings, "HUGGING_FACE_KEY", None) or ""
         if provider == AIProviderName.open_router:
-            return get_service_key_fn(provider)
+            return self.config.openrouter_api_key or getattr(settings, "OPENROUTER_API_KEY", None) or ""
         return ""
 
     def _init_embeddings(self) -> None:
@@ -3044,11 +3089,11 @@ if __name__ == "__main__":
         # m = "claude-sonnet-4-20250514"
         role = "segment_enrichment"
         settings = get_settings()
-        req = ConfigRequest(
+        req = await resolve_config_request_secrets(ConfigRequest(
             openai_api_key=settings.OPENAI_API_KEY,
             claude_api_key=settings.ANTHROPIC_API_KEY,
             role_models={ role: {"provider": "anthropic", "model": m}},
-        )
+        ))
         ms = ModelServiceBase(create_workflow_config(req))
         client = ms.get_client(role)
 

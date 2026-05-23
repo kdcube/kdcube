@@ -4,7 +4,7 @@ from kdcube_ai_app.apps.chat.sdk import config as sdk_config
 
 
 class _NoopSecretsManager:
-    def get_secret(self, key: str):
+    async def get_secret(self, key: str):
         return None
 
 

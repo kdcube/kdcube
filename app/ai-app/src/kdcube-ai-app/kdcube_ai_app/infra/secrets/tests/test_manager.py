@@ -24,26 +24,45 @@ class _FakeAwsSecretsClient:
     def __init__(self, initial: dict[str, str] | None = None):
         self.data = dict(initial or {})
 
-    def get_secret_value(self, *, SecretId: str):
+    async def get_secret_value(self, *, SecretId: str):
         if SecretId not in self.data:
             raise _FakeAwsClientError("ResourceNotFoundException")
         return {"SecretString": self.data[SecretId]}
 
-    def put_secret_value(self, *, SecretId: str, SecretString: str):
+    async def put_secret_value(self, *, SecretId: str, SecretString: str):
         if SecretId not in self.data:
             raise _FakeAwsClientError("ResourceNotFoundException")
         self.data[SecretId] = SecretString
         return {"ARN": SecretId}
 
-    def create_secret(self, *, Name: str, SecretString: str):
+    async def create_secret(self, *, Name: str, SecretString: str):
         self.data[Name] = SecretString
         return {"ARN": Name}
 
-    def delete_secret(self, *, SecretId: str, ForceDeleteWithoutRecovery: bool):
+    async def delete_secret(self, *, SecretId: str, ForceDeleteWithoutRecovery: bool):
         if SecretId not in self.data:
             raise _FakeAwsClientError("ResourceNotFoundException")
         self.data.pop(SecretId, None)
         return {"ARN": SecretId}
+
+
+class _FakeAwsClientContext:
+    def __init__(self, client: _FakeAwsSecretsClient):
+        self.client = client
+
+    async def __aenter__(self):
+        return self.client
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakeAwsSession:
+    def __init__(self, client: _FakeAwsSecretsClient):
+        self._client = client
+
+    def client(self, *_args, **_kwargs):
+        return _FakeAwsClientContext(self._client)
 
 
 def test_build_secrets_manager_config_uses_env_and_ignores_gateway_json(monkeypatch):
@@ -89,11 +108,12 @@ def test_aws_sm_secret_path_uses_grouped_documents():
     )
 
 
-def test_aws_sm_manager_reads_grouped_documents_and_virtual_metadata():
+@pytest.mark.asyncio
+async def test_aws_sm_manager_reads_grouped_documents_and_virtual_metadata():
     manager = AwsSecretsManagerSecretsManager(
         SecretsManagerConfig(provider="aws-sm", component="proc", aws_sm_prefix="kdcube/demo/demo-march")
     )
-    manager._client = _FakeAwsSecretsClient(
+    client = _FakeAwsSecretsClient(
         {
             "kdcube/demo/demo-march/platform/secrets": json.dumps(
                 {"services": {"openai": {"api_key": "sk-openai"}}}
@@ -106,25 +126,27 @@ def test_aws_sm_manager_reads_grouped_documents_and_virtual_metadata():
             ),
         }
     )
+    manager._session = _FakeAwsSession(client)
 
-    assert manager.get_secret("services.openai.api_key") == "sk-openai"
+    assert await manager.get_secret("services.openai.api_key") == "sk-openai"
     assert (
-        manager.get_secret("bundles.user-mgmt@1-0.secrets.user_management.cognito_user_pool_id") == "pool-123"
+        await manager.get_secret("bundles.user-mgmt@1-0.secrets.user_management.cognito_user_pool_id") == "pool-123"
     )
     assert (
-        manager.get_secret("users.user-1.bundles.user-mgmt@1-0.secrets.google.refresh_token") == "rt-user"
+        await manager.get_secret("users.user-1.bundles.user-mgmt@1-0.secrets.google.refresh_token") == "rt-user"
     )
-    assert json.loads(manager.get_secret("bundles.user-mgmt@1-0.secrets.__keys") or "[]") == [
+    assert json.loads(await manager.get_secret("bundles.user-mgmt@1-0.secrets.__keys") or "[]") == [
         "bundles.user-mgmt@1-0.secrets.user_management.cognito_user_pool_id",
         "bundles.user-mgmt@1-0.secrets.user_management.dry_run",
     ]
 
 
-def test_aws_sm_manager_falls_back_to_aggregate_bundle_blob_and_legacy_leafs():
+@pytest.mark.asyncio
+async def test_aws_sm_manager_falls_back_to_aggregate_bundle_blob_and_legacy_leafs():
     manager = AwsSecretsManagerSecretsManager(
         SecretsManagerConfig(provider="aws-sm", component="proc", aws_sm_prefix="kdcube/demo/demo-march")
     )
-    manager._client = _FakeAwsSecretsClient(
+    client = _FakeAwsSecretsClient(
         {
             "kdcube/demo/demo-march/bundles/secrets": json.dumps(
                 {
@@ -139,28 +161,30 @@ def test_aws_sm_manager_falls_back_to_aggregate_bundle_blob_and_legacy_leafs():
             "kdcube/demo/demo-march/services/openai/api_key": "sk-legacy-openai",
         }
     )
+    manager._session = _FakeAwsSession(client)
 
     assert (
-        manager.get_secret("bundles.user-mgmt@1-0.secrets.user_management.cognito_user_pool_id")
+        await manager.get_secret("bundles.user-mgmt@1-0.secrets.user_management.cognito_user_pool_id")
         == "pool-from-blob"
     )
     assert (
-        manager.get_secret("bundles.user-mgmt@1-0.secrets.user_management.sheets_key")
+        await manager.get_secret("bundles.user-mgmt@1-0.secrets.user_management.sheets_key")
         == "sheet-from-blob"
     )
-    assert manager.get_secret("services.openai.api_key") == "sk-legacy-openai"
+    assert await manager.get_secret("services.openai.api_key") == "sk-legacy-openai"
 
 
-def test_aws_sm_manager_writes_and_deletes_grouped_bundle_documents():
+@pytest.mark.asyncio
+async def test_aws_sm_manager_writes_and_deletes_grouped_bundle_documents():
     manager = AwsSecretsManagerSecretsManager(
         SecretsManagerConfig(provider="aws-sm", component="proc", aws_sm_prefix="kdcube/demo/demo-march")
     )
     client = _FakeAwsSecretsClient()
-    manager._client = client
+    manager._session = _FakeAwsSession(client)
 
-    manager.set_secret("bundles.user-mgmt@1-0.secrets.user_management.cognito_user_pool_id", "pool-123")
-    manager.set_secret("bundles.user-mgmt@1-0.secrets.user_management.sheets_key", "sheet-1")
-    manager.set_secret("bundles.user-mgmt@1-0.secrets.__keys", json.dumps(["ignored"]))
+    await manager.set_secret("bundles.user-mgmt@1-0.secrets.user_management.cognito_user_pool_id", "pool-123")
+    await manager.set_secret("bundles.user-mgmt@1-0.secrets.user_management.sheets_key", "sheet-1")
+    await manager.set_secret("bundles.user-mgmt@1-0.secrets.__keys", json.dumps(["ignored"]))
 
     stored = json.loads(client.data["kdcube/demo/demo-march/bundles/user-mgmt@1-0/secrets"])
     assert stored == {
@@ -170,21 +194,22 @@ def test_aws_sm_manager_writes_and_deletes_grouped_bundle_documents():
         }
     }
 
-    manager.delete_secret("bundles.user-mgmt@1-0.secrets.user_management.sheets_key")
+    await manager.delete_secret("bundles.user-mgmt@1-0.secrets.user_management.sheets_key")
     stored = json.loads(client.data["kdcube/demo/demo-march/bundles/user-mgmt@1-0/secrets"])
     assert stored == {"user_management": {"cognito_user_pool_id": "pool-123"}}
 
-    manager.delete_secret("bundles.user-mgmt@1-0.secrets.user_management.cognito_user_pool_id")
+    await manager.delete_secret("bundles.user-mgmt@1-0.secrets.user_management.cognito_user_pool_id")
     assert "kdcube/demo/demo-march/bundles/user-mgmt@1-0/secrets" not in client.data
 
 
-def test_aws_sm_manager_cross_replica_writes_use_distributed_doc_lock(monkeypatch):
+@pytest.mark.asyncio
+async def test_aws_sm_manager_cross_replica_writes_use_distributed_doc_lock(monkeypatch):
     from kdcube_ai_app.infra import namespaces
     from kdcube_ai_app.infra.redis import client as redis_client
 
-    fake_redis = _FakeSyncRedis()
+    fake_redis = _FakeRedis()
     shared_client = _FakeAwsSecretsClient()
-    monkeypatch.setattr(redis_client, "get_sync_redis_client", lambda *args, **kwargs: fake_redis)
+    monkeypatch.setattr(redis_client, "get_async_redis_client", lambda *args, **kwargs: fake_redis)
 
     cfg = SecretsManagerConfig(
         provider="aws-sm",
@@ -196,8 +221,8 @@ def test_aws_sm_manager_cross_replica_writes_use_distributed_doc_lock(monkeypatc
     )
     manager_a = AwsSecretsManagerSecretsManager(cfg)
     manager_b = AwsSecretsManagerSecretsManager(cfg)
-    manager_a._client = shared_client
-    manager_b._client = shared_client
+    manager_a._session = _FakeAwsSession(shared_client)
+    manager_b._session = _FakeAwsSession(shared_client)
 
     secret_id = "kdcube/demo/demo-project/bundles/user-mgmt@1-0/secrets"
     lock_key = namespaces.CONFIG.BUNDLES.SECRETS_AWS_SM_LOCK_FMT.format(
@@ -206,7 +231,7 @@ def test_aws_sm_manager_cross_replica_writes_use_distributed_doc_lock(monkeypatc
         doc=secret_id.replace("/", ":"),
     )
 
-    manager_a.set_many(
+    await manager_a.set_many(
         {
             "bundles.user-mgmt@1-0.secrets.user_management.cognito_user_pool_id": "pool-123",
             "bundles.user-mgmt@1-0.secrets.user_management.sheets_key": "sheet-1",
@@ -215,10 +240,10 @@ def test_aws_sm_manager_cross_replica_writes_use_distributed_doc_lock(monkeypatc
 
     assert lock_key not in fake_redis.data
     assert (
-        manager_b.get_secret("bundles.user-mgmt@1-0.secrets.user_management.cognito_user_pool_id")
+        await manager_b.get_secret("bundles.user-mgmt@1-0.secrets.user_management.cognito_user_pool_id")
         == "pool-123"
     )
-    assert manager_b.get_secret("bundles.user-mgmt@1-0.secrets.user_management.sheets_key") == "sheet-1"
+    assert await manager_b.get_secret("bundles.user-mgmt@1-0.secrets.user_management.sheets_key") == "sheet-1"
 
 
 def test_build_secrets_manager_config_defaults_prefix_from_tenant_and_project(monkeypatch):
@@ -268,7 +293,8 @@ def test_build_secrets_manager_config_uses_secrets_file_when_yaml_is_configured(
     assert config.global_secrets_yaml == "file:///tmp/global-secrets.yaml"
 
 
-def test_secrets_file_manager_reads_global_and_bundle_yaml(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_secrets_file_manager_reads_global_and_bundle_yaml(tmp_path, monkeypatch):
     global_file = tmp_path / "secrets.yaml"
     bundle_file = tmp_path / "bundles.secrets.yaml"
     global_file.write_text(
@@ -313,22 +339,23 @@ def test_secrets_file_manager_reads_global_and_bundle_yaml(tmp_path, monkeypatch
         )
     )
 
-    assert manager.get_secret("services.openai.api_key") == "sk-global"
-    assert manager.get_secret("services.anthropic.claude_code_key") == "sk-claude-code"
+    assert await manager.get_secret("services.openai.api_key") == "sk-global"
+    assert await manager.get_secret("services.anthropic.claude_code_key") == "sk-claude-code"
     assert (
-        manager.get_secret(
+        await manager.get_secret(
             "bundles.kdcube.copilot@2026-04-03-19-05.secrets.telegram.webhook_secret"
         )
         == "tg-secret"
     )
     assert json.loads(
-        manager.get_secret("bundles.kdcube.copilot@2026-04-03-19-05.secrets.__keys") or "[]"
+        await manager.get_secret("bundles.kdcube.copilot@2026-04-03-19-05.secrets.__keys") or "[]"
     ) == [
         "bundles.kdcube.copilot@2026-04-03-19-05.secrets.telegram.webhook_secret"
     ]
 
 
-def test_secrets_file_manager_writes_global_and_bundle_yaml(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_secrets_file_manager_writes_global_and_bundle_yaml(tmp_path, monkeypatch):
     global_file = tmp_path / "secrets.yaml"
     bundle_file = tmp_path / "bundles.secrets.yaml"
 
@@ -349,23 +376,23 @@ def test_secrets_file_manager_writes_global_and_bundle_yaml(tmp_path, monkeypatc
 
     assert manager.can_write() is True
 
-    manager.set_secret("services.openai.api_key", "sk-new")
-    manager.set_many(
+    await manager.set_secret("services.openai.api_key", "sk-new")
+    await manager.set_many(
         {
             "bundles.kdcube.copilot@2026-04-03-19-05.secrets.telegram.webhook_secret": "tg-secret",
             "bundles.kdcube.copilot@2026-04-03-19-05.secrets.docs.token": "docs-secret",
         }
     )
 
-    assert manager.get_secret("services.openai.api_key") == "sk-new"
+    assert await manager.get_secret("services.openai.api_key") == "sk-new"
     assert (
-        manager.get_secret(
+        await manager.get_secret(
             "bundles.kdcube.copilot@2026-04-03-19-05.secrets.telegram.webhook_secret"
         )
         == "tg-secret"
     )
     assert json.loads(
-        manager.get_secret("bundles.kdcube.copilot@2026-04-03-19-05.secrets.__keys") or "[]"
+        await manager.get_secret("bundles.kdcube.copilot@2026-04-03-19-05.secrets.__keys") or "[]"
     ) == [
         "bundles.kdcube.copilot@2026-04-03-19-05.secrets.docs.token",
         "bundles.kdcube.copilot@2026-04-03-19-05.secrets.telegram.webhook_secret",
@@ -377,25 +404,26 @@ def test_secrets_file_manager_writes_global_and_bundle_yaml(tmp_path, monkeypatc
     assert "tg-secret" in bundle_text
     assert "docs-secret" in bundle_text
 
-    manager.delete_secret("services.openai.api_key")
-    manager.delete_many(
+    await manager.delete_secret("services.openai.api_key")
+    await manager.delete_many(
         [
             "bundles.kdcube.copilot@2026-04-03-19-05.secrets.telegram.webhook_secret",
             "bundles.kdcube.copilot@2026-04-03-19-05.secrets.docs.token",
         ]
     )
 
-    assert manager.get_secret("services.openai.api_key") is None
+    assert await manager.get_secret("services.openai.api_key") is None
     assert (
-        manager.get_secret(
+        await manager.get_secret(
             "bundles.kdcube.copilot@2026-04-03-19-05.secrets.telegram.webhook_secret"
         )
         is None
     )
-    assert manager.get_secret("bundles.kdcube.copilot@2026-04-03-19-05.secrets.__keys") is None
+    assert await manager.get_secret("bundles.kdcube.copilot@2026-04-03-19-05.secrets.__keys") is None
 
 
-def test_secrets_file_manager_reads_and_writes_user_bundle_secrets(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_secrets_file_manager_reads_and_writes_user_bundle_secrets(tmp_path, monkeypatch):
     global_file = tmp_path / "secrets.yaml"
     monkeypatch.setenv("SECRETS_PROVIDER", "secrets-file")
     monkeypatch.setenv("GLOBAL_SECRETS_YAML", global_file.resolve().as_uri())
@@ -410,7 +438,7 @@ def test_secrets_file_manager_reads_and_writes_user_bundle_secrets(tmp_path, mon
         )
     )
 
-    manager.set_user_secret(
+    await manager.set_user_secret(
         user_id="user-1",
         bundle_id="rms@06-04-26-156",
         key="anthropic.api_key",
@@ -418,7 +446,7 @@ def test_secrets_file_manager_reads_and_writes_user_bundle_secrets(tmp_path, mon
     )
 
     assert (
-        manager.get_user_secret(
+        await manager.get_user_secret(
             user_id="user-1",
             bundle_id="rms@06-04-26-156",
             key="anthropic.api_key",
@@ -433,10 +461,10 @@ def test_secrets_file_manager_reads_and_writes_user_bundle_secrets(tmp_path, mon
 
 
 @pytest.mark.asyncio
-async def test_in_memory_manager_reads_and_writes_user_bundle_secrets_async():
+async def test_in_memory_manager_reads_and_writes_user_bundle_secrets():
     manager = InMemorySecretsManager()
 
-    await manager.set_user_secret_async(
+    await manager.set_user_secret(
         user_id="user-1",
         bundle_id="task-and-memo-app@1-0",
         key="email.accounts.google_1.tokens",
@@ -444,31 +472,51 @@ async def test_in_memory_manager_reads_and_writes_user_bundle_secrets_async():
     )
 
     assert (
-        await manager.get_user_secret_async(
+        await manager.get_user_secret(
             user_id="user-1",
             bundle_id="task-and-memo-app@1-0",
             key="email.accounts.google_1.tokens",
         )
         == '{"access_token":"secret"}'
     )
-    assert await manager.list_user_secret_keys_async(
+    assert await manager.list_user_secret_keys(
         user_id="user-1",
         bundle_id="task-and-memo-app@1-0",
     ) == []
 
-    await manager.delete_user_secret_async(
+    await manager.delete_user_secret(
         user_id="user-1",
         bundle_id="task-and-memo-app@1-0",
         key="email.accounts.google_1.tokens",
     )
     assert (
-        await manager.get_user_secret_async(
+        await manager.get_user_secret(
             user_id="user-1",
             bundle_id="task-and-memo-app@1-0",
             key="email.accounts.google_1.tokens",
         )
         is None
     )
+
+
+class _FakeRedis:
+    def __init__(self):
+        self.data = {}
+
+    async def get(self, key):
+        return self.data.get(key)
+
+    async def set(self, key, value, nx=False, ex=None):
+        if nx and key in self.data:
+            return False
+        self.data[key] = value
+        return True
+
+    async def eval(self, _script, _keys_count, key, token):
+        if self.data.get(key) == token:
+            self.data.pop(key, None)
+            return 1
+        return 0
 
 
 class _FakeSyncRedis:
@@ -491,7 +539,8 @@ class _FakeSyncRedis:
         return 0
 
 
-def test_secrets_file_manager_cross_replica_reads_current_yaml(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_secrets_file_manager_cross_replica_reads_current_yaml(tmp_path, monkeypatch):
     from kdcube_ai_app.infra import namespaces
     from kdcube_ai_app.infra.redis import client as redis_client
 
@@ -518,10 +567,10 @@ def test_secrets_file_manager_cross_replica_reads_current_yaml(tmp_path, monkeyp
         project="demo-project",
     )
 
-    assert manager_a.get_secret("services.openai.api_key") == "sk-old"
-    assert manager_b.get_secret("services.openai.api_key") == "sk-old"
+    assert await manager_a.get_secret("services.openai.api_key") == "sk-old"
+    assert await manager_b.get_secret("services.openai.api_key") == "sk-old"
 
-    manager_a.set_secret("services.openai.api_key", "sk-new")
+    await manager_a.set_secret("services.openai.api_key", "sk-new")
 
     assert lock_key not in fake_redis.data
-    assert manager_b.get_secret("services.openai.api_key") == "sk-new"
+    assert await manager_b.get_secret("services.openai.api_key") == "sk-new"

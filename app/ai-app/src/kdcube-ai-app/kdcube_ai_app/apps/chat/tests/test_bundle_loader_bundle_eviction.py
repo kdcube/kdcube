@@ -3,14 +3,26 @@ from __future__ import annotations
 import sys
 import types
 from pathlib import Path
+from types import SimpleNamespace
 
-from kdcube_ai_app.infra.plugin.agentic_loader import (
-    AgenticBundleSpec,
+import pytest
+
+from kdcube_ai_app.apps.chat.sdk.protocol import (
+    ChatTaskActor,
+    ChatTaskPayload,
+    ChatTaskRequest,
+    ChatTaskRouting,
+    ChatTaskUser,
+)
+from kdcube_ai_app.infra.plugin.bundle_loader import (
+    BundleSpec,
     _manifest_cache,
     _module_cache,
     _singleton_cache,
     cache_key_for_spec,
+    clear_bundle_loader_caches,
     evict_bundle_scope,
+    get_workflow_instance,
 )
 
 
@@ -27,7 +39,7 @@ def test_evict_bundle_scope_removes_only_target_bundle_modules(tmp_path):
     other_file = other_root / "entrypoint.py"
     other_file.write_text("z = 3\n")
 
-    spec = AgenticBundleSpec(path=str(bundle_root), module="entrypoint", singleton=True)
+    spec = BundleSpec(path=str(bundle_root), module="entrypoint", singleton=True)
     key = cache_key_for_spec(spec)
 
     target_module = types.ModuleType("kdcube_bundle_123.entrypoint")
@@ -71,3 +83,38 @@ def test_evict_bundle_scope_removes_only_target_bundle_modules(tmp_path):
             "kdcube_bundle_999.entrypoint",
         ]:
             sys.modules.pop(mod_name, None)
+
+
+def test_singleton_base_workflow_entrypoint_is_rejected(tmp_path):
+    clear_bundle_loader_caches()
+    bundle_root = tmp_path / "bad-workflow-bundle"
+    bundle_root.mkdir()
+    (bundle_root / "entrypoint.py").write_text(
+        """
+from kdcube_ai_app.infra.plugin.bundle_loader import bundle_entrypoint
+from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.base_workflow import BaseWorkflow
+
+@bundle_entrypoint(name="Bad Workflow")
+class BadWorkflow(BaseWorkflow):
+    pass
+""".lstrip()
+    )
+    spec = BundleSpec(path=str(bundle_root), module="entrypoint", singleton=True)
+    config = SimpleNamespace(ai_bundle_spec=SimpleNamespace(id="bad.workflow"), log_level="INFO")
+    ctx = ChatTaskPayload(
+        request=ChatTaskRequest(request_id="req-1"),
+        routing=ChatTaskRouting(
+            bundle_id="bad.workflow",
+            session_id="session-1",
+            conversation_id="conv-1",
+            turn_id="turn-1",
+        ),
+        actor=ChatTaskActor(tenant_id="demo", project_id="demo-project"),
+        user=ChatTaskUser(user_type="registered", user_id="user-1"),
+    )
+
+    try:
+        with pytest.raises(TypeError, match="BaseWorkflow subclasses are per-message orchestrators"):
+            get_workflow_instance(spec, config, comm_context=ctx)
+    finally:
+        clear_bundle_loader_caches()

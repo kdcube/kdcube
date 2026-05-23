@@ -7,11 +7,12 @@ import json
 import time
 import uuid
 from contextlib import nullcontext
-from typing import Any, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional
 from urllib.parse import urlencode
 
 from kdcube_ai_app.apps.chat.sdk.config import get_secret
 from kdcube_ai_app.infra.jobs.stream import RedisBackgroundJobStream
+from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_request_context
 from kdcube_ai_app.apps.chat.sdk.runtime.http_ops import BundleBinaryResponse
 from .async_storage import AsyncTaskStorage
 from .execution_artifacts import (
@@ -49,12 +50,19 @@ def configure_task_operations(
 
 
 def _storage_root(entrypoint: Any) -> str:
+    for method_name in ("task_storage_root", "storage_root_or_error"):
+        resolver = getattr(entrypoint, method_name, None)
+        if callable(resolver):
+            return str(resolver())
     if not callable(_storage_root_or_error):
         raise RuntimeError("task operations are not configured: storage_root_or_error is missing")
     return str(_storage_root_or_error(entrypoint))
 
 
 def _target_user(entrypoint: Any, *, user_id: Optional[str] = None, fingerprint: Optional[str] = None) -> str:
+    resolver = getattr(entrypoint, "target_task_user_id", None)
+    if callable(resolver):
+        return str(resolver(user_id=user_id, fingerprint=fingerprint))
     if callable(_target_user_id):
         return str(_target_user_id(entrypoint, user_id=user_id, fingerprint=fingerprint))
     value = str(user_id or fingerprint or "").strip()
@@ -106,13 +114,13 @@ def _b64url_decode(data: str) -> bytes:
     return base64.urlsafe_b64decode((data + padding).encode("ascii"))
 
 
-def _download_token_secret(entrypoint: Any) -> bytes:
+async def _download_token_secret(entrypoint: Any) -> bytes:
     _tenant, _project, bundle_id = _bundle_route_parts(entrypoint)
     secret = str(
         _bundle_prop(entrypoint, "integrations.telegram.artifact_download_secret", "")
-        or get_secret("b:integrations.telegram.artifact_download_secret")
-        or get_secret(f"bundles.{bundle_id}.secrets.integrations.telegram.artifact_download_secret")
-        or _telegram_bot_token()
+        or await get_secret("b:integrations.telegram.artifact_download_secret")
+        or await get_secret(f"bundles.{bundle_id}.secrets.integrations.telegram.artifact_download_secret")
+        or await _telegram_bot_token()
         or ""
     ).strip()
     return secret.encode("utf-8")
@@ -126,13 +134,13 @@ def _download_token_ttl(entrypoint: Any) -> int:
     return max(60, min(ttl, 86400))
 
 
-def _make_download_token(
+async def _make_download_token(
     entrypoint: Any,
     *,
     artifact_ref: str,
     user_id: str,
 ) -> tuple[str, int] | None:
-    secret = _download_token_secret(entrypoint)
+    secret = await _download_token_secret(entrypoint)
     if not secret:
         return None
     expires_at = int(time.time()) + _download_token_ttl(entrypoint)
@@ -147,8 +155,8 @@ def _make_download_token(
     return f"{body}.{sig}", expires_at
 
 
-def _verify_download_token(entrypoint: Any, *, artifact_ref: str, download_token: str) -> Dict[str, Any]:
-    secret = _download_token_secret(entrypoint)
+async def _verify_download_token(entrypoint: Any, *, artifact_ref: str, download_token: str) -> Dict[str, Any]:
+    secret = await _download_token_secret(entrypoint)
     if not secret:
         raise ValueError("artifact download token signing secret is not configured")
     try:
@@ -208,7 +216,7 @@ async def _decorate_execution_artifacts(
     for index, artifact in enumerate(artifacts):
         item = dict(artifact)
         artifact_ref = str(item.get("artifact_ref") or "").strip() or artifact_ref_for_execution_artifact(enriched, item, index=index)
-        signed = _make_download_token(entrypoint, artifact_ref=artifact_ref, user_id=user_id) if public else None
+        signed = await _make_download_token(entrypoint, artifact_ref=artifact_ref, user_id=user_id) if public else None
         download_token = signed[0] if signed else ""
         download_url = _artifact_download_url(entrypoint, artifact_ref=artifact_ref, public=public, download_token=download_token)
         item["artifact_ref"] = artifact_ref
@@ -474,7 +482,7 @@ async def download_execution_artifact(
 ) -> BundleBinaryResponse | Dict[str, Any]:
     if download_token:
         try:
-            token_payload = _verify_download_token(entrypoint, artifact_ref=artifact_ref, download_token=download_token)
+            token_payload = await _verify_download_token(entrypoint, artifact_ref=artifact_ref, download_token=download_token)
         except Exception as exc:
             return {
                 "ok": False,
@@ -600,11 +608,175 @@ def _run_prompt(*, task: Dict[str, Any], execution: Dict[str, Any], trigger: str
     ).strip()
 
 
-def _telegram_bot_token() -> str:
+def _result_answer(result: Any) -> str:
+    if isinstance(result, dict):
+        return str(
+            result.get("final_answer")
+            or result.get("answer")
+            or result.get("summary")
+            or ""
+        ).strip()
+    return str(result or "").strip()
+
+
+def _result_status(result: Any) -> str:
+    if not isinstance(result, dict):
+        return ""
+    status = str(result.get("execution_status") or result.get("status") or "").strip().lower()
+    return status if status in {"success", "failed", "cancelled"} else ""
+
+
+def _build_task_scoped_context(
+    entrypoint: Any,
+    *,
+    target_user: str,
+    run_conversation_id: str,
+    turn_id: str,
+    bundle_call_context: Dict[str, Any],
+):
+    comm_context = getattr(entrypoint, "comm_context", None)
+    if comm_context is None or not hasattr(comm_context, "model_copy"):
+        raise RuntimeError("task execution requires a request context with comm_context")
+
+    scoped_ctx = comm_context.model_copy(deep=True)
+    scoped_ctx.routing.session_id = run_conversation_id
+    scoped_ctx.routing.conversation_id = run_conversation_id
+    scoped_ctx.routing.turn_id = turn_id
+    scoped_ctx.user.user_id = target_user
+    scoped_ctx.bundle_call_context = bundle_call_context
+    return scoped_ctx
+
+
+async def _run_with_entrypoint_request_context(
+    entrypoint: Any,
+    scoped_ctx: Any,
+    runner: Callable[[], Awaitable[Dict[str, Any]]],
+) -> Dict[str, Any]:
+    binder = getattr(entrypoint, "bind_request_context", None)
+    if callable(binder):
+        with binder(comm_context=scoped_ctx):
+            with bind_current_request_context(scoped_ctx, comm=getattr(entrypoint, "comm", None)):
+                return await runner()
+
+    entrypoint.rebind_request_context(comm_context=scoped_ctx)
+    with bind_current_request_context(scoped_ctx, comm=getattr(entrypoint, "comm", None)):
+        return await runner()
+
+
+async def _run_default_react_task_job(
+    entrypoint: Any,
+    *,
+    task: Dict[str, Any],
+    execution: Dict[str, Any],
+    trigger: str,
+    target_user: str,
+    run_conversation_id: str,
+    turn_id: str,
+    bundle_call_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    scoped_ctx = _build_task_scoped_context(
+        entrypoint,
+        target_user=target_user,
+        run_conversation_id=run_conversation_id,
+        turn_id=turn_id,
+        bundle_call_context=bundle_call_context,
+    )
+
+    async def _run_scoped() -> Dict[str, Any]:
+        state = entrypoint.create_initial_state(
+            {
+                "request_id": getattr(scoped_ctx.request, "request_id", "") or str(uuid.uuid4()),
+                "tenant": scoped_ctx.actor.tenant_id,
+                "project": scoped_ctx.actor.project_id,
+                "user": target_user,
+                "user_type": scoped_ctx.user.user_type,
+                "session_id": run_conversation_id,
+                "conversation_id": run_conversation_id,
+                "turn_id": turn_id,
+                "text": _run_prompt(task=task, execution=execution, trigger=trigger),
+                "attachments": [],
+            }
+        )
+        state["turn_id"] = turn_id
+        state["agent_surface"] = "task_job"
+        state["task_execution"] = {
+            "task_id": task.get("id"),
+            "execution_id": execution["id"],
+            "trigger": trigger,
+            "conversation_id": run_conversation_id,
+            "turn_id": turn_id,
+            "task_definition": bundle_call_context["task_definition"],
+        }
+        run_task_job_turn = getattr(entrypoint, "run_task_job_turn", None)
+        if not callable(run_task_job_turn):
+            raise RuntimeError(
+                "Task execution requires entrypoint.execute_task_job(...) or entrypoint.run_task_job_turn(...)."
+            )
+        result = await run_task_job_turn(state=state)
+        return result if isinstance(result, dict) else {"final_answer": str(result or "")}
+
+    return await _run_with_entrypoint_request_context(entrypoint, scoped_ctx, _run_scoped)
+
+
+async def _execute_task_job(
+    entrypoint: Any,
+    *,
+    task: Dict[str, Any],
+    execution: Dict[str, Any],
+    storage: AsyncTaskStorage,
+    target_user: str,
+    trigger: str,
+    source: Dict[str, Any],
+    run_conversation_id: str,
+    turn_id: str,
+    bundle_call_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    executor = getattr(entrypoint, "execute_task_job", None)
+    if callable(executor):
+        async def _run_custom() -> Dict[str, Any]:
+            result = await executor(
+                task=task,
+                execution=execution,
+                storage=storage,
+                user_id=target_user,
+                trigger=trigger,
+                source=source,
+                conversation_id=run_conversation_id,
+                turn_id=turn_id,
+                bundle_call_context=bundle_call_context,
+            )
+            return result if isinstance(result, dict) else {"answer": str(result or "")}
+
+        try:
+            scoped_ctx = _build_task_scoped_context(
+                entrypoint,
+                target_user=target_user,
+                run_conversation_id=run_conversation_id,
+                turn_id=turn_id,
+                bundle_call_context=bundle_call_context,
+            )
+        except RuntimeError:
+            return await _run_custom()
+
+        return await _run_with_entrypoint_request_context(entrypoint, scoped_ctx, _run_custom)
+
+    return await _run_default_react_task_job(
+        entrypoint,
+        task=task,
+        execution=execution,
+        trigger=trigger,
+        target_user=target_user,
+        run_conversation_id=run_conversation_id,
+        turn_id=turn_id,
+        bundle_call_context=bundle_call_context,
+    )
+
+
+async def _telegram_bot_token() -> str:
     bundle_id = BUNDLE_ID or "task-and-memo-app@1-0"
     return (
-        get_secret("b:integrations.telegram.bot_token")
-        or get_secret(f"bundles.{bundle_id}.secrets.integrations.telegram.bot_token")
+        await get_secret("b:integrations.telegram.bot_token")
+        or await get_secret(f"bundles.{bundle_id}.secrets.integrations.telegram.bot_token")
         or ""
     )
 
@@ -719,7 +891,7 @@ async def _deliver_execution_to_telegram(
         messages = [TelegramMessage(kind="text", text=str(execution.get("summary") or "Task execution completed."))]
 
     delivery = await send_telegram_messages(
-        bot_token=_telegram_bot_token(),
+        bot_token=await _telegram_bot_token(),
         chat_id=recipient["chat_id"],
         messages=messages,
     )
@@ -822,45 +994,6 @@ async def run_task_execution(
     }
 
     try:
-        comm_context = getattr(entrypoint, "comm_context", None)
-        if comm_context is None or not hasattr(comm_context, "model_copy"):
-            raise RuntimeError("task execution requires a request context with comm_context")
-
-        scoped_ctx = comm_context.model_copy(deep=True)
-        scoped_ctx.routing.session_id = run_conversation_id
-        scoped_ctx.routing.conversation_id = run_conversation_id
-        scoped_ctx.routing.turn_id = turn_id
-        scoped_ctx.user.user_id = target_user
-        scoped_ctx.bundle_call_context = bundle_call_context
-        entrypoint.rebind_request_context(comm_context=scoped_ctx)
-
-        state = entrypoint.create_initial_state(
-            {
-                "request_id": getattr(scoped_ctx.request, "request_id", "") or str(uuid.uuid4()),
-                "tenant": scoped_ctx.actor.tenant_id,
-                "project": scoped_ctx.actor.project_id,
-                "user": target_user,
-                "user_type": scoped_ctx.user.user_type,
-                "session_id": run_conversation_id,
-                "conversation_id": run_conversation_id,
-                "turn_id": turn_id,
-                "text": _run_prompt(task=task, execution=execution, trigger=trigger),
-                "attachments": [],
-            }
-        )
-        state["turn_id"] = turn_id
-        state["agent_surface"] = "task_job"
-        state["task_execution"] = {
-            "task_id": task_id,
-            "execution_id": execution["id"],
-            "trigger": trigger,
-            "conversation_id": run_conversation_id,
-            "turn_id": turn_id,
-            "task_definition": bundle_call_context["task_definition"],
-        }
-        run_task_job_turn = getattr(entrypoint, "run_task_job_turn", None)
-        if not callable(run_task_job_turn):
-            raise RuntimeError("Task execution requires entrypoint.run_task_job_turn(...).")
         try:
             from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_bundle_call_context
         except Exception:
@@ -871,11 +1004,25 @@ async def run_task_execution(
             else nullcontext()
         )
         with context_binding:
-            result = await run_task_job_turn(state=state)
-        answer = str((result or {}).get("final_answer") or "").strip()
+            result = await _execute_task_job(
+                entrypoint,
+                task=task,
+                execution=execution,
+                storage=storage,
+                target_user=target_user,
+                trigger=trigger,
+                source=source or {},
+                run_conversation_id=run_conversation_id,
+                turn_id=turn_id,
+                bundle_call_context=bundle_call_context,
+            )
+        answer = _result_answer(result)
         current_execution = await storage.get_execution(execution_id=execution["id"], task_id=task_id) or execution
         current_status = str(current_execution.get("status") or "").strip().lower()
-        final_status = current_status if current_status in {"success", "failed", "cancelled"} else "success"
+        requested_status = _result_status(result)
+        final_status = current_status if current_status in {"success", "failed", "cancelled"} else (requested_status or "success")
+        artifacts = result.get("artifacts") if isinstance(result.get("artifacts"), list) else None
+        metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else None
         execution = await storage.update_execution(
             execution_id=execution["id"],
             task_id=task_id,
@@ -885,6 +1032,8 @@ async def run_task_execution(
             summary=answer or str(current_execution.get("summary") or "").strip() or "Task execution completed.",
             result=result or {},
             log_excerpt=answer[:1000],
+            artifacts=artifacts,
+            metadata_patch=metadata,
         )
         delivery = await _deliver_execution_to_telegram(
             entrypoint,

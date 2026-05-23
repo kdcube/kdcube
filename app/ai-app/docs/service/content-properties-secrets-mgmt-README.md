@@ -249,30 +249,29 @@ They are outside deployment export.
 Feature code and bundle code must access secrets through the SDK helper layer,
 not through provider internals.
 
-Async bundle/runtime code should use:
+Bundle/runtime code should use:
 
 | Need | Helper |
 |---|---|
-| platform/global secret | `await get_secret_async("canonical.key")` |
-| current bundle deployment secret | `await get_secret_async("b:group.key")` |
-| current-user bundle secret | `await get_user_secret_async("group.key")` |
-| write current-user bundle secret | `await set_user_secret_async("group.key", value)` |
-| delete current-user bundle secret | `await delete_user_secret_async("group.key")` |
+| platform/global secret | `await get_secret("canonical.key")` |
+| current bundle deployment secret | `await get_secret("b:group.key")` |
+| current-user bundle secret | `await get_secret("u:group.key")` |
+| write current-user bundle secret | `await set_user_secret("group.key", value)` |
+| delete current-user bundle secret | `await delete_user_secret("group.key")` |
 | write current bundle deployment secret | `await set_bundle_secret("group.key", value)` |
 
-Compatibility sync helpers such as `get_secret(...)` and
-`get_user_secret(...)` remain available for older sync-only code. Do not use
-them in new async request paths.
+Bundle-facing code awaits the SDK helpers directly. Do not read secrets through
+provider internals or direct bundle secret fields.
 
 Provider behavior:
 
 - `secrets-service` uses native async HTTP calls
 - `in-memory` is immediate
-- `secrets-file` and `aws-sm` currently expose async helpers through a
-  compatibility offload around sync storage/Redis/boto internals
+- `secrets-file` offloads file-backed reads/writes away from the event loop
+- `aws-sm` uses `aioboto3` and the async Redis client
 
-The public contract is async even when a provider still has sync internals.
-This keeps bundle code and tool code from directly blocking the event loop.
+Provider manager methods are async under their normal names. Do not add or use a
+parallel `*_async` provider API.
 
 ## 8. Export model
 

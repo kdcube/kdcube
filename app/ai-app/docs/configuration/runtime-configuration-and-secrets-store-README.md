@@ -3,8 +3,9 @@ id: ks:docs/configuration/runtime-configuration-and-secrets-store-README.md
 title: "Runtime Configuration and Secrets Store"
 summary: "Detailed runtime storage model behind settings, props, and secrets helpers: authoritative stores by mode, Redis cache behavior, PostgreSQL user props, provider-backed secrets, and export boundaries."
 tags: ["service", "configuration", "runtime", "storage", "secrets", "helpers"]
-keywords: ["authoritative configuration stores", "redis effective bundle props cache", "postgres user bundle properties", "provider backed user secrets", "bundle prop persistence path", "bundle secret persistence path", "grouped aws secrets layout", "descriptor authority by mode", "exportable versus non exportable state", "runtime storage model"]
+keywords: ["authoritative configuration stores", "redis bundle props cache", "postgres user bundle properties", "provider backed user secrets", "bundle prop persistence path", "bundle secret persistence path", "grouped aws secrets layout", "descriptor authority by mode", "exportable versus non exportable state", "runtime storage model"]
 see_also:
+  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
   - ks:docs/configuration/runtime-read-write-contract-README.md
   - ks:docs/configuration/service-runtime-configuration-mapping-README.md
   - ks:docs/configuration/assembly-descriptor-README.md
@@ -40,7 +41,7 @@ If you need the helper API contract, use:
 |---|---|---|---|
 | platform/global props | promoted runtime config assembled from env plus descriptor files such as `assembly.yaml` and `gateway.yaml` | none as a dedicated separate config store | outside bundle export |
 | platform/global secrets | configured secrets provider; in local `secrets-file` mode this is `secrets.yaml` | none as a separate dedicated cache | outside bundle export |
-| deployment-scoped bundle props | configured bundle descriptor authority | Redis effective bundle props cache | exported to `bundles.yaml` |
+| deployment-scoped bundle props | configured bundle descriptor authority | Redis bundle-props cache for descriptor/admin props | exported to `bundles.yaml` |
 | deployment-scoped bundle secrets | configured secrets provider; in local `secrets-file` mode this is `bundles.secrets.yaml` | provider-backed lookup; no separate Redis secret store | exported to `bundles.secrets.yaml` only when provider/export flow can reconstruct them |
 | user-scoped bundle props | PostgreSQL `<SCHEMA>.user_bundle_props` | no separate Redis authority | never exported |
 | user-scoped bundle secrets | configured secrets provider | no separate Redis authority | never exported |
@@ -88,9 +89,12 @@ Important:
   mounted writable `bundles.yaml`
 - set `BUNDLES_DESCRIPTOR_PROVIDER=file`
 
-## Redis role in bundle props
+## Redis Role In Bundle Props
 
-Redis is the runtime cache for effective deployment-scoped bundle props.
+Redis is the runtime cache for deployment-scoped descriptor/admin bundle props.
+It does not contain code defaults by itself. `BaseEntrypoint` family runtimes
+merge those cached descriptor/admin props with code defaults to produce
+effective `self.bundle_props`.
 
 The cache key is:
 
@@ -100,7 +104,8 @@ kdcube:config:bundles:props:{tenant}:{project}:{bundle_id}
 
 What Redis does:
 
-- serves effective bundle props at runtime
+- serves cached descriptor/admin bundle props as an input to the effective
+  runtime merge
 - receives cache updates after bundle-admin or bundle-code writes persist to authority
 - publishes bundle-prop update events for proc reconciliation
 
@@ -121,8 +126,8 @@ If Redis misses:
 Current behavior:
 
 1. load/merge against the configured bundle descriptor authority
-2. persist the effective prop update into that authority
-3. update the Redis effective-props cache
+2. persist the updated descriptor/admin props into that authority
+3. update the Redis bundle-props cache
 4. publish `bundles.props.update` on Redis
 
 Proc listens to that channel and reconciles scheduler-driven runtime state.
@@ -144,33 +149,33 @@ That means:
 
 Bundle secrets are not meant to become plain non-secret descriptor data.
 
-## Async secrets helper behavior
+## Secrets helper behavior
 
-KDCube services and bundle runtimes are async. The supported async helper
-contract is:
+KDCube services and bundle runtimes are async. Secret-provider reads and writes
+must be awaited through the SDK helper contract:
 
-| Data class | Async helper |
+| Data class | Helper |
 |---|---|
-| platform/global secrets | `await get_secret_async("canonical.key")` |
-| deployment-scoped bundle secrets | `await get_secret_async("b:group.key")` |
-| user-scoped bundle secrets | `await get_user_secret_async("group.key")` |
+| platform/global secrets | `await get_secret("canonical.key")` |
+| deployment-scoped bundle secrets | `await get_secret("b:group.key")` |
+| user-scoped bundle secrets | `await get_secret("u:group.key")` |
 | deployment-scoped bundle secret write | `await set_bundle_secret("group.key", value)` |
-| user-scoped bundle secret write | `await set_user_secret_async("group.key", value)` |
-| user-scoped bundle secret delete | `await delete_user_secret_async("group.key")` |
+| user-scoped bundle secret write | `await set_user_secret("group.key", value)` |
+| user-scoped bundle secret delete | `await delete_user_secret("group.key")` |
 
-The older sync helpers remain for compatibility, but new async request,
-tool, cron, and job code should not use them.
+Bundle-facing code should use these helpers directly. Do not reach into provider
+internals or direct bundle secret fields.
 
 Provider behavior:
 
 - `secrets-service` uses native async HTTP calls
 - `in-memory` is immediate
-- `secrets-file` and `aws-sm` currently expose async helpers through a
-  compatibility offload because their storage, distributed-lock, and provider
-  clients are sync internally
+- `secrets-file` offloads file-backed reads/writes away from the event loop
+- `aws-sm` uses `aioboto3` and the async Redis client
 
-This means callers get a stable async contract while provider implementations
-can move to deeper native async clients independently.
+The provider manager methods are async under their normal names
+(`get_secret`, `set_secret`, `delete_secret`, `set_many`, `delete_many`).
+There is no separate `*_async` provider API.
 
 ## User-scoped state storage
 

@@ -11,6 +11,7 @@ import logging
 import shutil
 import fcntl
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Dict, Optional, Tuple, Any, Set
 from pathlib import Path
 from pydantic import BaseModel, Field, ValidationError
@@ -24,12 +25,14 @@ from kdcube_ai_app.infra.secrets.manager import (
     _load_yaml_mapping_from_storage,
     _write_yaml_mapping_to_storage,
 )
+from kdcube_ai_app.storage.observed_file_locks import observed_file_lock
 
 REDIS_KEY_FMT = namespaces.CONFIG.BUNDLES.BUNDLE_MAPPING_KEY_FMT
 REDIS_CHANNEL_FMT = namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL
 ADMIN_BUNDLE_ID = "kdcube.admin"
 _EXAMPLES_REL_PATH = Path("apps/chat/sdk/examples/bundles")
 _DEFAULT_MANAGED_BUNDLES_ROOT = Path("/managed-bundles")
+_MANAGED_BUNDLE_METADATA_FILE = ".kdcube-managed-bundle.json"
 _BUNDLE_PROPS_LOCK_KEY_FMT = "bundle:props:write:{tenant}:{project}:{bundle_id}"
 _BUNDLE_PROPS_LOCK_TTL_SECONDS = 30
 _BUNDLE_PROPS_LOCK_WAIT_SECONDS = 10.0
@@ -64,6 +67,15 @@ def _example_bundle_lock_path(bundle_name: str) -> Path:
     lock_dir.mkdir(parents=True, exist_ok=True)
     return lock_dir / f"{safe}.lock"
 
+def _instance_id_for_lock_metadata() -> str:
+    try:
+        instance_id = str(get_settings().INSTANCE_ID or "").strip()
+        if instance_id:
+            return instance_id
+    except Exception:
+        pass
+    return os.environ.get("INSTANCE_ID") or os.environ.get("HOSTNAME") or "unknown"
+
 def _sanitize_example_version_part(value: str) -> str:
     safe = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "-" for ch in (value or ""))
     safe = safe.strip("-_.")
@@ -86,12 +98,100 @@ def _current_platform_ref() -> Optional[str]:
             return _sanitize_example_version_part(tail)
     return None
 
-def _shared_example_bundle_dir(bundle_name: str, version: str) -> Path:
-    root = _shared_bundles_root()
+def _shared_example_timestamp_suffix(now: Optional[datetime] = None) -> str:
+    value = now or datetime.now(timezone.utc)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    value = value.astimezone(timezone.utc)
+    return value.strftime("%Y%m%d%H%M%S") + f"{value.microsecond // 1000:03d}"
+
+def _shared_example_bundle_prefix(bundle_name: str, version: str) -> str:
     platform_ref = _current_platform_ref()
     if platform_ref:
-        return root / f"{bundle_name}__{platform_ref}__{version[:12]}"
-    return root / f"{bundle_name}__{version[:12]}"
+        return f"{bundle_name}__{platform_ref}__{version[:12]}"
+    return f"{bundle_name}__{version[:12]}"
+
+def _managed_bundle_created_sort_key(path: Path) -> tuple[float, float]:
+    metadata_path = path / _MANAGED_BUNDLE_METADATA_FILE
+    try:
+        data = json.loads(metadata_path.read_text(encoding="utf-8"))
+        created_epoch = data.get("created_at_epoch")
+        if isinstance(created_epoch, (int, float)):
+            return float(created_epoch), path.stat().st_mtime if path.exists() else 0.0
+    except Exception:
+        pass
+
+    suffix = path.name.rsplit("__", 1)[-1]
+    if suffix.isdigit() and len(suffix) >= 14:
+        try:
+            created_dt = datetime.strptime(suffix[:14], "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+            created_epoch = created_dt.timestamp()
+            if len(suffix) > 14:
+                created_epoch += int(suffix[14:17].ljust(3, "0")) / 1000.0
+            return created_epoch, path.stat().st_mtime if path.exists() else 0.0
+        except Exception:
+            pass
+
+    try:
+        mtime = path.stat().st_mtime
+    except Exception:
+        mtime = 0.0
+    return mtime, mtime
+
+def _find_existing_shared_example_bundle(root: Path, prefix: str) -> Optional[Path]:
+    if not root.exists():
+        return None
+    candidates: list[Path] = []
+    for path in root.iterdir():
+        if not path.is_dir():
+            continue
+        if not path.name.startswith(f"{prefix}__"):
+            continue
+        if not (path / "entrypoint.py").exists():
+            continue
+        candidates.append(path)
+    if not candidates:
+        return None
+    candidates.sort(key=_managed_bundle_created_sort_key, reverse=True)
+    return candidates[0]
+
+def _shared_example_bundle_dir(bundle_name: str, version: str) -> Path:
+    root = _shared_bundles_root()
+    prefix = _shared_example_bundle_prefix(bundle_name, version)
+    existing = _find_existing_shared_example_bundle(root, prefix)
+    if existing is not None:
+        return existing
+    return root / f"{prefix}__{_shared_example_timestamp_suffix()}"
+
+def _write_shared_example_bundle_metadata(
+    *,
+    bundle_root: Path,
+    dest_root: Path,
+    version: str,
+    recorded_dest_root: Optional[Path] = None,
+) -> None:
+    now = datetime.now(timezone.utc)
+    payload = {
+        "kind": "shared_example_bundle",
+        "bundle_name": bundle_root.name,
+        "source_path": str(bundle_root),
+        "dest_path": str(recorded_dest_root or dest_root),
+        "platform_ref": _current_platform_ref(),
+        "content_hash": version,
+        "content_hash_prefix": version[:12],
+        "created_at": now.isoformat(),
+        "created_at_epoch": now.timestamp(),
+    }
+    metadata_path = dest_root / _MANAGED_BUNDLE_METADATA_FILE
+    tmp_path = dest_root / f".{_MANAGED_BUNDLE_METADATA_FILE}.tmp-{os.getpid()}-{time.time_ns()}"
+    try:
+        tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        tmp_path.replace(metadata_path)
+    except Exception:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 def cleanup_old_shared_example_bundles(
     *,
@@ -136,7 +236,7 @@ def cleanup_old_shared_example_bundles(
             continue
         candidates.append(p)
 
-    candidates.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
+    candidates.sort(key=_managed_bundle_created_sort_key, reverse=True)
     removed = 0
 
     if ttl_hours and ttl_hours > 0:
@@ -145,7 +245,8 @@ def cleanup_old_shared_example_bundles(
             try:
                 if _is_active_dir(p):
                     continue
-                if p.stat().st_mtime < cutoff:
+                created_at, _mtime = _managed_bundle_created_sort_key(p)
+                if created_at < cutoff:
                     shutil.rmtree(p, ignore_errors=True)
                     removed += 1
                     candidates = [c for c in candidates if c != p]
@@ -175,17 +276,30 @@ def _ensure_example_bundle_shared(bundle_root: Path) -> Path:
 
     try:
         version = compute_dir_sha256(bundle_root, skip_files=set())
-        dest_root = _shared_example_bundle_dir(bundle_root.name, version)
         lock_path = _example_bundle_lock_path(bundle_root.name)
-        with lock_path.open("a+") as fh:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        with observed_file_lock(
+            lock_path=lock_path,
+            resource_id=f"example-bundle:{bundle_root.name}:{version[:12]}",
+            operation="example.bundle.materialize",
+            instance_id=_instance_id_for_lock_metadata(),
+            wait_seconds=300,
+        ):
+            dest_root = _shared_example_bundle_dir(bundle_root.name, version)
             if dest_root.exists() and (dest_root / "entrypoint.py").exists():
+                if not (dest_root / _MANAGED_BUNDLE_METADATA_FILE).exists():
+                    _write_shared_example_bundle_metadata(bundle_root=bundle_root, dest_root=dest_root, version=version)
                 return dest_root
 
             dest_root.parent.mkdir(parents=True, exist_ok=True)
             tmp_root = dest_root.parent / f".{dest_root.name}.tmp-{os.getpid()}-{time.time_ns()}"
             try:
                 shutil.copytree(bundle_root, tmp_root, dirs_exist_ok=False)
+                _write_shared_example_bundle_metadata(
+                    bundle_root=bundle_root,
+                    dest_root=tmp_root,
+                    version=version,
+                    recorded_dest_root=dest_root,
+                )
                 tmp_root.replace(dest_root)
             finally:
                 if tmp_root.exists():
@@ -245,7 +359,7 @@ def _load_example_bundles() -> Dict[str, "BundleEntry"]:
             continue
         bundle_path = _ensure_example_bundle_shared(item)
         try:
-            from kdcube_ai_app.infra.plugin.agentic_loader import get_declared_bundle_id
+            from kdcube_ai_app.infra.plugin.bundle_loader import get_declared_bundle_id
             bid = get_declared_bundle_id(bundle_path, "entrypoint") or item.name
         except Exception:
             bid = item.name
@@ -338,7 +452,7 @@ def _reserved_bundle_entry(bid: str) -> Optional["BundleEntry"]:
         )
     # Fallback: scan all example dirs and check declared @bundle_id.
     try:
-        from kdcube_ai_app.infra.plugin.agentic_loader import get_declared_bundle_id
+        from kdcube_ai_app.infra.plugin.bundle_loader import get_declared_bundle_id
         for item in root.iterdir():
             if not item.is_dir() or item.name in {"data", "__pycache__"}:
                 continue

@@ -169,7 +169,7 @@ class ContextBrowser:
         """
         user_id =self._runtime_ctx.user_id
         conversation_id = self._runtime_ctx.conversation_id
-        self._ensure_workspace()
+        await self._ensure_workspace()
         timeline_payload: Optional[Dict[str, Any]] = None
         try:
             res_ws = await self.ctx_client.recent(
@@ -482,7 +482,9 @@ class ContextBrowser:
             return 0
         from kdcube_ai_app.apps.chat.external_events import ConversationExternalEvent
 
+        source = self.external_event_source
         added = 0
+        max_applied_seq = 0
         for event in events:
             if not isinstance(event, ConversationExternalEvent):
                 continue
@@ -505,6 +507,7 @@ class ContextBrowser:
                 int(self._timeline.last_external_event_seq or 0),
                 int(event.sequence or 0),
             )
+            max_applied_seq = max(max_applied_seq, int(event.sequence or 0))
             added += len(blocks)
             self.log.log(
                 f"[timeline.external]: applied conversation={self._runtime_ctx.conversation_id} "
@@ -516,6 +519,14 @@ class ContextBrowser:
             )
             if call_hooks:
                 await self._emit_timeline_event_hooks(type=str(event.kind or "external"), event=event, blocks=blocks)
+        if max_applied_seq and source is not None:
+            try:
+                await source.mark_consumed_up_to(
+                    max_sequence=max_applied_seq,
+                    turn_id=str(self._runtime_ctx.turn_id or ""),
+                )
+            except Exception:
+                self.log.log(f"[timeline.external]: failed to mark consumed {traceback.format_exc()}", "ERROR")
         return added
 
     async def _emit_timeline_event_hooks(self, *, type: str, event: Any, blocks: List[Dict[str, Any]]) -> None:
@@ -693,10 +704,6 @@ class ContextBrowser:
     @property
     def timeline(self) -> Timeline:
         if self._timeline is None:
-            try:
-                self._ensure_workspace()
-            except Exception:
-                pass
             self._timeline = Timeline(runtime=self._runtime_ctx, svc=self.svc)
         return self._timeline
 
@@ -729,17 +736,17 @@ class ContextBrowser:
         self._timeline.unhide_paths(paths)
         self._timeline.write_local()
 
-    def _ensure_workspace(self) -> tuple[pathlib.Path, pathlib.Path]:
+    async def _ensure_workspace(self) -> tuple[pathlib.Path, pathlib.Path]:
         """
         Ensure per-turn workspace directories exist and are bound to OUTDIR_CV/WORKDIR_CV.
         Returns (workdir, outdir).
         """
-        def _bootstrap_git_workspace_if_needed() -> None:
+        async def _bootstrap_git_workspace_if_needed() -> None:
             if get_workspace_implementation(self._runtime_ctx) != "git":
                 return
             from kdcube_ai_app.apps.chat.sdk.solutions.react.git_workspace import ensure_current_turn_git_workspace
 
-            ensure_current_turn_git_workspace(
+            await ensure_current_turn_git_workspace(
                 runtime_ctx=self._runtime_ctx,
                 outdir=outdir,
                 logger=self.log,
@@ -755,7 +762,7 @@ class ContextBrowser:
                 WORKDIR_CV.set(str(workdir))
             except Exception:
                 pass
-            _bootstrap_git_workspace_if_needed()
+            await _bootstrap_git_workspace_if_needed()
             return workdir, outdir
 
         try:
@@ -794,7 +801,7 @@ class ContextBrowser:
         except Exception:
             pass
 
-        _bootstrap_git_workspace_if_needed()
+        await _bootstrap_git_workspace_if_needed()
         return workdir, outdir
 
     def _write_timeline_file(self, *, conversation_id: Optional[str], turn_id: Optional[str]) -> None:

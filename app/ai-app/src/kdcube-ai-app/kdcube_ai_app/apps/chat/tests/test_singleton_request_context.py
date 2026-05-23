@@ -12,15 +12,19 @@ from kdcube_ai_app.apps.chat.sdk.protocol import (
     ChatTaskRouting,
     ChatTaskUser,
 )
+from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import (
+    bind_current_request_context,
+    get_current_user_identity,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot import entrypoint as entrypoint_mod
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_economic import (
     BaseEntrypointWithEconomics,
 )
-from kdcube_ai_app.infra.plugin.agentic_loader import (
-    AgenticBundleSpec,
+from kdcube_ai_app.infra.plugin.bundle_loader import (
+    BundleSpec,
     _singleton_cache,
     cache_key_for_spec,
-    clear_agentic_caches,
+    clear_bundle_loader_caches,
     get_workflow_instance,
     notify_cached_bundle_props_changed,
 )
@@ -58,7 +62,7 @@ class _DummyConfig:
         return None
 
 
-def _ctx(*, user_type: str, user_id: str = "user-1") -> ChatTaskPayload:
+def _ctx(*, user_type: str, user_id: str = "user-1", email: str = "lena@nestlogic.com") -> ChatTaskPayload:
     return ChatTaskPayload(
         request=ChatTaskRequest(request_id=f"req-{user_type}"),
         routing=ChatTaskRouting(
@@ -75,6 +79,7 @@ def _ctx(*, user_type: str, user_id: str = "user-1") -> ChatTaskPayload:
             user_type=user_type,
             user_id=user_id,
             username="lena@nestlogic.com",
+            email=email,
             roles=["kdcube:role:super-admin"] if user_type == "privileged" else [],
             permissions=[],
             timezone="UTC",
@@ -83,12 +88,12 @@ def _ctx(*, user_type: str, user_id: str = "user-1") -> ChatTaskPayload:
 
 
 def test_singleton_workflow_rebinds_request_context(monkeypatch):
-    clear_agentic_caches()
+    clear_bundle_loader_caches()
     monkeypatch.setattr(entrypoint_mod, "get_settings", lambda: SimpleNamespace(TENANT="demo", PROJECT="demo-project"))
     monkeypatch.setattr(entrypoint_mod, "create_kv_cache_from_env", lambda: None)
 
     admin = _admin_bundle_entry()
-    spec = AgenticBundleSpec(
+    spec = BundleSpec(
         path=admin.path,
         module=admin.module,
         singleton=bool(admin.singleton),
@@ -102,7 +107,7 @@ def test_singleton_workflow_rebinds_request_context(monkeypatch):
     assert second is first
     assert second.user_type_from_comm_ctx(second.comm) == "privileged"
 
-    clear_agentic_caches()
+    clear_bundle_loader_caches()
 
 
 @pytest.mark.asyncio
@@ -147,6 +152,42 @@ async def test_singleton_entrypoint_keeps_comm_context_task_local(monkeypatch):
 
     assert first == ("user-a", "user-a", "user-a", "user-a")
     assert second == ("user-b", "user-b", "user-b", "user-b")
+
+
+def test_base_entrypoint_bind_request_context_restores_task_local_binding(monkeypatch):
+    monkeypatch.setattr(entrypoint_mod, "get_settings", lambda: SimpleNamespace(TENANT="demo", PROJECT="demo-project"))
+    monkeypatch.setattr(entrypoint_mod, "create_kv_cache_from_env", lambda: None)
+
+    class _ProbeEntrypoint(entrypoint_mod.BaseEntrypoint):
+        async def execute_core(self, *, state, thread_id, params):
+            del state, thread_id, params
+            return {}
+
+    ep = _ProbeEntrypoint(
+        config=_DummyConfig(bundle_id="bundle.probe"),
+        comm_context=_ctx(user_type="registered", user_id="seed"),
+    )
+    original = _ctx(user_type="registered", user_id="user-a")
+    scoped = _ctx(user_type="privileged", user_id="user-b")
+    ep.rebind_request_context(comm_context=original)
+
+    with ep.bind_request_context(comm_context=scoped):
+        assert ep.comm_context.user.user_id == "user-b"
+
+    assert ep.comm_context.user.user_id == "user-a"
+
+
+def test_get_current_user_identity_includes_email():
+    ctx = _ctx(user_type="registered", user_id="user-a", email="user-a@example.com")
+    with bind_current_request_context(ctx):
+        identity = get_current_user_identity()
+
+    assert identity["tenant_id"] == "demo"
+    assert identity["project_id"] == "demo-project"
+    assert identity["bundle_id"] == "kdcube.admin"
+    assert identity["user_id"] == "user-a"
+    assert identity["username"] == "lena@nestlogic.com"
+    assert identity["email"] == "user-a@example.com"
 
 
 def test_economics_entrypoint_rebind_refreshes_managers(monkeypatch):
@@ -447,7 +488,7 @@ def test_base_entrypoint_npm_install_args_for_ui_build():
 
 @pytest.mark.asyncio
 async def test_notify_cached_bundle_props_changed_calls_singleton_hook(monkeypatch):
-    clear_agentic_caches()
+    clear_bundle_loader_caches()
     monkeypatch.setattr(entrypoint_mod, "get_settings", lambda: SimpleNamespace(TENANT="demo", PROJECT="demo-project"))
     monkeypatch.setattr(entrypoint_mod, "create_kv_cache_from_env", lambda: None)
 
@@ -473,7 +514,7 @@ async def test_notify_cached_bundle_props_changed_calls_singleton_hook(monkeypat
     ep.kv_cache = MagicMock()
     ep.kv_cache.get_json = AsyncMock(return_value={"feature": {"enabled": True}})
 
-    spec = AgenticBundleSpec(path="/tmp/bundle.props", module="entrypoint", singleton=True)
+    spec = BundleSpec(path="/tmp/bundle.props", module="entrypoint", singleton=True)
     _singleton_cache[cache_key_for_spec(spec)] = (ep, SimpleNamespace(__name__="bundle.props.entrypoint"))
 
     try:
@@ -484,7 +525,10 @@ async def test_notify_cached_bundle_props_changed_calls_singleton_hook(monkeypat
             project="demo-project",
             updated_by="tester",
             source="unit-test",
-            redis=object(),
+            redis=SimpleNamespace(
+                get=AsyncMock(return_value=None),
+                set=AsyncMock(return_value=None),
+            ),
         )
         assert changed is True
         assert len(ep.events) == 1
@@ -493,4 +537,4 @@ async def test_notify_cached_bundle_props_changed_calls_singleton_hook(monkeypat
         assert ep.events[0]["source"] == "unit-test"
         assert ep.events[0]["current_props"]["feature"]["enabled"] is True
     finally:
-        clear_agentic_caches()
+        clear_bundle_loader_caches()

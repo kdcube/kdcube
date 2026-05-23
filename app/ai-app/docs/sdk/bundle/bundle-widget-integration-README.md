@@ -4,9 +4,10 @@ title: "Bundle Widget Integration"
 summary: "Bundle widget UI contract: source-folder widget apps, runtime config handshake, operation URL construction, auth propagation, and the recommended pattern when a capability is both widget and operation."
 tags: ["sdk", "bundle", "widget", "iframe", "frontend", "integrations", "telegram", "memory"]
 keywords: ["bundle widget contract", "iframe widget contract", "widget source folder", "static widget build", "runtime config handshake", "operation url construction", "auth propagation to widget", "widget and operation dual pattern", "shared sdk widget source", "telegram widget components", "memory widget component", "bundle widget integration"]
-updated_at: 2026-05-19
+updated_at: 2026-05-22
 see_also:
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
+  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
   - ks:docs/sdk/bundle/ui-components-lifecycle-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
   - ks:docs/sdk/bundle/bundle-client-ui-README.md
@@ -87,6 +88,17 @@ decorated Python method is still required for discovery, visibility, and route
 resolution, but it is not the UI that the browser receives. The method body may
 be a small placeholder for legacy/fallback cases.
 
+Source-folder builds currently run through the bundle UI build machinery
+provided by the `BaseEntrypoint` class family. If a bundle exposes buildable
+widgets, the entrypoint class must either inherit a concrete `BaseEntrypoint`
+family class, such as `BaseEntrypoint`, `BaseEntrypointWithEconomics`,
+`BaseEntrypointWithMemory`, or `BaseEntrypointWithEconomicsAndMemory`, or
+implement the equivalent `_ensure_ui_build(...)` contract. A plain workflow
+class with `@ui_widget(...)` decorators can declare widget surfaces, but it
+will not build or refresh source-folder widget artifacts unless that build
+contract exists. See
+[Bundle Entrypoint Classes](./bundle-entrypoint-classes-README.md).
+
 If `ui.widgets.<alias>` exists but the `@ui_widget(alias="<alias>")`
 surface is missing, the static config is ignored for widget routing. A direct
 widget request should fail with a missing-widget response because the platform
@@ -146,7 +158,7 @@ If code must override the decorator metadata itself, override the same Python
 method name in the child class:
 
 ```python
-class MyEntrypoint(BaseEntrypointWithWidgets):
+class MyEntrypoint(BaseEntrypointWithMemory):
     @ui_widget(alias="memories", icon={"lucide": "NotebookText"})
     async def memories_widget(self, **kwargs):
         ...
@@ -213,10 +225,16 @@ admin/channels panels, these three places must agree:
    ```
 
 For built-in/reference bundles, keep `src_folder`, `build_command`, and
-required `shared_sources` in `configuration_defaults()`. Then descriptors can
-usually say only `enabled: true`. Descriptors may repeat the same values when a
-seed should be self-documenting or when an environment intentionally overrides
-the default.
+required `shared_sources` in `configuration_defaults()` so workflow-side code
+and rebuild hooks have stable defaults.
+
+Current route-time widget serving evaluates effective bundle props after code
+defaults and descriptor/admin props are merged. That means intrinsic widget
+source/build values may live in `configuration_defaults()`, while descriptors
+carry only deployment overrides. Descriptors may still repeat `src_folder` and
+`build_command` when a seed file must be self-documenting or when an older
+runtime has to be supported. For the exact merge/materialization rules, see
+[Bundle Properties And Secrets Lifecycle](./bundle-properties-and-secrets-lifecycle-README.md).
 
 If the build fails with a path like this:
 
@@ -352,6 +370,60 @@ The bundle loader builds that source folder into shared bundle storage under:
 ```text
 <bundle_storage_root>/ui/widgets/<widget_alias>
 ```
+
+### Build Signature & Cache
+
+To avoid rebuilding unchanged sources on every bundle load, the loader
+maintains a **build signature** per UI app and compares it to a stored
+signature before deciding to rebuild. A matching signature produces:
+
+```text
+[bundle.ui] widget:<alias> skipped: signature cache hit
+```
+
+in the chat-proc logs and means the existing built artifacts under
+`<bundle_storage_root>/ui/widgets/<alias>` are reused as-is. A mismatch
+triggers a full rebuild via `build_command`.
+
+**What goes into the signature**:
+
+- `kind` — `main-view` or `widget:<safe_alias>`
+- `src_path` — absolute path of the resolved source folder
+- `build_command` — the exact command string from the widget config (after
+  `<VI_BUILD_DEST_ABSOLUTE_PATH>` placeholder substitution)
+- `bundle_delivery_id` — the bundle id from the active spec
+- a sha256 over the source tree: each file's `relative_path + "\0" + size +
+  "\0" + mtime_ns`, plus the same for every `shared_sources` source folder
+  declared on the widget config
+
+**What is ignored** when hashing the source tree:
+
+- directories: `node_modules`, `.git`, `dist`, `build`, `.vite`,
+  `.vite-temp`, `__pycache__`
+- file suffixes: `.tsbuildinfo`
+- generated `*.js` / `*.jsx` files (and their `.map` siblings) when a
+  matching `*.ts` / `*.tsx` source file exists in the same directory — these
+  are loader output shadows, not source
+
+**Where signatures live**:
+
+- main view: `<bundle_storage_root>/.ui.signature`
+- per widget: `<bundle_storage_root>/.ui.widgets/<safe_alias>.signature`
+  (where `safe_alias` is the widget alias with `/` → `_`)
+
+**How to force a rebuild**:
+
+- `touch` any non-ignored file under the widget's `src_folder` (changes
+  `mtime_ns` → changes the signature)
+- change anything in `build_command` (e.g. add a no-op flag)
+- delete the signature file directly:
+  `rm <bundle_storage_root>/.ui.widgets/<safe_alias>.signature`
+- bump the bundle id (rarely useful for local development)
+
+**Concurrency**: the build runs inside a shared-storage lock keyed by the
+bundle storage root, so concurrent loads from multiple workers do not run
+the same `build_command` twice. Workers that arrive after the signature was
+written hit the cache and skip the build.
 
 The widget route serves the built app and supports SPA subpath fallback:
 
@@ -691,7 +763,51 @@ The widget should request these fields from the runtime display environment:
 - `defaultProject`
 - `defaultAppBundleId`
 
-The widget must accept both response event types:
+### Tolerated Alternate Keys
+
+A widget loaded in different host contexts (control plane, embedded
+iframe, Telegram Mini App, public widget route) can receive the runtime
+config payload under slightly different key names. The widget **must**
+accept all of the following alternates when reading the payload, falling
+back left-to-right within each group:
+
+| Logical field | Canonical key | Alternates accepted |
+| --- | --- | --- |
+| Tenant | `defaultTenant` | `tenant`, `tenant_id` |
+| Project | `defaultProject` | `project`, `project_id` |
+| ID-token header name | `idTokenHeader` | `idTokenHeaderName`, `auth.idTokenHeaderName` |
+| Base URL | `baseUrl` | (no alternate) |
+| Access token | `accessToken` | (no alternate; preserve explicit `null`) |
+| ID token | `idToken` | (no alternate; preserve explicit `null`) |
+| App bundle id | `defaultAppBundleId` | (no alternate in the runtime-config payload; URL params accept `bundle_id` or `bundleId`) |
+
+The reference implementation lives in
+`sdk/examples/bundles/kdcube.copilot@2026-04-03-19-05/ui/widgets/copilot_webapp/src/store/settings.ts`
+and reads:
+
+```ts
+const tenant  = config.defaultTenant  || config.tenant  || config.tenant_id;
+const project = config.defaultProject || config.project || config.project_id;
+const idHdr   = config.idTokenHeader
+             || config.idTokenHeaderName
+             || config.auth?.idTokenHeaderName
+             || existing;
+// access/id tokens use `??` so explicit null is preserved
+const accessToken = config.accessToken ?? existing;
+const idToken     = config.idToken     ?? existing;
+```
+
+When the widget is launched via a route that encodes the bundle id as a URL
+query param, accept either spelling:
+
+```ts
+const bundleId = params.get('bundle_id') || params.get('bundleId');
+```
+
+### Tolerated Response Event Types
+
+The widget must accept both response event types from the `postMessage`
+runtime-config handshake:
 
 - `CONN_RESPONSE`
 - `CONFIG_RESPONSE`

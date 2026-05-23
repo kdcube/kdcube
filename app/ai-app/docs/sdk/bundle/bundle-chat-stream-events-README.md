@@ -7,6 +7,8 @@ keywords: ["chat stream event catalog", "socketio event catalog", "sse event cat
 see_also:
   - ks:docs/sdk/bundle/bundle-client-ui-README.md
   - ks:docs/sdk/bundle/bundle-client-communication-README.md
+  - ks:docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
+  - ks:docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
   - ks:docs/sdk/bundle/bundle-frontend-awareness-README.md
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/service/comm/comm-system.md
@@ -30,6 +32,10 @@ It is intended for:
 - Frontend developers integrating the chat UI.
 - Adapter developers (Telegram/Slack/etc.) who need to consume the stream.
 - Anyone building a sniffer/aggregator for chat activity.
+
+For bundle code that records selected comm events and sends bounded batches to
+a sink, use
+[Bundle Event Recording And Sinks](bundle-event-recording-and-sinks-README.md).
 
 It reflects the current server implementation (ingress + processor split) and the default client implementation in `ChatService.ts`.
 
@@ -97,6 +103,10 @@ Important:
 
 - `followup_accepted` / `steer_accepted` do **not** mean that a new proc turn started immediately.
 - They mean the message is accepted into ordered shared storage for that conversation.
+- The ack's `turn_id` is the fallback queued turn id for that submission, not proof that the UI should render a new turn.
+- `target_turn_id` is the client/user's intended turn. It is advisory and may be stale.
+- `active_turn_id` is the server-observed active turn at ingress time. It is the preferred same-turn render target when `live_owner_detected !== false`.
+- `event_id` and `external_event_sequence` identify the durable external event.
 - A live React turn may consume it while still running.
 - A consumed `followup` stays on the current turn and can affect the next decision boundary.
 - A consumed `steer` is a control interrupt. Engineering first tries to cancel the active generation or cancellable tool phase, then React gets a short finalize phase on that same turn.
@@ -424,10 +434,12 @@ Typical payload:
   "data": {
     "message_kind": "followup",
     "active_turn_id": "turn_active",
+    "target_turn_id": "turn_visible_to_client",
     "queued_turn_id": "turn_next",
     "task_id": "task_123",
-    "continuation_queue_size": 2,
-    "continuation_message_id": "cont_abc123"
+    "continuation_message_id": "cont_abc123",
+    "external_event_sequence": 42,
+    "live_owner_detected": false
   }
 }
 ```
@@ -436,7 +448,8 @@ Meaning:
 
 - the active turn is still running
 - this message was accepted into the ordered conversation external-event source
-- it is not yet a new `chat.start`
+- `queued_turn_id` / ack `turn_id` is a fallback task id, not a visible turn-start confirmation
+- `continuation_message_id` / ack `event_id` is the durable external event id and should be used for client dedupe when present
 - a live React turn may consume it during the active turn
 - otherwise proc will later promote the next accepted event into the normal ready queue
 
@@ -605,7 +618,10 @@ Client guidance:
 Client guidance for continuation acceptance:
 - Treat `followup_accepted` / `steer_accepted` as admission acknowledgements, not as turn-start confirmations.
 - Keep the UI bound to the same conversation; do not assume a second parallel turn started.
-- Use `queue.continuation.accepted` to show that the message is queued behind or alongside the active turn.
+- Do not render a new turn from the synchronous ack alone.
+- Render an immediate same-turn followup bubble only when `live_owner_detected !== false`; attach it to `active_turn_id || target_turn_id`.
+- Dedupe immediate continuation bubbles by `event_id || queued_turn_id || turn_id`.
+- Use `queue.continuation.accepted` to show that the message is stored behind or alongside the active turn.
 - If a later `conv_status` arrives with `completion = "queued_next"`, interpret that as "the next continuation has been promoted for normal processing".
 
 ---

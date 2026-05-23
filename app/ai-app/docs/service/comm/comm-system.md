@@ -176,7 +176,7 @@ ChatCommunicator
           | privacy-filtered compact records
           | bounded in memory
           |
-          +--> sink dispatch, e.g. send_telemetry(...)
+          +--> sink dispatch, e.g. send_recorded_events(...)
                  |
                  | selected batch
                  | sink-owned normalization / delivery

@@ -4,13 +4,14 @@ title: "How To Release Bundle Content"
 summary: "Optional but recommended Tier 1 lifecycle procedure for releasing bundle/content repositories: align bundle docs, config templates, release.yaml, validation, git commit/tag/push, and descriptor ref updates from a self-contained public bundle-builder workflow."
 tags: ["sdk", "bundle", "release", "content", "lifecycle", "tier-1"]
 keywords: ["bundle content release", "bundle release procedure", "release yaml", "bundle config templates", "bundle tag", "bundle descriptor ref", "shared widget source validation", "agent release workflow", "optional release procedure", "bundle lifecycle maintenance"]
-updated_at: 2026-05-16
+updated_at: 2026-05-22
 see_also:
   - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
   - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
+  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - ks:docs/configuration/bundles-descriptor-README.md
   - ks:docs/configuration/bundles-secrets-descriptor-README.md
@@ -19,6 +20,9 @@ see_also:
   - ks:docs/service/cicd/ngrok-README.md
   - ks:docs/sdk/bundle/bundle-delivery-and-update-README.md
   - ks:docs/sdk/bundle/bundle-widget-integration-README.md
+  - ks:docs/sdk/tools/custom-tools-README.md
+  - ks:docs/sdk/tools/tool-subsystem-README.md
+  - ks:docs/sdk/bundle/build/design/bundle-loader-import-isolation-README.md
 ---
 # How To Release Bundle Content
 
@@ -36,8 +40,25 @@ It is also the recommended way to work when building a bundle from scratch:
 - validate before release
 - only then commit, tag, push, and update runtime descriptors
 
+For runtime command choice during release validation or descriptor ref updates,
+use
+[how-to-configure-and-run-bundle-README.md#canonical-cli-flow-schemas](how-to-configure-and-run-bundle-README.md#canonical-cli-flow-schemas).
+Do not re-run `init` to validate an existing local runtime; use `refresh` for
+platform source/image changes and `bundle reload` for bundle changes.
+
 Do not rely on another release procedure when using this page.
 This page is the self-contained public bundle-builder procedure.
+
+Critical Python import rule:
+
+- release validation must prove bundle-local code uses package-relative imports
+  such as `from .services.storage import ...`
+- do not bless top-level bundle-local imports such as `from services...`,
+  `from apps...`, or `import tools`
+- release validation must include bundle-local tool modules: local
+  `TOOLS_SPECS` entries use `ref: "tools/name.py"` and those tools use
+  package-relative imports such as `from ..services.storage import ...`
+- see [bundle-runtime-README.md#critical-bundle-local-import-rule](../bundle-runtime-README.md#critical-bundle-local-import-rule)
 
 Critical release check for browser surfaces:
 
@@ -64,6 +85,11 @@ Before doing release actions, conclude these values with the user:
 | validation | which local and runtime checks are expected |
 | git actions | whether to commit, tag, and push |
 | descriptor update | which `bundles.yaml` should point at the new ref, if any |
+
+Before tagging, check bundle identity consistency across the folder name,
+`release.yaml`, `entrypoint.py`, config templates, interface docs, and the
+descriptor entry being updated. See
+[how-to-write-bundle-README.md#1b3-bundle-identity-rule](how-to-write-bundle-README.md#1b3-bundle-identity-rule).
 
 If the user explicitly says to release, commit, tag, push, and update a named
 descriptor, that is enough. Otherwise ask for the missing value before touching

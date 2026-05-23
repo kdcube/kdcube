@@ -22,6 +22,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.snapshot import build_portable_spec
 from kdcube_ai_app.apps.chat.sdk.runtime.iso_runtime import _InProcessRuntime
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_index import read_index
 import kdcube_ai_app.apps.chat.sdk.tools.tools_insights as tools_insights
+from kdcube_ai_app.apps.chat.sdk.runtime.workspace import artifact_outdir_for
 
 def _safe_label(s: str, *, maxlen: int = 96) -> str:
     """Filesystem-safe label from tool_id."""
@@ -31,6 +32,54 @@ def _safe_label(s: str, *, maxlen: int = 96) -> str:
 def _safe_exec_id(val: Optional[str]) -> str:
     safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", (val or "")).strip("_")
     return safe or new_exec_id()
+
+def _runtime_side_file_candidates(outdir: pathlib.Path, filename: str) -> list[pathlib.Path]:
+    root = pathlib.Path(outdir)
+    candidates = [root / filename]
+    try:
+        artifact_root = artifact_outdir_for(root, create=False)
+        candidates.append(artifact_root / filename)
+    except Exception:
+        pass
+
+    seen: set[str] = set()
+    unique: list[pathlib.Path] = []
+    for path in candidates:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(path)
+    return unique
+
+def _merge_comm_state_from_runtime_output(comm: Any, outdir: pathlib.Path) -> None:
+    """
+    Bring communicator side files back from a local subprocess or child runtime.
+
+    Runtime metadata lives at ``out/`` while generated artifacts live at
+    ``out/workdir``. Older runtimes wrote delta_aggregates.json at the runtime
+    root; current local subprocesses write it under the artifact root because
+    OUTPUT_DIR points there. Merge both locations and rely on communicator
+    dedupe for repeated chunks/events.
+    """
+    if comm is None:
+        return
+
+    merge_delta = getattr(comm, "merge_delta_cache_from_file", None)
+    if callable(merge_delta):
+        for path in _runtime_side_file_candidates(outdir, "delta_aggregates.json"):
+            try:
+                merge_delta(path)
+            except Exception:
+                pass
+
+    merge_recorded = getattr(comm, "merge_recorded_events_from_file", None)
+    if callable(merge_recorded):
+        for path in _runtime_side_file_candidates(outdir, "comm_recorded_events.json"):
+            try:
+                merge_recorded(path)
+            except Exception:
+                pass
 
 def _log_exec_payload(
     *,
@@ -689,17 +738,8 @@ async def execute_tool_in_isolation(
         timeout_s=240,
         isolation=isolation
     )
-    # Best-effort: bring back streamed deltas from the sandboxed tool run
-    try:
-        tool_manager.comm.merge_delta_cache_from_file(outdir / "delta_aggregates.json")
-    except Exception:
-        pass
-    try:
-        merge_recorded = getattr(tool_manager.comm, "merge_recorded_events_from_file", None)
-        if callable(merge_recorded):
-            merge_recorded(outdir / "comm_recorded_events.json")
-    except Exception:
-        pass
+    # Best-effort: bring back comm state from the subprocess/child tool run.
+    _merge_comm_state_from_runtime_output(getattr(tool_manager, "comm", None), outdir)
 
     # Check for subprocess-level errors
     subprocess_error = None

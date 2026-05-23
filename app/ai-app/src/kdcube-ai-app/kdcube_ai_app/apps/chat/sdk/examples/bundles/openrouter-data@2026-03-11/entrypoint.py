@@ -15,7 +15,7 @@
 #
 # To create your own data-processing bundle:
 #   - Subclass BaseEntrypoint
-#   - Decorate with @agentic_workflow(name=..., version=..., priority=...)
+#   - Decorate with @bundle_entrypoint(name=..., version=..., priority=...)
 #   - Override _build_graph() to define the processing pipeline
 #   - Configure the OpenRouter model in the `configuration` property
 
@@ -27,7 +27,7 @@ from langgraph.graph import StateGraph, START, END
 
 from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload
 from kdcube_ai_app.infra.service_hub.inventory import Config, BundleState
-from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow
+from kdcube_ai_app.infra.plugin.bundle_loader import bundle_entrypoint
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint import BaseEntrypoint
 
 from .orchestrator.workflow import OpenRouterDataWorkflow
@@ -40,7 +40,7 @@ BUNDLE_ID = "openrouter-data"
 DEFAULT_OR_MODEL = "google/gemini-2.5-flash-preview"
 
 
-@agentic_workflow(name=BUNDLE_ID, version="1.0.0", priority=50)
+@bundle_entrypoint(name=BUNDLE_ID, version="1.0.0", priority=50)
 class OpenRouterDataBundle(BaseEntrypoint):
     """
     Single-turn data processing bundle backed by OpenRouter.

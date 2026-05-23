@@ -108,6 +108,20 @@ class _FakeCompletedProc:
         return self._stdout, self._stderr
 
 
+class _FakeRunningContainerProc:
+    def __init__(self, stdout=b"", stderr=b""):
+        self.returncode = None
+        self._stdout = stdout
+        self._stderr = stderr
+
+    async def communicate(self):
+        self.returncode = 0
+        return self._stdout, self._stderr
+
+    def kill(self):
+        self.returncode = -9
+
+
 def test_docker_argv_grants_network_namespace_capability(tmp_path):
     workdir = tmp_path / "work"
     outdir = tmp_path / "out"
@@ -186,10 +200,11 @@ def test_split_bind_source_prepare_argv_is_networkless_and_scoped(tmp_path):
     outdir = tmp_path / "out"
     artifact_outdir = outdir / "workdir"
     executor_logdir = outdir / "logs" / "executor"
+    supervisor_logdir = outdir / "logs" / "supervisor"
 
     argv = docker_runtime._build_split_bind_source_prepare_argv(
         image="py-code-exec:latest",
-        host_paths=[workdir, outdir, artifact_outdir, executor_logdir],
+        host_paths=[workdir, outdir, artifact_outdir, executor_logdir, supervisor_logdir],
     )
 
     assert "--network" in argv
@@ -207,6 +222,7 @@ def test_split_bind_source_prepare_argv_is_networkless_and_scoped(tmp_path):
     assert any(item == f"{outdir}:/kdcube-bind-src-1:rw" for item in argv)
     assert any(item == f"{artifact_outdir}:/kdcube-bind-src-2:rw" for item in argv)
     assert any(item == f"{executor_logdir}:/kdcube-bind-src-3:rw" for item in argv)
+    assert any(item == f"{supervisor_logdir}:/kdcube-bind-src-4:rw" for item in argv)
     assert any("chmod -R a+rwX" in item for item in argv)
 
 
@@ -595,6 +611,80 @@ async def test_run_py_in_docker_mounts_local_kdcube_storage_rw(tmp_path, monkeyp
     runtime_globals = json.loads(runtime_globals_arg.split("=", 1)[1])
     portable_spec = json.loads(runtime_globals["PORTABLE_SPEC_JSON"])
     assert portable_spec["accounting_storage"]["storage_path"] == f"file://{private_storage_dir}"
+
+
+@pytest.mark.asyncio
+async def test_split_docker_precreates_supervisor_logdir_before_host_bind_prep(tmp_path, monkeypatch):
+    workdir = tmp_path / "work"
+    outdir = tmp_path / "out"
+    workdir.mkdir(parents=True, exist_ok=True)
+    outdir.mkdir(parents=True, exist_ok=True)
+    (workdir / "main.py").write_text("print('ok')\n", encoding="utf-8")
+
+    prepare_calls = []
+    docker_runs = []
+
+    async def _fake_prepare_split_host_bind_sources_with_docker(*, image, host_paths, log):
+        del image, log
+        prepare_calls.append(tuple(host_paths))
+        assert (outdir / "logs" / "executor").is_dir()
+        assert (outdir / "logs" / "supervisor").is_dir()
+        return True, ""
+
+    async def _fake_docker_control(args, *, timeout_s=10):
+        del timeout_s
+        if args[:3] == ["docker", "volume", "create"]:
+            return 0, "socket-volume\n", ""
+        if args[:3] == ["docker", "volume", "rm"]:
+            return 0, "", ""
+        if args[:2] == ["docker", "stop"]:
+            return 0, "", ""
+        return 0, "", ""
+
+    async def _fake_create_subprocess_exec(*args, **kwargs):
+        del kwargs
+        docker_runs.append(args)
+        if len(docker_runs) == 1:
+            return _FakeRunningContainerProc()
+        return _FakeCompletedProc(returncode=0)
+
+    monkeypatch.setattr(docker_runtime.asyncio, "create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr(docker_runtime, "_prepare_split_host_bind_sources_with_docker", _fake_prepare_split_host_bind_sources_with_docker)
+    monkeypatch.setattr(docker_runtime, "_docker_control", _fake_docker_control)
+    monkeypatch.setattr(docker_runtime, "check_and_apply_cloud_environment", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(docker_runtime, "_resolve_redis_url_for_container", lambda url, logger=None: url)
+    monkeypatch.setattr(docker_runtime, "_is_running_in_docker", lambda: True)
+    monkeypatch.setattr(docker_runtime, "_can_preflight_translated_host_path", lambda path: False)
+    monkeypatch.setattr(docker_runtime, "get_settings", lambda: SimpleNamespace(REDIS_URL="redis://example"))
+
+    def _fake_translate(path):
+        p = pathlib.Path(path).resolve()
+        if p == workdir.resolve():
+            return pathlib.Path("/opt/kdcube/efs/exec-workspace/test/work")
+        if p == outdir.resolve():
+            return pathlib.Path("/opt/kdcube/efs/exec-workspace/test/out")
+        return p
+
+    monkeypatch.setattr(docker_runtime, "_translate_container_path_to_host", _fake_translate)
+
+    result = await docker_runtime.run_py_in_docker(
+        workdir=workdir,
+        outdir=outdir,
+        runtime_globals={"EXECUTION_ID": "exec-split-supervisor-logdir"},
+        tool_module_names=[],
+        logger=SimpleNamespace(log=lambda *_args, **_kwargs: None),
+        container_strategy="split",
+        image="py-code-exec:latest",
+    )
+
+    assert result["ok"] is True
+    assert prepare_calls, "opaque translated host paths should still be prepared via Docker"
+    assert pathlib.Path("/opt/kdcube/efs/exec-workspace/test/out/logs/supervisor") in prepare_calls[0]
+    assert docker_runs, "split supervisor/executor docker runs should be attempted"
+    supervisor_run, executor_run = docker_runs
+    assert any(item == "/opt/kdcube/efs/exec-workspace/test/out:/workspace/runtime-out:rw" for item in supervisor_run)
+    assert all("/workspace/runtime-out" not in item for item in executor_run)
+    assert all("/logs/supervisor" not in item for item in executor_run)
 
 
 @pytest.mark.asyncio

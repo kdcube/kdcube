@@ -584,10 +584,10 @@ async def test_prefetch_git_bundles_skips_existing_paths(monkeypatch, tmp_path):
     bundle_root.mkdir()
     ensure_calls = []
 
-    async def _ensure_git_bundle_async(**kwargs):
+    async def _ensure_git_bundle(**kwargs):
         ensure_calls.append(kwargs)
 
-    monkeypatch.setattr(processor_mod, "ensure_git_bundle_async", _ensure_git_bundle_async)
+    monkeypatch.setattr(processor_mod, "ensure_git_bundle", _ensure_git_bundle)
 
     errors = await processor_mod.prefetch_git_bundles({
         "bundle.ready": {
@@ -610,17 +610,29 @@ async def test_prefetch_git_bundles_resolves_missing_paths_and_collects_errors(m
         lambda **kwargs: SimpleNamespace(bundle_root=Path(f"/tmp/{kwargs['bundle_id']}")),
     )
 
-    async def _ensure_git_bundle_async(**kwargs):
+    async def _ensure_git_bundle(**kwargs):
         ensure_calls.append(kwargs)
         if kwargs["bundle_id"] == "bundle.cooldown":
             raise processor_mod.GitBundleCooldown("cooldown")
         if kwargs["bundle_id"] == "bundle.fail":
             raise RuntimeError("boom")
 
-    monkeypatch.setattr(processor_mod, "ensure_git_bundle_async", _ensure_git_bundle_async)
+    monkeypatch.setattr(processor_mod, "ensure_git_bundle", _ensure_git_bundle)
 
-    from kdcube_ai_app.apps.chat.sdk.config import get_settings
-    monkeypatch.setattr(get_settings().PLATFORM.APPLICATIONS.GIT, "BUNDLE_GIT_ATOMIC", True)
+    monkeypatch.setattr(
+        processor_mod,
+        "get_settings",
+        lambda: SimpleNamespace(
+            PLATFORM=SimpleNamespace(
+                APPLICATIONS=SimpleNamespace(
+                    GIT=SimpleNamespace(
+                        BUNDLE_GIT_ALWAYS_PULL=False,
+                        BUNDLE_GIT_ATOMIC=True,
+                    ),
+                ),
+            ),
+        ),
+    )
     errors = await processor_mod.prefetch_git_bundles({
         "bundle.ok": {
             "repo": "https://example.invalid/ok.git",

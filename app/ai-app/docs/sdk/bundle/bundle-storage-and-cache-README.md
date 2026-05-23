@@ -30,12 +30,12 @@ CB_BUNDLE_STORAGE_URL=s3://my-bucket/prefix
 
 Use inside a bundle:
 ```python
-from kdcube_ai_app.apps.chat.sdk.storage.ai_bundle_storage import AIBundleStorage
+from kdcube_ai_app.apps.chat.sdk.storage.bundle_artifact_storage import BundleArtifactStorage
 
-self.storage = AIBundleStorage(
+self.storage = BundleArtifactStorage(
     tenant="acme",
     project="myproj",
-    ai_bundle_id=self.id,
+    bundle_id=self.id,
     storage_uri=None,  # or override per call
 )
 ```
@@ -50,8 +50,12 @@ self.storage.delete("logs/run1.txt")
 
 Storage path layout (logical):
 ```
-cb/tenants/{tenant}/projects/{project}/ai-bundle-storage/{ai_bundle_id}/...
+cb/tenants/{tenant}/projects/{project}/ai-bundle-storage/{bundle_id}/...
 ```
+
+The `ai-bundle-storage` path segment is the current compatibility prefix for
+existing deployments; new code should use the neutral `BundleArtifactStorage`
+API name.
 
 ---
 
@@ -133,7 +137,7 @@ Practical split:
 - `bundle_storage_dir(...)`
   - same canonical tenant/project/bundle-local root
   - use this only in helpers that do not have `self.bundle_storage_root()`
-- `AIBundleStorage`
+- `BundleArtifactStorage`
   - backend storage API for bundle artifacts
   - separate from the shared local filesystem root
 - `bundle_tool_context.host_files(...)`
@@ -173,6 +177,6 @@ See:
 
 ## References (code)
 
-- Storage: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/storage/ai_bundle_storage.py`
+- Storage: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/storage/bundle_artifact_storage.py`
 - KV cache: `src/kdcube-ai-app/kdcube_ai_app/infra/service_hub/cache.py`
 - Shared local storage helpers: `src/kdcube-ai-app/kdcube_ai_app/infra/plugin/bundle_storage.py`

@@ -3,8 +3,8 @@ id: ks:docs/sdk/bundle/ui-components-lifecycle-README.md
 title: "UI Components Lifecycle"
 summary: "How KDCube discovers, builds, caches, serves, and reloads bundle UI components in single-process and concurrent proc deployments."
 tags: ["sdk", "bundle", "ui", "widget", "main-view", "lifecycle", "preload", "concurrency", "efs", "iframe"]
-keywords: ["bundle ui lifecycle", "bundle widget lifecycle", "ui.widgets", "ui.main_view", "ui_widget decorator", "shared storage ui build", "bundle ui preload", "request triggered widget build", "bundle ui locks", "bundle ui signatures", "static widget route", "concurrent proc workers"]
-updated_at: 2026-05-19
+keywords: ["bundle ui lifecycle", "bundle widget lifecycle", "ui.widgets", "ui.main_view", "ui_widget decorator", "shared storage ui build", "bundle ui preload", "request triggered widget build", "bundle ui locks", "bundle ui signatures", "static widget route", "concurrent proc workers", "ui source edit auto-rebuild", "signature aware coalescing"]
+updated_at: 2026-05-23
 see_also:
   - ks:docs/sdk/bundle/bundle-widget-integration-README.md
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
@@ -299,7 +299,7 @@ GET /api/integrations/bundles/{tenant}/{project}/{bundle_id}/widgets/{alias}/ind
 
 the route does this:
 
-1. Load the bundle workflow for that request's worker.
+1. Load the bundle entrypoint for that request's worker.
 2. Discover the bundle interface manifest from decorators.
 3. Apply effective bundle props to the workflow.
 4. Resolve `@ui_widget(alias="<alias>")`.
@@ -336,6 +336,64 @@ sequenceDiagram
 
 The request-time build happens in the proc worker that received the request.
 The actual npm/vite command is a subprocess of that worker.
+
+## Source-Edit Detection And Auto-Rebuild
+
+For HTML-entrypoint requests, the static widget route consults a **signature
+provider** before short-circuiting the in-process "already built" check. The
+provider is the workflow's `compute_ui_widget_signature(alias)` (or
+`compute_ui_main_view_signature()` for main-view), which walks the source
+tree and computes the same `kind|src|build_command|bundle_id|<source-
+fingerprint>` string that `_ensure_static_ui_app_build` uses internally.
+
+Behaviour at the in-process layer:
+
+| Stored signature for `load_key` | Current signature from provider | Result |
+| --- | --- | --- |
+| Missing | Any value | Fall through, install build task |
+| Equal to current | Equal | Short-circuit (fast string equality, no source walk inside the lock) |
+| Different from current | Different | Drop stale entry, fall through, install fresh build task |
+| Any | `None` (provider returned None or raised) | Legacy membership-based short-circuit (skip if `load_key` was ever marked done) |
+
+The fingerprint walk runs **outside** the asyncio lock, so concurrent HTML
+requests do not serialise on it. The on-disk lock + signature inside
+`run_once_for_shared_bundle_storage` still arbitrates across workers — when
+two HTML requests on different machines compute the same new signature, only
+one actually rebuilds; the other observes "became current" and short-
+circuits at the shared-storage layer.
+
+Static-asset paths (`/widgets/<alias>/assets/*`) do **not** invoke the
+signature provider — they hit the legacy zero-cost membership short-circuit.
+Asset URLs are content-hashed by Vite, so a rebuild produces new filenames
+and the new `index.html` references them; old asset URLs that no longer
+exist return 404, which the browser handles via a page reload.
+
+Practical effect: editing a file in the bundle's UI `src_folder` and then
+hitting `index.html` causes the next request to rebuild — no manual
+`kdcube reload <bundle_id>` required for source edits. `kdcube reload`
+remains the supported escape hatch for invalidating other process-local
+state (manifests, decorator caches, singleton workflows).
+
+```mermaid
+sequenceDiagram
+  participant B as Browser
+  participant W as proc worker
+  participant P as Workflow
+  participant S as Shared storage
+
+  B->>W: GET /widgets/x/index.html
+  W->>P: compute_ui_widget_signature("x") -> "sig-A"
+  W->>W: in-process _done[load_key] == "sig-A"?
+  alt cached signature matches
+    W-->>B: serve cached index.html (fast path)
+  else cached signature missing or differs
+    W->>P: _ensure_ui_build()
+    P->>S: acquire op=ui-widget-x lock
+    P->>S: write build output + signature
+    W->>W: _done[load_key] = "sig-A"
+    W-->>B: serve fresh index.html
+  end
+```
 
 ## Cancellation And Timeouts
 
@@ -395,7 +453,8 @@ What is process-local:
 - imported Python modules
 - bundle singletons
 - manifest cache
-- process-local static entrypoint-load "done" set
+- process-local static entrypoint-load "done" map (load_key → captured
+  source signature; see [Source-Edit Detection And Auto-Rebuild](#source-edit-detection-and-auto-rebuild))
 - request state
 
 What is shared:
@@ -453,7 +512,7 @@ first. Do not patch the temporary source directory.
 
 ## Logs To Read
 
-UI build logs are emitted by the bundle workflow logger with `[bundle.ui]`.
+UI build logs are emitted by the bundle entrypoint logger with `[bundle.ui]`.
 
 Important lines:
 
@@ -502,6 +561,8 @@ Useful filters:
 | Widget route returns method-rendered payload instead of static app | `ui.widgets.<alias>` missing/disabled | Effective `ui.widgets` |
 | Static widget iframe is blank | Built `index.html` references root-relative assets | Vite `base: './'`, browser asset URLs |
 | Build repeats across workers | Signature not written, request cancellation before shielded build, stale lock, or differing signatures | `[bundle.ui] done`, `.ui.widgets/<alias>.signature`, lock owner logs |
+| Source edit not picked up on next HTML hit | Signature provider returned `None` (config disabled / src_folder missing) — falls back to legacy short-circuit | Workflow's `compute_ui_widget_signature(alias)` value, `ui.widgets.<alias>` props, log line "[bundle.ui] widget:<alias> build skipped" |
+| Source edit picked up on HTML hit but assets 404 | Browser cached old `index.html` referencing pre-rebuild asset hashes | Hard-reload the iframe; new `index.html` references new content-hashed assets |
 | One worker fails and another succeeds | Process-local manifest/cache/preload mismatch or request cancellation | `X-KDCube-Worker-Pid`, manifest validation logs |
 | Request returns client-disconnect wrapper | Browser/proxy canceled while route was loading/building | Compare request time with `[bundle.ui] build start/done` |
 

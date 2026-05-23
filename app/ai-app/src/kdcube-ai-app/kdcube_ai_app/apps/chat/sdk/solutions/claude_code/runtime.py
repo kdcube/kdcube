@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import pathlib
 import shutil
 import subprocess
@@ -17,9 +18,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.claude_code.types import (
     ClaudeCodeTurnKind,
 )
 from kdcube_ai_app.infra.git.auth import (
-    build_git_env as _build_git_env,
+    build_git_env,
     ensure_git_commit_identity as _ensure_git_commit_identity,
-    normalize_git_remote_url as _normalize_git_remote_url,
+    normalize_git_remote_url,
 )
 
 
@@ -148,17 +149,13 @@ def _git_head_sha(*, repo_root: pathlib.Path) -> str:
 def _ensure_session_repo(
     *,
     config: ClaudeCodeSessionStoreConfig,
+    repo_url: str,
+    env: dict[str, str],
 ) -> pathlib.Path:
     if config.implementation != "git":
         raise ValueError("claude_code_session_store_not_git")
-    repo_url = str(config.git_repo or "").strip()
     if not repo_url:
         raise ValueError("missing_claude_code_session_git_repo")
-    env = _build_git_env()
-    normalized_repo_url = _normalize_git_remote_url(repo_url)
-    if normalized_repo_url != repo_url:
-        logging.getLogger(__name__).info("[claude_code] using HTTPS for %s", repo_url)
-        repo_url = normalized_repo_url
     cache_root = _session_cache_root(config)
     repo_root = _session_lineage_repo_root(config)
     cache_root.mkdir(parents=True, exist_ok=True)
@@ -204,8 +201,8 @@ def _ensure_local_lineage_branch_ref(
     *,
     repo_root: pathlib.Path,
     config: ClaudeCodeSessionStoreConfig,
+    env: dict[str, str],
 ) -> str:
-    env = _build_git_env()
     remote_ref = claude_code_session_branch_ref(config)
     local_ref = "refs/heads/workspace"
     try:
@@ -290,24 +287,18 @@ def _is_session_missing_error(result: ClaudeCodeRunResult | None) -> bool:
     )
 
 
-def bootstrap_claude_code_session_store(
+def _bootstrap_claude_code_session_store_sync(
     *,
     config: ClaudeCodeSessionStoreConfig,
+    repo_url: str,
+    git_env: dict[str, str],
     logger: logging.Logger | None = None,
 ) -> dict[str, object]:
     log = logger or logging.getLogger("ClaudeCodeRuntime")
     local_root = pathlib.Path(config.local_root)
     local_root.mkdir(parents=True, exist_ok=True)
-    if config.implementation != "git":
-        return {
-            "implementation": config.implementation,
-            "local_root": str(local_root),
-            "bootstrapped": False,
-            "reason": "local_session_store",
-        }
-
-    repo_root = _ensure_session_repo(config=config)
-    lineage_ref = _ensure_local_lineage_branch_ref(repo_root=repo_root, config=config)
+    repo_root = _ensure_session_repo(config=config, repo_url=repo_url, env=git_env)
+    lineage_ref = _ensure_local_lineage_branch_ref(repo_root=repo_root, config=config, env=git_env)
     _ensure_local_git_repo(local_root=local_root, config=config)
     if lineage_ref:
         _clear_session_root(local_root=local_root)
@@ -355,23 +346,48 @@ def bootstrap_claude_code_session_store(
     }
 
 
-def publish_claude_code_session_store(
+async def bootstrap_claude_code_session_store(
     *,
     config: ClaudeCodeSessionStoreConfig,
+    logger: logging.Logger | None = None,
+) -> dict[str, object]:
+    local_root = pathlib.Path(config.local_root)
+    if config.implementation != "git":
+        await asyncio.to_thread(local_root.mkdir, parents=True, exist_ok=True)
+        return {
+            "implementation": config.implementation,
+            "local_root": str(local_root),
+            "bootstrapped": False,
+            "reason": "local_session_store",
+        }
+
+    raw_repo_url = str(config.git_repo or "").strip()
+    if not raw_repo_url:
+        raise ValueError("missing_claude_code_session_git_repo")
+    normalized_repo_url = await normalize_git_remote_url(raw_repo_url)
+    if normalized_repo_url != raw_repo_url:
+        logging.getLogger(__name__).info("[claude_code] using HTTPS for %s", raw_repo_url)
+    git_env = await build_git_env()
+    return await asyncio.to_thread(
+        _bootstrap_claude_code_session_store_sync,
+        config=config,
+        repo_url=normalized_repo_url,
+        git_env=git_env,
+        logger=logger,
+    )
+
+
+def _publish_claude_code_session_store_sync(
+    *,
+    config: ClaudeCodeSessionStoreConfig,
+    repo_url: str,
+    git_env: dict[str, str],
     logger: logging.Logger | None = None,
 ) -> dict[str, object]:
     log = logger or logging.getLogger("ClaudeCodeRuntime")
     local_root = pathlib.Path(config.local_root)
     local_root.mkdir(parents=True, exist_ok=True)
-    if config.implementation != "git":
-        return {
-            "implementation": config.implementation,
-            "local_root": str(local_root),
-            "published": False,
-            "reason": "local_session_store",
-        }
-
-    repo_root = _ensure_session_repo(config=config)
+    repo_root = _ensure_session_repo(config=config, repo_url=repo_url, env=git_env)
     _ensure_local_git_repo(local_root=local_root, config=config)
     subprocess.run(
         ["git", "-C", str(local_root), "add", "-A", "--", "."],
@@ -402,13 +418,12 @@ def publish_claude_code_session_store(
         check=True,
         capture_output=True,
     )
-    env = _build_git_env()
     lineage_ref = claude_code_session_branch_ref(config)
     subprocess.run(
         ["git", "-C", str(repo_root), "push", "origin", f"refs/heads/workspace:{lineage_ref}"],
         check=True,
         capture_output=True,
-        env=env,
+        env=git_env,
     )
     log.info(
         "[ClaudeCodeRuntime] published session store agent=%s conversation=%s local_root=%s branch=%s commit=%s committed=%s",
@@ -428,6 +443,37 @@ def publish_claude_code_session_store(
         "committed": committed,
         "published": True,
     }
+
+
+async def publish_claude_code_session_store(
+    *,
+    config: ClaudeCodeSessionStoreConfig,
+    logger: logging.Logger | None = None,
+) -> dict[str, object]:
+    local_root = pathlib.Path(config.local_root)
+    if config.implementation != "git":
+        await asyncio.to_thread(local_root.mkdir, parents=True, exist_ok=True)
+        return {
+            "implementation": config.implementation,
+            "local_root": str(local_root),
+            "published": False,
+            "reason": "local_session_store",
+        }
+
+    raw_repo_url = str(config.git_repo or "").strip()
+    if not raw_repo_url:
+        raise ValueError("missing_claude_code_session_git_repo")
+    normalized_repo_url = await normalize_git_remote_url(raw_repo_url)
+    if normalized_repo_url != raw_repo_url:
+        logging.getLogger(__name__).info("[claude_code] using HTTPS for %s", raw_repo_url)
+    git_env = await build_git_env()
+    return await asyncio.to_thread(
+        _publish_claude_code_session_store_sync,
+        config=config,
+        repo_url=normalized_repo_url,
+        git_env=git_env,
+        logger=logger,
+    )
 
 
 async def run_claude_code_turn(
@@ -453,8 +499,7 @@ async def run_claude_code_turn(
     effective_resume_existing = bool(resume_existing)
 
     if should_bootstrap and session_store is not None:
-        bootstrap_result = await asyncio.to_thread(
-            bootstrap_claude_code_session_store,
+        bootstrap_result = await bootstrap_claude_code_session_store(
             config=session_store,
             logger=logger,
         )
@@ -491,8 +536,7 @@ async def run_claude_code_turn(
                 _reset_local_session_checkout,
                 local_root=pathlib.Path(session_store.local_root),
             )
-            retry_bootstrap = await asyncio.to_thread(
-                bootstrap_claude_code_session_store,
+            retry_bootstrap = await bootstrap_claude_code_session_store(
                 config=session_store,
                 logger=logger,
             )
@@ -527,8 +571,7 @@ async def run_claude_code_turn(
         return result
     finally:
         if should_publish and session_store is not None:
-            await asyncio.to_thread(
-                publish_claude_code_session_store,
+            await publish_claude_code_session_store(
                 config=session_store,
                 logger=logger,
             )

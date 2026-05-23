@@ -288,7 +288,7 @@ User-scoped non-secret bundle props:
 
 User-scoped secrets:
 
-- `get_user_secret("some.key")`
+- `await get_secret("u:some.key")`
 - `set_user_secret("some.key", value)`
 
 Shared bundle storage:

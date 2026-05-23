@@ -282,14 +282,14 @@ On terminal completion:
 
 ### 4.4.1 Tool execution inside proc-owned turns
 
-For ReAct-style and similar bundle workflows, tool execution still belongs to
+For ReAct-style and similar bundle entrypoints, tool execution still belongs to
 the proc-owned turn lifecycle even when the concrete tool call runs outside the
 main proc interpreter.
 
 Current shape:
 - proc owns the chat turn, request context, communicator, accounting scope, and
-  bundle/workflow instance
-- bundle/workflow code may invoke tools through the tool subsystem
+  bundle entrypoint instance
+- bundle entrypoint code may invoke tools through the tool subsystem
 - tool execution can happen:
   - in-memory in the proc runtime
   - in an isolated runtime / supervisor path
@@ -548,7 +548,7 @@ Current behavior:
 - startup and bundle-update paths load or rebuild the effective registry for the worker scope
 - built-in example bundles are merged into that registry in [bundle_store.py](../../../src/kdcube-ai-app/kdcube_ai_app/infra/plugin/bundle_store.py)
 - request-time bundle resolution then uses the in-memory registry in [bundle_registry.py](../../../src/kdcube-ai-app/kdcube_ai_app/infra/plugin/bundle_registry.py)
-- module/singleton cache keys are based on the resolved bundle path in [agentic_loader.py](../../../src/kdcube-ai-app/kdcube_ai_app/infra/plugin/agentic_loader.py)
+- module/singleton cache keys are based on the resolved bundle path in [bundle_loader.py](../../../src/kdcube-ai-app/kdcube_ai_app/infra/plugin/bundle_loader.py)
 
 For built-in example bundles on Docker/ECS proc:
 

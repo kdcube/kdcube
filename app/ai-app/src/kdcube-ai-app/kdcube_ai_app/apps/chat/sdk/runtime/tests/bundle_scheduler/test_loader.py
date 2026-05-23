@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from kdcube_ai_app.infra.plugin.agentic_loader import (
+from kdcube_ai_app.infra.plugin.bundle_loader import (
     cron,
     CronJobSpec,
     discover_bundle_interface_manifest,

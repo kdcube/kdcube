@@ -29,19 +29,19 @@ class _FakeSecretsManager:
     def can_write(self):
         return True
 
-    def set_many(self, values):
+    async def set_many(self, values):
         self.set_many_calls.append(dict(values))
 
-    def delete_many(self, keys):
+    async def delete_many(self, keys):
         self.delete_many_calls.append(sorted(keys))
 
-    def set_secret(self, key, value):
+    async def set_secret(self, key, value):
         self.metadata[key] = value
 
-    def delete_secret(self, key):
+    async def delete_secret(self, key):
         self.metadata.pop(key, None)
 
-    def get_secret(self, key):
+    async def get_secret(self, key):
         return self.metadata.get(key)
 
 
@@ -108,7 +108,7 @@ async def test_set_current_user_bundle_secrets_uses_current_user_scope(monkeypat
 
     monkeypatch.setattr(integrations, "get_settings", lambda: SimpleNamespace(TENANT="tenant-a", PROJECT="project-a"))
     monkeypatch.setattr(integrations, "get_secrets_manager", lambda _settings: manager)
-    monkeypatch.setattr(integrations, "get_secret", lambda key: manager.get_secret(key))
+    monkeypatch.setattr(integrations, "get_secret", manager.get_secret)
 
     result = await integrations.set_current_user_bundle_secrets(
         "tenant-a",

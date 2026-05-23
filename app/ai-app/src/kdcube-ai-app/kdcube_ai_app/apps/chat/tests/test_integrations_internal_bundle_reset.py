@@ -48,7 +48,7 @@ def test_internal_reload_authority_reapplies_registry(monkeypatch):
     async def fake_set_registry_async(registry, default_bundle_id):
         calls["set_registry"] = (registry, default_bundle_id)
 
-    def fake_clear_agentic_caches():
+    def fake_clear_bundle_loader_caches():
         calls["cleared"] = True
 
     class _Redis:
@@ -67,11 +67,11 @@ def test_internal_reload_authority_reapplies_registry(monkeypatch):
 
     import kdcube_ai_app.infra.plugin.bundle_store as bundle_store
     import kdcube_ai_app.infra.plugin.bundle_registry as bundle_registry
-    import kdcube_ai_app.infra.plugin.agentic_loader as agentic_loader
+    import kdcube_ai_app.infra.plugin.bundle_loader as bundle_loader
 
     monkeypatch.setattr(bundle_store, "reload_registry_from_authority", fake_reload_registry_from_authority)
     monkeypatch.setattr(bundle_registry, "set_registry_async", fake_set_registry_async)
-    monkeypatch.setattr(agentic_loader, "clear_agentic_caches", fake_clear_agentic_caches)
+    monkeypatch.setattr(bundle_loader, "clear_bundle_loader_caches", fake_clear_bundle_loader_caches)
 
     client = TestClient(app)
     response = client.post("/internal/bundles/reload-authority", json={})
@@ -110,7 +110,7 @@ def test_internal_reload_authority_evicts_requested_bundle_scope(monkeypatch):
     async def fake_set_registry_async(registry, default_bundle_id):
         calls["set_registry"] = (registry, default_bundle_id)
 
-    def fake_clear_agentic_caches():
+    def fake_clear_bundle_loader_caches():
         calls["cleared"] = True
 
     def fake_evict_bundle_scope(spec, *, drop_sys_modules=True):
@@ -138,12 +138,12 @@ def test_internal_reload_authority_evicts_requested_bundle_scope(monkeypatch):
 
     import kdcube_ai_app.infra.plugin.bundle_store as bundle_store
     import kdcube_ai_app.infra.plugin.bundle_registry as bundle_registry
-    import kdcube_ai_app.infra.plugin.agentic_loader as agentic_loader
+    import kdcube_ai_app.infra.plugin.bundle_loader as bundle_loader
 
     monkeypatch.setattr(bundle_store, "reload_registry_from_authority", fake_reload_registry_from_authority)
     monkeypatch.setattr(bundle_registry, "set_registry_async", fake_set_registry_async)
-    monkeypatch.setattr(agentic_loader, "clear_agentic_caches", fake_clear_agentic_caches)
-    monkeypatch.setattr(agentic_loader, "evict_bundle_scope", fake_evict_bundle_scope)
+    monkeypatch.setattr(bundle_loader, "clear_bundle_loader_caches", fake_clear_bundle_loader_caches)
+    monkeypatch.setattr(bundle_loader, "evict_bundle_scope", fake_evict_bundle_scope)
 
     client = TestClient(app)
     response = client.post("/internal/bundles/reload-authority", json={"bundle_id": "demo.bundle@1.0.0"})

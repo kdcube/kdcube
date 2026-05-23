@@ -255,7 +255,7 @@ Primary reference bundle for bundle authoring in this repo:
 When reasoning about a bundle, keep these common anchors in mind:
 - `entrypoint.py`
   - defines `BUNDLE_ID`
-  - exposes the workflow class discovered by the bundle loader
+  - exposes the entrypoint class discovered by the bundle loader
 - `tools_descriptor.py`
   - declares custom tool registrations when the bundle exposes tools
 - `skills_descriptor.py`

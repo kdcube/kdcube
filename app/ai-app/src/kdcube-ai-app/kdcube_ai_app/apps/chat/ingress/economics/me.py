@@ -195,7 +195,7 @@ async def create_my_customer_portal_session(
         raise HTTPException(status_code=401, detail="User ID not found in session")
 
     mgr = _get_control_plane_manager(router)
-    stripe_client = _get_stripe()
+    stripe_client = await _get_stripe()
 
     sub = await mgr.subscription_mgr.get_subscription(
         tenant=settings.TENANT,

@@ -59,10 +59,10 @@ Multiple longrun methods may exist on one bundle.
 Example shape:
 
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow, longrun
+from kdcube_ai_app.infra.plugin.bundle_loader import bundle_entrypoint, longrun
 
 
-@agentic_workflow(...)
+@bundle_entrypoint(...)
 class TelemetryEntrypoint(BaseEntrypoint):
     @longrun(
         name="telemetry-consumer",

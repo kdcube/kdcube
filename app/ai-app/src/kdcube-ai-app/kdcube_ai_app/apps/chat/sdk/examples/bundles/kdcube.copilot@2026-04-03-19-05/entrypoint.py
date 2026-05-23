@@ -3,11 +3,11 @@
 #
 # ── entrypoint.py ──
 # Bundle entry point for the kdcube.copilot knowledge-space copilot.
-# Registers the bundle in the plugin system via @agentic_workflow and
+# Registers the bundle in the plugin system via @bundle_entrypoint and
 # manages the knowledge space lifecycle rooted at a single ai-app tree.
 #
 # What it does:
-#   1. Registers the bundle under the name "kdcube.copilot" (@agentic_workflow)
+#   1. Registers the bundle under the name "kdcube.copilot" (@bundle_entrypoint)
 #   2. Builds a LangGraph StateGraph with a single "orchestrate" node
 #   3. The "orchestrate" node initializes all dependencies (DB, indexes, RAG)
 #      and delegates execution to WithReactWorkflow.process()
@@ -50,9 +50,13 @@ from kdcube_ai_app.apps.chat.sdk.context.vector.conv_ticket_store import ConvTic
 from kdcube_ai_app.apps.chat.sdk.config import (
     delete_user_secret,
     get_secret,
-    get_service_secret,
-    get_user_secret,
     set_user_secret,
+)
+from kdcube_ai_app.apps.chat.sdk.comm.sink import (
+    STATS_COMM_EVENT_SELECTOR,
+    StatsTelemetrySink,
+    StatsTelemetryTarget,
+    configure_stats_event_recording,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram import TelegramUserAdminStorage
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram import user_admin as telegram_user_admin
@@ -71,7 +75,7 @@ from kdcube_ai_app.apps.chat.sdk.storage.ai_bundle_storage import AIBundleStorag
 from kdcube_ai_app.apps.chat.sdk.viz.patch_platform_dashboard import patch_dashboard
 from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
 from kdcube_ai_app.infra.service_hub.inventory import Config, BundleState
-from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow, api, mcp, on_job, ui_widget
+from kdcube_ai_app.infra.plugin.bundle_loader import bundle_entrypoint, api, mcp, on_job, ui_widget
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_memory import (
     BaseEntrypointWithEconomicsAndMemory,
 )
@@ -79,7 +83,6 @@ from kdcube_ai_app.storage.observed_file_locks import observed_file_lock, lock_o
 
 from .orchestrator.workflow import WithReactWorkflow
 from .event_filter import BundleEventFilter
-from . import evidence as copilot_evidence
 from .tools import react_tools as doc_reader_tools
 from .knowledge_base_admin import (
     AGENT_NAME as KB_ADMIN_AGENT_NAME,
@@ -115,24 +118,12 @@ TELEGRAM_WEBHOOK_PUBLIC_AUTH = {
 }
 TELEGRAM_WEBAPP_PUBLIC_AUTH = "none"
 COPILOT_WEBAPP_ALIAS = "copilot_webapp"
-COPILOT_EVENT_RECORD_SELECTOR = {
-    "include": {
-        "types": [
-            "kdcube.copilot.workflow.turn.started",
-            "kdcube.copilot.workflow.turn.completed",
-            "kdcube.copilot.workflow.turn.failed",
-            "kdcube.copilot.mcp.call",
-            "react.tool.call",
-            "react.skill.read",
-            "accounting.usage",
-            "chat.conversation.turn.completed",
-            "chat.complete",
-            "chat.error",
-        ],
-    }
+TELEMETRY_SINK_TOKEN_SECRET = "b:telemetry_sink.auth.token"
+MCP_EVENT_RECORD_SELECTOR = {
+    "include": {"types": ["kdcube.copilot.mcp.call"]},
+    "privacy": STATS_COMM_EVENT_SELECTOR.get("privacy", {}),
 }
-COPILOT_EVENT_RECORD_MAX = 200
-COPILOT_EVENT_RETENTION = 500
+EVENT_RECORD_MAX = 200
 
 
 def _storage_root_or_error(entrypoint: Any) -> pathlib.Path:
@@ -336,10 +327,10 @@ def _knowledge_outputs_ready(
     return True
 
 
-# @agentic_workflow — registration decorator: on application startup the system
+# @bundle_entrypoint — registration decorator: on application startup the system
 # scans all bundles and auto-loads classes decorated with this.
 # priority=100 — selection order when multiple bundles match (higher = preferred)
-@agentic_workflow(
+@bundle_entrypoint(
     name=BUNDLE_ID,
     version="1.0.0",
     priority=100,
@@ -490,13 +481,13 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
                 notify=False,
                 reason="bundle.on_load",
             )
-        await asyncio.to_thread(self._ensure_knowledge_space, reason="on_bundle_load")
+        await self._ensure_knowledge_space(reason="on_bundle_load")
         await self._ensure_ui_build()
         return None
 
     async def pre_run_hook(self, *, state: Dict[str, Any], econ_ctx: Optional[Dict[str, Any]] = None) -> None:
         """Reconcile knowledge space only if load-time prep did not happen or config changed."""
-        self._configure_copilot_event_recording()
+        await self._configure_event_recording()
         await self._emit_copilot_workflow_event(
             status="started",
             title="Copilot Turn Started",
@@ -507,7 +498,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
             },
         )
         await super().pre_run_hook(state=state, econ_ctx=econ_ctx or {})
-        await asyncio.to_thread(self._reconcile_knowledge_space, reason="pre_run_hook")
+        await self._reconcile_knowledge_space(reason="pre_run_hook")
         return None
 
     async def post_run_hook(
@@ -529,47 +520,52 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
                 "followup_count": len((result or {}).get("followups") or []),
             },
         )
-        await self._flush_copilot_recorded_events()
+        await self._send_recorded_events()
 
-    def _copilot_event_context(self) -> Dict[str, Any]:
-        actor = getattr(self.comm_context, "actor", None)
-        user = getattr(self.comm_context, "user", None)
-        routing = getattr(self.comm_context, "routing", None)
-        request = getattr(self.comm_context, "request", None)
-        return {
-            "tenant": getattr(actor, "tenant_id", None),
-            "project": getattr(actor, "project_id", None),
-            "user": getattr(user, "user_id", None) or getattr(user, "fingerprint", None),
-            "request_id": getattr(request, "request_id", None),
-            "session_id": getattr(routing, "session_id", None),
-            "conversation_id": getattr(routing, "conversation_id", None),
-            "turn_id": getattr(routing, "turn_id", None),
-        }
-
-    def _copilot_bundle_id(self) -> str:
+    def _bundle_id(self) -> str:
         return str(getattr(getattr(self.config, "ai_bundle_spec", None), "id", None) or BUNDLE_ID)
 
-    def _configure_copilot_event_recording(self) -> None:
+    async def _make_event_sink(self) -> StatsTelemetrySink | None:
+        endpoint_url = str(self.bundle_prop("telemetry_sink.endpoint_url", "") or "").strip()
+        if not endpoint_url:
+            return None
+        token = str(await get_secret(TELEMETRY_SINK_TOKEN_SECRET) or "").strip()
+        if not token:
+            try:
+                self.logger.log(
+                    f"[{BUNDLE_ID}] telemetry sink endpoint is configured but secret "
+                    f"{TELEMETRY_SINK_TOKEN_SECRET} is missing; event sending disabled.",
+                    "WARNING",
+                )
+            except Exception:
+                pass
+            return None
+        return StatsTelemetrySink(
+            StatsTelemetryTarget(
+                endpoint_url=endpoint_url,
+                token=token,
+            ),
+            source_bundle=self._bundle_id(),
+        )
+
+    async def _configure_event_recording(self) -> None:
         try:
             comm = self.comm
-            comm.record(COPILOT_EVENT_RECORD_SELECTOR, mode="replace", max_events=COPILOT_EVENT_RECORD_MAX)
-            comm.set_event_sink(self._copilot_event_sink)
+            sink = await self._make_event_sink()
+            if sink is None:
+                comm.stop_recording()
+                comm.set_event_sink(None)
+                comm.clear_recorded_events(STATS_COMM_EVENT_SELECTOR)
+                return
+            configure_stats_event_recording(
+                comm,
+                sink,
+                selector=STATS_COMM_EVENT_SELECTOR,
+                scope={"owner": "react", "bundle": self._bundle_id(), "runtime": "on_message"},
+                max_events=EVENT_RECORD_MAX,
+            )
         except Exception:
             self.logger.log(traceback.format_exc(), "WARNING")
-
-    async def _copilot_event_sink(self, batch: list[dict], **kwargs) -> Dict[str, Any]:
-        del kwargs
-        storage_root = self.bundle_storage_root()
-        if storage_root is None:
-            return {"accepted": 0, "error": "Bundle storage backend is not configured."}
-        accepted = await asyncio.to_thread(
-            copilot_evidence.append_comm_records,
-            storage_root=storage_root,
-            bundle_id=self._copilot_bundle_id(),
-            records=batch,
-            retention=COPILOT_EVENT_RETENTION,
-        )
-        return {"accepted": len(batch), "stored": accepted}
 
     async def _emit_copilot_workflow_event(self, *, status: str, title: str, data: Dict[str, Any]) -> None:
         try:
@@ -590,50 +586,66 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
         except Exception:
             self.logger.log(traceback.format_exc(), "WARNING")
 
-    async def _flush_copilot_recorded_events(self) -> Dict[str, Any]:
+    async def _send_recorded_events(self) -> Dict[str, Any]:
         try:
-            return await self.comm.send_telemetry(COPILOT_EVENT_RECORD_SELECTOR)
+            return await self.comm.send_recorded_events(STATS_COMM_EVENT_SELECTOR)
         except Exception:
             self.logger.log(traceback.format_exc(), "WARNING")
             return {"ok": False, "error": "Unable to flush recorded copilot events."}
 
     async def _record_doc_reader_mcp_call(self, payload: Dict[str, Any]) -> None:
-        storage_root = self.bundle_storage_root()
-        if storage_root is None:
+        sink = await self._make_event_sink()
+        if sink is None:
             return
-        event = copilot_evidence.direct_event(
-            bundle_id=self._copilot_bundle_id(),
-            source="mcp.doc_reader",
-            event_type="kdcube.copilot.mcp.call",
-            status=str(payload.get("status") or "completed"),
-            title="Copilot MCP Tool Call",
-            data={
-                "mcp_name": payload.get("mcp_name"),
-                "tool": payload.get("tool"),
-                "duration_ms": payload.get("duration_ms"),
-                "result_count": payload.get("result_count"),
-                "missing": payload.get("missing"),
-                "root": payload.get("root"),
-                "top_k": payload.get("top_k"),
-                "query_len": payload.get("query_len"),
-                "path": payload.get("path"),
-                "error": payload.get("error"),
-            },
-            context=self._copilot_event_context(),
-        )
-        await asyncio.to_thread(
-            copilot_evidence.append_events,
-            storage_root=storage_root,
-            events=[event],
-            retention=COPILOT_EVENT_RETENTION,
-        )
+        try:
+            async with self.comm.recording(
+                MCP_EVENT_RECORD_SELECTOR,
+                scope={"owner": "mcp", "bundle": self._bundle_id(), "runtime": "mcp.doc_reader"},
+                mode="append",
+                max_events=EVENT_RECORD_MAX,
+                sink=sink,
+                send_on_exit=True,
+                send_filter=MCP_EVENT_RECORD_SELECTOR,
+            ):
+                await self.comm.service_event(
+                    type="kdcube.copilot.mcp.call",
+                    step="mcp.doc_reader",
+                    status=str(payload.get("status") or "completed"),
+                    title="Copilot MCP Tool Call",
+                    agent="kdcube.copilot.mcp",
+                    auto_markdown=False,
+                    data={
+                        "mcp_name": payload.get("mcp_name"),
+                        "tool": payload.get("tool"),
+                        "duration_ms": payload.get("duration_ms"),
+                        "result_count": payload.get("result_count"),
+                        "missing": payload.get("missing"),
+                        "top_k": payload.get("top_k"),
+                        "query_len": payload.get("query_len"),
+                        "error": payload.get("error"),
+                    },
+                )
+        except Exception:
+            self.logger.log(traceback.format_exc(), "WARNING")
 
-    def _copilot_events_payload(self, *, limit: int = 100) -> Dict[str, Any]:
-        return copilot_evidence.build_widget_payload(
-            storage_root=self.bundle_storage_root(),
-            bundle_id=self._copilot_bundle_id(),
-            limit=limit,
-        )
+    async def _events_payload(self, *, limit: int = 100) -> Dict[str, Any]:
+        del limit
+        endpoint_configured = bool(str(self.bundle_prop("telemetry_sink.endpoint_url", "") or "").strip())
+        token_configured = bool(str(await get_secret(TELEMETRY_SINK_TOKEN_SECRET) or "").strip())
+        return {
+            "ok": True,
+            "bundle_id": self._bundle_id(),
+            "events": [],
+            "count": 0,
+            "limit": 0,
+            "by_type": {},
+            "by_source": {},
+            "external_sink": {
+                "configured": bool(endpoint_configured and token_configured),
+                "endpoint_configured": endpoint_configured,
+                "auth_configured": token_configured,
+            },
+        }
 
     def _doc_reader_storage_root(self) -> pathlib.Path | None:
         storage_root = self.bundle_storage_root()
@@ -650,12 +662,12 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
             on_tool_call=self._record_doc_reader_mcp_call,
         )
 
-    def _require_doc_reader_mcp_auth(self, request: Request) -> None:
+    async def _require_doc_reader_mcp_auth(self, request: Request) -> None:
         header_name = self.bundle_prop(
             "mcp.doc_reader.auth.header_name",
             "X-KDCube-Copilot-MCP-Token",
         )
-        expected_token = get_secret("b:mcp.doc_reader.auth.shared_token")
+        expected_token = await get_secret("b:mcp.doc_reader.auth.shared_token")
         provided_token = request.headers.get(header_name)
 
         if not expected_token:
@@ -673,7 +685,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
         return self._build_doc_reader_mcp_app(name_suffix="kdcube-doc")
 
     @mcp(alias="doc_reader", route="operations")
-    def doc_reader_mcp(self, request: Request, **kwargs):
+    async def doc_reader_mcp(self, request: Request, **kwargs):
         # Bundle-owned MCP auth contract for this endpoint:
         #
         # bundles.yaml
@@ -698,7 +710,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
         # - the operations route URL for alias "doc_reader"
         # - the header name from bundle props
         # - the token provisioned in bundle secrets
-        self._require_doc_reader_mcp_auth(request)
+        await self._require_doc_reader_mcp_auth(request)
         return self._build_doc_reader_mcp_app(name_suffix="doc_reader")
 
     @api(alias="copilot_webapp_widget", route="operations", user_types=("registered", "paid", "privileged"))
@@ -742,15 +754,15 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
             include_admin=telegram_webapp.user_has_role(self, TELEGRAM_ADMIN_ROLE),
         )
         requested_path = str(widget_path or path or "").strip("/").lower()
-        if requested_path in {"events", "event", "evidence"}:
+        if requested_path in {"events", "event"}:
             payload["active_tab"] = "events"
-        payload["events"] = self._copilot_events_payload(limit=100)
+        payload["events"] = await self._events_payload(limit=100)
         return payload
 
     @api(method="GET", alias="copilot_events_data", route="operations", user_types=("registered", "paid", "privileged"))
-    def copilot_events_data(self, limit: int = 100, **kwargs) -> Dict[str, Any]:
+    async def copilot_events_data(self, limit: int = 100, **kwargs) -> Dict[str, Any]:
         del kwargs
-        return self._copilot_events_payload(limit=limit)
+        return await self._events_payload(limit=limit)
 
     @api(method="GET", alias="conversations_list", route="operations", user_types=("registered", "paid", "privileged"))
     async def conversations_list(
@@ -1135,7 +1147,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
             telegram_init_data=telegram_init_data,
         )
 
-    def _resolve_knowledge_paths(
+    async def _resolve_knowledge_paths(
         self,
         *,
         bundle_root: pathlib.Path,
@@ -1178,8 +1190,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
             try:
                 from kdcube_ai_app.infra.plugin.git_bundle import ensure_git_bundle, bundle_dir_for_git
                 repos_root = (storage_root / "repos").resolve()
-                # Git auth is handled by git_bundle (SSH or HTTPS token via GIT_HTTP_TOKEN).
-                paths = ensure_git_bundle(
+                paths = await ensure_git_bundle(
                     bundle_id=f"{BUNDLE_ID}.knowledge",
                     git_url=repo,
                     git_ref=ref or None,
@@ -1240,7 +1251,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
             )
         return source_root, validate_refs, repo, ref or None
 
-    def _expected_knowledge_paths(
+    async def _expected_knowledge_paths(
         self,
         *,
         bundle_root: pathlib.Path,
@@ -1276,7 +1287,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
                 from kdcube_ai_app.infra.git.auth import normalize_git_remote_url
                 from kdcube_ai_app.infra.plugin.git_bundle import compute_git_bundle_paths
 
-                repo_url = normalize_git_remote_url(repo)
+                repo_url = await normalize_git_remote_url(repo)
                 paths = compute_git_bundle_paths(
                     bundle_id=f"{BUNDLE_ID}.knowledge",
                     git_url=repo_url,
@@ -1296,7 +1307,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
 
         return source_root, validate_refs, repo, ref or None
 
-    def _resolve_knowledge_setup(
+    async def _resolve_knowledge_setup(
         self,
     ) -> tuple[
         pathlib.Path | None,
@@ -1329,7 +1340,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
                 None,
             )
 
-        source_root, validate_refs, repo, ref = self._resolve_knowledge_paths(
+        source_root, validate_refs, repo, ref = await self._resolve_knowledge_paths(
             bundle_root=bundle_root,
             storage_root=storage_root,
         )
@@ -1345,7 +1356,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
             signature,
         )
 
-    def _expected_knowledge_setup(
+    async def _expected_knowledge_setup(
         self,
     ) -> tuple[
         pathlib.Path | None,
@@ -1378,7 +1389,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
                 None,
             )
 
-        source_root, validate_refs, repo, ref = self._expected_knowledge_paths(
+        source_root, validate_refs, repo, ref = await self._expected_knowledge_paths(
             bundle_root=bundle_root,
             storage_root=storage_root,
         )
@@ -1394,7 +1405,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
             signature,
         )
 
-    def _ensure_knowledge_space(self, *, reason: str) -> None:
+    async def _ensure_knowledge_space(self, *, reason: str) -> None:
         """
         Build or refresh the knowledge index under bundle storage.
         Uses a signature (repo|ref|root) to skip rebuilding when nothing changed.
@@ -1408,7 +1419,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
                 _expected_repo,
                 _expected_ref,
                 expected_signature,
-            ) = self._expected_knowledge_setup()
+            ) = await self._expected_knowledge_setup()
             if (
                 expected_ws_root
                 and _read_shared_knowledge_signature(expected_ws_root) == expected_signature
@@ -1429,7 +1440,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
                 repo,
                 ref,
                 signature,
-            ) = self._resolve_knowledge_setup()
+            ) = await self._resolve_knowledge_setup()
             if not ws_root:
                 self.logger.log(
                     f"[kdcube.copilot] knowledge build skipped ({reason}): bundle storage root is unavailable.",
@@ -1473,7 +1484,8 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
                     )
                     return None
                 # Build or refresh the knowledge index under bundle storage.
-                knowledge_resolver.prepare_knowledge_space(
+                await asyncio.to_thread(
+                    knowledge_resolver.prepare_knowledge_space,
                     bundle_root=bundle_root,
                     knowledge_root=ws_root,
                     source_root=source_root,
@@ -1502,7 +1514,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
             self.logger.log(traceback.format_exc(), "WARNING")
         return None
 
-    def _reconcile_knowledge_space(self, *, reason: str) -> None:
+    async def _reconcile_knowledge_space(self, *, reason: str) -> None:
         """
         Re-check current bundle props at run time and rebuild only if load-time prep
         never happened or the effective knowledge signature changed.
@@ -1516,7 +1528,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
                 repo,
                 ref,
                 signature,
-            ) = self._expected_knowledge_setup()
+            ) = await self._expected_knowledge_setup()
             if not ws_root:
                 self.logger.log(
                     f"[kdcube.copilot] knowledge reconcile skipped ({reason}): bundle storage root is unavailable.",
@@ -1535,7 +1547,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
                     f"[kdcube.copilot] knowledge reconcile ({reason}): load-time signature missing, building now.",
                     "INFO",
                 )
-                return self._ensure_knowledge_space(reason=reason)
+                return await self._ensure_knowledge_space(reason=reason)
             if self._knowledge_signature != signature:
                 self.logger.log(
                     (
@@ -1546,7 +1558,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
                     ),
                     "INFO",
                 )
-                return self._ensure_knowledge_space(reason=reason)
+                return await self._ensure_knowledge_space(reason=reason)
         except Exception:
             self.logger.log(f"[kdcube.copilot] knowledge reconcile failed ({reason})", "WARNING")
             self.logger.log(traceback.format_exc(), "WARNING")
@@ -1596,20 +1608,24 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
             or "anonymous"
         )
 
-    def _kb_admin_secret_flags(self, *, user_id: str) -> dict[str, bool]:
+    async def _service_secret(self, key: str) -> str | None:
+        canonical = f"services.{str(key or '').lstrip('.')}"
+        return await get_secret(f"b:{canonical}") or await get_secret(canonical)
+
+    async def _kb_admin_secret_flags(self, *, user_id: str) -> dict[str, bool]:
         bundle_id = getattr(getattr(self.config, "ai_bundle_spec", None), "id", None) or BUNDLE_ID
         return {
             "has_git_pat": bool(
-                get_user_secret("git.http_token", user_id=user_id, bundle_id=bundle_id)
-                or get_service_secret("git.http_token")
+                await get_secret("u:git.http_token", user_id=user_id, bundle_id=bundle_id)
+                or await self._service_secret("git.http_token")
             ),
             "has_anthropic_api_key": bool(
-                get_user_secret("anthropic.api_key", user_id=user_id, bundle_id=bundle_id)
-                or get_service_secret("anthropic.api_key")
+                await get_secret("u:anthropic.api_key", user_id=user_id, bundle_id=bundle_id)
+                or await self._service_secret("anthropic.api_key")
             ),
             "has_claude_code_key": bool(
-                get_user_secret("anthropic.claude_code_key", user_id=user_id, bundle_id=bundle_id)
-                or get_service_secret("anthropic.claude_code_key")
+                await get_secret("u:anthropic.claude_code_key", user_id=user_id, bundle_id=bundle_id)
+                or await self._service_secret("anthropic.claude_code_key")
             ),
         }
 
@@ -1660,20 +1676,20 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
             "claude_code_model": str(claude_code_model or DEFAULT_CLAUDE_CODE_MODEL).strip() or DEFAULT_CLAUDE_CODE_MODEL,
         }
 
-    def _kb_admin_claude_env(self, *, user_id: str) -> dict[str, str]:
+    async def _kb_admin_claude_env(self, *, user_id: str) -> dict[str, str]:
         bundle_id = getattr(getattr(self.config, "ai_bundle_spec", None), "id", None) or BUNDLE_ID
         env: dict[str, str] = {}
         api_key = (
-            get_user_secret("anthropic.api_key", user_id=user_id, bundle_id=bundle_id)
-            or get_service_secret("anthropic.api_key")
+            await get_secret("u:anthropic.api_key", user_id=user_id, bundle_id=bundle_id)
+            or await self._service_secret("anthropic.api_key")
         )
         auth_token = (
-            get_user_secret("anthropic.auth_token", user_id=user_id, bundle_id=bundle_id)
-            or get_service_secret("anthropic.auth_token")
+            await get_secret("u:anthropic.auth_token", user_id=user_id, bundle_id=bundle_id)
+            or await self._service_secret("anthropic.auth_token")
         )
         claude_code_key = (
-            get_user_secret("anthropic.claude_code_key", user_id=user_id, bundle_id=bundle_id)
-            or get_service_secret("anthropic.claude_code_key")
+            await get_secret("u:anthropic.claude_code_key", user_id=user_id, bundle_id=bundle_id)
+            or await self._service_secret("anthropic.claude_code_key")
         )
         if api_key:
             env["ANTHROPIC_API_KEY"] = api_key
@@ -1683,15 +1699,15 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
             env["CLAUDE_CODE_KEY"] = claude_code_key
         return env
 
-    def _kb_admin_git_credentials(self, *, user_id: str) -> tuple[str | None, str | None]:
+    async def _kb_admin_git_credentials(self, *, user_id: str) -> tuple[str | None, str | None]:
         bundle_id = getattr(getattr(self.config, "ai_bundle_spec", None), "id", None) or BUNDLE_ID
         token = (
-            get_user_secret("git.http_token", user_id=user_id, bundle_id=bundle_id)
-            or get_service_secret("git.http_token")
+            await get_secret("u:git.http_token", user_id=user_id, bundle_id=bundle_id)
+            or await self._service_secret("git.http_token")
         )
         http_user = (
-            get_user_secret("git.http_user", user_id=user_id, bundle_id=bundle_id)
-            or get_service_secret("git.http_user")
+            await get_secret("u:git.http_user", user_id=user_id, bundle_id=bundle_id)
+            or await self._service_secret("git.http_user")
             or "x-access-token"
         )
         return token, http_user
@@ -1776,7 +1792,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
         alias="knowledge_base_admin",
         roles=("kdcube:role:super-admin",),
     )
-    def knowledge_base_admin_widget(
+    async def knowledge_base_admin_widget(
         self,
         user_id: Optional[str] = None,
         fingerprint: Optional[str] = None,
@@ -1788,7 +1804,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
         if not storage:
             return ["<p>Bundle storage backend is not configured for this bundle.</p>"]
         target_user = self._kb_admin_user_id(user_id=user_id, fingerprint=fingerprint)
-        flags = self._kb_admin_secret_flags(user_id=target_user)
+        flags = await self._kb_admin_secret_flags(user_id=target_user)
         payload = build_kb_admin_widget_payload(
             storage,
             target_user,
@@ -1804,7 +1820,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
             return ["<p>Unable to render the Knowledge Base Admin widget right now.</p>"]
 
     @api(alias="knowledge_base_admin_widget_data", roles=("kdcube:role:super-admin",))
-    def knowledge_base_admin_widget_data(
+    async def knowledge_base_admin_widget_data(
         self,
         user_id: Optional[str] = None,
         fingerprint: Optional[str] = None,
@@ -1816,7 +1832,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
         if not storage:
             return {"ok": False, "error": "Bundle storage backend is not configured for this bundle."}
         target_user = self._kb_admin_user_id(user_id=user_id, fingerprint=fingerprint)
-        flags = self._kb_admin_secret_flags(user_id=target_user)
+        flags = await self._kb_admin_secret_flags(user_id=target_user)
         payload = build_kb_admin_widget_payload(
             storage,
             target_user,
@@ -1851,7 +1867,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
         }
 
     @api(alias="knowledge_base_admin_save_settings", roles=("kdcube:role:super-admin",))
-    def knowledge_base_admin_save_settings(
+    async def knowledge_base_admin_save_settings(
         self,
         content_repos: Optional[list[dict[str, Any]]] = None,
         output_repo: Optional[dict[str, Any]] = None,
@@ -1904,23 +1920,23 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
         )
         try:
             if clear_git_http_token:
-                delete_user_secret("git.http_token", user_id=target_user, bundle_id=bundle_id)
-                delete_user_secret("git.http_user", user_id=target_user, bundle_id=bundle_id)
+                await delete_user_secret("git.http_token", user_id=target_user, bundle_id=bundle_id)
+                await delete_user_secret("git.http_user", user_id=target_user, bundle_id=bundle_id)
             else:
                 if str(git_http_token or "").strip():
-                    set_user_secret("git.http_token", str(git_http_token).strip(), user_id=target_user, bundle_id=bundle_id)
+                    await set_user_secret("git.http_token", str(git_http_token).strip(), user_id=target_user, bundle_id=bundle_id)
                 if str(git_http_user or "").strip():
-                    set_user_secret("git.http_user", str(git_http_user).strip(), user_id=target_user, bundle_id=bundle_id)
+                    await set_user_secret("git.http_user", str(git_http_user).strip(), user_id=target_user, bundle_id=bundle_id)
 
             if clear_anthropic_api_key:
-                delete_user_secret("anthropic.api_key", user_id=target_user, bundle_id=bundle_id)
+                await delete_user_secret("anthropic.api_key", user_id=target_user, bundle_id=bundle_id)
             elif str(anthropic_api_key or "").strip():
-                set_user_secret("anthropic.api_key", str(anthropic_api_key).strip(), user_id=target_user, bundle_id=bundle_id)
+                await set_user_secret("anthropic.api_key", str(anthropic_api_key).strip(), user_id=target_user, bundle_id=bundle_id)
 
             if clear_claude_code_key:
-                delete_user_secret("anthropic.claude_code_key", user_id=target_user, bundle_id=bundle_id)
+                await delete_user_secret("anthropic.claude_code_key", user_id=target_user, bundle_id=bundle_id)
             elif str(claude_code_key or "").strip():
-                set_user_secret("anthropic.claude_code_key", str(claude_code_key).strip(), user_id=target_user, bundle_id=bundle_id)
+                await set_user_secret("anthropic.claude_code_key", str(claude_code_key).strip(), user_id=target_user, bundle_id=bundle_id)
 
             config = kb_admin_save_user_config(
                 storage,
@@ -1930,7 +1946,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
                 claude_code_model=claude_code_model or DEFAULT_CLAUDE_CODE_MODEL,
                 last_sync=kb_admin_load_user_config(storage, target_user).get("last_sync"),
             )
-            flags = self._kb_admin_secret_flags(user_id=target_user)
+            flags = await self._kb_admin_secret_flags(user_id=target_user)
             self.logger.log(
                 "[knowledge_base_admin.save_settings] persisted "
                 + json.dumps(
@@ -1977,7 +1993,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
             raise
 
     @api(alias="knowledge_base_admin_sync_workspace", roles=("kdcube:role:super-admin",))
-    def knowledge_base_admin_sync_workspace(
+    async def knowledge_base_admin_sync_workspace(
         self,
         user_id: Optional[str] = None,
         fingerprint: Optional[str] = None,
@@ -1990,7 +2006,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
             return {"ok": False, "error": "Bundle storage root is unavailable for Knowledge Base Admin."}
         target_user = self._kb_admin_user_id(user_id=user_id, fingerprint=fingerprint)
         config = kb_admin_load_user_config(storage, target_user)
-        token, http_user = self._kb_admin_git_credentials(user_id=target_user)
+        token, http_user = await self._kb_admin_git_credentials(user_id=target_user)
         try:
             workspace = kb_admin_ensure_workspace(
                 local_root=local_root,
@@ -2015,7 +2031,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
         }
 
     @api(alias="knowledge_base_admin_push_output_repo", roles=("kdcube:role:super-admin",))
-    def knowledge_base_admin_push_output_repo(
+    async def knowledge_base_admin_push_output_repo(
         self,
         user_id: Optional[str] = None,
         fingerprint: Optional[str] = None,
@@ -2028,7 +2044,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
             return {"ok": False, "error": "Bundle storage root is unavailable for Knowledge Base Admin."}
         target_user = self._kb_admin_user_id(user_id=user_id, fingerprint=fingerprint)
         config = kb_admin_load_user_config(storage, target_user)
-        token, http_user = self._kb_admin_git_credentials(user_id=target_user)
+        token, http_user = await self._kb_admin_git_credentials(user_id=target_user)
         try:
             output_status = kb_admin_push_output_repo(
                 local_root=local_root,
@@ -2066,7 +2082,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
         }
 
     @api(alias="knowledge_base_admin_reset_output_repo", roles=("kdcube:role:super-admin",))
-    def knowledge_base_admin_reset_output_repo(
+    async def knowledge_base_admin_reset_output_repo(
         self,
         commit: str,
         user_id: Optional[str] = None,
@@ -2080,7 +2096,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
             return {"ok": False, "error": "Bundle storage root is unavailable for Knowledge Base Admin."}
         target_user = self._kb_admin_user_id(user_id=user_id, fingerprint=fingerprint)
         config = kb_admin_load_user_config(storage, target_user)
-        token, http_user = self._kb_admin_git_credentials(user_id=target_user)
+        token, http_user = await self._kb_admin_git_credentials(user_id=target_user)
         try:
             output_status = kb_admin_reset_output_repo(
                 local_root=local_root,
@@ -2151,7 +2167,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
             config = kb_admin_validate_workspace_config(config)
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
-        token, http_user = self._kb_admin_git_credentials(user_id=target_user)
+        token, http_user = await self._kb_admin_git_credentials(user_id=target_user)
         try:
             workspace = kb_admin_ensure_workspace(
                 local_root=local_root,
@@ -2215,7 +2231,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
                     for item in (workspace.get("repo_statuses") or [])
                     if str(item.get("local_path") or "").strip()
                 ),
-                env=self._kb_admin_claude_env(user_id=target_user),
+                env=await self._kb_admin_claude_env(user_id=target_user),
                 step_name="knowledge_base_admin.agent",
                 permission_mode="acceptEdits",
             ),
@@ -2338,6 +2354,9 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
                     "stream_activity": True,
                     "web_app_auth_max_age_seconds": 86400,
                 },
+            },
+            "telemetry_sink": {
+                "endpoint_url": "",
             },
             "ui": {
                 "widgets": {

@@ -138,7 +138,7 @@ def resolve_bundle_root(path: str, module: Optional[str]) -> Path:
         return base
     return base
 
-def _apply_git_resolution(reg: Dict[str, Dict[str, Any]], source: str = "unknown") -> Dict[str, Dict[str, Any]]:
+async def _apply_git_resolution(reg: Dict[str, Dict[str, Any]], source: str = "unknown") -> Dict[str, Dict[str, Any]]:
     """
     Resolve git bundles to local paths (and optionally refresh).
     Keeps logic scoped to bundle registry, not processor.
@@ -164,7 +164,7 @@ def _apply_git_resolution(reg: Dict[str, Dict[str, Any]], source: str = "unknown
             from kdcube_ai_app.infra.plugin.git_bundle import (
                 ensure_git_bundle,
                 resolve_managed_bundles_root,
-                cleanup_old_git_bundles,
+                cleanup_old_git_bundles_async,
                 bundle_dir_for_git,
             )
             from kdcube_ai_app.infra.plugin.bundle_refs import get_local_active_paths
@@ -210,7 +210,7 @@ def _apply_git_resolution(reg: Dict[str, Dict[str, Any]], source: str = "unknown
                 except Exception:
                     pass
         try:
-            paths = ensure_git_bundle(
+            paths = await ensure_git_bundle(
                 bundle_id=bid,
                 git_url=repo,
                 git_ref=entry.get("ref"),
@@ -222,12 +222,17 @@ def _apply_git_resolution(reg: Dict[str, Dict[str, Any]], source: str = "unknown
             entry["path"] = str(paths.bundle_root)
             # best-effort commit capture
             try:
-                import subprocess
-                proc = subprocess.run(
-                    ["git", "-C", str(paths.repo_root), "rev-parse", "HEAD"],
-                    check=True, capture_output=True, text=True,
+                proc = await asyncio.create_subprocess_exec(
+                    "git",
+                    "-C",
+                    str(paths.repo_root),
+                    "rev-parse",
+                    "HEAD",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                 )
-                commit = (proc.stdout or "").strip()
+                stdout_b, _ = await proc.communicate()
+                commit = stdout_b.decode("utf-8", errors="replace").strip() if proc.returncode == 0 else ""
                 if commit:
                     entry["git_commit"] = commit
             except Exception:
@@ -242,7 +247,7 @@ def _apply_git_resolution(reg: Dict[str, Dict[str, Any]], source: str = "unknown
             resolved += 1
             if atomic:
                 base_dir = bundle_dir_for_git(bid, entry.get("ref"), repo)
-                cleanup_old_git_bundles(
+                await cleanup_old_git_bundles_async(
                     bundle_id=base_dir,
                     bundles_root=resolve_managed_bundles_root(),
                     active_paths=get_local_active_paths(),
@@ -342,7 +347,12 @@ def load_from_env() -> None:
             reg[item["id"]] = item
 
         reg = _ensure_admin_bundle(reg)
-        reg = _apply_git_resolution(reg, source="env")
+        if any(entry.get("repo") for entry in reg.values()):
+            logger.warning(
+                "Sync load_from_env does not resolve git bundles; use the async registry load path "
+                "so provider-backed git credentials can be resolved without blocking the event loop."
+            )
+            _warn_missing_local_path_bundles(reg, source="env")
         _REGISTRY = reg
 
         # resolve default
@@ -386,7 +396,11 @@ def set_registry(
             new_reg[item["id"]] = item
         new_reg = _ensure_admin_bundle(new_reg)
         if resolve_git:
-            new_reg = _apply_git_resolution(new_reg, source=source)
+            logger.warning(
+                "Sync set_registry does not resolve git bundles; use await set_registry_async(...). "
+                "The registry was updated without pulling git-backed bundle content."
+            )
+            _warn_missing_local_path_bundles(new_reg, source=source)
         _REGISTRY = new_reg
         _DEFAULT_ID = default_id if default_id in _REGISTRY else ADMIN_BUNDLE_ID
 
@@ -406,7 +420,11 @@ def upsert_bundles(
             reg[item["id"]] = {**reg.get(item["id"], {}), **item}
         reg = _ensure_admin_bundle(reg)
         if resolve_git:
-            reg = _apply_git_resolution(reg, source=source)
+            logger.warning(
+                "Sync upsert_bundles does not resolve git bundles; use await upsert_bundles_async(...). "
+                "The registry was updated without pulling git-backed bundle content."
+            )
+            _warn_missing_local_path_bundles(reg, source=source)
         _REGISTRY = reg
         if default_id:
             _DEFAULT_ID = default_id if default_id in _REGISTRY else _DEFAULT_ID
@@ -487,14 +505,42 @@ async def set_registry_async(
     resolve_git: bool = True,
     source: str = "registry.set",
 ) -> None:
-    """Async wrapper around set_registry (runs in thread pool)."""
-    await asyncio.to_thread(set_registry, registry, default_id, resolve_git=resolve_git, source=source)
+    """Replace the in-memory registry and resolve git-backed bundles through async git/auth paths."""
+    global _REGISTRY, _DEFAULT_ID
+    new_reg: Dict[str, Dict[str, Any]] = {}
+    for k, v in (registry or {}).items():
+        item = _normalize({"id": k, **(v or {})})
+        new_reg[item["id"]] = item
+    new_reg = _ensure_admin_bundle(new_reg)
+    if resolve_git:
+        new_reg = await _apply_git_resolution(new_reg, source=source)
+    with _REG_LOCK:
+        _REGISTRY = new_reg
+        _DEFAULT_ID = default_id if default_id in _REGISTRY else ADMIN_BUNDLE_ID
 
 
 
-async def upsert_bundles_async(partial: Dict[str, Dict[str, Any]], default_id: Optional[str]) -> None:
-    """Async wrapper around upsert_bundles (runs in thread pool)."""
-    await asyncio.to_thread(upsert_bundles, partial, default_id)
+async def upsert_bundles_async(
+    partial: Dict[str, Dict[str, Any]],
+    default_id: Optional[str],
+    *,
+    resolve_git: bool = True,
+    source: str = "registry.upsert",
+) -> None:
+    """Merge bundle registry entries and resolve git-backed bundles through async git/auth paths."""
+    global _REGISTRY, _DEFAULT_ID
+    with _REG_LOCK:
+        reg = dict(_REGISTRY)
+    for k, v in (partial or {}).items():
+        item = _normalize({"id": k, **(v or {})})
+        reg[item["id"]] = {**reg.get(item["id"], {}), **item}
+    reg = _ensure_admin_bundle(reg)
+    if resolve_git:
+        reg = await _apply_git_resolution(reg, source=source)
+    with _REG_LOCK:
+        _REGISTRY = reg
+        if default_id:
+            _DEFAULT_ID = default_id if default_id in _REGISTRY else _DEFAULT_ID
 
 
 async def load_registry(redis, logger):

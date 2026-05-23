@@ -4,9 +4,12 @@ title: "Bundle Runtime"
 summary: "Runtime objects and capabilities available inside bundle entrypoints and tools: communicator, integrations, props and secrets, caches, artifacts, and isolated-execution surfaces."
 tags: ["sdk", "bundle", "runtime", "tools", "integrations", "communicator", "isolation"]
 keywords: ["bundle runtime objects", "communicator access", "integrations access", "props and secrets access", "cache access", "artifact handling", "isolated execution surface", "entrypoint runtime context"]
+updated_at: 2026-05-22
 see_also:
   - ks:docs/sdk/bundle/bundle-developer-guide-README.md
   - ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
+  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
+  - ks:docs/sdk/bundle/build/design/bundle-loader-import-isolation-README.md
   - ks:docs/sdk/bundle/bundle-lifecycle-README.md
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
@@ -15,6 +18,7 @@ see_also:
   - ks:docs/sdk/tools/tool-subsystem-README.md
   - ks:docs/sdk/bundle/bundle-client-communication-README.md
   - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
+  - ks:docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
   - ks:docs/service/synch-mechanisms/critical-section-README.md
 ---
 # Bundle Runtime
@@ -26,6 +30,7 @@ This page explains the actual runtime surfaces available to:
 
 Use this together with:
 - [How To Assemble A Bundle With SDK Building Blocks](build/how-to-assemble-bundle-with-sdk-building-blocks-README.md) for the reusable SDK/platform blocks to prefer before writing a custom subsystem
+- [Bundle Properties And Secrets Lifecycle](bundle-properties-and-secrets-lifecycle-README.md) for how `self.bundle_props`, descriptor/admin props, and bundle secrets flow
 - [Bundle Lifecycle](bundle-lifecycle-README.md) for phase ordering
 - [Bundle Agent Integration](bundle-agent-integration-README.md) for React, tools/skills, MCP, and Claude Code wiring
 - [Bundle Platform Integration](bundle-platform-integration-README.md) for public entrypoint design
@@ -39,8 +44,7 @@ There are two different runtime surfaces:
    - `self.comm`
    - `self.comm_context`
    - `self.bundle_props`
-   - `get_secret_async(...)` / `get_user_secret_async(...)`
-   - compatibility sync helpers such as `get_secret(...)` / `get_user_secret(...)`
+   - `await get_secret(...)`
    - bundle storage helpers
    - DB/Redis handles passed into the entrypoint
 
@@ -54,6 +58,68 @@ There are two different runtime surfaces:
    - `REGISTRY`
 
 They are related, but they are not identical.
+
+## Critical Bundle-Local Import Rule
+
+Bundle-local Python code must use package-relative imports for other code in
+the same bundle.
+
+Use:
+
+```python
+from .services.news import build_news_service
+from .apps.news.news_pipeline import build_news_pipeline_service
+from .orchestrator.workflow import WithReactWorkflow
+```
+
+From nested bundle packages, use the corresponding relative form:
+
+```python
+from ..tools import react_tools
+from .service import NewsPipelineService
+```
+
+Do not use top-level imports for bundle-local folders:
+
+```python
+# Do not do this for bundle-local code.
+from services.news import build_news_service
+from apps.news.news_pipeline import build_news_pipeline_service
+import tools
+```
+
+Reason: multiple bundles are loaded in the same processor process, and Python
+`sys.modules` is process-global. Top-level names such as `services`, `apps`,
+`tools`, `orchestrator`, or `resources` can collide across bundles. A later
+bundle may then import another bundle's package or fail with
+`ModuleNotFoundError` even though the files exist in its own bundle directory.
+
+The bundle loader provides an isolated virtual package for directory bundles.
+Package-relative imports are what keep bundle-local code inside that virtual
+package.
+
+Design note:
+
+- proc intentionally loads many bundles in one worker process to share heavy
+  runtime resources such as Redis/Postgres pools and process-local helpers
+- the loader keeps compatibility with raw module-path descriptor shapes and
+  `@venv` child loads, so it cannot make generic top-level bundle-local names
+  globally safe
+- the shared bundle suite now lints top-level imports of bundle-owned Python
+  roots and reports them as authoring errors
+- see [Bundle Loader Import Isolation](build/design/bundle-loader-import-isolation-README.md)
+  for the history and rationale
+
+Authoring requirements:
+
+- keep `__init__.py` in bundle-local package directories that are imported
+- use relative imports from `entrypoint.py` and from nested bundle modules
+- reserve absolute imports for installed libraries and globally unique packages
+- when wrapping existing code, either place it under the bundle package and
+  convert internal imports to relative imports, or move it into a real
+  installable package with a globally unique name
+- tests should include a KDCube-loader or shared bundle-suite import check, not
+  only a direct `sys.path.insert(bundle_root); import entrypoint` check
 
 ## Runtime entry paths
 
@@ -78,16 +144,14 @@ Current flow:
 What the bundle has in this path:
 - `self.comm`
 - `self.comm_context`
-- `self.bundle_props`
+- effective props via `self.bundle_prop(...)`
 - `self.pg_pool`
 - `self.redis`
 - bundle storage helpers such as `bundle_storage_root()`
 - secret lookup through:
-  - `await get_secret_async("b:...")` for current bundle deployment secrets
-- `await get_secret_async("...")` / `await get_secret_async("a:...")` for platform/global secrets
-- `await get_user_secret_async(...)` for current-user secrets
-- the sync helpers remain available for compatibility, but async entrypoints,
-  APIs, hooks, cron handlers, `@on_job`, and tools should use the async helpers
+  - `await get_secret("b:...")` for current bundle deployment secrets
+- `await get_secret("...")` / `await get_secret("a:...")` for platform/global secrets
+- `await get_secret("u:...")` for current-user secrets
 
 ## Portable bundle call context
 
@@ -431,9 +495,9 @@ Use cases for the local helper root:
 - cron job state
 - daily pipeline workspace/cache
 
-Do not confuse this with `AIBundleStorage`:
+Do not confuse this with `BundleArtifactStorage`:
 - local helper root = shared instance-local filesystem
-- `AIBundleStorage` = backend storage API for bundle artifacts
+- `BundleArtifactStorage` = backend storage API for bundle artifacts
 
 ## Guarded shared filesystem objects
 
@@ -506,24 +570,28 @@ Detailed runtime lifecycle:
 
 ## Async props and secrets access
 
-KDCube bundle execution is async. In async bundle code, use the async secret
-helpers as the normal API:
+KDCube bundle execution is async. In bundle code, use the awaited secret helpers
+as the normal API:
 
 ```python
 from kdcube_ai_app.apps.chat.sdk.config import (
-    get_secret_async,
-    get_user_secret_async,
-    set_user_secret_async,
-    delete_user_secret_async,
+    get_secret,
+    set_user_secret,
+    delete_user_secret,
     set_bundle_secret,
 )
 
-deployment_token = await get_secret_async("b:integrations.telegram.bot_token")
-user_token = await get_user_secret_async("email.accounts.google_1.tokens")
-await set_user_secret_async("email.accounts.google_1.tokens", token_json)
-await delete_user_secret_async("email.accounts.google_1.tokens")
+deployment_token = await get_secret("b:integrations.telegram.bot_token")
+user_token = await get_secret("email.accounts.google_1.tokens")
+await set_user_secret("email.accounts.google_1.tokens", token_json)
+await delete_user_secret("email.accounts.google_1.tokens")
 await set_bundle_secret("integrations.telegram.webhook_secret", webhook_secret)
 ```
+
+For non-secret deployment config, use `self.bundle_prop("path", default)`.
+Use `dict(self.bundle_props or {})` only when a whole effective props snapshot
+is required. Do not read secrets from `self.bundle_secrets` or raw descriptor
+helpers.
 
 Scope resolution:
 
@@ -537,12 +605,6 @@ Scope resolution:
   `@on_job` method should call `await super().handle_job(**kwargs)` first; mixins
   dispatch by `work_kind` and return `handled=true` when they consumed the job
 
-Compatibility:
-
-- `get_secret(...)`, `get_user_secret(...)`, `set_user_secret(...)`, and
-  `delete_user_secret(...)` still exist for old sync code
-- do not use sync helpers in new async request paths unless the surrounding
-  code is already sync-only
 - do not call `get_secrets_manager(...).get_secret(...)` directly from bundle
   or feature code
 
@@ -582,10 +644,10 @@ Why this matters:
 - a later bundle-specific session does not re-scope clients already created by
   another bundle or by the platform
 
-`AIBundleStorage` is platform storage. It uses its explicit `storage_uri` or
+`BundleArtifactStorage` is platform storage. It uses its explicit `storage_uri` or
 the platform `KDCUBE_STORAGE_PATH` / `settings.STORAGE_PATH`. Bundle-specific
 props such as `my_feature.aws_profile` do not automatically apply to
-`AIBundleStorage`. If a bundle needs artifact storage under a non-default AWS
+`BundleArtifactStorage`. If a bundle needs artifact storage under a non-default AWS
 identity, pass storage configuration explicitly through the storage API or add a
 bundle-owned storage wrapper that constructs the backend with an explicit
 profile/region.
@@ -707,8 +769,7 @@ Important:
 | `self.comm` | yes | yes | no | no |
 | `self.comm_context` | yes | yes | no | no |
 | `bundle_props` / `self.bundle_prop(...)` | yes | yes | indirectly through bundle code only | indirectly through bundle code only |
-| `get_secret_async(...)` / `get_secret(...)` | yes | yes | yes, if imported directly | yes, if imported directly |
-| `get_user_secret_async(...)` / `get_user_secret(...)` | yes | yes | yes, if imported directly | yes, if imported directly |
+| `await get_secret(...)` | yes | yes | yes, if imported directly | yes, if imported directly |
 | bundle storage helpers | yes | yes | yes if the tool receives/constructs the needed bundle context | yes if the tool receives/constructs the needed bundle context |
 | `_SERVICE` / `SERVICE` | no | no | yes | yes |
 | `_INTEGRATIONS` / `INTEGRATIONS` | no | no | yes | yes |
@@ -745,6 +806,11 @@ For actual event names, `chat.delta` shape, and built-in markers such as
 `answer`, `thinking`, `canvas`, `timeline_text`, and `subsystem`, read:
 
 - [bundle-chat-stream-events-README.md](bundle-chat-stream-events-README.md)
+
+For recording selected comm events into a bounded buffer and sending the batch
+to a bundle/platform sink, read:
+
+- [bundle-event-recording-and-sinks-README.md](bundle-event-recording-and-sinks-README.md)
 
 ## Shared browser, cache, and retrieval from tools
 
@@ -789,8 +855,8 @@ This is the same browser service used by rendering-oriented SDK tools.
 - Entry point code should use `self.comm`, `self.comm_context`, bundle props,
   secrets, and bundle storage helpers.
 - In async entrypoints, APIs, hooks, cron handlers, `@on_job`, and tools, use
-  async secret helpers such as `get_secret_async(...)` and
-  `get_user_secret_async(...)`.
+  `await get_secret(...)`, `await set_user_secret(...)`, and
+  `await delete_user_secret(...)`.
 - Tool modules should use the centrally bound runtime globals rather than trying
   to reconstruct runtime state themselves.
 - Use `get_comm()` or `_COMMUNICATOR` when a tool needs chat-side event

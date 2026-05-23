@@ -46,7 +46,7 @@ import aiohttp
 from kdcube_ai_app.apps.chat.sdk.tools.backends.web.inventory import compose_search_results_html, SearchRequest, \
     make_hit, clamp_max_results, SearchBackendError, _claim_sid_block, _normalize_url, dedup_round_robin_ranked, \
     PROVIDERS_AUTHORITY_RANK
-from kdcube_ai_app.apps.chat.sdk.config import get_settings, get_plain, get_service_secret
+from kdcube_ai_app.apps.chat.sdk.config import get_settings, get_plain, get_secret
 from kdcube_ai_app.apps.chat.sdk.tools.web.favicon_cache import enrich_sources_pool_with_favicons
 from kdcube_ai_app.apps.chat.sdk.tools.web.with_llm import sources_reconciler, \
     filter_search_results_by_content
@@ -317,7 +317,7 @@ class BraveSearchBackend(SearchBackend):
     }
 
     def __init__(self, api_key: Optional[str] = None):
-        self.api_key = (api_key or get_service_secret("brave.api_key") or "").strip()
+        self.api_key = (api_key or "").strip()
         if not self.api_key:
             raise SearchBackendError("BRAVE_API_KEY not set")
 
@@ -492,7 +492,7 @@ class BraveSearchBackend(SearchBackend):
 
 # ----------------------------- Factory -----------------------------
 
-def get_search_backend(name: Optional[str] = None) -> SearchBackend:
+async def get_search_backend(name: Optional[str] = None) -> SearchBackend:
     """
     Factory.
     Uses env WEB_SEARCH_BACKEND if name not provided.
@@ -503,12 +503,17 @@ def get_search_backend(name: Optional[str] = None) -> SearchBackend:
     if n in ("duckduckgo", "ddg"):
         return DDGSearchBackend()
     if n == "brave":
-        return BraveSearchBackend()
+        api_key = (
+            await get_secret("b:services.brave.api_key")
+            or await get_secret("services.brave.api_key")
+            or ""
+        )
+        return BraveSearchBackend(api_key=api_key)
 
     raise SearchBackendError(f"Unknown backend '{n}'. Use 'duckduckgo' or 'brave'.")
 
 
-def get_search_backend_or_hybrid(
+async def get_search_backend_or_hybrid(
         backend_name: Optional[str] = None,
         *,
         enable_hybrid: bool = True,
@@ -537,14 +542,14 @@ def get_search_backend_or_hybrid(
         from kdcube_ai_app.apps.chat.sdk.tools.backends.web.hybrid_search_backend import get_hybrid_search_backend, HybridMode
         primary_name = get_plain("a:platform.services.proc.tools.web_search.web_search_primary_backend") or "brave"
         mode = HybridMode(hybrid_mode) if hybrid_mode in ("sequential", "parallel") else HybridMode.SEQUENTIAL
-        return get_hybrid_search_backend(primary_name, spare_backend, mode)
+        return await get_hybrid_search_backend(primary_name, spare_backend, mode)
 
     # Get requested backend
     try:
-        backend = get_search_backend(backend_name)
+        backend = await get_search_backend(backend_name)
     except SearchBackendError:
         logger.exception(f"Failed to init backend '{backend_name}'; falling back to DDG")
-        backend = get_search_backend("duckduckgo")
+        backend = await get_search_backend("duckduckgo")
         backend_name = "duckduckgo"
 
     # Wrap in hybrid if enabled and not already DDG
@@ -554,7 +559,7 @@ def get_search_backend_or_hybrid(
             f"with {spare_backend} fallback"
         )
         from kdcube_ai_app.apps.chat.sdk.tools.backends.web.hybrid_search_backend import HybridSearchBackend, HybridMode
-        spare = get_search_backend(spare_backend)
+        spare = await get_search_backend(spare_backend)
         mode = HybridMode(hybrid_mode) if hybrid_mode in ("sequential", "parallel") else HybridMode.SEQUENTIAL
         backend = HybridSearchBackend(primary=backend, spare=spare, mode=mode)
 
@@ -707,7 +712,7 @@ async def web_search(
     # )
     enable_hybrid = False
     primary_backend_name = (get_plain("a:platform.services.proc.tools.web_search.web_search_backend") or "brave").strip().lower()
-    search_backend = get_search_backend_or_hybrid(
+    search_backend = await get_search_backend_or_hybrid(
         backend_name=primary_backend_name,
         enable_hybrid=enable_hybrid,
         hybrid_mode=hybrid_mode,
@@ -778,7 +783,7 @@ async def web_search(
     backend_errors = getattr(search_backend, "_last_errors", None)
     if _should_fail(backend_errors, per_query_results) and backend_name not in ("duckduckgo", "ddg"):
         logger.warning(f"web_search: primary backend failed; falling back to duckduckgo")
-        ddg_backend = get_search_backend("duckduckgo")
+        ddg_backend = await get_search_backend("duckduckgo")
         search_backend = ddg_backend
         backend_name = (
                 getattr(search_backend, "provider", None)

@@ -320,7 +320,7 @@ class HybridSearchBackend:
         return merged
 
 
-def get_hybrid_search_backend(
+async def get_hybrid_search_backend(
         primary_name: Optional[str] = None,
         spare_name: str = "duckduckgo",
         mode: HybridMode = HybridMode.SEQUENTIAL,
@@ -340,7 +340,7 @@ def get_hybrid_search_backend(
     # Import here to avoid circular dependency
     from .search_backends import get_search_backend
 
-    primary = get_search_backend(primary_name)
-    spare = get_search_backend(spare_name)
+    primary = await get_search_backend(primary_name)
+    spare = await get_search_backend(spare_name)
 
     return HybridSearchBackend(primary=primary, spare=spare, mode=mode)

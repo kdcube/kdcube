@@ -4,6 +4,7 @@ title: "Bundle Lifecycle"
 summary: "Lifecycle model for bundles: discovery, load, initialization, invocation, hooks, background jobs, singleton state, UI build behavior, and which storage or config surfaces exist at each phase."
 tags: ["sdk", "bundle", "lifecycle", "storage", "configuration", "entrypoint", "background-jobs"]
 keywords: ["bundle discovery and load", "initialization hooks", "invocation phases", "on_job lifecycle", "background job lifecycle", "singleton bundle state", "ui build lifecycle", "storage availability by phase", "configuration availability by phase", "bundle lifecycle model"]
+updated_at: 2026-05-21
 see_also:
   - ks:docs/sdk/bundle/bundle-developer-guide-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
@@ -42,11 +43,19 @@ Even if a deployment enables singleton reuse, durable bundle state should live i
 
 Do **not** rely on Python instance fields as durable cross-request state.
 
+Critical discovery rule:
+
+- the first lifecycle phase is module import
+- bundle-local Python imports must be package-relative before decorators,
+  hooks, or runtime methods can be discovered
+- see [Bundle Runtime](bundle-runtime-README.md#critical-bundle-local-import-rule)
+  for the full import-isolation contract
+
 ## Lifecycle at a glance
 
 ```mermaid
 flowchart TD
-    R[Bundle registry entry] --> D["@agentic_workflow discovery"]
+    R[Bundle registry entry] --> D["@bundle_entrypoint discovery"]
     D --> I[Instantiate entrypoint]
     I --> L[on_bundle_load once per process per tenant/project]
     L --> Q[Incoming turn or REST operation request]
@@ -67,7 +76,7 @@ flowchart TD
 
 | Phase | When | What happens |
 |---|---|---|
-| Discovery | Proc startup / bundle load | Loader imports the bundle module and finds the class decorated with `@agentic_workflow` |
+| Discovery | Proc startup / bundle load | Loader imports the bundle module and finds the class decorated with `@bundle_entrypoint` |
 | Instantiation | Per request by default | Entrypoint instance is created with `config`, `comm_context`, `pg_pool`, `redis` |
 | One-time init | Once per process per tenant/project | `on_bundle_load(...)` may prepare indexes, local caches, repos, or other bundle-local assets |
 | Request prep | Every invocation | Request-bound routing/identity is rebuilt, singleton instances are rebound, bundle props are loaded/merged, hooks can run |
@@ -261,12 +270,12 @@ Three classes of changes matter during bundle development:
 
 2. **Descriptor-backed bundle config**
    - comes from `bundles.yaml`
-   - affects new requests after proc reapplies the descriptor (`reset-env` / `kdcube reload`)
+   - affects new requests after proc reapplies the descriptor (`reset-env` / `kdcube bundle reload`)
 
 3. **Bundle code changes**
    - require proc cache eviction before the next request should load the updated module
    - for local development, the intended path is:
-     - `kdcube reload <bundle_id> --workdir <runtime-workdir>`
+     - `kdcube bundle reload <bundle_id> --workdir <runtime-workdir>`
 
 4. **`@venv` requirements changes**
    - if only `requirements.txt` changed, the next call to the decorated function will rebuild the cached venv automatically
@@ -365,8 +374,8 @@ See:
 | Surface | Access | Isolation | Use it for |
 |---|---|---|---|
 | `bundle_props` | read | tenant + project + bundle | effective non-secret configuration |
-| `get_secret_async(...)` | read | secret key namespace | API keys, tokens, credentials |
-| `get_user_secret_async(...)` | read/write | tenant + project + bundle + user | per-user tokens and credentials |
+| `await get_secret(...)` | read | secret key namespace | API keys, tokens, credentials |
+| `await get_secret("u:...")`, `await set_user_secret(...)`, `await delete_user_secret(...)` | read/write | tenant + project + bundle + user | per-user tokens and credentials |
 | Redis KV cache | read/write | whatever keys you choose | lightweight distributed state, flags, small caches |
 | Bundle storage backend (`CB_BUNDLE_STORAGE_URL`) | read/write | tenant + project + bundle | persistent bundle data on file/S3 storage |
 | Shared local bundle storage (`BUNDLE_STORAGE_ROOT`) | read/write by bundle code | tenant + project + bundle | large local/EFS caches, cloned repos, indexes, read-only assets |
@@ -379,8 +388,8 @@ Bundle developer surfaces
 
   Config / identity
     bundle_props
-    get_secret_async(...)
-    get_user_secret_async(...)
+    await get_secret(...)
+    await get_secret("u:...")
     comm_context.actor.{tenant_id, project_id, user_id, ...}
 
   Distributed state

@@ -5,18 +5,18 @@ import logging
 from email.message import EmailMessage
 from typing import Optional, Sequence
 
-from kdcube_ai_app.apps.chat.sdk.config import get_settings, get_secret, read_plain, _plain_or_settings
+from kdcube_ai_app.apps.chat.sdk.config import get_secret, get_settings, read_plain, _plain_or_settings
 
 logger = logging.getLogger(__name__)
 
 
-def _smtp_settings() -> dict:
+def _smtp_settings(*, password: str | None = None) -> dict:
     user = _plain_or_settings("notifications.email.user", "EMAIL_USER")
     return {
         "host": _plain_or_settings("notifications.email.host", "EMAIL_HOST"),
         "port": int(_plain_or_settings("notifications.email.port", "EMAIL_PORT", 587) or 587),
         "user": user,
-        "password": get_secret("services.email.password"),
+        "password": password,
         "from_addr": _plain_or_settings("notifications.email.from", "EMAIL_FROM") or user,
         "to_default": _plain_or_settings("notifications.email.to", "EMAIL_TO", "ops@example.com"),
         "use_tls": bool(_plain_or_settings("notifications.email.use_tls", "EMAIL_USE_TLS", True)),
@@ -26,12 +26,12 @@ def _smtp_settings() -> dict:
 
 def _send_email_sync(
     *,
+    cfg: dict,
     to_addrs: Sequence[str],
     subject: str,
     body: str,
     cc: Optional[Sequence[str]] = None,
 ) -> bool:
-    cfg = _smtp_settings()
     if not cfg["enabled"]:
         logger.info("Email disabled (notifications.email.enabled=false). Skipping send.")
         return False
@@ -71,10 +71,11 @@ async def send_admin_email(
     to_addrs: Optional[Sequence[str]] = None,
     cc: Optional[Sequence[str]] = None,
 ) -> bool:
-    cfg = _smtp_settings()
+    cfg = _smtp_settings(password=await get_secret("services.email.password"))
     to_list = list(to_addrs) if to_addrs else [cfg["to_default"]]
     return await asyncio.to_thread(
         _send_email_sync,
+        cfg=cfg,
         to_addrs=to_list,
         subject=subject,
         body=body,

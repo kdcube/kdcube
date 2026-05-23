@@ -40,7 +40,7 @@ async def create_checkout_topup(
     """Create a Stripe Checkout Session for a one-time lifetime credits purchase."""
     settings = get_settings()
     mgr = _get_control_plane_manager(router)
-    stripe_client = _get_stripe()
+    stripe_client = await _get_stripe()
 
     tenant, project = settings.TENANT, settings.PROJECT
     user_id = session.user_id
@@ -93,7 +93,7 @@ async def create_checkout_subscription(
     """Create a Stripe Checkout Session for a recurring subscription."""
     settings = get_settings()
     mgr = _get_control_plane_manager(router)
-    stripe_client = _get_stripe()
+    stripe_client = await _get_stripe()
 
     tenant, project = settings.TENANT, settings.PROJECT
     user_id = session.user_id

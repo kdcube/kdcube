@@ -18,7 +18,7 @@ This is the canonical reference for how tool descriptors are consumed and how to
 
 ## Descriptor wiring
 
-`tools_descriptor.py` is imported by the bundle workflow and passed to `create_tool_subsystem_with_mcp(...)` as data:
+`tools_descriptor.py` is imported by bundle code and passed to `create_tool_subsystem_with_mcp(...)` as data:
 
 ```python
 tool_subsystem, _ = create_tool_subsystem_with_mcp(
@@ -63,9 +63,17 @@ That means bundle code can look natural:
 
 ```python
 from .. import preferences_store
+from ..services.storage import Store
 ```
 
 instead of manually reconstructing sibling modules with `importlib`.
+
+The bundle-local import-isolation rule still applies. Do not import same-bundle
+helpers from top-level roots such as `services`, `tools`, `apps`, or
+`resources`; those names are process-global in proc and can collide across
+bundles. For bundle-local tools, use `ref` entries rather than `module` entries
+so the runtime can keep the tool tied to the bundle root and rewrite paths for
+distributed isolated execution.
 
 ## Why `ref` works in iso-runtime and Docker
 

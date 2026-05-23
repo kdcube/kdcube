@@ -245,7 +245,7 @@ def _patch_ingress_dependencies(monkeypatch):
             ),
         ),
     )
-    monkeypatch.setattr(chat_core, "_load_registry_from_redis", _load_registry)
+    monkeypatch.setattr(chat_core, "_load_active_registry", _load_registry)
     monkeypatch.setattr(chat_core, "build_envelope_from_session", lambda **_kwargs: _DummyEnvelope())
     monkeypatch.setattr(chat_core, "ChatCommunicator", _DummyCommunicator)
 
@@ -288,6 +288,10 @@ async def test_busy_message_is_stored_as_followup(_patch_ingress_dependencies):
     assert result.ok is True
     assert result.reason == "followup_accepted"
     assert result.continuation_kind == "followup"
+    assert result.active_turn_id == "turn-active"
+    assert result.target_turn_id is None
+    assert result.queued_turn_id == result.turn_id
+    assert result.live_owner_detected is False
 
     source = build_conversation_external_event_source(
         redis=redis,
@@ -299,7 +303,85 @@ async def test_busy_message_is_stored_as_followup(_patch_ingress_dependencies):
     assert len(events) == 1
     assert events[0].kind == "followup"
     assert events[0].active_turn_id_at_ingress == "turn-active"
+    assert not events[0].owner_turn_id
+    assert result.event_id == events[0].message_id
+    assert result.external_event_sequence == events[0].sequence
     assert events[0].task_payload["continuation"]["kind"] == "followup"
+
+
+@pytest.mark.asyncio
+async def test_busy_followup_ack_preserves_target_and_server_active_owner(_patch_ingress_dependencies):
+    redis = _MiniRedis()
+    source = build_conversation_external_event_source(
+        redis=redis,
+        tenant="tenant-a",
+        project="project-a",
+        conversation_id="conv-1",
+    )
+    await redis.set(source.owner_key, json.dumps({
+        "turn_id": "turn-active",
+        "bundle_id": "bundle.demo",
+        "instance_id": "proc-1",
+        "process_id": 11,
+        "listener_id": "listener-1",
+        "lease_token": "lease-1",
+        "lease_epoch": 1,
+        "started_at": "2026-03-16T00:00:00Z",
+        "updated_at": "2026-03-16T00:00:01Z",
+    }))
+    app = SimpleNamespace(state=SimpleNamespace(
+        redis_async=redis,
+        conversation_browser=_BusyConversationBrowser(),
+        conversation_store=_DummyConversationStore(),
+    ))
+    session = SimpleNamespace(
+        session_id="sess-1",
+        user_type=UserType.REGISTERED,
+        user_id="user-1",
+        username="user",
+        fingerprint="fp-1",
+        roles=[],
+        permissions=[],
+        timezone="UTC",
+    )
+
+    result = await process_chat_message(
+        app=app,
+        chat_queue_manager=_QueueManagerShouldNotRun(),
+        chat_comm=_DummyRelay(),
+        session=session,
+        request_context=SimpleNamespace(user_utc_offset_min=None),
+        message_data={
+            "conversation_id": "conv-1",
+            "target_turn_id": "turn-client-visible",
+            "payload": {},
+        },
+        message_text="followup text",
+        ingress=IngressConfig(
+            transport="sse",
+            entrypoint="/sse/chat",
+            component="chat.sse",
+            instance_id="ingress-1",
+            stream_id="stream-1",
+        ),
+    )
+
+    assert result.ok is True
+    assert result.reason == "followup_accepted"
+    assert result.active_turn_id == "turn-active"
+    assert result.target_turn_id == "turn-client-visible"
+    assert result.queued_turn_id == result.turn_id
+    assert result.live_owner_detected is True
+
+    events = await source.read_since(0)
+    assert len(events) == 1
+    assert events[0].target_turn_id == "turn-client-visible"
+    assert events[0].active_turn_id_at_ingress == "turn-active"
+    assert events[0].owner_turn_id == "turn-active"
+    assert events[0].task_payload["continuation"]["target_turn_id"] == "turn-client-visible"
+    assert events[0].task_payload["continuation"]["active_turn_id"] == "turn-active"
+    assert result.event_id == events[0].message_id
+    assert result.external_event_sequence == events[0].sequence
 
 
 @pytest.mark.asyncio

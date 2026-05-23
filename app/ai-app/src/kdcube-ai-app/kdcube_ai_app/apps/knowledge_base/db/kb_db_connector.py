@@ -9,6 +9,7 @@ Final KnowledgeBaseConnector implementation using the actual KnowledgeBaseDB and
 
 import json
 import logging
+import os
 import traceback
 from datetime import datetime
 
@@ -859,14 +860,13 @@ def create_kb_connector(tenant: str,
 
 def embedding_model() -> ModelRecord:
     from kdcube_ai_app.infra.llm.llm_data_model import AIProviderName, AIProvider
-    from kdcube_ai_app.infra.llm.util import get_service_key_fn
 
     # from kdcube_ai_app.infra.embedding.embedding import embedder_model
     # Use OpenAI embeddings (1536 dimensions)
     # return embedder_model(size=1536, get_key_fn=get_api_key)
     provider = AIProviderName.open_ai
     provider = AIProvider(provider=provider,
-                          apiToken=get_service_key_fn(provider))
+                          apiToken=os.getenv("OPENAI_API_KEY") or "")
     model_config = EMBEDDERS.get("openai-text-embedding-3-small")
     model_name = model_config.get("model_name")
     return ModelRecord(
