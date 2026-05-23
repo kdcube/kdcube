@@ -1,64 +1,58 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.5.23.312"
+  ref: "2026.5.23.1825"
   description: |
-    This patch release improves rapid follow-up handling, attachment timeline
-    behavior, the Versatile example-bundle chat UI, and CLI/runtime operator
-    guidance after the 2026.5.22.442 release.
+    This patch release completes the async secret-resolution migration for
+    bundle and runtime services, improves git-backed runtime authentication,
+    and adds a signature-aware UI widget rebuild path for bundle development
+    after the 2026.5.23.312 release.
 
     Highlights
 
-    - Fixes a rapid second-send race where an acked conversation id could still
-      be rejected as missing before searchable turn artifacts were indexed. The
-      ingress resolver now accepts the already-written conversation state row as
-      valid ownership evidence.
-    - Prevents live follow-up external events from being promoted into a
-      separate queued turn while an active timeline owner is present. This keeps
-      follow-up lifecycle events attached to the active turn instead of
-      producing an empty phantom turn.
-    - Marks external events consumed immediately after the active React
-      timeline applies them, closing the duplicate-processing window while
-      preserving fallback promotion if no live owner handles the event.
-    - Serializes Versatile example-bundle sends and fixes follow-up attachment
-      routing, attachment chips, attachment reload behavior, and Files tab
-      classification for user-uploaded versus assistant-produced files.
-    - Adds a richer Versatile Chat tab with conversation delete, canvas
-      copy/download tools, favicon/link status display, collapsible search and
-      fetch sections, drag-and-drop attachments, and an expandable canvas
-      iframe.
-    - Refactors the Versatile example-bundle UI into clearer Redux, API,
-      feature-component, primitive, and utility boundaries while preserving the
-      existing integration contracts.
-    - Adds bundle-builder onboarding for the Versatile example bundle and
-      documents non-chat bundle stream events.
-    - Improves CLI/operator behavior around Docker cleanup timeouts, refresh
-      hanging prevention, bundle reload documentation, descriptor export, and
-      canonical local bundle runtime flows.
+    - Migrates service and bundle secret access to async-only resolution so
+      runtime paths, integrations, economics, model routing, web search, email,
+      Telegram, and knowledge-base services can use the same non-blocking
+      secret contract.
+    - Updates git-backed runtime and workspace authentication so secrets are
+      resolved through the shared async manager instead of sync fallbacks.
+    - Tightens bundle runtime context propagation for static entrypoints,
+      managed git bundles, isolated execution, MCP adapters, Claude Code
+      sessions, ReAct workspaces, and task operations.
+    - Adds signature-aware UI widget rebuild coalescing so bundle widget source
+      edits trigger rebuilds without unnecessary repeated builds.
+    - Clarifies descriptor override defaults, bundle properties, bundle
+      secrets, runtime read/write contracts, and secret-provider documentation
+      for bundle builders and operators.
+    - Refreshes tests around secret manager behavior, service key resolution,
+      bundle registry runtime context, git bundle locking, static entrypoint
+      loading, email integration, ReAct workspaces, and UI widget rebuilds.
 
     Runtime and deployment notes:
 
-    - Deployments must point the platform ref at 2026.5.23.312 to receive the
-      rapid follow-up, attachment timeline, Versatile UI, and CLI/runtime
-      fixes.
+    - Deployments must point the platform ref at 2026.5.23.1825 to receive the
+      async secret-resolution, git-backed runtime, and widget rebuild fixes.
     - No descriptor shape migration is required.
+    - Secret-provider implementations must be available in async-capable paths;
+      sync secret lookup fallbacks have been removed from runtime code.
     - No private deployment content is part of this OSS release.
 
     Validation and regression coverage:
 
-    - Focused ingress conversation-id tests passed.
-    - Focused external-event promotion and consumption tests passed.
-    - Focused React external-event timeline tests passed.
+    - Focused secret manager and service-key resolution tests passed in the
+      related implementation commits.
+    - Focused bundle registry, static entrypoint, git runtime, ReAct workspace,
+      email integration, and UI widget rebuild tests were updated with the new
+      async contract.
     - Staged OSS private-name scan passed before commit.
 
     Changelog
 
-    - Fixed server-side conversation id acceptance for in-flight conversations.
-    - Fixed live follow-up duplication into queued phantom turns.
-    - Improved Versatile example-bundle chat, attachment, file, link, and canvas
-      UI behavior.
-    - Refactored Versatile example-bundle UI internals.
-    - Updated bundle stream-event and builder-agent documentation.
-    - Tightened CLI runtime cleanup, refresh, reload, and descriptor-export
-      behavior.
+    - Removed sync secret-resolution fallbacks from runtime and integration
+      code.
+    - Updated bundle and service runtime code to await secret resolution.
+    - Improved git-backed bundle, runtime, and workspace authentication.
+    - Added signature-aware UI widget rebuild coalescing.
+    - Updated operator and bundle-builder documentation for properties,
+      secrets, runtime context, and descriptor overrides.
 config:
-    version: "2026.5.23.312"
+    version: "2026.5.23.1825"
