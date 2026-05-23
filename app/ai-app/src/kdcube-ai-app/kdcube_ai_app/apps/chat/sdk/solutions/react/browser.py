@@ -482,7 +482,9 @@ class ContextBrowser:
             return 0
         from kdcube_ai_app.apps.chat.external_events import ConversationExternalEvent
 
+        source = self.external_event_source
         added = 0
+        max_applied_seq = 0
         for event in events:
             if not isinstance(event, ConversationExternalEvent):
                 continue
@@ -505,6 +507,7 @@ class ContextBrowser:
                 int(self._timeline.last_external_event_seq or 0),
                 int(event.sequence or 0),
             )
+            max_applied_seq = max(max_applied_seq, int(event.sequence or 0))
             added += len(blocks)
             self.log.log(
                 f"[timeline.external]: applied conversation={self._runtime_ctx.conversation_id} "
@@ -516,6 +519,14 @@ class ContextBrowser:
             )
             if call_hooks:
                 await self._emit_timeline_event_hooks(type=str(event.kind or "external"), event=event, blocks=blocks)
+        if max_applied_seq and source is not None:
+            try:
+                await source.mark_consumed_up_to(
+                    max_sequence=max_applied_seq,
+                    turn_id=str(self._runtime_ctx.turn_id or ""),
+                )
+            except Exception:
+                self.log.log(f"[timeline.external]: failed to mark consumed {traceback.format_exc()}", "ERROR")
         return added
 
     async def _emit_timeline_event_hooks(self, *, type: str, event: Any, blocks: List[Dict[str, Any]]) -> None:

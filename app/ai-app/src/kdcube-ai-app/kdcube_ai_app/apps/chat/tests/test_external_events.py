@@ -388,6 +388,43 @@ async def test_external_event_consumed_live_is_not_promoted():
 
 
 @pytest.mark.asyncio
+async def test_external_event_live_owner_defers_promotion_until_owner_releases():
+    redis = _FakeRedis()
+    source = build_conversation_external_event_source(
+        redis=redis,
+        tenant="t1",
+        project="p1",
+        conversation_id="conv1",
+    )
+
+    event = await source.publish(
+        kind="followup",
+        explicit=False,
+        target_turn_id="turn-active",
+        active_turn_id_at_ingress="turn-active",
+        owner_turn_id="turn-active",
+        source="ingress.sse",
+        text="same turn please",
+        payload={"message": "same turn please"},
+        task_payload=_task_payload(task_id="task-followup", turn_id="turn-queued", text="same turn please"),
+    )
+    lease = await source.acquire_owner(turn_id="turn-active", bundle_id="bundle.demo", listener_id="listener-1")
+
+    claimed = await source.claim_next_promotable(claimant_id="proc-1", min_idle_ms=1)
+    assert claimed is None
+    stored = await source.get_event(event.message_id)
+    assert stored is not None
+    assert stored.promoted_at is None
+    assert stored.consumed_at is None
+
+    released = await source.release_owner(listener_id="listener-1", lease_token=lease.lease_token)
+    assert released is True
+    claimed_after_release = await source.claim_next_promotable(claimant_id="proc-2", min_idle_ms=1)
+    assert claimed_after_release is not None
+    assert claimed_after_release.message_id == event.message_id
+
+
+@pytest.mark.asyncio
 async def test_external_event_not_consumed_is_promoted_once():
     redis = _FakeRedis()
     source = build_conversation_external_event_source(
