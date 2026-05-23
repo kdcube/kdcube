@@ -1,61 +1,64 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.5.22.442"
+  ref: "2026.5.23.312"
   description: |
-    This patch release tightens local runtime refresh behavior, shared managed
-    example-bundle materialization, and bundle-builder documentation after the
-    2026.5.21.145 release.
+    This patch release improves rapid follow-up handling, attachment timeline
+    behavior, the Versatile example-bundle chat UI, and CLI/runtime operator
+    guidance after the 2026.5.22.442 release.
 
     Highlights
 
-    - Adds source selectors to `kdcube refresh`: `--latest`, `--upstream`, and
-      `--release <ref>`, so existing runtimes can move to a selected platform
-      source without reseeding staged descriptors.
-    - Fixes explicit local-source refresh: `kdcube refresh --path <repo>
-      --build` now restages the requested platform checkout into the runtime
-      repo instead of falling back to stale install metadata.
-    - Preserves and restores runtime UI nginx build support files during local
-      refresh so Docker web-ui builds can run from a freshly restaged runtime
-      repo.
-    - Hardens bundle UI builds against generated JS shadow files, preventing
-      stale generated `App.js` siblings from shadowing TS/TSX widget source
-      during Vite import analysis.
-    - Makes shared managed example-bundle directories timestamped and metadata
-      backed, making it clear which materialized copy is newest and improving
-      cleanup ordering.
-    - Protects shared example-bundle materialization with the canonical
-      observed file lock, so concurrent proc workers on a shared filesystem do
-      not create duplicate timestamped copies for the same content hash.
-    - Documents refresh source selectors and local runtime bootstrap behavior
-      across Tier 1 bundle docs, CLI docs, website docs, and reusable
-      Build-with-KDCube agent guidance.
+    - Fixes a rapid second-send race where an acked conversation id could still
+      be rejected as missing before searchable turn artifacts were indexed. The
+      ingress resolver now accepts the already-written conversation state row as
+      valid ownership evidence.
+    - Prevents live follow-up external events from being promoted into a
+      separate queued turn while an active timeline owner is present. This keeps
+      follow-up lifecycle events attached to the active turn instead of
+      producing an empty phantom turn.
+    - Marks external events consumed immediately after the active React
+      timeline applies them, closing the duplicate-processing window while
+      preserving fallback promotion if no live owner handles the event.
+    - Serializes Versatile example-bundle sends and fixes follow-up attachment
+      routing, attachment chips, attachment reload behavior, and Files tab
+      classification for user-uploaded versus assistant-produced files.
+    - Adds a richer Versatile Chat tab with conversation delete, canvas
+      copy/download tools, favicon/link status display, collapsible search and
+      fetch sections, drag-and-drop attachments, and an expandable canvas
+      iframe.
+    - Refactors the Versatile example-bundle UI into clearer Redux, API,
+      feature-component, primitive, and utility boundaries while preserving the
+      existing integration contracts.
+    - Adds bundle-builder onboarding for the Versatile example bundle and
+      documents non-chat bundle stream events.
+    - Improves CLI/operator behavior around Docker cleanup timeouts, refresh
+      hanging prevention, bundle reload documentation, descriptor export, and
+      canonical local bundle runtime flows.
 
     Runtime and deployment notes:
 
-    - Deployments must point the platform ref at 2026.5.22.442 to receive the
-      refresh/source-selection fixes, bundle UI shadow-file handling, and
-      timestamped managed example-bundle materialization.
+    - Deployments must point the platform ref at 2026.5.23.312 to receive the
+      rapid follow-up, attachment timeline, Versatile UI, and CLI/runtime
+      fixes.
     - No descriptor shape migration is required.
     - No private deployment content is part of this OSS release.
 
     Validation and regression coverage:
 
-    - Focused managed-bundle and UI source-copy tests passed.
-    - Focused CLI descriptor/source-copy tests passed.
-    - Python syntax validation passed for changed platform files.
-    - Local Docker runtime was refreshed from the patched source, rebuilt, and
-      restarted successfully.
-    - Versatile main UI and `versatile_webapp` widget built successfully after
-      refresh.
+    - Focused ingress conversation-id tests passed.
+    - Focused external-event promotion and consumption tests passed.
+    - Focused React external-event timeline tests passed.
     - Staged OSS private-name scan passed before commit.
 
     Changelog
 
-    - Fixed `kdcube refresh` source selection and local restaging behavior.
-    - Fixed stale generated JS shadowing during bundle UI builds.
-    - Added timestamped managed example-bundle directories and observable
-      shared-filesystem locking.
-    - Updated runtime/bootstrap documentation for bundle builders and coding
-      agents.
+    - Fixed server-side conversation id acceptance for in-flight conversations.
+    - Fixed live follow-up duplication into queued phantom turns.
+    - Improved Versatile example-bundle chat, attachment, file, link, and canvas
+      UI behavior.
+    - Refactored Versatile example-bundle UI internals.
+    - Updated bundle stream-event and builder-agent documentation.
+    - Tightened CLI runtime cleanup, refresh, reload, and descriptor-export
+      behavior.
 config:
-    version: "2026.5.22.442"
+    version: "2026.5.23.312"
