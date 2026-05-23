@@ -107,29 +107,41 @@ def _comm() -> ChatCommunicator:
     )
 
 
-def test_doc_reader_mcp_auth_uses_bundle_prop_and_bundle_secret(monkeypatch):
+@pytest.mark.anyio
+async def test_doc_reader_mcp_auth_uses_bundle_prop_and_bundle_secret(monkeypatch):
     mod = _load_entrypoint_module()
     workflow = object.__new__(mod.ReactWorkflow)
+    workflow.config = SimpleNamespace(ai_bundle_spec=SimpleNamespace(id="kdcube.copilot"))
     workflow.bundle_prop = lambda key, default=None: (
         "X-Test-MCP-Token" if key == "mcp.doc_reader.auth.header_name" else default
     )
-    monkeypatch.setattr(mod, "get_secret", lambda key: "shared-token" if key == "b:mcp.doc_reader.auth.shared_token" else None)
 
-    workflow._require_doc_reader_mcp_auth(
+    async def _get_secret(key, **kwargs):
+        return "shared-token" if key == "b:mcp.doc_reader.auth.shared_token" else None
+
+    monkeypatch.setattr(mod, "get_secret", _get_secret)
+
+    await workflow._require_doc_reader_mcp_auth(
         _request(header_name="X-Test-MCP-Token", header_value="shared-token")
     )
 
 
-def test_doc_reader_mcp_auth_rejects_invalid_header(monkeypatch):
+@pytest.mark.anyio
+async def test_doc_reader_mcp_auth_rejects_invalid_header(monkeypatch):
     mod = _load_entrypoint_module()
     workflow = object.__new__(mod.ReactWorkflow)
+    workflow.config = SimpleNamespace(ai_bundle_spec=SimpleNamespace(id="kdcube.copilot"))
     workflow.bundle_prop = lambda key, default=None: (
         "X-Test-MCP-Token" if key == "mcp.doc_reader.auth.header_name" else default
     )
-    monkeypatch.setattr(mod, "get_secret", lambda key: "shared-token" if key == "b:mcp.doc_reader.auth.shared_token" else None)
+
+    async def _get_secret(key, **kwargs):
+        return "shared-token" if key == "b:mcp.doc_reader.auth.shared_token" else None
+
+    monkeypatch.setattr(mod, "get_secret", _get_secret)
 
     with pytest.raises(HTTPException) as exc:
-        workflow._require_doc_reader_mcp_auth(
+        await workflow._require_doc_reader_mcp_auth(
             _request(header_name="X-Test-MCP-Token", header_value="wrong-token")
         )
 
@@ -181,7 +193,8 @@ def test_kdcube_doc_mcp_builds_fresh_stateless_app_per_request():
     assert [name for name, _app in built] == ["kdcube-doc", "kdcube-doc"]
 
 
-def test_event_recording_configures_react_scope_from_endpoint_and_secret(monkeypatch):
+@pytest.mark.anyio
+async def test_event_recording_configures_react_scope_from_endpoint_and_secret(monkeypatch):
     mod = _load_entrypoint_module()
     workflow = object.__new__(mod.ReactWorkflow)
     workflow._comm = _comm()
@@ -190,13 +203,12 @@ def test_event_recording_configures_react_scope_from_endpoint_and_secret(monkeyp
     workflow.bundle_prop = lambda key, default=None: (
         "http://stats.local/telemetry/events" if key == "telemetry_sink.endpoint_url" else default
     )
-    monkeypatch.setattr(
-        mod,
-        "get_secret",
-        lambda key: "telemetry-token" if key == mod.TELEMETRY_SINK_TOKEN_SECRET else None,
-    )
+    async def _get_secret(key, **kwargs):
+        return "telemetry-token" if key == mod.TELEMETRY_SINK_TOKEN_SECRET else None
 
-    workflow._configure_event_recording()
+    monkeypatch.setattr(mod, "get_secret", _get_secret)
+
+    await workflow._configure_event_recording()
 
     recording = workflow.comm.recording_config()
     assert workflow.comm.event_sink is not None
@@ -221,7 +233,10 @@ async def test_doc_reader_mcp_call_records_and_sends_scoped_event():
         sent_batches.append((batch, kwargs))
         return {"accepted": len(batch)}
 
-    workflow._make_event_sink = lambda: sink
+    async def _make_event_sink():
+        return sink
+
+    workflow._make_event_sink = _make_event_sink
 
     await workflow._record_doc_reader_mcp_call(
         {

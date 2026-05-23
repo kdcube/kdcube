@@ -235,7 +235,7 @@ Record at the workflow boundary:
 ```python
 async def pre_run_hook(self, **kwargs):
     await super().pre_run_hook(**kwargs)
-    self._configure_event_recording()
+    await self._configure_event_recording()
 
 
 async def post_run_hook(self, **kwargs):

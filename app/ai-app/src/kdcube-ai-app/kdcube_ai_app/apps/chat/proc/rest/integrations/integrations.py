@@ -3582,13 +3582,13 @@ async def _call_bundle_mcp_inner(
         runtime_comm = _resolve_bound_runtime_comm(workflow=workflow, comm_context=comm_context)
         with bind_current_request_context(comm_context, comm=runtime_comm):
             result = await _invoke_bundle_callable(fn, **extra)
-        mcp_app = _coerce_bundle_mcp_asgi_app(result, transport=endpoint_spec.transport)
-        return await _dispatch_bundle_mcp_request(
-            request=request,
-            mcp_app=mcp_app,
-            transport=endpoint_spec.transport,
-            mcp_path=mcp_path,
-        )
+            mcp_app = _coerce_bundle_mcp_asgi_app(result, transport=endpoint_spec.transport)
+            return await _dispatch_bundle_mcp_request(
+                request=request,
+                mcp_app=mcp_app,
+                transport=endpoint_spec.transport,
+                mcp_path=mcp_path,
+            )
     except HTTPException:
         raise
     except Exception as e:

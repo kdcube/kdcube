@@ -146,3 +146,23 @@ def test_build_doc_reader_mcp_app_returns_streamable_http_app(tmp_path):
     assert hasattr(app, "streamable_http_app")
     assert callable(app.streamable_http_app)
     assert app.streamable_http_app() is not None
+
+
+def test_doc_reader_mcp_prepare_awaits_async_refresh(tmp_path, monkeypatch):
+    mod = _load_react_tools_module()
+    monkeypatch.setattr(mod.knowledge_resolver, "search_knowledge", lambda **kwargs: [])
+    refreshed: list[str] = []
+
+    async def _refresh():
+        refreshed.append("done")
+
+    app = mod.build_doc_reader_mcp_app(
+        name="kdcube.copilot.doc_reader",
+        storage_root_provider=lambda: tmp_path,
+        refresh_knowledge_space=_refresh,
+    )
+
+    result = asyncio.run(app.call_tool("search_knowledge", {"query": "bundle docs"}))
+
+    assert result == ([], {"result": []})
+    assert refreshed == ["done"]

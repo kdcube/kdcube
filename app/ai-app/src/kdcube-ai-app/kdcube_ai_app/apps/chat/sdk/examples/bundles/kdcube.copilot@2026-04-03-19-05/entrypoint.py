@@ -529,7 +529,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
         endpoint_url = str(self.bundle_prop("telemetry_sink.endpoint_url", "") or "").strip()
         if not endpoint_url:
             return None
-        token = str(await get_secret(TELEMETRY_SINK_TOKEN_SECRET) or "").strip()
+        token = str(await get_secret(TELEMETRY_SINK_TOKEN_SECRET, bundle_id=self._bundle_id()) or "").strip()
         if not token:
             try:
                 self.logger.log(
@@ -631,7 +631,9 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
     async def _events_payload(self, *, limit: int = 100) -> Dict[str, Any]:
         del limit
         endpoint_configured = bool(str(self.bundle_prop("telemetry_sink.endpoint_url", "") or "").strip())
-        token_configured = bool(str(await get_secret(TELEMETRY_SINK_TOKEN_SECRET) or "").strip())
+        token_configured = bool(
+            str(await get_secret(TELEMETRY_SINK_TOKEN_SECRET, bundle_id=self._bundle_id()) or "").strip()
+        )
         return {
             "ok": True,
             "bundle_id": self._bundle_id(),
@@ -667,7 +669,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
             "mcp.doc_reader.auth.header_name",
             "X-KDCube-Copilot-MCP-Token",
         )
-        expected_token = await get_secret("b:mcp.doc_reader.auth.shared_token")
+        expected_token = await get_secret("b:mcp.doc_reader.auth.shared_token", bundle_id=self._bundle_id())
         provided_token = request.headers.get(header_name)
 
         if not expected_token:
@@ -1610,7 +1612,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
 
     async def _service_secret(self, key: str) -> str | None:
         canonical = f"services.{str(key or '').lstrip('.')}"
-        return await get_secret(f"b:{canonical}") or await get_secret(canonical)
+        return await get_secret(f"b:{canonical}", bundle_id=self._bundle_id()) or await get_secret(canonical)
 
     async def _kb_admin_secret_flags(self, *, user_id: str) -> dict[str, bool]:
         bundle_id = getattr(getattr(self.config, "ai_bundle_spec", None), "id", None) or BUNDLE_ID
