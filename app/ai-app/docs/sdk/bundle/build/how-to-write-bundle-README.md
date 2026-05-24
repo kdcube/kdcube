@@ -142,7 +142,6 @@ Critical bundle-to-browser event rule:
 - `broadcast=False` targets that peer when `KDC-Stream-ID` was supplied;
   `broadcast=True` sends to all connected peers in the same authenticated
   session
-- this is session-scoped delivery, not tenant-wide or project-wide broadcast
 - read the concrete client and bundle recipe before implementing this:
   [bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream](../bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream)
 

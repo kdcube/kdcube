@@ -24,7 +24,7 @@ from kdcube_ai_app.auth.AuthManager import AuthenticationError, RequireUser
 from kdcube_ai_app.auth.sessions import UserSession, UserType
 from kdcube_ai_app.infra.namespaces import REDIS, ns_key
 
-from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator
+from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator, PROJECT_BROADCAST_ROOM
 from kdcube_ai_app.apps.chat.ids import new_turn_id
 from kdcube_ai_app.apps.chat.sdk.protocol import (
     ServiceCtx, ConversationCtx,
@@ -93,6 +93,7 @@ class Client:
     session_id: str
     stream_id: Optional[str]
     queue: asyncio.Queue[str]      # queue of SSE frames (strings)
+    project_events: bool = False
 
 class SSECapacityError(Exception):
     """Raised when SSE instance capacity is exhausted."""
@@ -253,6 +254,12 @@ class SSEHub:
             tenant=client.tenant,
             project=client.project,
         )
+        if client.project_events:
+            await self.chat_comm.acquire_project_channel(
+                tenant=client.tenant,
+                project=client.project,
+                callback=self._on_relay,
+            )
         await self._publish_stats(
             tp_key[0],
             tp_key[1],
@@ -299,6 +306,11 @@ class SSEHub:
                                                      tenant=client.tenant,
                                                      project=client.project,
                                                      )
+        if client.project_events:
+            await self.chat_comm.release_project_channel(
+                tenant=client.tenant,
+                project=client.project,
+            )
         await self._publish_stats(
             tp_key[0],
             tp_key[1],
@@ -320,17 +332,25 @@ class SSEHub:
         """
         async with self._lock:
             snapshot: Dict[str, tuple[str | None, str | None, int]] = {}
+            project_snapshot: Dict[Tuple[str, str], int] = {}
             for session_id, clients in self._by_session.items():
                 if not clients:
                     continue
                 tenant = clients[0].tenant
                 project = clients[0].project
                 snapshot[session_id] = (tenant, project, len(clients))
+                for client in clients:
+                    if client.project_events:
+                        key = self._tp_key(client)
+                        project_snapshot[key] = project_snapshot.get(key, 0) + 1
 
         await self.chat_comm.reconcile_sessions(snapshot, reason=reason)
+        reconcile_project = getattr(self.chat_comm, "reconcile_project_channels", None)
+        if reconcile_project:
+            await reconcile_project(project_snapshot, reason=reason)
         logger.info(
-            "[SSEHub] resync relay reason=%s sessions=%s hub_id=%s relay_id=%s",
-            reason, len(snapshot), id(self), id(self.chat_comm),
+            "[SSEHub] resync relay reason=%s sessions=%s project_channels=%s hub_id=%s relay_id=%s",
+            reason, len(snapshot), len(project_snapshot), id(self), id(self.chat_comm),
         )
 
     # Relay callback invoked by ChatRelayCommunicator
@@ -347,6 +367,27 @@ class SSEHub:
             if not event or not room:
                 logger.warning(f"[SSEHub._on_relay] unrouted message {message}")
                 return  # we only fan-out messages scoped to a session room. ignore malformed / global messages
+
+            if room == PROJECT_BROADCAST_ROOM:
+                service = (data or {}).get("service") or {}
+                tenant = service.get("tenant")
+                project = service.get("project")
+                if not tenant or not project:
+                    logger.warning("[SSEHub._on_relay] project event missing tenant/project: %s", message)
+                    return
+                async with self._lock:
+                    recipients = [
+                        client
+                        for clients in self._by_session.values()
+                        for client in clients
+                        if client.project_events and client.tenant == tenant and client.project == project
+                    ]
+                if not recipients:
+                    return
+                frame = _sse_frame(event, data, event_id=str(uuid.uuid4()))
+                for client in recipients:
+                    self._enqueue(client, frame)
+                return
 
             logger.debug(
                 "[SSEHub._on_relay] RECEIVED event=%s session=%s target_sid=%s "
@@ -457,6 +498,7 @@ def create_sse_router(
         id_token: Optional[str] = None,
         project: Optional[str] = None,
         tenant: Optional[str] = None,
+        project_events: bool = False,
     ):
 
         # --- Resolve session exactly like WS connect ---
@@ -530,7 +572,8 @@ def create_sse_router(
         client = Client(session_id=session.session_id,
                         stream_id=stream_id, queue=q,
                         tenant=tenant,
-                        project=project,)
+                        project=project,
+                        project_events=bool(project_events),)
 
         # Register client
         try:
@@ -565,6 +608,7 @@ def create_sse_router(
                 **({"stream_id": stream_id} if stream_id else {}),
                 **({"tenant": tenant} if tenant else {}),
                 **({"project": project} if project else {}),
+                "project_events": bool(project_events),
             }
             yield _sse_frame("ready", hello, event_id=str(uuid.uuid4()))
 

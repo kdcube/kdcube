@@ -4,13 +4,14 @@ title: "Bundle Platform Integration"
 summary: "Declarative platform contract for exposing bundle capabilities through decorators, manifest metadata, REST operations, widgets, MCP routes, static UI, public routes, scheduled jobs, and background job handlers."
 tags: ["sdk", "bundle", "integration", "decorators", "widgets", "operations", "mcp", "ui", "manifest", "cron", "scheduled-jobs", "background-jobs"]
 keywords: ["decorator based integration", "bundle manifest contract", "rest operations exposure", "widget exposure", "mcp route exposure", "static ui exposure", "public route exposure", "scheduled job exposure", "on_job background job handler"]
-updated_at: 2026-05-22
+updated_at: 2026-05-24
 see_also:
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
   - ks:docs/sdk/bundle/bundle-entrypoint-classes-README.md
   - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
   - ks:docs/sdk/bundle/bundle-transports-README.md
+  - ks:docs/sdk/bundle/bundle-client-communication-README.md
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/sdk/bundle/bundle-scheduled-jobs-README.md
   - ks:docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
@@ -70,6 +71,23 @@ Critical import rule:
   as `services`, `apps`, `tools`, or `resources`
 - see [Bundle Runtime](bundle-runtime-README.md#critical-bundle-local-import-rule)
   for the import-isolation contract
+
+## Bundle-to-client event scopes
+
+Bundle code can use the request-bound or entrypoint-bound communicator to emit
+events to connected clients. There are three distinct scopes:
+
+| Primitive | Scope | Where to use it |
+| --- | --- | --- |
+| `comm.service_event(..., broadcast=False)` | the current peer when `KDC-Stream-ID` was supplied; otherwise the current session | direct progress/reply from an `@api`, widget operation, or other request-bound method |
+| `comm.service_event(..., broadcast=True)` | all connected peers in the current authenticated session | session-wide state changes for the current user |
+| `comm.project_event(...)` | all SSE clients in the same tenant/project that subscribed with `project_events=true` | compact tenant/project snapshots, such as operational dashboards |
+
+Project events are SSE-only in the current contract. They are for small,
+bounded, already-safe payloads. Do not publish raw telemetry events, prompts,
+answers, logs, or unbounded result lists through this path. The concrete client
+and bundle recipe lives in
+[Bundle Client Communication](bundle-client-communication-README.md#tenantproject-sse-broadcast).
 
 ## 1) Supported decorators
 

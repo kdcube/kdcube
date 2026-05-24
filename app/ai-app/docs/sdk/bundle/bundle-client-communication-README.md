@@ -110,8 +110,12 @@ Supported query params:
 | `id_token` | No | ID token fallback when headers are unavailable |
 | `tenant` | No | Override tenant for the stream |
 | `project` | No | Override project for the stream |
+| `project_events` | No | Set to `true` to receive tenant/project-level service events on this SSE stream |
 
 `stream_id` is the peer identifier later used for direct-delivery semantics.
+`project_events=true` is opt-in and should be used only by clients that need
+compact project-level updates, such as dashboards or landing-page status
+widgets.
 
 After the stream opens, clients should subscribe to the shared chat event catalog. In addition to the main lifecycle routes (`chat_start`, `chat_step`, `chat_delta`, `chat_complete`, `chat_error`, `chat_service`, `conv_status`), ReAct clients should also handle `chat_compaction`. That route carries `env.type = "chat.compaction"` and marks context compaction start/completion while a long turn is still running.
 
@@ -435,10 +439,72 @@ Delivery semantics:
   otherwise it falls back to the current session route.
 - `broadcast=True` sends to all connected SSE/Socket.IO peers in the same
   authenticated session.
-- this is not tenant-wide or project-wide broadcast. The current relay is
-  intentionally session-scoped.
 - use namespaced semantic event types such as `bundle.job.progress`,
   `memory.snapshot.completed`, or `admin.import.failed`.
+
+### Tenant/project SSE broadcast
+
+When a bundle needs to update all connected SSE clients in the same
+tenant/project, use `comm.project_event(...)`. This is a separate primitive from
+`broadcast=True`:
+
+- `broadcast=True` means all peers in the current user session.
+- `comm.project_event(...)` means all SSE clients that explicitly subscribed to
+  tenant/project events for the same tenant/project.
+
+Client-side SSE opt-in:
+
+```ts
+const streamId = crypto.randomUUID();
+
+const streamUrl = new URL(`${baseUrl}/sse/stream`);
+streamUrl.searchParams.set("user_session_id", sessionId);
+streamUrl.searchParams.set("stream_id", streamId);
+streamUrl.searchParams.set("tenant", tenant);
+streamUrl.searchParams.set("project", project);
+streamUrl.searchParams.set("project_events", "true");
+
+const events = new EventSource(streamUrl.toString(), { withCredentials: true });
+
+events.addEventListener("chat_service", event => {
+  const envelope = JSON.parse(event.data);
+  if (envelope.type === "my.bundle.snapshot") {
+    applySnapshot(envelope.data);
+  }
+});
+```
+
+Bundle-side publisher:
+
+```python
+from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import get_current_comm
+
+async def publish_snapshot(self, snapshot: dict):
+    comm = get_current_comm() or self.comm
+    if comm is None:
+        return
+
+    await comm.project_event(
+        type="my.bundle.snapshot",
+        step="snapshot",
+        status="completed",
+        title="Snapshot updated",
+        data={"snapshot": snapshot},
+        auto_markdown=False,
+    )
+```
+
+Rules:
+
+- project events currently target SSE clients, not Socket.IO clients
+- clients must opt in with `project_events=true`
+- the event is carried on the existing `chat_service` route; route by
+  `envelope.type`
+- payloads must be compact, bounded, and already safe for all viewers in the
+  tenant/project
+- do not publish raw telemetry events, logs, prompts, answers, or unbounded
+  result lists through this path
+- debounce project broadcasts when the source changes frequently
 
 ## 9. Response Headers Clients Should Use
 

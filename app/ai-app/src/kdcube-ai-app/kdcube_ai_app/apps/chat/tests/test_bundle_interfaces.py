@@ -1242,6 +1242,67 @@ async def test_call_bundle_mcp_inner_supports_public_mcp_endpoint(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_call_bundle_mcp_inner_keeps_request_context_during_asgi_dispatch(monkeypatch):
+    class _ContextWorkflow:
+        @mcp(alias="context", route="public")
+        def context_mcp(self, **kwargs):
+            async def _app(scope, receive, send):
+                del receive
+                from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import (
+                    get_current_bundle_id,
+                    get_current_request_context,
+                )
+
+                ctx = get_current_request_context()
+                payload = json.dumps(
+                    {
+                        "path": scope.get("path"),
+                        "bundle_id": get_current_bundle_id(),
+                        "routing_bundle_id": getattr(getattr(ctx, "routing", None), "bundle_id", None),
+                    }
+                ).encode("utf-8")
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 200,
+                        "headers": [(b"content-type", b"application/json")],
+                    }
+                )
+                await send({"type": "http.response.body", "body": payload, "more_body": False})
+
+            return _app
+
+    comm_context = SimpleNamespace(routing=SimpleNamespace(bundle_id="bundle.demo"))
+
+    async def _load_bundle_workflow(**kwargs):
+        del kwargs
+        return _ContextWorkflow(), SimpleNamespace(id="bundle.demo"), "tenant-a", "project-a", comm_context
+
+    monkeypatch.setattr(integrations, "_load_bundle_workflow", _load_bundle_workflow)
+
+    response = await integrations._call_bundle_mcp_inner(
+        tenant="tenant-a",
+        project="project-a",
+        bundle_id="bundle.demo",
+        request=_request(
+            method="GET",
+            path="/api/integrations/bundles/tenant-a/project-a/bundle.demo/public/mcp/context/probe",
+        ),
+        endpoint_alias="context",
+        route="public",
+        mcp_path="probe",
+    )
+
+    assert response.status_code == 200
+    payload = json.loads(response.body.decode("utf-8"))
+    assert payload == {
+        "path": "/mcp/probe",
+        "bundle_id": "bundle.demo",
+        "routing_bundle_id": "bundle.demo",
+    }
+
+
+@pytest.mark.asyncio
 async def test_dispatch_bundle_mcp_request_runs_asgi_lifespan():
     mcp_app = _LifespanMCPProvider().streamable_http_app()
 
@@ -1759,14 +1820,15 @@ async def test_call_bundle_op_inner_enforces_public_header_secret(monkeypatch):
         del kwargs
         return _Workflow(), SimpleNamespace(id="bundle.demo"), "tenant-a", "project-a"
 
+    async def _get_secret(key, default=None):
+        return (
+            "telegram-secret"
+            if key == "bundles.bundle.demo.secrets.telegram.webhook_secret"
+            else default
+        )
+
     monkeypatch.setattr(integrations, "_load_bundle_workflow", _load_bundle_workflow)
-    monkeypatch.setattr(
-        integrations,
-        "get_secret",
-        lambda key, default=None: "telegram-secret"
-        if key == "bundles.bundle.demo.secrets.telegram.webhook_secret"
-        else default,
-    )
+    monkeypatch.setattr(integrations, "get_secret", _get_secret)
 
     with pytest.raises(integrations.HTTPException) as exc:
         await integrations._call_bundle_op_inner(

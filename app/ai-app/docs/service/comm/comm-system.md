@@ -87,6 +87,8 @@ Transports (SSE / Socket.IO) hook into the chat relay to dynamically subscribe/u
 **Core responsibilities**
 
 * **Dynamic session subscriptions** (with refcounting).
+* **Dynamic tenant/project subscriptions** for SSE clients that opt into
+  project-level events.
 * **Tenant/project-aware channel naming**.
 * **Fan-out into transport callbacks** (SSE hub, WS handler).
 * **Single publishing entry** for standard chat envelope types.
@@ -101,11 +103,16 @@ Transports (SSE / Socket.IO) hook into the chat relay to dynamically subscribe/u
     * Final channel shards by session:
 
         * `"{tenant}:{project}:chat.events.{session_id}"`
+* The tenant/project channel for project-scoped SSE events:
+
+    * `"{tenant}:{project}:chat.events.__project__"`
 
 **Why this matters**
 
 * It prevents every transport worker from subscribing to a global firehose.
 * The Pub/Sub traffic becomes proportional to *active sessions*, not *total system volume*.
+* Project-scoped updates are still opt-in; only SSE clients that request
+  `project_events=true` subscribe to the tenant/project channel.
 
 ---
 
@@ -133,6 +140,8 @@ Transports (SSE / Socket.IO) hook into the chat relay to dynamically subscribe/u
 * Provide a generic typed event API:
 
     * `event(...)`
+    * `service_event(...)`
+    * `project_event(...)`
 * **Record deltas** into an internal cache:
 
     * `get_delta_aggregates`, `export_delta_cache`, etc.
@@ -150,6 +159,27 @@ See: [docs/sdk/bundle/bundle-firewall-README.md](../../sdk/bundle/bundle-firewal
 
 ---
 
+## Delivery Scopes
+
+The communicator exposes three distinct delivery scopes. Bundle code should
+choose the smallest scope that matches the UI behavior.
+
+| Primitive | Delivery scope | Client requirement | Typical use |
+| --- | --- | --- | --- |
+| `comm.service_event(..., broadcast=False)` | direct peer when the request supplied `KDC-Stream-ID`; otherwise current session | open SSE/Socket.IO peer; pass `KDC-Stream-ID` for REST operations that need a direct reply | progress for the tab that launched a bundle operation |
+| `comm.service_event(..., broadcast=True)` | all connected peers in the current authenticated session | normal session stream | update every tab for the same user session |
+| `comm.project_event(...)` | all SSE clients for the same tenant/project that opened `/sse/stream?project_events=true` | SSE stream with `tenant`, `project`, and `project_events=true` | compact debounced project snapshots, such as usage dashboards |
+
+`comm.project_event(...)` is not a replacement for telemetry streams or raw
+logs. It publishes a `chat_service` envelope to the tenant/project channel
+`{tenant}:{project}:chat.events.__project__`. Use it for small, bounded,
+already-aggregated payloads.
+
+Socket.IO project subscriptions are not part of the current contract. Use SSE
+for tenant/project broadcast receivers.
+
+---
+
 ## Comm Recording And Event Sink Boundary
 
 `ChatCommunicator` is already the widely used bundle-facing path for chat,
@@ -162,7 +192,7 @@ Proposed generic flow:
 ```text
 bundle code
   |
-  | self.comm.start / step / delta / event / service_event / complete / error
+  | self.comm.start / step / delta / event / service_event / project_event / complete / error
   v
 ChatCommunicator
   |

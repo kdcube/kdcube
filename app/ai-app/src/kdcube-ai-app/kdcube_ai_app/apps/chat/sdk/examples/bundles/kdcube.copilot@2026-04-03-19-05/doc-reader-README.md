@@ -326,6 +326,11 @@ Implementation:
 - `_record_doc_reader_mcp_call()` uses `async with comm.recording(...)` so each
   doc-reader MCP call records and sends only its `kdcube.copilot.mcp.call`
   event.
+- Doc-reader MCP calls report `mcp_address` for the exposed MCP route and
+  `mcp_endpoint` for the API called inside it. `search_knowledge` also reports
+  a bounded `reported_values[]` item with concept `search query` so downstream
+  stats surfaces can show recent explicitly reported query labels without
+  reading raw prompts or tool arguments.
 
 Current selected event types come from the SDK stats selector:
 

@@ -1,9 +1,9 @@
 ---
 id: ks:docs/service/comm/CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md
 title: "Chat Relay Session Subscr SSE Socketio Funout"
-summary: "SSE/Socket.IO relay design: session subscriptions and fan‑out via Redis."
+summary: "SSE/Socket.IO relay design: session subscriptions, tenant/project SSE subscriptions, and fan-out via Redis."
 tags: ["service", "comm", "relay", "sse", "redis"]
-keywords: ["session subscription", "fanout", "redis pubsub", "SSE relay", "Socket.IO"]
+keywords: ["session subscription", "project subscription", "fanout", "redis pubsub", "SSE relay", "Socket.IO"]
 see_also:
   - ks:docs/service/comm/comm-system.md
   - ks:docs/service/comm/README-comm.md
@@ -20,6 +20,8 @@ This document describes the architecture of the **chat relay** in the KDCube AI 
 
 * How **Redis Pub/Sub** is used as a relay between orchestrators/workers and the web app.
 * How the **SSE hub** dynamically subscribes to per-session channels.
+* How the SSE hub can also subscribe to tenant/project channels for compact
+  non-chat updates such as dashboard snapshots.
 * The problems we were fighting (high traffic, wrong subscription semantics, sync I/O).
 * What did **not** work and what the final working design looks like.
 
@@ -188,9 +190,12 @@ Per-client structure:
 ```python
 @dataclass(frozen=True)
 class Client:
+    tenant: Optional[str]
+    project: Optional[str]
     session_id: str
     stream_id: Optional[str]      # for DM/targeted messages
     queue: asyncio.Queue[str]     # SSE frames queue
+    project_events: bool = False  # opt into tenant/project SSE topic
 ```
 
 Register logic (key part):
@@ -294,6 +299,62 @@ When the request is cancelled / disconnected, we call:
 ```python
 await app.state.sse_hub.unregister(client)
 ```
+
+### Tenant/project SSE events
+
+Session broadcast and project broadcast are separate primitives:
+
+| Primitive | Subscribers | Publisher | Use case |
+| --- | --- | --- | --- |
+| `comm.service_event(..., broadcast=False)` | current `KDC-Stream-ID` when present, otherwise current session fanout | request-bound bundle/workflow code | direct reply to the tab/window that called an operation |
+| `comm.service_event(..., broadcast=True)` | all SSE clients in the current user session | request-bound bundle/workflow code | update every tab for the same user session |
+| `comm.project_event(...)` | SSE clients that opened `/sse/stream` with `project_events=true` for the same tenant/project | request-bound or headless code with a `ChatCommunicator` | compact tenant/project updates such as stats snapshots |
+
+Client opt-in:
+
+```ts
+const url = new URL(`${baseUrl}/sse/stream`);
+url.searchParams.set("user_session_id", sessionId);
+url.searchParams.set("stream_id", streamId);
+url.searchParams.set("tenant", tenant);
+url.searchParams.set("project", project);
+url.searchParams.set("project_events", "true");
+
+const es = new EventSource(url.toString(), { withCredentials: true });
+es.addEventListener("chat_service", (event) => {
+  const env = JSON.parse(event.data);
+  if (env.type === "my.bundle.snapshot") {
+    // apply compact project snapshot
+  }
+});
+```
+
+Server-side publisher:
+
+```python
+await comm.project_event(
+    type="my.bundle.snapshot",
+    step="snapshot",
+    status="completed",
+    title="Snapshot updated",
+    data={"snapshot": snapshot},
+    auto_markdown=False,
+)
+```
+
+Implementation points:
+
+- Server publisher: `kdcube_ai_app/apps/chat/emitters.py`
+  (`ChatCommunicator.project_event`, `ChatRelayCommunicator.emit_project`).
+- SSE subscription and fanout:
+  `kdcube_ai_app/apps/chat/ingress/sse/chat.py`
+  (`project_events` query parameter, `SSEHub._on_relay`).
+
+Project events use the Redis channel
+`{tenant}:{project}:chat.events.__project__` and are only delivered to clients
+that explicitly opted in. They are meant for compact, debounced updates. Do not
+publish raw logs, raw telemetry events, prompts, or unbounded payloads through
+this path.
 
 ---
 

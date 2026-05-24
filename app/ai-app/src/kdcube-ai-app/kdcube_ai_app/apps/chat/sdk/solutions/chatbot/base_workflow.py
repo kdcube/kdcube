@@ -11,7 +11,7 @@ import random
 import traceback
 import copy
 from importlib import import_module
-from typing import Dict, Any, List, Optional, Type, Callable, Awaitable
+from typing import Dict, Any, List, Optional, Type, Callable, Awaitable, Mapping
 
 from kdcube_ai_app.apps.chat.emitters import (
     ChatCommunicator,
@@ -85,6 +85,64 @@ def _nonnegative_int(value: Any) -> Optional[int]:
     except Exception:
         return None
     return parsed if parsed >= 0 else None
+
+
+def _chat_input_kind(kind: Any) -> str:
+    text = str(kind or "").strip().lower()
+    if text in {"", "regular", "user", "prompt"}:
+        return "message"
+    if text in {"message", "followup", "steer"}:
+        return text
+    if "followup" in text:
+        return "followup"
+    if "steer" in text:
+        return "steer"
+    return "message"
+
+
+def _produced_file_count(blocks: Any, turn_id: str) -> int:
+    """Count current-turn files/outputs exposed in timeline blocks."""
+    if not isinstance(blocks, list):
+        return 0
+    turn_text = str(turn_id or "").strip()
+    produced: set[str] = set()
+
+    def _add_path(value: Any) -> None:
+        path = str(value or "").strip()
+        if not path:
+            return
+        if "/attachments/" in path or ".attachments/" in path:
+            return
+        if turn_text:
+            if path.startswith(f"fi:{turn_text}.files/") or path.startswith(f"fi:{turn_text}.outputs/"):
+                produced.add(path)
+                return
+            if path.startswith(f"{turn_text}/files/") or path.startswith(f"{turn_text}/outputs/"):
+                produced.add(path)
+                return
+        if path.startswith("fi:files/") or path.startswith("fi:outputs/"):
+            produced.add(path)
+
+    def _scan_mapping(mapping: Mapping[str, Any]) -> None:
+        for key in ("path", "artifact_path", "logical_path", "physical_path", "resolved_ref"):
+            _add_path(mapping.get(key))
+        for key in ("meta", "data", "value", "payload"):
+            child = mapping.get(key)
+            if isinstance(child, Mapping):
+                _scan_mapping(child)
+        text = mapping.get("text")
+        if isinstance(text, str) and ("artifact_path" in text or "physical_path" in text):
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                parsed = None
+            if isinstance(parsed, Mapping):
+                _scan_mapping(parsed)
+
+    for block in blocks:
+        if isinstance(block, Mapping):
+            _scan_mapping(block)
+    return len(produced)
 
 
 def _get_prop_path(data: Dict[str, Any], path: str, default: Any = None) -> Any:
@@ -2166,17 +2224,27 @@ class BaseWorkflow():
             timing_ctx = _tend(t1, ms1)
             scratchpad.timings.append({"title": "context.load", "elapsed_ms": timing_ctx["elapsed_ms"]})
 
+        _continuation = self.comm_context.continuation if hasattr(self.comm_context, "continuation") else None
+        _continuation_kind = (getattr(_continuation, "kind", None) or "") or ""
+        _chat_input = _chat_input_kind(_continuation_kind)
+        _attachment_count = len([att for att in (scratchpad.user_attachments or []) if isinstance(att, dict)])
+
         # (1) user message
         await self._emit({"type": "chat.conversation.accepted", "agent": "user", "step": "chat.user.message", "status": "completed",
-                          "title": "User Message", "data": {"text": scratchpad.short_text, "chars": len(scratchpad.short_text)}})
+                          "title": "User Message",
+                          "data": {
+                              "text": scratchpad.short_text,
+                              "chars": len(scratchpad.short_text),
+                              "message_len": len(scratchpad.short_text),
+                              "input_kind": _chat_input,
+                              "attachment_count": _attachment_count,
+                          }})
         self.logger.log_step("recv_user_message", {"len": len(scratchpad.user_text)})
 
         # Contribute user prompt + attachments to current turn log
         await self._materialize_current_turn_user_attachments(scratchpad)
         try:
             build_user_input_blocks = _react_symbol("layout", "build_user_input_blocks")
-            _continuation = self.comm_context.continuation if hasattr(self.comm_context, "continuation") else None
-            _continuation_kind = (getattr(_continuation, "kind", None) or "") or ""
             self.ctx_browser.contribute(
                 blocks=build_user_input_blocks(
                     runtime=self.ctx_browser.runtime_ctx,
@@ -2379,6 +2447,7 @@ class BaseWorkflow():
         # Save turn log (always) - v2
         try:
             contrib_log = []
+            used_sids = []
             try:
                 if self.ctx_browser:
                     contrib_log = list(self.ctx_browser.current_turn_blocks() or [])
@@ -2400,7 +2469,6 @@ class BaseWorkflow():
                 except Exception:
                     pass
             end_ts = datetime.datetime.utcnow().isoformat() + "Z"
-            used_sids = []
             total_tokens = 0
             try:
                 extract_sources_used_from_blocks = _react_symbol(
@@ -2494,8 +2562,13 @@ class BaseWorkflow():
 
         total_ms = int((time.perf_counter() - t_turn0) * 1000)
         step_title = "Plan Completed" if ok else "Plan Failed"
+        completion_metrics = {
+            "elapsed_ms": total_ms,
+            "produced_file_count": _produced_file_count(payload.get("blocks") or [], turn_id) if isinstance(payload, dict) else 0,
+            "citation_count": len(used_sids or []) if isinstance(used_sids, list) else 0,
+        }
         await self._emit({"type": "chat.conversation.turn.completed", "agent": "planner", "step": "plan.done", "status": "completed",
-                          "title": step_title, "data": {"elapsed_ms": total_ms},
+                          "title": step_title, "data": completion_metrics,
                           "timing": {"started_ms": ms0u, "ended_ms": _now_ms(), "elapsed_ms": total_ms}})
         scratchpad.timings.append({
             "title": step_title,

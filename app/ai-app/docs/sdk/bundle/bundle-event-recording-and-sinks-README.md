@@ -235,7 +235,7 @@ Record at the workflow boundary:
 ```python
 async def pre_run_hook(self, **kwargs):
     await super().pre_run_hook(**kwargs)
-    self._configure_event_recording()
+    await self._configure_event_recording()
 
 
 async def post_run_hook(self, **kwargs):
@@ -561,6 +561,63 @@ the POST. Current built-in mappings include:
 
 The selector includes only bounded metadata keys. It does not copy raw prompts,
 answers, tool arguments, or delta text.
+
+For bundle-exposed MCP services, report the route/server identity separately
+from the API called inside that MCP service:
+
+```python
+await comm.service_event(
+    type="my.bundle.mcp.call",
+    step="mcp.search",
+    status="completed",
+    data={
+        "mcp_address": "my.bundle@1/mcp/doc_reader",
+        "mcp_endpoint": "search_knowledge",
+        "duration_ms": 42,
+        "reported_values": [
+            {"concept": "search query", "value": query},
+        ],
+    },
+)
+```
+
+`reported_values` is opt-in bounded metadata for product analytics surfaces. Do
+not put prompts, answers, tool arguments, or unbounded payloads there.
+
+## Project-Scoped UI Events
+
+Recording and sinks are for durable/batch event handoff. For connected widgets
+that need a compact live update, use the communicator's project event primitive
+instead of inventing a bundle-specific stream.
+
+Client widgets opt in when opening SSE:
+
+```ts
+const url = new URL(`${baseUrl}/sse/stream`);
+url.searchParams.set("user_session_id", sessionId);
+url.searchParams.set("stream_id", streamId);
+url.searchParams.set("tenant", tenant);
+url.searchParams.set("project", project);
+url.searchParams.set("project_events", "true");
+```
+
+Bundle code publishes a compact envelope:
+
+```python
+await comm.project_event(
+    type="my.bundle.snapshot",
+    step="snapshot",
+    status="completed",
+    title="Snapshot updated",
+    data={"snapshot": snapshot},
+    auto_markdown=False,
+)
+```
+
+This fans out to SSE clients subscribed to the same tenant/project. It is not
+the same as `service_event(..., broadcast=True)`, which remains scoped to the
+current user session. Use project events for small debounced snapshots or
+status notices, not raw telemetry streams.
 
 ## Selector Practice
 

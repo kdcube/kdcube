@@ -1,58 +1,49 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.5.23.1825"
+  ref: "2026.5.24.420"
   description: |
-    This patch release completes the async secret-resolution migration for
-    bundle and runtime services, improves git-backed runtime authentication,
-    and adds a signature-aware UI widget rebuild path for bundle development
-    after the 2026.5.23.312 release.
+    This documentation-focused platform release updates the communication and
+    bundle SDK docs for tenant/project-scoped SSE events and the
+    `comm.project_event(...)` primitive.
 
     Highlights
 
-    - Migrates service and bundle secret access to async-only resolution so
-      runtime paths, integrations, economics, model routing, web search, email,
-      Telegram, and knowledge-base services can use the same non-blocking
-      secret contract.
-    - Updates git-backed runtime and workspace authentication so secrets are
-      resolved through the shared async manager instead of sync fallbacks.
-    - Tightens bundle runtime context propagation for static entrypoints,
-      managed git bundles, isolated execution, MCP adapters, Claude Code
-      sessions, ReAct workspaces, and task operations.
-    - Adds signature-aware UI widget rebuild coalescing so bundle widget source
-      edits trigger rebuilds without unnecessary repeated builds.
-    - Clarifies descriptor override defaults, bundle properties, bundle
-      secrets, runtime read/write contracts, and secret-provider documentation
-      for bundle builders and operators.
-    - Refreshes tests around secret manager behavior, service key resolution,
-      bundle registry runtime context, git bundle locking, static entrypoint
-      loading, email integration, ReAct workspaces, and UI widget rebuilds.
+    - Documents the three bundle-to-client event scopes: direct peer delivery
+      through `KDC-Stream-ID`, current-session broadcast through
+      `comm.service_event(..., broadcast=True)`, and tenant/project SSE
+      broadcast through `comm.project_event(...)`.
+    - Adds the `/sse/stream?project_events=true` client contract and the
+      bundle-side `comm.project_event(...)` recipe in the bundle client
+      communication guide.
+    - Updates the comm architecture docs to include the tenant/project
+      `chat.events.__project__` channel, opt-in SSE subscription behavior, and
+      the guidance that project events are for compact debounced snapshots, not
+      raw telemetry or logs.
+    - Keeps the signal narrow in Tier 1 bundle-builder docs: the building-block
+      map points builders to the detailed contract, while the broader authoring
+      docs are not repeated with the full recipe.
+    - Removes the stale documentation claim that non-chat bundle live events
+      cannot have a tenant/project broadcast path.
 
     Runtime and deployment notes:
 
-    - Deployments must point the platform ref at 2026.5.23.1825 to receive the
-      async secret-resolution, git-backed runtime, and widget rebuild fixes.
-    - No descriptor shape migration is required.
-    - Secret-provider implementations must be available in async-capable paths;
-      sync secret lookup fallbacks have been removed from runtime code.
+    - Deployments must point the platform ref at 2026.5.24.420 to receive this
+      documentation update.
+    - No runtime code or descriptor shape migration is part of this release.
+    - Tenant/project SSE event support remains an opt-in client behavior:
+      widgets must open `/sse/stream` with `project_events=true`.
     - No private deployment content is part of this OSS release.
 
     Validation and regression coverage:
 
-    - Focused secret manager and service-key resolution tests passed in the
-      related implementation commits.
-    - Focused bundle registry, static entrypoint, git runtime, ReAct workspace,
-      email integration, and UI widget rebuild tests were updated with the new
-      async contract.
+    - Documentation diff check passed for the scoped release files.
     - Staged OSS private-name scan passed before commit.
 
     Changelog
 
-    - Removed sync secret-resolution fallbacks from runtime and integration
-      code.
-    - Updated bundle and service runtime code to await secret resolution.
-    - Improved git-backed bundle, runtime, and workspace authentication.
-    - Added signature-aware UI widget rebuild coalescing.
-    - Updated operator and bundle-builder documentation for properties,
-      secrets, runtime context, and descriptor overrides.
+    - Added tenant/project SSE event documentation to comm service docs.
+    - Added bundle-facing `comm.project_event(...)` usage guidance.
+    - Updated the transport map and platform integration scope table.
+    - Added a single Tier 1 discovery pointer in the SDK building-block map.
 config:
-    version: "2026.5.23.1825"
+    version: "2026.5.24.420"

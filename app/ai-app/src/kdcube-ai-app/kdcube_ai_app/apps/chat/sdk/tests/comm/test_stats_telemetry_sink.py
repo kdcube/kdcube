@@ -122,11 +122,14 @@ async def test_copilot_mcp_call_maps_to_mcp_call() -> None:
         status="completed",
         agent="kdcube.copilot.mcp",
         data={
+            "mcp_address": "kdcube.copilot/mcp/doc_reader",
+            "mcp_endpoint": "search_knowledge",
             "mcp_name": "doc_reader",
             "tool": "search",
             "duration_ms": 125,
             "result_count": 3,
             "query_len": 22,
+            "reported_values": [{"concept": "search query", "value": "how to configure telemetry"}],
         },
     )
 
@@ -134,9 +137,68 @@ async def test_copilot_mcp_call_maps_to_mcp_call() -> None:
 
     assert len(events) == 1
     assert events[0]["name"] == "mcp.call"
-    assert events[0]["dimensions"]["server"] == "doc_reader"
-    assert events[0]["dimensions"]["tool"] == "search"
+    assert events[0]["dimensions"]["mcp_address"] == "kdcube.copilot/mcp/doc_reader"
+    assert events[0]["dimensions"]["mcp_endpoint"] == "search_knowledge"
     assert events[0]["metrics"]["latency_ms"] == 125
+    assert events[0]["data"]["reported_values"] == [
+        {"concept": "search query", "value": "how to configure telemetry"}
+    ]
+
+
+@pytest.mark.anyio
+async def test_chat_accept_maps_to_chat_message_without_text() -> None:
+    comm = _make_comm()
+    comm.record(STATS_COMM_EVENT_SELECTOR, mode="replace")
+
+    await comm.service_event(
+        type="chat.conversation.accepted",
+        step="chat.user.message",
+        status="completed",
+        agent="user",
+        data={
+            "text": "private user text must not be copied",
+            "input_kind": "regular",
+            "message_len": 36,
+            "attachment_count": 2,
+        },
+    )
+
+    events = recorded_comm_batch_to_telemetry(comm.export_recorded_events(), comm=comm)
+
+    assert len(events) == 1
+    event = events[0]
+    assert event["name"] == "chat.message"
+    assert event["dimensions"]["input_kind"] == "message"
+    assert event["dimensions"]["role"] == "user"
+    assert event["metrics"]["message_len"] == 36
+    assert event["metrics"]["attachment_count"] == 2
+    assert "private user text" not in str(event)
+
+
+@pytest.mark.anyio
+async def test_continuation_accept_maps_to_followup_chat_message() -> None:
+    comm = _make_comm()
+    comm.record(STATS_COMM_EVENT_SELECTOR, mode="replace")
+
+    await comm.service_event(
+        type="queue.continuation.accepted",
+        step="queue.continuation",
+        status="completed",
+        agent="ingress",
+        data={
+            "message_kind": "followup",
+            "message_len": 19,
+            "attachment_count": 1,
+        },
+    )
+
+    events = recorded_comm_batch_to_telemetry(comm.export_recorded_events(), comm=comm)
+
+    assert len(events) == 1
+    assert events[0]["name"] == "chat.message"
+    assert events[0]["dimensions"]["input_kind"] == "followup"
+    assert events[0]["metrics"]["message_len"] == 19
+    assert events[0]["metrics"]["attachment_count"] == 1
 
 
 @pytest.mark.anyio
@@ -150,9 +212,9 @@ async def test_accounting_usage_preserves_breakdown_as_list() -> None:
         status="completed",
         data={
             "breakdown": {
-                "service": "llm",
+                "service_type": "llm",
                 "provider": "anthropic",
-                "model": "claude-sonnet",
+                "model_or_service": "claude-sonnet",
                 "input_tokens": 10,
                 "output_tokens": 4,
                 "cache_read_tokens": 2,
@@ -167,18 +229,107 @@ async def test_accounting_usage_preserves_breakdown_as_list() -> None:
     event = events[0]
     assert event["name"] == "accounting.usage"
     assert event["dimensions"]["provider"] == "anthropic"
-    assert event["dimensions"]["model"] == "claude-sonnet"
+    assert event["dimensions"]["service_type"] == "llm"
+    assert event["dimensions"]["model_or_service"] == "claude-sonnet"
     assert event["metrics"]["cost_total_usd"] == 0.03
     assert event["data"]["breakdown"] == [
         {
-            "service": "llm",
+            "service_type": "llm",
             "provider": "anthropic",
-            "model": "claude-sonnet",
+            "model_or_service": "claude-sonnet",
             "input_tokens": 10.0,
             "output_tokens": 4.0,
             "cache_read_tokens": 2.0,
         }
     ]
+
+
+@pytest.mark.anyio
+async def test_accounting_usage_preserves_service_specific_breakdown_fields() -> None:
+    comm = _make_comm()
+    comm.record(STATS_COMM_EVENT_SELECTOR, mode="replace")
+
+    await comm.service_event(
+        type="accounting.usage",
+        step="accounting",
+        status="completed",
+        data={
+            "breakdown": [
+                {
+                    "service_type": "embedding",
+                    "provider": "openai",
+                    "model_or_service": "text-embedding-3-small",
+                    "tokens": 450,
+                    "cost_usd": 0.000009,
+                },
+                {
+                    "service_type": "web_search",
+                    "provider": "brave",
+                    "model_or_service": "unknown",
+                    "tier": "free",
+                    "search_queries": 1,
+                    "search_results": 6,
+                    "cost_per_1k_requests": 0,
+                    "cost_usd": 0,
+                },
+            ],
+            "cost_total_usd": 0.000009,
+        },
+    )
+
+    events = recorded_comm_batch_to_telemetry(comm.export_recorded_events(), comm=comm)
+    breakdown = events[0]["data"]["breakdown"]
+
+    assert breakdown[0]["embedding_tokens"] == 450.0
+    assert breakdown[1]["tier"] == "free"
+    assert breakdown[1]["search_queries"] == 1.0
+    assert breakdown[1]["search_results"] == 6.0
+
+
+@pytest.mark.anyio
+async def test_accounting_usage_event_id_is_stable_across_chat_and_service_envelopes() -> None:
+    comm = _make_comm()
+    comm.record(STATS_COMM_EVENT_SELECTOR, mode="replace")
+    data = {
+        "breakdown": [
+            {
+                "service_type": "llm",
+                "provider": "anthropic",
+                "model_or_service": "claude-sonnet",
+                "input_tokens": 10,
+                "output_tokens": 4,
+                "cache_5m_write_tokens": 7,
+                "cache_read_tokens": 20,
+                "cost_usd": 0.03,
+            }
+        ],
+        "cost_total_usd": 0.03,
+    }
+
+    await comm.event(
+        agent="accounting",
+        type="accounting.usage",
+        step="accounting",
+        status="completed",
+        data=data,
+    )
+    await comm.service_event(
+        type="accounting.usage",
+        step="accounting",
+        status="completed",
+        agent="accounting",
+        data=data,
+    )
+
+    records = comm.export_recorded_events()
+    assert len(records) == 2
+    assert records[0]["record_id"] != records[1]["record_id"]
+
+    events = recorded_comm_batch_to_telemetry(records, comm=comm)
+
+    assert len(events) == 2
+    assert events[0]["event_id"] == events[1]["event_id"]
+    assert events[0]["data"]["breakdown"] == events[1]["data"]["breakdown"]
 
 
 @pytest.mark.anyio

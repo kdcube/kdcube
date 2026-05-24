@@ -12,6 +12,8 @@ Run with:
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from kdcube_ai_app.apps.chat.sdk.comm.event_filter import EventFilterInput, IEventFilter
@@ -41,6 +43,15 @@ class _RecordingRelay:
     def emitted_statuses(self) -> list[str | None]:
         """Return event.status values in emission order."""
         return [env.get("event", {}).get("status") for _, env in self.events]
+
+
+class _ProjectRelay(_RecordingRelay):
+    def __init__(self) -> None:
+        super().__init__()
+        self.project_events: list[dict] = []
+
+    async def emit_project(self, *, event: str, data: dict, tenant: str, project: str) -> None:
+        self.project_events.append({"event": event, "data": data, "tenant": tenant, "project": project})
 
 
 def _make_comm(relay: _RecordingRelay, event_filter=None):
@@ -78,6 +89,62 @@ class TestEventStructure:
         _, envelope = relay.events[0]
         assert envelope["type"] == "chat.start"
         assert envelope["event"]["status"] == "started"
+
+    @pytest.mark.anyio
+    async def test_project_event_uses_project_relay_topic(self):
+        """comm.project_event() emits to tenant/project subscribers, not the current session room."""
+        from kdcube_ai_app.apps.chat.emitters import PROJECT_BROADCAST_ROOM
+
+        relay = _ProjectRelay()
+        comm = _make_comm(relay)
+
+        await comm.project_event(
+            type="demo.snapshot",
+            step="snapshot",
+            status="completed",
+            title="Snapshot",
+            data={"value": 1},
+            auto_markdown=False,
+        )
+
+        assert relay.events == []
+        assert len(relay.project_events) == 1
+        emitted = relay.project_events[0]
+        assert emitted["event"] == "chat_service"
+        assert emitted["tenant"] == "t"
+        assert emitted["project"] == "p"
+        assert emitted["data"]["type"] == "demo.snapshot"
+        assert emitted["data"]["conversation"]["session_id"] == PROJECT_BROADCAST_ROOM
+
+    @pytest.mark.anyio
+    async def test_project_sse_relay_only_fans_out_to_project_subscribers(self):
+        from kdcube_ai_app.apps.chat.emitters import PROJECT_BROADCAST_ROOM
+        from kdcube_ai_app.apps.chat.ingress.sse.chat import Client, SSEHub
+
+        hub = SSEHub(chat_comm=object())
+        project_client = Client(tenant="t", project="p", session_id="s1", stream_id="a", queue=asyncio.Queue(), project_events=True)
+        session_only_client = Client(tenant="t", project="p", session_id="s1", stream_id="b", queue=asyncio.Queue(), project_events=False)
+        other_project_client = Client(tenant="t", project="other", session_id="s2", stream_id="c", queue=asyncio.Queue(), project_events=True)
+        hub._by_session = {
+            "s1": [project_client, session_only_client],
+            "s2": [other_project_client],
+        }
+
+        await hub._on_relay(
+            {
+                "event": "chat_service",
+                "session_id": PROJECT_BROADCAST_ROOM,
+                "data": {
+                    "type": "demo.snapshot",
+                    "service": {"tenant": "t", "project": "p"},
+                    "data": {"value": 1},
+                },
+            }
+        )
+
+        assert project_client.queue.qsize() == 1
+        assert session_only_client.queue.qsize() == 0
+        assert other_project_client.queue.qsize() == 0
 
     @pytest.mark.anyio
     async def test_delta_event_has_running_status(self):

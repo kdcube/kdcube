@@ -28,6 +28,8 @@ from kdcube_ai_app.apps.chat.sdk.util import ensure_event_markdown
 from kdcube_ai_app.infra.orchestration.app.communicator import ServiceCommunicator
 
 logger = logging.getLogger(__name__)
+
+PROJECT_BROADCAST_ROOM = "__project__"
 _MISSING = object()
 
 # map protocol type → client socket event
@@ -191,6 +193,7 @@ class ChatRelayCommunicator:
         self._callbacks: Set[Callable[[dict], Awaitable[None]]] = set()
         self._session_refcounts: Dict[str, int] = {}
         self._session_meta: Dict[str, Tuple[str, str]] = {}
+        self._project_refcounts: Dict[Tuple[str, str], int] = {}
         self._listener_started = False
         self._sub_lock = asyncio.Lock()
 
@@ -206,6 +209,9 @@ class ChatRelayCommunicator:
     def _session_channel(self, session_id: str, tenant: str | None = None, project: str | None = None) -> str:
         base = self._base_channel(tenant, project)
         return f"{base}.{session_id}"
+
+    def _project_channel(self, tenant: str | None = None, project: str | None = None) -> str:
+        return f"{self._base_channel(tenant, project)}.{PROJECT_BROADCAST_ROOM}"
 
     def _derive_session_id(self, env: ChatEnvelope, explicit: str | None) -> str | None:
         if explicit:
@@ -237,6 +243,22 @@ class ChatRelayCommunicator:
     async def emit_envelope(self, env: ChatEnvelope, *, target_sid: Optional[str] = None, session_id: Optional[str] = None):
         """Low-level: publish a prebuilt envelope."""
         await self._pub(env, target_sid=target_sid, session_id=session_id)
+
+    async def emit_project(
+            self,
+            *,
+            event: str,
+            data: dict,
+            tenant: str,
+            project: str,
+    ) -> None:
+        await self._comm.pub(
+            event=event,
+            data=data,
+            target_sid=None,
+            session_id=PROJECT_BROADCAST_ROOM,
+            channel=self._project_channel(tenant=tenant, project=project),
+        )
 
     async def emit_start(self, service: ServiceCtx, conv: ConversationCtx, *, message: str, queue_stats: Dict[str, Any] | None = None, target_sid: Optional[str] = None, session_id: Optional[str] = None):
         await self._pub(ChatEnvelope.start(service, conv, message=message, queue_stats=queue_stats), target_sid=target_sid, session_id=session_id)
@@ -378,6 +400,27 @@ class ChatRelayCommunicator:
             else:
                 self._session_refcounts[session_id] = count - 1
 
+    async def acquire_project_channel(self, tenant: str, project: str, *, callback=None):
+        key = (tenant or "-", project or "-")
+        async with self._sub_lock:
+            if callback:
+                self.add_listener(callback)
+            count = self._project_refcounts.get(key, 0)
+            if count == 0:
+                await self._comm.subscribe_add(self._project_channel(tenant=tenant, project=project))
+            self._project_refcounts[key] = count + 1
+            await self._ensure_listener()
+
+    async def release_project_channel(self, tenant: str, project: str):
+        key = (tenant or "-", project or "-")
+        async with self._sub_lock:
+            count = self._project_refcounts.get(key, 0)
+            if count <= 1:
+                self._project_refcounts.pop(key, None)
+                await self._comm.unsubscribe_some(self._project_channel(tenant=tenant, project=project))
+            else:
+                self._project_refcounts[key] = count - 1
+
     async def reconcile_sessions(
             self,
             session_counts: Dict[str, Tuple[str, str, int]],
@@ -411,6 +454,35 @@ class ChatRelayCommunicator:
         logger.info(
             "[ChatRelayCommunicator] reconciled sessions reason=%s desired=%s current=%s",
             reason, len(session_counts), len(self._session_refcounts),
+        )
+
+    async def reconcile_project_channels(
+            self,
+            project_counts: Dict[Tuple[str, str], int],
+            *,
+            reason: str = "manual",
+    ):
+        """
+        Rebuild project relay subscriptions/refcounts from SSE hub state.
+        project_counts: {(tenant, project): count}
+        """
+        async with self._sub_lock:
+            desired = set(project_counts.keys())
+            for (tenant, project), count in project_counts.items():
+                key = (tenant or "-", project or "-")
+                self._project_refcounts[key] = max(int(count), 1)
+                await self._comm.subscribe_add(self._project_channel(tenant=tenant, project=project))
+
+            stale = [key for key in list(self._project_refcounts.keys()) if key not in desired]
+            for tenant, project in stale:
+                await self._comm.unsubscribe_some(self._project_channel(tenant=tenant, project=project))
+                self._project_refcounts.pop((tenant, project), None)
+
+        if project_counts:
+            await self._ensure_listener()
+        logger.info(
+            "[ChatRelayCommunicator] reconciled project channels reason=%s desired=%s current=%s",
+            reason, len(project_counts), len(self._project_refcounts),
         )
 
     async def subscribe(self, callback):
@@ -1331,6 +1403,56 @@ class ChatCommunicator:
             event="chat_service",   # actual Socket.IO / pubsub event name
             data=env,
             broadcast=broadcast,
+        )
+
+    async def project_event(
+            self,
+            *,
+            type: str,
+            step: str,
+            status: str,
+            title: str | None = None,
+            data: dict | None = None,
+            agent: str | None = None,
+            markdown: str | None = None,
+            auto_markdown: bool = True,
+    ) -> None:
+        """
+        Emit a service-level event to subscribers of the current tenant/project
+        SSE project topic. This is distinct from ``broadcast=True`` on
+        ``service_event``: that flag fans out only within the current user
+        session, while project events target clients that explicitly subscribed
+        to tenant/project events.
+        """
+        env = self._base_env(type)
+        env["conversation"]["session_id"] = PROJECT_BROADCAST_ROOM
+        env["event"].update({
+            "agent": agent,
+            "title": title,
+            "status": status,
+            "step": step,
+        })
+        env["data"] = data or {}
+
+        if markdown:
+            env["event"]["markdown"] = markdown
+        elif auto_markdown:
+            try:
+                ensure_event_markdown(env)
+            except Exception:
+                import traceback
+                print(traceback.format_exc())
+
+        env["route"] = "chat_service"
+        emit_project = getattr(self.emitter, "emit_project", None)
+        if emit_project is None:
+            await self.emit("chat_service", env, broadcast=True)
+            return
+        await emit_project(
+            event="chat_service",
+            data=env,
+            tenant=self.tenant,
+            project=self.project,
         )
 
     def _export_comm_spec_for_runtime(self) -> dict:

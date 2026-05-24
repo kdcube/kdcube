@@ -19,36 +19,53 @@ STATS_COMM_EVENT_TYPES = [
     "accounting.usage",
     "chat.complete",
     "chat.error",
+    "chat.conversation.accepted",
     "chat.conversation.turn.completed",
     "kdcube.copilot.workflow.turn.started",
     "kdcube.copilot.workflow.turn.completed",
     "kdcube.copilot.workflow.turn.failed",
     "kdcube.copilot.mcp.call",
+    "queue.continuation.accepted",
     "react.tool.call",
     "react.skill.read",
+    "timeline.external.accepted",
 ]
 
 STATS_COMM_DATA_KEYS = [
     "agent_costs",
+    "attachment_count",
+    "attachments_count",
     "breakdown",
+    "chat_input_kind",
+    "chars",
     "cost_total_usd",
+    "citation_count",
+    "citations_count",
     "duration_ms",
     "error_code",
     "error_count",
     "exception_type",
+    "file_count",
+    "input_kind",
     "input_tokens",
     "latency_ms",
+    "mcp_address",
+    "mcp_endpoint",
     "mcp_name",
+    "message_len",
+    "message_kind",
     "missing",
     "missing_count",
-    "model",
+    "model_or_service",
     "output_tokens",
+    "produced_file_count",
     "provider",
     "query_len",
     "requested_count",
+    "reported_values",
     "resolved_count",
     "result_count",
-    "service",
+    "service_type",
     "skills",
     "tool",
     "tool_call_id",
@@ -237,6 +254,12 @@ def recorded_comm_item_to_telemetry(
     if typ == "accounting.usage":
         return [_accounting_event(item, ctx)]
     if typ in {
+        "chat.conversation.accepted",
+        "queue.continuation.accepted",
+        "timeline.external.accepted",
+    }:
+        return [_chat_message_event(item, ctx)]
+    if typ in {
         "kdcube.copilot.workflow.turn.started",
         "kdcube.copilot.workflow.turn.completed",
         "kdcube.copilot.workflow.turn.failed",
@@ -247,6 +270,31 @@ def recorded_comm_item_to_telemetry(
     if typ == "chat.error" or _status(item) in {"error", "failed"}:
         return [_error_event(item, ctx)]
     return [_comm_event(item, ctx)]
+
+
+def _chat_message_event(item: Mapping[str, Any], ctx: Mapping[str, str]) -> Dict[str, Any]:
+    data = _mapping(item.get("data"))
+    ev = _mapping(item.get("event"))
+    typ = _safe(item.get("type"), max_len=128)
+    input_kind = _chat_input_kind(data, typ)
+    metrics = _metrics(data)
+    status = _status(item)
+    return _base_event(
+        item,
+        ctx,
+        name="chat.message",
+        dimensions={
+            "role": "user",
+            "input_kind": input_kind,
+            "type": typ,
+            "status": status,
+            "agent": _safe(ev.get("agent") or "user", max_len=128),
+            "step": _safe(ev.get("step") or "chat.user.message", max_len=128),
+            "source_bundle": ctx["source_bundle"],
+        },
+        metrics=metrics,
+        status=status,
+    )
 
 
 def _tool_event(item: Mapping[str, Any], ctx: Mapping[str, str]) -> Dict[str, Any]:
@@ -317,22 +365,23 @@ def _skill_events(item: Mapping[str, Any], ctx: Mapping[str, str]) -> List[Dict[
 
 def _mcp_event(item: Mapping[str, Any], ctx: Mapping[str, str]) -> Dict[str, Any]:
     data = _mapping(item.get("data"))
-    server = _safe(data.get("mcp_name") or data.get("server") or "kdcube.copilot", max_len=160)
-    tool = _safe(data.get("tool") or "unknown", max_len=160)
+    endpoint = _safe(data.get("mcp_endpoint") or data.get("tool") or "unknown", max_len=160)
+    address = _safe(data.get("mcp_address") or data.get("mcp_name"), max_len=180)
     status = _status(item)
     return _base_event(
         item,
         ctx,
         name="mcp.call",
         dimensions={
-            "server": server,
-            "tool": tool,
+            "mcp_address": address,
+            "mcp_endpoint": endpoint,
             "status": status,
             "source_bundle": ctx["source_bundle"],
         },
         metrics=_metrics(data, include_latency=True),
         status=status,
         error_kind=_error_kind(data, status, default_kind="mcp_error"),
+        data={"reported_values": _reported_values(data.get("reported_values"))},
     )
 
 
@@ -343,14 +392,27 @@ def _accounting_event(item: Mapping[str, Any], ctx: Mapping[str, str]) -> Dict[s
     metrics = _metrics(data)
     if "cost_total_usd" in data:
         metrics["cost_total_usd"] = _number(data.get("cost_total_usd"))
+    conversation = _mapping(item.get("conversation"))
+    stable_identity = {
+        "tenant": ctx.get("tenant") or "",
+        "project": ctx.get("project") or "",
+        "source_bundle": ctx.get("source_bundle") or "",
+        "user_id": ctx.get("user_id") or "",
+        "session_id": _safe(conversation.get("session_id"), max_len=160),
+        "conversation_id": _safe(conversation.get("conversation_id"), max_len=160),
+        "turn_id": _safe(conversation.get("turn_id"), max_len=160),
+        "breakdown": breakdown,
+        "cost_total_usd": metrics.get("cost_total_usd"),
+    }
     return _base_event(
         item,
         ctx,
         name="accounting.usage",
+        stable_identity=stable_identity,
         dimensions={
-            "service": _safe(first.get("service") or data.get("service"), max_len=80),
+            "service_type": _safe(first.get("service_type") or data.get("service_type"), max_len=80),
             "provider": _safe(first.get("provider") or data.get("provider"), max_len=128),
-            "model": _safe(first.get("model") or data.get("model"), max_len=160),
+            "model_or_service": _safe(first.get("model_or_service") or data.get("model_or_service"), max_len=160),
             "agent": _safe(first.get("agent"), max_len=128),
             "source_bundle": ctx["source_bundle"],
         },
@@ -433,11 +495,12 @@ def _base_event(
     metrics: Mapping[str, Any],
     status: str,
     suffix: str = "",
+    stable_identity: Optional[Mapping[str, Any]] = None,
     error_kind: str = "",
     data: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     conversation = _mapping(item.get("conversation"))
-    event_id = _event_id(item, name=name, suffix=suffix)
+    event_id = _event_id(item, name=name, suffix=suffix, stable_identity=stable_identity)
     timestamp = _record_timestamp(item)
     return {
         "schema": STATS_SCHEMA,
@@ -517,7 +580,22 @@ def _bundle_from_scopes(item: Mapping[str, Any]) -> str:
     return ""
 
 
-def _event_id(item: Mapping[str, Any], *, name: str, suffix: str = "") -> str:
+def _event_id(
+    item: Mapping[str, Any],
+    *,
+    name: str,
+    suffix: str = "",
+    stable_identity: Optional[Mapping[str, Any]] = None,
+) -> str:
+    if stable_identity is not None:
+        seed = {
+            "name": name,
+            "suffix": suffix,
+            "identity": stable_identity,
+        }
+        digest = hashlib.sha256(json.dumps(seed, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+        return f"comm_{digest[:32]}"
+
     record_id = _safe(item.get("record_id"), max_len=200)
     seed = {
         "record_id": record_id,
@@ -552,8 +630,19 @@ def _metrics(data: Mapping[str, Any], *, include_latency: bool = False) -> Dict[
         latency = data.get("latency_ms", data.get("duration_ms"))
         if latency is not None:
             metrics["latency_ms"] = _number(latency)
+    if "message_len" not in data and "chars" in data:
+        metrics["message_len"] = _number(data.get("chars"))
+    aliases = {
+        "attachments_count": "attachment_count",
+        "file_count": "produced_file_count",
+        "citations_count": "citation_count",
+    }
+    for source_key, target_key in aliases.items():
+        if target_key not in data and source_key in data:
+            metrics[target_key] = _number(data.get(source_key))
     for key in (
         "active_seconds",
+        "attachment_count",
         "bytes",
         "cache_1h_write_tokens",
         "cache_5m_write_tokens",
@@ -561,15 +650,39 @@ def _metrics(data: Mapping[str, Any], *, include_latency: bool = False) -> Dict[
         "cache_read_tokens",
         "cache_write_tokens",
         "cost_total_usd",
+        "citation_count",
         "input_tokens",
         "message_len",
         "output_tokens",
+        "produced_file_count",
         "read_ms",
         "thinking_tokens",
     ):
         if key in data:
             metrics[key] = _number(data.get(key))
     return metrics
+
+
+def _chat_input_kind(data: Mapping[str, Any], typ: str) -> str:
+    raw = (
+        data.get("input_kind")
+        or data.get("chat_input_kind")
+        or data.get("message_kind")
+        or data.get("continuation_kind")
+        or ""
+    )
+    text = str(raw or "").strip().lower()
+    if typ == "chat.conversation.accepted" and not text:
+        return "message"
+    if text in {"", "regular", "user", "prompt"}:
+        return "message"
+    if text in {"message", "followup", "steer"}:
+        return text
+    if "followup" in text:
+        return "followup"
+    if "steer" in text:
+        return "steer"
+    return "message"
 
 
 def _accounting_breakdown(value: Any) -> List[Dict[str, Any]]:
@@ -585,26 +698,55 @@ def _accounting_breakdown(value: Any) -> List[Dict[str, Any]]:
         if not isinstance(item, Mapping):
             continue
         line: Dict[str, Any] = {}
-        for key in ("service", "provider", "model", "agent"):
+        for key in ("service_type", "provider", "model_or_service", "agent", "tier"):
             text = _safe(item.get(key), max_len=160)
             if text:
                 line[key] = text
+        if "service_type" not in line:
+            text = _safe(item.get("service"), max_len=160)
+            if text:
+                line["service_type"] = text
+        if "model_or_service" not in line:
+            text = _safe(item.get("model"), max_len=160)
+            if text:
+                line["model_or_service"] = text
         for key in (
             "input_tokens",
             "output_tokens",
+            "tokens",
+            "embedding_tokens",
             "cache_creation_tokens",
             "cache_write_tokens",
             "cache_5m_write_tokens",
             "cache_1h_write_tokens",
             "cache_read_tokens",
             "thinking_tokens",
+            "search_queries",
+            "search_results",
+            "cost_per_1k_requests",
             "cost_usd",
             "cost_total_usd",
         ):
             if key in item:
                 line[key] = _number(item.get(key))
+        if line.get("service_type") == "embedding" and "embedding_tokens" not in line and "tokens" in line:
+            line["embedding_tokens"] = line["tokens"]
         if line:
             out.append(line)
+    return out
+
+
+def _reported_values(value: Any) -> List[Dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    out: List[Dict[str, str]] = []
+    for item in value[:8]:
+        if not isinstance(item, Mapping):
+            continue
+        concept = _safe(item.get("concept"), max_len=80)
+        reported_value = _safe(item.get("value"), max_len=500)
+        if concept and reported_value:
+            out.append({"concept": concept, "value": reported_value})
     return out
 
 

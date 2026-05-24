@@ -192,9 +192,9 @@ def _record_data_for_type(envelope_type: str, data_payload: dict[str, Any], priv
             "breakdown",
             "cost_total_usd",
             "agent_costs",
-            "service",
+            "service_type",
             "provider",
-            "model",
+            "model_or_service",
         }
         return ({k: json_safe(v) for k, v in data_payload.items() if k in allowed}, False)
 

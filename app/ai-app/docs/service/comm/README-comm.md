@@ -22,6 +22,8 @@ This README is the entry point for **communication integrations**:
 - **Auth/session handling**: token sources, anonymous vs registered, role-based policy
 - **Attachments**: REST/SSE multipart and Socket.IO binary frames
 - **Internal relay**: Redis Pub/Sub fan-out (`ServiceCommunicator` + `ChatRelayCommunicator`)
+- **Tenant/project SSE events**: opt-in project-scoped service updates for
+  compact cross-session UI refreshes
 - **Comm recording and event sinks**: optional recording of selected comm
   envelopes and bounded batch dispatch to telemetry or other configured sinks
 
@@ -47,6 +49,9 @@ If you are implementing a UI, API client, or a new transport, start here.
   - `stream_id` (client-provided unique id)
   - `user_session_id` (optional; reuse an existing session)
   - `bearer_token`, `id_token` (optional; can upgrade anonymous)
+  - `tenant`, `project` (optional tenant/project override)
+  - `project_events=true` (optional subscription to tenant/project-level
+    service events)
 
 **Send**
 - Endpoint: `/sse/chat`
@@ -145,7 +150,9 @@ The gateway/auth adapters accept tokens from multiple sources, so clients can ch
 
 ## 5) Internal relay (Redis)
 
-All transports subscribe to the same internal event bus via **session-scoped** Redis channels.
+All transports subscribe to the same internal event bus. Normal chat and
+operation replies use **session-scoped** Redis channels. SSE clients may also
+opt into a separate tenant/project channel for compact project-level updates.
 
 ### Components
 - **Service relay**: `ServiceCommunicator` (low-level Pub/Sub)
@@ -155,6 +162,9 @@ All transports subscribe to the same internal event bus via **session-scoped** R
 ### Why this matters
 - Per-session Redis channels prevent every server from receiving all events.
 - The relay subscribes only when at least one active connection for that session exists.
+- Tenant/project channels are opt-in and are intended for compact, debounced
+  service updates such as dashboard snapshots. They are not raw telemetry or
+  log streams.
 - The same producer-facing `ChatCommunicator` path can optionally record
   selected, privacy-filtered envelopes and dispatch bounded batches to telemetry
   or other configured sinks.
@@ -221,7 +231,8 @@ For the client-facing contract and examples, see:
 | `comm.step(...)` | progress/status event | no | not exposed by the helper |
 | `comm.delta(...)` | stream chunk | yes | not exposed by the helper |
 | `comm.event(...)` | custom typed event | no | yes |
-| `comm.service_event(...)` | service-level event | no | yes |
+| `comm.service_event(...)` | service-level event | no | yes, session-scoped |
+| `comm.project_event(...)` | tenant/project service event over SSE opt-in channel | no | project-scoped |
 | `comm.emit(...)` | low-level socket route control | N/A | yes |
 
 Rule of thumb:
@@ -229,6 +240,9 @@ Rule of thumb:
 - if you are asking “which marker should I use?”, you almost certainly want `comm.delta(...)`
 - if you are asking “should this be broadcast?”, you probably want `comm.event(...)`,
   `comm.service_event(...)`, or the low-level `comm.emit(...)`
+- if you need all connected SSE clients for the same tenant/project to receive
+  a compact update, use `comm.project_event(...)` and require clients to open
+  `/sse/stream` with `project_events=true`
 
 ---
 

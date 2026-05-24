@@ -279,7 +279,7 @@ Deployment-scoped non-secret config:
 
 Bundle-scoped deployment secrets:
 
-- `get_secret("b:some.dot.path")`
+- `await get_secret("b:some.dot.path")`
 
 User-scoped non-secret bundle props:
 
@@ -289,7 +289,7 @@ User-scoped non-secret bundle props:
 User-scoped secrets:
 
 - `await get_secret("u:some.key")`
-- `set_user_secret("some.key", value)`
+- `await set_user_secret("some.key", value)`
 
 Shared bundle storage:
 

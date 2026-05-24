@@ -690,6 +690,18 @@ header; unauthenticated sends fail before the HTTP request.
 
 Unknown selected comm records become `comm.event`.
 
+For `mcp.call`, keep the exposed MCP server identity and the API called inside
+that server separate:
+
+- `mcp_address`: stable bundle/MCP route or server identity
+- `mcp_endpoint`: API/tool name called inside that MCP server
+
+If an MCP server intentionally wants to surface a bounded value, such as a
+search query label, it may include `reported_values=[{"concept": "...",
+"value": "..."}]`. The stats adapter truncates this list and forwards it as
+explicit metadata. It must not be used to copy raw prompts, answers, or tool
+arguments by default.
+
 ## Tests
 
 Focused coverage lives in

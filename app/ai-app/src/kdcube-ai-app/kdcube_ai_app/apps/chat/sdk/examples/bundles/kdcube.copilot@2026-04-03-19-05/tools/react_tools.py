@@ -17,7 +17,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import pathlib
 import time
@@ -124,7 +123,7 @@ def build_doc_reader_mcp_app(
     *,
     name: str,
     storage_root_provider: Callable[[], str | pathlib.Path | None] | None = None,
-    refresh_knowledge_space: Callable[[], None] | None = None,
+    refresh_knowledge_space: Callable[[], Any] | None = None,
     on_tool_call: Callable[..., Any] | None = None,
 ):
     try:
@@ -134,10 +133,14 @@ def build_doc_reader_mcp_app(
 
     mcp = FastMCP(name, stateless_http=True)
 
-    def _prepare() -> pathlib.Path | None:
+    async def _prepare() -> pathlib.Path | None:
         if refresh_knowledge_space is not None:
-            refresh_knowledge_space()
+            result = refresh_knowledge_space()
+            if inspect.isawaitable(result):
+                await result
         storage_root = storage_root_provider() if storage_root_provider is not None else None
+        if inspect.isawaitable(storage_root):
+            storage_root = await storage_root
         return ensure_knowledge_root(storage_root=storage_root)
 
     async def _notify_tool_call(
@@ -178,7 +181,7 @@ def build_doc_reader_mcp_app(
     ) -> list[dict]:
         started_at = time.perf_counter()
         try:
-            await asyncio.to_thread(_prepare)
+            await _prepare()
             result = await search_knowledge_docs(
                 query=query,
                 root=root,
@@ -190,7 +193,9 @@ def build_doc_reader_mcp_app(
                 status="completed",
                 started_at=started_at,
                 data={
+                    "mcp_endpoint": "search_knowledge",
                     "query_len": len(str(query or "")),
+                    "reported_values": [{"concept": "search query", "value": str(query or "")}],
                     "root": root,
                     "top_k": top_k,
                     "result_count": len(result or []),
@@ -202,7 +207,13 @@ def build_doc_reader_mcp_app(
                 tool="search_knowledge",
                 status="error",
                 started_at=started_at,
-                data={"query_len": len(str(query or "")), "root": root, "error": str(exc)[:300]},
+                data={
+                    "mcp_endpoint": "search_knowledge",
+                    "query_len": len(str(query or "")),
+                    "reported_values": [{"concept": "search query", "value": str(query or "")}],
+                    "root": root,
+                    "error": str(exc)[:300],
+                },
             )
             raise
 
@@ -216,13 +227,14 @@ def build_doc_reader_mcp_app(
     async def _read_knowledge(path: str) -> dict:
         started_at = time.perf_counter()
         try:
-            await asyncio.to_thread(_prepare)
+            await _prepare()
             result = await read_knowledge_doc(path=path)
             await _notify_tool_call(
                 tool="read_knowledge",
                 status="completed",
                 started_at=started_at,
                 data={
+                    "mcp_endpoint": "read_knowledge",
                     "path": str(path or "")[:300],
                     "missing": bool((result or {}).get("missing")),
                 },
@@ -233,7 +245,7 @@ def build_doc_reader_mcp_app(
                 tool="read_knowledge",
                 status="error",
                 started_at=started_at,
-                data={"path": str(path or "")[:300], "error": str(exc)[:300]},
+                data={"mcp_endpoint": "read_knowledge", "path": str(path or "")[:300], "error": str(exc)[:300]},
             )
             raise
 

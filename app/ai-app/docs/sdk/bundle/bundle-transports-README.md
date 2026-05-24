@@ -538,7 +538,7 @@ This path is separate from `@api(...)` and `@mcp(...)`.
 
 | Surface | Owned by | Transport | Target |
 | --- | --- | --- | --- |
-| communicator output | bundle runtime | SSE / Socket.IO through proc | active browser peer or session listeners |
+| communicator output | bundle runtime | SSE / Socket.IO through proc | active browser peer, session listeners, or opt-in tenant/project SSE listeners |
 | widget/browser callback | widget or hosted UI code | HTTP REST to `/api/integrations/*` | proc bundle operations |
 | static asset delivery | platform static handler | HTTP | platform UI / browser client |
 
@@ -565,6 +565,12 @@ pass the connected peer id through the configured stream-id header so
 `comm.service_event(...)` can reply to that exact peer or broadcast to the
 current session. See the concrete recipe in
 [Bundle Client Communication](bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream).
+
+For tenant/project-level widget refreshes, SSE clients opt in with
+`project_events=true`, and bundle code emits `comm.project_event(...)`. Keep
+those payloads compact and already safe for all viewers in the tenant/project.
+The detailed recipe is in
+[Bundle Client Communication](bundle-client-communication-README.md#tenantproject-sse-broadcast).
 
 ### 7.2 Who owns outbound auth
 
