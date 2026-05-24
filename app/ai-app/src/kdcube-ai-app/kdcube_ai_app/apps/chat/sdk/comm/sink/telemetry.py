@@ -19,32 +19,46 @@ STATS_COMM_EVENT_TYPES = [
     "accounting.usage",
     "chat.complete",
     "chat.error",
+    "chat.conversation.accepted",
     "chat.conversation.turn.completed",
     "kdcube.copilot.workflow.turn.started",
     "kdcube.copilot.workflow.turn.completed",
     "kdcube.copilot.workflow.turn.failed",
     "kdcube.copilot.mcp.call",
+    "queue.continuation.accepted",
     "react.tool.call",
     "react.skill.read",
+    "timeline.external.accepted",
 ]
 
 STATS_COMM_DATA_KEYS = [
     "agent_costs",
+    "attachment_count",
+    "attachments_count",
     "breakdown",
+    "chat_input_kind",
+    "chars",
     "cost_total_usd",
+    "citation_count",
+    "citations_count",
     "duration_ms",
     "error_code",
     "error_count",
     "exception_type",
+    "file_count",
+    "input_kind",
     "input_tokens",
     "latency_ms",
     "mcp_address",
     "mcp_endpoint",
     "mcp_name",
+    "message_len",
+    "message_kind",
     "missing",
     "missing_count",
     "model_or_service",
     "output_tokens",
+    "produced_file_count",
     "provider",
     "query_len",
     "requested_count",
@@ -240,6 +254,12 @@ def recorded_comm_item_to_telemetry(
     if typ == "accounting.usage":
         return [_accounting_event(item, ctx)]
     if typ in {
+        "chat.conversation.accepted",
+        "queue.continuation.accepted",
+        "timeline.external.accepted",
+    }:
+        return [_chat_message_event(item, ctx)]
+    if typ in {
         "kdcube.copilot.workflow.turn.started",
         "kdcube.copilot.workflow.turn.completed",
         "kdcube.copilot.workflow.turn.failed",
@@ -250,6 +270,31 @@ def recorded_comm_item_to_telemetry(
     if typ == "chat.error" or _status(item) in {"error", "failed"}:
         return [_error_event(item, ctx)]
     return [_comm_event(item, ctx)]
+
+
+def _chat_message_event(item: Mapping[str, Any], ctx: Mapping[str, str]) -> Dict[str, Any]:
+    data = _mapping(item.get("data"))
+    ev = _mapping(item.get("event"))
+    typ = _safe(item.get("type"), max_len=128)
+    input_kind = _chat_input_kind(data, typ)
+    metrics = _metrics(data)
+    status = _status(item)
+    return _base_event(
+        item,
+        ctx,
+        name="chat.message",
+        dimensions={
+            "role": "user",
+            "input_kind": input_kind,
+            "type": typ,
+            "status": status,
+            "agent": _safe(ev.get("agent") or "user", max_len=128),
+            "step": _safe(ev.get("step") or "chat.user.message", max_len=128),
+            "source_bundle": ctx["source_bundle"],
+        },
+        metrics=metrics,
+        status=status,
+    )
 
 
 def _tool_event(item: Mapping[str, Any], ctx: Mapping[str, str]) -> Dict[str, Any]:
@@ -585,8 +630,19 @@ def _metrics(data: Mapping[str, Any], *, include_latency: bool = False) -> Dict[
         latency = data.get("latency_ms", data.get("duration_ms"))
         if latency is not None:
             metrics["latency_ms"] = _number(latency)
+    if "message_len" not in data and "chars" in data:
+        metrics["message_len"] = _number(data.get("chars"))
+    aliases = {
+        "attachments_count": "attachment_count",
+        "file_count": "produced_file_count",
+        "citations_count": "citation_count",
+    }
+    for source_key, target_key in aliases.items():
+        if target_key not in data and source_key in data:
+            metrics[target_key] = _number(data.get(source_key))
     for key in (
         "active_seconds",
+        "attachment_count",
         "bytes",
         "cache_1h_write_tokens",
         "cache_5m_write_tokens",
@@ -594,15 +650,39 @@ def _metrics(data: Mapping[str, Any], *, include_latency: bool = False) -> Dict[
         "cache_read_tokens",
         "cache_write_tokens",
         "cost_total_usd",
+        "citation_count",
         "input_tokens",
         "message_len",
         "output_tokens",
+        "produced_file_count",
         "read_ms",
         "thinking_tokens",
     ):
         if key in data:
             metrics[key] = _number(data.get(key))
     return metrics
+
+
+def _chat_input_kind(data: Mapping[str, Any], typ: str) -> str:
+    raw = (
+        data.get("input_kind")
+        or data.get("chat_input_kind")
+        or data.get("message_kind")
+        or data.get("continuation_kind")
+        or ""
+    )
+    text = str(raw or "").strip().lower()
+    if typ == "chat.conversation.accepted" and not text:
+        return "message"
+    if text in {"", "regular", "user", "prompt"}:
+        return "message"
+    if text in {"message", "followup", "steer"}:
+        return text
+    if "followup" in text:
+        return "followup"
+    if "steer" in text:
+        return "steer"
+    return "message"
 
 
 def _accounting_breakdown(value: Any) -> List[Dict[str, Any]]:

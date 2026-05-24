@@ -146,6 +146,62 @@ async def test_copilot_mcp_call_maps_to_mcp_call() -> None:
 
 
 @pytest.mark.anyio
+async def test_chat_accept_maps_to_chat_message_without_text() -> None:
+    comm = _make_comm()
+    comm.record(STATS_COMM_EVENT_SELECTOR, mode="replace")
+
+    await comm.service_event(
+        type="chat.conversation.accepted",
+        step="chat.user.message",
+        status="completed",
+        agent="user",
+        data={
+            "text": "private user text must not be copied",
+            "input_kind": "regular",
+            "message_len": 36,
+            "attachment_count": 2,
+        },
+    )
+
+    events = recorded_comm_batch_to_telemetry(comm.export_recorded_events(), comm=comm)
+
+    assert len(events) == 1
+    event = events[0]
+    assert event["name"] == "chat.message"
+    assert event["dimensions"]["input_kind"] == "message"
+    assert event["dimensions"]["role"] == "user"
+    assert event["metrics"]["message_len"] == 36
+    assert event["metrics"]["attachment_count"] == 2
+    assert "private user text" not in str(event)
+
+
+@pytest.mark.anyio
+async def test_continuation_accept_maps_to_followup_chat_message() -> None:
+    comm = _make_comm()
+    comm.record(STATS_COMM_EVENT_SELECTOR, mode="replace")
+
+    await comm.service_event(
+        type="queue.continuation.accepted",
+        step="queue.continuation",
+        status="completed",
+        agent="ingress",
+        data={
+            "message_kind": "followup",
+            "message_len": 19,
+            "attachment_count": 1,
+        },
+    )
+
+    events = recorded_comm_batch_to_telemetry(comm.export_recorded_events(), comm=comm)
+
+    assert len(events) == 1
+    assert events[0]["name"] == "chat.message"
+    assert events[0]["dimensions"]["input_kind"] == "followup"
+    assert events[0]["metrics"]["message_len"] == 19
+    assert events[0]["metrics"]["attachment_count"] == 1
+
+
+@pytest.mark.anyio
 async def test_accounting_usage_preserves_breakdown_as_list() -> None:
     comm = _make_comm()
     comm.record(STATS_COMM_EVENT_SELECTOR, mode="replace")

@@ -839,6 +839,11 @@ async def process_chat_message(
                     )
                     if attachment_result is not None:
                         return attachment_result
+                    hosted_attachments = []
+                    try:
+                        hosted_attachments = list((payload.request.payload or {}).get("attachments") or []) if payload.request else []
+                    except Exception:
+                        hosted_attachments = []
                     env = await external_event_source.publish(
                         kind=continuation_kind,
                         explicit=continuation_explicit,
@@ -873,6 +878,9 @@ async def process_chat_message(
                                 agent="ingress",
                                 data={
                                     "message_kind": continuation_kind,
+                                    "input_kind": continuation_kind,
+                                    "message_len": len(text or ""),
+                                    "attachment_count": len(hosted_attachments),
                                     "active_turn_id": active_turn,
                                     "event_id": env.message_id,
                                     "event_sequence": env.sequence,
@@ -889,6 +897,9 @@ async def process_chat_message(
                                 agent="ingress",
                                 data={
                                     "message_kind": continuation_kind,
+                                    "input_kind": continuation_kind,
+                                    "message_len": len(text or ""),
+                                    "attachment_count": len(hosted_attachments),
                                     "active_turn_id": active_turn,
                                     "queued_turn_id": payload.routing.turn_id,
                                     "task_id": payload.meta.task_id,
@@ -931,6 +942,11 @@ async def process_chat_message(
                 )
                 if attachment_result is not None:
                     return attachment_result
+                hosted_attachments = []
+                try:
+                    hosted_attachments = list((payload.request.payload or {}).get("attachments") or []) if payload.request else []
+                except Exception:
+                    hosted_attachments = []
                 env = await continuation_source.publish(
                     payload,
                     kind=continuation_kind,
@@ -948,6 +964,9 @@ async def process_chat_message(
                         agent="ingress",
                         data={
                             "message_kind": continuation_kind,
+                            "input_kind": continuation_kind,
+                            "message_len": len(text or ""),
+                            "attachment_count": len(hosted_attachments),
                             "active_turn_id": active_turn,
                             "queued_turn_id": payload.routing.turn_id,
                             "task_id": payload.meta.task_id,
