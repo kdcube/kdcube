@@ -55,6 +55,9 @@ mismatched sessions are rejected (401/403).
 - Proxy service wiring: [custom-ui-managed compose](../../../deployment/docker/custom-ui-managed-infra/docker-compose.yaml)
 - The proxy service exchanges credentials and returns tokens; the UI stores
   access + refresh + id tokens and forwards them to the API.
+- The delegated web-proxy supports both the existing masquerade cookie flow and
+  a non-masquerade flow where the real auth and identity cookies are already
+  present on the request.
 
 ## Token transport (server-side)
 
@@ -88,6 +91,29 @@ Notes:
   in [ingress chat core](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/chat_core.py).
 - If cookies are present, they are treated as valid credentials (same as headers).
 
+## Delegated proxy cookie flows
+
+Delegated auth has two proxy-level request shapes:
+
+| Shape | Browser request contains | Proxy action |
+|---|---|---|
+| Masquerade cookie flow | proxylogin masquerade cookie only | call internal `/auth/unmask`, receive real token cookies, inject them into the upstream request |
+| Non-masquerade cookie flow | configured auth cookie and configured ID cookie | forward the request with those cookies unchanged |
+
+The current web-proxy templates include a commented future validation hook in
+the non-masquerade branch:
+
+```nginx
+# local validation = ngx.location.capture("/auth/validate", {
+#     method = ngx.HTTP_GET,
+# })
+```
+
+Leave this call disabled until proxylogin exposes the validation endpoint. The
+gateway/backend still validates the resulting JWTs through the configured auth
+provider; the future proxylogin validation hook is an extra proxy-side gate for
+non-masquerade browser cookie sessions.
+
 ## Configuration
 
 Common environment variables:
@@ -95,6 +121,16 @@ Common environment variables:
 - `AUTH_TOKEN_COOKIE_NAME` (default `__Secure-LATC`)
 - `ID_TOKEN_COOKIE_NAME` (default `__Secure-LITC`)
 - `IDP_DB_PATH` (SimpleIDP user token map)
+
+In descriptor-driven deployments these values come from `assembly.yaml`:
+
+```yaml
+auth:
+  id_token_header_name: "X-ID-Token"
+  auth_token_cookie_name: "__Secure-LATC"
+  id_token_cookie_name: "__Secure-LITC"
+  jwks_cache_ttl_seconds: 86400
+```
 
 ## Roles (current)
 

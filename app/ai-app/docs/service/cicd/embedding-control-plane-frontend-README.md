@@ -486,6 +486,30 @@ but it still must be tested with the deployed auth provider. Cross-site
 embedding should assume third-party-cookie restrictions unless the auth flow is
 designed to avoid them.
 
+For same-site subdomain embedding, a top-level login page can set the real auth
+and identity cookies on a shared parent domain, then the iframe can reuse those
+cookies without running a login flow inside the iframe:
+
+```text
+parent: https://app.example.com
+iframe: https://ai.app.example.com/platform/chat
+cookie Domain=.app.example.com; Path=/; Secure
+```
+
+The iframe must receive both configured non-masquerade cookies:
+
+| Descriptor field | Default cookie name | Meaning |
+|---|---|---|
+| `auth.auth_token_cookie_name` | `__Secure-LATC` | access/auth token |
+| `auth.id_token_cookie_name` | `__Secure-LITC` | identity token |
+
+The delegated web-proxy uses these descriptor-rendered names. If both cookies
+are present, it treats the request as a non-masquerade cookie request and does
+not call `/auth/unmask`. If either cookie is missing, it keeps using the
+existing proxylogin unmask flow. A proxylogin-side validation subrequest for the
+non-masquerade branch is present in the proxy templates as a commented hook and
+should be enabled only when proxylogin exposes that endpoint.
+
 CORS does not permit iframe embedding. CORS controls fetch/XHR. Frame embedding
 is controlled by `X-Frame-Options` and CSP `frame-ancestors`.
 

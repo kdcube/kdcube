@@ -62,6 +62,10 @@ These env vars are the direct runtime surface for assembly-backed settings.
 | `COGNITO_USER_POOL_ID` | `auth.cognito.user_pool_id` | `get_settings()` | CLI local compose, AWS deployment |
 | `COGNITO_APP_CLIENT_ID` | `auth.cognito.app_client_id` | `get_settings()` | CLI local compose, AWS deployment |
 | `COGNITO_SERVICE_CLIENT_ID` | `auth.cognito.service_client_id` | `get_settings()` | CLI local compose, AWS deployment |
+| `ID_TOKEN_HEADER_NAME` | `auth.id_token_header_name` | `get_settings()` | CLI local compose, AWS deployment |
+| `AUTH_TOKEN_COOKIE_NAME` | `auth.auth_token_cookie_name` | `get_settings()` / web-proxy env | CLI local compose, AWS deployment |
+| `ID_TOKEN_COOKIE_NAME` | `auth.id_token_cookie_name` | `get_settings()` / web-proxy env | CLI local compose, AWS deployment |
+| `JWKS_CACHE_TTL_SECONDS` | `auth.jwks_cache_ttl_seconds` | `get_settings()` | CLI local compose, AWS deployment |
 | `CHAT_APP_PORT` | `ports.ingress` | `get_settings()` | CLI local compose |
 | `CHAT_PROCESSOR_PORT` | `ports.proc` | `get_settings()` | CLI local compose |
 | `METRICS_PORT` | `ports.metrics` | `get_settings()` | CLI local compose |
@@ -111,6 +115,45 @@ They are consumed either:
 - by the installer/deployment layer
 - by runtime env rendering
 - or by direct `read_plain(...)` reads from `assembly.yaml`
+
+### `auth.*` token transport
+
+`auth.*` defines both the identity provider and the token transport names used
+by runtime services and the delegated web-proxy.
+
+Example:
+
+```yaml
+auth:
+  type: "delegated"             # simple | cognito | delegated
+  idp: "cognito"                # simple | cognito
+  id_token_header_name: "X-ID-Token"
+  auth_token_cookie_name: "__Secure-LATC"
+  id_token_cookie_name: "__Secure-LITC"
+  jwks_cache_ttl_seconds: 86400
+
+  cognito:
+    region: "eu-west-1"
+    user_pool_id: "eu-west-1_XXXXXXXXX"
+    app_client_id: ""
+    service_client_id: ""
+
+  proxy_login:
+    redis_key_prefix: "proxylogin:<TENANT>:<PROJECT>:"
+    token_masquerade: true
+    http_urlbase: "https://YOUR_DOMAIN/auth"
+```
+
+`auth_token_cookie_name` and `id_token_cookie_name` are not frontend-only
+settings. They are rendered into ingress/proc runtime env and into the
+delegated web-proxy. The proxy uses them to detect the non-masquerade path
+where a top-level login flow has already set the real auth and identity
+cookies. If either cookie is missing, the delegated proxy keeps using the
+existing `/auth/unmask` flow.
+
+`auth.proxy_login.token_masquerade` controls how proxylogin issues browser
+cookies. It does not change the backend token validator; ingress/proc still
+validate tokens using the configured auth provider.
 
 ### `auth.turnstile_development_token`
 

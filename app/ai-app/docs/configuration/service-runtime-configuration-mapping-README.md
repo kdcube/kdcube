@@ -66,6 +66,10 @@ per-descriptor pages. This section keeps only the cross-descriptor overview.
 | `COGNITO_USER_POOL_ID` | `auth.cognito.user_pool_id` | `assembly.yaml` | CLI local compose, AWS deployment |
 | `COGNITO_APP_CLIENT_ID` | `auth.cognito.app_client_id` | `assembly.yaml` | CLI local compose, AWS deployment |
 | `COGNITO_SERVICE_CLIENT_ID` | `auth.cognito.service_client_id` | `assembly.yaml` | CLI local compose, AWS deployment |
+| `ID_TOKEN_HEADER_NAME` | `auth.id_token_header_name` | `assembly.yaml` | CLI local compose, AWS deployment |
+| `AUTH_TOKEN_COOKIE_NAME` | `auth.auth_token_cookie_name` | `assembly.yaml` | CLI local compose, AWS deployment |
+| `ID_TOKEN_COOKIE_NAME` | `auth.id_token_cookie_name` | `assembly.yaml` | CLI local compose, AWS deployment |
+| `JWKS_CACHE_TTL_SECONDS` | `auth.jwks_cache_ttl_seconds` | `assembly.yaml` | CLI local compose, AWS deployment |
 | `CHAT_APP_PORT` | `ports.ingress` | `assembly.yaml` | CLI local compose |
 | `CHAT_PROCESSOR_PORT` | `ports.proc` | `assembly.yaml` | CLI local compose |
 | `METRICS_PORT` | `ports.metrics` | `assembly.yaml` | CLI local compose |
@@ -80,6 +84,9 @@ Notes:
   overrides
 - Kubernetes and AWS deployment do not use those fields as their public service
   exposure contract
+- in delegated auth deployments, `AUTH_TOKEN_COOKIE_NAME` and
+  `ID_TOKEN_COOKIE_NAME` are also passed to the web-proxy so it can distinguish
+  already-present real cookies from the proxylogin masquerade/unmask flow
 
 ### Secrets provider and secrets-file inputs
 

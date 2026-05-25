@@ -184,6 +184,9 @@ limit_req_status 429;
    NGINX_PROXY_RUNTIME_CONFIG_PATH=./config/nginx_proxy_ssl_delegated_auth.conf
    ```
 4. Provide `.env.proxylogin` with the required Cognito / auth configuration.
+5. If the deployment changes the auth or ID cookie names, set
+   `AUTH_TOKEN_COOKIE_NAME` and `ID_TOKEN_COOKIE_NAME` through `assembly.yaml`;
+   the CLI renders them into the web-proxy environment.
 
 Without step 3, OpenResty will fail to start because the SSL/delegated-auth config references `proxy_login` upstream which would not exist.
 

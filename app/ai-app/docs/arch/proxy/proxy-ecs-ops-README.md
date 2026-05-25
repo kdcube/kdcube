@@ -205,7 +205,7 @@ Register each ECS service with Cloud Map. Each service gets a DNS name like `web
 upstream web_ui      { server web-ui.kdcube.local:80; }
 upstream chat_api    { server chat-ingress.kdcube.local:8010; }
 upstream chat_proc   { server chat-proc.kdcube.local:8020; }
-upstream proxy_login { server proxylogin.kdcube.local:80; }
+upstream proxy_login { server proxylogin.kdcube.local:8080; }
 ```
 
 **Option B — ALB per service (simpler for fewer services)**
@@ -221,6 +221,11 @@ resolver_timeout 5s;
 ```
 
 Without this, OpenResty's Lua DNS lookups use the system resolver, which may not honour TTLs correctly and can cause stale upstream addresses after a `proxylogin` task replacement.
+
+In delegated auth deployments, the ECS task definition must pass
+`AUTH_TOKEN_COOKIE_NAME` and `ID_TOKEN_COOKIE_NAME` to web-proxy. These values
+come from `assembly.yaml` and let OpenResty distinguish already-present real
+token cookies from the proxylogin masquerade/unmask flow.
 
 ---
 

@@ -52,7 +52,7 @@ Short version of the difference:
 In both models, the deployment boundary is the same:
 
 - one `tenant/project` = one isolated environment
-- use separate `tenant/project` values for customer isolation or lifecycle
+- use separate `tenant/project` values for account isolation or lifecycle
   stages such as `dev`, `staging`, and `prod`
 - keep multiple bundles inside one `tenant/project` when they belong to the
   same environment
@@ -458,6 +458,9 @@ Fast-path requirements:
 - if `storage.workspace.type == git`, `storage.workspace.repo` is set
 - if `storage.claude_code_session.type == git`, `storage.claude_code_session.repo` is set
 - if `auth.type` is `cognito` or `delegated`, the required Cognito fields are set
+- token transport names from `auth.*` are rendered into ingress/proc env and,
+  for delegated auth, into the web-proxy env; defaults are used when descriptor
+  fields are omitted
 - if `frontend` is present and no `frontend.image` is set, the required
   `frontend.build.*` fields and `frontend.frontend_config` are set
 

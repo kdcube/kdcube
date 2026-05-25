@@ -2429,6 +2429,19 @@ def gather_configuration(
         descriptor_pool = _pick(cognito_descriptor, "user_pool_id")
         descriptor_app = _pick(cognito_descriptor, "app_client_id")
         descriptor_service = _pick(cognito_descriptor, "service_client_id")
+        id_token_header_name = _pick(auth_descriptor, "id_token_header_name") or "X-ID-Token"
+        auth_token_cookie_name = _pick(auth_descriptor, "auth_token_cookie_name") or "__Secure-LATC"
+        id_token_cookie_name = _pick(auth_descriptor, "id_token_cookie_name") or "__Secure-LITC"
+        jwks_cache_ttl = str(auth_descriptor.get("jwks_cache_ttl_seconds") or "86400")
+        for auth_env in (env_main, env_ingress, env_proc):
+            update_env_value(auth_env, "ID_TOKEN_HEADER_NAME", id_token_header_name)
+            update_env_value(auth_env, "AUTH_TOKEN_COOKIE_NAME", auth_token_cookie_name)
+            update_env_value(auth_env, "ID_TOKEN_COOKIE_NAME", id_token_cookie_name)
+            update_env_value(auth_env, "JWKS_CACHE_TTL_SECONDS", jwks_cache_ttl)
+        _set_nested(assembly_data, ["auth", "id_token_header_name"], id_token_header_name)
+        _set_nested(assembly_data, ["auth", "auth_token_cookie_name"], auth_token_cookie_name)
+        _set_nested(assembly_data, ["auth", "id_token_cookie_name"], id_token_cookie_name)
+        _set_nested(assembly_data, ["auth", "jwks_cache_ttl_seconds"], int(jwks_cache_ttl) if jwks_cache_ttl.isdigit() else jwks_cache_ttl)
         use_descriptor_auth = False
         if descriptor_region or descriptor_pool or descriptor_app or descriptor_service:
             use_descriptor_auth = ask_confirm(

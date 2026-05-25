@@ -383,6 +383,9 @@ services:
     restart: unless-stopped
     volumes:
       - ${NGINX_PROXY_RUNTIME_CONFIG_PATH:-${KDCUBE_CONFIG_DIR:-./config}/nginx_proxy.conf}:/usr/local/openresty/nginx/conf/nginx.conf:ro
+    environment:
+      AUTH_TOKEN_COOKIE_NAME: ${AUTH_TOKEN_COOKIE_NAME:-__Secure-LATC}
+      ID_TOKEN_COOKIE_NAME: ${ID_TOKEN_COOKIE_NAME:-__Secure-LITC}
     depends_on:
       chat-ingress:
         condition: service_started

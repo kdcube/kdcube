@@ -21,13 +21,13 @@ The proxy runs every inbound request through six phases in sequence:
 1. **SSL/TLS termination** — unwraps HTTPS, redirects HTTP → HTTPS, blocks direct IP access (returns `444`).
 2. **Security headers + compression** — injects `HSTS`, `X-Frame-Options`, `X-XSS-Protection`, `Referrer-Policy`; gzip on all text responses.
 3. **Rate limiting** — `limit_req` zones for chat, KB, upload, and auth routes.
-4. **Auth cookie unmask** — for every protected route, internally calls `proxylogin /v1/unmask`, extracts real session cookies, and injects them into the upstream request.
+4. **Auth cookie handling** — for protected routes, either accepts already-present real token cookies or internally calls `proxylogin /v1/unmask`, extracts real session cookies, and injects them into the upstream request.
 5. **Path-based routing** — dispatches to five upstream backends by URL prefix.
 6. **Protocol handling** — SSE (buffering off, 600 s timeout), WebSocket upgrade, SPA 404 fallback.
 
 ![proxy-full-pipeline.svg](proxy-full-pipeline.svg)
 
-Phase ordering matters: rate limiting (phase 3) runs *before* auth unmask (phase 4), so a DDoS burst is dropped before burning a `proxylogin` round-trip.
+Phase ordering matters: rate limiting (phase 3) runs *before* auth cookie handling (phase 4), so a DDoS burst is dropped before burning a `proxylogin` round-trip.
 
 ---
 
@@ -43,20 +43,35 @@ Phase ordering matters: rate limiting (phase 3) runs *before* auth unmask (phase
 
 ---
 
-## Auth unmask flow
+## Auth Cookie Flow
 
-For every protected location, OpenResty calls an internal subrequest before forwarding to the backend:
+For every protected location, OpenResty checks the request cookies before
+forwarding to the backend:
 
 ```
 client request
   → access_by_lua: unmask_token()
-      → internal GET /auth/unmask  →  proxylogin /v1/unmask
-      ← Set-Cookie: <real session cookies>
-  → inject cookies into upstream request
+      ├─ if configured auth + ID cookies already exist:
+      │    → forward cookies unchanged
+      │    → future: internal GET /auth/validate → proxylogin validation
+      └─ otherwise:
+           → internal GET /auth/unmask → proxylogin /v1/unmask
+           ← Set-Cookie: <real session cookies>
+           → inject cookies into upstream request
   → proxy_pass to backend
 ```
 
-The `unmask_token()` Lua function is defined once in `init_by_lua_block` and called in every protected `access_by_lua_block`. Unprotected routes (e.g. `/api/kb/`) skip this step — align them if KB routes should also be auth-gated.
+The `unmask_token()` Lua function is defined once in `init_by_lua_block` and
+called in every protected `access_by_lua_block`. The direct-cookie branch uses
+`AUTH_TOKEN_COOKIE_NAME` and `ID_TOKEN_COOKIE_NAME`, both rendered from
+`assembly.yaml` with defaults `__Secure-LATC` and `__Secure-LITC`.
+
+The direct-cookie branch currently contains a commented `/auth/validate`
+subrequest. Keep it commented until proxylogin implements that endpoint. Runtime
+services still validate the forwarded JWTs through the configured auth provider.
+
+Unprotected routes (e.g. `/api/kb/`) skip this step — align them if KB routes
+should also be auth-gated.
 
 ---
 
