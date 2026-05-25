@@ -182,7 +182,13 @@ class OAuthManager(AuthManager):
             self._jwks_cache_exp = now + ttl
             return keys
 
-    async def _jwt_verify(self, token: str, *, audience: Optional[str] = None) -> Dict[str, Any]:
+    async def _jwt_verify(
+        self,
+        token: str,
+        *,
+        audience: Optional[str] = None,
+        verify_audience: bool = False,
+    ) -> Dict[str, Any]:
         if not self.oauth_config.VERIFY_SIGNATURE:
             return jwt.decode(token, options={"verify_signature": False})
         jwks = await self.get_jwks_keys()
@@ -201,7 +207,7 @@ class OAuthManager(AuthManager):
             algorithms=["RS256"],
             audience=audience or self.oauth_config.OAUTH2_AUDIENCE,
             issuer=self.oauth_config.OAUTH2_ISSUER,
-            options={"verify_aud": False}
+            options={"verify_aud": verify_audience}
         )
 
     async def introspect_token(self, token: str) -> TokenIntrospectionResponse:
@@ -292,7 +298,11 @@ class OAuthManager(AuthManager):
         """
         ID tokens are JWTs meant for the client; validate signature/iss/aud.
         """
-        return await self._jwt_verify(id_token, audience=self.oauth_config.OAUTH2_AUDIENCE)
+        return await self._jwt_verify(
+            id_token,
+            audience=self.oauth_config.OAUTH2_AUDIENCE,
+            verify_audience=True,
+        )
 
     async def get_user_info(self, token: str) -> Dict[str, Any]:
         try:

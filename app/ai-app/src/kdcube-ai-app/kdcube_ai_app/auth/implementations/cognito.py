@@ -194,7 +194,23 @@ class CognitoAuthManager(OAuthManager):
 
     async def _verify_id_token(self, id_token: str) -> Dict[str, Any]:
         """Override to handle Cognito ID token specifics"""
-        return await self._jwt_verify(id_token, audience=self.oauth_config.OAUTH2_AUDIENCE)
+        payload = await self._jwt_verify(
+            id_token,
+            audience=self.oauth_config.OAUTH2_AUDIENCE,
+            verify_audience=True,
+        )
+        if payload.get("token_use") != "id":
+            raise AuthenticationError("Expected Cognito ID token")
+        return payload
+
+    async def _verify_access_token(self, token: str) -> Dict[str, Any]:
+        """Verify Cognito access token and enforce app-client binding."""
+        payload = await super()._verify_access_token(token)
+        if payload.get("token_use") != "access":
+            raise AuthenticationError("Expected Cognito access token")
+        if payload.get("client_id") != self.oauth_config.OAUTH2_AUDIENCE:
+            raise AuthenticationError("Cognito access token client_id mismatch")
+        return payload
 
     async def get_service_token(self) -> str:
         raise NotImplementedError("Service tokens are not issued by Cognito User Pools.")
