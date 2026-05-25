@@ -38,6 +38,7 @@ LINKEDIN_USERINFO_URL = "https://api.linkedin.com/v2/userinfo"
 LINKEDIN_UGC_POSTS_URL = "https://api.linkedin.com/v2/ugcPosts"
 LINKEDIN_ASSETS_URL = "https://api.linkedin.com/v2/assets"
 LINKEDIN_DOCUMENTS_URL = "https://api.linkedin.com/v2/documents"
+LINKEDIN_SOCIAL_ACTIONS_URL = "https://api.linkedin.com/v2/socialActions"
 
 LINKEDIN_IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".gif", ".webp"})
 # PDF upload requires LinkedIn Marketing API partner access (not available to standard apps).
@@ -789,3 +790,53 @@ async def create_linkedin_media_post(
     post_id = response.headers.get("x-restli-id") or response.headers.get("X-RestLi-Id") or ""
     body = _parse_json_object(raw) if raw.strip() else {}
     return {"post_id": post_id, **body}
+
+
+async def add_linkedin_comment(
+    *,
+    access_token: str,
+    person_id: str,
+    post_urn: str,
+    text: str,
+    reply_to_comment_urn: str = "",
+    asset_urn: str = "",
+) -> Dict[str, Any]:
+    """Post a comment on a LinkedIn share/ugcPost/activity.
+
+    asset_urn is optional — pass a urn:li:digitalmediaAsset: from register_image_upload
+    to attach an image. reply_to_comment_urn is a composite comment URN
+    (urn:li:comment:(urn:li:activity:...,commentId)) for nested replies.
+    """
+    import urllib.parse as _urlparse
+    url = f"{LINKEDIN_SOCIAL_ACTIONS_URL}/{_urlparse.quote(post_urn, safe='')}/comments"
+    payload: Dict[str, Any] = {
+        "actor": f"urn:li:person:{person_id}",
+        "message": {"text": text},
+        "object": post_urn,
+    }
+    if reply_to_comment_urn.strip():
+        payload["parentComment"] = reply_to_comment_urn.strip()
+    if asset_urn.strip():
+        payload["content"] = [{"entity": {"digitalmediaAsset": asset_urn.strip()}}]
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                url,
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "X-Restli-Protocol-Version": "2.0.0",
+                },
+            )
+    except httpx.HTTPError as exc:
+        raise RuntimeError(f"LinkedIn comment request failed: {exc}") from exc
+    raw = response.text
+    if response.status_code >= 400:
+        raise ProviderHttpError(
+            status=response.status_code, reason=str(response.reason_phrase or ""),
+            body=raw[:8000], parsed=_parse_json_object(raw), url=url,
+        )
+    comment_id = response.headers.get("x-restli-id") or response.headers.get("X-RestLi-Id") or ""
+    body = _parse_json_object(raw) if raw.strip() else {}
+    comment_urn = body.get("$URN") or (f"urn:li:comment:({post_urn},{comment_id})" if comment_id else "")
+    return {"comment_id": comment_id, "comment_urn": comment_urn, **body}

@@ -343,13 +343,16 @@ async def payload(
             fingerprint=fingerprint,
         ),
         "memory": memory_payload,
-        "settings": settings_module.payload(
-            entrypoint,
-            user_id=user_id,
-            fingerprint=fingerprint,
-            telegram_identity=telegram_identity,
-        ),
     }
+    settings_payload = settings_module.payload(
+        entrypoint,
+        user_id=user_id,
+        fingerprint=fingerprint,
+        telegram_identity=telegram_identity,
+    )
+    if inspect.isawaitable(settings_payload):
+        settings_payload = await settings_payload
+    data["settings"] = settings_payload
     if telegram_identity:
         listing = admin.storage(entrypoint).list_conversations(
             telegram_user_id=str(telegram_identity.get("telegram_user_id") or ""),
