@@ -103,6 +103,11 @@ class CognitoAuthManager(OAuthManager):
                 id_sub = id_payload.get("sub")
                 if access_sub and id_sub and access_sub != id_sub:
                     raise AuthenticationError("Token subjects don't match")
+                if _auth_debug_enabled():
+                    logger.info(
+                        "Cognito auth validation ok: access_token_use=access client_bound=true "
+                        "id_token_use=id audience_checked=true subject_match=true"
+                    )
 
                 # Create user from ID token (has roles/groups)
                 user = self._create_user_from_id_token(id_payload)
