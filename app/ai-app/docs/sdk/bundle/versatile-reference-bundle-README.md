@@ -38,6 +38,13 @@ This is the bundle to study first.
 | Direct isolated exec from bundle code | `entrypoint.py:preferences_exec_report` |
 | MCP connector declarations | `tools_descriptor.py` |
 
+When studying the entrypoint, pay attention to lifecycle inheritance. A bundle
+that subclasses the `BaseEntrypoint` family and overrides `on_bundle_load(...)`
+must keep `await super().on_bundle_load(**kwargs)` in the hook unless it
+intentionally replaces platform prop refresh and UI build behavior. That base
+hook is what lets startup preload build configured `ui.main_view` and
+`ui.widgets.*` assets before a user opens the UI.
+
 ## What It Does Not Demonstrate
 
 Do not use `versatile` as the reference for:

@@ -233,6 +233,11 @@ Pass `--path /path/to/kdcube-ai-app` when the runtime should rebuild from that
 local checkout. Use exactly one of `--path`, `--upstream`, `--latest`, or
 `--release <ref>` when the platform source should change.
 
+Do not wrap normal `refresh` with a separate `kdcube stop` / `kdcube start`.
+`refresh` already performs the stop/start cycle after updating source/images,
+unless `--no-restart` is explicitly passed. Use `--no-restart` only when an
+operator intentionally wants to stage the refresh and start later.
+
 ### Apply Bundle Config And Reload
 
 Use `bundle config apply` when the user intentionally wants seed
@@ -1605,15 +1610,15 @@ Use the existing runtime when you want to:
 Example:
 
 ```bash
-kdcube init \
+kdcube refresh \
   --workdir ~/.kdcube/kdcube-runtime/mytenant__myproject \
   --upstream \
   --build
 ```
 
 This reuses the initialized runtime, refreshes the platform source from
-upstream, and rebuilds images without starting containers. Run `kdcube start`
-afterward when you want to start the stack.
+upstream, rebuilds images, and restarts containers. Add `--no-restart` only
+when you want to refresh/build now and start the stack later.
 
 ### Fresh runtime
 

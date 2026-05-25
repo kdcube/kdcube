@@ -153,6 +153,10 @@ implements the same UI build contract. The `@ui_widget(...)` decorator declares
 the surface, but the `BaseEntrypoint` family provides the default static
 UI/widget build and refresh path. See
 [Bundle Entrypoint Classes](../bundle-entrypoint-classes-README.md).
+If that entrypoint overrides `on_bundle_load(...)`, call
+`await super().on_bundle_load(**kwargs)` after applying needed runtime handles
+from `kwargs`; otherwise startup preload can import the bundle without building
+its configured widget assets.
 
 Keep the decorated bundle entrypoint and the per-message orchestrator separate:
 decorate the `BaseEntrypoint`-family class, and create `BaseWorkflow`

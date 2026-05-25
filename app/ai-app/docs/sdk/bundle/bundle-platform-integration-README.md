@@ -55,6 +55,7 @@ For the CLI lifecycle that makes these integration changes visible in a local
 runtime, use
 [how-to-configure-and-run-bundle-README.md#canonical-cli-flow-schemas](build/how-to-configure-and-run-bundle-README.md#canonical-cli-flow-schemas).
 In short: `init` creates the runtime, `refresh` changes platform source/images,
+rebuilds when requested, and restarts the stack unless `--no-restart` is used;
 `bundle config apply` reapplies seed bundle descriptors, and
 `bundle reload` clears bundle caches for code/config changes.
 
@@ -373,7 +374,7 @@ and background work can be retried after task interruption.
 
 | Hook | Available On | When It Runs | Main Use | Important Contract |
 | --- | --- | --- | --- | --- |
-| `on_bundle_load(**kwargs)` | `BaseEntrypoint` and subclasses | Once per process / tenant / project when the bundle is loaded or preloaded | Build static UI, warm local indexes, prepare per-process assets | Accept only kwargs you need. Default refreshes bundle props and ensures UI build. Avoid long unbounded work. |
+| `on_bundle_load(**kwargs)` | `BaseEntrypoint` and subclasses | Once per process / tenant / project when the bundle is loaded or preloaded | Build static UI, warm local indexes, prepare per-process assets | Accept only kwargs you need. Default refreshes bundle props and ensures UI build. If overriding a `BaseEntrypoint` family class, call `await super().on_bundle_load(**kwargs)` after applying needed runtime handles from `kwargs`. Avoid long unbounded work. |
 | `on_props_changed(previous_props, current_props, reason, tenant, project, updated_by, source)` | `BaseEntrypoint` and subclasses | After effective bundle props change for the live bundle instance | Reconcile side effects after config changes | Default is no-op except UI-related cache handling. Treat props as deployment/runtime config, not secrets. |
 | `pre_run_hook(state)` | `BaseEntrypoint` and subclasses | Before the main `@on_message` execution core | Per-turn setup, state enrichment, request-local checks | Keep fast. For `BaseEntrypointWithEconomics`, the hook may also accept `econ_ctx`. |
 | `post_run_hook(state, result)` | `BaseEntrypoint` and subclasses | After successful main turn execution | Per-turn finalization based on output | Keep fast and non-critical. For `BaseEntrypointWithEconomics`, the hook may also accept `econ_ctx`. |

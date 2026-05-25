@@ -542,6 +542,21 @@ Use:
   `BaseEntrypoint` family already uses the higher-level `bundle_once.py`
   helper for UI outputs
 
+When a `BaseEntrypoint` family subclass overrides `on_bundle_load(...)`, keep
+the base hook in the chain:
+
+```python
+async def on_bundle_load(self, **kwargs):
+    if kwargs.get("comm_context") is not None:
+        self.comm_context = kwargs["comm_context"]
+    await super().on_bundle_load(**kwargs)
+    await self._prepare_my_bundle_state()
+```
+
+The base hook refreshes effective bundle props and builds configured static UI.
+If it is skipped, preload may appear successful while the widget builds only on
+first live access.
+
 Pattern:
 
 1. check `signature + ready` before taking the lock

@@ -270,6 +270,28 @@ Bundles that build UI in `on_bundle_load()` will build during this preload pass.
 Shared-storage signatures and locks prevent duplicate final output, but every
 worker still needs to load the bundle and validate its own in-process manifest.
 
+For entrypoints that subclass `BaseEntrypoint` or one of its memory/economics
+variants, the default `on_bundle_load()` refreshes effective bundle props and
+calls `_ensure_ui_build()`. If your bundle overrides `on_bundle_load()`, preserve
+that base lifecycle:
+
+```python
+async def on_bundle_load(self, **kwargs):
+    if kwargs.get("pg_pool") is not None:
+        self.pg_pool = kwargs["pg_pool"]
+    if kwargs.get("redis") is not None:
+        self.redis = kwargs["redis"]
+    if kwargs.get("comm_context") is not None:
+        self.comm_context = kwargs["comm_context"]
+
+    await super().on_bundle_load(**kwargs)  # refresh props + build configured UI
+    await self._prepare_bundle_specific_indexes()
+```
+
+If the override skips `super().on_bundle_load(...)`, `ui.widgets.*.src_folder`
+may be valid and the bundle may still load, but startup preload will not build
+those widget assets. The first live widget request then has to build them.
+
 ```mermaid
 sequenceDiagram
   participant W1 as proc worker pid=65

@@ -322,6 +322,19 @@ Async rule:
 - do not run blocking setup in a request path
 - if expensive work is only needed once for shared bundle storage, make it idempotent and guard it with a storage signature plus a cross-process lock
 
+`BaseEntrypoint` hook inheritance rule:
+
+- if the bundle entrypoint subclasses `BaseEntrypoint`,
+  `BaseEntrypointWithMemory`, `BaseEntrypointWithEconomics`, or another
+  platform entrypoint family class, an `on_bundle_load(...)` override must call
+  `await super().on_bundle_load(**kwargs)` unless it deliberately replaces the
+  platform UI build/prop-refresh contract
+- apply runtime handles from `kwargs` first when your bundle needs them, then
+  call `super()`, then run bundle-specific preparation
+- missing `super()` is a startup-preload bug: the bundle can still load and
+  scheduled jobs can still run, but source-folder widgets may only build when a
+  user opens the widget
+
 Shared-storage rule:
 
 - `singleton` does not mean machine-global or EFS-global setup
@@ -395,6 +408,9 @@ Skeleton file rules:
   `ui.widgets.<alias>.src_folder` can be present while no static artifacts are
   built or served. The family includes the bare base plus economics and memory
   variants; see [Bundle Entrypoint Classes](../bundle-entrypoint-classes-README.md)
+- when such an entrypoint overrides `on_bundle_load(...)`, preserve
+  `await super().on_bundle_load(**kwargs)` so startup preload builds configured
+  UI before live widget traffic
 - do not decorate a `BaseWorkflow` subclass as the singleton bundle entrypoint.
   `BaseWorkflow` is the per-message orchestrator created inside the
   `BaseEntrypoint` turn execution.

@@ -445,6 +445,26 @@ def configuration(self):
    - stores the build output under `<bundle_storage_root>/ui/`
    - writes a `.ui.signature` file so the build is skipped on subsequent loads if nothing changed
 
+If an entrypoint subclasses `BaseEntrypoint` or a derived memory/economics
+entrypoint and overrides `on_bundle_load(...)`, it must keep the base lifecycle:
+
+```python
+async def on_bundle_load(self, **kwargs):
+    if kwargs.get("comm_context") is not None:
+        self.comm_context = kwargs["comm_context"]
+    if kwargs.get("pg_pool") is not None:
+        self.pg_pool = kwargs["pg_pool"]
+    if kwargs.get("redis") is not None:
+        self.redis = kwargs["redis"]
+
+    await super().on_bundle_load(**kwargs)
+    await self._prepare_bundle_specific_state()
+```
+
+The base hook refreshes bundle props and calls `_ensure_ui_build()`. Skipping it
+is the common cause of widgets building only on first selection even though
+bundle preload is enabled.
+
 3. The built SPA is served by the processor's static endpoint:
 
 ```
