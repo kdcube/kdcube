@@ -1,67 +1,39 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.5.26.250"
+  ref: "2026.5.26.410"
   description: |
-    This platform release improves bundle startup preload behavior, widget
-    embed control, telemetry event sinks, and bundle-builder lifecycle
-    guidance, with an additional Cognito validation alignment.
+    This platform release adds the public anonymous bundle UI access path for
+    embedded versatile UI surfaces, with a host-driven login handoff contract.
 
     Highlights
 
-    - Hardens startup bundle preload coordination across multi-worker proc
-      runtimes so workers claim bundles independently instead of blocking all
-      preload work behind one bundle.
-    - Adds per-bundle preload observability, lock ownership, timestamps,
-      retry/failure status, and clearer startup logging for diagnosing slow or
-      delayed bundle initialization.
-    - Reduces stale shared-storage UI lock impact, adds heartbeat/stale-lock
-      recovery, validates git-managed bundle caches beyond path existence, and
-      cleans stale widget build output when a widget is removed from bundle
-      configuration.
-    - Adds host-driven widget frame expand/collapse messaging and documents the
-      frame view contract for embedded bundle widgets.
-    - Improves stats telemetry sink conversation activity handling and related
-      event-sink documentation.
-    - Clarifies the bundle lifecycle contract: `BaseEntrypoint` family
-      `on_bundle_load(...)` overrides must preserve the base hook unless they
-      intentionally replace bundle prop refresh and static UI build behavior.
-    - Clarifies that `kdcube refresh` restarts the stack by default unless
-      `--no-restart` is explicitly used.
-    - Aligns Cognito token checks with the validated claim model used by the
-      auth layer.
+    - Allows the versatile bundle UI to expose selected public anonymous
+      surfaces without requiring a platform-authenticated session first.
+    - Adds a host login handoff path so an embedded host can receive the login
+      request and drive its own sign-in flow.
+    - Keeps the embedded UI contract compatible with the host-driven frame
+      controls introduced in the previous release.
 
     Runtime and deployment notes:
 
-    - Deployments must point the platform ref at 2026.5.26.250 to receive this
+    - Deployments must point the platform ref at 2026.5.26.410 to receive this
       update.
-    - Descriptor-driven deployments should enable bundle preload when first-use
-      widget latency must be avoided.
-    - Bundle entrypoints that override `on_bundle_load(...)` and rely on
-      platform UI build support must call `await super().on_bundle_load(...)`.
-    - Git-backed bundle cache validation now checks repository metadata, ref,
-      subdir, and marker consistency before considering a managed bundle cache
-      reusable.
-    - No private deployment content is part of this platform release.
+    - Public anonymous access remains bundle-controlled; deployments still
+      decide which bundle surfaces are exposed through descriptor/runtime
+      configuration.
+    - Host login handoff is for embedded UI integration. It does not replace the
+      platform authentication and authorization checks for protected surfaces.
+    - No private deployment content is part of this OSS release.
 
     Validation and regression coverage:
 
-    - Local Docker runtime refresh verified that bundle preload starts on proc
-      startup and preloads configured widgets before live widget selection.
-    - Stats bundle preload path was validated against the corrected lifecycle
-      contract in the companion applications repository.
-    - Focused Python compile check passed for the affected bundle entrypoint in
-      the companion applications repository.
+    - Release metadata diff check passed.
     - Staged OSS private-name scan must pass before the release commit.
 
     Changelog
 
-    - Hardened startup bundle preload coordination and observability.
-    - Added stale UI lock recovery and stale widget output cleanup.
-    - Strengthened git-managed bundle cache validation.
-    - Added host-driven widget expand/collapse messaging for embedded frames.
-    - Updated stats telemetry sink conversation activity handling.
-    - Updated bundle lifecycle, UI lifecycle, platform integration, and Tier 1
-      builder docs for preload, `on_bundle_load(...)`, and `refresh` behavior.
-    - Aligned Cognito token validation checks.
+    - Added public anonymous access support for selected versatile bundle UI
+      flows.
+    - Added host login handoff behavior for embedded UI usage.
 config:
-    version: "2026.5.26.250"
+    version: "2026.5.26.410"
