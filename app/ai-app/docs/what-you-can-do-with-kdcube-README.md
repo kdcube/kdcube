@@ -4,7 +4,7 @@ title: "What You Can Do With KDCube"
 summary: "Dense product and builder overview of KDCube: what it is, who it is for, why bundles matter, what surfaces and runtimes it supports, and how engineers or coding agents turn code into runnable AI products."
 tags: ["docs", "product", "overview", "sdk", "platform", "bundle", "agent", "react", "exec"]
 keywords: ["what is kdcube", "what can kdcube do", "ai product platform", "bundle runtime", "hot reload bundle", "kdcube bundle", "build ai app", "wrap existing app", "coding agent build bundle", "claude code build bundle", "local to cloud workflow", "mcp endpoint", "react agent", "announce", "steer followup", "user memory", "iso runtime", "distributed exec", "streaming widgets", "artifact provenance"]
-updated_at: 2026-05-16
+updated_at: 2026-05-27
 see_also:
   - ks:docs/quick-start-README.md
   - ks:docs/README.md
@@ -103,7 +103,7 @@ This lets an AI product be deployed, configured, reloaded, tested, and reasoned
 about as a unit.
 
 Bundles can also be hot-reloaded during development and operations. `kdcube
-reload <bundle_id>` reapplies the descriptor-authoritative bundle registry,
+bundle reload <bundle_id>` reapplies the descriptor-authoritative bundle registry,
 evicts process-local bundle caches, refreshes bundle code/config for subsequent
 requests, and broadcasts the change to running components. Platform image
 changes still require the normal image rebuild/restart path.
@@ -335,7 +335,7 @@ Build the bundle as a thin KDCube adapter around product logic:
 - interface docs define routes/widgets/MCP/jobs/config
 - tests verify imports, descriptors, and runtime behavior
 
-Run locally with kdcube init/start/reload using the active descriptor set.
+Run locally with kdcube init/start/bundle reload using the active descriptor set.
 Do not invent runtime paths or config scopes; use the docs and reference bundle.
 ```
 

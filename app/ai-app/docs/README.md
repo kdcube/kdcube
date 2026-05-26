@@ -1,16 +1,17 @@
 ---
 id: ks:docs/README.md
 title: "Platform Documentation Index"
-summary: "Top-level map of the KDCube documentation tree: architecture, configuration, service runtime, SDK authoring, execution, economics, and deployment or operations guides."
+summary: "Curated top-level map of the KDCube documentation tree for builders, integrators, operators, and agents."
 tags: ["docs", "index", "sdk", "service", "ops", "architecture"]
-keywords: ["documentation index", "platform architecture", "configuration guides", "service runtime docs", "bundle sdk docs", "execution docs", "economics docs", "deployment and operations docs"]
+keywords: ["documentation index", "platform architecture", "configuration guides", "service runtime docs", "bundle sdk docs", "execution docs", "deployment and operations docs", "bundle builder docs", "client widgets", "streaming", "memory", "claude code"]
+updated_at: 2026-05-27
 see_also:
   - ks:docs/what-you-can-do-with-kdcube-README.md
-  - ks:docs/arch/architecture-short.md
-  - ks:docs/configuration/assembly-descriptor-README.md
-  - ks:docs/service/service-and-infrastructure-index-README.md
+  - ks:docs/quick-start-README.md
+  - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
+  - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
   - ks:docs/sdk/bundle/bundle-index-README.md
-  - ks:docs/ops/ops-overview-README.md
+  - ks:docs/arch/architecture-short.md
 ---
 # Docs Index
 
@@ -20,114 +21,98 @@ Curated index of platform, service, and SDK documentation.
 ## Start Here
 
 * What You Can Do With KDCube: [what-you-can-do-with-kdcube-README.md](what-you-can-do-with-kdcube-README.md)
-* Quick Start (Local Docker Compose): [quick-start-README.md](quick-start-README.md)
+* Quick Start: [quick-start-README.md](quick-start-README.md)
+* How To Navigate Bundle Docs: [how-to-navigate-kdcube-docs-README.md](sdk/bundle/build/how-to-navigate-kdcube-docs-README.md)
+* Bundle Docs Index: [bundle-index-README.md](sdk/bundle/bundle-index-README.md)
 
-## Architecture
+## Build Bundles
 
-* System Architecture (Short): [architecture-short.md](arch/architecture-short.md)
-* System Architecture (Long): [architecture-long.md](arch/architecture-long.md)
+* How To Write A Bundle: [how-to-write-bundle-README.md](sdk/bundle/build/how-to-write-bundle-README.md)
+* Assemble With SDK Building Blocks: [how-to-assemble-bundle-with-sdk-building-blocks-README.md](sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md)
+* Configure And Run A Bundle: [how-to-configure-and-run-bundle-README.md](sdk/bundle/build/how-to-configure-and-run-bundle-README.md)
+* Test A Bundle: [how-to-test-bundle-README.md](sdk/bundle/build/how-to-test-bundle-README.md)
+* Release Bundle Content: [how-to-release-bundle-content-README.md](sdk/bundle/build/how-to-release-bundle-content-README.md)
+* Versatile Reference Bundle: [versatile-reference-bundle-README.md](sdk/bundle/versatile-reference-bundle-README.md)
+* Bundle Developer Guide: [bundle-developer-guide-README.md](sdk/bundle/bundle-developer-guide-README.md)
 
-## Service & Gateway
+## Bundle Interfaces And Frontend
 
-* Auth Overview: [auth-README.md](service/auth/auth-README.md)
-* Gateway & Admission Control (Current): [gateway-README.md](service/gateway-README.md)
+* Bundle Interfaces: [bundle-interfaces-README.md](sdk/bundle/bundle-interfaces-README.md)
+* Bundle Client UI: [bundle-client-ui-README.md](sdk/bundle/bundle-client-ui-README.md)
+* Bundle Widget Integration: [bundle-widget-integration-README.md](sdk/bundle/bundle-widget-integration-README.md)
+* UI Components Lifecycle: [ui-components-lifecycle-README.md](sdk/bundle/ui-components-lifecycle-README.md)
+* Bundle Frontend Awareness: [bundle-frontend-awareness-README.md](sdk/bundle/bundle-frontend-awareness-README.md)
+* Bundle Client Communication: [bundle-client-communication-README.md](sdk/bundle/bundle-client-communication-README.md)
+* Bundle Chat Stream Events: [bundle-chat-stream-events-README.md](sdk/bundle/bundle-chat-stream-events-README.md)
+* Bundle Transports: [bundle-transports-README.md](sdk/bundle/bundle-transports-README.md)
+
+## Agents, Tools, Skills, And Memory
+
+* Bundle Agent Integration: [bundle-agent-integration-README.md](sdk/bundle/bundle-agent-integration-README.md)
+* ReAct Runtime Flow: [flow-README.md](sdk/agents/react/flow-README.md)
+* ReAct Context: [react-context-README.md](sdk/agents/react/react-context-README.md)
+* ReAct Tools: [react-tools-README.md](sdk/agents/react/react-tools-README.md)
+* ReAct Compaction: [compaction-README.md](sdk/agents/react/compaction-README.md)
+* ReAct Context Caching: [context-caching-README.md](sdk/agents/react/context-caching-README.md)
+* Artifact Discovery: [artifact-discovery-README.md](sdk/agents/react/artifact-discovery-README.md)
+* Tool Subsystem: [tool-subsystem-README.md](sdk/tools/tool-subsystem-README.md)
+* Custom Tools: [custom-tools-README.md](sdk/tools/custom-tools-README.md)
+* MCP Integration: [mcp-README.md](sdk/tools/mcp-README.md)
+* Skills: [skills-README.md](sdk/skills/skills-README.md)
+* Custom Skills: [custom-skills-README.md](sdk/skills/custom-skills-README.md)
+* User Memory: [how-react-remembers-README.md](sdk/memory/how-react-remembers-README.md)
+* Claude Code Agent: [claude-code-README.md](sdk/agents/claude/claude-code-README.md)
+
+## Runtime, Storage, And Execution
+
+* Bundle Storage And Cache: [bundle-storage-and-cache-README.md](sdk/bundle/bundle-storage-and-cache-README.md)
+* File Storage And Hosting: [files-storage-system-README.md](hosting/files-storage-system-README.md)
+* Artifacts Limits: [artifacts-limits-README.md](hosting/artifacts-limits-README.md)
+* ISO Runtime: [README-iso-runtime.md](exec/README-iso-runtime.md)
+* Runtime Modes For Built-In Tools: [README-runtime-modes-builtin-tools.md](exec/README-runtime-modes-builtin-tools.md)
+* Run Python In ISO Runtime: [run-py-README.md](exec/run-py-README.md)
+* Execution Logging And Error Propagation: [exec-logging-error-propagation-README.md](exec/exec-logging-error-propagation-README.md)
+* Distributed Execution: [distributed-exec-README.md](exec/distributed-exec-README.md)
+
+## Configuration And Secrets
+
+* Assembly Descriptor: [assembly-descriptor-README.md](configuration/assembly-descriptor-README.md)
+* Bundles Descriptor: [bundles-descriptor-README.md](configuration/bundles-descriptor-README.md)
+* Bundles Secrets Descriptor: [bundles-secrets-descriptor-README.md](configuration/bundles-secrets-descriptor-README.md)
+* Platform Secrets Descriptor: [secrets-descriptor-README.md](configuration/secrets-descriptor-README.md)
 * Service Runtime Configuration Mapping: [service-runtime-configuration-mapping-README.md](configuration/service-runtime-configuration-mapping-README.md)
-* Monitoring & Observability: [README-monitoring-observability.md](service/README-monitoring-observability.md)
-* Service and Infrastructure Index: [service-and-infrastructure-index-README.md](service/service-and-infrastructure-index-README.md)
+* Bundle Runtime Settings, Configuration, And Secrets: [bundle-runtime-configuration-and-secrets-README.md](configuration/bundle-runtime-configuration-and-secrets-README.md)
+* Bundle Properties And Secrets Lifecycle: [bundle-properties-and-secrets-lifecycle-README.md](sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md)
+* Reserved Platform Properties: [bundle-reserved-platform-properties-README.md](sdk/bundle/bundle-reserved-platform-properties-README.md)
+
+## Service, Deployment, And Operations
+
+* Architecture Short: [architecture-short.md](arch/architecture-short.md)
+* Architecture Long: [architecture-long.md](arch/architecture-long.md)
+* Current CLI: [cli-README.md](service/cicd/cli-README.md)
+* Descriptors And CI/CD: [descriptors-README.md](service/cicd/descriptors-README.md)
+* Custom CI/CD: [custom-cicd-README.md](service/cicd/custom-cicd-README.md)
+* Auth Overview: [auth-README.md](service/auth/auth-README.md)
+* Embedding Control Plane Frontend: [embedding-control-plane-frontend-README.md](service/cicd/embedding-control-plane-frontend-README.md)
+* Gateway And Admission Control: [gateway-README.md](service/gateway-README.md)
+* Monitoring And Observability: [README-monitoring-observability.md](service/README-monitoring-observability.md)
+* Service And Infrastructure Index: [service-and-infrastructure-index-README.md](service/service-and-infrastructure-index-README.md)
+
+## Scheduled Work, Streaming, And Communication
+
+* Bundle Scheduled Jobs: [bundle-scheduled-jobs-README.md](sdk/bundle/bundle-scheduled-jobs-README.md)
+* Streaming Exec Widget: [streaming-widget-README.md](sdk/streaming/streaming-widget-README.md)
+* LLM Streaming And Accountable Invocation: [llm-streaming-README.md](sdk/streaming/llm-streaming-README.md)
+* Communication Integrations: [README-comm.md](service/comm/README-comm.md)
+* Communication Subsystem Architecture: [comm-system.md](service/comm/comm-system.md)
+* Redis Chat Relay And SSE Fan-Out: [CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md](service/comm/CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md)
 * Service Streams: [streams/README.md](service/streams/README.md)
 
-## Communication & Relay
+## Economics, Hosting, And Governance
 
-* Communication Integrations (External + Internal): [README-comm.md](service/comm/README-comm.md)
-* Communication Subsystem Architecture: [comm-system.md](service/comm/comm-system.md)
-* Redis-based Chat Relay & SSE Fan-Out: [CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md](service/comm/CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md)
-* Attachments System: [attachments-system.md](hosting/attachments-system.md)
-
-## Execution & Isolation
-
-* Isolated Code Execution Architecture (Docker + External Modes): [runtime-README.md](exec/runtime-README.md)
-* Isolated Runtime (ISO) - Design and Operations: [README-iso-runtime.md](exec/README-iso-runtime.md)
-* Run Python in ISO Runtime (Docker) — Minimal Developer Guide: [run-py-README.md](exec/run-py-README.md)
-* Runtime modes for built-in tools: [README-runtime-modes-builtin-tools.md](exec/README-runtime-modes-builtin-tools.md)
-* Isolated Code Execution - Operations Guide: [operations.md](exec/operations.md)
-* Executor log streams: [logging-README.md](exec/logging-README.md)
-* Distributed Execution (Fargate/External): [distributed-exec-README.md](exec/distributed-exec-README.md)
-
-## SDK Bundles
-
-* Bundle docs index: [bundle-index-README.md](sdk/bundle/bundle-index-README.md)
-* Bundle developer guide: [bundle-developer-guide-README.md](sdk/bundle/bundle-developer-guide-README.md)
-* Bundle ops guide: [bundle-delivery-and-update-README.md](sdk/bundle/bundle-delivery-and-update-README.md)
-* Bundle interfaces: [bundle-interfaces-README.md](sdk/bundle/bundle-interfaces-README.md)
-* Bundle client UI contract: [bundle-client-ui-README.md](sdk/bundle/bundle-client-ui-README.md)
-* Bundle client communication: [bundle-client-communication-README.md](sdk/bundle/bundle-client-communication-README.md)
-* Bundle chat stream events: [bundle-chat-stream-events-README.md](sdk/bundle/bundle-chat-stream-events-README.md)
-* Bundle storages + cache: [bundle-storage-and-cache-README.md](sdk/bundle/bundle-storage-and-cache-README.md)
-
-## SDK Agents (ReAct v2)
-
-* ReAct v2 Structure: [structure-README.md](sdk/agents/react/structure-README.md)
-* End-to-end flow (react v2): [flow-README.md](sdk/agents/react/flow-README.md)
-* ReAct v2 State Machine: [react-state-machine-README.md](sdk/agents/react/react-state-machine-README.md)
-* Runtime Configuration: [runtime-configuration-README.md](sdk/agents/react/runtime-configuration-README.md)
-* ReAct v2 — Context + Turn Data: [react-context-README.md](sdk/agents/react/react-context-README.md)
-* Context Layout (Blocks): [context-layout.md](sdk/agents/react/context-layout.md)
-* Context Progression & Compaction: [context-progression.md](sdk/agents/react/context-progression.md)
-* Context Compaction (v2): [compaction-README.md](sdk/agents/react/compaction-README.md)
-* Context Caching (Dual Checkpoints, Round-Based): [context-caching-README.md](sdk/agents/react/context-caching-README.md)
-* Context Browser (v2): [context-browser-README.md](sdk/agents/react/context-browser-README.md)
-* Session View (Cache TTL): [session-view-README.md](sdk/agents/react/session-view-README.md)
-* Plan tracking (react v2): [plan-README.md](sdk/agents/react/plan-README.md)
-* ReAct Announce Block (ANNOUNCE banner): [react-announce-README.md](sdk/agents/react/react-announce-README.md)
-* ReAct v2 Budget Model: [react-budget-README.md](sdk/agents/react/react-budget-README.md)
-* React Round (Tool Call) Model: [react-round-README.md](sdk/agents/react/react-round-README.md)
-* React Tools (react.*): [react-tools-README.md](sdk/agents/react/react-tools-README.md)
-* React Event Blocks: [event-blocks-README.md](sdk/agents/react/event-blocks-README.md)
-* Tool Call Blocks (react v2): [tool-call-blocks-README.md](sdk/agents/react/tool-call-blocks-README.md)
-* Timeline (react v2): [timeline-README.md](sdk/agents/react/timeline-README.md)
-* Turn Log Structure (Current): [turn-log-README.md](sdk/agents/react/turn-log-README.md)
-* Turn Data (Conversation Fetch): [turn-data-README.md](sdk/agents/react/turn-data-README.md)
-* Sources Pool: [source-pool-README.md](sdk/agents/react/source-pool-README.md)
-* Conversation Artifacts (v2): [conversation-artifacts-README.md](sdk/agents/react/conversation-artifacts-README.md)
-* Artifact Discovery (Logical/Physical Paths): [artifact-discovery-README.md](sdk/agents/react/artifact-discovery-README.md)
-* Artifact Storage Rules: [artifact-storage-README.md](sdk/agents/react/artifact-storage-README.md)
-* Hooks (v2): [hooks-README.md](sdk/agents/react/hooks-README.md)
-* External execution notes (Fargate / distributed): [external-exec-README.md](sdk/agents/react/external-exec-README.md)
-
-## SDK Tools & Skills
-
-* Tool Subsystem: [tool-subsystem-README.md](sdk/tools/tool-subsystem-README.md)
-* MCP Integration (Runtime): [mcp-README.md](sdk/tools/mcp-README.md)
-* Skills Subsystem: [skills-README.md](sdk/skills/skills-README.md)
-* Skills Infrastructure: [skills-infra-README.md](sdk/skills/skills-infra-README.md)
-
-## SDK Streaming & Storage
-
-* Streaming Exec Widget (Live Code + Execution Status): [streaming-widget-README.md](sdk/streaming/streaming-widget-README.md)
-* Channeled Streamer (Versatile Streamer): [channeled-streamer-README.md](sdk/streaming/channeled-streamer-README.md)
-* SDK Storage Layout: [sdk-store-README.md](sdk/storage/sdk-store-README.md)
-* Git Store (shared git subprocess transport): [git-store-README.md](sdk/storage/git-store-README.md)
-* KV Cache (Service Hub): [cache-README.md](sdk/storage/cache-README.md)
-
-## Economics & OPEX
-
-* Economics Model (Control Plane): [economic-README.md](economics/economic-README.md)
-* Economics subsystem: [economics-usage.md](economics/economics-usage.md)
-* Economics Operations (Schema + Jobs + Config): [operational-README.md](economics/operational-README.md)
-* Stripe Integration Guide: [stripe-README.md](economics/stripe-README.md)
+* Economics Model: [economic-README.md](economics/economic-README.md)
+* Economics Operations: [operational-README.md](economics/operational-README.md)
 * OPEX Aggregations: [README-AGGREGATIONS.md](aggregations/README-AGGREGATIONS.md)
-
-## Hosting & Storage
-
-* Artifacts Limits: [artifacts-limits-README.md](hosting/artifacts-limits-README.md)
-* Managed Infra. S3: [s3-README.md](ops/s3-README.md)
-
-## Safety & Governance
-
-* Feedback System – Complete Architecture & Design (v2.2): [feedback-system.md](feedback-system.md)
-* Citations & Sources System: [citations-system.md](citations-system.md)
-* Prompt Exfiltration in Direct vs Internal Agents: [README-prompt-exfiltration-internal-and-direct-agents.md](sdk/agents/README-prompt-exfiltration-internal-and-direct-agents.md)
-
-## Deployment
-
-* All-in-One Docker Compose: [README.md](../deployment/docker/all_in_one/README.md)
+* Citations And Sources System: [citations-system.md](citations-system.md)
+* Feedback System: [feedback-system.md](feedback-system.md)
+* Prompt Exfiltration In Direct Vs Internal Agents: [README-prompt-exfiltration-internal-and-direct-agents.md](sdk/agents/README-prompt-exfiltration-internal-and-direct-agents.md)
