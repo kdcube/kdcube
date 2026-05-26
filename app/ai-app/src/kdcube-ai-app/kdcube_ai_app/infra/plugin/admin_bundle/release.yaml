@@ -1,0 +1,16 @@
+bundle:
+  repo: "https://github.com/kdcube/kdcube-ai-app.git"
+  ref: "unreleased"
+  description: |
+    Built-in admin bundle storage interface.
+
+    Highlights
+
+    - Add the `bundle_storage` privileged widget as a modular React/Redux
+      application under the built-in `kdcube.admin` bundle.
+    - Add ingress storage control-plane APIs for listing storage roots,
+      browsing local storage paths, exporting selected paths as zip, and
+      deleting selected paths after confirmation.
+    - Add the processor registry read API used by the widget to compare active
+      bundle registry entries with managed bundle folders.
+    - Document the admin bundle interface with an OpenAPI contract.
