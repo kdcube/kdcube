@@ -5,9 +5,9 @@
 # Bundle-local tool: react.search_knowledge
 #
 # Provides the LLM agent with the ability to search the knowledge space
-# index (index.json) for relevant docs by keyword matching. Registered
-# as a Semantic Kernel plugin with alias "react" in tools_descriptor.py,
-# so the tool ID becomes "react.search_knowledge".
+# SQLite retrieval index for relevant docs before reading exact ks: paths.
+# Registered as a Semantic Kernel plugin with alias "react" in
+# tools_descriptor.py, so the tool ID becomes "react.search_knowledge".
 #
 # The bundle package is loaded under a real dynamic package root, so normal
 # same-bundle relative imports work here. Proc-side tool binding seeds
@@ -170,7 +170,8 @@ def build_doc_reader_mcp_app(
         name="search_knowledge",
         description=(
             "Search the kdcube.copilot knowledge space. "
-            "Use this before external search for platform, SDK, and deployment docs."
+            "This is the primary structured/SQLite catalog lookup for platform, SDK, and deployment docs. "
+            "Search first, then read exact ks: hits."
         ),
     )
     async def _search_knowledge(
@@ -221,7 +222,7 @@ def build_doc_reader_mcp_app(
         name="read_knowledge",
         description=(
             "Read an exact ks: path from the kdcube.copilot knowledge space. "
-            "Use this when you already know the concrete document or source path."
+            "Use this after search_knowledge returns a concrete document/source path, or when a doc gives an exact path."
         ),
     )
     async def _read_knowledge(path: str) -> dict:
@@ -257,8 +258,8 @@ class KDCubeCopilotTools:
     @kernel_function(
         name="search_knowledge",
         description=(
-            "Search the local knowledge space exposed by this bundle. "
-            "Use this for product/architecture questions before external search."
+            "Search the local SQLite-backed knowledge space exposed by this bundle. "
+            "Use this as the first catalog step for product/architecture questions before exact reads or external search."
         ),
     )
     async def search_knowledge(

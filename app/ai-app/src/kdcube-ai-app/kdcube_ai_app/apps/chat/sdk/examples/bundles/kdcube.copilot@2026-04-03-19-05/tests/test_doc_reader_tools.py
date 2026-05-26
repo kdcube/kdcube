@@ -44,6 +44,23 @@ def _load_react_tools_module():
     return module
 
 
+def _load_knowledge_module(name: str):
+    root = _bundle_root()
+    package_name = "copilot_bundle_testpkg"
+    _ensure_package(package_name, root)
+    _ensure_package(f"{package_name}.knowledge", root / "knowledge")
+    module_name = f"{package_name}.knowledge.{name}"
+    spec = importlib.util.spec_from_file_location(
+        module_name,
+        root / "knowledge" / f"{name}.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec is not None and spec.loader is not None
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_doc_reader_helpers_delegate_to_knowledge_resolver(tmp_path, monkeypatch):
     mod = _load_react_tools_module()
     monkeypatch.setattr(mod.knowledge_resolver, "KNOWLEDGE_ROOT", None)
@@ -132,6 +149,158 @@ def test_doc_reader_can_read_path_returned_by_search(tmp_path):
     assert doc.get("missing") is not True
     assert doc["mime"] == "text/markdown"
     assert "Readable content." in doc["text"]
+
+
+def test_knowledge_index_builds_sqlite_and_compact_navigation(tmp_path):
+    index_builder = _load_knowledge_module("index_builder")
+    resolver = _load_knowledge_module("resolver")
+    resolver.KNOWLEDGE_ROOT = None
+
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    for idx in range(12):
+        body = "General documentation body."
+        if idx == 7:
+            body = "This page explains iframe embedding and control plane integration."
+        (docs / f"doc-{idx}.md").write_text(
+            "\n".join(
+                [
+                    "---",
+                    f'title: "Doc {idx}"',
+                    f'summary: "Summary for document {idx}"',
+                    'tags: ["docs"]',
+                    'keywords: ["navigation"]',
+                    "---",
+                    f"# Doc {idx}",
+                    "",
+                    body,
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    index_builder.build_knowledge_index(
+        knowledge_root=tmp_path,
+        docs_root=docs,
+    )
+
+    assert (tmp_path / "index.json").exists()
+    assert (tmp_path / ".cache" / "knowledge_search.sqlite").exists()
+    index_md = (tmp_path / "index.md").read_text(encoding="utf-8")
+    assert "Retrieval index" in index_md
+    assert "doc-11.md" not in index_md
+    assert len(index_md.splitlines()) < 60
+
+    resolver.KNOWLEDGE_ROOT = tmp_path
+    hits = resolver.search_knowledge(
+        query="iframe embedding",
+        root="ks:docs",
+        max_hits=5,
+    )
+
+    assert hits
+    assert hits[0]["path"] == "ks:docs/doc-7.md"
+    assert "iframe embedding" in hits[0]["excerpt"]
+
+
+def test_knowledge_index_builder_map_prioritizes_builder_docs(tmp_path):
+    index_builder = _load_knowledge_module("index_builder")
+
+    docs = tmp_path / "docs"
+    (docs / "sdk" / "bundle" / "build").mkdir(parents=True)
+    (docs / "sdk" / "agents" / "claude").mkdir(parents=True)
+    (docs / "configuration").mkdir(parents=True)
+    (docs / "exec").mkdir(parents=True)
+    fixtures = {
+        docs / "sdk" / "bundle" / "build" / "how-to-navigate-kdcube-docs-README.md": (
+            "How To Navigate KDCube Bundle Docs",
+            "Tier 1 navigation guide.",
+        ),
+        docs / "sdk" / "bundle" / "build" / "how-to-write-bundle-README.md": (
+            "How To Write A Bundle",
+            "Bundle authoring guide.",
+        ),
+        docs / "sdk" / "bundle" / "build" / "how-to-assemble-bundle-with-sdk-building-blocks-README.md": (
+            "How To Assemble A Bundle With SDK Building Blocks",
+            "Reusable SDK building blocks.",
+        ),
+        docs / "sdk" / "bundle" / "build" / "sync-tier1-bundle-docs-to-build-with-kdcube-plugins-README.md": (
+            "Tier 1 Bundle Pack For Build-With-KDCube Plugins",
+            "Plugin handoff note.",
+        ),
+        docs / "sdk" / "bundle" / "bundle-index-README.md": ("Bundle Index", "Bundle authoring docs."),
+        docs / "sdk" / "bundle" / "bundle-client-ui-README.md": ("Bundle Client UI", "Client UI docs."),
+        docs / "sdk" / "bundle" / "bundle-storage-and-cache-README.md": ("Bundle Storage", "Storage docs."),
+        docs / "sdk" / "agents" / "claude" / "claude-code-workspace-bootstrap-README.md": (
+            "Claude Code Workspace Management",
+            "Workspace implementation detail.",
+        ),
+        docs / "exec" / "README-iso-runtime.md": ("ISO Runtime", "Isolation docs."),
+        docs / "configuration" / "assembly-descriptor-README.md": ("Assembly Descriptor", "Configuration docs."),
+    }
+    for path, (title, summary) in fixtures.items():
+        path.write_text(
+            "\n".join(
+                [
+                    "---",
+                    f'title: "{title}"',
+                    f'summary: "{summary}"',
+                    "---",
+                    f"# {title}",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    index_builder.build_knowledge_index(
+        knowledge_root=tmp_path,
+        docs_root=docs,
+    )
+
+    index_md = (tmp_path / "index.md").read_text(encoding="utf-8")
+    assert "## Builder map" in index_md
+    assert "## Primary landing docs" not in index_md
+    assert index_md.index("### Start here for bundle builders") < index_md.index(
+        "### Client UI, widgets, and streaming"
+    )
+    assert index_md.index("ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md") < index_md.index(
+        "ks:docs/configuration/assembly-descriptor-README.md"
+    )
+    assert "ks:docs/sdk/bundle/build/sync-tier1-bundle-docs-to-build-with-kdcube-plugins-README.md" not in index_md
+    assert "ks:docs/sdk/agents/claude/claude-code-workspace-bootstrap-README.md" not in index_md
+
+
+def test_oversized_index_read_returns_compact_search_guidance(tmp_path):
+    resolver = _load_knowledge_module("resolver")
+    resolver.KNOWLEDGE_ROOT = tmp_path
+
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "index.md").write_text("# Giant Index\n\n" + ("- item\n" * 5000), encoding="utf-8")
+    (tmp_path / "index.json").write_text(
+        json.dumps(
+            {
+                "knowledge_root": "ks:",
+                "items": [
+                    {
+                        "path": "ks:docs/example.md",
+                        "title": "Example",
+                        "summary": "Example summary",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / ".cache").mkdir()
+    (tmp_path / ".cache" / "knowledge_search.sqlite").write_bytes(b"placeholder")
+
+    result = resolver.read_knowledge(path="ks:index.md")
+
+    assert result.get("missing") is not True
+    assert result["source_truncated"] is True
+    assert result["size_bytes"] > 20_000
+    assert "react.search_knowledge" in result["text"]
+    assert len(result["text"]) < 1000
 
 
 def test_build_doc_reader_mcp_app_returns_streamable_http_app(tmp_path):

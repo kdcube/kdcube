@@ -71,7 +71,7 @@ class ExecSpaceTools:
         self,
         logical_ref: Annotated[str, (
             "Logical namespace root or namespaced path to resolve, for example "
-            "'ks:', 'ks:docs', 'ks:deployment', 'ks:src/kdcube-ai-app/...', or 'ks:index.md'."
+            "'ks:', 'ks:docs', 'ks:deployment', or 'ks:src/kdcube-ai-app/...'."
         )],
     ) -> Annotated[dict[str, Any], (
         "Envelope: {ok, error, ret}. "

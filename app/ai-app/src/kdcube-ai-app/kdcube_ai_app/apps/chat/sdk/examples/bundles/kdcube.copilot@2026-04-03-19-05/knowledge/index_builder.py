@@ -10,7 +10,7 @@
 #      ai-app root layout (docs/, deployment/, src/, ui/) via symlinks
 #      (preferred) or copy, then build the index
 #   2. build_knowledge_index() — scan all .md files, parse YAML front-matter,
-#      generate index.json (structured) + index.md (human-readable)
+#      generate index.json, SQLite FTS retrieval, and compact index.md
 #   3. validate_doc_refs() — check that backticked code references in docs
 #      (e.g. `src/kdcube-ai-app/...`) point to existing files under the
 #      common knowledge root
@@ -22,7 +22,7 @@
 #
 # Output files:
 #   index.json — {"items": [{path, title, summary, tags, keywords, ...}]}
-#   index.md   — Markdown listing with usage instructions for the agent
+#   index.md   — compact navigation note for the agent
 
 from __future__ import annotations
 
@@ -33,6 +33,25 @@ import shutil
 from typing import Iterable, Dict, Any, List, Optional, Tuple
 
 import re
+
+try:
+    from .sqlite_index import build_sqlite_search_index
+except Exception:
+    import importlib.util
+    import sys
+
+    _module_name = "_kdcube_copilot_sqlite_index"
+    if _module_name in sys.modules:
+        _sqlite_mod = sys.modules[_module_name]
+    else:
+        _path = pathlib.Path(__file__).resolve().parent / "sqlite_index.py"
+        _spec = importlib.util.spec_from_file_location(_module_name, str(_path))
+        if not _spec or not _spec.loader:
+            raise ImportError(f"Cannot load sqlite_index: {_path}")
+        _sqlite_mod = importlib.util.module_from_spec(_spec)
+        sys.modules[_module_name] = _sqlite_mod
+        _spec.loader.exec_module(_sqlite_mod)  # type: ignore
+    build_sqlite_search_index = getattr(_sqlite_mod, "build_sqlite_search_index")
 
 
 def _remove_target(dst: pathlib.Path) -> None:
@@ -276,7 +295,7 @@ def build_knowledge_index(
     """
     Scan all .md files, extract front-matter metadata, and write:
       - index.json — structured index for search_knowledge()
-      - index.md   — human-readable doc listing for the agent
+      - index.md   — compact navigation note for the agent
     """
     index_path = knowledge_root / "index.json"
     index_md_path = knowledge_root / "index.md"
@@ -297,25 +316,34 @@ def build_knowledge_index(
     except Exception as exc:
         if logger:
             logger.log(f"[knowledge.index] failed to write index.json: {exc}", level="WARNING")
+    try:
+        sqlite_path = build_sqlite_search_index(
+            knowledge_root=knowledge_root,
+            entries=entries,
+        )
+        if logger:
+            logger.log(
+                f"[knowledge.index] sqlite search index ready: {sqlite_path} items={len(entries)}",
+                level="INFO",
+            )
+    except Exception as exc:
+        if logger:
+            logger.log(f"[knowledge.index] failed to write sqlite search index: {exc}", level="WARNING")
 
     md_lines = [
         "# Knowledge Space Index",
         "",
-        "This bundle exposes a read‑only knowledge space you can search and read.",
+        "This bundle exposes a read‑only knowledge space for platform docs, deployment material, source, UI, and tests.",
         "",
         "## How to use",
-        "- Use `react.search_knowledge(query=..., root=\"ks:docs\")` to search docs.",
-        "- Use `react.read([\"ks:docs/<path>\"])` to open a doc.",
-        "- Use exact common-root-relative paths under `ks:` for source, deployment, test, or UI files, for example `ks:src/kdcube-ai-app/...`.",
+        "- Use `react.search_knowledge(query=..., root=\"ks:docs\")` for documentation retrieval.",
+        "- Use `react.search_knowledge(query=..., root=\"ks:deployment\")` for deployment markdown.",
+        "- Open exact search hits with `react.read([\"ks:...\"])`.",
+        "- Use exact common-root-relative paths under `ks:` for source, deployment, test, or UI files.",
     ]
     if (knowledge_root / "src").exists():
         md_lines += [
             "- Knowledge-space browsing in code should start from a real subtree such as `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk`.",
-        ]
-    if deployment_root:
-        md_lines += [
-            "- Use `react.search_knowledge(query=..., root=\"ks:deployment\")` to search deployment docs.",
-            "- Use `react.read([\"ks:deployment/<path>\"])` to open deployment files (compose, env, Dockerfiles).",
         ]
     advertised_examples: list[tuple[str, str, str]] = []
     sdk_root = knowledge_root / "src" / "kdcube-ai-app" / "kdcube_ai_app" / "apps" / "chat" / "sdk"
@@ -358,45 +386,111 @@ def build_knowledge_index(
         ]
         for logical_root, meaning, access in advertised_examples:
             md_lines.append(f"- {logical_root} — {meaning}; {access}.")
-    md_lines += [
-        "",
-        "## Docs",
+    by_path = {str(item.get("path") or ""): item for item in entries if isinstance(item, dict)}
+    curated_sections: list[tuple[str, list[str]]] = [
+        (
+            "Start here for bundle builders",
+            [
+                "ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md",
+                "ks:docs/sdk/bundle/build/how-to-write-bundle-README.md",
+                "ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md",
+                "ks:docs/sdk/bundle/bundle-index-README.md",
+                "ks:docs/sdk/bundle/versatile-reference-bundle-README.md",
+                "ks:docs/what-you-can-do-with-kdcube-README.md",
+            ],
+        ),
+        (
+            "Run, configure, test, and release",
+            [
+                "ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md",
+                "ks:docs/sdk/bundle/build/how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md",
+                "ks:docs/sdk/bundle/build/how-to-test-bundle-README.md",
+                "ks:docs/sdk/bundle/build/how-to-release-bundle-content-README.md",
+                "ks:docs/service/cicd/cli-README.md",
+            ],
+        ),
+        (
+            "Client UI, widgets, and streaming",
+            [
+                "ks:docs/sdk/bundle/bundle-client-ui-README.md",
+                "ks:docs/sdk/bundle/bundle-widget-integration-README.md",
+                "ks:docs/sdk/bundle/ui-components-lifecycle-README.md",
+                "ks:docs/sdk/bundle/bundle-client-communication-README.md",
+                "ks:docs/sdk/bundle/bundle-chat-stream-events-README.md",
+                "ks:docs/sdk/streaming/streaming-widget-README.md",
+                "ks:docs/sdk/streaming/llm-streaming-README.md",
+            ],
+        ),
+        (
+            "Storage, isolation, and execution",
+            [
+                "ks:docs/sdk/bundle/bundle-storage-and-cache-README.md",
+                "ks:docs/hosting/files-storage-system-README.md",
+                "ks:docs/exec/README-iso-runtime.md",
+                "ks:docs/exec/README-runtime-modes-builtin-tools.md",
+            ],
+        ),
+        (
+            "Agents, tools, skills, and Claude Code",
+            [
+                "ks:docs/sdk/bundle/bundle-agent-integration-README.md",
+                "ks:docs/sdk/agents/react/react-context-README.md",
+                "ks:docs/sdk/agents/react/react-tools-README.md",
+                "ks:docs/sdk/agents/react/flow-README.md",
+                "ks:docs/sdk/tools/custom-tools-README.md",
+                "ks:docs/sdk/tools/tool-subsystem-README.md",
+                "ks:docs/sdk/tools/mcp-README.md",
+                "ks:docs/sdk/skills/skills-README.md",
+                "ks:docs/sdk/skills/custom-skills-README.md",
+                "ks:docs/sdk/agents/claude/claude-code-README.md",
+            ],
+        ),
+        (
+            "Configuration, secrets, and properties",
+            [
+                "ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md",
+                "ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md",
+                "ks:docs/sdk/bundle/bundle-reserved-platform-properties-README.md",
+                "ks:docs/configuration/service-runtime-configuration-mapping-README.md",
+                "ks:docs/configuration/bundles-descriptor-README.md",
+                "ks:docs/configuration/bundles-secrets-descriptor-README.md",
+                "ks:docs/configuration/secrets-descriptor-README.md",
+                "ks:docs/configuration/assembly-descriptor-README.md",
+            ],
+        ),
+        (
+            "Jobs, transports, and architecture",
+            [
+                "ks:docs/sdk/bundle/bundle-scheduled-jobs-README.md",
+                "ks:docs/sdk/bundle/bundle-transports-README.md",
+                "ks:docs/arch/architecture-short.md",
+            ],
+        ),
     ]
-    for item in entries:
-        if item.get("kind") != "doc":
-            continue
-        md_lines.append(f"- {item.get('path')} — {item.get('title')}")
-        if item.get("summary"):
-            md_lines.append(f"  summary: {item.get('summary')}")
-        if item.get("tags"):
-            md_lines.append(f"  tags: {', '.join(str(t) for t in item.get('tags') or [])}")
-        if item.get("keywords"):
-            md_lines.append(f"  keywords: {', '.join(str(t) for t in item.get('keywords') or [])}")
-        if item.get("see_also"):
-            md_lines.append(f"  see also: {', '.join(str(t) for t in item.get('see_also') or [])}")
-        headings = [str(h.get("text") or "").strip() for h in (item.get("headings") or []) if isinstance(h, dict)]
-        if headings:
-            md_lines.append(f"  sections: {'; '.join(headings)}")
-    if deployment_root:
+    curated_any = any(any(path in by_path for path in paths) for _, paths in curated_sections)
+    if curated_any:
         md_lines += [
             "",
-            "## Deployment",
+            "## Builder map",
         ]
-        for item in entries:
-            if item.get("kind") != "deployment":
+        for title, paths in curated_sections:
+            items = [by_path[path] for path in paths if path in by_path]
+            if not items:
                 continue
-            md_lines.append(f"- {item.get('path')} — {item.get('title')}")
-            if item.get("summary"):
-                md_lines.append(f"  summary: {item.get('summary')}")
-            if item.get("tags"):
-                md_lines.append(f"  tags: {', '.join(str(t) for t in item.get('tags') or [])}")
-            if item.get("keywords"):
-                md_lines.append(f"  keywords: {', '.join(str(t) for t in item.get('keywords') or [])}")
-            if item.get("see_also"):
-                md_lines.append(f"  see also: {', '.join(str(t) for t in item.get('see_also') or [])}")
-            headings = [str(h.get("text") or "").strip() for h in (item.get("headings") or []) if isinstance(h, dict)]
-            if headings:
-                md_lines.append(f"  sections: {'; '.join(headings)}")
+            md_lines += ["", f"### {title}"]
+            for item in items:
+                summary = str(item.get("summary") or "").strip()
+                line = f"- {item.get('path')} — {item.get('title')}"
+                if summary:
+                    line += f": {summary}"
+                md_lines.append(line)
+    md_lines += [
+        "",
+        "## Retrieval index",
+        f"- `index.json` contains {len(entries)} metadata rows for compatibility.",
+        "- `.cache/knowledge_search.sqlite` is the retrieval index used by `react.search_knowledge` and the doc-reader MCP.",
+        "- Search results return compact hits; read exact hits instead of loading the whole catalog.",
+    ]
     try:
         index_md_path.write_text("\n".join(md_lines).strip() + "\n", encoding="utf-8")
     except Exception as exc:

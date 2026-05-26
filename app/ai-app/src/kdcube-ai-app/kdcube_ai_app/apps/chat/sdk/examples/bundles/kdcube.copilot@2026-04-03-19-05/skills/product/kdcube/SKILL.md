@@ -202,14 +202,19 @@ Exec exploration note:
 
 ## Knowledge space navigation
 This bundle exposes a read‑only knowledge space:
-- Start with `react.read(["ks:index.md"])` to see the current index.
-- Use `react.search_knowledge(query=..., root="ks:docs")` to search docs.
-- Use `react.read(["ks:docs/<path>"])` to open a doc.
+- Start with `react.search_knowledge(query=..., root="ks:docs")` for documentation retrieval.
+- Use `react.search_knowledge(query=..., root="ks:deployment")` for deployment markdown.
+- Use `react.read(["ks:docs/<path>"])` to open an exact search hit.
 - Use `react.read(["ks:<real-app-ai-app-relative-path>"])` when a doc or result gives you an exact path such as `ks:src/...` or `ks:deployment/...`.
 These are real app-relative paths under one common `ks:` root, not special platform-mandated namespace folders.
-The index is generated on bundle startup by scanning `docs/` and deployment markdown under the prepared common root.
+The retrieval index is SQLite-backed and is generated on bundle startup by scanning `docs/` and deployment markdown under the prepared common root.
 Doc pages should mention real `app/ai-app`-relative paths such as `src/...`, `deployment/...`, `docs/...`, or `ui/...`.
 The bundle prepares one common root from the repo configured in bundle props (`knowledge.repo`, `knowledge.ref`, `knowledge.root`).
+
+Discovery order:
+1. Search with `react.search_knowledge`.
+2. Read exact search hits with `react.read`.
+3. Browse a narrow `ks:` subtree in exec only when exact paths are still unclear.
 
 Important limitations:
 - `react.search_knowledge` primarily indexes docs metadata and deployment markdown, not the whole source tree.

@@ -6,5 +6,5 @@ tools:
     role: open knowledge sources
     why: "Read docs, sources, or deploy artifacts from the knowledge space by ks: path."
   - id: react.search_knowledge
-    role: knowledge navigation
-    why: Search the local knowledge space index and docs for KDCube details.
+    role: primary knowledge navigation
+    why: Search the SQLite-backed local knowledge catalog before reading exact KDCube docs or source paths.

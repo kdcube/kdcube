@@ -108,6 +108,7 @@ import sys
 
 # Unique bundle ID — used by the plugin system to discover and load this bundle
 BUNDLE_ID = "kdcube.copilot"
+KNOWLEDGE_INDEX_SCHEMA = "sqlite-fts-v1"
 KB_ADMIN_TURN_KINDS = ("regular", "followup", "steer")
 TELEGRAM_ADMIN_ROLE = "kdcube:role:super-admin"
 TELEGRAM_WEBHOOK_SECRET_HEADER = "X-Telegram-Bot-Api-Secret-Token"
@@ -319,6 +320,8 @@ def _knowledge_outputs_ready(
     if not (storage_root / "index.json").exists():
         return False
     if not (storage_root / "index.md").exists():
+        return False
+    if not (storage_root / ".cache" / "knowledge_search.sqlite").exists():
         return False
     if source_root:
         for name in ("docs", "deployment", "src", "ui"):
@@ -1350,7 +1353,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
             storage_root=storage_root,
         )
         ws_root = _knowledge_root_for_storage(storage_root)
-        signature = f"{repo}|{ref}|{source_root}|{validate_refs}"
+        signature = f"{KNOWLEDGE_INDEX_SCHEMA}|{repo}|{ref}|{source_root}|{validate_refs}"
         return (
             ws_root,
             bundle_root,
@@ -1399,7 +1402,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
             storage_root=storage_root,
         )
         ws_root = _knowledge_root_for_storage(storage_root)
-        signature = f"{repo}|{ref}|{source_root}|{validate_refs}"
+        signature = f"{KNOWLEDGE_INDEX_SCHEMA}|{repo}|{ref}|{source_root}|{validate_refs}"
         return (
             ws_root,
             bundle_root,
@@ -1510,7 +1513,8 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
                     f"src={(ws_root / 'src').exists()} "
                     f"ui={(ws_root / 'ui').exists()} "
                     f"index_json={(ws_root / 'index.json').exists()} "
-                    f"index_md={(ws_root / 'index.md').exists()}"
+                    f"index_md={(ws_root / 'index.md').exists()} "
+                    f"sqlite_index={(ws_root / '.cache' / 'knowledge_search.sqlite').exists()}"
                 ),
                 "INFO",
             )
