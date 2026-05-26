@@ -1,52 +1,67 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.5.25.1545"
+  ref: "2026.5.26.250"
   description: |
-    This platform release tightens delegated authentication handling and
-    Cognito token validation, with a small frontend telemetry compatibility
-    fix.
+    This platform release improves bundle startup preload behavior, widget
+    embed control, telemetry event sinks, and bundle-builder lifecycle
+    guidance, with an additional Cognito validation alignment.
 
     Highlights
 
-    - Adds direct delegated-cookie support for embedded control-plane
-      deployments that receive already-issued auth and identity cookies from a
-      same-site parent application.
-    - Wires configurable auth and identity cookie names through CLI and ECS
-      deployment paths so proxy configuration follows descriptor values.
-    - Documents the same-site iframe integration model, required cookie
-      attributes, and the current delegated-auth expectations.
-    - Tightens Cognito JWT validation so ID tokens must validate audience and
-      token type, while access tokens must match the configured app client and
-      carry the expected access-token type.
-    - Aligns frontend event logging with the external log event enum by keeping
-      the native `warn` level instead of converting it to `warning`.
+    - Hardens startup bundle preload coordination across multi-worker proc
+      runtimes so workers claim bundles independently instead of blocking all
+      preload work behind one bundle.
+    - Adds per-bundle preload observability, lock ownership, timestamps,
+      retry/failure status, and clearer startup logging for diagnosing slow or
+      delayed bundle initialization.
+    - Reduces stale shared-storage UI lock impact, adds heartbeat/stale-lock
+      recovery, validates git-managed bundle caches beyond path existence, and
+      cleans stale widget build output when a widget is removed from bundle
+      configuration.
+    - Adds host-driven widget frame expand/collapse messaging and documents the
+      frame view contract for embedded bundle widgets.
+    - Improves stats telemetry sink conversation activity handling and related
+      event-sink documentation.
+    - Clarifies the bundle lifecycle contract: `BaseEntrypoint` family
+      `on_bundle_load(...)` overrides must preserve the base hook unless they
+      intentionally replace bundle prop refresh and static UI build behavior.
+    - Clarifies that `kdcube refresh` restarts the stack by default unless
+      `--no-restart` is explicitly used.
+    - Aligns Cognito token checks with the validated claim model used by the
+      auth layer.
 
     Runtime and deployment notes:
 
-    - Deployments must point the platform ref at 2026.5.25.1545 to receive this
+    - Deployments must point the platform ref at 2026.5.26.250 to receive this
       update.
-    - Descriptor-driven deployments can configure the auth and identity cookie
-      names through the existing auth descriptor fields.
-    - Direct delegated cookies are accepted only as already-issued real auth
-      cookies; masquerade cookies are not required for this flow.
-    - Cognito role/group claims are trusted only after token signature, issuer,
-      token type, and app-client checks pass.
-    - No private deployment content is part of this OSS release.
+    - Descriptor-driven deployments should enable bundle preload when first-use
+      widget latency must be avoided.
+    - Bundle entrypoints that override `on_bundle_load(...)` and rely on
+      platform UI build support must call `await super().on_bundle_load(...)`.
+    - Git-backed bundle cache validation now checks repository metadata, ref,
+      subdir, and marker consistency before considering a managed bundle cache
+      reusable.
+    - No private deployment content is part of this platform release.
 
     Validation and regression coverage:
 
-    - Focused Cognito token validation tests passed.
-    - Release metadata diff check passed.
-    - Staged OSS private-name scan passed before commit.
+    - Local Docker runtime refresh verified that bundle preload starts on proc
+      startup and preloads configured widgets before live widget selection.
+    - Stats bundle preload path was validated against the corrected lifecycle
+      contract in the companion applications repository.
+    - Focused Python compile check passed for the affected bundle entrypoint in
+      the companion applications repository.
+    - Staged OSS private-name scan must pass before the release commit.
 
     Changelog
 
-    - Added direct delegated-cookie proxy support.
-    - Wired auth cookie names through CLI and ECS deployment configuration.
-    - Updated auth, proxy, CICD, and configuration docs for embedded frontend
-      integration.
-    - Enforced Cognito ID-token audience/type and access-token client/type
-      validation.
-    - Fixed frontend event logging level typing for warning events.
+    - Hardened startup bundle preload coordination and observability.
+    - Added stale UI lock recovery and stale widget output cleanup.
+    - Strengthened git-managed bundle cache validation.
+    - Added host-driven widget expand/collapse messaging for embedded frames.
+    - Updated stats telemetry sink conversation activity handling.
+    - Updated bundle lifecycle, UI lifecycle, platform integration, and Tier 1
+      builder docs for preload, `on_bundle_load(...)`, and `refresh` behavior.
+    - Aligned Cognito token validation checks.
 config:
-    version: "2026.5.25.1545"
+    version: "2026.5.26.250"
