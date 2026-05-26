@@ -53,6 +53,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.http_ops import (
     BundleFileResponse,
     BundleUploadedFile,
 )
+from kdcube_ai_app.apps.chat.sdk.infra.control_plane.storage import summarize_registry_bundles
 from kdcube_ai_app.infra.plugin.bundle_store import (
     load_registry,
     BundlesRegistry,
@@ -1395,6 +1396,32 @@ async def get_available_bundles(
     }
 
 
+@admin_router.get("/admin/integrations/bundles/storage-registry")
+async def get_bundle_storage_registry(
+        request: Request,
+        tenant: Optional[str] = None,
+        project: Optional[str] = None,
+        session: UserSession = Depends(auth_without_pressure()),
+):
+    """Return active bundle registry fields used by storage operations."""
+    del session
+    settings = get_settings()
+    tenant_id = tenant or settings.TENANT
+    project_id = project or settings.PROJECT
+    try:
+        redis = _get_app_redis(request)
+        reg = await load_registry(redis, tenant_id, project_id)
+    except Exception:
+        raise HTTPException(status_code=503, detail="Failed to load bundles registry for tenant/project")
+    summary = summarize_registry_bundles(reg.bundles, default_bundle_id=reg.default_bundle_id)
+    return {
+        "tenant": tenant_id,
+        "project": project_id,
+        **summary,
+        "authority": describe_authoritative_bundle_store(tenant_id, project_id),
+    }
+
+
 @router.get("/bundles")
 async def get_bundles(
         request: Request,
@@ -2319,6 +2346,7 @@ async def serve_static_asset(
         bundle_id: str,
         request: Request,
         path: str = "index.html",
+        base_href: Optional[str] = None,
         session: UserSession = Depends(require_auth(RequireUser())),
 ):
     """
@@ -2471,9 +2499,9 @@ async def serve_static_asset(
     # resolve correctly when the HTML is embedded via srcDoc in an iframe.
     if target.name == "index.html":
         from fastapi.responses import HTMLResponse
-        base_href = f"/api/integrations/static/{tenant}/{project}/{bundle_id}/"
+        resolved_base = base_href or f"/api/integrations/static/{tenant}/{project}/{bundle_id}/"
         content = target.read_text(encoding="utf-8")
-        content = _inject_kdcube_resize_reporter(content, base_href=base_href)
+        content = _inject_kdcube_resize_reporter(content, base_href=resolved_base)
         return HTMLResponse(content=content, headers={"Cache-Control": "no-cache"})
 
     rel_parts = target.relative_to(ui_root).parts
@@ -2506,6 +2534,39 @@ async def bundle_static_asset(
 ):
     return await serve_static_asset(tenant=tenant, project=project, bundle_id=bundle_id, path=path, request=request,
                                     session=session)
+
+
+# Public (no-auth) main-UI shell, mirroring /public/widgets. Serves the built
+# SPA to anonymous visitors so a bundle's main view can be embedded on a public
+# page (e.g. a landing site). The shell is not sensitive; data is still gated by
+# the bundle's authed APIs, and the app resolves identity itself via /profile.
+@router.get("/bundles/{tenant}/{project}/{bundle_id}/public/static")
+async def bundle_static_asset_public(
+        tenant: str,
+        project: str,
+        bundle_id: str,
+        request: Request,
+):
+    return await serve_static_asset(
+        tenant=tenant, project=project, bundle_id=bundle_id, request=request,
+        base_href=f"/api/integrations/bundles/{tenant}/{project}/{bundle_id}/public/static/",
+        session=_build_public_api_request_session(request),
+    )
+
+
+@router.get("/bundles/{tenant}/{project}/{bundle_id}/public/static/{path:path}")
+async def bundle_static_asset_public_path(
+        tenant: str,
+        project: str,
+        bundle_id: str,
+        path: str,
+        request: Request,
+):
+    return await serve_static_asset(
+        tenant=tenant, project=project, bundle_id=bundle_id, path=path, request=request,
+        base_href=f"/api/integrations/bundles/{tenant}/{project}/{bundle_id}/public/static/",
+        session=_build_public_api_request_session(request),
+    )
 
 
 @router.post("/bundles/{tenant}/{project}/{bundle_id}/public/{operation}")

@@ -89,6 +89,8 @@ def build_frontend_config() -> dict[str, Any]:
         routes_prefix=_text(settings.plain("proxy.route_prefix")) or None,
         company_name=_text(settings.plain("company")) or None,
         turnstile_development_token=_text(settings.plain("auth.turnstile_development_token")) or None,
+        auth_token_cookie_name=_text(getattr(auth_cfg, "AUTH_TOKEN_COOKIE_NAME", "")) or None,
+        id_token_cookie_name=_text(getattr(auth_cfg, "ID_TOKEN_COOKIE_NAME", "")) or None,
     )
 
 

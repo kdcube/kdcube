@@ -178,6 +178,8 @@ def build_frontend_config(
     routes_prefix: Optional[str] = None,
     company_name: Optional[str] = None,
     turnstile_development_token: Optional[str] = None,
+    auth_token_cookie_name: Optional[str] = None,
+    id_token_cookie_name: Optional[str] = None,
 ) -> dict[str, Any]:
     """
     Build the public frontend runtime config.
@@ -243,6 +245,21 @@ def build_frontend_config(
         auth["turnstileDevelopmentToken"] = turnstile_token
     elif is_placeholder(as_text(auth.get("turnstileDevelopmentToken"))):
         auth.pop("turnstileDevelopmentToken", None)
+
+    # Non-masquerade auth cookie names, so a parent page (e.g. a co-located
+    # landing site) can set exactly the cookies the proxy reads for the
+    # embedded same-origin widgets. Source: assembly auth.*_cookie_name with the
+    # platform defaults.
+    auth["authTokenCookieName"] = (
+        as_text(auth_token_cookie_name)
+        or as_text(get_nested(assembly or {}, "auth", "auth_token_cookie_name"))
+        or "__Secure-LATC"
+    )
+    auth["idTokenCookieName"] = (
+        as_text(id_token_cookie_name)
+        or as_text(get_nested(assembly or {}, "auth", "id_token_cookie_name"))
+        or "__Secure-LITC"
+    )
 
     merged["auth"] = auth
     return merged
