@@ -28,9 +28,16 @@ def _collect_py_files(root: Path) -> List[Path]:
 
 def _scan_event_types(text: str) -> Set[str]:
     out: Set[str] = set()
+    # kwarg / bare-key forms: type='x', type: 'x', etype='x'
     for m in re.finditer(r"(?<!\[)\btype\s*[:=]\s*['\"]([a-zA-Z0-9_.-]+)['\"]", text):
         out.add(m.group(1))
     for m in re.finditer(r"\betype\s*=\s*['\"]([a-zA-Z0-9_.-]+)['\"]", text):
+        out.add(m.group(1))
+    # JSON / dict-literal form with a quoted key: "type": "chat.conversation.title".
+    # Some envelopes (e.g. emit_conversation_title in base_workflow.py) are built
+    # as a dict literal, which the bare-key patterns above miss. The prefix filter
+    # in _build_catalog keeps this from pulling in unrelated "type" keys.
+    for m in re.finditer(r"""['"]type['"]\s*:\s*['"]([a-zA-Z0-9_.-]+)['"]""", text):
         out.add(m.group(1))
     return out
 

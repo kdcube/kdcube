@@ -248,6 +248,47 @@ These are produced by the base workflow. Clients should treat them as `chat_step
 
 ---
 
+**Conversation Title (`conversation_title`)**
+
+The backend auto-names a conversation **while the turn is still running** — usually
+right after the first user message of a new conversation. It announces the name as
+a step event so the client can update the conversation header live, instead of
+waiting until the turn completes.
+
+- It rides the `chat_step` route (some deployments also echo it on `chat_delta`),
+  so **match on `event.step`, not on `env.type`**.
+- `env.type = "chat.conversation.title"`, `event.step = "conversation_title"`,
+  `event.status = "completed"`.
+- The name is in `data.title`.
+
+Envelope:
+
+```json
+{
+  "type": "chat.conversation.title",
+  "route": "chat_step",
+  "conversation": { "conversation_id": "conv_123", "turn_id": "turn_123" },
+  "event": { "step": "conversation_title", "status": "completed", "title": "Conversation named" },
+  "data": { "title": "Inspecting a zip and generating an Excel report" }
+}
+```
+
+Client guidance:
+
+- When `event.step === "conversation_title"`, set the conversation title from
+  `data.title` **immediately**, and do not render it as a visible timeline/step
+  entry.
+- Apply it live; do **not** wait for `chat_complete` or for a conversations-list
+  refresh to surface the name. The stored `conversation_title` on the conversation
+  record (and the list endpoint) are a fallback for clients that reload history,
+  not the primary signal during a live turn. Treating the list refresh as the only
+  source is the common bug that leaves the header on its placeholder
+  ("Untitled conversation") until the turn ends.
+- A brand-new conversation has no name yet; show a placeholder until this event
+  arrives.
+
+---
+
 **ReAct Compaction Events (`chat_compaction`)**
 
 Long ReAct turns can hit a context budget while they are still running. When the runtime actually starts or completes a compaction pass, it emits `env.type = "chat.compaction"` on the `chat_compaction` route.
@@ -714,6 +755,7 @@ python kdcube-ai-app/app/ai-app/docs/sdk/bundle/scripts/gen_sse_event_catalog.py
 **Generated Event Catalog (static scan)**
 
 SSE route names:
+- `chat_compaction`
 - `chat_complete`
 - `chat_delta`
 - `chat_error`
@@ -728,9 +770,14 @@ Event `type` values:
 - `accounting.usage`
 - `analytics.rate_limit.post_run_exceeded`
 - `assistant.completion`
+- `assistant.completion.attempt`
 - `chat.attachments`
 - `chat.citations`
+- `chat.compaction`
 - `chat.complete`
+- `chat.conversation.accepted`
+- `chat.conversation.title`
+- `chat.conversation.turn.completed`
 - `chat.delta`
 - `chat.error`
 - `chat.exec_report`
@@ -739,15 +786,40 @@ Event `type` values:
 - `chat.followups`
 - `chat.start`
 - `chat.step`
+- `chat.turn.summary`
 - `conv.range.summary`
+- `conv.status`
+- `conv.working.summary`
 - `economics.user_underfunded_absorbed`
 - `queue.continuation.accepted`
+- `queue.enqueue_rejected`
 - `rate_limit.ai_services_quota`
 - `rate_limit.attachment_failure`
 - `rate_limit.lane_switch`
 - `rate_limit.warning`
+- `react.current_turn.compaction_checkpoint`
 - `react.decision.raw`
+- `react.exit`
+- `react.note`
+- `react.notes`
+- `react.notice`
+- `react.plan`
+- `react.plan.ack`
+- `react.plan.active`
+- `react.plan.history`
+- `react.pruned.turn_status`
+- `react.round.start`
+- `react.rounds.compacted`
+- `react.skill.read`
+- `react.state`
+- `react.thinking`
+- `react.tool.call`
+- `react.tool.code`
+- `react.tool.result`
+- `react.turn.finalize`
+- `react.workspace.checkout`
 - `react.workspace.publish`
+- `solver.react.action`
 - `solver.react.decision`
 - `timeline.external.accepted`
 - `timeline.external.steer.cancel_requested`
@@ -759,19 +831,6 @@ Event `type` values:
 - `user.attachment.text`
 - `user.followup`
 - `user.prompt`
-
-`chat.files` is emitted for hosted file artifacts. Files may come from built-in
-rendering/exec tools, from custom tool results that return
-`ret.artifact_type: "files"`, or from trusted bundle/catalog tools that call
-`bundle_tool_context.host_files(...)`. Clients should treat all of these as the
-same hosted-file surface and use the hosted metadata (`hosted_uri`, `rn`, `key`,
-`filename`, `mime`) supplied in the event payload.
-
-`host_files(...)` itself requires prepared runtime scope in the tool process:
-tenant, project, user id, conversation id, turn id, conversation storage, and a
-hosting-capable `ToolSubsystem`. Normal React workflows prepare that through
-`BaseWorkflow.build_react(...)`; isolated tool execution prepares it through
-`bootstrap_bind_all(...)`.
 
 Delta markers:
 - `answer`

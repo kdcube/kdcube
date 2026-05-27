@@ -709,6 +709,17 @@ export function applyConvStatus(state: ChatState, env: ConvStatusEnvelope): Chat
 }
 
 export function applyChatStep(state: ChatState, env: ChatStepEnvelope): ChatState {
+  /* The backend names the conversation mid-turn via a `conversation_title` step
+   * (the title arrives in data.title). Apply it straight to the header so it
+   * updates live, instead of waiting for the post-turn conversations-list
+   * refresh — and don't record it as a timeline step. Mirrors the OSS chat
+   * client (chat-web-app).
+   * Contract: docs/sdk/bundle/bundle-chat-stream-events-README.md
+   * ("Conversation Title (`conversation_title`)"). */
+  if (env.event?.step === 'conversation_title') {
+    const title = typeof env.data?.title === 'string' ? env.data.title.trim() : ''
+    return title ? { ...state, conversationTitle: title } : state
+  }
   const syncedState = syncConversationFromEnvelope(
     ensureTurn(state, env.conversation.turn_id, timestampValue(env.timestamp)),
     env,
@@ -792,6 +803,12 @@ export function applyChatStep(state: ChatState, env: ChatStepEnvelope): ChatStat
 }
 
 export function applyChatDelta(state: ChatState, env: ChatDeltaEnvelope): ChatState {
+  /* Some deployments emit `conversation_title` on the delta route; honor it
+   * here too so the header updates live (see applyChatStep). */
+  if (env.event?.step === 'conversation_title') {
+    const title = typeof env.data?.title === 'string' ? env.data.title.trim() : ''
+    return title ? { ...state, conversationTitle: title } : state
+  }
   const turnId = env.conversation.turn_id
   const timestamp = timestampValue(env.timestamp)
   const marker = env.delta?.marker || 'answer'
