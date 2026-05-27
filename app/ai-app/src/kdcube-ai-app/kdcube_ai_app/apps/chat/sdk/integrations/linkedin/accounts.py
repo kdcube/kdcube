@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 import aiofiles
+import aiofiles.os
 import httpx
 
 try:
@@ -136,12 +137,8 @@ async def oauth_state_secret(entrypoint: Any) -> str:
         await _secret_lookup(
             "b:integrations.linkedin.oauth_state_secret",
             f"bundles.{bundle_id}.secrets.integrations.linkedin.oauth_state_secret",
-            "b:integrations.email.oauth_state_secret",
-            f"bundles.{bundle_id}.secrets.integrations.email.oauth_state_secret",
-            "b:integrations.telegram.webhook_secret",
-            f"bundles.{bundle_id}.secrets.integrations.telegram.webhook_secret",
         )
-        or str(entrypoint.bundle_prop("integrations.linkedin.oauth.state_secret", "") or "").strip()
+        or str(entrypoint.bundle_prop("integrations.linkedin.oauth_state_secret", "") or "").strip()
     )
 
 
@@ -226,19 +223,6 @@ class LinkedInAccountStore:
     def _empty_accounts(self) -> Dict[str, Any]:
         return {"schema_version": "linkedin-accounts.v1", "updated_at": _utc_now(), "accounts": []}
 
-    def _read_accounts_doc(self) -> Dict[str, Any]:
-        if not self.accounts_path.exists():
-            return self._empty_accounts()
-        try:
-            data = json.loads(self.accounts_path.read_text(encoding="utf-8"))
-        except Exception:
-            return self._empty_accounts()
-        if not isinstance(data, dict):
-            return self._empty_accounts()
-        if not isinstance(data.get("accounts"), list):
-            data["accounts"] = []
-        return data
-
     async def _read_accounts_doc_async(self) -> Dict[str, Any]:
         if not self.accounts_path.exists():
             return self._empty_accounts()
@@ -253,14 +237,6 @@ class LinkedInAccountStore:
             data["accounts"] = []
         return data
 
-    def _write_accounts_doc(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        data["schema_version"] = "linkedin-accounts.v1"
-        data["updated_at"] = _utc_now()
-        tmp = self.accounts_path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(data, indent=2, sort_keys=True, ensure_ascii=True) + "\n", encoding="utf-8")
-        tmp.replace(self.accounts_path)
-        return data
-
     async def _write_accounts_doc_async(self, data: Dict[str, Any]) -> Dict[str, Any]:
         data["schema_version"] = "linkedin-accounts.v1"
         data["updated_at"] = _utc_now()
@@ -269,19 +245,6 @@ class LinkedInAccountStore:
             await fh.write(json.dumps(data, indent=2, sort_keys=True, ensure_ascii=True) + "\n")
         tmp.replace(self.accounts_path)
         return data
-
-    def list_accounts(self) -> List[Dict[str, Any]]:
-        rows: List[Dict[str, Any]] = []
-        for raw in self._read_accounts_doc().get("accounts") or []:
-            if not isinstance(raw, dict):
-                continue
-            account_id = str(raw.get("account_id") or "").strip()
-            if not account_id:
-                continue
-            item = dict(raw)
-            item["has_token"] = bool(self.get_tokens(account_id))
-            rows.append(item)
-        return sorted(rows, key=lambda item: str(item.get("display_name") or item.get("account_id") or ""))
 
     async def list_accounts_async(self) -> List[Dict[str, Any]]:
         rows: List[Dict[str, Any]] = []
@@ -295,43 +258,6 @@ class LinkedInAccountStore:
             item["has_token"] = bool(await self.get_tokens_async(account_id))
             rows.append(item)
         return sorted(rows, key=lambda item: str(item.get("display_name") or item.get("account_id") or ""))
-
-    def upsert_account(self, account: Mapping[str, Any]) -> Dict[str, Any]:
-        now = _utc_now()
-        provider = "linkedin"
-        person_id = str(account.get("person_id") or "").strip()
-        account_id = str(account.get("account_id") or "").strip()
-        if not account_id:
-            account_id = f"linkedin_{_safe_segment(person_id or uuid.uuid4().hex, fallback='account')}"
-        row = {
-            "account_id": account_id,
-            "provider": provider,
-            "person_id": person_id,
-            "email": str(account.get("email") or "").strip(),
-            "display_name": str(account.get("display_name") or person_id or account_id).strip(),
-            "status": str(account.get("status") or "connected").strip().lower() or "connected",
-            "scope": list(account.get("scope") or []),
-            "connected_at": str(account.get("connected_at") or now),
-            "updated_at": now,
-            "last_error": str(account.get("last_error") or "").strip(),
-        }
-        data = self._read_accounts_doc()
-        rows = [item for item in data.get("accounts") or [] if isinstance(item, dict)]
-        existing = next((item for item in rows if str(item.get("account_id") or "") == account_id), None)
-        if existing is None and person_id:
-            existing = next(
-                (item for item in rows if str(item.get("person_id") or "") == person_id),
-                None,
-            )
-        if existing:
-            row["account_id"] = str(existing.get("account_id") or account_id)
-            existing.update({key: value for key, value in row.items() if value not in (None, "") or key in {"last_error"}})
-            row = existing
-        else:
-            rows.append(row)
-        data["accounts"] = rows
-        self._write_accounts_doc(data)
-        return dict(row)
 
     async def upsert_account_async(self, account: Mapping[str, Any]) -> Dict[str, Any]:
         now = _utc_now()
@@ -370,18 +296,6 @@ class LinkedInAccountStore:
         await self._write_accounts_doc_async(data)
         return dict(row)
 
-    def delete_account(self, account_id: str) -> bool:
-        wanted = str(account_id or "").strip()
-        data = self._read_accounts_doc()
-        rows = [item for item in data.get("accounts") or [] if isinstance(item, dict)]
-        kept = [item for item in rows if str(item.get("account_id") or "") != wanted]
-        deleted = len(kept) != len(rows)
-        data["accounts"] = kept
-        self._write_accounts_doc(data)
-        if deleted:
-            self.delete_tokens(wanted)
-        return deleted
-
     async def delete_account_async(self, account_id: str) -> bool:
         wanted = str(account_id or "").strip()
         data = await self._read_accounts_doc_async()
@@ -398,9 +312,6 @@ class LinkedInAccountStore:
     def token_secret_key(account_id: str) -> str:
         return f"linkedin.accounts.{_safe_segment(account_id, fallback='account')}.tokens"
 
-    def set_tokens(self, account_id: str, tokens: Mapping[str, Any]) -> None:
-        raise RuntimeError("LinkedIn token storage is async-only; use set_tokens_async().")
-
     async def set_tokens_async(self, account_id: str, tokens: Mapping[str, Any]) -> None:
         if set_user_secret is None:
             raise RuntimeError("async user-scoped secret storage is unavailable")
@@ -410,9 +321,6 @@ class LinkedInAccountStore:
             user_id=self.user_id,
             bundle_id=self.bundle_id,
         )
-
-    def get_tokens(self, account_id: str) -> Dict[str, Any]:
-        raise RuntimeError("LinkedIn token storage is async-only; use get_tokens_async().")
 
     async def get_tokens_async(self, account_id: str) -> Dict[str, Any]:
         if get_secret is None:
@@ -430,9 +338,6 @@ class LinkedInAccountStore:
             return {}
         return parsed if isinstance(parsed, dict) else {}
 
-    def delete_tokens(self, account_id: str) -> None:
-        raise RuntimeError("LinkedIn token storage is async-only; use delete_tokens_async().")
-
     async def delete_tokens_async(self, account_id: str) -> None:
         if delete_user_secret is None:
             return
@@ -445,7 +350,7 @@ class LinkedInAccountStore:
         digest = hashlib.sha256(state.encode("utf-8")).hexdigest()
         return self.states_dir / f"{digest}.json"
 
-    def create_oauth_state(
+    async def create_oauth_state_async(
         self,
         *,
         secret: str,
@@ -470,10 +375,11 @@ class LinkedInAccountStore:
         encoded = _b64url_json(payload)
         sig = hmac.new(str(secret).encode("utf-8"), encoded.encode("utf-8"), hashlib.sha256).hexdigest()
         state = f"{encoded}.{sig}"
-        self._state_path(state).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        async with aiofiles.open(self._state_path(state), "w", encoding="utf-8") as fh:
+            await fh.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
         return {"state": state, "payload": payload}
 
-    def consume_oauth_state(self, *, state: str, secret: str) -> Dict[str, Any]:
+    async def consume_oauth_state_async(self, *, state: str, secret: str) -> Dict[str, Any]:
         raw = str(state or "").strip()
         if "." not in raw:
             raise ValueError("LinkedIn OAuth state is invalid")
@@ -485,9 +391,9 @@ class LinkedInAccountStore:
         if int(payload.get("exp") or 0) < int(time.time()):
             raise ValueError("LinkedIn OAuth state expired")
         path = self._state_path(raw)
-        if not path.exists():
+        if not await aiofiles.os.path.exists(path):
             raise ValueError("LinkedIn OAuth state was not found or already used")
-        path.unlink()
+        await aiofiles.os.remove(path)
         return payload
 
 
@@ -502,7 +408,7 @@ async def build_linkedin_authorize_url(
     client_id = linkedin_client_id(entrypoint)
     if not client_id:
         raise ValueError("integrations.linkedin.client_id is not configured")
-    state = store.create_oauth_state(
+    state = await store.create_oauth_state_async(
         secret=await oauth_state_secret(entrypoint),
         source=source,
         return_hint=return_hint,
@@ -807,6 +713,10 @@ async def add_linkedin_comment(
     to attach an image. reply_to_comment_urn is a composite comment URN
     (urn:li:comment:(urn:li:activity:...,commentId)) for nested replies.
     """
+    # TODO(linkedin): validate this helper against the current LinkedIn Comments API
+    # before exposing it as production-supported. Current LinkedIn docs describe
+    # /rest/socialActions with a Linkedin-Version header and a different image
+    # attachment shape than the legacy /v2 endpoint below.
     import urllib.parse as _urlparse
     url = f"{LINKEDIN_SOCIAL_ACTIONS_URL}/{_urlparse.quote(post_urn, safe='')}/comments"
     payload: Dict[str, Any] = {

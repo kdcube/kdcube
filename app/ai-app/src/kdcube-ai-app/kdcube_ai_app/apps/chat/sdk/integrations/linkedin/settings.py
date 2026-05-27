@@ -16,12 +16,18 @@ from kdcube_ai_app.apps.chat.sdk.integrations.linkedin.accounts import (
     linkedin_scopes,
     oauth_state_secret,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.bundle_registry import (
+    configured_bundle_id,
+    register_config,
+    resolve_config,
+)
 
 BUNDLE_ID = ""
 
 _storage_root_or_error: Callable[[Any], Any] | None = None
 _target_user_id: Callable[..., str] | None = None
 _resolve_identity: Callable[..., Any] | None = None
+_CONFIGS: Dict[str, Dict[str, Any]] = {}
 
 
 def configure_linkedin_settings(
@@ -37,24 +43,41 @@ def configure_linkedin_settings(
     _storage_root_or_error = storage_root_or_error
     _target_user_id = target_user_id
     _resolve_identity = resolve_identity
+    register_config(
+        _CONFIGS,
+        bundle_id=BUNDLE_ID,
+        config={
+            "storage_root_or_error": storage_root_or_error,
+            "target_user_id": target_user_id,
+            "resolve_identity": resolve_identity,
+        },
+    )
+
+
+def _config(entrypoint: Any = None) -> Dict[str, Any]:
+    cfg = resolve_config(_CONFIGS, entrypoint=entrypoint, label="LinkedIn settings integration")
+    if not cfg.get("storage_root_or_error") or not cfg.get("target_user_id"):
+        raise RuntimeError("LinkedIn settings integration is not configured")
+    return cfg
+
+
+def _bundle_id(entrypoint: Any = None) -> str:
+    return configured_bundle_id(_config(entrypoint)) or BUNDLE_ID
 
 
 def _storage_root(entrypoint: Any) -> Any:
-    if _storage_root_or_error is None:
-        raise RuntimeError("LinkedIn settings integration is not configured: storage_root_or_error is missing")
-    return _storage_root_or_error(entrypoint)
+    return _config(entrypoint)["storage_root_or_error"](entrypoint)
 
 
 def _target_user(entrypoint: Any, *, user_id: Optional[str] = None, fingerprint: Optional[str] = None) -> str:
-    if _target_user_id is None:
-        raise RuntimeError("LinkedIn settings integration is not configured: target_user_id is missing")
-    return _target_user_id(entrypoint, user_id=user_id, fingerprint=fingerprint)
+    return _config(entrypoint)["target_user_id"](entrypoint, user_id=user_id, fingerprint=fingerprint)
 
 
 def _telegram_identity(entrypoint: Any, *, request: Any = None, telegram_init_data: str = "") -> Any:
-    if _resolve_identity is None:
+    resolver = _config(entrypoint).get("resolve_identity")
+    if resolver is None:
         raise RuntimeError("LinkedIn settings integration is not configured: resolve_identity is missing")
-    return _resolve_identity(entrypoint, request=request, telegram_init_data=telegram_init_data)
+    return resolver(entrypoint, request=request, telegram_init_data=telegram_init_data)
 
 
 def _configured(value: str) -> bool:
@@ -64,7 +87,7 @@ def _configured(value: str) -> bool:
 
 def store_for(entrypoint: Any, *, user_id: Optional[str] = None, fingerprint: Optional[str] = None) -> tuple[LinkedInAccountStore, str]:
     resolved_user = _target_user(entrypoint, user_id=user_id, fingerprint=fingerprint)
-    return LinkedInAccountStore(_storage_root(entrypoint), user_id=resolved_user, bundle_id=BUNDLE_ID), resolved_user
+    return LinkedInAccountStore(_storage_root(entrypoint), user_id=resolved_user, bundle_id=_bundle_id(entrypoint)), resolved_user
 
 
 async def status(
@@ -76,7 +99,7 @@ async def status(
     store, resolved_user = store_for(entrypoint, user_id=user_id, fingerprint=fingerprint)
     enabled = bool(entrypoint.bundle_prop("integrations.linkedin.enabled", False))
     client_id_configured = _configured(linkedin_client_id(entrypoint))
-    client_secret_configured = _configured(await linkedin_client_secret(BUNDLE_ID))
+    client_secret_configured = _configured(await linkedin_client_secret(_bundle_id(entrypoint)))
     state_secret_configured = _configured(await oauth_state_secret(entrypoint))
     missing = []
     if not enabled:
@@ -169,7 +192,7 @@ async def callback(entrypoint: Any, *, request: Any = None, code: str = "", stat
 
     secret = await oauth_state_secret(entrypoint)
     try:
-        payload = LinkedInAccountStore(_storage_root(entrypoint), user_id="state-reader").consume_oauth_state(
+        payload = await LinkedInAccountStore(_storage_root(entrypoint), user_id="state-reader").consume_oauth_state_async(
             state=state,
             secret=secret,
         )
@@ -181,9 +204,9 @@ async def callback(entrypoint: Any, *, request: Any = None, code: str = "", stat
     if not user_id or not account_id:
         raise HTTPException(status_code=400, detail="OAuth state is missing user/account")
 
-    store = LinkedInAccountStore(_storage_root(entrypoint), user_id=user_id, bundle_id=BUNDLE_ID)
+    bundle_id = _bundle_id(entrypoint)
+    store = LinkedInAccountStore(_storage_root(entrypoint), user_id=user_id, bundle_id=bundle_id)
     try:
-        bundle_id = str(BUNDLE_ID or "").strip()
         token = await exchange_linkedin_code(
             code=code,
             redirect_uri=callback_url(entrypoint, request=request),

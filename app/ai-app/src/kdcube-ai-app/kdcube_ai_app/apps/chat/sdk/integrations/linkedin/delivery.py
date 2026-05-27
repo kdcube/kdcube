@@ -31,11 +31,11 @@ def strip_markdown(text: str) -> str:
     value = re.sub(r"```[^\n]*\n(.*?)\n```", r"\1", value, flags=re.DOTALL)
     value = re.sub(r"~~~[^\n]*\n(.*?)\n~~~", r"\1", value, flags=re.DOTALL)
 
-    # Markdown links  [label](url) → label (url)
-    value = re.sub(r"\[([^\]\n]+)\]\(([^)\s]+)\)", r"\1 (\2)", value)
-
     # Markdown images  ![alt](url) → alt
     value = re.sub(r"!\[([^\]\n]*)\]\([^)]*\)", r"\1", value)
+
+    # Markdown links  [label](url) → label (url)
+    value = re.sub(r"\[([^\]\n]+)\]\(([^)\s]+)\)", r"\1 (\2)", value)
 
     # Blockquotes  > text → text
     value = re.sub(r"^>\s*", "", value, flags=re.MULTILINE)

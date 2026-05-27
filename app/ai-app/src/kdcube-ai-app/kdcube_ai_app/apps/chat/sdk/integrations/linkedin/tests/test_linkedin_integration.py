@@ -15,7 +15,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.linkedin import settings as li_set
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
-def _make_entrypoint(props: dict | None = None) -> SimpleNamespace:
+def _make_entrypoint(props: dict | None = None, *, bundle_id: str = "test-bundle@1") -> SimpleNamespace:
     prop_map = props or {}
 
     def bundle_prop(key, default=None):
@@ -23,9 +23,9 @@ def _make_entrypoint(props: dict | None = None) -> SimpleNamespace:
 
     ns = SimpleNamespace(
         bundle_prop=bundle_prop,
-        bundle_id="test-bundle@1",
+        bundle_id=bundle_id,
         config=SimpleNamespace(
-            ai_bundle_spec=SimpleNamespace(id="test-bundle@1"),
+            ai_bundle_spec=SimpleNamespace(id=bundle_id),
         ),
         comm_context=SimpleNamespace(
             actor=SimpleNamespace(tenant_id="tenant1", project_id="proj1"),
@@ -41,6 +41,9 @@ def _make_store(tmp_path, user_id="user-1"):
 
 @pytest.fixture(autouse=True)
 def _sdk_secret_fakes(monkeypatch):
+    li_settings._CONFIGS.clear()
+    li_settings.BUNDLE_ID = ""
+
     async def _empty_get_secret(*args, **kwargs):
         return ""
 
@@ -55,13 +58,43 @@ def _sdk_secret_fakes(monkeypatch):
     monkeypatch.setattr(li_accounts, "delete_user_secret", _noop_delete_user_secret)
 
 
+@pytest.mark.asyncio
+async def test_oauth_state_secret_uses_linkedin_secret_only(monkeypatch):
+    seen: list[str] = []
+
+    async def _get_secret(key, **kw):
+        seen.append(str(key))
+        if "integrations.email.oauth_state_secret" in str(key):
+            return "wrong-email-secret"
+        if "integrations.telegram.webhook_secret" in str(key):
+            return "wrong-telegram-secret"
+        return ""
+
+    monkeypatch.setattr(li_accounts, "get_secret", _get_secret)
+    ep = _make_entrypoint()
+
+    assert await li_accounts.oauth_state_secret(ep) == ""
+    assert all("integrations.email" not in key for key in seen)
+    assert all("integrations.telegram" not in key for key in seen)
+
+
+@pytest.mark.asyncio
+async def test_oauth_state_secret_uses_documented_bundle_prop():
+    ep = _make_entrypoint({"integrations.linkedin.oauth_state_secret": "prop-secret"})
+    assert await li_accounts.oauth_state_secret(ep) == "prop-secret"
+
+    old_key_ep = _make_entrypoint({"integrations.linkedin.oauth.state_secret": "old-prop-secret"})
+    assert await li_accounts.oauth_state_secret(old_key_ep) == ""
+
+
 # ── OAuth state: create and consume ───────────────────────────────────────────
 
-def test_oauth_state_roundtrip(tmp_path):
+@pytest.mark.asyncio
+async def test_oauth_state_roundtrip(tmp_path):
     store = _make_store(tmp_path)
     secret = "test-secret-abc"
 
-    result = store.create_oauth_state(secret=secret, source="settings", return_hint="back")
+    result = await store.create_oauth_state_async(secret=secret, source="settings", return_hint="back")
     state = result["state"]
     payload = result["payload"]
 
@@ -70,52 +103,57 @@ def test_oauth_state_roundtrip(tmp_path):
     assert payload["source"] == "settings"
     assert payload["return_hint"] == "back"
 
-    consumed = store.consume_oauth_state(state=state, secret=secret)
+    consumed = await store.consume_oauth_state_async(state=state, secret=secret)
     assert consumed["user_id"] == "user-1"
     assert consumed["provider"] == "linkedin"
 
 
-def test_oauth_state_wrong_secret_rejected(tmp_path):
+@pytest.mark.asyncio
+async def test_oauth_state_wrong_secret_rejected(tmp_path):
     store = _make_store(tmp_path)
-    result = store.create_oauth_state(secret="correct", source="settings")
+    result = await store.create_oauth_state_async(secret="correct", source="settings")
     with pytest.raises(ValueError, match="signature"):
-        store.consume_oauth_state(state=result["state"], secret="wrong")
+        await store.consume_oauth_state_async(state=result["state"], secret="wrong")
 
 
-def test_oauth_state_tampered_payload_rejected(tmp_path):
+@pytest.mark.asyncio
+async def test_oauth_state_tampered_payload_rejected(tmp_path):
     store = _make_store(tmp_path)
-    result = store.create_oauth_state(secret="s3cr3t", source="settings")
+    result = await store.create_oauth_state_async(secret="s3cr3t", source="settings")
     state = result["state"]
     encoded, sig = state.rsplit(".", 1)
     tampered = encoded[:-2] + "AA" + "." + sig
     with pytest.raises(ValueError):
-        store.consume_oauth_state(state=tampered, secret="s3cr3t")
+        await store.consume_oauth_state_async(state=tampered, secret="s3cr3t")
 
 
-def test_oauth_state_expired(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_oauth_state_expired(tmp_path, monkeypatch):
     store = _make_store(tmp_path)
-    result = store.create_oauth_state(secret="s3cr3t", source="settings", ttl_seconds=1)
+    result = await store.create_oauth_state_async(secret="s3cr3t", source="settings", ttl_seconds=1)
     state = result["state"]
     # Wind the clock forward past the TTL — capture real time.time before patching
     real_now = time.time()
     monkeypatch.setattr(li_accounts.time, "time", lambda: real_now + 10)
     with pytest.raises(ValueError, match="expired"):
-        store.consume_oauth_state(state=state, secret="s3cr3t")
+        await store.consume_oauth_state_async(state=state, secret="s3cr3t")
 
 
-def test_oauth_state_replay_rejected(tmp_path):
+@pytest.mark.asyncio
+async def test_oauth_state_replay_rejected(tmp_path):
     store = _make_store(tmp_path)
-    result = store.create_oauth_state(secret="s3cr3t", source="settings")
+    result = await store.create_oauth_state_async(secret="s3cr3t", source="settings")
     state = result["state"]
-    store.consume_oauth_state(state=state, secret="s3cr3t")  # first use ok
+    await store.consume_oauth_state_async(state=state, secret="s3cr3t")  # first use ok
     with pytest.raises(ValueError, match="not found"):
-        store.consume_oauth_state(state=state, secret="s3cr3t")  # replay rejected
+        await store.consume_oauth_state_async(state=state, secret="s3cr3t")  # replay rejected
 
 
-def test_oauth_state_requires_non_empty_secret(tmp_path):
+@pytest.mark.asyncio
+async def test_oauth_state_requires_non_empty_secret(tmp_path):
     store = _make_store(tmp_path)
     with pytest.raises(ValueError, match="not configured"):
-        store.create_oauth_state(secret="", source="settings")
+        await store.create_oauth_state_async(secret="", source="settings")
 
 
 # ── Account store: upsert + tokens ───────────────────────────────────────────
@@ -224,6 +262,21 @@ async def test_delete_account_removes_entry(tmp_path, monkeypatch):
     assert deleted is True
     assert await store.list_accounts_async() == []
     assert any(account_id in k for k in deleted_keys)
+
+
+def test_account_store_exposes_async_account_and_token_operations_only(tmp_path):
+    store = _make_store(tmp_path)
+    for name in (
+        "list_accounts",
+        "upsert_account",
+        "delete_account",
+        "set_tokens",
+        "get_tokens",
+        "delete_tokens",
+        "create_oauth_state",
+        "consume_oauth_state",
+    ):
+        assert not hasattr(store, name)
 
 
 # ── create_linkedin_post ──────────────────────────────────────────────────────
@@ -390,6 +443,58 @@ async def test_settings_status_returns_accounts(tmp_path, monkeypatch):
     assert result["accounts"][0]["has_token"] is True
 
 
+@pytest.mark.asyncio
+async def test_settings_resolves_per_bundle_configuration(tmp_path, monkeypatch):
+    async def _get_secret(key, **kw):
+        raw_key = str(key)
+        if raw_key.startswith("u:"):
+            return '{"access_token":"tok"}'
+        if "oauth_state_secret" in raw_key:
+            return "state-secret"
+        if "client_secret" in raw_key:
+            return "client-secret"
+        return ""
+
+    monkeypatch.setattr(li_accounts, "get_secret", _get_secret)
+
+    root_a = tmp_path / "bundle-a"
+    root_b = tmp_path / "bundle-b"
+    li_settings.configure_linkedin_settings(
+        storage_root_or_error=lambda ep: root_a,
+        target_user_id=lambda ep, **kw: "user-a",
+        bundle_id="bundle-a@1",
+    )
+    li_settings.configure_linkedin_settings(
+        storage_root_or_error=lambda ep: root_b,
+        target_user_id=lambda ep, **kw: "user-b",
+        bundle_id="bundle-b@1",
+    )
+
+    await li_accounts.LinkedInAccountStore(root_a, user_id="user-a", bundle_id="bundle-a@1").upsert_account_async(
+        {"person_id": "A", "display_name": "Account A"}
+    )
+    await li_accounts.LinkedInAccountStore(root_b, user_id="user-b", bundle_id="bundle-b@1").upsert_account_async(
+        {"person_id": "B", "display_name": "Account B"}
+    )
+
+    ep_a = _make_entrypoint(
+        {"integrations.linkedin.enabled": True, "integrations.linkedin.client_id": "client-a"},
+        bundle_id="bundle-a@1",
+    )
+    ep_b = _make_entrypoint(
+        {"integrations.linkedin.enabled": True, "integrations.linkedin.client_id": "client-b"},
+        bundle_id="bundle-b@1",
+    )
+
+    result_a = await li_settings.status(ep_a)
+    result_b = await li_settings.status(ep_b)
+
+    assert result_a["user_id"] == "user-a"
+    assert [item["display_name"] for item in result_a["accounts"]] == ["Account A"]
+    assert result_b["user_id"] == "user-b"
+    assert [item["display_name"] for item in result_b["accounts"]] == ["Account B"]
+
+
 # ── delivery: strip_markdown ──────────────────────────────────────────────────
 
 @pytest.mark.parametrize("input_text,expected_fragment", [
@@ -413,6 +518,11 @@ def test_strip_markdown_removes_syntax(input_text, expected_fragment):
     # Markdown syntax characters that wrapped the content should be gone
     for char in ("**", "__", "~~", "```"):
         assert char not in result
+
+
+def test_strip_markdown_image_does_not_leak_url_or_marker():
+    result = li_delivery.strip_markdown("![alt text](https://img.example.com/pic.png)")
+    assert result == "alt text"
 
 
 def test_strip_markdown_fenced_code_block():
