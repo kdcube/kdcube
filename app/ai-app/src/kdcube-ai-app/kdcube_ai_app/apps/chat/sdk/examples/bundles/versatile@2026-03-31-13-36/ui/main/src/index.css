@@ -714,6 +714,15 @@ a { color: inherit; }
    column is position:relative) rather than fixed to the window. */
 .k-scroll-to-bottom.k-scroll-in-tile { position: absolute; right: 14px; bottom: 104px; }
 
+/* Turn status-line accounting: a small gold coin + cost, and the wall time. */
+.k-turn-meta { display: inline-flex; align-items: center; gap: 10px; font-size: 11px;
+  color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.k-turn-cost { display: inline-flex; align-items: center; gap: 4px; }
+.k-coin { display: inline-flex; align-items: center; justify-content: center;
+  width: 14px; height: 14px; border-radius: 50%; background: #E8B04B; color: #3A2A06;
+  font-size: 9px; font-weight: 800; line-height: 1; }
+.k-turn-time { color: var(--muted); }
+
 /* Message toolbar (copy on hover for user/assistant message body) */
 .k-msg { position: relative; }
 .k-msg-toolbar {

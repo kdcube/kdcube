@@ -307,6 +307,8 @@ export function createEmptyTurn(turnId: string, createdAt: number, message = '')
     artifacts: [],
     timeline: [],
     followups: [],
+    costUsd: null,
+    elapsedMs: null,
   }
 }
 
@@ -726,6 +728,15 @@ export function applyChatStep(state: ChatState, env: ChatStepEnvelope): ChatStat
   )
   return updateTurn(syncedState, env.conversation.turn_id, (turn) => {
     const timestamp = timestampValue(env.timestamp)
+    /* Turn accounting for the status line: cost from the `accounting.usage`
+     * event (step "accounting"), wall time from `chat.turn.summary` (step
+     * "turn.summary"). Both arrive once near the end of the turn. */
+    const costUsd = env.event.step === 'accounting' && typeof env.data?.cost_total_usd === 'number'
+      ? env.data.cost_total_usd
+      : turn.costUsd
+    const elapsedMs = env.event.step === 'turn.summary' && typeof env.data?.elapsed_ms === 'number'
+      ? env.data.elapsed_ms
+      : turn.elapsedMs
     const nextStep: TurnStep = {
       step: env.event.step,
       title: env.event.title,
@@ -793,6 +804,8 @@ export function applyChatStep(state: ChatState, env: ChatStepEnvelope): ChatStat
 
     return {
       ...turn,
+      costUsd,
+      elapsedMs,
       steps: {
         ...turn.steps,
         [env.event.step]: nextStep,

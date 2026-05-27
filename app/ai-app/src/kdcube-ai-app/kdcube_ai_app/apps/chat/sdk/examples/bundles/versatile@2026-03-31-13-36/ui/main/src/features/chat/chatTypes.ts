@@ -211,6 +211,11 @@ export interface ChatTurn {
   artifacts: Artifact[]
   timeline: TimelineEntry[]
   followups: string[]
+  /* Turn accounting, populated at the end of the turn: cost from the
+   * `accounting.usage` event (data.cost_total_usd) and wall time from the
+   * `chat.turn.summary` event (data.elapsed_ms). Null until those arrive. */
+  costUsd?: number | null
+  elapsedMs?: number | null
 }
 
 export interface ChatState {
