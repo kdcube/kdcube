@@ -3,11 +3,13 @@
 from dataclasses import dataclass
 # chat/sdk/storage/rn.py
 
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 def _safe(s: str) -> str:
-    # only protect ':' which we use as RN separators
-    return (s or "").replace(":", "%3A")
+    return quote(s or "", safe="")
+
+def rn_unescape(s: str) -> str:
+    return unquote(s or "")
 
 def rn_message(tenant: str, project: str,
                user_id: str,
@@ -52,14 +54,14 @@ FILE_PATH_RE = re.compile(
     r'^cb/tenants/(?P<tenant>[^/]+)/projects/(?P<project>[^/]+)/attachments/'
     r'(?P<user_id>[^/]+)/'
     r'(?P<conversation_id>[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12})/'
-    r'(?P<turn_id>[^/]+)/(?P<filename>[^/]+)$'
+    r'(?P<turn_id>[^/]+)/(?P<filename>.+)$'
 )
 
 LEGACY_FILE_PATH_RE = re.compile(
     r'^cb/tenants/(?P<tenant>[^/]+)/projects/(?P<project>[^/]+)/attachments/(?P<role>[^/]+)/'
     r'(?P<user_id>[^/]+)/'
     r'(?P<conversation_id>[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12})/'
-    r'(?P<turn_id>[^/]+)/(?P<filename>[^/]+)$'
+    r'(?P<turn_id>[^/]+)/(?P<filename>.+)$'
 )
 
 def parse_file_path(path: str) -> dict:

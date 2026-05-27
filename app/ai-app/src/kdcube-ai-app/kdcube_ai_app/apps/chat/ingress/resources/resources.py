@@ -5,6 +5,7 @@
 from typing import List, Dict, Any, Optional
 import logging
 import json, io, mimetypes, re
+from pathlib import PurePosixPath
 from urllib.parse import unquote, quote
 
 from pydantic import BaseModel
@@ -13,6 +14,7 @@ from fastapi.responses import StreamingResponse
 
 from kdcube_ai_app.apps.chat.ingress.resolvers import require_auth, get_project, get_tenant_dep
 from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore
+from kdcube_ai_app.apps.chat.sdk.storage.rn import rn_unescape
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.auth.AuthManager import PRIVILEGED_ROLES, RequireUser
 from kdcube_ai_app.auth.sessions import UserSession
@@ -60,6 +62,18 @@ def _ok_headers(filename: str, mime: str, as_attachment: bool) -> dict:
 def _is_text_mime(mt: str) -> bool:
     return (mt or "").startswith("text/") or mt in ("application/json","application/xml")
 
+def _safe_resource_relpath(value: str, *, label: str = "path", url_encoded: bool = True) -> str:
+    rel = str(value or "")
+    if url_encoded:
+        rel = unquote(rel)
+    rel = rel.replace("\\", "/")
+    if not rel or "\x00" in rel or rel.startswith("/") or rel.endswith("/"):
+        raise HTTPException(status_code=400, detail=f"Invalid {label}")
+    parts = rel.split("/")
+    if any(part in ("", ".", "..") for part in parts):
+        raise HTTPException(status_code=400, detail=f"Invalid {label}")
+    return str(PurePosixPath(rel))
+
 def _parse_chatbot_rn(rn: str) -> Dict[str, Any]:
     # ef:<tenant>:<project>:chatbot:<stage>:<user_id>:<conversation_id>:<turn_id>:<role>:<tail...>
     parts = rn.split(":")
@@ -69,7 +83,7 @@ def _parse_chatbot_rn(rn: str) -> Dict[str, Any]:
         "tenant": parts[1],
         "project": parts[2],
         "stage": parts[4],
-        "user_id": parts[5].replace("%3A", ":"),
+        "user_id": rn_unescape(parts[5]),
         "conversation_id": parts[6],
         "turn_id": parts[7],
         "role": parts[8],
@@ -128,7 +142,7 @@ async def chatbot_content_by_rn(req: RNContentRequest,
         if stage == "message":
             if len(tail) < 1:
                 raise HTTPException(status_code=400, detail="Missing message_id")
-            message_id = tail[0]
+            message_id = rn_unescape(tail[0])
             legacy = [conv_rel_legacy(w, owner_id, message_id) for w in ("registered", "anonymous", "privileged", "paid")]
             rel = _pick_existing_rel(store, [conv_rel(owner_id, message_id)] + legacy)
             if not rel:
@@ -143,7 +157,7 @@ async def chatbot_content_by_rn(req: RNContentRequest,
         if stage in ("file", "attachment"):
             if len(tail) < 1:
                 raise HTTPException(status_code=400, detail="Missing filename")
-            filename = tail[0].replace("%3A", ":")
+            filename = _safe_resource_relpath(rn_unescape(tail[0]), label="filename", url_encoded=False)
             legacy = [att_rel_legacy(w, owner_id, filename) for w in ("registered", "anonymous", "privileged", "paid")]
             rel = _pick_existing_rel(store, [att_rel(owner_id, filename)] + legacy)
             if not rel:
@@ -177,8 +191,12 @@ async def chatbot_content_by_rn(req: RNContentRequest,
         if stage == "execution":
             if len(tail) < 2:
                 raise HTTPException(status_code=400, detail="Execution RN must be :execution:<kind>:<rel_path>")
-            kind = tail[0]
-            rel_path = "/".join([seg.replace("%3A", ":") for seg in tail[1:]])
+            kind = rn_unescape(tail[0])
+            rel_path = _safe_resource_relpath(
+                rn_unescape(":".join(tail[1:])),
+                label="execution path",
+                url_encoded=False,
+            )
             legacy = [exec_rel_legacy(w, owner_id, kind, rel_path) for w in ("registered", "anonymous", "privileged", "paid")]
             rel = _pick_existing_rel(store, [exec_rel(owner_id, kind, rel_path)] + legacy)
             if not rel:
@@ -211,7 +229,7 @@ async def chatbot_content_by_rn(req: RNContentRequest,
         if stage == "citable":
             if len(tail) < 1:
                 raise HTTPException(status_code=400, detail="Missing message_id")
-            message_id = tail[0]
+            message_id = rn_unescape(tail[0])
             pick = _pick_namespace_exists(store, tenant, project, owner_id, conv_id, turn_id,
                                           lambda who, uid: conv_rel(who, uid, message_id))
             if not pick:
@@ -232,7 +250,7 @@ async def chatbot_content_by_rn(req: RNContentRequest,
 
 # --------------------- ATTACHMENTS ---------------------
 
-@router.get("/{tenant}/{project}/conv/{owner_id}/{conversation_id}/turn/{turn_id}/attachment/{filename}/preview")
+@router.get("/{tenant}/{project}/conv/{owner_id}/{conversation_id}/turn/{turn_id}/attachment/{filename:path}/preview")
 async def preview_cb_attachment(
     tenant: str = Depends(get_tenant_dep),
     project: str = Depends(get_project),
@@ -248,7 +266,7 @@ async def preview_cb_attachment(
             raise HTTPException(status_code=403, detail="Forbidden")
 
         store = ConversationStore(get_settings().STORAGE_PATH)
-        filename = unquote(filename)
+        filename = _safe_resource_relpath(filename, label="filename")
 
         # try both namespaces with provided owner_id
         rels = [
@@ -272,7 +290,7 @@ async def preview_cb_attachment(
         logger.exception("preview_cb_attachment error")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/{tenant}/{project}/conv/{owner_id}/{conversation_id}/turn/{turn_id}/attachment/{filename}/download")
+@router.get("/{tenant}/{project}/conv/{owner_id}/{conversation_id}/turn/{turn_id}/attachment/{filename:path}/download")
 async def download_cb_attachment(
     tenant: str = Depends(get_tenant_dep),
     project: str = Depends(get_project),
@@ -303,7 +321,7 @@ async def preview_cb_exec_file(
             raise HTTPException(status_code=403, detail="Forbidden")
 
         store = ConversationStore(get_settings().STORAGE_PATH)
-        rel_path = unquote(path)
+        rel_path = _safe_resource_relpath(path, label="execution path")
 
         rels = [
             f"cb/tenants/{tenant}/projects/{project}/executions/{owner_id}/{conversation_id}/{turn_id}/{kind}/{rel_path}"
