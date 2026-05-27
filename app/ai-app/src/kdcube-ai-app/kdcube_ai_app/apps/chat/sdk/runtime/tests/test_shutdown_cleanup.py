@@ -36,6 +36,23 @@ def test_drop_executor_identity_clears_root_supplementary_group(monkeypatch):
     ]
 
 
+def test_effective_capabilities_parser_reads_cap_eff():
+    assert iso_runtime._effective_capabilities_from_proc_status("Name:\tpython\nCapEff:\t0000000000000000\n") == 0
+    assert iso_runtime._effective_capabilities_from_proc_status("CapEff:\t0000000000000020\n") == 0x20
+    assert iso_runtime._effective_capabilities_from_proc_status("Name:\tpython\n") is None
+
+
+def test_assert_no_effective_capabilities_rejects_retained_caps(monkeypatch, tmp_path):
+    status = tmp_path / "status"
+    status.write_text("Name:\tpython\nCapEff:\t0000000000000020\n", encoding="utf-8")
+
+    monkeypatch.setattr(iso_runtime.sys, "platform", "linux")
+    monkeypatch.setattr(iso_runtime.pathlib, "Path", lambda value: status if value == "/proc/self/status" else pathlib.Path(value))
+
+    with pytest.raises(PermissionError, match="retained effective capabilities"):
+        iso_runtime._assert_no_effective_capabilities()
+
+
 def test_workspace_limit_violation_detects_new_large_file(tmp_path):
     root = tmp_path / "out"
     root.mkdir()
@@ -51,7 +68,7 @@ def test_workspace_limit_violation_detects_new_large_file(tmp_path):
         baseline=baseline,
         current=current,
         max_file_bytes=64,
-        max_workspace_bytes=1024,
+        max_exec_workspace_delta_bytes=1024,
     )
 
     assert violation is not None
@@ -71,8 +88,89 @@ def test_workspace_limit_violation_ignores_unchanged_baseline_file(tmp_path):
         baseline=baseline,
         current=current,
         max_file_bytes=64,
-        max_workspace_bytes=1024,
+        max_exec_workspace_delta_bytes=1024,
     ) is None
+
+
+def test_workspace_roots_include_executor_log_dirs(tmp_path):
+    outdir = tmp_path / "out"
+    workdir = tmp_path / "work"
+    logdir = tmp_path / "logs" / "executor"
+    alt_logdir = tmp_path / "executor-log"
+    for path in (outdir, workdir, logdir, alt_logdir):
+        path.mkdir(parents=True)
+
+    roots = iso_runtime._workspace_roots(
+        env={
+            "OUTPUT_DIR": str(outdir),
+            "WORKDIR": str(workdir),
+            "LOG_DIR": str(logdir),
+            "EXECUTOR_LOG_DIR": str(alt_logdir),
+        },
+        cwd=workdir,
+        outdir=outdir,
+    )
+
+    root_paths = {path.resolve() for path in roots}
+    assert logdir.resolve() in root_paths
+    assert alt_logdir.resolve() in root_paths
+
+
+def test_workspace_limit_violation_detects_turn_total(tmp_path):
+    root = tmp_path / "out"
+    root.mkdir()
+    existing = root / "existing.bin"
+    existing.write_bytes(b"x" * 40)
+    baseline = iso_runtime._snapshot_workspace_file_sizes([root])
+
+    generated = root / "generated.bin"
+    generated.write_bytes(b"x" * 20)
+    current = iso_runtime._snapshot_workspace_file_sizes([root])
+
+    violation = iso_runtime._workspace_limit_violation(
+        baseline=baseline,
+        current=current,
+        max_file_bytes=64,
+        max_exec_workspace_delta_bytes=1024,
+        max_workspace_bytes=50,
+    )
+
+    assert violation is not None
+    assert violation["error"] == "workspace_size_limit"
+    assert violation["size_bytes"] == 60
+    assert violation["offending_paths"][0].endswith("generated.bin")
+
+
+def test_workspace_limit_violation_detects_log_dir_growth(tmp_path):
+    outdir = tmp_path / "out"
+    workdir = tmp_path / "work"
+    logdir = tmp_path / "logs" / "executor"
+    for path in (outdir, workdir, logdir):
+        path.mkdir(parents=True)
+
+    roots = iso_runtime._workspace_roots(
+        env={
+            "OUTPUT_DIR": str(outdir),
+            "WORKDIR": str(workdir),
+            "LOG_DIR": str(logdir),
+        },
+        cwd=workdir,
+        outdir=outdir,
+    )
+    baseline = iso_runtime._snapshot_workspace_file_sizes(roots)
+    (logdir / "bulk.bin").write_bytes(b"x" * 128)
+    current = iso_runtime._snapshot_workspace_file_sizes(roots)
+
+    violation = iso_runtime._workspace_limit_violation(
+        baseline=baseline,
+        current=current,
+        max_file_bytes=1024,
+        max_exec_workspace_delta_bytes=64,
+    )
+
+    assert violation is not None
+    assert violation["error"] == "exec_workspace_delta_limit"
+    assert any(path.endswith("bulk.bin") for path in violation["offending_paths"])
 
 
 class _FakeProc:
@@ -176,6 +274,7 @@ def test_split_executor_argv_is_networkless_and_does_not_mount_supervisor_data(t
     assert "--cap-add=SETUID" in argv
     assert "--cap-add=SETGID" in argv
     assert "--cap-add=FOWNER" in argv
+    assert "--cap-add=KILL" in argv
     assert "--cap-add=SYS_ADMIN" not in argv
     assert "--cap-add=NET_ADMIN" not in argv
     assert "--read-only" in argv
@@ -786,6 +885,40 @@ async def test_iso_runtime_terminates_child_process_when_cancelled(tmp_path, mon
 
     assert fake_proc.terminate_calls == 1
     assert fake_proc.kill_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_iso_runtime_preflight_blocks_when_workspace_is_already_over_limit(tmp_path, monkeypatch):
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    (outdir / "existing.bin").write_bytes(b"x" * 16)
+
+    async def _fake_create_subprocess_exec(*_args, **_kwargs):
+        raise AssertionError("subprocess should not start when workspace is already over quota")
+
+    monkeypatch.setattr(iso_runtime.asyncio, "create_subprocess_exec", _fake_create_subprocess_exec)
+
+    result = await iso_runtime._run_subprocess(
+        entry_path=tmp_path / "entry.py",
+        cwd=outdir,
+        env={
+            "EXECUTION_ID": "exec-preflight-quota",
+            "EXEC_MAX_FILE_BYTES": "100",
+            "EXEC_MAX_WORKSPACE_DELTA_BYTES": "100",
+            "EXEC_MAX_WORKSPACE_BYTES": "3",
+            "EXEC_WORKSPACE_MONITOR_INTERVAL_S": "0.01",
+        },
+        timeout_s=60,
+        outdir=outdir,
+        allow_network=True,
+        exec_id="exec-preflight-quota",
+    )
+
+    assert result["ok"] is False
+    assert result["returncode"] == 153
+    assert result["error"] == "workspace_size_limit"
+    assert "workspace total exceeds max size" in result["error_summary"]
+    assert "workspace total exceeds max size" in (outdir / "logs" / "runtime.err.log").read_text(encoding="utf-8")
 
 
 @pytest.mark.asyncio

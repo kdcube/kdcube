@@ -2580,6 +2580,11 @@ def gather_configuration(
                 update_env_value(env_proxy, "TOKEN_MASQUERADE", str(token_masq).lower())
                 _set_nested(assembly_data, ["auth", "proxy_login", "token_masquerade"], token_masq)
 
+            enforce_mfa = parse_bool(proxy_login_cfg.get("enforce_mfa"))
+            if enforce_mfa is not None:
+                update_env_value(env_proxy, "COGNITO_ENFORCEMFA", str(enforce_mfa).lower())
+                _set_nested(assembly_data, ["auth", "proxy_login", "enforce_mfa"], enforce_mfa)
+
             reset_cfg = proxy_login_cfg.get("password_reset") if isinstance(proxy_login_cfg.get("password_reset"), dict) else {}
             reset_company = str(reset_cfg.get("company") or env_proxy.entries.get("PASSWORD_RESET_COMPANY", (None, None))[1] or "")
             reset_sender = str(reset_cfg.get("sender") or env_proxy.entries.get("PASSWORD_RESET_SENDER", (None, None))[1] or "")

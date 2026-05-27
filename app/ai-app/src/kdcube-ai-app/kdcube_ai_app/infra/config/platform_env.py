@@ -173,6 +173,9 @@ PLATFORM_ENV_GROUPS: dict[str, tuple[str, ...]] = {
     ),
     "exec_runtime": (
         "EXEC_DESCRIPTOR_PAYLOAD_SCOPE",
+        "EXEC_MAX_FILE_BYTES",
+        "EXEC_MAX_WORKSPACE_DELTA_BYTES",
+        "EXEC_MAX_WORKSPACE_BYTES",
         "EXEC_RUNTIME_MODE",
         "EXEC_WORKSPACE_ROOT",
         "FARGATE_ASSIGN_PUBLIC_IP",

@@ -209,7 +209,8 @@ platform:
     proc:
       exec:
         max_file_bytes: 100m
-        max_workspace_bytes: 250m
+        max_exec_workspace_delta_bytes: 250m
+        max_workspace_bytes: ""
         workspace_monitor_interval_s: 0.5
 ```
 
@@ -220,6 +221,7 @@ surface.
 The same values may be provided in an exec runtime profile as:
 ```yaml
 max_file_bytes: 100m
+max_exec_workspace_delta_bytes: 250m
 max_workspace_bytes: 250m
 workspace_monitor_interval_s: 0.5
 ```

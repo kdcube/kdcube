@@ -192,6 +192,7 @@ async def run_py_code(
         "EXECUTION_MODE",
         "EXEC_NO_UNEXPECTED_EXIT",
         "EXEC_MAX_FILE_BYTES",
+        "EXEC_MAX_WORKSPACE_DELTA_BYTES",
         "EXEC_MAX_WORKSPACE_BYTES",
         "EXEC_WORKSPACE_MONITOR_INTERVAL_S",
         "EXEC_BLOCK_AF_ALG",

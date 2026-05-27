@@ -29,7 +29,8 @@ from kdcube_ai_app.apps.chat.sdk.util import strip_lone_surrogates
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
 
 _DEFAULT_EXEC_MAX_FILE_BYTES = 100 * 1024 * 1024
-_DEFAULT_EXEC_MAX_WORKSPACE_BYTES = 250 * 1024 * 1024
+_DEFAULT_EXEC_MAX_WORKSPACE_DELTA_BYTES = 250 * 1024 * 1024
+_DEFAULT_EXEC_MAX_WORKSPACE_BYTES = None
 _DEFAULT_EXEC_WORKSPACE_MONITOR_INTERVAL_S = 0.5
 _AF_ALG = 38
 _SOCKET_SYSCALL_BY_MACHINE = {
@@ -38,6 +39,38 @@ _SOCKET_SYSCALL_BY_MACHINE = {
     "aarch64": 198,
     "arm64": 198,
 }
+
+
+def _effective_capabilities_from_proc_status(status_text: str) -> Optional[int]:
+    for line in (status_text or "").splitlines():
+        if not line.startswith("CapEff:"):
+            continue
+        raw = line.split(":", 1)[1].strip()
+        if not raw:
+            return None
+        try:
+            return int(raw, 16)
+        except ValueError:
+            return None
+    return None
+
+
+def _assert_no_effective_capabilities(*, logger=None) -> None:
+    if sys.platform != "linux":
+        return
+    try:
+        status_text = pathlib.Path("/proc/self/status").read_text(encoding="utf-8", errors="ignore")
+    except Exception as e:
+        if logger is not None:
+            logger.warning("[executor] Could not verify effective capabilities after UID drop: %s", e)
+        return
+    cap_eff = _effective_capabilities_from_proc_status(status_text)
+    if cap_eff is None:
+        if logger is not None:
+            logger.warning("[executor] Could not find CapEff in /proc/self/status after UID drop")
+        return
+    if cap_eff != 0:
+        raise PermissionError(f"executor child retained effective capabilities after UID drop: CapEff=0x{cap_eff:x}")
 
 
 def _drop_executor_identity(*, executor_uid: int, executor_gid: int, logger=None) -> None:
@@ -51,6 +84,7 @@ def _drop_executor_identity(*, executor_uid: int, executor_gid: int, logger=None
     os.umask(0o002)
     os.setgid(executor_gid)
     os.setuid(executor_uid)
+    _assert_no_effective_capabilities(logger=logger)
     if logger is not None:
         logger.info("[executor] Dropped to UID %s GID %s groups=[%s]", executor_uid, executor_gid, executor_gid)
 
@@ -255,6 +289,8 @@ def _workspace_roots(*, env: Mapping[str, str], cwd: pathlib.Path, outdir: pathl
         cwd,
         pathlib.Path(env["OUTPUT_DIR"]) if env.get("OUTPUT_DIR") else None,
         pathlib.Path(env["WORKDIR"]) if env.get("WORKDIR") else None,
+        pathlib.Path(env["LOG_DIR"]) if env.get("LOG_DIR") else None,
+        pathlib.Path(env["EXECUTOR_LOG_DIR"]) if env.get("EXECUTOR_LOG_DIR") else None,
     ]
     roots: List[pathlib.Path] = []
     seen: set[str] = set()
@@ -296,7 +332,8 @@ def _workspace_limit_violation(
         baseline: Dict[str, int],
         current: Dict[str, int],
         max_file_bytes: Optional[int],
-        max_workspace_bytes: Optional[int],
+        max_exec_workspace_delta_bytes: Optional[int],
+        max_workspace_bytes: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     changed: List[Tuple[str, int, int]] = []
     for path, size in current.items():
@@ -312,45 +349,40 @@ def _workspace_limit_violation(
                 "limit_bytes": max_file_bytes,
             }
 
+    if max_exec_workspace_delta_bytes is None:
+        created_bytes = 0
+    else:
+        created_bytes = sum(max(0, size - previous) for _path, size, previous in changed)
+        if created_bytes > max_exec_workspace_delta_bytes:
+            changed.sort(key=lambda item: max(0, item[1] - item[2]), reverse=True)
+            return {
+                "error": "exec_workspace_delta_limit",
+                "error_summary": f"exec workspace delta exceeds max size ({created_bytes} > {max_exec_workspace_delta_bytes} bytes)",
+                "size_bytes": created_bytes,
+                "limit_bytes": max_exec_workspace_delta_bytes,
+                "offending_paths": [path for path, _size, _previous in changed[:20]],
+            }
+
     if max_workspace_bytes is None:
         return None
 
-    created_bytes = sum(max(0, size - previous) for _path, size, previous in changed)
-    if created_bytes <= max_workspace_bytes:
+    current_total = sum(max(0, int(size)) for size in current.values())
+    if current_total <= max_workspace_bytes:
         return None
 
     changed.sort(key=lambda item: max(0, item[1] - item[2]), reverse=True)
+    if changed:
+        offending_paths = [path for path, _size, _previous in changed[:20]]
+    else:
+        largest = sorted(current.items(), key=lambda item: item[1], reverse=True)
+        offending_paths = [path for path, _size in largest[:20]]
     return {
         "error": "workspace_size_limit",
-        "error_summary": f"workspace output delta exceeds max size ({created_bytes} > {max_workspace_bytes} bytes)",
-        "size_bytes": created_bytes,
+        "error_summary": f"workspace total exceeds max size ({current_total} > {max_workspace_bytes} bytes)",
+        "size_bytes": current_total,
         "limit_bytes": max_workspace_bytes,
-        "offending_paths": [path for path, _size, _previous in changed[:20]],
+        "offending_paths": offending_paths,
     }
-
-
-def _cleanup_limit_violation_files(violation: Dict[str, Any], baseline: Dict[str, int], log: Any) -> None:
-    paths: List[str] = []
-    offending_path = violation.get("offending_path")
-    if isinstance(offending_path, str) and offending_path:
-        paths.append(offending_path)
-    for item in violation.get("offending_paths") or []:
-        if isinstance(item, str) and item:
-            paths.append(item)
-
-    for raw_path in dict.fromkeys(paths):
-        try:
-            path = pathlib.Path(raw_path)
-            current_size = path.stat().st_size if path.exists() else 0
-            if current_size <= int(baseline.get(str(path.resolve()), 0)):
-                continue
-            path.unlink(missing_ok=True)
-            try:
-                log.warning("[executor] Removed oversized generated file: %s", raw_path)
-            except Exception:
-                pass
-        except Exception:
-            continue
 
 
 def _run_in_executor_with_ctx(loop, fn, *args, **kwargs):
@@ -605,6 +637,11 @@ async def _run_subprocess(entry_path: pathlib.Path, *,
     EXECUTOR_GID = int(os.environ.get("EXECUTOR_GID", "1000"))
     _ensure_subprocess_temp_env(env, outdir=outdir)
     max_file_bytes = _exec_limit_bytes(env, "EXEC_MAX_FILE_BYTES", default=_DEFAULT_EXEC_MAX_FILE_BYTES)
+    max_exec_workspace_delta_bytes = _exec_limit_bytes(
+        env,
+        "EXEC_MAX_WORKSPACE_DELTA_BYTES",
+        default=_DEFAULT_EXEC_MAX_WORKSPACE_DELTA_BYTES,
+    )
     max_workspace_bytes = _exec_limit_bytes(
         env,
         "EXEC_MAX_WORKSPACE_BYTES",
@@ -651,6 +688,34 @@ async def _run_subprocess(entry_path: pathlib.Path, *,
     workspace_roots = _workspace_roots(env=env, cwd=cwd, outdir=outdir)
     workspace_baseline = _snapshot_workspace_file_sizes(workspace_roots)
     resource_violation: Optional[Dict[str, Any]] = None
+    startup_violation = _workspace_limit_violation(
+        baseline=workspace_baseline,
+        current=workspace_baseline,
+        max_file_bytes=max_file_bytes,
+        max_exec_workspace_delta_bytes=max_exec_workspace_delta_bytes,
+        max_workspace_bytes=max_workspace_bytes,
+    )
+    if startup_violation is not None:
+        summary = str(startup_violation.get("error_summary") or "execution workspace already exceeds filesystem limits")
+        try:
+            log.error("[executor] preflight: %s", summary)
+        except Exception:
+            pass
+        try:
+            log_dir = pathlib.Path(env.get("LOG_DIR") or (outdir / "logs"))
+            log_dir.mkdir(parents=True, exist_ok=True)
+            with open(log_dir / "runtime.err.log", "ab") as f:
+                f.write(f"[runtime] ERROR: {summary}\n".encode("utf-8", errors="ignore"))
+        except Exception:
+            pass
+        return {
+            "ok": False,
+            "returncode": 153,
+            "error": startup_violation.get("error") or "workspace_size_limit",
+            "stderr_tail": summary,
+            "error_summary": summary,
+            "details": startup_violation,
+        }
 
     if not allow_network:
         log.info(f"[_run_subprocess] Starting isolated executor (root->uid 1001, no network)")
@@ -682,7 +747,7 @@ async def _run_subprocess(entry_path: pathlib.Path, *,
 
     async def _monitor_workspace_limits() -> None:
         nonlocal resource_violation
-        if max_file_bytes is None and max_workspace_bytes is None:
+        if max_file_bytes is None and max_exec_workspace_delta_bytes is None and max_workspace_bytes is None:
             return
         while proc.returncode is None:
             current = _snapshot_workspace_file_sizes(workspace_roots)
@@ -690,6 +755,7 @@ async def _run_subprocess(entry_path: pathlib.Path, *,
                 baseline=workspace_baseline,
                 current=current,
                 max_file_bytes=max_file_bytes,
+                max_exec_workspace_delta_bytes=max_exec_workspace_delta_bytes,
                 max_workspace_bytes=max_workspace_bytes,
             )
             if violation is not None:
@@ -699,12 +765,16 @@ async def _run_subprocess(entry_path: pathlib.Path, *,
                     proc.terminate()
                 except ProcessLookupError:
                     pass
+                except PermissionError as e:
+                    log.error("[executor] failed to terminate over-limit process: %s", e)
                 await asyncio.sleep(1)
                 if proc.returncode is None:
                     try:
                         proc.kill()
                     except ProcessLookupError:
                         pass
+                    except PermissionError as e:
+                        log.error("[executor] failed to kill over-limit process: %s", e)
                 return
             await asyncio.sleep(monitor_interval_s)
 
@@ -804,13 +874,13 @@ async def _run_subprocess(entry_path: pathlib.Path, *,
         baseline=workspace_baseline,
         current=current_workspace,
         max_file_bytes=max_file_bytes,
+        max_exec_workspace_delta_bytes=max_exec_workspace_delta_bytes,
         max_workspace_bytes=max_workspace_bytes,
     )
     if final_violation is not None and resource_violation is None:
         resource_violation = final_violation
 
     if resource_violation is not None:
-        _cleanup_limit_violation_files(resource_violation, workspace_baseline, log)
         summary = str(resource_violation.get("error_summary") or "execution output exceeded filesystem limits")
         try:
             log_dir = pathlib.Path(env.get("LOG_DIR") or (outdir / "logs"))
@@ -822,7 +892,7 @@ async def _run_subprocess(entry_path: pathlib.Path, *,
         return {
             "ok": False,
             "returncode": proc.returncode if proc.returncode is not None else 153,
-            "error": resource_violation.get("error") or "workspace_size_limit",
+            "error": resource_violation.get("error") or "exec_workspace_delta_limit",
             "stderr_tail": stderr_tail,
             "error_summary": summary,
             "details": resource_violation,
@@ -2373,7 +2443,8 @@ class _InProcessRuntime:
             py_exec_cfg = None
         platform_limit_env = (
             ("EXEC_MAX_FILE_BYTES", getattr(py_exec_cfg, "EXEC_MAX_FILE_BYTES", "100m")),
-            ("EXEC_MAX_WORKSPACE_BYTES", getattr(py_exec_cfg, "EXEC_MAX_WORKSPACE_BYTES", "250m")),
+            ("EXEC_MAX_WORKSPACE_DELTA_BYTES", getattr(py_exec_cfg, "EXEC_MAX_WORKSPACE_DELTA_BYTES", "250m")),
+            ("EXEC_MAX_WORKSPACE_BYTES", getattr(py_exec_cfg, "EXEC_MAX_WORKSPACE_BYTES", "")),
             (
                 "EXEC_WORKSPACE_MONITOR_INTERVAL_S",
                 getattr(py_exec_cfg, "EXEC_WORKSPACE_MONITOR_INTERVAL_S", 0.5),
@@ -2384,12 +2455,10 @@ class _InProcessRuntime:
                 extra_env[env_key] = str(value).strip()
 
         limit_env_from_profile = (
-            ("EXEC_MAX_FILE_BYTES", ("max_file_bytes", "exec_max_file_bytes", "max_output_file_bytes")),
-            ("EXEC_MAX_WORKSPACE_BYTES", ("max_workspace_bytes", "exec_max_workspace_bytes", "max_output_bytes")),
-            (
-                "EXEC_WORKSPACE_MONITOR_INTERVAL_S",
-                ("workspace_monitor_interval_s", "exec_workspace_monitor_interval_s"),
-            ),
+            ("EXEC_MAX_FILE_BYTES", ("max_file_bytes",)),
+            ("EXEC_MAX_WORKSPACE_DELTA_BYTES", ("max_exec_workspace_delta_bytes",)),
+            ("EXEC_MAX_WORKSPACE_BYTES", ("max_workspace_bytes",)),
+            ("EXEC_WORKSPACE_MONITOR_INTERVAL_S", ("workspace_monitor_interval_s",)),
         )
         for env_key, cfg_keys in limit_env_from_profile:
             value = _pick_runtime_cfg(exec_runtime_cfg, *cfg_keys)

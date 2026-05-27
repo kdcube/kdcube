@@ -362,6 +362,7 @@ Use the detailed page for those reserved paths:
 For ISO runtime filesystem limits, platform defaults come from
 `assembly.yaml` under `platform.services.proc.exec`. A bundle may override only
 its own run with `execution.runtime.max_file_bytes`,
+`execution.runtime.max_exec_workspace_delta_bytes`,
 `execution.runtime.max_workspace_bytes`, and
 `execution.runtime.workspace_monitor_interval_s`.
 

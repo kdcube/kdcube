@@ -1,7 +1,7 @@
 ---
 id: ks:docs/sdk/agents/react/react-announce-README.md
 title: "React Announce"
-summary: "Announce block semantics and lifecycle in React v2."
+summary: "Announce block semantics and lifecycle in React v2/v3."
 tags: ["sdk", "agents", "react", "announce", "timeline"]
 keywords: ["announce banner", "system signals", "plan status", "feedback"]
 see_also:
@@ -11,7 +11,7 @@ see_also:
 ---
 # ReAct Announce Block (ANNOUNCE banner)
 
-This doc describes how the **announce** block is used for ReAct v2.
+This doc describes how the **announce** block is used for ReAct v2 and v3.
 
 ## What it is
 - An **ephemeral tail block** added by the runtime for each decision round.
@@ -21,6 +21,7 @@ This doc describes how the **announce** block is used for ReAct v2.
   - open-plan summary with plan ids, snapshot refs, and status markers (if any exist)
   - compact live-turn external event summary (`followup`, `steer`) when present
   - compact workspace status
+  - current isolated runtime limits and active workspace usage
   - authoritative temporal context (UTC + user timezone)
   - optional system notices (e.g., cache TTL pruning)
 
@@ -32,6 +33,28 @@ This doc describes how the **announce** block is used for ReAct v2.
 - During the loop: updated each round with a fresh ANNOUNCE.
 - On exit: the final announce block is **persisted** into the turn log blocks,
   then announce is cleared.
+
+## Runtime limits in ANNOUNCE
+ANNOUNCE includes a compact `[RUNTIME LIMITS]` section when runtime context is
+available.
+
+The section is recomputed for every decision round. It shows:
+- `exec file max`: maximum size of one file created by a single exec call
+- `exec workspace delta max`: maximum net-new writable bytes a single exec call may add
+- `active workspace max`: maximum total active workspace bytes, if configured
+- `active workspace used`: bytes currently present in the local active workspace
+- `remaining`: remaining active workspace capacity before the next exec call
+- `next exec new bytes max`: effective new-byte budget for the next exec call, computed as the smaller of `exec workspace delta max` and active-workspace `remaining`
+- `effective single new file max`: effective size for one newly created file, computed from the file cap and the next-exec byte budget
+
+The active workspace count includes files currently present in the local turn
+workspace, including current-turn files, outputs, materialized attachments, and
+exec work files. Hosted-only attachments and already-offloaded historical data do
+not count until they are materialized or pulled into the active workspace.
+
+This section is the authoritative round-local signal for output sizing. Older
+cached context or static bundle instructions may describe the policy, but ANNOUNCE
+contains the current remaining capacity.
 
 ## Feedback in ANNOUNCE
 - Feedback updates are fetched **only at turn start** (timeline load).
@@ -97,6 +120,11 @@ ANNOUNCE only shows current-turn live events. Historical preserved event blocks 
 [BUDGET]
   iterations  ███░░░░░░░  12 remaining
   time_elapsed_in_turn   2m15s
+
+[RUNTIME LIMITS]
+  exec file max=20MB; exec workspace delta max=50MB; active workspace max=50MB
+  active workspace used=12MB across 6 files; remaining=38MB; next exec new bytes max=38MB; effective single new file max=20MB
+  recomputed each round; materialized attachments and current-turn files/outputs count when present locally
 
 [AUTHORITATIVE TEMPORAL CONTEXT (GROUND TRUTH)]
   user_timezone: Europe/Berlin

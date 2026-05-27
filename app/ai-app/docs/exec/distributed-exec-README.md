@@ -398,6 +398,7 @@ config:
         - sg-xxxx
       assign_public_ip: DISABLED
       max_file_bytes: 100m
+      max_exec_workspace_delta_bytes: 250m
       max_workspace_bytes: 250m
       workspace_monitor_interval_s: 0.5
 ```

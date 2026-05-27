@@ -687,6 +687,65 @@ async def test_run_exec_tool_forwards_bundle_storage_dir_to_runtime(tmp_path, mo
 
 
 @pytest.mark.asyncio
+async def test_run_exec_tool_reports_runtime_quota_error_but_keeps_succeeded_artifacts(tmp_path, monkeypatch):
+    class _FakeRuntime:
+        def __init__(self, logger):
+            self.logger = logger
+
+        async def execute_py_code(self, **kwargs):
+            artifact_root = exec_tools_module.artifact_outdir_for(kwargs["output_dir"])
+            target = artifact_root / "turn_1" / "outputs" / "stats" / "report.txt"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("partial report\n", encoding="utf-8")
+            return {
+                "ok": False,
+                "returncode": 0,
+                "error": "workspace_size_limit",
+                "error_summary": "workspace total exceeds max size (10485760 > 3145728 bytes)",
+                "stderr_tail": "workspace total exceeds max size (10485760 > 3145728 bytes)",
+            }
+
+    monkeypatch.setattr(exec_tools_module, "_InProcessRuntime", _FakeRuntime)
+    monkeypatch.setattr(
+        exec_tools_module,
+        "build_portable_spec",
+        lambda **_kwargs: SimpleNamespace(to_json=lambda: "{}"),
+    )
+
+    tool_manager = SimpleNamespace(
+        svc=object(),
+        comm=SimpleNamespace(_export_comm_spec_for_runtime=lambda: {}),
+        export_runtime_globals=lambda: {},
+        tool_modules_tuple_list=lambda: [],
+        bundle_root=None,
+    )
+
+    result = await run_exec_tool(
+        tool_manager=tool_manager,
+        output_contract={},
+        code="print('ok')",
+        contract=[{
+            "name": "report",
+            "filename": "turn_1/outputs/stats/report.txt",
+            "mime": "text/plain",
+            "description": "Report text",
+            "visibility": "external",
+        }],
+        timeout_s=30,
+        workdir=tmp_path / "work",
+        outdir=tmp_path / "out",
+    )
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "workspace_size_limit"
+    assert result["succeeded"] == [{"artifact_id": "report", "filename": "turn_1/outputs/stats/report.txt"}]
+    assert len(result["items"]) == 1
+    assert result["items"][0]["output"]["path"] == "turn_1/outputs/stats/report.txt"
+    assert "Status: error" in result["report_text"]
+    assert "Succeeded:\n- report.txt" in result["report_text"]
+
+
+@pytest.mark.asyncio
 async def test_run_exec_tool_touches_task_activity_while_runtime_runs(tmp_path, monkeypatch):
     activity_kinds = []
 

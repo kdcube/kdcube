@@ -960,7 +960,8 @@ class Settings(PLATFORM_CONFIG):
                     PY_CODE_EXEC_NETWORK_MODE=self._resolve_str("PY_CODE_EXEC_NETWORK_MODE", f"{exec_p}.py_code_exec_network_mode", "host"),
                     PY_CODE_EXEC_CONTAINER_STRATEGY=self._resolve_str("PY_CODE_EXEC_CONTAINER_STRATEGY", f"{exec_p}.py_code_exec_container_strategy", "split"),
                     EXEC_MAX_FILE_BYTES=self._assembly_str(f"{exec_p}.max_file_bytes") or "100m",
-                    EXEC_MAX_WORKSPACE_BYTES=self._assembly_str(f"{exec_p}.max_workspace_bytes") or "250m",
+                    EXEC_MAX_WORKSPACE_DELTA_BYTES=self._assembly_str(f"{exec_p}.max_exec_workspace_delta_bytes") or "250m",
+                    EXEC_MAX_WORKSPACE_BYTES=self._assembly_str(f"{exec_p}.max_workspace_bytes"),
                     EXEC_WORKSPACE_MONITOR_INTERVAL_S=self._assembly_float(f"{exec_p}.workspace_monitor_interval_s") or 0.5,
                 ),
             ),
@@ -1394,6 +1395,9 @@ def export_managed_env(
     _put("PY_CODE_EXEC_TIMEOUT", resolved.PLATFORM.EXEC.PY.PY_CODE_EXEC_TIMEOUT)
     _put("PY_CODE_EXEC_NETWORK_MODE", resolved.PLATFORM.EXEC.PY.PY_CODE_EXEC_NETWORK_MODE)
     _put("PY_CODE_EXEC_CONTAINER_STRATEGY", resolved.PLATFORM.EXEC.PY.PY_CODE_EXEC_CONTAINER_STRATEGY)
+    _put("EXEC_MAX_FILE_BYTES", resolved.PLATFORM.EXEC.PY.EXEC_MAX_FILE_BYTES)
+    _put("EXEC_MAX_WORKSPACE_DELTA_BYTES", resolved.PLATFORM.EXEC.PY.EXEC_MAX_WORKSPACE_DELTA_BYTES)
+    _put("EXEC_MAX_WORKSPACE_BYTES", resolved.PLATFORM.EXEC.PY.EXEC_MAX_WORKSPACE_BYTES)
     _put("EXEC_WORKSPACE_ROOT", resolved.PLATFORM.EXEC.EXEC_WORKSPACE_ROOT)
     _put("REACT_DEBUG_ROOT", resolved.PLATFORM.REACT_DEBUG.REACT_DEBUG_ROOT)
     _put("REACT_DEBUG_KEEP_FILES", resolved.PLATFORM.REACT_DEBUG.REACT_DEBUG_KEEP_FILES)

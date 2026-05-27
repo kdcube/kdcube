@@ -36,6 +36,7 @@ auth:
   proxy_login:
     redis_key_prefix: "proxylogin:<TENANT>:<PROJECT>:"
     token_masquerade: true
+    enforce_mfa: false                    # COGNITO_ENFORCEMFA
     password_reset:
       company: "KDCube"
       sender: "info@example.com"
@@ -350,8 +351,9 @@ platform:
         py_code_exec_timeout: 600              # PY_CODE_EXEC_TIMEOUT
         py_code_exec_network_mode: "host"      # PY_CODE_EXEC_NETWORK_MODE
         py_code_exec_container_strategy: "split"  # PY_CODE_EXEC_CONTAINER_STRATEGY: combined | split
-        max_file_bytes: "100m"                 # Max single file the ISO runtime may create per run; "0"/"unlimited" disables
-        max_workspace_bytes: "250m"            # Max net-new workspace/output bytes the ISO runtime may create per run
+        max_file_bytes: "100m"                 # Max single file the ISO runtime may create per exec call; "0"/"unlimited" disables
+        max_exec_workspace_delta_bytes: "250m" # Max net-new monitored writable bytes the ISO runtime may create per exec call
+        max_workspace_bytes: ""                # Optional max total bytes in the active workspace before finalization/offload
         workspace_monitor_interval_s: 0.5      # ISO runtime workspace quota polling interval
 
       react_debug:

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.layout import build_announce_text
+from kdcube_ai_app.apps.chat.sdk.solutions.react.layout import build_announce_text
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.plan import (
     apply_plan_updates,
     build_plan_block,

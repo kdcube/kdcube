@@ -454,7 +454,7 @@ This property is reserved for bundle-level execution runtime control.
 
 It is copied into runtime context and then propagated into exec tool execution.
 The current primary use case is selecting Docker/Fargate execution and
-overriding ISO runtime limits per bundle run instead of relying only on
+overriding ISO runtime limits per bundle exec call instead of relying only on
 proc-wide assembly defaults.
 
 Example:
@@ -476,6 +476,7 @@ config:
         - sg-xxxx
       assign_public_ip: DISABLED
       max_file_bytes: 100m
+      max_exec_workspace_delta_bytes: 250m
       max_workspace_bytes: 250m
       workspace_monitor_interval_s: 0.5
 ```
@@ -552,8 +553,9 @@ Supported keys and defaults:
 | `cpus` | docker | unset | Passed as `--cpus <value>` |
 | `memory` | docker | unset | Passed as `--memory <value>` |
 | `extra_args` | docker | unset | Extra raw `docker run` args; list or shell-style string |
-| `max_file_bytes` | docker, fargate, local | `platform.services.proc.exec.max_file_bytes` -> `100m` | Max single generated file per run |
-| `max_workspace_bytes` | docker, fargate, local | `platform.services.proc.exec.max_workspace_bytes` -> `250m` | Max net-new workdir/outdir bytes per run |
+| `max_file_bytes` | docker, fargate, local | `platform.services.proc.exec.max_file_bytes` -> `100m` | Max single generated file per exec call |
+| `max_exec_workspace_delta_bytes` | docker, fargate, local | `platform.services.proc.exec.max_exec_workspace_delta_bytes` -> `250m` | Max net-new monitored writable bytes per exec call |
+| `max_workspace_bytes` | docker, fargate, local | `platform.services.proc.exec.max_workspace_bytes` -> unset | Optional max total bytes currently present in the active workspace writable roots before finalization/offload |
 | `workspace_monitor_interval_s` | docker, fargate, local | `platform.services.proc.exec.workspace_monitor_interval_s` -> `0.5` | Workspace quota polling interval |
 | `descriptor_payload_scope` | docker, fargate | `all` | `active_bundle` filters only `bundles.yaml` and `bundles.secrets.yaml` to the caller bundle before packaging descriptor payloads for the trusted supervisor |
 | `enabled` | fargate | `FARGATE_EXEC_ENABLED` -> disabled | Enables distributed exec |

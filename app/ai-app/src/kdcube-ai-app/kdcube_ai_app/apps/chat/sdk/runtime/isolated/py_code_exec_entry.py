@@ -41,6 +41,22 @@ from kdcube_ai_app.apps.chat.sdk.runtime.iso_runtime import apply_exec_file_size
 from kdcube_ai_app.apps.chat.sdk.runtime.isolated.supervisor_entry import PrivilegedSupervisor
 import kdcube_ai_app.apps.utils.logging_config as logging_config
 
+
+def _run_result_exit_code(res: object, *, default_failure: int = 1) -> int:
+    if not isinstance(res, dict):
+        return 0
+    if res.get("error") == "timeout":
+        return 124
+    rc = res.get("returncode")
+    ok = bool(res.get("ok", True))
+    has_error = bool(res.get("error"))
+    if ok and not has_error:
+        return int(rc) if isinstance(rc, int) else 0
+    if isinstance(rc, int) and rc != 0:
+        return rc
+    return int(default_failure)
+
+
 # Optional central registry; if you don’t have it yet, dynamic resolution will be used
 try:
     from kdcube_ai_app.apps.chat.sdk.runtime import tool_registry
@@ -768,11 +784,7 @@ async def _async_executor_main(logger: AgentLogger) -> int:
                 tail = stderr_tail[-4000:]
                 logger.log(f"[entry.executor] subprocess stderr tail:\n{tail}", level="ERROR")
                 _append_errors_log(f"[entry.executor] subprocess stderr tail:\n{tail}")
-        if res.get("error") == "timeout":
-            return 124
-        rc = res.get("returncode")
-        if isinstance(rc, int):
-            return rc
+        return _run_result_exit_code(res)
 
     return 0
 
@@ -991,12 +1003,7 @@ async def _async_main() -> int:
 
     # Map run_py_code() result to exit code
     if isinstance(res, dict):
-        if res.get("error") == "timeout":
-            return 124  # typical timeout exit code
-
-        rc = res.get("returncode")
-        if isinstance(rc, int):
-            return rc
+        return _run_result_exit_code(res)
 
     # Unknown failure shape → generic error
     return 1

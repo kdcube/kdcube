@@ -4,7 +4,7 @@ import json
 import pathlib
 import subprocess
 
-from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.layout import build_announce_text
+from kdcube_ai_app.apps.chat.sdk.solutions.react.layout import build_announce_text
 from kdcube_ai_app.apps.chat.sdk.solutions.react.proto import RuntimeCtx
 from kdcube_ai_app.apps.chat.sdk.runtime.workspace import artifact_outdir_for
 
@@ -114,6 +114,61 @@ def test_build_announce_text_includes_context_caps(tmp_path):
     assert "ks: is uncapped unless knowledge_read_visible_* caps are configured" in announce_text
     assert "ranged react.read items" in announce_text
     assert "exec_stdout=capped" in announce_text
+
+
+def test_build_announce_text_recomputes_runtime_limits_each_round(tmp_path):
+    outdir = tmp_path / "out"
+    workdir = tmp_path / "work"
+    (outdir / "turn_123" / "outputs").mkdir(parents=True, exist_ok=True)
+    workdir.mkdir(parents=True, exist_ok=True)
+    (outdir / "turn_123" / "outputs" / "report.txt").write_bytes(b"123456")
+    (workdir / "scratch.bin").write_bytes(b"1234")
+    runtime = RuntimeCtx(
+        turn_id="turn_123",
+        outdir=str(outdir),
+        workdir=str(workdir),
+        exec_runtime={
+            "max_file_bytes": "8b",
+            "max_exec_workspace_delta_bytes": "12b",
+            "max_workspace_bytes": "20b",
+        },
+    )
+
+    announce_text = build_announce_text(
+        iteration=1,
+        max_iterations=6,
+        started_at="2026-04-02T10:00:00Z",
+        timezone="UTC",
+        runtime_ctx=runtime,
+        timeline_blocks=[],
+        constraints=None,
+        feedback_updates=None,
+        feedback_incorporated=False,
+        mode="full",
+    )
+
+    assert "[RUNTIME LIMITS]" in announce_text
+    assert "exec file max=8B; exec workspace delta max=12B; active workspace max=20B" in announce_text
+    assert "active workspace used=10B across 2 files; remaining=10B" in announce_text
+    assert "next exec new bytes max=10B; effective single new file max=8B" in announce_text
+    assert "recomputed each round" in announce_text
+
+    (workdir / "later.bin").write_bytes(b"12345")
+    next_announce_text = build_announce_text(
+        iteration=2,
+        max_iterations=6,
+        started_at="2026-04-02T10:00:00Z",
+        timezone="UTC",
+        runtime_ctx=runtime,
+        timeline_blocks=[],
+        constraints=None,
+        feedback_updates=None,
+        feedback_incorporated=False,
+        mode="full",
+    )
+
+    assert "active workspace used=15B across 3 files; remaining=5B" in next_announce_text
+    assert "next exec new bytes max=5B; effective single new file max=5B" in next_announce_text
 
 
 def test_build_announce_text_includes_lineage_scopes_even_when_current_turn_is_sparse(tmp_path):

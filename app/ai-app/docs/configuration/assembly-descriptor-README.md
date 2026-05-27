@@ -142,6 +142,7 @@ auth:
   proxy_login:
     redis_key_prefix: "proxylogin:<TENANT>:<PROJECT>:"
     token_masquerade: true
+    enforce_mfa: false
     http_urlbase: "https://YOUR_DOMAIN/auth"
 ```
 
@@ -155,6 +156,9 @@ existing `/auth/unmask` flow.
 `auth.proxy_login.token_masquerade` controls how proxylogin issues browser
 cookies. It does not change the backend token validator; ingress/proc still
 validate tokens using the configured auth provider.
+
+`auth.proxy_login.enforce_mfa` maps to Proxy Login `COGNITO_ENFORCEMFA`. When
+enabled, Proxy Login enforces MFA during the Cognito login flow.
 
 ### `auth.turnstile_development_token`
 
@@ -387,7 +391,8 @@ platform:
         py_code_exec_network_mode: "host"
         py_code_exec_container_strategy: "split"
         max_file_bytes: "100m"
-        max_workspace_bytes: "250m"
+        max_exec_workspace_delta_bytes: "250m"
+        max_workspace_bytes: ""
         workspace_monitor_interval_s: 0.5
 ```
 
@@ -398,8 +403,9 @@ platform:
 | `py_code_exec_timeout` | `get_settings().PLATFORM.EXEC.PY.PY_CODE_EXEC_TIMEOUT` | default Python execution timeout in seconds |
 | `py_code_exec_network_mode` | `get_settings().PLATFORM.EXEC.PY.PY_CODE_EXEC_NETWORK_MODE` | Docker network mode for the ISO supervisor container |
 | `py_code_exec_container_strategy` | `get_settings().PLATFORM.EXEC.PY.PY_CODE_EXEC_CONTAINER_STRATEGY` | `split` runs supervisor and generated code in separate containers and is the default; `combined` keeps the older single exec container |
-| `max_file_bytes` | `get_settings().PLATFORM.EXEC.PY.EXEC_MAX_FILE_BYTES` | max single generated file size per isolated run |
-| `max_workspace_bytes` | `get_settings().PLATFORM.EXEC.PY.EXEC_MAX_WORKSPACE_BYTES` | max net-new workdir/outdir bytes per isolated run |
+| `max_file_bytes` | `get_settings().PLATFORM.EXEC.PY.EXEC_MAX_FILE_BYTES` | max single generated file size per isolated exec call |
+| `max_exec_workspace_delta_bytes` | `get_settings().PLATFORM.EXEC.PY.EXEC_MAX_WORKSPACE_DELTA_BYTES` | max net-new monitored writable bytes per isolated exec call |
+| `max_workspace_bytes` | `get_settings().PLATFORM.EXEC.PY.EXEC_MAX_WORKSPACE_BYTES` | optional max total bytes currently present in the active workspace writable roots before finalization/offload |
 | `workspace_monitor_interval_s` | `get_settings().PLATFORM.EXEC.PY.EXEC_WORKSPACE_MONITOR_INTERVAL_S` | polling interval for workspace quota enforcement |
 
 The ISO runtime passes the limit values into the isolated executor as internal

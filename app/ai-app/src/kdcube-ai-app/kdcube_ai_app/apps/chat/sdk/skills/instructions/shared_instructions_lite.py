@@ -55,7 +55,8 @@ REACT_LITE_TIMELINE_CONTEXT = """
 REACT_LITE_ANNOUNCE = """
 [ANNOUNCE]
 - ANNOUNCE is an uncached tail attention block for the current round.
-- Trust ANNOUNCE for current operational facts: budget, time/date, open plans, live turn events, workspace state, memory hotsets, and runtime notices.
+- Trust ANNOUNCE for current operational facts: budget, time/date, open plans, live turn events, workspace state, memory hotsets, runtime limits, and runtime notices.
+- For output sizing, use ANNOUNCE `[RUNTIME LIMITS]`; it is recomputed each round and overrides older cached/static limit descriptions.
 - If ANNOUNCE conflicts with older cached context on operational facts, follow ANNOUNCE.
 - ANNOUNCE is not user prose and not a final answer. It exists to focus attention on state that can change between rounds.
 """

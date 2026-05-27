@@ -1662,6 +1662,7 @@ def test_gather_configuration_supports_explicit_proxy_host_ports(monkeypatch, tm
                 "proxy_login": {
                     "redis_key_prefix": "proxylogin:<TENANT>:<PROJECT>:",
                     "token_masquerade": True,
+                    "enforce_mfa": True,
                     "password_reset": {
                         "company": "KDCube",
                         "sender": "info@example.com",
@@ -1692,11 +1693,13 @@ def test_gather_configuration_supports_explicit_proxy_host_ports(monkeypatch, tm
     assert "KDCUBE_PROXY_HTTPS_PORT=443" in env_main
     env_proxy = (config_dir / ".env.proxylogin").read_text()
     assert "REDIS_KEYPREFIX=proxylogin:demo-tenant:demo-project:" in env_proxy
+    assert "COGNITO_ENFORCEMFA=true" in env_proxy
     assert "PASSWORD_RESET_REDIRECTURL=http://ai.example.com/platform/reset-password?user=%[1]s" in env_proxy
     assert "HTTP_URLBASE=http://ai.example.com/auth" in env_proxy
     assembly_data = yaml.safe_load(assembly_path.read_text())
     proxy_login = assembly_data["auth"]["proxy_login"]
     assert proxy_login["redis_key_prefix"] == "proxylogin:demo-tenant:demo-project:"
+    assert proxy_login["enforce_mfa"] is True
     assert proxy_login["password_reset"]["redirect_url"] == "http://ai.example.com/platform/reset-password?user=%[1]s"
     assert proxy_login["http_urlbase"] == "http://ai.example.com/auth"
 

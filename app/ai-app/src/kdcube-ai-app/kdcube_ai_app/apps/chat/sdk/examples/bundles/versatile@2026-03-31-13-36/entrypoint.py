@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import inspect
 import traceback
 from typing import Any, Dict, Optional

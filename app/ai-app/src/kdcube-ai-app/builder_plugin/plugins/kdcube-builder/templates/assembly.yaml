@@ -15,6 +15,7 @@ auth:
   proxy_login:
     redis_key_prefix: "proxylogin:<TENANT>:<PROJECT>:"
     token_masquerade: true
+    enforce_mfa: false
     password_reset:
       company: "KDCube"
       sender: "email@your-org.com"

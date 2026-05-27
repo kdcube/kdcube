@@ -118,7 +118,8 @@ platform:
         py_code_exec_timeout: 600
         py_code_exec_network_mode: host
         max_file_bytes: 100m
-        max_workspace_bytes: 250m
+        max_exec_workspace_delta_bytes: 250m
+        max_workspace_bytes: ""
         workspace_monitor_interval_s: 0.5
 ```
 
@@ -573,8 +574,9 @@ metadata, not file contents:
 ```text
 Use isolated code execution only. Report:
 1. os.getuid(), os.getgid(), os.getgroups()
-2. immediate names under /workspace/logs and /workspace/logs/*
-3. exists/listable/readable for:
+2. CapEff from /proc/self/status
+3. immediate names under /workspace/logs and /workspace/logs/*
+4. exists/listable/readable for:
    - /tmp/kdcube-supervisor
    - /tmp/kdcube-runtime-descriptors
    - /managed-bundles
@@ -587,6 +589,7 @@ Do not print file contents.
 Expected in split Docker:
 
 - `uid=1001`, `gid=1000`, and groups do not include `0(root)`.
+- `CapEff` is `0000000000000000`.
 - `socket(AF_ALG, ...)` fails with `EAFNOSUPPORT`/`Address family not supported by protocol`.
 - `find / -xdev \( -perm -4000 -o -perm -2000 \) -type f` should return no setuid/setgid helper binaries in the rebuilt executor image.
 - `/workspace/logs` contains only `executor/`.

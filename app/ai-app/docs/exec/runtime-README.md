@@ -378,9 +378,11 @@ entrypoint flow. The split filesystem tree is documented in
 │  • split executor receives only work, artifact output, executor logs,  │
 │    and supervisor socket mounts                                        │
 │  • split executor uses --network none, --cap-drop=ALL,                 │
-│    no-new-privileges, and narrow UID/ownership capability add-backs    │
+│    no-new-privileges, and narrow entrypoint-only capability add-backs  │
+│    for ownership, UID/GID drop, and terminating its own child process  │
 │  • generated-code child denies socket(AF_ALG) via inherited seccomp    │
-│    filter; executor image removes setuid/setgid helper bits            │
+│    filter, verifies zero effective capabilities after UID/GID drop,    │
+│    and executor image removes setuid/setgid helper bits                │
 │                                                                         │
 │  Layer 2: Network Isolation                                            │
 │  • Supervisor keeps configured network path for approved tools         │
@@ -392,7 +394,8 @@ entrypoint flow. The split filesystem tree is documented in
 │  • Supervisor: trusted component with runtime access                   │
 │  • Executor: UID 1001 / GID 1000 - untrusted code                      │
 │  • setgroups([1000]), setgid(1000), setuid(1001) after isolation       │
-│  • Executor should not retain supplementary root group                 │
+│  • Executor should not retain supplementary root group or effective    │
+│    Linux capabilities                                                  │
 │                                                                         │
 │  Layer 4: Tool Proxying                                                │
 │  • Untrusted code cannot import real tool modules                      │

@@ -217,6 +217,59 @@ Supervisor container in `split` strategy
 └─ /tmp/kdcube-supervisor/... (private supervisor runtime roots)
 ```
 
+Split strategy container views:
+
+```text
+Supervisor container                         Executor container
+────────────────────                         ──────────────────
+/workspace/work/                             /workspace/work/
+  main.py                                      main.py
+  user_code.py                                user_code.py
+
+/workspace/out/                              /workspace/out/
+  exec_result_*.json                           exec_result_*.json
+  codegen_result_*.json                        codegen_result_*.json
+  turn_<id>/                                   turn_<id>/
+    files/                                       files/
+    outputs/                                     outputs/
+    attachments/                                 attachments/
+
+/workspace/runtime-out/                      /workspace/logs/executor/
+  timeline.json                                executor.log
+  tool_calls_index.json                        runtime.err.log
+  delta_aggregates.json                        user.log
+  comm_recorded_events.json
+  executed_programs/
+  logs/
+    docker.out.log
+    docker.err.log
+    infra.log
+    supervisor/
+      supervisor.log
+    executor/
+      executor.log
+      runtime.err.log
+      user.log
+  workdir/                                   /supervisor-socket
+    ... same artifact tree as /workspace/out
+
+/tmp/kdcube-supervisor/
+  bundles/<bundle_id>/        # RO bundle code
+  bundle-storage/...          # RO prepared bundle data
+```
+
+The split executor view intentionally excludes the full runtime output tree,
+supervisor logs, `infra.log`, descriptor files, bundle roots, bundle storage,
+platform storage, and provider secrets. If an attachment is only present as
+hosted metadata, it is not in this tree. It becomes part of the executor-visible
+workspace only after the platform materializes or pulls it into
+`turn_<id>/attachments/`.
+
+The supervisor has the broader runtime view because it owns tool execution,
+network calls, bundle-local tools, and diagnostics. Generated code cannot read
+those supervisor-only paths directly; it must ask the supervisor through the
+socket and the supervisor applies the tool allowlist and runtime policy.
+
 Important:
 
 - bundle code and bundle readonly data are separate surfaces
@@ -294,10 +347,14 @@ Docker ISO runtime supports two strategies:
   container receives only the current `/workspace/work`, `/workspace/out`, a
   shared supervisor socket, a minimal safe env, and stripped runtime globals.
   The executor container runs with `--network none`, `--read-only`,
-  `--cap-drop=ALL`, a small capability add-back only for ownership/UID drop,
-  and `no-new-privileges`. The generated-code child also installs an inherited
-  seccomp deny rule for `socket(AF_ALG, ...)`, and the executor image removes
-  setuid/setgid bits from base-image helper binaries.
+  `--cap-drop=ALL`, narrow capability add-backs for bind-source ownership,
+  UID/GID drop, and entrypoint lifecycle control, and `no-new-privileges`.
+  `CAP_KILL` is present only so the root entrypoint can terminate its own
+  UID-dropped generated-code child on timeout, cancellation, or quota breach.
+  The generated-code child drops to UID/GID 1001/1000, verifies it has zero
+  effective Linux capabilities, installs an inherited seccomp deny rule for
+  `socket(AF_ALG, ...)`, and the executor image removes setuid/setgid bits from
+  base-image helper binaries.
 
 Configure platform default:
 
@@ -494,8 +551,10 @@ sudo chmod -R g+rwX /path/to/exec-workspace
   - Docker network mode for the exec container (`host` is typical).
 - `platform.services.proc.exec.max_file_bytes`
   - Descriptor source for max single generated file size.
+- `platform.services.proc.exec.max_exec_workspace_delta_bytes`
+  - Descriptor source for max net-new monitored writable bytes per exec call.
 - `platform.services.proc.exec.max_workspace_bytes`
-  - Descriptor source for max net-new workspace/output bytes per run.
+  - Optional descriptor source for max total bytes in the active workspace writable roots before finalization/offload.
 - `platform.services.proc.exec.workspace_monitor_interval_s`
   - Descriptor source for workspace quota polling interval.
 
@@ -534,7 +593,11 @@ sudo chmod -R g+rwX /path/to/exec-workspace
 - **Narrow writable surface for untrusted code**: `/workspace/work`,
   artifact `OUTPUT_DIR`, executor-local logs, and the supervisor socket mount
   are the only intended writable surfaces. The Docker root filesystem is read-only.
-- **Filesystem abuse limits**: the isolated entrypoint applies `RLIMIT_FSIZE` and a live workspace monitor so generated code cannot create oversized files or fill the writable workspace. Defaults are `100MiB` per file and `250MiB` net new bytes per run.
+- **Filesystem abuse limits**: the isolated entrypoint applies `RLIMIT_FSIZE` and a live workspace monitor so generated code cannot create oversized files or fill the writable workspace. Defaults are `100MiB` per file and `250MiB` net new bytes per exec call.
+- **Capability boundary**: the split executor container starts with
+  `--cap-drop=ALL` and only narrow add-backs needed by the root entrypoint.
+  Generated code runs after UID/GID drop and must have zero effective Linux
+  capabilities.
 - **No secret env passthrough**: executor receives minimal, safe environment.
 - **No descriptor or bundle-path globals for executor**: descriptor payload env, bundle root paths, bundle storage paths, and communicator bootstrap data stay out of executor globals/env.
 - **Tool execution via supervisor**: network and external side effects are mediated.
@@ -548,17 +611,30 @@ executor path.
 
 Descriptor controls:
 - `platform.services.proc.exec.max_file_bytes`: maximum size for any generated single file. Default: `100m`. The value accepts raw bytes or suffixes such as `50m`, `100mb`, `1g`. Set to `0`, `disabled`, or `unlimited` only for trusted debugging.
-- `platform.services.proc.exec.max_workspace_bytes`: maximum net new bytes across writable workdir/outdir for one run. Default: `250m`.
+- `platform.services.proc.exec.max_exec_workspace_delta_bytes`: maximum net-new bytes across monitored writable roots for one exec call. Default: `250m`.
+- `platform.services.proc.exec.max_workspace_bytes`: optional maximum total bytes currently present in the active workspace writable roots before finalization/offload. This catches accumulation across multiple exec calls in the same active workspace.
 - `platform.services.proc.exec.workspace_monitor_interval_s`: live monitor interval. Default: `0.5`.
+
+The monitored writable roots are the executor work directory, artifact
+`OUTPUT_DIR`, `LOG_DIR`, and `EXECUTOR_LOG_DIR`. Current-turn artifacts created
+by the assistant under `files/` or `outputs/` count toward these limits. User
+attachments also count when they are materialized into the active turn artifact
+workspace, for example under `turn_<id>/attachments/`, or when the agent pulls
+an attachment into the workspace before using it. Attachments that only exist in
+hosted storage or timeline metadata are not counted until they become local
+files in one of the monitored roots.
 
 The proc runtime reads these values through `get_settings().PLATFORM.EXEC.PY`
 and forwards them to the isolated process as internal `EXEC_*` env transport.
 Do not configure them as platform env vars.
 
 Bundles can override these limits for their own run in an exec runtime profile
-using `max_file_bytes`, `max_workspace_bytes`, and
-`workspace_monitor_interval_s`. If a limit is exceeded, the executor is
-terminated and oversized generated files are removed where possible.
+using `max_file_bytes`, `max_exec_workspace_delta_bytes`, `max_workspace_bytes`, and
+`workspace_monitor_interval_s`. If the active workspace is already over the
+configured total limit before an exec starts, generated code is not launched. If
+a limit is detected during or after execution, the result is marked as an error
+while any successfully produced contracted artifacts remain available to the
+caller.
 
 These size controls are separate from the broader information-disclosure
 hardening work: they prevent resource exhaustion and oversized downloads, but

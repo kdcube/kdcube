@@ -654,7 +654,8 @@ async def test_execute_py_code_routes_to_docker_with_selected_profile_settings(m
                         "cpus": "1.5",
                         "memory": "2g",
                         "max_file_bytes": "100m",
-                        "max_workspace_bytes": "250m",
+                        "max_exec_workspace_delta_bytes": "250m",
+                        "max_workspace_bytes": "300m",
                         "extra_args": ["--pids-limit", "256"],
                     },
                 },
@@ -677,7 +678,8 @@ async def test_execute_py_code_routes_to_docker_with_selected_profile_settings(m
     ]
     assert captured["extra_env"]["EXECUTION_SANDBOX"] == "docker"
     assert captured["extra_env"]["EXEC_MAX_FILE_BYTES"] == "100m"
-    assert captured["extra_env"]["EXEC_MAX_WORKSPACE_BYTES"] == "250m"
+    assert captured["extra_env"]["EXEC_MAX_WORKSPACE_DELTA_BYTES"] == "250m"
+    assert captured["extra_env"]["EXEC_MAX_WORKSPACE_BYTES"] == "300m"
 
 
 @pytest.mark.asyncio
@@ -696,7 +698,8 @@ async def test_execute_py_code_injects_descriptor_filesystem_limits(monkeypatch,
         "    proc:\n"
         "      exec:\n"
         "        max_file_bytes: 64m\n"
-        "        max_workspace_bytes: 128m\n"
+        "        max_exec_workspace_delta_bytes: 128m\n"
+        "        max_workspace_bytes: 192m\n"
         "        workspace_monitor_interval_s: 0.25\n",
         encoding="utf-8",
     )
@@ -726,7 +729,8 @@ async def test_execute_py_code_injects_descriptor_filesystem_limits(monkeypatch,
 
     assert res["ok"] is True
     assert captured["extra_env"]["EXEC_MAX_FILE_BYTES"] == "64m"
-    assert captured["extra_env"]["EXEC_MAX_WORKSPACE_BYTES"] == "128m"
+    assert captured["extra_env"]["EXEC_MAX_WORKSPACE_DELTA_BYTES"] == "128m"
+    assert captured["extra_env"]["EXEC_MAX_WORKSPACE_BYTES"] == "192m"
     assert captured["extra_env"]["EXEC_WORKSPACE_MONITOR_INTERVAL_S"] == "0.25"
 
 

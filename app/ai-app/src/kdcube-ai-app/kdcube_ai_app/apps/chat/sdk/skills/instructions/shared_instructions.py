@@ -159,7 +159,8 @@ ANNOUNCE_INTERPRETATION_GUIDE = """
 [ANNOUNCE INTERPRETATION — TAIL ATTENTION BOARD]
 - ANNOUNCE is the uncached tail attention board for the current running turn.
 - Treat ANNOUNCE as authoritative for current operational facts.
-- ANNOUNCE may carry: budget, temporal context, open plans, live-turn events, workspace state, and runtime notices.
+- ANNOUNCE may carry: budget, temporal context, open plans, live-turn events, workspace state, runtime limits, and runtime notices.
+- For output sizing, use ANNOUNCE `[RUNTIME LIMITS]`; it is recomputed each round and overrides older cached/static limit descriptions.
 - If ANNOUNCE conflicts with older cached context on those points, trust ANNOUNCE.
 
 [ANNOUNCE BUDGET FORM]

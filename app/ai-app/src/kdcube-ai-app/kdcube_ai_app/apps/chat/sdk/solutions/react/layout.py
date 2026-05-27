@@ -8,6 +8,7 @@ import datetime
 import time
 import urllib.parse
 import pathlib
+import os
 from typing import Dict, Any, List, Tuple, Optional
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.proto import RuntimeCtx
@@ -48,6 +49,8 @@ DEFAULT_READ_VISIBLE_MAX_BYTES = 10 * 1024 * 1024
 DEFAULT_READ_VISIBLE_CONTEXT_FRACTION = 0.15
 DEFAULT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS = 8_000
 DEFAULT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS = 12_000
+DEFAULT_EXEC_MAX_FILE_BYTES = 100 * 1024 * 1024
+DEFAULT_EXEC_MAX_WORKSPACE_DELTA_BYTES = 250 * 1024 * 1024
 
 
 def record_assistant_completion_attempt(
@@ -969,6 +972,213 @@ def build_announce_context_cap_lines(*, runtime_ctx: Optional[RuntimeCtx]) -> Li
     ]
 
 
+def _limit_bytes(raw: Any, *, default: Optional[int] = None) -> Optional[int]:
+    if raw is None or raw == "":
+        return default
+    if isinstance(raw, bool):
+        return default
+    text = str(raw).strip().lower()
+    if not text:
+        return default
+    if text in {"0", "false", "off", "none", "no", "disabled", "unlimited"}:
+        return None
+    multiplier = 1
+    for suffix, value in (
+        ("gib", 1024 ** 3),
+        ("gb", 1024 ** 3),
+        ("g", 1024 ** 3),
+        ("mib", 1024 ** 2),
+        ("mb", 1024 ** 2),
+        ("m", 1024 ** 2),
+        ("kib", 1024),
+        ("kb", 1024),
+        ("k", 1024),
+        ("b", 1),
+    ):
+        if text.endswith(suffix):
+            text = text[: -len(suffix)].strip()
+            multiplier = value
+            break
+    try:
+        value = int(float(text) * multiplier)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else None
+
+
+def _bytes_label(value: Optional[int]) -> str:
+    if value is None:
+        return "none"
+    value = max(0, int(value))
+    if value >= 1024 * 1024 * 1024:
+        scaled = value / float(1024 * 1024 * 1024)
+        return f"{scaled:.1f}GB" if scaled % 1 else f"{int(scaled)}GB"
+    if value >= 1024 * 1024:
+        scaled = value / float(1024 * 1024)
+        return f"{scaled:.1f}MB" if scaled % 1 else f"{int(scaled)}MB"
+    if value >= 1024:
+        scaled = value / float(1024)
+        return f"{scaled:.1f}KB" if scaled % 1 else f"{int(scaled)}KB"
+    return f"{value}B"
+
+
+def _path_is_relative_to(path: pathlib.Path, parent: pathlib.Path) -> bool:
+    try:
+        path.relative_to(parent)
+        return True
+    except Exception:
+        return False
+
+
+def _active_workspace_roots(runtime_ctx: RuntimeCtx) -> List[pathlib.Path]:
+    raw_roots = [
+        getattr(runtime_ctx, "workdir", None),
+        getattr(runtime_ctx, "outdir", None),
+    ]
+    roots: List[pathlib.Path] = []
+    seen: set[str] = set()
+    for raw in raw_roots:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        try:
+            path = pathlib.Path(text).expanduser().resolve(strict=False)
+        except Exception:
+            path = pathlib.Path(text).expanduser().absolute()
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        roots.append(path)
+    roots.sort(key=lambda item: len(str(item)))
+    filtered: List[pathlib.Path] = []
+    for root in roots:
+        if any(root != existing and _path_is_relative_to(root, existing) for existing in filtered):
+            continue
+        filtered.append(root)
+    return filtered
+
+
+def _directory_size_bytes(root: pathlib.Path) -> Tuple[int, int]:
+    if not root.exists():
+        return 0, 0
+    total = 0
+    files = 0
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        try:
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(pathlib.Path(entry.path))
+                            continue
+                        if entry.is_file(follow_symlinks=False):
+                            total += int(entry.stat(follow_symlinks=False).st_size)
+                            files += 1
+                    except OSError:
+                        continue
+        except (OSError, FileNotFoundError, NotADirectoryError):
+            continue
+    return total, files
+
+
+def _current_active_workspace_size(runtime_ctx: RuntimeCtx) -> Tuple[int, int]:
+    total = 0
+    files = 0
+    for root in _active_workspace_roots(runtime_ctx):
+        root_total, root_files = _directory_size_bytes(root)
+        total += root_total
+        files += root_files
+    return total, files
+
+
+def _runtime_value(cfg: Dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in cfg:
+            return cfg.get(key)
+    return None
+
+
+def _min_present(*values: Optional[int]) -> Optional[int]:
+    present = [int(value) for value in values if value is not None]
+    return min(present) if present else None
+
+
+def _effective_runtime_limits(runtime_ctx: RuntimeCtx) -> Dict[str, Optional[int]]:
+    try:
+        from kdcube_ai_app.apps.chat.sdk.config import get_settings
+        py_exec_cfg = get_settings().PLATFORM.EXEC.PY
+    except Exception:
+        py_exec_cfg = None
+    platform_file = getattr(py_exec_cfg, "EXEC_MAX_FILE_BYTES", "100m") if py_exec_cfg else "100m"
+    platform_delta = getattr(py_exec_cfg, "EXEC_MAX_WORKSPACE_DELTA_BYTES", "250m") if py_exec_cfg else "250m"
+    platform_workspace = getattr(py_exec_cfg, "EXEC_MAX_WORKSPACE_BYTES", "") if py_exec_cfg else ""
+
+    try:
+        from kdcube_ai_app.apps.chat.sdk.runtime.exec_runtime_config import resolve_exec_runtime_profile
+        cfg = resolve_exec_runtime_profile(runtime=getattr(runtime_ctx, "exec_runtime", None), profile=None)
+    except Exception:
+        cfg = getattr(runtime_ctx, "exec_runtime", None) or {}
+        if not isinstance(cfg, dict):
+            cfg = {}
+
+    file_raw = _runtime_value(cfg, "max_file_bytes")
+    delta_raw = _runtime_value(cfg, "max_exec_workspace_delta_bytes")
+    workspace_raw = _runtime_value(cfg, "max_workspace_bytes")
+    return {
+        "max_file_bytes": _limit_bytes(file_raw if file_raw not in (None, "") else platform_file, default=DEFAULT_EXEC_MAX_FILE_BYTES),
+        "max_exec_workspace_delta_bytes": _limit_bytes(
+            delta_raw if delta_raw not in (None, "") else platform_delta,
+            default=DEFAULT_EXEC_MAX_WORKSPACE_DELTA_BYTES,
+        ),
+        "max_workspace_bytes": _limit_bytes(workspace_raw if workspace_raw not in (None, "") else platform_workspace, default=None),
+    }
+
+
+def build_announce_runtime_limit_lines(*, runtime_ctx: Optional[RuntimeCtx]) -> List[str]:
+    if runtime_ctx is None:
+        return []
+    limits = _effective_runtime_limits(runtime_ctx)
+    max_file = limits.get("max_file_bytes")
+    max_delta = limits.get("max_exec_workspace_delta_bytes")
+    max_workspace = limits.get("max_workspace_bytes")
+    try:
+        current_bytes, current_files = _current_active_workspace_size(runtime_ctx)
+        usage_label = f"{_bytes_label(current_bytes)} across {current_files} file{'s' if current_files != 1 else ''}"
+    except Exception:
+        current_bytes = 0
+        usage_label = "unknown"
+
+    if max_workspace is None:
+        remaining_workspace = None
+        remaining_label = "unbounded"
+    else:
+        remaining_workspace = max(0, int(max_workspace) - int(current_bytes))
+        remaining_label = _bytes_label(remaining_workspace)
+
+    next_exec_new_bytes = max_delta
+    if remaining_workspace is not None:
+        next_exec_new_bytes = _min_present(max_delta, remaining_workspace)
+    effective_single_file = _min_present(max_file, next_exec_new_bytes)
+
+    lines = ["[RUNTIME LIMITS]"]
+    lines.append(
+        "  exec file max="
+        f"{_bytes_label(max_file)}; exec workspace delta max={_bytes_label(max_delta)}; "
+        f"active workspace max={_bytes_label(max_workspace)}"
+    )
+    lines.append(
+        f"  active workspace used={usage_label}; remaining={remaining_label}; "
+        f"next exec new bytes max={_bytes_label(next_exec_new_bytes)}; effective single new file max={_bytes_label(effective_single_file)}"
+    )
+    lines.append(
+        "  recomputed each round; materialized attachments and current-turn files/outputs count when present locally"
+    )
+    return lines
+
+
 def build_announce_text(
     *,
     iteration: int,
@@ -1054,6 +1264,11 @@ def build_announce_text(
     if show_status_sections and cap_lines:
         lines.append("")
         lines.extend(cap_lines)
+
+    runtime_limit_lines = build_announce_runtime_limit_lines(runtime_ctx=runtime_ctx)
+    if show_status_sections and runtime_limit_lines:
+        lines.append("")
+        lines.extend(runtime_limit_lines)
 
     if show_temporal:
         try:

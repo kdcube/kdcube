@@ -105,8 +105,9 @@ bundles:
           runtime:
             mode: "docker"              # none | local | docker | fargate | external
             container_strategy: "split" # optional: combined | split; docker mode only
-            max_file_bytes: "50m"       # overrides assembly default for this bundle run
-            max_workspace_bytes: "100m" # overrides assembly default for this bundle run
+            max_file_bytes: "50m"       # overrides assembly default for this bundle exec call
+            max_exec_workspace_delta_bytes: "100m" # overrides assembly default for this bundle exec call
+            max_workspace_bytes: "150m" # optional cap for the active workspace before finalization/offload
             workspace_monitor_interval_s: 0.5
             descriptor_payload_scope: active_bundle # optional: filter bundle descriptors sent to supervisor
 ```

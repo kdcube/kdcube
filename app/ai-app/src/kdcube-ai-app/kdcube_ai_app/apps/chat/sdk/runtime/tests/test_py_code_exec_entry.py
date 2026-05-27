@@ -23,6 +23,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.isolated.py_code_exec_entry import (
     _materialize_runtime_descriptor_payloads,
     _prepare_runtime_environment,
     _restore_bundle_if_present,
+    _run_result_exit_code,
     _run_async_main_with_preclose_gc,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.isolated.supervisor_entry import PrivilegedSupervisor
@@ -91,6 +92,14 @@ def test_run_async_main_collects_loop_bound_cycles_before_loop_close():
 
     assert _run_async_main_with_preclose_gc(_main()) == 7
     assert closed == ["closed"]
+
+
+def test_run_result_exit_code_treats_managed_runtime_failure_as_nonzero():
+    assert _run_result_exit_code({"ok": False, "returncode": 0, "error": "workspace_size_limit"}) == 1
+    assert _run_result_exit_code({"ok": False, "returncode": 0, "error": "exec_workspace_delta_limit"}) == 1
+    assert _run_result_exit_code({"ok": False, "returncode": 0, "error": "timeout"}) == 124
+    assert _run_result_exit_code({"ok": False, "returncode": 137, "error": "killed"}) == 137
+    assert _run_result_exit_code({"ok": True, "returncode": 0}) == 0
 
 
 def test_hydrate_runtime_payload_from_secret_restores_env(monkeypatch):

@@ -361,7 +361,8 @@ class PyExecConfig(BaseModel):
     PY_CODE_EXEC_NETWORK_MODE: str = "host"
     PY_CODE_EXEC_CONTAINER_STRATEGY: str = "split"
     EXEC_MAX_FILE_BYTES: str = "100m"
-    EXEC_MAX_WORKSPACE_BYTES: str = "250m"
+    EXEC_MAX_WORKSPACE_DELTA_BYTES: str = "250m"
+    EXEC_MAX_WORKSPACE_BYTES: str | None = None
     EXEC_WORKSPACE_MONITOR_INTERVAL_S: float = 0.5
 
 
