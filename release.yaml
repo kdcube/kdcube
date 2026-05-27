@@ -1,52 +1,32 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.5.27.242"
+  ref: "2026.5.27.317"
   description: |
-    This platform release adds LinkedIn integration hardening, the admin
-    bundle storage surface, structured Copilot knowledge search, and additional
-    embedding guidance for host applications.
+    This platform release tightens embedded iframe sizing behavior for hosted
+    bundle UI surfaces.
 
     Highlights
 
-    - Adds and hardens the LinkedIn integration SDK, including async-only
-      account/token/state persistence, per-bundle settings resolution, and
-      stricter LinkedIn OAuth state-secret handling.
-    - Adds the admin bundle storage control plane API and widget foundation for
-      browsing operational storage surfaces.
-    - Adds structured Copilot knowledge search so large documentation indexes
-      can be queried without forcing agents to read the full index up front.
-    - Improves embedded UI behavior and documentation, including public static
-      main-view routing, frontend cookie-name configuration, and host
-      integration guidance.
-    - Refreshes bundle UI, lifecycle, and React workspace documentation.
+    - Lets embedded iframes shrink as well as grow, so host pages receive more
+      accurate frame sizing after content collapses or becomes shorter.
 
     Runtime and deployment notes:
 
-    - Deployments must point the platform ref at 2026.5.27.242 to receive this
+    - Deployments must point the platform ref at 2026.5.27.317 to receive this
       update.
-    - LinkedIn token and OAuth-state storage is async-only. Bundle code should
-      use the async LinkedIn account-store APIs.
-    - Admin storage roots must be mounted into the relevant runtime containers
-      for the storage widget/API to inspect those surfaces.
-    - Public anonymous and embedded UI access remain descriptor-controlled and
-      do not replace protected-surface authorization checks.
+    - No descriptor shape changes are required for this update.
+    - The iframe resize fix applies to existing embedded control-plane/bundle UI
+      hosts that consume frame resize messages.
     - No private deployment content is part of this OSS release.
 
     Validation and regression coverage:
 
-    - LinkedIn integration tests passed.
-    - Telegram and LinkedIn integration tests passed together.
-    - Python compile checks passed for touched integration modules.
+    - Release metadata parse check passed.
     - Staged OSS private-name scan must pass before the release commit.
 
     Changelog
 
-    - Added LinkedIn SDK integration and tightened follow-up fixes for async
-      secret handling and per-bundle configuration.
-    - Added admin bundle storage API/widget scaffolding and mounted storage
-      roots for ingress.
-    - Added structured knowledge search support for Copilot.
-    - Updated embedding, ngrok, bundle UI, and React workspace documentation.
-    - Improved versatile UI embedded/landing behavior.
+    - Fixed embedded iframe resize handling so frames can shrink after a
+      previous larger height was reported.
 config:
-    version: "2026.5.27.242"
+    version: "2026.5.27.317"
