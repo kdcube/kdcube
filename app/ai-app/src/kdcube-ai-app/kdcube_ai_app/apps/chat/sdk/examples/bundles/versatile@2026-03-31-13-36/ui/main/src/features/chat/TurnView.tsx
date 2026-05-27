@@ -225,7 +225,8 @@ function TurnViewImpl({
   let timeLabel: string | null = null
   if (typeof elapsedMs === 'number' && elapsedMs >= 0) {
     const total = Math.round(elapsedMs / 1000)
-    timeLabel = `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
+    // min.sec (dot, not colon, which reads as a clock time)
+    timeLabel = `${Math.floor(total / 60)}.${String(total % 60).padStart(2, '0')}`
   }
 
   /* Hide the user-bubble entirely when the turn has no text AND no
@@ -290,24 +291,9 @@ function TurnViewImpl({
             <span className="font-semibold text-[var(--text-2)]">Assistant</span>
             <span className={stateChipClass}>{turn.state}</span>
           </div>
-          {costLabel || timeLabel ? (
-            <div className="k-turn-meta">
-              {costLabel ? (
-                <span
-                  className="k-turn-cost"
-                  title={costUsd != null ? `Turn cost: $${costUsd.toFixed(6)}` : undefined}
-                >
-                  <span className="k-coin" aria-hidden="true">$</span>
-                  {costLabel}
-                </span>
-              ) : null}
-              {timeLabel ? (
-                <span className="k-turn-time" title="Turn time (min:sec)">t={timeLabel}</span>
-              ) : null}
-            </div>
-          ) : null}
         </div>
 
+        <div className="k-tabsbar">
         <div className="k-tabs">
           {([
             /* Chat is the default visual; sits first per design. */
@@ -329,6 +315,23 @@ function TurnViewImpl({
               {count ? <span className="k-count">{count}</span> : null}
             </button>
           ))}
+        </div>
+          {costLabel || timeLabel ? (
+            <div className="k-turn-meta k-tabs-meta">
+              {costLabel ? (
+                <span
+                  className="k-turn-cost"
+                  title={costUsd != null ? `Turn cost: $${costUsd.toFixed(6)}` : undefined}
+                >
+                  <span className="k-coin" aria-hidden="true">$</span>
+                  {costLabel}
+                </span>
+              ) : null}
+              {timeLabel ? (
+                <span className="k-turn-time" title="Turn time (min.sec)">t={timeLabel}</span>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         <div className="flex flex-col gap-2 pt-1">
