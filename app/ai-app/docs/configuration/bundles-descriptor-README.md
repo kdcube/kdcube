@@ -374,7 +374,7 @@ Reload workflow:
 - run:
 
 ```bash
-kdcube reload <bundle_id> --workdir <runtime-workdir> --path <repo-root>
+kdcube bundle reload <bundle_id> --workdir <runtime-workdir> --path <repo-root>
 ```
 
 That reapplies the mounted descriptor and clears proc bundle caches.
@@ -426,7 +426,7 @@ For local development with code edits on the host:
 - define the bundle in `bundles.yaml` with `path: /bundles/...`
 - set `assembly.paths.host_bundles_path` to the matching host root
 - run KDCube via the CLI compose path
-- use `kdcube reload <bundle_id>` after code changes
+- use `kdcube bundle reload <bundle_id>` after code changes
 
 That is the correct local dev contract.
 

@@ -166,7 +166,7 @@ workdir/config/bundles.yaml + bundles.secrets.yaml
           v
 new live deployment-scoped bundle state
           |
-          | kdcube export --out-dir <dir>
+          | kdcube config export --out-dir <dir>
           v
 reviewable descriptor output
 bundles.yaml + bundles.secrets.yaml
@@ -332,7 +332,7 @@ bundle code.
 | Bundle Admin props merge | Same authority/cache/update path, with admin actor metadata. |
 | `kdcube bundle --set-config ...` | Patches the staged runtime descriptor for the active workdir and should be followed by reload when runtime behavior must change. |
 | `kdcube bundle config apply --descriptors-location ...` | Reapplies seed `bundles.yaml` and optional `bundles.secrets.yaml` into an existing runtime. This is a user/operator descriptor-authority action, not a platform refresh. |
-| `kdcube export --out-dir ...` | Exports deployment-scoped live bundle descriptors back to `bundles.yaml` and `bundles.secrets.yaml` for review or seed descriptor updates. |
+| `kdcube config export --out-dir ...` | Exports deployment-scoped live bundle descriptors back to `bundles.yaml` and `bundles.secrets.yaml` for review or seed descriptor updates. |
 | `await set_bundle_secret(path, value)` | Persists deployment-scoped bundle secret through the configured secrets provider. |
 | Bundle Admin secrets write | Writes bundle secrets through the configured secrets provider and tracks key metadata for admin/export flows. |
 

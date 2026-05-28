@@ -323,7 +323,7 @@ Storage summary:
 | Where do I set it? | `config.embedding` in bundle props |
 | Is it in secrets? | no |
 | Is it in PostgreSQL `user_bundle_props`? | no |
-| Is it exportable by `kdcube export`? | yes |
+| Is it exportable by `kdcube config export`? | yes |
 
 ## `memory`
 
@@ -413,7 +413,7 @@ Storage summary:
 | Is it in secrets? | no |
 | Is it user-scoped memory data? | no, it is deployment-scoped subsystem config |
 | Where is user memory data stored? | the project PostgreSQL memory tables, scoped by tenant/project/user and optionally bundle |
-| Is it exportable by `kdcube export`? | yes, as bundle config; not as user memory data |
+| Is it exportable by `kdcube config export`? | yes, as bundle config; not as user memory data |
 
 ## `economics.reservation_amount_dollars`
 
@@ -596,7 +596,7 @@ Storage summary:
 |---|---|
 | Where is it configured? | `config.execution.runtime` in bundle props |
 | Where is it persisted on `aws-sm`? | bundle descriptor doc in AWS SM |
-| Where is it exported from? | `kdcube export` reconstructs it into `bundles.yaml` |
+| Where is it exported from? | `kdcube config export` reconstructs it into `bundles.yaml` |
 
 ## `mcp.services`
 
@@ -693,7 +693,7 @@ Storage summary:
 | Where do I set it? | `config.pdf_footer` in bundle props |
 | Is it in secrets? | no — it is plain display text |
 | Does it affect DOCX or PPTX output? | no — only `write_pdf` |
-| Is it exportable by `kdcube export`? | yes, as part of bundle descriptor config |
+| Is it exportable by `kdcube config export`? | yes, as part of bundle descriptor config |
 
 ## Exporting reserved properties back to descriptors
 
@@ -701,7 +701,7 @@ Reserved platform properties are not exported separately. They are exported as
 part of the bundle descriptor `config`:
 
 ```bash
-kdcube export \
+kdcube config export \
   --tenant <tenant> \
   --project <project> \
   --aws-region <region> \

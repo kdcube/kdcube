@@ -392,7 +392,7 @@ exist return 404, which the browser handles via a page reload.
 
 Practical effect: editing a file in the bundle's UI `src_folder` and then
 hitting `index.html` causes the next request to rebuild — no manual
-`kdcube reload <bundle_id>` required for source edits. `kdcube reload`
+`kdcube bundle reload <bundle_id>` required for source edits. `kdcube bundle reload`
 remains the supported escape hatch for invalidating other process-local
 state (manifests, decorator caches, singleton workflows).
 

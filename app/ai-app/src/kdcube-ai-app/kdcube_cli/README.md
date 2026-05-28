@@ -391,9 +391,9 @@ kdcube defaults \
 | `kdcube bundle reload <bundle_id> [--json] [--quiet]` | Reapply bundle config and clear proc caches — no full restart needed |
 | `kdcube bundle <bundle_id>` | Create, update, or delete a staged bundle entry |
 | `kdcube bundle config apply --descriptors-location <dir> [--dry-run] [--reload]` | User/operator flow to reapply seed `bundles.yaml` / `bundles.secrets.yaml` to an existing runtime — no platform refresh |
-| `kdcube config export --out-dir <dir> [--include-platform-descriptors]` | Export live runtime descriptors for review/reuse |
+| `kdcube config export --out-dir <dir> [--include-platform-descriptors]` | Export live local runtime descriptors for review/reuse |
+| `kdcube config export --tenant <t> --project <p> --aws-region <r> --out-dir <dir>` | Export deployment-scoped bundle descriptors from AWS Secrets Manager |
 | `kdcube config import --descriptors-location <dir> [--include-platform-descriptors] [--dry-run] [--reload]` | Import reviewed runtime descriptors into an existing local runtime |
-| `kdcube export` | Export live `bundles.yaml` / `bundles.secrets.yaml`; local paths are normalized back to host descriptor paths |
 
 ### Configuration
 

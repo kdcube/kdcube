@@ -25,7 +25,7 @@ Use this page when you need to know:
 - what Redis does and does not own
 - what changes in local file mode vs `aws-sm`
 - where bundle prop writes persist
-- what `kdcube export` can reconstruct
+- what `kdcube config export` can reconstruct
 
 If you are deciding where a value belongs as a bundle author, start with:
 
@@ -188,7 +188,7 @@ User-scoped bundle state is intentionally outside descriptors.
 
 That is why:
 
-- user state is not exported by `kdcube export`
+- user state is not exported by `kdcube config export`
 - user state is not reconstructed into `bundles.yaml`
 - user state is not reconstructed into `bundles.secrets.yaml`
 
@@ -212,18 +212,22 @@ So `aws-sm` is not “one single JSON blob for everything”.
 
 ## Export and ejection behavior
 
-`kdcube export` is bundle-state export only.
+`kdcube config export` exports bundle descriptors by default.
 
-It reconstructs:
+By default, it reconstructs:
 
 - `bundles.yaml`
 - `bundles.secrets.yaml`
 
-It does not reconstruct:
+With `--include-platform-descriptors`, it also reconstructs local runtime
+platform descriptors:
 
 - `assembly.yaml`
 - `gateway.yaml`
 - `secrets.yaml`
+
+It never reconstructs:
+
 - user-scoped bundle props
 - user-scoped bundle secrets
 

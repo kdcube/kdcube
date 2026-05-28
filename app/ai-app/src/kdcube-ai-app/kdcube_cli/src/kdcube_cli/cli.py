@@ -3475,6 +3475,9 @@ def main() -> None:
         action="store_true",
         help="Include assembly.yaml, secrets.yaml, and gateway.yaml in addition to bundle descriptors",
     )
+    _sp.add_argument("--aws-region", default="", help="With `config export`, AWS region for aws-sm bundle descriptor export")
+    _sp.add_argument("--aws-profile", default="", help="With `config export`, AWS profile for aws-sm bundle descriptor export")
+    _sp.add_argument("--aws-sm-prefix", default="", help="With `config export`, explicit AWS Secrets Manager prefix")
     _sp.add_argument("--dry-run", action="store_true", help="With `config import`, show what would change without staging files")
     _sp.add_argument("--reload", action="store_true", dest="reload_changed", help="With `config import`, reload changed bundle ids after staging descriptors")
     _sp.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
@@ -4204,11 +4207,6 @@ def main() -> None:
             )
             _resolved = _resolve_cli_workdir(_workdir)
             _config_dir = _canonical_descriptor_dir_from_initialized_workdir(_resolved)
-            if _config_dir is None:
-                raise SystemExit(
-                    f"Workdir is not initialized: {_resolved}\n"
-                    "`kdcube config export/import` only operates on a runtime created by `kdcube init`."
-                )
             _action = str(args.config_action or "").strip()
             _op_console = Console(file=_NullWriter()) if bool(args.json_output) else console
             if _action == "export":
@@ -4219,6 +4217,64 @@ def main() -> None:
                 if args.dry_run or args.reload_changed or args.verbose:
                     raise SystemExit("--dry-run, --reload, and --verbose are only supported with `kdcube config import`.")
                 _out_dir = Path(os.path.expanduser(args.out_dir)).resolve()
+                _aws_export = bool(
+                    str(getattr(args, "aws_region", "") or "").strip()
+                    or str(getattr(args, "aws_profile", "") or "").strip()
+                    or str(getattr(args, "aws_sm_prefix", "") or "").strip()
+                )
+                if _aws_export:
+                    if args.include_platform_descriptors:
+                        raise SystemExit(
+                            "`kdcube config export --include-platform-descriptors` "
+                            "requires an initialized local runtime workdir. "
+                            "AWS SM export can reconstruct bundle descriptors only."
+                        )
+                    _t = str(args.tenant or cli_defaults.get("default_tenant", "") or "").strip()
+                    _p = str(args.project or cli_defaults.get("default_project", "") or "").strip()
+                    if not (_t and _p):
+                        try:
+                            _t, _p = _parse_workdir_namespace(_resolved)
+                        except Exception:
+                            pass
+                    if not (_t and _p):
+                        raise SystemExit(
+                            "`kdcube config export` with AWS SM flags requires "
+                            "--tenant and --project, or configured CLI defaults."
+                        )
+                    export_live_bundle_descriptors(
+                        _op_console,
+                        tenant=_t,
+                        project=_p,
+                        out_dir=_out_dir,
+                        aws_region=str(args.aws_region or "").strip() or None,
+                        aws_profile=str(args.aws_profile or "").strip() or None,
+                        aws_sm_prefix=str(args.aws_sm_prefix or "").strip() or None,
+                        bundles_path=None,
+                        bundles_secrets_path=None,
+                    )
+                    if args.json_output:
+                        _print_json(
+                            {
+                                "status": "ok",
+                                "action": "export",
+                                "source": "aws-sm",
+                                "tenant": _t,
+                                "project": _p,
+                                "out_dir": str(_out_dir),
+                                "include_platform_descriptors": False,
+                                "files": [
+                                    {"name": "bundles.yaml", "target": str(_out_dir / "bundles.yaml")},
+                                    {"name": "bundles.secrets.yaml", "target": str(_out_dir / "bundles.secrets.yaml")},
+                                ],
+                            }
+                        )
+                    return
+                if _config_dir is None:
+                    raise SystemExit(
+                        f"Workdir is not initialized: {_resolved}\n"
+                        "`kdcube config export/import` requires an initialized local runtime workdir "
+                        "unless `config export` is explicitly using AWS SM flags."
+                    )
                 _t, _p = _parse_workdir_namespace(_resolved)
                 export_live_bundle_descriptors(
                     _op_console,
@@ -4256,6 +4312,17 @@ def main() -> None:
                     )
                 return
             if _action == "import":
+                if (
+                    str(getattr(args, "aws_region", "") or "").strip()
+                    or str(getattr(args, "aws_profile", "") or "").strip()
+                    or str(getattr(args, "aws_sm_prefix", "") or "").strip()
+                ):
+                    raise SystemExit("--aws-region, --aws-profile, and --aws-sm-prefix are only supported with `kdcube config export`.")
+                if _config_dir is None:
+                    raise SystemExit(
+                        f"Workdir is not initialized: {_resolved}\n"
+                        "`kdcube config import` only operates on a runtime created by `kdcube init`."
+                    )
                 if not str(args.descriptors_location or "").strip():
                     raise SystemExit("--descriptors-location is required with `kdcube config import`.")
                 if str(args.out_dir or "").strip():

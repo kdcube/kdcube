@@ -546,7 +546,7 @@ bundle state can be exported directly from AWS Secrets Manager:
 ```bash
 OUT_DIR=/tmp/kdcube-export
 
-kdcube export \
+kdcube config export \
   --tenant <tenant> \
   --project <project> \
   --aws-region <region> \
@@ -843,7 +843,7 @@ It is separate from the broader descriptor mounts used by `read_plain(...)`.
 
 In `aws-sm` deployments, `bundles.yaml` is the descriptor/export shape, but the
 live authoritative deployment-scoped bundle state is stored in grouped AWS SM
-documents and can be exported back with `kdcube export`. In that mode,
+documents and can be exported back with `kdcube config export`. In that mode,
 mounted `/config/bundles.yaml` is only a deploy snapshot, not the live
 authoritative store.
 
@@ -1194,7 +1194,7 @@ Export live bundle descriptors:
 
 ```bash
 OUT_DIR=/tmp/export
-kdcube export --tenant acme --project prod --out-dir "$OUT_DIR"
+kdcube config export --tenant acme --project prod --out-dir "$OUT_DIR"
 ls -lh "$OUT_DIR"
 ```
 
@@ -1238,9 +1238,9 @@ kdcube defaults \
 | `default_project` | `--default-project` | Used by `kdcube info` for workdir resolution and display; used by descriptor export/import commands as fallback project |
 
 `kdcube start`, `kdcube stop`, `kdcube bundle reload`,
-`kdcube bundle config apply`, `kdcube config export/import`, and `kdcube export` resolve the target workdir
-with the following precedence. The older top-level `kdcube reload` command is a
-compatibility alias for `kdcube bundle reload`.
+`kdcube bundle config apply`, `kdcube config export`, and
+`kdcube config import` resolve the target workdir with the following
+precedence.
 
 1. `--workdir` passed explicitly → use it.
 2. `--workdir` omitted, `default_workdir` present in `cli-defaults.json` → use

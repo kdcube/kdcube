@@ -93,9 +93,9 @@ Those remain deployment-owned.
 
 | Data class | Read API | Write API from bundle code | Ownership boundary | Live authority today | Export / ejection path |
 |---|---|---|---|---|---|
-| platform/global props | `get_settings()` for effective values; `get_plain("...")` for raw descriptor inspection | none supported | tenant + project deployment | promoted runtime config assembled from env plus descriptor files such as `assembly.yaml` and `gateway.yaml` | outside `kdcube export`; manage through deployment descriptors |
-| platform/global secrets | `await get_secret("canonical.key")` | none supported | tenant + project deployment | configured secrets provider; in local `secrets-file` mode this is `secrets.yaml` | outside `kdcube export`; manage through deployment secret workflows |
-| deployment-scoped bundle props | `self.bundle_prop(...)`, `self.bundle_props` | `await set_bundle_prop(...)` | tenant + project + bundle | configured bundle descriptor authority; Redis is the runtime cache. Recommended cloud mode is writable mounted `bundles.yaml` with `BUNDLES_DESCRIPTOR_PROVIDER=file`. | exported to `bundles.yaml`; `kdcube export` includes it |
+| platform/global props | `get_settings()` for effective values; `get_plain("...")` for raw descriptor inspection | none supported | tenant + project deployment | promoted runtime config assembled from env plus descriptor files such as `assembly.yaml` and `gateway.yaml` | exported by `kdcube config export --include-platform-descriptors`; otherwise manage through deployment descriptors |
+| platform/global secrets | `await get_secret("canonical.key")` | none supported | tenant + project deployment | configured secrets provider; in local `secrets-file` mode this is `secrets.yaml` | exported by `kdcube config export --include-platform-descriptors` only when the provider/export flow can reconstruct them; otherwise manage through deployment secret workflows |
+| deployment-scoped bundle props | `self.bundle_prop(...)`, `self.bundle_props` | `await set_bundle_prop(...)` | tenant + project + bundle | configured bundle descriptor authority; Redis is the runtime cache. Recommended cloud mode is writable mounted `bundles.yaml` with `BUNDLES_DESCRIPTOR_PROVIDER=file`. | exported to `bundles.yaml`; `kdcube config export` includes it |
 | deployment-scoped bundle secrets | `await get_secret("b:...")` | `await set_bundle_secret(...)` | tenant + project + bundle | configured secrets provider; in local `secrets-file` mode this is `bundles.secrets.yaml` | exported to `bundles.secrets.yaml` when the provider/export flow can reconstruct them |
 | user-scoped bundle props | `get_user_prop(...)`, `get_user_props()` | `set_user_prop(...)`, `delete_user_prop(...)` | tenant + project + bundle + user | PostgreSQL `<SCHEMA>.user_bundle_props` | never exported to descriptors or bundle export |
 | user-scoped bundle secrets | `await get_secret("u:...")` | `await set_user_secret(...)`, `await delete_user_secret(...)` | tenant + project + bundle + user | configured secrets provider; in local `secrets-file` mode this is `secrets.yaml` | never exported to descriptors or bundle export |
@@ -400,18 +400,22 @@ Important ownership rule:
 
 ## Export and ejection rules
 
-`kdcube export` is bundle-state export only.
+`kdcube config export` exports bundle descriptors by default.
 
-It exports:
+By default, it exports:
 
 - `bundles.yaml`
 - `bundles.secrets.yaml`
 
-It does not export:
+With `--include-platform-descriptors`, it also exports deployment descriptors
+that can be reconstructed from the local runtime:
 
 - `assembly.yaml`
 - `gateway.yaml`
 - `secrets.yaml`
+
+It never exports:
+
 - user props
 - user secrets
 

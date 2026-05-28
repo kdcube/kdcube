@@ -3,7 +3,7 @@ id: ks:docs/service/cicd/design/cli--as-control-plane-README.md
 title: "CLI As Control Plane"
 summary: "Design for evolving the KDCube CLI from a local installer into an application-level control plane for multiple local and cloud deployments, while keeping tenant/project as the deployment boundary and defaulting local compose-backed starts to one active deployment at a time."
 tags: ["service", "cicd", "cli", "control-plane", "design"]
-keywords: ["kdcube init", "kdcube defaults", "kdcube run", "kdcube stop", "kdcube reload", "kdcube export", "tenant project", "profile", "control plane for multiple deployments", "single active local deployment rule", "multiple deployment snapshots on one machine"]
+keywords: ["kdcube init", "kdcube defaults", "kdcube run", "kdcube stop", "kdcube bundle reload", "kdcube config export", "tenant project", "profile", "control plane for multiple deployments", "single active local deployment rule", "multiple deployment snapshots on one machine"]
 see_also:
   - ks:docs/service/cicd/cli-README.md
   - ks:docs/configuration/runtime-read-write-contract-README.md
@@ -282,7 +282,7 @@ If true concurrent local multi-instance support is ever introduced, it should be
 an explicit advanced mode with per-deployment compose naming and per-deployment
 published port allocation.
 
-## 5. `kdcube reload`
+## 5. `kdcube bundle reload`
 
 Purpose:
 
@@ -291,7 +291,7 @@ Purpose:
 Target shape:
 
 ```bash
-kdcube reload \
+kdcube bundle reload \
   {--workdir <workdir>} | {--tenant <tenant> --project <project>} \
   --bundle-id <bundle_id>
 ```
@@ -303,7 +303,7 @@ It is not:
 - a platform/global descriptor reload
 - a user-state export/import operation
 
-## 6. `kdcube export`
+## 6. `kdcube config export`
 
 Purpose:
 
@@ -312,7 +312,7 @@ Purpose:
 Target shape:
 
 ```bash
-kdcube export \
+kdcube config export \
   --profile <profile> \
   --tenant <tenant> \
   --project <project> \

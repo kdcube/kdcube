@@ -320,7 +320,7 @@ when images must be rebuilt.
 7. Reload after bundle descriptor/config changes:
 
 ```bash
-kdcube reload <bundle_id> --tenant <t> --project <p>
+kdcube bundle reload <bundle_id> --tenant <t> --project <p>
 ```
 
 8. Check local proxy first:

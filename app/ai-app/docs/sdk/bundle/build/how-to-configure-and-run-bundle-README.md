@@ -274,7 +274,7 @@ live runtime bundle authority
 workdir/config/bundles.yaml + bundles.secrets.yaml
               |
               v
-kdcube export --out-dir <dir>
+kdcube config export --out-dir <dir>
               |
               v
 portable bundle descriptors for review
@@ -562,10 +562,10 @@ For the exact helper contract and cloud-mode differences, use:
 
 | Scope | Typical examples | Read / write API | Live authority in the local runtime | Export / ejection path |
 |---|---|---|---|---|
-| platform/global props | ports, auth ids, storage backends, path roots | `get_settings()` for effective values; `get_plain("...")` for raw descriptor inspection; no supported write API from bundle code | staged `assembly.yaml` and `gateway.yaml` under `workdir/config/`, plus env | not part of `kdcube export`; manage through the deployment descriptor set |
-| platform/global secrets | deployment-wide API keys, auth secrets | async read: `await get_secret("canonical.key")`; no supported write API from bundle code | `secrets.yaml` only when `secrets-file` is active; otherwise the configured secrets provider | not part of `kdcube export`; manage through deployment secret workflows |
-| deployment-scoped bundle props | feature flags, cron expressions, model selection, bundle UI config | read: `self.bundle_prop(...)`; write: `await set_bundle_prop(...)` | `workdir/config/bundles.yaml` when file-backed descriptor mode is active, with Redis as runtime cache | exported by `kdcube export` to `bundles.yaml` |
-| deployment-scoped bundle secrets | webhook secrets, shared API tokens, bundle-specific credentials | async read: `await get_secret("b:...")`; write: `await set_bundle_secret(...)` | `workdir/config/bundles.secrets.yaml` only in local `secrets-file` mode; otherwise the configured secrets provider | exported by `kdcube export` to `bundles.secrets.yaml` when the provider/export flow can reconstruct them |
+| platform/global props | ports, auth ids, storage backends, path roots | `get_settings()` for effective values; `get_plain("...")` for raw descriptor inspection; no supported write API from bundle code | staged `assembly.yaml` and `gateway.yaml` under `workdir/config/`, plus env | exported by `kdcube config export --include-platform-descriptors`; otherwise manage through the deployment descriptor set |
+| platform/global secrets | deployment-wide API keys, auth secrets | async read: `await get_secret("canonical.key")`; no supported write API from bundle code | `secrets.yaml` only when `secrets-file` is active; otherwise the configured secrets provider | exported by `kdcube config export --include-platform-descriptors` only when the provider/export flow can reconstruct them; otherwise manage through deployment secret workflows |
+| deployment-scoped bundle props | feature flags, cron expressions, model selection, bundle UI config | read: `self.bundle_prop(...)`; write: `await set_bundle_prop(...)` | `workdir/config/bundles.yaml` when file-backed descriptor mode is active, with Redis as runtime cache | exported by `kdcube config export` to `bundles.yaml` |
+| deployment-scoped bundle secrets | webhook secrets, shared API tokens, bundle-specific credentials | async read: `await get_secret("b:...")`; write: `await set_bundle_secret(...)` | `workdir/config/bundles.secrets.yaml` only in local `secrets-file` mode; otherwise the configured secrets provider | exported by `kdcube config export` to `bundles.secrets.yaml` when the provider/export flow can reconstruct them |
 | user-scoped bundle props | one user's preferences or bundle-managed non-secret state | read/write: `get_user_prop(...)`, `set_user_prop(...)`, `delete_user_prop(...)` | PostgreSQL user bundle props table | never exported |
 | user-scoped bundle secrets | one user's personal tokens or credentials managed by the bundle | read/write: `await get_secret("u:...")`, `await set_user_secret(...)`, `await delete_user_secret(...)` | configured secrets provider; in local `secrets-file` mode this is `secrets.yaml` | never exported |
 
@@ -578,7 +578,10 @@ bundle user scope.
 
 Two hard rules:
 
-- `kdcube export` is a bundle-state export only. It exports `bundles.yaml` and `bundles.secrets.yaml`. It does not export `assembly.yaml`, `gateway.yaml`, `secrets.yaml`, user props, or user secrets.
+- `kdcube config export` exports bundle descriptors by default. Add
+  `--include-platform-descriptors` only when you intentionally need
+  `assembly.yaml`, `gateway.yaml`, and platform secrets in the reviewed export.
+  User props and user secrets are never exported.
 - Bundle Admin writes live deployment-scoped bundle state only. It does not rewrite platform/global deployment descriptors.
 - In async bundle code, use `get_secret(...)`, `set_user_secret(...)`, and
   `delete_user_secret(...)` from `kdcube_ai_app.apps.chat.sdk.config`.
@@ -1543,7 +1546,7 @@ To export the current effective bundle descriptors:
 ```bash
 export OUT_DIR=/tmp/live-bundles
 
-kdcube export \
+kdcube config export \
   --workdir ~/.kdcube/kdcube-runtime/mytenant__myproject \
   --out-dir "$OUT_DIR"
 
@@ -1671,7 +1674,7 @@ If you only remember the essentials, remember these:
 - use `kdcube bundle <bundle_id> --set-config / --set-secret / --del-config / --del-secret` for targeted staged config or secret patches
 - use `kdcube bundle reload <bundle_id>` when you changed active runtime bundle descriptors or need proc cache eviction
 - use `kdcube info --workdir <path>` to inspect the runtime you are actually using
-- use `kdcube export` before overwriting runtime bundle state with older descriptor copies
+- use `kdcube config export` before overwriting runtime bundle state with older descriptor copies
 
 For the exact read/write helper contract behind those rules, use:
 
