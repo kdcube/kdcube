@@ -334,6 +334,7 @@ async def process_chat_message(
     RequestContext + IngressConfig.
     """
     text = (message_text or "").strip()
+    has_raw_attachments = bool(raw_attachments)
     requested_kind, requested_kind_explicit = _resolve_requested_continuation_kind(
         message_data,
         conversation_busy=False,
@@ -400,9 +401,10 @@ async def process_chat_message(
             http_status=503,
         )
 
-    # Empty message → emit error via relay + let transport map to HTTP/WS.
+    # Empty text is valid when the user sent attachments: the hosted attachment
+    # descriptors are added to request.payload before the turn/follow-up is run.
     # Explicit steer messages may intentionally carry blank text.
-    if not text and requested_kind != "steer":
+    if not text and not has_raw_attachments and requested_kind != "steer":
         await chat_comm.emit_error(
             svc,
             conv,
