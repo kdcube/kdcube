@@ -279,7 +279,11 @@ older seed copy. By default it writes `bundles.yaml` and
 `bundles.secrets.yaml`; add `--include-platform-descriptors` to also export
 `assembly.yaml`, `secrets.yaml`, and `gateway.yaml`. Local non-git bundle
 paths are normalized back to host paths, while git-backed entries keep
-repo/ref/subdir and drop materialized runtime paths.
+repo/ref/subdir and drop materialized runtime paths. Local host-managed
+Postgres/Redis entries are exported as descriptor-facing `localhost`, even
+though the running containers use `host.docker.internal`. CLI-managed local
+storage and bundle host paths are exported as `null` so a later `init` can
+derive them from that runtime's workdir.
 
 ```bash
 kdcube config export \

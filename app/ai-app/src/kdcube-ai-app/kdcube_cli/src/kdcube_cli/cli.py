@@ -1505,6 +1505,59 @@ def _descriptor_file_changed(source_path: Path, target_path: Path) -> bool:
         return True
 
 
+CLI_MANAGED_ASSEMBLY_PATH_KEYS = (
+    "host_kdcube_storage_path",
+    "host_bundles_path",
+    "host_managed_bundles_path",
+    "host_bundle_storage_path",
+    "host_exec_workspace_path",
+    "host_react_debug_path",
+)
+CLI_MANAGED_LOCAL_STORAGE_URIS = {
+    ("storage", "kdcube"): {"file:///kdcube-storage", "/kdcube-storage"},
+    ("storage", "bundles"): {"file:///bundle-storage", "/bundle-storage"},
+}
+
+
+def _denormalize_exported_assembly_descriptor(data: dict[str, object]) -> bool:
+    changed = False
+    for path in (("infra", "postgres", "host"), ("infra", "redis", "host")):
+        value = _get_nested(data, *path)
+        if isinstance(value, str) and value.strip() == "host.docker.internal":
+            installer_mod._set_nested(data, list(path), "localhost")
+            changed = True
+
+    for key in CLI_MANAGED_ASSEMBLY_PATH_KEYS:
+        value = _get_nested(data, "paths", key)
+        if value is not None:
+            installer_mod._set_nested(data, ["paths", key], None)
+            changed = True
+
+    for path, generated_values in CLI_MANAGED_LOCAL_STORAGE_URIS.items():
+        value = _get_nested(data, *path)
+        if isinstance(value, str) and value.strip() in generated_values:
+            installer_mod._set_nested(data, list(path), None)
+            changed = True
+
+    return changed
+
+
+def _export_platform_descriptor_file(source: Path, target: Path) -> None:
+    if source.name != "assembly.yaml":
+        shutil.copyfile(source, target)
+        return
+
+    data = installer_mod.load_release_descriptor_soft(source)
+    if not data or not _denormalize_exported_assembly_descriptor(data):
+        shutil.copyfile(source, target)
+        return
+
+    target.write_text(
+        yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+
+
 def _export_platform_descriptors(
     console: Console,
     *,
@@ -1519,7 +1572,7 @@ def _export_platform_descriptors(
         if not source.exists():
             raise SystemExit(f"{name} not found under runtime config directory: {config_dir}")
         out_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, target)
+        _export_platform_descriptor_file(source, target)
         files.append(
             {
                 "name": name,

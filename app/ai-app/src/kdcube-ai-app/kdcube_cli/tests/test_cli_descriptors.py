@@ -2781,8 +2781,71 @@ def test_export_platform_descriptors_copies_platform_files(tmp_path: Path):
     )
 
     assert {item["name"] for item in files} == {"assembly.yaml", "secrets.yaml", "gateway.yaml"}
-    for name in ("assembly.yaml", "secrets.yaml", "gateway.yaml"):
+    assert (out_dir / "assembly.yaml").exists()
+    for name in ("secrets.yaml", "gateway.yaml"):
         assert (out_dir / name).read_text() == (config_dir / name).read_text()
+
+
+def test_export_platform_descriptors_denormalizes_local_infra_hosts(tmp_path: Path):
+    config_dir = _write_initialized_runtime_config(tmp_path / "runtime", marker="source")
+    assembly_path = config_dir / "assembly.yaml"
+    assembly = yaml.safe_load(assembly_path.read_text())
+    assembly["infra"] = {
+        "postgres": {"host": "host.docker.internal", "port": "5432"},
+        "redis": {"host": "host.docker.internal", "port": "6379"},
+    }
+    assembly_path.write_text(yaml.safe_dump(assembly, sort_keys=False), encoding="utf-8")
+    out_dir = tmp_path / "out"
+
+    _export_platform_descriptors(
+        Console(file=None),
+        config_dir=config_dir,
+        out_dir=out_dir,
+        quiet=True,
+    )
+
+    exported = yaml.safe_load((out_dir / "assembly.yaml").read_text())
+    assert exported["infra"]["postgres"]["host"] == "localhost"
+    assert exported["infra"]["redis"]["host"] == "localhost"
+
+
+def test_export_platform_descriptors_drops_cli_managed_local_paths(tmp_path: Path):
+    runtime = tmp_path / "runtime"
+    config_dir = _write_initialized_runtime_config(runtime, marker="source")
+    assembly_path = config_dir / "assembly.yaml"
+    assembly = yaml.safe_load(assembly_path.read_text())
+    assembly["storage"] = {
+        "kdcube": "file:///kdcube-storage",
+        "bundles": "file:///bundle-storage",
+    }
+    assembly["paths"] = {
+        "host_kdcube_storage_path": str(runtime / "data" / "kdcube-storage"),
+        "host_bundles_path": str(tmp_path / "src"),
+        "host_managed_bundles_path": str(runtime / "data" / "managed-bundles"),
+        "host_bundle_storage_path": str(runtime / "data" / "bundle-storage"),
+        "host_exec_workspace_path": str(runtime / "data" / "exec-workspace"),
+        "host_react_debug_path": str(runtime / "data" / "react-debug"),
+    }
+    assembly_path.write_text(yaml.safe_dump(assembly, sort_keys=False), encoding="utf-8")
+    out_dir = tmp_path / "out"
+
+    _export_platform_descriptors(
+        Console(file=None),
+        config_dir=config_dir,
+        out_dir=out_dir,
+        quiet=True,
+    )
+
+    exported = yaml.safe_load((out_dir / "assembly.yaml").read_text())
+    assert exported["storage"] == {"kdcube": None, "bundles": None}
+    assert exported["paths"] == {
+        "host_kdcube_storage_path": None,
+        "host_bundles_path": None,
+        "host_managed_bundles_path": None,
+        "host_bundle_storage_path": None,
+        "host_exec_workspace_path": None,
+        "host_react_debug_path": None,
+    }
 
 
 def test_apply_config_descriptors_overwrites_platform_files_and_regenerates(monkeypatch, tmp_path: Path):

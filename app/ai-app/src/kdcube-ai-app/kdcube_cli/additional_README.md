@@ -439,6 +439,10 @@ kdcube config import \
 
 With `--include-platform-descriptors`, export writes `assembly.yaml`,
 `secrets.yaml`, `gateway.yaml`, `bundles.yaml`, and `bundles.secrets.yaml`.
+Local host-managed Postgres/Redis entries are exported as descriptor-facing
+`localhost`, even though the running containers use `host.docker.internal`.
+CLI-managed local storage and bundle host paths are exported as `null` so a
+later `init` can derive them from that runtime's workdir.
 Import treats that reviewed directory as authoritative for the local runtime:
 platform descriptors are overwritten exactly, bundle descriptors are
 path-normalized, and runtime env/config files are regenerated from the imported
