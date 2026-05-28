@@ -4403,6 +4403,8 @@ def run_setup(
                         "postgres-setup",
                         "kdcube-secrets",
                     ]
+                    if ctx.docker_dir.name == "custom-ui-managed-infra":
+                        build_services.append("proxylogin")
                     if not (ui_image_override and not is_placeholder(ui_image_override)):
                         build_services.append("web-ui")
                     subprocess.run(

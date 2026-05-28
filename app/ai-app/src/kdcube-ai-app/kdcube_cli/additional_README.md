@@ -226,6 +226,9 @@ SDK code) on an existing workdir. It:
   `--release <ref>`;
 - restages explicit local `--path <repo>` into `<workdir>/repo` before
   rebuilding when no source selector is provided;
+- rebuilds `proxylogin` in `custom-ui-managed-infra` mode when `--build` is
+  used, so delegated-auth behavior is refreshed with the rest of the local
+  platform surface;
 - stops the stack if it is running;
 - rebuilds platform Docker images when `--build` is given;
 - restarts the stack (unless `--no-restart` is passed);
@@ -410,6 +413,42 @@ This stages only `bundles.yaml` and optional `bundles.secrets.yaml`. Host local
 bundle paths are translated to runtime-visible `/bundles/...` paths before the
 runtime copy is written.
 
+For local runtimes where the operator wants to snapshot, review, edit, and
+reapply the full runtime descriptor authority, use `kdcube config`:
+
+```bash
+kdcube config export \
+  --tenant <tenant> \
+  --project <project> \
+  --out-dir /tmp/kdcube-export \
+  --include-platform-descriptors
+
+kdcube config import \
+  --tenant <tenant> \
+  --project <project> \
+  --descriptors-location /tmp/kdcube-export \
+  --include-platform-descriptors \
+  --dry-run
+
+kdcube config import \
+  --tenant <tenant> \
+  --project <project> \
+  --descriptors-location /tmp/kdcube-export \
+  --include-platform-descriptors
+```
+
+With `--include-platform-descriptors`, export writes `assembly.yaml`,
+`secrets.yaml`, `gateway.yaml`, `bundles.yaml`, and `bundles.secrets.yaml`.
+Local host-managed Postgres/Redis entries are exported as descriptor-facing
+`localhost`, even though the running containers use `host.docker.internal`.
+CLI-managed local storage and bundle host paths are exported as `null` so a
+later `init` can derive them from that runtime's workdir.
+Import treats that reviewed directory as authoritative for the local runtime:
+platform descriptors are overwritten exactly, bundle descriptors are
+path-normalized, and runtime env/config files are regenerated from the imported
+platform descriptors. Restart the stack after importing platform descriptors so
+running services pick up service-level env changes.
+
 For `aws-sm` deployments, you can also export the current effective live
 deployment-scoped bundle descriptors directly from AWS Secrets Manager:
 
@@ -498,6 +537,8 @@ what is incomplete.
 | `kdcube bundle reload <bundle_id> [--workdir <path>] [--json] [--quiet] [--verbose]` | Reapply `bundles.yaml` from the active runtime and clear proc bundle caches. Normal output is concise; `--json` is scriptable; `--verbose` shows the raw Docker Compose command and proc response. |
 | `kdcube reload <bundle_id> [--workdir <path>] [--json] [--quiet] [--verbose]` | Compatibility alias for bundle reload. |
 | `kdcube bundle config apply [--workdir <path>] [--tenant <id>] [--project <id>] --descriptors-location <dir> [--dry-run] [--reload]` | User/operator descriptor-sync flow. Reapply seed `bundles.yaml` and optional `bundles.secrets.yaml` to an existing runtime; with `--reload`, reload changed declared bundle ids. Does not touch platform descriptors, rebuild images, or restart Docker. |
+| `kdcube config export [--workdir <path>] [--tenant <id>] [--project <id>] --out-dir <dir> [--include-platform-descriptors]` | Export live local runtime descriptors. By default exports `bundles.yaml` and `bundles.secrets.yaml`; with `--include-platform-descriptors`, also exports `assembly.yaml`, `secrets.yaml`, and `gateway.yaml`. |
+| `kdcube config import [--workdir <path>] [--tenant <id>] [--project <id>] --descriptors-location <dir> [--include-platform-descriptors] [--dry-run] [--reload]` | Import reviewed descriptors into an existing local runtime. Bundle descriptors are path-normalized; with `--include-platform-descriptors`, platform descriptors are overwritten exactly and runtime env/config files are regenerated. |
 | `kdcube export [--workdir <path>] [--tenant <id>] [--project <id>] [--out-dir <dir>] [--aws-region <region>]` | Export effective live `bundles.yaml` and `bundles.secrets.yaml`. Local export normalizes runtime paths back to reusable descriptor paths. |
 | `kdcube info [--workdir <path>] [--tenant <t>] [--project <p>] [--show-defaults] [--show-current-running-runtime] [--json]` | Show CLI defaults, currently running deployment, and runtime info from defaults when called with no arguments. `--workdir` shows runtime info for a specific workdir; `--tenant`/`--project` disambiguate when multiple runtimes exist under `--workdir`, or construct the target runtime from the default runtime base when `--workdir` is omitted. `--show-defaults` prints only the stored CLI defaults. `--show-current-running-runtime` prints only the currently running deployment. `--json` prints machine-readable output. |
 | `kdcube clean` | Clean local Docker cache and unused KDCube images. |
@@ -510,11 +551,11 @@ what is incomplete.
 | Field | Flag | Purpose |
 |---|---|---|
 | `default_workdir` | `--default-workdir` | Fallback workdir when `--workdir` is omitted from a subcommand |
-| `default_tenant` | `--default-tenant` | Used by `kdcube info` for workdir resolution and display; used by `kdcube export` as fallback tenant |
-| `default_project` | `--default-project` | Used by `kdcube info` for workdir resolution and display; used by `kdcube export` as fallback project |
+| `default_tenant` | `--default-tenant` | Used by `kdcube info` for workdir resolution and display; used by descriptor export/import commands as fallback tenant |
+| `default_project` | `--default-project` | Used by `kdcube info` for workdir resolution and display; used by descriptor export/import commands as fallback project |
 
 `kdcube start`, `kdcube stop`, `kdcube bundle reload`,
-`kdcube bundle config apply`, and `kdcube export` resolve the target workdir
+`kdcube bundle config apply`, `kdcube config export/import`, and `kdcube export` resolve the target workdir
 with the following precedence:
 
 1. `--workdir` passed explicitly → use it.

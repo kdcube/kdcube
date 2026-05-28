@@ -10,6 +10,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -44,6 +45,7 @@ CLI_LOCK_FILE = Path.home() / ".kdcube" / "cli-lock.json"
 DEFAULT_REPO_DIRNAME = "repo"
 DOCKER_STATUS_TIMEOUT_SECONDS = 20
 DOCKER_CLEAN_TIMEOUT_SECONDS = 120
+PLATFORM_DESCRIPTOR_FILENAMES = ("assembly.yaml", "secrets.yaml", "gateway.yaml")
 STANDARD_INIT_SECRET_PROMPTS: tuple[tuple[str, str], ...] = (
     ("services.openai.api_key", "OpenAI API key"),
     ("services.anthropic.api_key", "Anthropic API key"),
@@ -390,6 +392,8 @@ def build_compose_images(
         "postgres-setup",
         "kdcube-secrets",
     ]
+    if ctx.docker_dir.name == "custom-ui-managed-infra":
+        build_services.append("proxylogin")
     if not (ui_image_override and not installer_mod.is_placeholder(ui_image_override)):
         build_services.append("web-ui")
 
@@ -1473,6 +1477,279 @@ def apply_bundle_config_descriptors(
         "removed_bundle_ids": removed_ids,
         "secret_only_changed_bundle_ids": secret_only_changed_ids,
         "reloaded": reload_results,
+    }
+
+
+@contextmanager
+def _temporary_env(overrides: dict[str, str]):
+    previous: dict[str, str | None] = {}
+    for key, value in overrides.items():
+        previous[key] = os.environ.get(key)
+        os.environ[key] = value
+    try:
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def _descriptor_file_changed(source_path: Path, target_path: Path) -> bool:
+    if not target_path.exists():
+        return True
+    try:
+        return source_path.read_bytes() != target_path.read_bytes()
+    except OSError:
+        return True
+
+
+CLI_MANAGED_ASSEMBLY_PATH_KEYS = (
+    "host_kdcube_storage_path",
+    "host_bundles_path",
+    "host_managed_bundles_path",
+    "host_bundle_storage_path",
+    "host_exec_workspace_path",
+    "host_react_debug_path",
+)
+CLI_MANAGED_LOCAL_STORAGE_URIS = {
+    ("storage", "kdcube"): {"file:///kdcube-storage", "/kdcube-storage"},
+    ("storage", "bundles"): {"file:///bundle-storage", "/bundle-storage"},
+}
+
+
+def _denormalize_exported_assembly_descriptor(data: dict[str, object]) -> bool:
+    changed = False
+    for path in (("infra", "postgres", "host"), ("infra", "redis", "host")):
+        value = _get_nested(data, *path)
+        if isinstance(value, str) and value.strip() == "host.docker.internal":
+            installer_mod._set_nested(data, list(path), "localhost")
+            changed = True
+
+    for key in CLI_MANAGED_ASSEMBLY_PATH_KEYS:
+        value = _get_nested(data, "paths", key)
+        if value is not None:
+            installer_mod._set_nested(data, ["paths", key], None)
+            changed = True
+
+    for path, generated_values in CLI_MANAGED_LOCAL_STORAGE_URIS.items():
+        value = _get_nested(data, *path)
+        if isinstance(value, str) and value.strip() in generated_values:
+            installer_mod._set_nested(data, list(path), None)
+            changed = True
+
+    return changed
+
+
+def _export_platform_descriptor_file(source: Path, target: Path) -> None:
+    if source.name != "assembly.yaml":
+        shutil.copyfile(source, target)
+        return
+
+    data = installer_mod.load_release_descriptor_soft(source)
+    if not data or not _denormalize_exported_assembly_descriptor(data):
+        shutil.copyfile(source, target)
+        return
+
+    target.write_text(
+        yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+
+
+def _export_platform_descriptors(
+    console: Console,
+    *,
+    config_dir: Path,
+    out_dir: Path,
+    quiet: bool = False,
+) -> list[dict[str, object]]:
+    files: list[dict[str, object]] = []
+    for name in PLATFORM_DESCRIPTOR_FILENAMES:
+        source = config_dir / name
+        target = out_dir / name
+        if not source.exists():
+            raise SystemExit(f"{name} not found under runtime config directory: {config_dir}")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        _export_platform_descriptor_file(source, target)
+        files.append(
+            {
+                "name": name,
+                "source": str(source),
+                "target": str(target),
+                "size_bytes": target.stat().st_size,
+            }
+        )
+    if not quiet:
+        console.print("[green]Exported platform descriptors.[/green]")
+        for item in files:
+            console.print(f"[dim]  {item['name']}:[/dim] {item['target']}")
+    return files
+
+
+def _apply_platform_config_descriptors(
+    console: Console,
+    *,
+    config_dir: Path,
+    descriptors_location: Path,
+    dry_run: bool = False,
+    quiet: bool = False,
+) -> list[dict[str, object]]:
+    source_dir = descriptors_location.expanduser().resolve()
+    if not source_dir.exists() or not source_dir.is_dir():
+        raise SystemExit(f"Descriptor directory not found: {source_dir}")
+
+    files: list[dict[str, object]] = []
+    for name in PLATFORM_DESCRIPTOR_FILENAMES:
+        source = source_dir / name
+        target = config_dir / name
+        if not source.exists():
+            raise SystemExit(f"{name} not found under {source_dir}")
+        changed = _descriptor_file_changed(source, target)
+        files.append(
+            {
+                "name": name,
+                "source": str(source),
+                "target": str(target),
+                "changed": changed,
+            }
+        )
+        if not dry_run:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+
+    if not quiet:
+        if dry_run:
+            console.print("[yellow]Dry run: platform descriptors were not modified.[/yellow]")
+        else:
+            console.print(f"[green]Applied platform descriptors:[/green] {source_dir}")
+        for item in files:
+            marker = "changed" if item["changed"] else "unchanged"
+            console.print(f"[dim]  {item['name']}:[/dim] {marker}")
+    return files
+
+
+def _regenerate_runtime_config_from_descriptors(
+    console: Console,
+    *,
+    repo_root: Path,
+    workdir: Path,
+    quiet: bool = False,
+) -> None:
+    config_dir = workdir / "config"
+    assembly = installer_mod.load_release_descriptor_soft(config_dir / "assembly.yaml")
+    frontend_data = _get_nested(assembly, "frontend")
+    use_frontend = bool(
+        isinstance(frontend_data, dict)
+        and (_get_nested(frontend_data, "build", "repo") or frontend_data.get("image"))
+    )
+    env_overrides = {
+        "KDCUBE_DESCRIPTORS_LOCATION": str(config_dir.resolve()),
+        "KDCUBE_ASSEMBLY_DESCRIPTOR_PATH": str((config_dir / "assembly.yaml").resolve()),
+        "KDCUBE_SECRETS_DESCRIPTOR_PATH": str((config_dir / "secrets.yaml").resolve()),
+        "KDCUBE_BUNDLES_DESCRIPTOR_PATH": str((config_dir / "bundles.yaml").resolve()),
+        "KDCUBE_BUNDLES_SECRETS_PATH": str((config_dir / "bundles.secrets.yaml").resolve()),
+        "KDCUBE_GATEWAY_DESCRIPTOR_PATH": str((config_dir / "gateway.yaml").resolve()),
+        "KDCUBE_ASSEMBLY_USER_SUPPLIED": "0",
+        "KDCUBE_ASSEMBLY_USE_BUNDLES": "1" if bool(_get_nested(assembly, "bundles")) else "0",
+        "KDCUBE_ASSEMBLY_USE_FRONTEND": "1" if use_frontend else "0",
+        "KDCUBE_ASSEMBLY_USE_PLATFORM": "0",
+        "KDCUBE_USE_BUNDLES_DESCRIPTOR": "1",
+        "KDCUBE_USE_BUNDLES_SECRETS": "1",
+        "KDCUBE_INIT_PREPARE_ONLY": "1",
+        "KDCUBE_CLI_NONINTERACTIVE": "1",
+    }
+    with _temporary_env(env_overrides):
+        run_installer(
+            Console(file=_NullWriter()) if quiet else console,
+            repo_root=repo_root,
+            workdir=workdir,
+            mode="skip",
+            release_ref=None,
+            docker_namespace=None,
+            dry_run=True,
+        )
+
+
+def apply_config_descriptors(
+    console: Console,
+    *,
+    workdir: Path,
+    descriptors_location: Path,
+    include_platform_descriptors: bool = False,
+    dry_run: bool = False,
+    reload_changed: bool = False,
+    repo_root: Path | None = None,
+    verbose: bool = False,
+    quiet: bool = False,
+) -> dict[str, object]:
+    config_dir = _canonical_descriptor_dir_from_initialized_workdir(workdir)
+    if config_dir is None:
+        raise SystemExit(
+            f"Workdir is not initialized: {workdir}\n"
+            "`kdcube config import` only operates on an existing runtime created by `kdcube init`."
+        )
+
+    source_dir = descriptors_location.expanduser().resolve()
+    if not (source_dir / "bundles.yaml").exists():
+        raise SystemExit(f"bundles.yaml not found under {source_dir}")
+    if include_platform_descriptors:
+        missing_platform = [name for name in PLATFORM_DESCRIPTOR_FILENAMES if not (source_dir / name).exists()]
+        if missing_platform:
+            raise SystemExit(
+                "Platform descriptor import requires the full platform descriptor set. "
+                f"Missing under {source_dir}: {', '.join(missing_platform)}"
+            )
+    platform_files: list[dict[str, object]] = []
+    if include_platform_descriptors:
+        platform_files = _apply_platform_config_descriptors(
+            console,
+            config_dir=config_dir,
+            descriptors_location=source_dir,
+            dry_run=dry_run,
+            quiet=quiet,
+        )
+
+    bundle_result = apply_bundle_config_descriptors(
+        console,
+        workdir=workdir,
+        descriptors_location=source_dir,
+        dry_run=dry_run,
+        reload_changed=reload_changed,
+        repo_root=repo_root,
+        verbose=verbose,
+        quiet=quiet,
+    )
+
+    regenerated = False
+    if include_platform_descriptors and not dry_run:
+        resolved_repo = repo_root or _resolve_subcommand_repo(
+            str(DEFAULT_DIR),
+            workdir=workdir,
+            path_provided=False,
+        )
+        _regenerate_runtime_config_from_descriptors(
+            console,
+            repo_root=resolved_repo,
+            workdir=workdir,
+            quiet=quiet,
+        )
+        regenerated = True
+        if not quiet:
+            console.print(
+                "[dim]Runtime env/config files regenerated. Restart the stack for service-level "
+                f"descriptor changes to take effect: kdcube refresh --workdir {workdir}[/dim]"
+            )
+
+    return {
+        "status": "dry-run" if dry_run else "ok",
+        "workdir": str(workdir),
+        "descriptors_location": str(source_dir),
+        "include_platform_descriptors": include_platform_descriptors,
+        "platform_files": platform_files,
+        "bundle_result": bundle_result,
+        "runtime_config_regenerated": regenerated,
     }
 
 
@@ -2593,6 +2870,16 @@ def _save_cli_defaults(data: dict) -> None:
 
 
 def _parse_workdir_namespace(workdir: Path) -> tuple[str, str]:
+    meta = _read_install_meta_raw(workdir)
+    if isinstance(meta, dict):
+        tenant = str(meta.get("tenant") or "").strip()
+        project = str(meta.get("project") or "").strip()
+        if tenant and project:
+            return tenant, project
+    assembly = installer_mod.load_release_descriptor_soft(workdir / "config" / "assembly.yaml")
+    tenant, project = installer_mod.descriptor_context_from_assembly(assembly)
+    if tenant and project:
+        return tenant, project
     name = workdir.name
     if "__" in name:
         tenant, _, project = name.partition("__")
@@ -2649,11 +2936,44 @@ def _lock_running_services(lock: dict) -> set[str]:
         return set()
 
 
+def _same_runtime_workdir(left: object, right: object) -> bool:
+    try:
+        return Path(str(left)).expanduser().resolve() == Path(str(right)).expanduser().resolve()
+    except Exception:
+        return False
+
+
+def _namespace_key(value: object) -> str:
+    return str(value or "").strip().replace("_", "-")
+
+
+def _lock_matches_target(
+    lock: dict,
+    *,
+    tenant: str,
+    project: str,
+    workdir: Path | None = None,
+) -> bool:
+    lock_tenant = str(lock.get("tenant", "")).strip()
+    lock_project = str(lock.get("project", "")).strip()
+    if lock_tenant == tenant and lock_project == project:
+        return True
+    if (
+        _namespace_key(lock_tenant) == _namespace_key(tenant)
+        and _namespace_key(lock_project) == _namespace_key(project)
+    ):
+        return True
+    if workdir is not None and lock.get("workdir") and _same_runtime_workdir(lock.get("workdir"), workdir):
+        return True
+    return False
+
+
 def _check_before_start(
     console: Console,
     *,
     tenant: str,
     project: str,
+    workdir: Path | None = None,
 ) -> None:
     """Raise SystemExit if a different deployment is already running. Clear stale locks silently."""
     lock = _read_cli_lock()
@@ -2661,7 +2981,7 @@ def _check_before_start(
         return
     lock_tenant = str(lock.get("tenant", "")).strip()
     lock_project = str(lock.get("project", "")).strip()
-    if lock_tenant == tenant and lock_project == project:
+    if _lock_matches_target(lock, tenant=tenant, project=project, workdir=workdir):
         return
     running = _lock_running_services(lock)
     if running:
@@ -2696,7 +3016,7 @@ def _check_before_stop(workdir: Path, env_file: Path, docker_dir: Path) -> None:
     if lock is not None:
         lock_tenant = str(lock.get("tenant", "")).strip()
         lock_project = str(lock.get("project", "")).strip()
-        if lock_tenant != target_tenant or lock_project != target_project:
+        if not _lock_matches_target(lock, tenant=target_tenant, project=target_project, workdir=workdir):
             raise SystemExit(
                 f"Cannot stop: a different deployment is currently running.\n"
                 f"  Running  : {lock_tenant} / {lock_project}  ({lock.get('workdir', '?')})\n"
@@ -3139,6 +3459,29 @@ def main() -> None:
         action="store_true",
         dest="reload_changed",
         help="With `bundle config apply`, reload changed bundle ids after staging descriptors",
+    )
+
+    _sp = subparsers.add_parser("config", help="Export or import runtime descriptors")
+    _add_quiet_arg(_sp)
+    _sp.add_argument("config_action", choices=("export", "import"), help="Descriptor operation")
+    _sp.add_argument("--tenant", default="", help="Tenant of the runtime. With --project, composes under the platform default base.")
+    _sp.add_argument("--project", default="", help="Project of the runtime. Pair with --tenant.")
+    _sp.add_argument("--workdir", default=None, help="(Advanced) Fully-qualified namespaced runtime workdir")
+    _sp.add_argument("--path", default=str(DEFAULT_DIR), help="Platform repo path")
+    _sp.add_argument("--out-dir", default="", help="With `config export`, output directory for exported files")
+    _sp.add_argument("--descriptors-location", default="", help="With `config import`, source directory containing descriptors")
+    _sp.add_argument(
+        "--include-platform-descriptors",
+        action="store_true",
+        help="Include assembly.yaml, secrets.yaml, and gateway.yaml in addition to bundle descriptors",
+    )
+    _sp.add_argument("--dry-run", action="store_true", help="With `config import`, show what would change without staging files")
+    _sp.add_argument("--reload", action="store_true", dest="reload_changed", help="With `config import`, reload changed bundle ids after staging descriptors")
+    _sp.add_argument("--json", action="store_true", dest="json_output", help="Print machine-readable JSON")
+    _sp.add_argument(
+        "--verbose",
+        action="store_true",
+        help="With `config import --reload`, show the raw docker compose command and proc response",
     )
 
     _sp = subparsers.add_parser("export", help="Export live bundle descriptors")
@@ -3852,6 +4195,87 @@ def main() -> None:
 
             _print_bundle_apply_hint(console, _bundle_id, _resolved)
             return
+        if args.command == "config":
+            _workdir = _resolve_subcommand_workdir(
+                args.workdir,
+                cli_defaults,
+                tenant_arg=getattr(args, "tenant", "") or "",
+                project_arg=getattr(args, "project", "") or "",
+            )
+            _resolved = _resolve_cli_workdir(_workdir)
+            _config_dir = _canonical_descriptor_dir_from_initialized_workdir(_resolved)
+            if _config_dir is None:
+                raise SystemExit(
+                    f"Workdir is not initialized: {_resolved}\n"
+                    "`kdcube config export/import` only operates on a runtime created by `kdcube init`."
+                )
+            _action = str(args.config_action or "").strip()
+            _op_console = Console(file=_NullWriter()) if bool(args.json_output) else console
+            if _action == "export":
+                if not str(args.out_dir or "").strip():
+                    raise SystemExit("--out-dir is required with `kdcube config export`.")
+                if str(args.descriptors_location or "").strip():
+                    raise SystemExit("--descriptors-location is only supported with `kdcube config import`.")
+                if args.dry_run or args.reload_changed or args.verbose:
+                    raise SystemExit("--dry-run, --reload, and --verbose are only supported with `kdcube config import`.")
+                _out_dir = Path(os.path.expanduser(args.out_dir)).resolve()
+                _t, _p = _parse_workdir_namespace(_resolved)
+                export_live_bundle_descriptors(
+                    _op_console,
+                    tenant=_t,
+                    project=_p,
+                    out_dir=_out_dir,
+                    aws_region=None,
+                    aws_profile=None,
+                    aws_sm_prefix=None,
+                    bundles_path=_config_dir / "bundles.yaml",
+                    bundles_secrets_path=_config_dir / "bundles.secrets.yaml",
+                )
+                _platform_files: list[dict[str, object]] = []
+                if args.include_platform_descriptors:
+                    _platform_files = _export_platform_descriptors(
+                        _op_console,
+                        config_dir=_config_dir,
+                        out_dir=_out_dir,
+                        quiet=bool(args.quiet or args.json_output),
+                    )
+                if args.json_output:
+                    _print_json(
+                        {
+                            "status": "ok",
+                            "action": "export",
+                            "workdir": str(_resolved),
+                            "out_dir": str(_out_dir),
+                            "include_platform_descriptors": bool(args.include_platform_descriptors),
+                            "files": [
+                                {"name": "bundles.yaml", "target": str(_out_dir / "bundles.yaml")},
+                                {"name": "bundles.secrets.yaml", "target": str(_out_dir / "bundles.secrets.yaml")},
+                                *_platform_files,
+                            ],
+                        }
+                    )
+                return
+            if _action == "import":
+                if not str(args.descriptors_location or "").strip():
+                    raise SystemExit("--descriptors-location is required with `kdcube config import`.")
+                if str(args.out_dir or "").strip():
+                    raise SystemExit("--out-dir is only supported with `kdcube config export`.")
+                _repo = _resolve_subcommand_repo(args.path, workdir=_resolved, path_provided=_arg_provided("--path"))
+                _result = apply_config_descriptors(
+                    _op_console,
+                    workdir=_resolved,
+                    descriptors_location=Path(os.path.expanduser(args.descriptors_location)).resolve(),
+                    include_platform_descriptors=bool(args.include_platform_descriptors),
+                    dry_run=bool(args.dry_run),
+                    reload_changed=bool(args.reload_changed),
+                    repo_root=_repo,
+                    verbose=bool(args.verbose),
+                    quiet=bool(args.quiet or args.json_output),
+                )
+                if args.json_output:
+                    _print_json(_result)
+                return
+            raise SystemExit("Usage: kdcube config <export|import> ...")
         if args.command == "export":
             _workdir = _resolve_subcommand_workdir(
                 args.workdir, cli_defaults,
@@ -3899,7 +4323,7 @@ def main() -> None:
             _resolved = _resolve_cli_workdir(_workdir)
             _repo = _resolve_subcommand_repo(args.path, workdir=_resolved, path_provided=_arg_provided("--path"))
             _t, _p = _parse_workdir_namespace(_resolved)
-            _check_before_start(console, tenant=_t, project=_p)
+            _check_before_start(console, tenant=_t, project=_p, workdir=_resolved)
             start_compose_stack(console, repo_root=_repo, workdir=_resolved, build=args.build)
             return
         if args.command == "refresh":
@@ -4025,7 +4449,7 @@ def main() -> None:
             if args.build:
                 build_compose_images(console, repo_root=_repo, workdir=_resolved)
             if not args.no_restart:
-                _check_before_start(console, tenant=_t, project=_p)
+                _check_before_start(console, tenant=_t, project=_p, workdir=_resolved)
                 start_compose_stack(console, repo_root=_repo, workdir=_resolved, build=False)
             else:
                 console.print(
@@ -4209,6 +4633,14 @@ def main() -> None:
             if _descriptor_bootstrap["bundles_secrets_path"]:
                 os.environ["KDCUBE_BUNDLES_SECRETS_PATH"] = str(_descriptor_bootstrap["bundles_secrets_path"])
             _init_assembly = _descriptor_bootstrap["assembly"]
+            if (
+                str(args.descriptors_location or "").strip()
+                and not (str(args.tenant or "").strip() or str(args.project or "").strip())
+            ):
+                _descriptor_tenant, _descriptor_project = installer_mod.descriptor_context_from_assembly(_init_assembly)
+                if _descriptor_tenant and _descriptor_project:
+                    _init_preset_tenant = _descriptor_tenant
+                    _init_preset_project = _descriptor_project
             os.environ["KDCUBE_ASSEMBLY_USE_BUNDLES"] = "1" if bool(_get_nested(_init_assembly, "bundles")) else "0"
             os.environ["KDCUBE_ASSEMBLY_USE_FRONTEND"] = "1" if bool(_get_nested(_init_assembly, "frontend")) else "0"
             os.environ["KDCUBE_ASSEMBLY_USE_PLATFORM"] = "0"
@@ -4421,7 +4853,7 @@ def main() -> None:
                 os.environ["KDCUBE_CLI_NONINTERACTIVE"] = "1"
             if not args.dry_run:
                 _t, _p = _parse_workdir_namespace(workdir)
-                _check_before_start(console, tenant=_t, project=_p)
+                _check_before_start(console, tenant=_t, project=_p, workdir=workdir)
             run_installer(console, repo_path, workdir, install_mode, release_ref, None, args.dry_run)
             if not args.dry_run:
                 try:
@@ -4729,7 +5161,7 @@ def main() -> None:
         if not args.dry_run:
             _resolved_wdir = _resolve_cli_workdir(workdir)
             _t, _p = _parse_workdir_namespace(_resolved_wdir)
-            _check_before_start(console, tenant=_t, project=_p)
+            _check_before_start(console, tenant=_t, project=_p, workdir=_resolved_wdir)
         run_installer(console, repo_path, workdir, mode, release_ref, docker_namespace, args.dry_run)
         if not args.dry_run:
             try:

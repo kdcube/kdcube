@@ -274,10 +274,38 @@ kdcube bundle reload <bundle_id>
 proc clears bundle cache and reloads code/config on the next request
 ```
 
-Use `kdcube export` before replacing live runtime bundle descriptors with an
-older seed copy. Export writes `bundles.yaml` and `bundles.secrets.yaml`;
-local non-git bundle paths are normalized back to host paths, while git-backed
-entries keep repo/ref/subdir and drop materialized runtime paths.
+Use `kdcube config export` before replacing live runtime descriptors with an
+older seed copy. By default it writes `bundles.yaml` and
+`bundles.secrets.yaml`; add `--include-platform-descriptors` to also export
+`assembly.yaml`, `secrets.yaml`, and `gateway.yaml`. Local non-git bundle
+paths are normalized back to host paths, while git-backed entries keep
+repo/ref/subdir and drop materialized runtime paths. Local host-managed
+Postgres/Redis entries are exported as descriptor-facing `localhost`, even
+though the running containers use `host.docker.internal`. CLI-managed local
+storage and bundle host paths are exported as `null` so a later `init` can
+derive them from that runtime's workdir.
+
+```bash
+kdcube config export \
+  --tenant acme \
+  --project staging \
+  --out-dir /tmp/kdcube-export \
+  --include-platform-descriptors
+
+# after review/editing the exported files
+kdcube config import \
+  --tenant acme \
+  --project staging \
+  --descriptors-location /tmp/kdcube-export \
+  --include-platform-descriptors
+```
+
+`config import --include-platform-descriptors` treats the reviewed descriptor
+directory as the local runtime authority and overwrites `assembly.yaml`,
+`secrets.yaml`, and `gateway.yaml` exactly. It also stages bundle descriptors
+and regenerates runtime env/config files from the imported platform
+descriptors. Restart the stack after importing platform descriptors so running
+services pick up service-level env changes.
 
 ### Advanced workdir placement
 
@@ -300,7 +328,7 @@ kdcube init --workdir-base /opt/kdcube --tenant acme --project staging
 ```
 
 `--workdir` and `--workdir-base` are mutually exclusive. Other subcommands
-(`start`, `stop`, `reload`, `bundle`, `info`, `export`) accept the same
+(`start`, `stop`, `reload`, `bundle`, `config`, `info`, `export`) accept the same
 `--tenant`/`--project` shape and a `--workdir` for the explicit form.
 
 ### `kdcube refresh`
@@ -314,6 +342,9 @@ descriptors (`bundles.yaml`, `bundles.secrets.yaml`, `assembly.yaml`,
 ```bash
 kdcube refresh --workdir ~/.kdcube/kdcube-runtime/<tenant>__<project> --build
 ```
+
+In `custom-ui-managed-infra` mode, `--build` also rebuilds `proxylogin`
+because delegated-auth behavior is part of the local platform surface.
 
 Refresh also accepts the same platform source selectors as `init`:
 `--latest`, `--upstream`, and `--release <ref>`. When you pass
@@ -360,6 +391,8 @@ kdcube defaults \
 | `kdcube bundle reload <bundle_id> [--json] [--quiet]` | Reapply bundle config and clear proc caches — no full restart needed |
 | `kdcube bundle <bundle_id>` | Create, update, or delete a staged bundle entry |
 | `kdcube bundle config apply --descriptors-location <dir> [--dry-run] [--reload]` | User/operator flow to reapply seed `bundles.yaml` / `bundles.secrets.yaml` to an existing runtime — no platform refresh |
+| `kdcube config export --out-dir <dir> [--include-platform-descriptors]` | Export live runtime descriptors for review/reuse |
+| `kdcube config import --descriptors-location <dir> [--include-platform-descriptors] [--dry-run] [--reload]` | Import reviewed runtime descriptors into an existing local runtime |
 | `kdcube export` | Export live `bundles.yaml` / `bundles.secrets.yaml`; local paths are normalized back to host descriptor paths |
 
 ### Configuration

@@ -5,7 +5,9 @@ from pathlib import Path
 import yaml
 from rich.console import Console
 
+from kdcube_cli import cli as cli_mod
 from kdcube_cli.cli import (
+    _export_platform_descriptors,
     _bootstrap_repo_for_defaults,
     _build_paths_for_repo,
     _canonical_descriptor_dir_from_initialized_workdir,
@@ -30,6 +32,7 @@ from kdcube_cli.cli import (
     _resolve_subcommand_workdir,
     _resolve_cli_workdir,
     _save_cli_defaults,
+    apply_config_descriptors,
 )
 from kdcube_cli import export_live_bundles as export_mod
 from kdcube_cli.installer import (
@@ -2718,6 +2721,156 @@ bundles:
 
     assert (out_dir / "bundles.yaml").read_text() == bundles_path.read_text()
     assert (out_dir / "bundles.secrets.yaml").read_text() == bundles_secrets_path.read_text()
+
+
+def _write_initialized_runtime_config(workdir: Path, *, marker: str = "old") -> Path:
+    config_dir = workdir / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "install-meta.json").write_text(
+        json.dumps(
+            {
+                "tenant": "demo",
+                "project": "project",
+                "repo_root": str(workdir / "repo"),
+            }
+        )
+    )
+    (config_dir / "assembly.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "context": {"tenant": "demo", "project": "project"},
+                "platform": {"repo": "https://github.com/example/platform.git", "ref": marker},
+                "auth": {"type": "simple"},
+                "proxy": {"ssl": False},
+                "paths": {"host_bundles_path": str(workdir / "bundles")},
+            },
+            sort_keys=False,
+        )
+    )
+    (config_dir / "secrets.yaml").write_text(f"services:\n  marker: {marker}\n")
+    (config_dir / "gateway.yaml").write_text(f"routes:\n  marker: {marker}\n")
+    (config_dir / "bundles.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "bundles": {
+                    "version": "1",
+                    "items": [{"id": "demo.bundle", "path": "/bundles/demo.bundle", "module": "entrypoint"}],
+                }
+            },
+            sort_keys=False,
+        )
+    )
+    (config_dir / "bundles.secrets.yaml").write_text(
+        yaml.safe_dump(
+            {"bundles": {"version": "1", "items": [{"id": "demo.bundle", "secrets": {"api": {"key": marker}}}]}},
+            sort_keys=False,
+        )
+    )
+    return config_dir
+
+
+def test_export_platform_descriptors_copies_platform_files(tmp_path: Path):
+    config_dir = _write_initialized_runtime_config(tmp_path / "runtime", marker="source")
+    out_dir = tmp_path / "out"
+
+    files = _export_platform_descriptors(
+        Console(file=None),
+        config_dir=config_dir,
+        out_dir=out_dir,
+        quiet=True,
+    )
+
+    assert {item["name"] for item in files} == {"assembly.yaml", "secrets.yaml", "gateway.yaml"}
+    assert (out_dir / "assembly.yaml").exists()
+    for name in ("secrets.yaml", "gateway.yaml"):
+        assert (out_dir / name).read_text() == (config_dir / name).read_text()
+
+
+def test_export_platform_descriptors_denormalizes_local_infra_hosts(tmp_path: Path):
+    config_dir = _write_initialized_runtime_config(tmp_path / "runtime", marker="source")
+    assembly_path = config_dir / "assembly.yaml"
+    assembly = yaml.safe_load(assembly_path.read_text())
+    assembly["infra"] = {
+        "postgres": {"host": "host.docker.internal", "port": "5432"},
+        "redis": {"host": "host.docker.internal", "port": "6379"},
+    }
+    assembly_path.write_text(yaml.safe_dump(assembly, sort_keys=False), encoding="utf-8")
+    out_dir = tmp_path / "out"
+
+    _export_platform_descriptors(
+        Console(file=None),
+        config_dir=config_dir,
+        out_dir=out_dir,
+        quiet=True,
+    )
+
+    exported = yaml.safe_load((out_dir / "assembly.yaml").read_text())
+    assert exported["infra"]["postgres"]["host"] == "localhost"
+    assert exported["infra"]["redis"]["host"] == "localhost"
+
+
+def test_export_platform_descriptors_drops_cli_managed_local_paths(tmp_path: Path):
+    runtime = tmp_path / "runtime"
+    config_dir = _write_initialized_runtime_config(runtime, marker="source")
+    assembly_path = config_dir / "assembly.yaml"
+    assembly = yaml.safe_load(assembly_path.read_text())
+    assembly["storage"] = {
+        "kdcube": "file:///kdcube-storage",
+        "bundles": "file:///bundle-storage",
+    }
+    assembly["paths"] = {
+        "host_kdcube_storage_path": str(runtime / "data" / "kdcube-storage"),
+        "host_bundles_path": str(tmp_path / "src"),
+        "host_managed_bundles_path": str(runtime / "data" / "managed-bundles"),
+        "host_bundle_storage_path": str(runtime / "data" / "bundle-storage"),
+        "host_exec_workspace_path": str(runtime / "data" / "exec-workspace"),
+        "host_react_debug_path": str(runtime / "data" / "react-debug"),
+    }
+    assembly_path.write_text(yaml.safe_dump(assembly, sort_keys=False), encoding="utf-8")
+    out_dir = tmp_path / "out"
+
+    _export_platform_descriptors(
+        Console(file=None),
+        config_dir=config_dir,
+        out_dir=out_dir,
+        quiet=True,
+    )
+
+    exported = yaml.safe_load((out_dir / "assembly.yaml").read_text())
+    assert exported["storage"] == {"kdcube": None, "bundles": None}
+    assert exported["paths"] == {
+        "host_kdcube_storage_path": None,
+        "host_bundles_path": None,
+        "host_managed_bundles_path": None,
+        "host_bundle_storage_path": None,
+        "host_exec_workspace_path": None,
+        "host_react_debug_path": None,
+    }
+
+
+def test_apply_config_descriptors_overwrites_platform_files_and_regenerates(monkeypatch, tmp_path: Path):
+    target_config = _write_initialized_runtime_config(tmp_path / "runtime", marker="old")
+    source_config = _write_initialized_runtime_config(tmp_path / "source", marker="new")
+    regenerated: list[dict[str, object]] = []
+
+    def _fake_regenerate(*args, **kwargs):
+        regenerated.append({"args": args, **kwargs})
+
+    monkeypatch.setattr(cli_mod, "_regenerate_runtime_config_from_descriptors", _fake_regenerate)
+
+    result = apply_config_descriptors(
+        Console(file=None),
+        workdir=target_config.parent,
+        descriptors_location=source_config,
+        include_platform_descriptors=True,
+        repo_root=tmp_path / "repo",
+        quiet=True,
+    )
+
+    assert result["runtime_config_regenerated"] is True
+    assert regenerated and regenerated[0]["workdir"] == target_config.parent
+    for name in ("assembly.yaml", "secrets.yaml", "gateway.yaml", "bundles.yaml", "bundles.secrets.yaml"):
+        assert (target_config / name).read_text() == (source_config / name).read_text()
 
 
 def test_gather_configuration_default_bootstrap_prompts_only_minimal_inputs(monkeypatch, tmp_path: Path):
