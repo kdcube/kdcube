@@ -15,7 +15,15 @@ STATS_SCHEMA = "kdcube.telemetry.v1"
 DEFAULT_EVENT_TENANT = "default"
 DEFAULT_EVENT_PROJECT = "main"
 
-STATS_COMM_EVENT_TYPES = [
+# Types the comm should record in its in-memory buffer. Split into two:
+#  * telemetry types — shaped into a kdcube.telemetry.v1 event by
+#    `recorded_comm_item_to_telemetry` and shipped through `StatsTelemetrySink`;
+#  * record-only types — kept in the buffer for non-telemetry consumers
+#    (turn summarizer, journal, anything reading `comm.export_recorded_events`
+#    before the telemetry flush), but never shipped to the sink.
+# `STATS_COMM_EVENT_TYPES` is the union and is what the recording selector uses,
+# so adding a type to either list is enough to have it buffered.
+STATS_COMM_TELEMETRY_TYPES = [
     "accounting.usage",
     "chat.complete",
     "chat.error",
@@ -30,6 +38,15 @@ STATS_COMM_EVENT_TYPES = [
     "react.skill.read",
     "timeline.external.accepted",
 ]
+
+STATS_COMM_RECORD_ONLY_TYPES = [
+    # UI status-line turn-timing summary. Useful as a structured turn-end
+    # marker for non-sink code; not shipped as telemetry because
+    # `chat.conversation.turn.completed` already represents turn end there.
+    "chat.turn.summary",
+]
+
+STATS_COMM_EVENT_TYPES = STATS_COMM_TELEMETRY_TYPES + STATS_COMM_RECORD_ONLY_TYPES
 
 STATS_COMM_DATA_KEYS = [
     "active_seconds",
@@ -236,6 +253,10 @@ def recorded_comm_item_to_telemetry(
 ) -> List[Dict[str, Any]]:
     typ = _safe(item.get("type"), max_len=128)
     if not typ:
+        return []
+    if typ in STATS_COMM_RECORD_ONLY_TYPES:
+        # Buffered for other consumers via `comm.export_recorded_events`; do
+        # not ship as telemetry.
         return []
     ctx = _context(
         item,
