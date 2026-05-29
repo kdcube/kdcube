@@ -179,6 +179,72 @@ def test_resolve_bundle_local_path_preserves_container_visible_path(tmp_path: Pa
     assert mode == "container"
 
 
+def test_resolve_bundle_local_path_preserves_managed_container_path(tmp_path: Path):
+    workdir = tmp_path / "runtime"
+    config_dir = workdir / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "assembly.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "paths": {
+                    "host_bundles_path": str(tmp_path / "src"),
+                    "host_managed_bundles_path": str(tmp_path / "runtime" / "data" / "managed-bundles"),
+                },
+                "platform": {
+                    "services": {
+                        "proc": {
+                            "bundles": {
+                                "bundles_root": "/bundles",
+                                "managed_bundles_root": "/managed-bundles",
+                            }
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    resolved, mode = _resolve_bundle_local_path_for_runtime("/managed-bundles/demo.bundle__latest__abc", workdir)
+
+    assert resolved == "/managed-bundles/demo.bundle__latest__abc"
+    assert mode == "managed-container"
+
+
+def test_resolve_bundle_local_path_translates_stale_managed_host_cache_path(tmp_path: Path):
+    workdir = tmp_path / "runtime"
+    managed_root = workdir / "data" / "managed-bundles"
+    config_dir = workdir / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "assembly.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "paths": {
+                    "host_bundles_path": str(tmp_path / "src"),
+                    "host_managed_bundles_path": str(managed_root),
+                },
+                "platform": {
+                    "services": {
+                        "proc": {
+                            "bundles": {
+                                "bundles_root": "/bundles",
+                                "managed_bundles_root": "/managed-bundles",
+                            }
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    stale_path = managed_root / "demo.bundle__old__missing"
+    resolved, mode = _resolve_bundle_local_path_for_runtime(str(stale_path), workdir)
+
+    assert resolved == "/managed-bundles/demo.bundle__old__missing"
+    assert mode == "managed-translated"
+
+
 def test_resolve_bundle_local_path_rejects_escaped_container_path(tmp_path: Path):
     workdir = tmp_path / "runtime"
     config_dir = workdir / "config"
@@ -243,7 +309,7 @@ def test_resolve_bundle_local_path_rejects_host_path_outside_runtime_root(tmp_pa
 
 def test_bundle_apply_command_quotes_values_with_spaces(tmp_path: Path):
     assert _bundle_apply_command("bundle with space", tmp_path / "runtime dir") == (
-        f"kdcube reload 'bundle with space' --workdir '{tmp_path / 'runtime dir'}'"
+        f"kdcube bundle reload 'bundle with space' --workdir '{tmp_path / 'runtime dir'}'"
     )
 
 
@@ -756,10 +822,11 @@ def test_compose_running_services_uses_runtime_docker_dir(monkeypatch, tmp_path:
     env_file.write_text("")
     seen: dict[str, object] = {}
 
-    def _fake_output(cmd, env=None, *, cwd=None):
+    def _fake_output(cmd, env=None, *, cwd=None, timeout=None):
         seen["cmd"] = cmd
         seen["env"] = env
         seen["cwd"] = cwd
+        seen["timeout"] = timeout
         return "chat-proc\nchat-ingress\n"
 
     monkeypatch.setattr("kdcube_cli.cli._docker_output", _fake_output)
@@ -768,6 +835,7 @@ def test_compose_running_services_uses_runtime_docker_dir(monkeypatch, tmp_path:
 
     assert result == {"chat-proc", "chat-ingress"}
     assert seen["cwd"] == docker_dir
+    assert seen["timeout"] == 20
 
 
 def test_build_paths_for_repo_uses_runtime_compose_mode(tmp_path: Path):
@@ -2535,6 +2603,11 @@ def test_gather_configuration_reuses_existing_container_bundle_paths_from_runtim
                         "id": "demo.bundle@1.0.0",
                         "path": "/bundles/marketing/demo.bundle",
                         "module": "entrypoint",
+                    },
+                    {
+                        "id": "managed.bundle@1.0.0",
+                        "path": "/managed-bundles/managed.bundle__latest__abc",
+                        "module": "entrypoint",
                     }
                 ]
             }
@@ -2554,8 +2627,9 @@ def test_gather_configuration_reuses_existing_container_bundle_paths_from_runtim
     assert assembly_data["paths"]["host_bundles_path"] == str(host_bundle_root.resolve())
 
     bundles_data = yaml.safe_load(bundles_path.read_text())
-    bundle_item = bundles_data["bundles"]["items"][0]
-    assert bundle_item["path"] == "/bundles/marketing/demo.bundle"
+    bundle_items = bundles_data["bundles"]["items"]
+    assert bundle_items[0]["path"] == "/bundles/marketing/demo.bundle"
+    assert bundle_items[1]["path"] == "/managed-bundles/managed.bundle__latest__abc"
 
 
 def test_apply_runtime_secrets_to_file_descriptors_updates_secrets_files(tmp_path: Path):
@@ -2722,8 +2796,59 @@ bundles:
         bundles_secrets_path=bundles_secrets_path,
     )
 
-    assert (out_dir / "bundles.yaml").read_text() == bundles_path.read_text()
-    assert (out_dir / "bundles.secrets.yaml").read_text() == bundles_secrets_path.read_text()
+    assert yaml.safe_load((out_dir / "bundles.yaml").read_text()) == yaml.safe_load(bundles_path.read_text())
+    assert yaml.safe_load((out_dir / "bundles.secrets.yaml").read_text()) == yaml.safe_load(
+        bundles_secrets_path.read_text()
+    )
+
+
+def test_export_live_bundle_descriptors_keeps_managed_cache_paths_runtime_visible(tmp_path: Path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "assembly.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "paths": {
+                    "host_bundles_path": str(tmp_path / "src"),
+                    "host_managed_bundles_path": str(tmp_path / "runtime" / "data" / "managed-bundles"),
+                },
+                "platform": {
+                    "services": {
+                        "proc": {
+                            "bundles": {
+                                "bundles_root": "/bundles",
+                                "managed_bundles_root": "/managed-bundles",
+                            }
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    data = {
+        "bundles": {
+            "items": [
+                {
+                    "id": "local.bundle",
+                    "path": "/bundles/apps/local.bundle",
+                    "module": "entrypoint",
+                },
+                {
+                    "id": "managed.bundle",
+                    "path": "/managed-bundles/managed.bundle__main__abc",
+                    "module": "entrypoint",
+                },
+            ]
+        }
+    }
+
+    translations = export_mod._normalize_exported_bundle_paths(data, config_dir=config_dir)
+
+    items = data["bundles"]["items"]
+    assert items[0]["path"] == str(tmp_path / "src" / "apps" / "local.bundle")
+    assert items[1]["path"] == "/managed-bundles/managed.bundle__main__abc"
+    assert {item["action"] for item in translations} == {"translated_path", "kept_managed_path"}
 
 
 def _write_initialized_runtime_config(workdir: Path, *, marker: str = "old") -> Path:
@@ -2986,8 +3111,8 @@ def test_gather_configuration_default_bootstrap_prompts_only_minimal_inputs(monk
             "auth": {"type": "simple"},
             "proxy": {"ssl": False},
             "storage": {
-                "kdcube": "/kdcube-storage",
-                "bundles": "/bundle-storage",
+                "kdcube": None,
+                "bundles": None,
                 "workspace": {"type": "local", "repo": ""},
                 "claude_code_session": {"type": "local", "repo": ""},
             },
@@ -2996,12 +3121,12 @@ def test_gather_configuration_default_bootstrap_prompts_only_minimal_inputs(monk
                     "user": "postgres",
                     "password": "postgres",
                     "database": "kdcube",
-                    "host": "postgres-db",
+                    "host": "localhost",
                     "port": "5432",
                 },
                 "redis": {
                     "password": "redispass",
-                    "host": "redis",
+                    "host": "localhost",
                     "port": "6379",
                 },
             },
@@ -3034,7 +3159,12 @@ def test_gather_configuration_default_bootstrap_prompts_only_minimal_inputs(monk
     ]
 
     env_main = (config_dir / ".env").read_text()
+    assembly = yaml.safe_load(assembly_path.read_text())
     assert f"HOST_BUNDLES_PATH={(tmp_path / 'src').resolve()}" in env_main
+    assert assembly["storage"]["kdcube"] == "file:///kdcube-storage"
+    assert assembly["storage"]["bundles"] == "file:///bundle-storage"
+    assert assembly["infra"]["postgres"]["host"] == "host.docker.internal"
+    assert assembly["infra"]["redis"]["host"] == "host.docker.internal"
 
 
 # ---------------------------------------------------------------------------

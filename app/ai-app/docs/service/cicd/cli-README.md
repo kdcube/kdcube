@@ -539,7 +539,8 @@ copy of the container runtime files:
 | `infra.postgres.host`, `infra.redis.host` | Exported as descriptor-facing `localhost` for local runtimes, even when containers use `host.docker.internal`. |
 | `paths.host_bundles_path` | Preserved. This is the host source root for unmanaged local bundles. |
 | Other `paths.host_*` runtime mounts | Exported as `null` so the next `init` derives them from that runtime's workdir. |
-| `storage.kdcube`, `storage.bundles` local container URIs | Exported as `null` when they point at CLI-generated `/kdcube-storage` or `/bundle-storage` mounts. |
+| `storage.kdcube`, `storage.bundles` local container URIs | Exported as `null` when they point at CLI-generated `/kdcube-storage` or `/bundle-storage` mounts. During `init` or `config import`, `null` means "derive the local runtime default for this environment." |
+| Bundle paths under `/managed-bundles` | Kept as container-visible managed cache paths. They are not folded into `paths.host_bundles_path`. |
 | Service `log_dir: /logs` | Omitted. `/logs` is a generated container mount, so the next `init` derives it again from the workdir logs folder. |
 
 Import treats the reviewed descriptor directory as authoritative for the local

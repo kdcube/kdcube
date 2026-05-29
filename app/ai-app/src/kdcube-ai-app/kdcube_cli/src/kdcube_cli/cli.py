@@ -1168,6 +1168,34 @@ def _bundle_runtime_roots(workdir: Path) -> tuple[Path | None, str]:
     return host_root, container_root.rstrip("/") or "/"
 
 
+def _managed_bundle_runtime_roots(workdir: Path) -> tuple[Path | None, str]:
+    config_dir = workdir / "config"
+    assembly_path = config_dir / "assembly.yaml"
+    assembly = installer_mod.load_release_descriptor_soft(assembly_path)
+
+    host_root_raw = _get_nested(assembly, "paths", "host_managed_bundles_path")
+    if not isinstance(host_root_raw, str) or not host_root_raw.strip():
+        host_root_raw = _runtime_env_value(workdir, "HOST_MANAGED_BUNDLES_PATH")
+    host_root: Path | None = None
+    if isinstance(host_root_raw, str) and host_root_raw.strip():
+        host_root = Path(host_root_raw).expanduser().resolve()
+
+    container_root_raw = _get_nested(
+        assembly,
+        "platform",
+        "services",
+        "proc",
+        "bundles",
+        "managed_bundles_root",
+    )
+    if not isinstance(container_root_raw, str) or not container_root_raw.strip():
+        container_root_raw = _runtime_env_value(workdir, "MANAGED_BUNDLES_ROOT")
+    container_root = str(container_root_raw or "/managed-bundles").strip() or "/managed-bundles"
+    if not container_root.startswith("/"):
+        container_root = "/" + container_root
+    return host_root, container_root.rstrip("/") or "/"
+
+
 def _is_container_visible_path(raw_path: str, container_root: str) -> bool:
     normalized = posixpath.normpath(raw_path.strip().replace("\\", "/"))
     root = posixpath.normpath(container_root.rstrip("/") or "/")
@@ -1180,10 +1208,20 @@ def _resolve_bundle_local_path_for_runtime(raw_path: str, workdir: Path) -> tupl
         raise SystemExit("--local-path cannot be empty.")
 
     host_root, container_root = _bundle_runtime_roots(workdir)
+    managed_host_root, managed_container_root = _managed_bundle_runtime_roots(workdir)
     if _is_container_visible_path(value, container_root):
         return posixpath.normpath(value.replace("\\", "/")), "container"
+    if _is_container_visible_path(value, managed_container_root):
+        return posixpath.normpath(value.replace("\\", "/")), "managed-container"
 
     candidate = Path(value).expanduser().resolve()
+    if managed_host_root is not None:
+        try:
+            rel = candidate.relative_to(managed_host_root)
+        except ValueError:
+            pass
+        else:
+            return posixpath.join(managed_container_root, rel.as_posix()), "managed-translated"
     if not candidate.exists():
         raise SystemExit(f"Bundle local path does not exist on the host: {candidate}")
     if not candidate.is_dir():
@@ -1776,7 +1814,9 @@ def _host_path_for_runtime_bundle_path(runtime_path: str, workdir: Path) -> str 
         return None
     host_root, container_root = _bundle_runtime_roots(workdir)
     if host_root is None or not _is_container_visible_path(value, container_root):
-        return None
+        host_root, container_root = _managed_bundle_runtime_roots(workdir)
+        if host_root is None or not _is_container_visible_path(value, container_root):
+            return None
     normalized = posixpath.normpath(value.replace("\\", "/"))
     root = posixpath.normpath(container_root.rstrip("/") or "/")
     if normalized == root:

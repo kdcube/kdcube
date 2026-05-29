@@ -192,8 +192,10 @@ def _normalize_exported_bundle_paths(
 
     Runtime descriptors consumed by Docker use container-visible paths such as
     /bundles/... or /managed-bundles/.... Exported seed descriptors should use
-    host paths for local-path bundles. Git-backed descriptors should keep their
-    repo/ref/subdir fields and must not export an incidental materialized path.
+    host paths for unmanaged local-path bundles. Managed cache paths remain
+    container-visible because they are runtime materialization locations, not
+    portable source roots. Git-backed descriptors should keep their repo/ref/subdir
+    fields and must not export an incidental materialized path.
     """
     if not isinstance(data, dict):
         return []
@@ -236,19 +238,25 @@ def _normalize_exported_bundle_paths(
         raw_path = str(item.get("path") or "").strip()
         if not raw_path:
             continue
+        if _container_path_to_host_path(
+            raw_path,
+            container_root=container_managed,
+            host_root=host_managed,
+        ) is not None:
+            translations.append(
+                {
+                    "bundle_id": bundle_id,
+                    "action": "kept_managed_path",
+                    "runtime_path": raw_path,
+                }
+            )
+            continue
         host_path = _container_path_to_host_path(
             raw_path,
             container_root=container_bundles,
             host_root=host_bundles,
         )
         source = "bundles"
-        if host_path is None:
-            host_path = _container_path_to_host_path(
-                raw_path,
-                container_root=container_managed,
-                host_root=host_managed,
-            )
-            source = "managed_bundles"
         if host_path is None:
             continue
         item["path"] = host_path
@@ -307,6 +315,8 @@ def _export_live_bundle_descriptors_from_files(
             bundle_id = item.get("bundle_id") or "<unknown>"
             if action == "removed_git_path":
                 console.print(f"[dim]  {bundle_id}: removed git materialized path[/dim]")
+            elif action == "kept_managed_path":
+                console.print(f"[dim]  {bundle_id}: kept managed cache path {item.get('runtime_path')}[/dim]")
             elif action == "translated_path":
                 console.print(
                     f"[dim]  {bundle_id}: {item.get('runtime_path')} -> {item.get('host_path')}[/dim]"

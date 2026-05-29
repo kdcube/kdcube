@@ -2159,13 +2159,25 @@ def gather_configuration(
         )
         bundles_root = str(bundles_root_raw or "/bundles").strip() or "/bundles"
         bundles_root_path = Path(bundles_root)
+        managed_root_raw = _get_nested(
+            assembly_data,
+            "platform",
+            "services",
+            "proc",
+            "bundles",
+            "managed_bundles_root",
+        )
+        managed_root = str(managed_root_raw or "/managed-bundles").strip() or "/managed-bundles"
+        managed_root_path = Path(managed_root)
 
-        resolved_paths: list[Path] = []
+        resolved_pairs: list[tuple[dict, Path]] = []
         for spec in local_specs:
             raw_path = str(spec.get("path") or "").strip()
             if not raw_path:
                 continue
             candidate = Path(raw_path).expanduser()
+            if candidate.is_absolute() and (candidate == managed_root_path or managed_root_path in candidate.parents):
+                continue
             if candidate.is_absolute() and candidate == bundles_root_path:
                 base_root = seed_root or fallback_root
                 resolved = base_root.resolve()
@@ -2179,11 +2191,12 @@ def gather_configuration(
                 resolved = (seed_root / candidate).resolve()
             else:
                 resolved = (bundles_path.parent / candidate).resolve()
-            resolved_paths.append(resolved)
+            resolved_pairs.append((spec, resolved))
 
-        if not resolved_paths:
+        if not resolved_pairs:
             return ensure_directory_root(host_bundles_fallback, label="Host bundles root")
 
+        resolved_paths = [path for _spec, path in resolved_pairs]
         if seed_root is not None:
             try:
                 if all(path.is_relative_to(seed_root) for path in resolved_paths):
@@ -2198,7 +2211,7 @@ def gather_configuration(
         host_bundles_root_str = ensure_directory_root(str(host_bundles_root), label="Host bundles root")
         host_bundles_root = Path(host_bundles_root_str).resolve()
 
-        for spec, resolved in zip(local_specs, resolved_paths):
+        for spec, resolved in resolved_pairs:
             rel = os.path.relpath(str(resolved), str(host_bundles_root))
             spec["path"] = posixpath.join("/bundles", rel.replace(os.sep, "/"))
 
@@ -3480,12 +3493,25 @@ def gather_configuration(
 
     _autosave()
 
+    storage_kdcube_descriptor = _get_nested(assembly_data, "storage", "kdcube")
+    storage_bundles_descriptor = _get_nested(assembly_data, "storage", "bundles")
+    if storage_kdcube_descriptor is None or (
+        isinstance(storage_kdcube_descriptor, str) and is_placeholder(storage_kdcube_descriptor)
+    ):
+        _set_nested(assembly_data, ["storage", "kdcube"], "file:///kdcube-storage")
+        storage_kdcube_descriptor = "file:///kdcube-storage"
+    if storage_bundles_descriptor is None or (
+        isinstance(storage_bundles_descriptor, str) and is_placeholder(storage_bundles_descriptor)
+    ):
+        _set_nested(assembly_data, ["storage", "bundles"], "file:///bundle-storage")
+        storage_bundles_descriptor = "file:///bundle-storage"
+
     storage_kdcube_runtime = _runtime_storage_env_value(
-        _get_nested(assembly_data, "storage", "kdcube"),
+        storage_kdcube_descriptor,
         default_container_path="/kdcube-storage",
     )
     storage_bundles_runtime = _runtime_storage_env_value(
-        _get_nested(assembly_data, "storage", "bundles"),
+        storage_bundles_descriptor,
         default_container_path="/bundle-storage",
     )
     if descriptor_workspace_mode or is_placeholder(env_proc.entries.get("KDCUBE_STORAGE_PATH", (None, None))[1]):
@@ -3515,6 +3541,8 @@ def gather_configuration(
         update_env_value(env_proc, "HOST_BUNDLE_STORAGE_PATH", host_bundle_storage)
     if is_placeholder(env_proc.entries.get("HOST_MANAGED_BUNDLES_PATH", (None, None))[1]):
         update_env_value(env_proc, "HOST_MANAGED_BUNDLES_PATH", host_managed_bundles)
+
+    _autosave()
 
     ui_build_context = env_main.entries.get("UI_BUILD_CONTEXT", (None, None))[1]
     default_ui_context = defaults.get("ui_build_context", "")
