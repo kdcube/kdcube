@@ -530,6 +530,25 @@ export function hydrateHistoricalConversation(conversation: ConversationDTO): Ch
           }
           break
         }
+        case 'artifact:conv.artifacts.steps': {
+          const items = Array.isArray(payload.items) ? payload.items : []
+          let costUsd = turn.costUsd ?? null
+          let elapsedMs = turn.elapsedMs ?? null
+          for (const item of items) {
+            if (!item || typeof item !== 'object') continue
+            const row = item as Record<string, unknown>
+            const type = typeof row.type === 'string' ? row.type : ''
+            const data = (row.data && typeof row.data === 'object') ? row.data as Record<string, unknown> : {}
+            if (type === 'accounting.usage' && typeof data.cost_total_usd === 'number') {
+              costUsd = data.cost_total_usd
+            }
+            if (type === 'chat.turn.summary' && typeof data.elapsed_ms === 'number') {
+              elapsedMs = data.elapsed_ms
+            }
+          }
+          turn = { ...turn, costUsd, elapsedMs }
+          break
+        }
         case 'artifact:conv.artifacts.stream': {
           const items = Array.isArray(payload.items) ? payload.items : []
           let tempState: ChatState = {

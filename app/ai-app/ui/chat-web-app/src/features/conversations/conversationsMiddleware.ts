@@ -361,6 +361,8 @@ const conversationsMiddleware = (): Middleware => {
                                 })
                                 break
                             }
+                            case "artifact:conv.artifacts.steps":
+                                break
                             case "artifact:turn.log.reaction":
                                 break
                             case "artifact:conv.user_shortcuts": {

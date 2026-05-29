@@ -634,6 +634,7 @@ class ChatCommunicator:
         self.room = self.room or self.conversation.get("session_id")
         self.target_sid = self.target_sid or self.conversation.get("socket_id")
         self._delta_cache: dict[Tuple[str, str, str, str, str, str, str], _DeltaAggregate] = {}
+        self._step_events_cache: dict[Tuple[str, str], list[dict]] = {}
         self._recording_enabled: bool = False
         self._recording_filter: Any = None
         self._recording_rules: list[dict[str, Any]] = []
@@ -1355,7 +1356,43 @@ class ChatCommunicator:
         socket_event = _EVENT_MAP.get(route) or _EVENT_MAP.get(type) or "chat_step"
         if route:
             env["route"] = route
+        self._accumulate_step_event(type=type, step=step, status=status,
+                                    agent=agent, title=title,
+                                    markdown=env.get("event", {}).get("markdown"),
+                                    data=data, ts=env.get("ts"))
         await self.emit(event=socket_event, data=env, broadcast=broadcast)
+
+    _STEP_ARTIFACT_TYPES = frozenset({"accounting.usage", "chat.turn.summary"})
+
+    def _accumulate_step_event(
+            self, *, type: str, step: str, status: str,
+            agent: str | None, title: str | None,
+            markdown: str | None, data: dict | None, ts: int | None,
+    ) -> None:
+        if type not in self._STEP_ARTIFACT_TYPES:
+            return
+        conv_id = self.conversation.get("conversation_id") or ""
+        turn_id = self.conversation.get("turn_id") or ""
+        if not conv_id or not turn_id:
+            return
+        key = (conv_id, turn_id)
+        items = self._step_events_cache.setdefault(key, [])
+        event_entry: dict = {"agent": agent, "step": step, "status": status, "title": title}
+        if markdown:
+            event_entry["markdown"] = markdown
+        item: dict = {
+            "type": type,
+            "recorded_at_ms": ts or int(time.time() * 1000),
+            "event": event_entry,
+            "data": data or {},
+        }
+        items.append(item)
+
+    def get_step_events(self, *, conversation_id: str, turn_id: str) -> list[dict]:
+        return list(self._step_events_cache.get((conversation_id, turn_id), []))
+
+    def clear_step_events(self, *, conversation_id: str, turn_id: str) -> None:
+        self._step_events_cache.pop((conversation_id, turn_id), None)
 
     async def service_event(
             self,

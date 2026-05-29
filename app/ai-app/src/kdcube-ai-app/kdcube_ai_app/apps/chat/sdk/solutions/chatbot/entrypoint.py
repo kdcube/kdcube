@@ -2006,6 +2006,46 @@ class BaseEntrypoint:
         )
         return self.ctx_client
 
+    async def _persist_steps_artifacts(self, *, state: Dict[str, Any]) -> None:
+        """Save accounting.usage and chat.turn.summary recorded events as a conv.artifacts.steps artifact.
+
+        Call this from post_run_hook BEFORE sending/clearing the recorded-events buffer.
+        Both events must already be in the buffer: accounting.usage is emitted by run_accounting()
+        and chat.turn.summary is emitted inside finish_turn() during execute_core().
+        """
+        try:
+            ctx_client = await self.get_ctx_client()
+            if ctx_client is None:
+                return
+            tenant = state.get("tenant") or getattr(self.config, "tenant", None) or self.settings.TENANT
+            project = state.get("project") or getattr(self.config, "project", None) or self.settings.PROJECT
+            user_id = state.get("user") or state.get("fingerprint") or ""
+            user_type = state.get("user_type") or "anonymous"
+            conversation_id = state.get("conversation_id") or state.get("session_id") or ""
+            turn_id = state.get("turn_id") or getattr(self, "_turn_id", None) or ""
+            bundle_id = str(getattr(getattr(self.config, "ai_bundle_spec", None), "id", "") or "")
+            if not (tenant and project and user_id and conversation_id and turn_id):
+                return
+            step_items = self.comm.get_step_events(
+                conversation_id=conversation_id, turn_id=turn_id
+            )
+            if not step_items:
+                return
+            self.comm.clear_step_events(conversation_id=conversation_id, turn_id=turn_id)
+            await ctx_client.save_artifact(
+                kind="conv.artifacts.steps",
+                tenant=tenant, project=project,
+                turn_id=turn_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                bundle_id=bundle_id,
+                user_type=user_type,
+                content={"version": "v1", "items": step_items},
+                extra_tags=["conversation", "steps"],
+            )
+        except Exception:
+            self.logger.log(traceback.format_exc(), "WARNING")
+
     async def close_optional_services(self) -> None:
         if self._kb:
             try:
