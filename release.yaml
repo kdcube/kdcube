@@ -1,43 +1,48 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.5.28.210"
+  ref: "2026.5.29.1534"
   description: |
-    This platform release improves versatile chat navigation and live UI
-    behavior, hardens artifact materialization, and tightens isolated execution
-    workspace limits.
+    This platform release improves local descriptor export/import workflows,
+    fixes seed descriptor materialization, and includes several chat/runtime
+    hardening updates.
 
     Highlights
 
-    - Updates the versatile chat UI with live conversation title updates,
-      viewport-locked expanded layout, turn pagination, and clearer turn
-      cost/time status.
-    - Adds turn navigation controls for moving to first, previous, next, and
-      latest turns, while keeping compact widgets focused on latest-turn access.
-    - Fixes React artifact hosting and pull materialization, including nested
-      artifact resource resolution.
-    - Strengthens isolated runtime workspace limit handling for generated files
-      and monitored writable workspace deltas.
+    - Adds and aligns `kdcube config export` / `kdcube config import` for
+      local seed descriptor workflows.
+    - Exports local descriptors in seed-compatible form: local storage defaults
+      remain portable, local service hosts are normalized, platform-managed
+      bundles are not exported with materialized managed paths, and unmanaged
+      local bundle paths are preserved.
+    - Fixes descriptor-mode platform secret resolution.
+    - Accepts attachment-only chat and follow-up messages for processing.
+    - Hardens delegated auth cookie forwarding.
+    - Splits recorded telemetry event types from telemetry-shippable payloads.
+    - Updates isolated workspace mental-map documentation to match the current
+      implementation.
 
     Runtime and deployment notes:
 
-    - Deployments must point the platform ref at 2026.5.28.210 to receive this
+    - Deployments must point the platform ref at 2026.5.29.1534 to receive this
       update.
-    - Operators using isolated Python execution should review the current
-      `platform.services.proc.exec` workspace limit settings in `assembly.yaml`.
+    - Exported local descriptors may be reviewed and re-used as seed
+      descriptors; `null` local storage values mean "use the runtime default"
+      during init/import.
     - No private deployment content is part of this OSS release.
 
     Validation and regression coverage:
 
-    - Release metadata parse check passed.
+    - CLI descriptor tests passed.
     - Staged OSS private-name scan must pass before the release commit.
 
     Changelog
 
-    - Fixed live application of conversation title stream events.
-    - Fixed expanded chat layout and turn pagination behavior.
-    - Fixed React artifact hosting, pull materialization, and nested resource
-      resolution.
-    - Improved turn navigation and compact widget behavior.
-    - Hardened isolated runtime workspace quota enforcement.
+    - Fixed config export/import seed descriptor behavior.
+    - Fixed local descriptor default materialization.
+    - Fixed platform-managed bundle export shape.
+    - Fixed descriptor-mode platform secret resolution.
+    - Fixed attachment-only message promotion.
+    - Hardened delegated auth cookie forwarding.
+    - Split recorded and shippable telemetry event schemas.
 config:
-    version: "2026.5.28.210"
+    version: "2026.5.29.1534"
