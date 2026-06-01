@@ -43,7 +43,7 @@ TOOL_SPEC = {
         "Use channel='canvas' for LARGE MARKDOWN OR any non‑markdown (HTML/JSON/YAML/XML/Mermaid) — shown in a separate canvas panel in the UI. Markdown is first-class on canvas: full reports, multi-section briefs, big markdown tables, slide sources all live here. The split is SIZE/SHAPE (paragraph vs. report), not format. "
         "Use channel='internal' to write user-invisible internal file artifacts. "
         "Set scratchpad=true only for short inline notes that should appear as react.note. "
-        "Use canonical current-turn physical paths: turn_<current>/files/... for durable workspace state "
+        "Use canonical current-turn physical paths: turn_<current>/files/... for durable workspace state, "
         "or turn_<current>/outputs/... for reports, exports, demos, and other produced artifacts. "
         "The file extension MUST match the content format (e.g., HTML -> .html, Markdown -> .md). "
         "When channel='canvas', the file extension MUST match a supported canvas format: "
@@ -59,7 +59,7 @@ TOOL_SPEC = {
         "If a workflow skill governs the content shape (e.g. for document/slide source), load that skill with react.read in an EARLIER round and wait until the ACTIVE skill block is visible before writing — the skill's instructions are not actionable until that block is in your timeline."
     ),
     "args": {
-        "path": "str (FIRST FIELD). Canonical current-turn physical filepath: turn_<current>/outputs/<scope>/<name>, or turn_<current>/files/<scope>/<path> for durable workspace state.",
+        "path": "str (FIRST FIELD). Canonical current-turn physical filepath: turn_<current>/outputs/<scope>/<name> or turn_<current>/files/<scope>/<path> for durable workspace state.",
         "channel": "str (SECOND FIELD). Pick by content shape: 'timeline_text' for short inline content in the main chat stream (mid-turn updates, intermediate findings); 'canvas' for LARGE / visual / tabular content or renderer sources, shown in a separate canvas panel; 'internal' only for private scratch never shown to the user.",
         "content": "str|object (THIRD FIELD). Content to record.",
         "kind": "str (FOURTH FIELD). 'display' or 'file'.",
@@ -149,7 +149,7 @@ async def handle_react_write(*, react: Any, ctx_browser: Any, state: Dict[str, A
     rewrite_notice = None
     if artifact_name.startswith("fi:") and all(
         marker not in artifact_name[len("fi:"):]
-        for marker in (".files/", ".outputs/")
+        for marker in (".files/", ".outputs/", ".snapshots/")
     ):
         state["exit_reason"] = "error"
         state["error"] = {"where": "tool_execution", "error": "invalid_write_logical_path", "managed": True}

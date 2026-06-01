@@ -1902,11 +1902,12 @@ class ConvIndex:
         WITH content_matches AS (
             SELECT 
                 m.turn_id,
+                m.conversation_id,
                 m.role AS matched_role,
                 m.ts AS matched_ts,
                 {sim_sql},
                 exp(-ln(2) * EXTRACT(EPOCH FROM (now() - m.ts)) / ({half_life_days_param}*24*3600.0)) AS rec,
-                ROW_NUMBER() OVER (PARTITION BY m.turn_id ORDER BY m.ts DESC) AS rn
+                ROW_NUMBER() OVER (PARTITION BY m.conversation_id, m.turn_id ORDER BY m.ts DESC) AS rn
             FROM {self.schema}.conv_messages m
             WHERE {' AND '.join(where)}
               AND m.turn_id IS NOT NULL
@@ -1916,6 +1917,7 @@ class ConvIndex:
         unique_turns AS (
             SELECT 
                 turn_id, 
+                conversation_id,
                 matched_role, 
                 matched_ts, 
                 sim,
@@ -1928,7 +1930,7 @@ class ConvIndex:
         )
         SELECT 
             log.id, log.message_id, log.role, log.text, log.hosted_uri, log.ts, log.tags,
-            log.turn_id, log.bundle_id,
+            log.turn_id, log.conversation_id, log.bundle_id,
             ut.sim,
             ut.rec,
             ut.score,
@@ -1941,6 +1943,7 @@ class ConvIndex:
             FROM {self.schema}.conv_messages
             WHERE user_id = $1
               AND turn_id = ut.turn_id
+              AND conversation_id = ut.conversation_id
               AND role = 'artifact'
               AND tags @> ARRAY['artifact:turn.log']::text[]
               AND ts + (ttl_days || ' days')::interval >= now()

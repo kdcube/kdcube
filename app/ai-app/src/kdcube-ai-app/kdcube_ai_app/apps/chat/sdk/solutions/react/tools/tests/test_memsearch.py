@@ -32,8 +32,8 @@ class FakeBrowser:
             block["meta"] = {**block.get("meta", {}), **meta}
         self.contribute([block])
 
-    async def get_turn_log(self, turn_id: str):
-        return self._turn_logs.get(turn_id, {})
+    async def get_turn_log(self, turn_id: str, conversation_id: str | None = None):
+        return self._turn_logs.get((conversation_id or "", turn_id), self._turn_logs.get(turn_id, {}))
 
     async def search_turn_catalog(self, **kwargs):
         raise AssertionError(f"unexpected search_turn_catalog call: {kwargs!r}")
@@ -447,6 +447,7 @@ async def test_memsearch_semantic_user_scope_is_forwarded(tmp_path):
     async def _search(**kwargs):
         captured_search.update(kwargs)
         return "turn_cross", [{
+            "conversation_id": "conv_2",
             "turn_id": "turn_cross",
             "score": 0.8,
             "sim": 0.75,
@@ -457,7 +458,7 @@ async def test_memsearch_semantic_user_scope_is_forwarded(tmp_path):
         }]
 
     ctx.search = _search
-    ctx._turn_logs["turn_cross"] = {
+    ctx._turn_logs[("conv_2", "turn_cross")] = {
         "blocks": [
             {
                 "type": "conv.working.summary",
@@ -487,6 +488,77 @@ async def test_memsearch_semantic_user_scope_is_forwarded(tmp_path):
 
     assert captured_search["scope"] == "user"
     assert out["last_tool_result"][0]["turn_id"] == "turn_cross"
+    assert out["last_tool_result"][0]["conversation_id"] == "conv_2"
+    assert out["last_tool_result"][0]["snippets"][0]["conversation_id"] == "conv_2"
+    summary = _latest_summary_payload(ctx)
+    assert summary["hits"][0]["conversation_id"] == "conv_2"
+    assert summary["hits"][0]["snippets"][0]["conversation_id"] == "conv_2"
+
+
+@pytest.mark.asyncio
+async def test_memsearch_scopes_cross_conversation_fi_refs(tmp_path):
+    runtime = RuntimeCtx(
+        turn_id="turn_current",
+        outdir=str(tmp_path / "out"),
+        workdir=str(tmp_path / "work"),
+        conversation_id="conv_1",
+        user_id="user_1",
+    )
+    ctx = FakeBrowser(runtime)
+
+    async def _search(**kwargs):
+        return "turn_cross", [{
+            "conversation_id": "conv_2",
+            "turn_id": "turn_cross",
+            "score": 0.8,
+            "sim": 0.75,
+            "rec": 0.9,
+            "matched_via_role": "user",
+            "source_query": "wizard snapshot",
+            "ts": "2026-03-12T10:00:00Z",
+        }]
+
+    ctx.search = _search
+    ctx._turn_logs[("conv_2", "turn_cross")] = {
+        "blocks": [
+            {
+                "type": "react.note",
+                "turn_id": "turn_cross",
+                "ts": "2026-03-12T10:00:00Z",
+                "path": "fi:turn_cross.snapshots/wizard/current.yaml",
+                "text": "state: needs_triage\n",
+                "meta": {},
+            }
+        ],
+        "sources_pool": [],
+    }
+
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "params": {
+                    "query": "wizard snapshot",
+                    "targets": ["notes"],
+                    "scope": "user",
+                }
+            }
+        }
+    }
+
+    await handle_react_memsearch(ctx_browser=ctx, state=state, tool_call_id="ms_cross")
+
+    summary = _latest_summary_payload(ctx)
+    assert summary["hits"][0]["snippets"] == [{
+        "path": "fi:conv_conv_2.turn_cross.snapshots/wizard/current.yaml",
+        "role": "notes",
+        "ts": "2026-03-12T10:00:00Z",
+    }]
+    text_blocks = [
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result" and b.get("mime") == "text/markdown"
+    ]
+    assert text_blocks[-1]["path"] == "fi:conv_conv_2.turn_cross.snapshots/wizard/current.yaml"
+    assert "conversation_id" not in text_blocks[-1].get("meta", {})
 
 
 @pytest.mark.asyncio

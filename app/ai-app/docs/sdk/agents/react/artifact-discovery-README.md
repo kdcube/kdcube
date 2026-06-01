@@ -144,6 +144,9 @@ The rewrite is recorded as a **protocol notice** in the timeline so the agent ca
   metadata block from `meta.digest` (if present). It then emits:
   - metadata digest block (text only)
   - file content block (text or base64) when readable; binary files emit **metadata only**
+- If an `fi:` path starts `fi:conv_<conversation_id>.turn_<id>...`, the
+  `conv_` segment is the conversation scope. The artifact belongs to another
+  conversation and consumers must preserve that segment.
 - `react.read` also accepts `fi:<artifact-root-relative-path>` for readable
   files already present in the artifact root. New artifact reads should use
   `turn_...` paths or canonical `fi:<turn_id>...` logical paths. Runtime logs
@@ -164,6 +167,8 @@ The rewrite is recorded as a **protocol notice** in the timeline so the agent ca
 **react.rg**
 - Searches files already materialized under the artifact root and returns discovery metadata plus optional line-numbered content matches.
 - It does not search hidden/pruned timeline, unpulled historical snapshots, or `ks:`. Use visible refs or `react.memsearch` to identify older `fi:` refs, then `react.pull` them before local search. Checkout only when you need an editable current-turn copy.
+- `fi:conv_<conversation_id>.turn_<id>...` roots are cross-conversation refs and
+  are resolved with that conversation scope after materialization.
 - Result shape is `{root, hits}`.
 - Each hit contains:
   - `path`: relative to the searched root
@@ -175,6 +180,8 @@ The rewrite is recorded as a **protocol notice** in the timeline so the agent ca
 
 **react.pull**
 - Accepts `fi:` refs only.
+- `fi:conv_<conversation_id>.turn_<id>...` paths are cross-conversation refs and
+  are resolved with that conversation scope.
 - For `fi:<turn>.files/<prefix>` folder pulls, the current implementation does **not** scan all hosted storage.
 - In `workspace_implementation=custom`, it inspects artifact metadata for the referenced turn from timeline/turn-log state, expands the matching descendants, and fetches only the exact matched hosted blobs.
 - In `workspace_implementation=git`, `fi:<turn>.files/...` resolves against the git-backed lineage snapshot for that version instead of scanning artifact history.

@@ -14,11 +14,15 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
     ARTIFACT_NAMESPACE_ATTACHMENTS,
     ARTIFACT_NAMESPACE_FILES,
     ARTIFACT_NAMESPACE_OUTPUTS,
+    ARTIFACT_NAMESPACE_SNAPSHOTS,
     build_physical_artifact_path,
     is_turn_id,
     physical_path_to_logical_path,
+    split_logical_artifact_ref,
     split_logical_artifact_path,
+    split_physical_artifact_ref,
     split_physical_artifact_path,
+    unscoped_logical_artifact_path,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.workspace import artifact_outdir_for, resolve_artifact_path
 
@@ -39,9 +43,9 @@ _TURN_ID_PATTERN = (
     r"(?:turn_[A-Za-z0-9_.:-]+|telegram_turn_[A-Za-z0-9_.:-]+|"
     r"\d{4}-\d{2}-\d{2}-\d{2}-\d{2}(?:-\d{2})?(?:-\d{3,6})?)"
 )
-_CODE_PATH_RE = re.compile(rf"({_TURN_ID_PATTERN}/(files|outputs|attachments)/[^\s'\"\)\];,]+)")
+_CODE_PATH_RE = re.compile(rf"({_TURN_ID_PATTERN}/(files|outputs|snapshots|attachments)/[^\s'\"\)\];,]+)")
 _PATH_TOKEN_RE = re.compile(r"[^\s'\"\)\];,]+")
-_UNQUALIFIED_ARTIFACT_PREFIXES = ("files/", "outputs/", "attachments/")
+_UNQUALIFIED_ARTIFACT_PREFIXES = ("files/", "outputs/", "snapshots/", "attachments/")
 _FETCH_CTX_PATH_RE = re.compile(r"([a-z]{2}:[A-Za-z0-9_./\\-]+)")
 _TURN_ROOT_RE = re.compile(rf"\b({_TURN_ID_PATTERN})\b")
 
@@ -80,6 +84,7 @@ def extract_code_file_paths(code: str, *, turn_id: str = "") -> tuple[List[str],
     out: List[str] = []
     current_files_prefix = f"{turn_id}/files/" if turn_id else ""
     current_outputs_prefix = f"{turn_id}/outputs/" if turn_id else ""
+    current_snapshots_prefix = f"{turn_id}/snapshots/" if turn_id else ""
     current_att_prefix = f"{turn_id}/attachments/" if turn_id else ""
     for p in cleaned:
         if p in seen:
@@ -90,6 +95,8 @@ def extract_code_file_paths(code: str, *, turn_id: str = "") -> tuple[List[str],
             continue
         if (current_files_prefix and p.startswith(current_files_prefix)) or (
             current_outputs_prefix and p.startswith(current_outputs_prefix)
+        ) or (
+            current_snapshots_prefix and p.startswith(current_snapshots_prefix)
         ) or (
             current_att_prefix and p.startswith(current_att_prefix)
         ):
@@ -142,9 +149,14 @@ def _infer_physical_from_fi(path: str) -> str:
     if not isinstance(path, str) or not path.strip():
         return ""
     p = path.strip()
-    tid, namespace, rel = split_logical_artifact_path(p)
+    conversation_id, tid, namespace, rel = split_logical_artifact_ref(p)
     if tid and rel:
-        physical = build_physical_artifact_path(turn_id=tid, namespace=namespace, relpath=rel)
+        physical = build_physical_artifact_path(
+            turn_id=tid,
+            namespace=namespace,
+            relpath=rel,
+            conversation_id=conversation_id,
+        )
         if physical:
             return physical
     if p.startswith("fi:"):
@@ -372,27 +384,72 @@ async def hydrate_workspace_paths(
     ctx_browser: Any,
     paths: List[str],
     outdir: pathlib.Path,
+    conversation_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Materialize requested physical workspace paths using the configured implementation.
     Files under <turn>/files may come from custom timeline rehost or git-backed snapshots.
-    Outputs and attachments always use the custom artifact/hosting path.
+    Outputs, snapshots, and attachments always use the custom artifact/hosting path.
     """
     normalized = [str(p).strip() for p in (paths or []) if isinstance(p, str) and str(p).strip()]
     if not normalized:
         return {"rehosted": [], "missing": [], "errors": []}
+
+    if not conversation_id:
+        grouped_by_conversation: Dict[str, List[str]] = {}
+        unscoped_paths: List[str] = []
+        for path in normalized:
+            embedded_conversation_id, _, _, _ = split_physical_artifact_ref(path)
+            if embedded_conversation_id:
+                grouped_by_conversation.setdefault(embedded_conversation_id, []).append(path)
+            else:
+                unscoped_paths.append(path)
+        if grouped_by_conversation:
+            merged = {"rehosted": [], "missing": [], "errors": []}
+
+            async def _merge_group(payload: Dict[str, Any] | None) -> None:
+                if not isinstance(payload, dict):
+                    return
+                for key in ("rehosted", "missing", "errors"):
+                    merged[key].extend(list(payload.get(key) or []))
+
+            if unscoped_paths:
+                await _merge_group(await hydrate_workspace_paths(
+                    ctx_browser=ctx_browser,
+                    paths=unscoped_paths,
+                    outdir=outdir,
+                    conversation_id=None,
+                ))
+            for embedded_conversation_id, scoped_paths in grouped_by_conversation.items():
+                await _merge_group(await hydrate_workspace_paths(
+                    ctx_browser=ctx_browser,
+                    paths=scoped_paths,
+                    outdir=outdir,
+                    conversation_id=embedded_conversation_id,
+                ))
+            for key in ("rehosted", "missing", "errors"):
+                merged[key] = list(dict.fromkeys(merged[key]))
+            return merged
+
     outdir = artifact_outdir_for(outdir)
 
     files_paths: List[str] = []
     other_paths: List[str] = []
     for path in normalized:
-        if "/files/" in path or path.endswith("/files"):
+        _, _, namespace, _ = split_physical_artifact_ref(path)
+        if namespace == ARTIFACT_NAMESPACE_FILES or "/files/" in path or path.endswith("/files"):
             files_paths.append(path)
         else:
             other_paths.append(path)
 
     result = {"rehosted": [], "missing": [], "errors": []}
-    impl = get_workspace_implementation(getattr(ctx_browser, "runtime_ctx", None))
+    runtime_ctx = getattr(ctx_browser, "runtime_ctx", None)
+    impl = get_workspace_implementation(runtime_ctx)
+    current_conversation_id = str(getattr(runtime_ctx, "conversation_id", "") or "").strip()
+    if conversation_id and conversation_id != current_conversation_id:
+        # Git-backed workspace lineage is conversation-local; cross-conversation
+        # recovery must use persisted artifact/turn-log metadata.
+        impl = WORKSPACE_IMPLEMENTATION_CUSTOM
 
     async def _merge(payload: Dict[str, Any] | None) -> None:
         if not isinstance(payload, dict):
@@ -413,7 +470,11 @@ async def hydrate_workspace_paths(
             custom_candidate_paths: List[str] = []
             for physical in files_paths:
                 logical = physical_to_logical_artifact_path(physical)
-                artifact = await resolve_logical_artifact(ctx_browser=ctx_browser, path=logical) if logical else None
+                artifact = await resolve_logical_artifact(
+                    ctx_browser=ctx_browser,
+                    path=logical,
+                    conversation_id=conversation_id,
+                ) if logical else None
                 mime = (
                     (artifact.get("mime") or "").strip()
                     if isinstance(artifact, dict)
@@ -435,6 +496,7 @@ async def hydrate_workspace_paths(
                     ctx_browser=ctx_browser,
                     paths=custom_candidate_paths,
                     outdir=outdir,
+                    conversation_id=conversation_id,
                 ))
         else:
             from kdcube_ai_app.apps.chat.sdk.solutions.react.solution_workspace import rehost_files_from_timeline
@@ -443,6 +505,7 @@ async def hydrate_workspace_paths(
                 ctx_browser=ctx_browser,
                 paths=files_paths,
                 outdir=outdir,
+                conversation_id=conversation_id,
             ))
 
     if other_paths:
@@ -452,6 +515,7 @@ async def hydrate_workspace_paths(
             ctx_browser=ctx_browser,
             paths=other_paths,
             outdir=outdir,
+            conversation_id=conversation_id,
         ))
 
     result["rehosted"] = list(dict.fromkeys(result["rehosted"]))
@@ -464,32 +528,51 @@ def _parse_checkout_file_ref(path: str) -> Optional[Dict[str, str]]:
     raw = str(path or "").strip()
     if not raw.startswith("fi:"):
         return None
-    turn_id, namespace, rel = split_logical_artifact_path(raw)
+    conversation_id, turn_id, namespace, rel = split_logical_artifact_ref(raw)
     if turn_id and namespace == ARTIFACT_NAMESPACE_FILES and rel:
+        physical_path = build_physical_artifact_path(
+            turn_id=turn_id,
+            namespace=namespace,
+            relpath=rel.strip("/"),
+            conversation_id=conversation_id,
+        )
         return {
             "logical_path": raw,
+            **({"conversation_id": conversation_id} if conversation_id else {}),
             "turn_id": turn_id,
             "rel": rel.strip("/"),
-            "physical_path": f"{turn_id}/files/{rel.strip('/')}",
+            "physical_path": physical_path,
         }
-    logical = raw[len("fi:"):].strip()
+    logical = unscoped_logical_artifact_path(raw)[len("fi:"):].strip()
     if logical.endswith(".files"):
         turn_id = logical[: -len(".files")].strip()
         if turn_id:
             return {
                 "logical_path": raw,
+                **({"conversation_id": conversation_id} if conversation_id else {}),
                 "turn_id": turn_id,
                 "rel": "",
-                "physical_path": f"{turn_id}/files",
+                "physical_path": build_physical_artifact_path(
+                    turn_id=turn_id,
+                    namespace=ARTIFACT_NAMESPACE_FILES,
+                    relpath=".",
+                    conversation_id=conversation_id,
+                ).rstrip("/."),
             }
     if logical.endswith(".files/"):
         turn_id = logical[: -len(".files/")].strip()
         if turn_id:
             return {
                 "logical_path": raw,
+                **({"conversation_id": conversation_id} if conversation_id else {}),
                 "turn_id": turn_id,
                 "rel": "",
-                "physical_path": f"{turn_id}/files",
+                "physical_path": build_physical_artifact_path(
+                    turn_id=turn_id,
+                    namespace=ARTIFACT_NAMESPACE_FILES,
+                    relpath=".",
+                    conversation_id=conversation_id,
+                ).rstrip("/."),
             }
     return None
 
@@ -502,18 +585,29 @@ def normalize_checkout_requests(
 ) -> tuple[List[Dict[str, str]], List[Dict[str, str]]]:
     accepted: List[Dict[str, str]] = []
     invalid: List[Dict[str, str]] = []
-    seen: set[tuple[str, str]] = set()
+    seen: set[tuple[str, str, str]] = set()
 
     def _accept(entry: Dict[str, str]) -> None:
-        key = (entry["turn_id"], entry["rel"])
+        key = (entry.get("conversation_id", ""), entry["turn_id"], entry["rel"])
         if key in seen:
             return
         seen.add(key)
         accepted.append(entry)
 
-    requested = [str(p).strip() for p in (raw_paths or []) if str(p).strip()]
+    requested: List[Dict[str, str]] = []
+    for raw_path in (raw_paths or []):
+        if isinstance(raw_path, dict):
+            path = str(raw_path.get("path") or "").strip()
+            if not path:
+                continue
+            requested.append({"path": path})
+            continue
+        path = str(raw_path).strip()
+        if path:
+            requested.append({"path": path})
     if requested:
-        for raw in requested:
+        for req in requested:
+            raw = req["path"]
             parsed = _parse_checkout_file_ref(raw)
             if not parsed:
                 invalid.append({
@@ -644,12 +738,14 @@ async def checkout_workspace_paths(
             except Exception as exc:
                 errors.append(f"checkout_scan_failed:{source_prefix}:{exc}")
         if not matched:
+            pull_payload = {"paths": [logical_path]}
             missing.append({
                 "logical_path": logical_path,
+                **({"conversation_id": req.get("conversation_id")} if req.get("conversation_id") else {}),
                 "physical_path": source_physical,
                 "kind": "files",
                 "reason": "source_not_materialized",
-                "pull_hint": f"react.pull(paths={json.dumps([logical_path], ensure_ascii=False)})",
+                "pull_hint": f"react.pull({json.dumps(pull_payload, ensure_ascii=False)})",
             })
             continue
         for matched_physical in matched:

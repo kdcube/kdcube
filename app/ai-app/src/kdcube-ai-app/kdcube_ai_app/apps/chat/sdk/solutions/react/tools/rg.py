@@ -22,9 +22,10 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
     ARTIFACT_NAMESPACE_ATTACHMENTS,
     ARTIFACT_NAMESPACE_FILES,
     ARTIFACT_NAMESPACE_OUTPUTS,
+    ARTIFACT_NAMESPACE_SNAPSHOTS,
     build_physical_artifact_path,
     physical_path_to_logical_path,
-    split_logical_artifact_path,
+    split_logical_artifact_ref,
     split_physical_artifact_path,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.workspace import artifact_outdir_for
@@ -49,8 +50,9 @@ TOOL_SPEC = {
         "root": (
             "optional root selector. Omit to search the full materialized artifact workspace. "
             "Use canonical turn_<id>/files/<path>, turn_<id>/outputs/<path>, "
-            "turn_<id>/attachments/<path>, or fi:turn_<id>.* artifact paths "
-            "to search a file or subtree. "
+            "turn_<id>/attachments/<path>, or supported fi:turn_<id>.* artifact paths "
+            "to search a file or subtree. An fi:conv_<conversation_id>.turn_<id>... root belongs to another "
+            "conversation and is resolved with that scope after the file has been pulled locally. "
             "Legacy outdir/<path> is accepted but should not be used in new calls."
         ),
         "name_regex": "optional Python regex matched against the basename only, not the full path",
@@ -189,22 +191,24 @@ def _resolve_root(
         # Backwards compatibility only.
         rel = root_sel[len("outdir/"):].lstrip("/")
     elif root_sel.startswith("fi:"):
-        logical_turn, namespace, logical_rel = split_logical_artifact_path(root_sel)
+        source_conversation_id, logical_turn, namespace, logical_rel = split_logical_artifact_ref(root_sel)
         if logical_turn and namespace in {
             ARTIFACT_NAMESPACE_FILES,
             ARTIFACT_NAMESPACE_OUTPUTS,
+            ARTIFACT_NAMESPACE_SNAPSHOTS,
             ARTIFACT_NAMESPACE_ATTACHMENTS,
         } and logical_rel:
             rel = build_physical_artifact_path(
                 turn_id=logical_turn,
                 namespace=namespace,
                 relpath=logical_rel,
+                conversation_id=source_conversation_id,
             )
         else:
             code = "rg_invalid_root"
             message = (
-                "invalid fi: root selector. Use fi:turn_<id>.files/<path>, "
-                "fi:turn_<id>.outputs/<path>, or fi:turn_<id>.user.attachments/<path>."
+                "invalid fi: root selector. Use a supported fi:turn_<id>.<namespace>/<path> "
+                "artifact path such as files, outputs, or attachments."
             )
             rel = ""
     else:
@@ -214,6 +218,7 @@ def _resolve_root(
         elif (
             root_sel.startswith(f"{ARTIFACT_NAMESPACE_FILES}/")
             or root_sel.startswith(f"{ARTIFACT_NAMESPACE_OUTPUTS}/")
+            or root_sel.startswith(f"{ARTIFACT_NAMESPACE_SNAPSHOTS}/")
             or root_sel.startswith(f"{ARTIFACT_NAMESPACE_ATTACHMENTS}/")
         ):
             if not turn_id:
@@ -230,7 +235,7 @@ def _resolve_root(
         else:
             code = "rg_invalid_root"
             message = (
-                "invalid root selector. Omit root, or use canonical turn_<id>/files|outputs|attachments paths or fi:turn_<id>.* artifact paths."
+                "invalid root selector. Omit root, or use canonical turn_<id>/files|outputs|attachments paths or a supported fi:turn_<id>.* artifact path."
             )
 
     if rel:

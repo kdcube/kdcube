@@ -2830,6 +2830,7 @@ async def search_context(
         user: str,
         conv: str,
         *,
+        scope: str = "conversation",
         top_k: int = 5,
         days: int = 365,
         half_life_days: float = 7.0,
@@ -2878,7 +2879,7 @@ async def search_context(
                 search_tags=search_tags,
                 top_k=top_k,
                 days=days,
-                scope="conversation",
+                scope=scope,
                 half_life_days=half_life_days,
                 timestamp_filters=timestamp_filters,
             )
@@ -2925,6 +2926,7 @@ async def search_context(
 
             hit = {
                 "turn_id": tid,
+                "conversation_id": r.get("conversation_id") or conv,
                 "role": r.get("role", "artifact"),
                 "ts": r.get("ts"),
                 "sim": sim,

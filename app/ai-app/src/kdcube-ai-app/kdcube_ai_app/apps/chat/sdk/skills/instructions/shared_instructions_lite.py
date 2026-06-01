@@ -156,6 +156,7 @@ REACT_LITE_PATHS_AND_NAMESPACES = """
   - `fi:turn_<id>.outputs/<path>` for non-workspace produced artifacts
   - `fi:turn_<id>.user.attachments/<name>` for original user attachments
   - `fi:turn_<id>.external.<kind>.attachments/<message_id>/<name>` for followup/steer attachments
+- If an `fi:` path starts `fi:conv_<conversation_id>.turn_<id>...`, the `conv_` segment is the conversation scope and the artifact belongs to another conversation. Current-conversation `fi:` paths do not have this segment. Use scoped paths exactly as supplied.
 - `tc:turn_<id>.<tool_call_id>.call` and `.result` address tool call inputs/results.
 - `so:sources_pool[1,3]` and `so:sources_pool[2:6]` address source rows.
 - `ws:turn_<id>.conv.working.summary` addresses the latest working summary for a turn.
@@ -207,7 +208,7 @@ REACT_LITE_MEMORY_SEARCH_RECOVERY = """
 # Include this block only when `react.rg` is available.
 REACT_LITE_LOCAL_ARTIFACT_SEARCH = """
 [LOCAL ARTIFACT SEARCH WITH react.rg]
-- Use `react.rg` only for readable files already materialized locally under OUT_DIR. It does not search hidden timeline, unpulled historical snapshots, or `ks:`.
+- Use `react.rg` only for readable files already materialized locally under OUT_DIR. It does not search hidden timeline, unmaterialized conversation history, or `ks:`.
 - `react.rg` hits may include `logical_path` and ready-to-pass `read_item` ranges for `react.read`.
 - Search roots should match visible/local paths: omit `root`, or use `turn_<id>/files/...`, `turn_<id>/outputs/...`, `turn_<id>/attachments/...`, or a matching `fi:` artifact path.
 - If the target is in an older turn, identify the `fi:` ref from visible context or `react.memsearch`, then pull it before local search.
@@ -230,7 +231,7 @@ REACT_LITE_WORKSPACE_BASE = """
 - You do not have direct host filesystem access. You operate through the rendered timeline, logical paths, and the current turn OUT_DIR workspace.
 - Reason about three spaces:
   - current-turn OUT_DIR: `turn_<current>/files/`, `turn_<current>/outputs/`, `turn_<current>/attachments/`, `logs/`
-  - versioned conversation snapshots: logical `fi:turn_<id>.files/...`, `fi:turn_<id>.outputs/...`, attachments
+  - versioned conversation artifact refs: logical `fi:turn_<id>.files/...`, `fi:turn_<id>.outputs/...`, attachments
   - read-only bundle knowledge space: logical `ks:<path>`
 - When files are materialized, the filesystem visible to exec/code is rooted at `OUTPUT_DIR` and is shaped like:
   ```text
@@ -273,6 +274,18 @@ REACT_LITE_FILES_VS_OUTPUTS = """
   - `turn_<current>/outputs/workspace_app/report.html` = deliverable/source artifact, not project state
   - `turn_<current>/outputs/quarterly_review/deck.md` = one-off presentation source, not a maintained workspace
 """
+
+
+# Include this block only when the runtime opts this agent into story/wizard snapshots.
+REACT_LITE_STORY_SNAPSHOTS = """
+[STORY SNAPSHOTS]
+- Story snapshots are durable state artifacts for a user story, wizard, or reactive workflow. Use them only when the visible workflow or runtime explicitly exposes snapshot paths.
+- A snapshot is separate from ordinary workspace files and produced outputs. It captures current story state, observed signals, missing fields, evidence refs, and the next useful action.
+- The canonical logical path is `fi:turn_<id>.snapshots/<name>`. Current-turn writes use `turn_<current>/snapshots/<name>`.
+- The format is chosen by the workflow: YAML, JSON, Markdown, or another text-oriented representation. Preserve the existing format when updating a snapshot.
+- Do not invent snapshots, snapshot paths, or snapshot-required behavior when the current workflow does not expose them.
+"""
+
 
 # Include this block only when `react.pull`/`react.checkout` are available.
 REACT_LITE_WORKSPACE_PULL_CHECKOUT = """

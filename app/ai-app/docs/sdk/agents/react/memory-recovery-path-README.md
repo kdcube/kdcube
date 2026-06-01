@@ -33,7 +33,7 @@ The recovery path is built on stable logical paths:
 | `su:` | model-generated compacted conversation range summary |
 | `ar:` | authored conversation artifacts such as user prompts, assistant completions, plans |
 | `tc:` | tool call / tool result blocks |
-| `fi:` | user attachments and produced files |
+| `fi:` | user attachments, produced files, and opt-in snapshot artifacts |
 | `so:` | sources pool rows and slices |
 
 The model should not need physical paths for normal recovery. It uses
@@ -192,9 +192,41 @@ Examples:
 react.read(["ws:turn_13083704.conv.working.summary"])
 react.read(["tc:turn_13083704.tc_8fc21a80902b.result"])
 react.read(["fi:turn_13083704.outputs/email-attachments/invoice.pdf"])
+react.read(["fi:turn_13083704.snapshots/wizard-state.yaml"])
 react.read(["ar:turn_13083704.assistant.completion"])
 react.read(["so:sources_pool[1,3,5]"])
 ```
+
+Snapshot artifacts use a dedicated `fi:<turn_id>.snapshots/<name>` namespace
+for durable story/wizard state. The format is not enforced; snapshot files may
+be YAML, JSON, Markdown, or another text-oriented representation chosen by the
+bundle or event generator. This concept is opt-in per ReAct agent; bundle config
+must enable `react.story_snapshots.enabled: true`, or bundle code must call
+`build_react(..., story_snapshots_enabled=True)`, before the snapshot instruction
+block is added to that agent's decision prompt. Cross-conversation recovery
+continues to work for ordinary file/output refs even when this block is off.
+
+A cross-conversation `fi:` artifact path carries the conversation scope as a
+leading `conv_` segment. The ordinary same-conversation form stays short; the
+scoped form appears only when some recovery/linking surface emits a path to
+another conversation:
+
+```json
+{
+  "items": [
+    {
+      "path": "fi:conv_9f3d27c2.turn_x.snapshots/wizard-state.yaml"
+    }
+  ]
+}
+```
+
+The `turn_id` is still part of the logical path. If an `fi:` path starts
+`fi:conv_<conversation_id>.turn_<id>...`, the `conv_` segment is the
+conversation scope and the artifact belongs to that other conversation. Current
+conversation `fi:` paths do not have this segment. Consumers must preserve the
+segment and pass the scoped path directly to `react.read`, `react.pull`,
+`react.checkout`, or `react.rg`.
 
 For non-text binary files needed by code:
 

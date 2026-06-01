@@ -825,15 +825,17 @@ class ContextBrowser:
         except Exception:
             pass
 
-    async def get_turn_log(self, *, turn_id: str) -> Dict[str, Any]:
+    async def get_turn_log(self, *, turn_id: str, conversation_id: Optional[str] = None) -> Dict[str, Any]:
         if not turn_id:
             return {}
-        if turn_id in self._turn_log_cache:
-            return self._turn_log_cache[turn_id]
+        effective_conversation_id = str(conversation_id or self._runtime_ctx.conversation_id or "").strip()
+        cache_key = f"{effective_conversation_id}\n{turn_id}"
+        if cache_key in self._turn_log_cache:
+            return self._turn_log_cache[cache_key]
         try:
             mat = await self.ctx_client.materialize_turn(
                 user_id=self._runtime_ctx.user_id,
-                conversation_id=self._runtime_ctx.conversation_id,
+                conversation_id=effective_conversation_id,
                 turn_id=turn_id,
                 scope="conversation",
                 days=365,
@@ -842,7 +844,7 @@ class ContextBrowser:
             )
             turn_log_env = mat.get("turn_log") or {}
             payload = unwrap_payload(turn_log_env or {})
-            self._turn_log_cache[turn_id] = payload or {}
+            self._turn_log_cache[cache_key] = payload or {}
             return payload or {}
         except Exception:
             return {}

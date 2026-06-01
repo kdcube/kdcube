@@ -44,8 +44,8 @@ class FakeBrowser:
             visible_paths=visible_paths,
         )
 
-    async def get_turn_log(self, turn_id: str):
-        return self._turn_logs.get(turn_id, {})
+    async def get_turn_log(self, turn_id: str, conversation_id: str | None = None):
+        return self._turn_logs.get((conversation_id or "", turn_id), self._turn_logs.get(turn_id, {}))
 
 
 class FakeReact:

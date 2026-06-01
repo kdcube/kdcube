@@ -147,6 +147,68 @@ async def test_pull_materializes_exact_attachment_ref(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_pull_materializes_cross_conversation_snapshot_ref(tmp_path):
+    outdir = tmp_path / "out"
+    runtime = RuntimeCtx(
+        turn_id="turn_pull",
+        outdir=str(outdir),
+        workdir=str(tmp_path / "work"),
+        conversation_id="conv_1",
+    )
+    ctx = FakeBrowser(runtime)
+    logical = "fi:conv_conv_2.turn_prev.snapshots/wizard/current.yaml"
+    physical = "conv_conv_2/turn_prev/snapshots/wizard/current.yaml"
+    stored_logical = "fi:turn_prev.snapshots/wizard/current.yaml"
+    stored_physical = "turn_prev/snapshots/wizard/current.yaml"
+    ctx._turn_logs[("conv_2", "turn_prev")] = {
+        "blocks": [
+            {
+                "type": "react.tool.result",
+                "mime": "application/json",
+                "text": json.dumps({"artifact_path": stored_logical, "physical_path": stored_physical}),
+                "turn_id": "turn_prev",
+            },
+            {
+                "type": "react.tool.result",
+                "mime": "application/yaml",
+                "path": stored_logical,
+                "text": "state: current\n",
+                "turn_id": "turn_prev",
+                "meta": {"physical_path": stored_physical},
+            },
+        ]
+    }
+
+    class _Settings:
+        STORAGE_PATH = str(tmp_path)
+
+    import kdcube_ai_app.apps.chat.sdk.config as cfg
+    cfg.get_settings = lambda: _Settings()
+
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "params": {
+                    "paths": [logical],
+                }
+            }
+        },
+        "outdir": str(outdir),
+    }
+
+    await handle_react_pull(ctx_browser=ctx, state=state, tool_call_id="pull_snapshot")
+
+    payload = _latest_payload(ctx)
+    assert payload["pulled"] == [{
+        "logical_path": logical,
+        "physical_path": physical,
+        "file_count": 1,
+    }]
+    assert "missing" not in payload
+    assert (outdir / "workdir" / physical).read_text(encoding="utf-8") == "state: current\n"
+
+
+@pytest.mark.asyncio
 async def test_pull_materializes_hosted_internal_output_not_preview(tmp_path):
     outdir = tmp_path / "out"
     runtime = RuntimeCtx(turn_id="turn_pull", outdir=str(outdir), workdir=str(tmp_path / "work"))

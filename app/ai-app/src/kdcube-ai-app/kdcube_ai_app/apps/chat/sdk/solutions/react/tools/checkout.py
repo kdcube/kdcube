@@ -39,6 +39,7 @@ TOOL_SPEC = {
         ),
         "paths": (
             "ordered list[str] of fi:turn_<id>.files refs to apply into the current-turn workspace. "
+            "An fi:conv_<conversation_id>.turn_<id>... ref belongs to another conversation and is resolved with that scope. "
             "Later entries override earlier ones if they overlap. "
             "For compatibility, params.version is still accepted as a whole-tree checkout of fi:turn_<id>.files/."
         ),
@@ -57,10 +58,11 @@ async def handle_react_checkout(*, ctx_browser: Any, state: Dict[str, Any], tool
     last_decision = state.get("last_decision") or {}
     tool_call = last_decision.get("tool_call") or {}
     tool_id = "react.checkout"
-    params = tool_call.get("params") or {}
+    raw_params = tool_call.get("params") or {}
+    params = raw_params if isinstance(raw_params, dict) else {}
     raw_paths = params.get("paths")
-    if raw_paths is None and isinstance(params, list):
-        raw_paths = params
+    if raw_paths is None and isinstance(raw_params, list):
+        raw_paths = raw_params
     raw_mode = str(params.get("mode") or "").strip().lower()
     turn_id = str(getattr(getattr(ctx_browser, "runtime_ctx", None), "turn_id", "") or "").strip()
 

@@ -155,6 +155,15 @@ EXTERNAL_TURN_EVENTS_GUIDE = """
 - These events are durable. They stay visible across pruning and may reappear after compaction as preserved event blocks.
 """
 
+STORY_SNAPSHOTS_GUIDE = """
+[STORY SNAPSHOTS]
+- Story snapshots are durable state artifacts for a user story, wizard, or reactive workflow. Use them only when the visible workflow or runtime explicitly exposes snapshot paths.
+- A snapshot is separate from ordinary workspace files and produced outputs. It captures current story state, observed signals, missing fields, evidence refs, and the next useful action.
+- The canonical logical path is `fi:turn_<id>.snapshots/<name>`. Current-turn writes use `turn_<current>/snapshots/<name>`.
+- The format is chosen by the workflow: YAML, JSON, Markdown, or another text-oriented representation. Preserve the existing format when updating a snapshot.
+- Do not invent snapshots, snapshot paths, or snapshot-required behavior when the current workflow does not expose them.
+"""
+
 ANNOUNCE_INTERPRETATION_GUIDE = """
 [ANNOUNCE INTERPRETATION — TAIL ATTENTION BOARD]
 - ANNOUNCE is the uncached tail attention board for the current running turn.
@@ -226,7 +235,7 @@ SUGGESTED_FOLLOWUPS_GUIDE = """
 """
 
 WORKSPACE_IMPLEMENTATION_GUIDE_CUSTOM = """
-[WORKSPACE MODEL — EXPLICIT PULL / CUSTOM SNAPSHOT MODE]
+[WORKSPACE MODEL — EXPLICIT PULL / CUSTOM ARTIFACT-HISTORY MODE]
 The agent should reason about THREE distinct spaces, with EXPLICIT workspace activation:
 
 ```text
@@ -242,7 +251,7 @@ VISIBLE / ADDRESSABLE WORKSPACE MODEL
      timeline.json
      ...
 
-2) VERSIONED CONVERSATION SNAPSHOTS (logical first, local only after pull)
+2) VERSIONED CONVERSATION ARTIFACT REFS (logical first, local only after pull)
    fi:turn_<id>.files/<scope>/<path>
    fi:turn_<id>.outputs/<scope>/<path>
    fi:turn_<id>.user.attachments/<name>
@@ -252,16 +261,16 @@ VISIBLE / ADDRESSABLE WORKSPACE MODEL
    ks:<bundle-defined-path>/...
 ```
 
-- `fi:` is the versioned snapshot namespace. It is the main way to refer to older workspace files, non-workspace outputs, and attachments.
-- Older snapshot files are NOT assumed to be present locally by default. If you need them for code/execution, pull them explicitly with `react.pull(paths=[...])`.
+- `fi:` is the versioned file/artifact namespace. It is the main way to refer to older workspace files, non-workspace outputs, and attachments.
+- Older artifact files are NOT assumed to be present locally by default. If you need them for code/execution, pull them explicitly with `react.pull(paths=[...])`.
 - `react.pull` accepts `fi:` refs only.
 - Pulling a folder/slice is supported ONLY for `fi:turn_<id>.files/<scope-or-subtree>`.
 - Pulling `fi:turn_<id>.outputs/...` is allowed only as an EXACT file ref.
-- In this CUSTOM mode, folder pulls are resolved from conversation artifact history / hosting-backed snapshot state, not from git.
+- In this CUSTOM mode, folder pulls are resolved from conversation artifact history / hosting-backed artifact state, not from git.
 - Pulling `fi:turn_<id>.user.attachments/...`, `fi:turn_<id>.external.<kind>.attachments/<message_id>/...`, or legacy `fi:turn_<id>.attachments/...` is allowed only as an EXACT file ref. Do not expect binary descendants to appear automatically when you pull a folder.
 - If you need a binary file from hosting (xlsx, pptx, pdf, image, zip, etc.), name that exact `fi:` file in `react.pull`.
 - `react.pull(...)` is for historical side materialization only. Pulled content stays under its historical turn root and should be treated as readonly reference material.
-- Use `react.checkout(mode="replace", paths=[...])` after `react.pull` when the active current-turn workspace itself must contain a runnable/searchable/testable project snapshot, as an editable copy of a historical `files/...` tree under `turn_<current>/files/...`.
+- Use `react.checkout(mode="replace", paths=[...])` after `react.pull` when the active current-turn workspace itself must contain a runnable/searchable/testable project copy, as an editable copy of a historical `files/...` tree under `turn_<current>/files/...`.
 - Use `react.checkout(mode="overlay", paths=[...])` after `react.pull` when you want to import or overwrite selected historical files into an already materialized current-turn workspace.
 - `react.checkout(mode="replace", ...)` replaces the current-turn `files/` tree, then applies the requested `fi:turn_<id>.files/...` refs in order.
 - `react.checkout(mode="overlay", ...)` keeps the current-turn `files/` tree and applies the requested refs on top without deleting unspecified files.
@@ -284,12 +293,12 @@ VISIBLE / ADDRESSABLE WORKSPACE MODEL
   - `turn_<current>/outputs/workspace_app/report.md`
   - `turn_<current>/outputs/analytics_dashboard/test_results.txt`
 - Reserve `outputs/tmp/...` only for disposable scratch outputs.
-- `react.rg` searches readable local artifact files already materialized on this worker and returns file metadata plus line-numbered regex matches. Use roots that match visible paths: omit `root`, use canonical physical `turn_<id>/...` roots, or matching `fi:` artifact paths. It does not browse the continuous conversation timeline, unpulled snapshot memory, or `ks:` directly. Locate older content from visible refs or `react.memsearch`, then `react.pull` it before local search. If you need to edit it, checkout the pulled `files/...` ref into the current turn first.
+- `react.rg` searches readable local artifact files already materialized on this worker and returns file metadata plus line-numbered regex matches. Use roots that match visible paths: omit `root`, use canonical physical `turn_<id>/...` roots, or matching `fi:` artifact paths. It does not browse the continuous conversation timeline, unmaterialized artifact history, or `ks:` directly. Locate older content from visible refs or `react.memsearch`, then `react.pull` it before local search. If you need to edit it, checkout the pulled `files/...` ref into the current turn first.
 - `ks:` remains read-only and separate from OUT_DIR. Use `react.read` or bundle-specific tools for it.
 """
 
 WORKSPACE_IMPLEMENTATION_GUIDE_GIT = """
-[WORKSPACE MODEL — EXPLICIT PULL / GIT-BACKED SNAPSHOT MODE]
+[WORKSPACE MODEL — EXPLICIT PULL / GIT-BACKED ARTIFACT-HISTORY MODE]
 The agent should reason about THREE distinct spaces, with EXPLICIT workspace activation:
 
 ```text
@@ -305,7 +314,7 @@ VISIBLE / ADDRESSABLE WORKSPACE MODEL
      timeline.json
      ...
 
-2) VERSIONED CONVERSATION SNAPSHOTS (logical first, local only after pull)
+2) VERSIONED CONVERSATION ARTIFACT REFS (logical first, local only after pull)
    fi:turn_<id>.files/<scope>/<path>
    fi:turn_<id>.outputs/<scope>/<path>
    fi:turn_<id>.user.attachments/<name>
@@ -315,11 +324,11 @@ VISIBLE / ADDRESSABLE WORKSPACE MODEL
    ks:<bundle-defined-path>/...
 ```
 
-- `fi:` is the versioned snapshot namespace. It is the main way to refer to older workspace files, non-workspace outputs, and attachments.
-- Older snapshot files are NOT assumed to be present locally by default. If you need them for code/execution, pull them explicitly with `react.pull(paths=[...])`.
+- `fi:` is the versioned file/artifact namespace. It is the main way to refer to older workspace files, non-workspace outputs, and attachments.
+- Older artifact files are NOT assumed to be present locally by default. If you need them for code/execution, pull them explicitly with `react.pull(paths=[...])`.
 - `react.pull` accepts `fi:` refs only.
 - Pulling a folder/slice is supported ONLY for `fi:turn_<id>.files/<scope-or-subtree>`.
-- In this GIT mode, `fi:turn_<id>.files/...` resolves against the conversation's git-backed workspace lineage snapshot for that version.
+- In this GIT mode, `fi:turn_<id>.files/...` resolves against the conversation's git-backed workspace lineage for that version.
 - Pulling `fi:turn_<id>.outputs/...` is allowed only as an EXACT file ref and is always resolved through hosted/custom artifact history, not git.
 - Pulling `fi:turn_<id>.user.attachments/...`, `fi:turn_<id>.external.<kind>.attachments/<message_id>/...`, or legacy `fi:turn_<id>.attachments/...` is allowed only as an EXACT file ref. Do not expect binary descendants to appear automatically when you pull a folder.
 - If you need a binary file from hosting (xlsx, pptx, pdf, image, zip, etc.), name that exact `fi:` file in `react.pull`.
@@ -330,8 +339,8 @@ VISIBLE / ADDRESSABLE WORKSPACE MODEL
 - Your main workspace, as you should mentally organize and inspect it, is `turn_<current>/files/...`.
 - `turn_<current>/outputs/...` is for current-turn produced artifacts that should not become workspace history.
 - Treat `turn_<current>/files/...` as the authoritative project tree for the turn.
-- `react.pull(fi:turn_<older>.files/...)` creates a version-scoped historical snapshot view under `turn_<older>/files/...`; it does NOT implicitly replace or activate the current-turn worktree.
-- Use `react.checkout(mode="replace", paths=[...])` after `react.pull` when the current-turn workspace itself must contain a runnable/searchable/testable project snapshot, as an editable copy under `turn_<current>/files/...`.
+- `react.pull(fi:turn_<older>.files/...)` creates a version-scoped historical artifact view under `turn_<older>/files/...`; it does NOT implicitly replace or activate the current-turn worktree.
+- Use `react.checkout(mode="replace", paths=[...])` after `react.pull` when the current-turn workspace itself must contain a runnable/searchable/testable project copy, as an editable copy under `turn_<current>/files/...`.
 - Use `react.checkout(mode="overlay", paths=[...])` after `react.pull` when you want to import or overwrite selected historical files into an already materialized current-turn workspace.
 - `react.checkout(mode="replace", ...)` replaces the current-turn `files/` tree, then applies the requested `fi:turn_<id>.files/...` refs in order.
 - `react.checkout(mode="overlay", ...)` keeps the current-turn `files/` tree and applies the requested refs on top without deleting unspecified files.
@@ -371,7 +380,7 @@ VISIBLE / ADDRESSABLE WORKSPACE MODEL
   - `turn_<current>/outputs/workspace_app/report.md`
   - `turn_<current>/outputs/analytics_dashboard/test_results.txt`
 - Reserve `outputs/tmp/...` only for disposable scratch outputs.
-- `react.rg` searches readable local artifact files already materialized on this worker and returns file metadata plus line-numbered regex matches. Use roots that match visible paths: omit `root`, use canonical physical `turn_<id>/...` roots, or matching `fi:` artifact paths. It does not browse the continuous conversation timeline, unpulled snapshot memory, or `ks:` directly. Locate older content from visible refs or `react.memsearch`, then `react.pull` it before local search. If you need to edit it, checkout the pulled `files/...` ref into the current turn first.
+- `react.rg` searches readable local artifact files already materialized on this worker and returns file metadata plus line-numbered regex matches. Use roots that match visible paths: omit `root`, use canonical physical `turn_<id>/...` roots, or matching `fi:` artifact paths. It does not browse the continuous conversation timeline, unmaterialized artifact history, or `ks:` directly. Locate older content from visible refs or `react.memsearch`, then `react.pull` it before local search. If you need to edit it, checkout the pulled `files/...` ref into the current turn first.
 - `ks:` remains read-only and separate from OUT_DIR. Use `react.read` or bundle-specific tools for it.
 """
 
@@ -544,7 +553,7 @@ Using unsupported logical namespaces with fetch_ctx returns an error rather than
 
 #### react.rg results
 - `react.rg` does not load full file contents into context.
-- `react.rg` searches only files already materialized under the local artifact workspace. It is not a search over the whole conversation timeline, hidden/pruned blocks, unpulled historical snapshots, or `ks:`. Materialize needed older files first with `react.pull`; if the goal is editing, then checkout the pulled `files/...` ref into the current turn. Use roots that match visible paths: fully qualified `turn_<id>/files/...`, `turn_<id>/outputs/...`, `turn_<id>/attachments/...`, or `fi:...`.
+- `react.rg` searches only files already materialized under the local artifact workspace. It is not a search over the whole conversation timeline, hidden/pruned blocks, unmaterialized artifact history, or `ks:`. Materialize needed older files first with `react.pull`; if the goal is editing, then checkout the pulled `files/...` ref into the current turn. Use roots that match visible paths: fully qualified `turn_<id>/files/...`, `turn_<id>/outputs/...`, `turn_<id>/attachments/...`, or `fi:...`.
 - Each hit returns:
   - `path`: relative to the searched root
   - `size_bytes`
@@ -953,6 +962,7 @@ Timeline and recovery entries show logical paths as the primary artifact identit
 | `fi:turn_<id>.external.<kind>.attachments/<message_id>/<rel>` | `turn_<id>/external/<kind>/attachments/<message_id>/<rel>` |
 
 - `ar:`, `tc:`, `so:`, `su:`, `ks:`, and `sk:` are logical context refs, not filesystem paths.
+- If an `fi:` path starts `fi:conv_<conversation_id>.turn_<id>...`, the `conv_` segment is the conversation scope and the file/artifact is from another conversation. Current-conversation `fi:` paths do not have this segment. Use scoped paths exactly as supplied with `react.read`, `react.pull`, `react.checkout`, or `react.rg`.
 - If an artifact line says `physical_path: exists (derive)`, derive the physical path from its logical `fi:` path with the table above.
 - If no `physical_path` line is shown, do not assume there is a filesystem file.
 - Do not mix separators: logical `fi:` paths use a dot after the turn id and slash after the namespace; physical paths use slashes. If you see `fi:turn_<id>/outputs/...` or `turn_<id>.outputs/...`, normalize mentally to the canonical form before using it.
@@ -1309,7 +1319,7 @@ You have following tools to capture content which you produce in the named and d
   This is very useful tool when results retrieved by react.read, react.memsearch or web_tools.web_search / web_tools/web_fetch are irrelevant. In that case you can hide the, to avoid spending tokens, and provide the replacement which explains the irrelevance and helps later to correlate the retrieval query (path or semantic query)
   to result it returned so do not repeat the same irrelevant retrieval later. This is also useful when you have already seen the content but it is far in the tail of your visible context and you want to keep the context clean and focused on more relevant content.
 - react.rg: safe ripgrep-like file/region search over files already materialized on this worker (no shell). Use it to locate readable files by name or regex content before reading/editing. Prefer roots that match visible paths: omit `root`, or use fully qualified `turn_<id>/files/...`, `turn_<id>/outputs/...`, `turn_<id>/attachments/...`, or matching `fi:` artifact paths.
-  It does not search hidden/pruned timeline, unpulled historical snapshots, or bundle knowledge space. If the target is from an older turn, identify the `fi:` ref from visible context or `react.memsearch`, then `react.pull` it before local search. If you need to modify it, checkout the pulled `files/...` ref into the current turn.
+  It does not search hidden/pruned timeline, unmaterialized artifact history, or bundle knowledge space. If the target is from an older turn, identify the `fi:` ref from visible context or `react.memsearch`, then `react.pull` it before local search. If you need to modify it, checkout the pulled `files/...` ref into the current turn.
   It returns discovery metadata (`size_bytes`, `text_symbols`, `line_count`, `logical_path`) and, for content matches, line-numbered previews plus `read_item` ranges. For large text artifacts, search first, then follow up with react.read using `items`/`read_items` for the exact regions you need.
 
 - Use rendering_tools.write_* to render and write the special formats (pdf, pptx, docx, png).

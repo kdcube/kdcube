@@ -16,19 +16,34 @@ def test_get_workspace_implementation_guide_custom_mentions_hosting_backed_mode(
     assert "not from git" in guide
 
 
+def test_lite_workspace_profile_does_not_teach_story_snapshots_by_default():
+    text = default_lite_system_instruction("workspace")
+    assert "[STORY SNAPSHOTS]" not in text
+    assert "fi:turn_<id>.snapshots/<name>" not in text
+
+
+def test_lite_story_snapshots_block_is_explicit_opt_in():
+    text = default_lite_system_instruction(
+        "workspace",
+        extra_blocks=["REACT_LITE_STORY_SNAPSHOTS"],
+    )
+    assert "[STORY SNAPSHOTS]" in text
+    assert "fi:turn_<id>.snapshots/<name>" in text
+
+
 def test_get_workspace_implementation_guide_git_mentions_git_backed_mode():
     guide = get_workspace_implementation_guide("git")
     assert "react.pull(paths=[...])" in guide
     assert "EXACT file ref" in guide
     assert "binary descendants" in guide
     assert "GIT mode" in guide
-    assert "git-backed workspace lineage snapshot" in guide
+    assert "git-backed workspace lineage" in guide
     assert "local git repo" in guide
     assert "git pull" in guide
     assert "active lineage workspace" in guide
-    assert "historical snapshot view" in guide
+    assert "historical artifact view" in guide
     assert 'react.checkout(mode="replace", paths=[...])' in guide or 'react.checkout(mode="replace", paths=["fi:' in guide
-    assert "runnable/searchable/testable project snapshot" in guide
+    assert "runnable/searchable/testable project copy" in guide
     assert "mode=\"overlay\"" in guide
     assert "turn_<current>/files/..." in guide
     assert "previous saved workspace paths" in guide
@@ -49,12 +64,22 @@ def test_build_decision_system_text_uses_selected_workspace_implementation():
     assert "Workspace activation is explicit" in text
     assert "do NOT auto-materialize old files" in text
     assert 'react.checkout(mode="replace", paths=[fi:...])' in text or 'react.checkout(mode="replace", paths=["fi:' in text
-    assert "runnable/searchable/testable project snapshot" in text
+    assert "runnable/searchable/testable project copy" in text
     assert "mode=\"overlay\"" in text
     assert "turn_<current>/files/..." in text
     assert "existing top-level scope" in text
     assert "previous saved workspace paths" in text
     assert "current editable workspace" in text
+
+
+def test_default_decision_system_text_does_not_teach_story_snapshots():
+    text = build_decision_system_text(
+        adapters=[],
+        infra_adapters=[],
+        workspace_implementation="custom",
+    )
+    assert "[STORY SNAPSHOTS]" not in text
+    assert "fi:turn_<id>.snapshots/<name>" not in text
 
 
 def test_build_decision_system_text_appends_agent_admin_customization():

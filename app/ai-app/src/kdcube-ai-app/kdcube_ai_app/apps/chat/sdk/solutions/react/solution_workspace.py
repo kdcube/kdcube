@@ -24,10 +24,14 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
     ARTIFACT_NAMESPACE_ATTACHMENTS,
     ARTIFACT_NAMESPACE_FILES,
     ARTIFACT_NAMESPACE_OUTPUTS,
+    ARTIFACT_NAMESPACE_SNAPSHOTS,
     build_logical_artifact_path,
     build_physical_artifact_path,
+    split_logical_artifact_ref,
     split_logical_artifact_path,
+    split_physical_artifact_ref,
     split_physical_artifact_path,
+    unscoped_logical_artifact_path,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.workspace import (
     _guess_mime_from_path,
@@ -190,6 +194,7 @@ async def read_artifact_for_react(
         ctx_browser: Any,
         path: str,
         outdir: pathlib.Path,
+        conversation_id: Optional[str] = None,
         max_bytes: Optional[int] = None,
         max_text_symbols: Optional[int] = None,
         stats_only: bool = False,
@@ -208,31 +213,38 @@ async def read_artifact_for_react(
     raw_path = path.strip()
     if not raw_path.startswith("fi:"):
         return {"missing": True}
+    embedded_conversation_id, source_turn_id, source_namespace, source_rel = split_logical_artifact_ref(raw_path)
+    if embedded_conversation_id:
+        conversation_id = embedded_conversation_id
+    unscoped_path = unscoped_logical_artifact_path(raw_path)
     inferred_physical = _infer_physical_from_fi(raw_path)
+    current_conversation_id = str(getattr(getattr(ctx_browser, "runtime_ctx", None), "conversation_id", "") or "").strip()
+    use_current_timeline = not conversation_id or conversation_id == current_conversation_id
 
     artifact: Optional[Dict[str, Any]] = None
-    try:
-        artifact = ctx_browser.timeline.resolve_artifact(raw_path)
-    except Exception:
-        artifact = None
+    if use_current_timeline:
+        try:
+            artifact = ctx_browser.timeline.resolve_artifact(unscoped_path)
+        except Exception:
+            artifact = None
 
     if not isinstance(artifact, dict):
         # attempt to load from historical turn log
-        tid, _, _ = split_logical_artifact_path(raw_path)
+        tid = source_turn_id
         if tid:
             try:
-                turn_log = await ctx_browser.get_turn_log(turn_id=tid)
+                turn_log = await ctx_browser.get_turn_log(turn_id=tid, conversation_id=conversation_id)
             except Exception:
                 turn_log = {}
             contrib_log = (turn_log.get("blocks") or []) if isinstance(turn_log, dict) else []
             if contrib_log:
-                artifact = resolve_artifact_from_timeline({"blocks": contrib_log, "sources_pool": []}, raw_path)
+                artifact = resolve_artifact_from_timeline({"blocks": contrib_log, "sources_pool": []}, unscoped_path)
 
     if not isinstance(artifact, dict):
         if not inferred_physical:
             return {"missing": True}
         artifact = {
-            "path": raw_path,
+            "path": unscoped_path,
             "filepath": inferred_physical,
             "physical_path": inferred_physical,
             "mime": _guess_mime_from_path(inferred_physical),
@@ -248,6 +260,13 @@ async def read_artifact_for_react(
         or inferred_physical
         or ""
     )
+    if conversation_id and conversation_id != current_conversation_id and source_turn_id and source_namespace and source_rel:
+        physical_path = build_physical_artifact_path(
+            turn_id=source_turn_id,
+            namespace=source_namespace,
+            relpath=source_rel,
+            conversation_id=conversation_id,
+        )
     if not physical_path:
         return {
             "artifact": artifact,
@@ -261,6 +280,7 @@ async def read_artifact_for_react(
                 ctx_browser=ctx_browser,
                 paths=[physical_path],
                 outdir=outdir,
+                conversation_id=conversation_id,
             )
         except Exception:
             pass
@@ -336,6 +356,7 @@ async def resolve_logical_artifact(
         *,
         ctx_browser: Any,
         path: str,
+        conversation_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Resolve a logical artifact path from the live timeline first, then from the
@@ -344,26 +365,32 @@ async def resolve_logical_artifact(
     raw_path = str(path or "").strip()
     if not raw_path:
         return None
-    try:
-        artifact = ctx_browser.timeline.resolve_artifact(raw_path)
-        if isinstance(artifact, dict):
-            return artifact
-    except Exception:
-        pass
+    embedded_conversation_id, source_turn_id, _, _ = split_logical_artifact_ref(raw_path)
+    if embedded_conversation_id:
+        conversation_id = embedded_conversation_id
+    unscoped_path = unscoped_logical_artifact_path(raw_path)
+    current_conversation_id = str(getattr(getattr(ctx_browser, "runtime_ctx", None), "conversation_id", "") or "").strip()
+    if not conversation_id or conversation_id == current_conversation_id:
+        try:
+            artifact = ctx_browser.timeline.resolve_artifact(unscoped_path)
+            if isinstance(artifact, dict):
+                return artifact
+        except Exception:
+            pass
 
     if not raw_path.startswith("fi:"):
         return None
-    tid, _, _ = split_logical_artifact_path(raw_path)
+    tid = source_turn_id
     if not tid:
         return None
     try:
-        turn_log = await ctx_browser.get_turn_log(turn_id=tid)
+        turn_log = await ctx_browser.get_turn_log(turn_id=tid, conversation_id=conversation_id)
     except Exception:
         turn_log = {}
     contrib_log = (turn_log.get("blocks") or []) if isinstance(turn_log, dict) else []
     if not contrib_log:
         return None
-    artifact = resolve_artifact_from_timeline({"blocks": contrib_log, "sources_pool": []}, raw_path)
+    artifact = resolve_artifact_from_timeline({"blocks": contrib_log, "sources_pool": []}, unscoped_path)
     return artifact if isinstance(artifact, dict) else None
 
 async def rehost_files_from_timeline(
@@ -371,6 +398,7 @@ async def rehost_files_from_timeline(
         ctx_browser: Any,
         paths: List[str],
         outdir: pathlib.Path,
+        conversation_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Rehost referenced files or directory-shaped prefixes like
@@ -392,16 +420,59 @@ async def rehost_files_from_timeline(
     rehosted: List[str] = []
     missing: List[str] = []
     errors: List[str] = []
+    if not conversation_id:
+        grouped_by_conversation: Dict[str, List[str]] = {}
+        unscoped_paths: List[str] = []
+        for path in paths:
+            embedded_conversation_id, _, _, _ = split_physical_artifact_ref(path)
+            if embedded_conversation_id:
+                grouped_by_conversation.setdefault(embedded_conversation_id, []).append(path)
+            else:
+                unscoped_paths.append(path)
+        if grouped_by_conversation:
+            merged = {"rehosted": [], "missing": [], "errors": []}
+
+            async def _merge_group(payload: Dict[str, Any] | None) -> None:
+                if not isinstance(payload, dict):
+                    return
+                for key in ("rehosted", "missing", "errors"):
+                    merged[key].extend(list(payload.get(key) or []))
+
+            if unscoped_paths:
+                await _merge_group(await rehost_files_from_timeline(
+                    ctx_browser=ctx_browser,
+                    paths=unscoped_paths,
+                    outdir=outdir,
+                    conversation_id=None,
+                ))
+            for embedded_conversation_id, scoped_paths in grouped_by_conversation.items():
+                await _merge_group(await rehost_files_from_timeline(
+                    ctx_browser=ctx_browser,
+                    paths=scoped_paths,
+                    outdir=outdir,
+                    conversation_id=embedded_conversation_id,
+                ))
+            for key in ("rehosted", "missing", "errors"):
+                merged[key] = list(dict.fromkeys(merged[key]))
+            return merged
+
     processed_targets: set[str] = set()
     turn_blocks_cache: Dict[str, List[Dict[str, Any]]] = {}
+    current_conversation_id = str(getattr(getattr(ctx_browser, "runtime_ctx", None), "conversation_id", "") or "").strip()
+    target_conversation_id = str(conversation_id or "").strip()
+    if target_conversation_id == current_conversation_id:
+        target_conversation_id = ""
 
     by_turn: Dict[str, List[str]] = {}
     by_turn_outputs: Dict[str, List[str]] = {}
+    by_turn_snapshots: Dict[str, List[str]] = {}
     by_turn_attachments: Dict[str, List[str]] = {}
     for p in paths:
         if not isinstance(p, str):
             continue
-        turn_id, namespace, rel = split_physical_artifact_path(p)
+        embedded_conversation_id, turn_id, namespace, rel = split_physical_artifact_ref(p)
+        if embedded_conversation_id and not target_conversation_id and embedded_conversation_id != current_conversation_id:
+            target_conversation_id = embedded_conversation_id
         if namespace == ARTIFACT_NAMESPACE_FILES and turn_id:
             if not _safe_relpath(p):
                 errors.append(f"unsafe_path:{p}")
@@ -412,6 +483,11 @@ async def rehost_files_from_timeline(
                 errors.append(f"unsafe_path:{p}")
                 continue
             by_turn_outputs.setdefault(turn_id, []).append(rel)
+        elif namespace == ARTIFACT_NAMESPACE_SNAPSHOTS and turn_id:
+            if not _safe_relpath(p):
+                errors.append(f"unsafe_path:{p}")
+                continue
+            by_turn_snapshots.setdefault(turn_id, []).append(rel)
         elif namespace == ARTIFACT_NAMESPACE_ATTACHMENTS and turn_id:
             if not _safe_relpath(p):
                 errors.append(f"unsafe_path:{p}")
@@ -437,6 +513,14 @@ async def rehost_files_from_timeline(
             if not tid or not rel:
                 continue
             by_turn_outputs.setdefault(tid, []).append(rel)
+        elif "/snapshots/" in p:
+            if not _safe_relpath(p):
+                errors.append(f"unsafe_path:{p}")
+                continue
+            tid, rel = p.split("/snapshots/", 1)
+            if not tid or not rel:
+                continue
+            by_turn_snapshots.setdefault(tid, []).append(rel)
         elif "/attachments/" in p:
             if not _safe_relpath(p):
                 errors.append(f"unsafe_path:{p}")
@@ -447,24 +531,26 @@ async def rehost_files_from_timeline(
             by_turn_attachments.setdefault(tid, []).append(rel)
 
     async def _turn_blocks(turn_id: str) -> List[Dict[str, Any]]:
-        if turn_id in turn_blocks_cache:
-            return turn_blocks_cache[turn_id]
+        cache_key = f"{conversation_id or ''}\n{turn_id}"
+        if cache_key in turn_blocks_cache:
+            return turn_blocks_cache[cache_key]
         blocks: List[Dict[str, Any]] = []
+        if not conversation_id or conversation_id == current_conversation_id:
+            try:
+                timeline = getattr(ctx_browser, "timeline", None)
+                timeline_blocks = getattr(timeline, "blocks", None)
+                if isinstance(timeline_blocks, list):
+                    blocks.extend([b for b in timeline_blocks if isinstance(b, dict)])
+            except Exception:
+                pass
         try:
-            timeline = getattr(ctx_browser, "timeline", None)
-            timeline_blocks = getattr(timeline, "blocks", None)
-            if isinstance(timeline_blocks, list):
-                blocks.extend([b for b in timeline_blocks if isinstance(b, dict)])
-        except Exception:
-            pass
-        try:
-            turn_log = await ctx_browser.get_turn_log(turn_id=turn_id)
+            turn_log = await ctx_browser.get_turn_log(turn_id=turn_id, conversation_id=conversation_id)
         except Exception:
             turn_log = {}
         contrib_log = (turn_log.get("blocks") or []) if isinstance(turn_log, dict) else []
         if isinstance(contrib_log, list):
             blocks.extend([b for b in contrib_log if isinstance(b, dict)])
-        turn_blocks_cache[turn_id] = blocks
+        turn_blocks_cache[cache_key] = blocks
         return blocks
 
     def _collect_descendant_relpaths(*, blocks: List[Dict[str, Any]], turn_id: str, rel_prefix: str, kind: str) -> List[str]:
@@ -496,6 +582,8 @@ async def rehost_files_from_timeline(
                 _record_rel(rel)
             elif kind == "outputs" and namespace == ARTIFACT_NAMESPACE_OUTPUTS:
                 _record_rel(rel)
+            elif kind == "snapshots" and namespace == ARTIFACT_NAMESPACE_SNAPSHOTS:
+                _record_rel(rel)
             elif kind == "files" and namespace == ARTIFACT_NAMESPACE_FILES:
                 _record_rel(rel)
 
@@ -503,12 +591,14 @@ async def rehost_files_from_timeline(
             candidate = (candidate or "").strip().strip("/")
             if not candidate:
                 return
-            tid, namespace, rel = split_physical_artifact_path(candidate)
+            _, tid, namespace, rel = split_physical_artifact_ref(candidate)
             if tid != turn_id or not rel:
                 return
             if kind == "attachments" and namespace == ARTIFACT_NAMESPACE_ATTACHMENTS:
                 _record_rel(rel)
             elif kind == "outputs" and namespace == ARTIFACT_NAMESPACE_OUTPUTS:
+                _record_rel(rel)
+            elif kind == "snapshots" and namespace == ARTIFACT_NAMESPACE_SNAPSHOTS:
                 _record_rel(rel)
             elif kind == "files" and namespace == ARTIFACT_NAMESPACE_FILES:
                 _record_rel(rel)
@@ -543,6 +633,12 @@ async def rehost_files_from_timeline(
                 namespace=ARTIFACT_NAMESPACE_OUTPUTS,
                 relpath=rel,
             )
+        elif kind == "snapshots":
+            artifact_path = build_logical_artifact_path(
+                turn_id=turn_id,
+                namespace=ARTIFACT_NAMESPACE_SNAPSHOTS,
+                relpath=rel,
+            )
         else:
             artifact_path = build_logical_artifact_path(
                 turn_id=turn_id,
@@ -550,14 +646,16 @@ async def rehost_files_from_timeline(
                 relpath=rel,
             )
         # 1) Prefer current in-memory timeline (covers current turn before persistence).
-        try:
-            timeline = getattr(ctx_browser, "timeline", None)
-            if timeline:
-                artifact = timeline.resolve_artifact(artifact_path)
-                if isinstance(artifact, dict):
-                    return artifact
-        except Exception:
-            pass
+        current_conversation_id = str(getattr(getattr(ctx_browser, "runtime_ctx", None), "conversation_id", "") or "").strip()
+        if not conversation_id or conversation_id == current_conversation_id:
+            try:
+                timeline = getattr(ctx_browser, "timeline", None)
+                if timeline:
+                    artifact = timeline.resolve_artifact(artifact_path)
+                    if isinstance(artifact, dict):
+                        return artifact
+            except Exception:
+                pass
         # 2) Fall back to persisted turn log.
         contrib_log = await _turn_blocks(turn_id)
         return resolve_artifact_from_timeline({"blocks": contrib_log, "sources_pool": []}, artifact_path)
@@ -585,7 +683,9 @@ async def rehost_files_from_timeline(
             return False
 
     async def _rehost_kind(*, by_turn_paths: Dict[str, List[str]], kind: str) -> None:
-        target_ns = "attachments" if kind == "attachments" else ("outputs" if kind == "outputs" else "files")
+        target_ns = "attachments" if kind == "attachments" else (
+            "outputs" if kind == "outputs" else ("snapshots" if kind == "snapshots" else "files")
+        )
         for turn_id, rels in by_turn_paths.items():
             for rel in rels:
                 artifact = await _resolve_artifact(turn_id=turn_id, rel=rel, kind=kind)
@@ -597,10 +697,14 @@ async def rehost_files_from_timeline(
                 )
                 physical_rel = build_physical_artifact_path(
                     turn_id=turn_id,
-                    namespace=ARTIFACT_NAMESPACE_ATTACHMENTS if kind == "attachments" else (
-                        ARTIFACT_NAMESPACE_OUTPUTS if kind == "outputs" else ARTIFACT_NAMESPACE_FILES
+                    namespace=(
+                        ARTIFACT_NAMESPACE_ATTACHMENTS if kind == "attachments" else
+                        ARTIFACT_NAMESPACE_OUTPUTS if kind == "outputs" else
+                        ARTIFACT_NAMESPACE_SNAPSHOTS if kind == "snapshots" else
+                        ARTIFACT_NAMESPACE_FILES
                     ),
                     relpath=rel,
+                    conversation_id=target_conversation_id,
                 ) or f"{turn_id}/{target_ns}/{rel}"
                 if not rel_targets:
                     missing.append(physical_rel)
@@ -608,10 +712,14 @@ async def rehost_files_from_timeline(
                 for target_rel in rel_targets:
                     target_key = build_physical_artifact_path(
                         turn_id=turn_id,
-                        namespace=ARTIFACT_NAMESPACE_ATTACHMENTS if kind == "attachments" else (
-                            ARTIFACT_NAMESPACE_OUTPUTS if kind == "outputs" else ARTIFACT_NAMESPACE_FILES
+                        namespace=(
+                            ARTIFACT_NAMESPACE_ATTACHMENTS if kind == "attachments" else
+                            ARTIFACT_NAMESPACE_OUTPUTS if kind == "outputs" else
+                            ARTIFACT_NAMESPACE_SNAPSHOTS if kind == "snapshots" else
+                            ARTIFACT_NAMESPACE_FILES
                         ),
                         relpath=target_rel,
+                        conversation_id=target_conversation_id,
                     ) or f"{turn_id}/{target_ns}/{target_rel}"
                     if target_key in processed_targets:
                         continue
@@ -682,6 +790,7 @@ async def rehost_files_from_timeline(
 
     await _rehost_kind(by_turn_paths=by_turn, kind="files")
     await _rehost_kind(by_turn_paths=by_turn_outputs, kind="outputs")
+    await _rehost_kind(by_turn_paths=by_turn_snapshots, kind="snapshots")
     await _rehost_kind(by_turn_paths=by_turn_attachments, kind="attachments")
 
     return {"rehosted": rehosted, "missing": missing, "errors": errors}

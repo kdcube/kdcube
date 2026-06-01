@@ -18,7 +18,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.common import tc_result_p
 ARTIFACT_NAMESPACE_FILES = "files"
 ARTIFACT_NAMESPACE_OUTPUTS = "outputs"
 ARTIFACT_NAMESPACE_ATTACHMENTS = "attachments"
+ARTIFACT_NAMESPACE_SNAPSHOTS = "snapshots"
 ARTIFACT_EXTERNAL_PREFIX = "external/"
+ARTIFACT_CONVERSATION_PREFIX = "conv_"
 _TIMESTAMP_TURN_ID_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}(?:-\d{2})?(?:-\d{3,6})?$"
 )
@@ -63,18 +65,55 @@ def _split_external_attachment_rel(relpath: str) -> tuple[str, str, str]:
     return "", "", ""
 
 
-def build_external_attachment_physical_path(*, turn_id: str, kind: str, message_id: str, relpath: str) -> str:
+def _conversation_segment(conversation_id: str = "") -> str:
+    raw = str(conversation_id or "").strip().strip("/")
+    if not raw:
+        return ""
+    if "." in raw or "/" in raw or "\\" in raw:
+        return ""
+    return f"{ARTIFACT_CONVERSATION_PREFIX}{raw}"
+
+
+def _split_logical_conversation_prefix(raw_value: str) -> tuple[str, str]:
+    raw = str(raw_value or "").strip()
+    if raw.startswith("fi:"):
+        raw = raw[len("fi:"):]
+    if not raw.startswith(ARTIFACT_CONVERSATION_PREFIX):
+        return "", raw
+    segment, sep, rest = raw.partition(".")
+    if not sep or not rest:
+        return "", raw
+    conversation_id = segment[len(ARTIFACT_CONVERSATION_PREFIX):].strip()
+    return conversation_id, rest
+
+
+def _split_physical_conversation_prefix(raw_value: str) -> tuple[str, str]:
+    raw = str(raw_value or "").strip().lstrip("/")
+    if not raw.startswith(ARTIFACT_CONVERSATION_PREFIX):
+        return "", raw
+    segment, sep, rest = raw.partition("/")
+    if not sep or not rest:
+        return "", raw
+    conversation_id = segment[len(ARTIFACT_CONVERSATION_PREFIX):].strip()
+    return conversation_id, rest
+
+
+def build_external_attachment_physical_path(*, turn_id: str, kind: str, message_id: str, relpath: str, conversation_id: str = "") -> str:
     rel = (relpath or "").strip().lstrip("/")
     if not turn_id or not kind or not message_id or not rel:
         return ""
-    return f"{turn_id}/external/{kind}/attachments/{message_id}/{rel}"
+    prefix = _conversation_segment(conversation_id)
+    scoped = f"{turn_id}/external/{kind}/attachments/{message_id}/{rel}"
+    return f"{prefix}/{scoped}" if prefix else scoped
 
 
-def build_external_attachment_logical_path(*, turn_id: str, kind: str, message_id: str, relpath: str) -> str:
+def build_external_attachment_logical_path(*, turn_id: str, kind: str, message_id: str, relpath: str, conversation_id: str = "") -> str:
     rel = (relpath or "").strip().lstrip("/")
     if not turn_id or not kind or not message_id or not rel:
         return ""
-    return f"fi:{turn_id}.external.{kind}.attachments/{message_id}/{rel}"
+    prefix = _conversation_segment(conversation_id)
+    scoped = f"{turn_id}.external.{kind}.attachments/{message_id}/{rel}"
+    return f"fi:{prefix}.{scoped}" if prefix else f"fi:{scoped}"
 
 
 def _is_safe_outdir_relpath(path_value: str) -> bool:
@@ -89,10 +128,11 @@ def _is_safe_outdir_relpath(path_value: str) -> bool:
         return False
 
 
-def build_physical_artifact_path(*, turn_id: str, namespace: str, relpath: str) -> str:
+def build_physical_artifact_path(*, turn_id: str, namespace: str, relpath: str, conversation_id: str = "") -> str:
     rel = (relpath or "").strip().lstrip("/")
     if not turn_id or not namespace or not rel:
         return ""
+    prefix = _conversation_segment(conversation_id)
     if namespace == ARTIFACT_NAMESPACE_ATTACHMENTS:
         kind, message_id, event_rel = _split_external_attachment_rel(rel)
         if kind and message_id and event_rel:
@@ -101,18 +141,24 @@ def build_physical_artifact_path(*, turn_id: str, namespace: str, relpath: str) 
                 kind=kind,
                 message_id=message_id,
                 relpath=event_rel,
+                conversation_id=conversation_id,
             )
-    return f"{turn_id}/{namespace}/{rel}"
+    scoped = f"{turn_id}/{namespace}/{rel}"
+    return f"{prefix}/{scoped}" if prefix else scoped
 
 
-def build_logical_artifact_path(*, turn_id: str, namespace: str, relpath: str) -> str:
+def build_logical_artifact_path(*, turn_id: str, namespace: str, relpath: str, conversation_id: str = "") -> str:
     rel = (relpath or "").strip().lstrip("/")
     if not turn_id or not namespace or not rel:
         return ""
+    prefix = _conversation_segment(conversation_id)
+    turn_prefix = f"{prefix}.{turn_id}" if prefix else turn_id
     if namespace == ARTIFACT_NAMESPACE_FILES:
-        return f"fi:{turn_id}.files/{rel}"
+        return f"fi:{turn_prefix}.files/{rel}"
     if namespace == ARTIFACT_NAMESPACE_OUTPUTS:
-        return f"fi:{turn_id}.outputs/{rel}"
+        return f"fi:{turn_prefix}.outputs/{rel}"
+    if namespace == ARTIFACT_NAMESPACE_SNAPSHOTS:
+        return f"fi:{turn_prefix}.snapshots/{rel}"
     if namespace == ARTIFACT_NAMESPACE_ATTACHMENTS:
         kind, message_id, event_rel = _split_external_attachment_rel(rel)
         if kind and message_id and event_rel:
@@ -121,13 +167,15 @@ def build_logical_artifact_path(*, turn_id: str, namespace: str, relpath: str) -
                 kind=kind,
                 message_id=message_id,
                 relpath=event_rel,
+                conversation_id=conversation_id,
             )
-        return f"fi:{turn_id}.user.attachments/{rel}"
+        return f"fi:{turn_prefix}.user.attachments/{rel}"
     return ""
 
 
 def split_physical_artifact_path(path_value: str) -> tuple[str, str, str]:
     raw = (path_value or "").strip().lstrip("/")
+    _, raw = _split_physical_conversation_prefix(raw)
     if not raw:
         return "", "", ""
     match = _EXTERNAL_PHYSICAL_RE.match(raw) or _EXTERNAL_PHYSICAL_LEGACY_RE.match(raw)
@@ -145,6 +193,7 @@ def split_physical_artifact_path(path_value: str) -> tuple[str, str, str]:
     for namespace in (
         ARTIFACT_NAMESPACE_FILES,
         ARTIFACT_NAMESPACE_OUTPUTS,
+        ARTIFACT_NAMESPACE_SNAPSHOTS,
         ARTIFACT_NAMESPACE_ATTACHMENTS,
     ):
         marker = f"/{namespace}/"
@@ -160,10 +209,17 @@ def split_physical_artifact_path(path_value: str) -> tuple[str, str, str]:
     return "", "", ""
 
 
+def split_physical_artifact_ref(path_value: str) -> tuple[str, str, str, str]:
+    conversation_id, body = _split_physical_conversation_prefix(path_value)
+    turn_id, namespace, rel = split_physical_artifact_path(body)
+    return conversation_id, turn_id, namespace, rel
+
+
 def split_logical_artifact_path(path_value: str) -> tuple[str, str, str]:
     raw = (path_value or "").strip()
     if raw.startswith("fi:"):
         raw = raw[len("fi:"):]
+    _, raw = _split_logical_conversation_prefix(raw)
     if not raw:
         return "", "", ""
     match = _EXTERNAL_LOGICAL_RE.match(raw) or _EXTERNAL_LOGICAL_LEGACY_RE.match(raw)
@@ -180,6 +236,9 @@ def split_logical_artifact_path(path_value: str) -> tuple[str, str, str]:
     if ".outputs/" in raw:
         turn_id, rel = raw.split(".outputs/", 1)
         return turn_id, ARTIFACT_NAMESPACE_OUTPUTS, rel
+    if ".snapshots/" in raw:
+        turn_id, rel = raw.split(".snapshots/", 1)
+        return turn_id, ARTIFACT_NAMESPACE_SNAPSHOTS, rel
     if ".user.attachments/" in raw:
         turn_id, rel = raw.split(".user.attachments/", 1)
         return turn_id, ARTIFACT_NAMESPACE_ATTACHMENTS, rel
@@ -193,6 +252,7 @@ def split_logical_artifact_path(path_value: str) -> tuple[str, str, str]:
     for namespace in (
         ARTIFACT_NAMESPACE_FILES,
         ARTIFACT_NAMESPACE_OUTPUTS,
+        ARTIFACT_NAMESPACE_SNAPSHOTS,
         ARTIFACT_NAMESPACE_ATTACHMENTS,
     ):
         marker = f"/{namespace}/"
@@ -202,6 +262,24 @@ def split_logical_artifact_path(path_value: str) -> tuple[str, str, str]:
         if is_turn_id(turn_id) and rel:
             return turn_id, namespace, rel
     return "", "", ""
+
+
+def split_logical_artifact_ref(path_value: str) -> tuple[str, str, str, str]:
+    conversation_id, body = _split_logical_conversation_prefix(path_value)
+    turn_id, namespace, rel = split_logical_artifact_path(body)
+    return conversation_id, turn_id, namespace, rel
+
+
+def logical_artifact_conversation_id(path_value: str) -> str:
+    conversation_id, _, _, _ = split_logical_artifact_ref(path_value)
+    return conversation_id
+
+
+def unscoped_logical_artifact_path(path_value: str) -> str:
+    _, turn_id, namespace, rel = split_logical_artifact_ref(path_value)
+    if turn_id and namespace and rel:
+        return build_logical_artifact_path(turn_id=turn_id, namespace=namespace, relpath=rel)
+    return str(path_value or "").strip()
 
 
 def infer_artifact_namespace(path_value: str, *, default: str = ARTIFACT_NAMESPACE_FILES) -> str:
@@ -216,6 +294,8 @@ def infer_artifact_namespace(path_value: str, *, default: str = ARTIFACT_NAMESPA
         return namespace
     if raw.startswith(f"{ARTIFACT_NAMESPACE_OUTPUTS}/"):
         return ARTIFACT_NAMESPACE_OUTPUTS
+    if raw.startswith(f"{ARTIFACT_NAMESPACE_SNAPSHOTS}/"):
+        return ARTIFACT_NAMESPACE_SNAPSHOTS
     if raw.startswith(f"{ARTIFACT_NAMESPACE_ATTACHMENTS}/"):
         return ARTIFACT_NAMESPACE_ATTACHMENTS
     if raw.startswith(f"{ARTIFACT_NAMESPACE_FILES}/"):
@@ -228,13 +308,13 @@ def physical_path_to_logical_path(path_value: str) -> str:
     if not raw:
         return ""
     if raw.startswith("fi:"):
-        turn_id, namespace, rel = split_logical_artifact_path(raw)
+        conversation_id, turn_id, namespace, rel = split_logical_artifact_ref(raw)
         if turn_id and namespace and rel:
-            return build_logical_artifact_path(turn_id=turn_id, namespace=namespace, relpath=rel)
+            return build_logical_artifact_path(turn_id=turn_id, namespace=namespace, relpath=rel, conversation_id=conversation_id)
         return raw
-    turn_id, namespace, rel = split_physical_artifact_path(raw)
+    conversation_id, turn_id, namespace, rel = split_physical_artifact_ref(raw)
     if turn_id and namespace and rel:
-        return build_logical_artifact_path(turn_id=turn_id, namespace=namespace, relpath=rel)
+        return build_logical_artifact_path(turn_id=turn_id, namespace=namespace, relpath=rel, conversation_id=conversation_id)
     if _is_safe_outdir_relpath(raw):
         return f"fi:{raw}"
     return ""
@@ -259,14 +339,19 @@ def normalize_physical_path(
         return "", "", False
     # Accept logical paths and convert to physical
     if raw.startswith("fi:"):
-        logical = raw[len("fi:"):]
-        tid, namespace, rel = split_logical_artifact_path(logical)
+        conversation_id, tid, namespace, rel = split_logical_artifact_ref(raw)
         if tid and namespace and rel:
             rel = rel.lstrip("/")
-            use_turn = turn_id or tid
-            physical = build_physical_artifact_path(turn_id=use_turn, namespace=namespace, relpath=rel)
+            use_turn = tid if conversation_id else (turn_id or tid)
+            physical = build_physical_artifact_path(
+                turn_id=use_turn,
+                namespace=namespace,
+                relpath=rel,
+                conversation_id=conversation_id,
+            )
             return physical, rel, True
         if allow_generic_fi:
+            logical = raw[len("fi:"):]
             logical = logical.lstrip("/")
             if _is_safe_outdir_relpath(logical):
                 return logical, logical, False
@@ -280,6 +365,9 @@ def normalize_physical_path(
         rewritten = True
     elif raw.startswith(f"{ARTIFACT_NAMESPACE_OUTPUTS}/"):
         rel = raw[len(f"{ARTIFACT_NAMESPACE_OUTPUTS}/"):]
+        rewritten = True
+    elif raw.startswith(f"{ARTIFACT_NAMESPACE_SNAPSHOTS}/"):
+        rel = raw[len(f"{ARTIFACT_NAMESPACE_SNAPSHOTS}/"):]
         rewritten = True
     elif raw.startswith(f"{ARTIFACT_NAMESPACE_ATTACHMENTS}/"):
         rel = raw[len(f"{ARTIFACT_NAMESPACE_ATTACHMENTS}/"):]

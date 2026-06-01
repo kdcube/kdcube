@@ -206,6 +206,13 @@ def _react_line_numbers_mode(bundle_props: Dict[str, Any], settings: Any) -> str
     return normalize_line_numbers_mode(configured, default=LINE_NUMBERS_LINES)
 
 
+def _react_story_snapshots_enabled(bundle_props: Dict[str, Any]) -> bool:
+    configured = _bool_or_none(_get_prop_path(bundle_props or {}, "react.story_snapshots.enabled"))
+    if configured is None:
+        configured = _bool_or_none(_get_prop_path(bundle_props or {}, "config.react.story_snapshots.enabled"))
+    return bool(configured) if configured is not None else False
+
+
 def _react_debug_timeline_enabled(bundle_props: Dict[str, Any], settings: Any, *, default: bool = False) -> bool:
     configured = _bool_or_none(_get_prop_path(bundle_props or {}, "react.debug_timeline"))
     if configured is None:
@@ -395,6 +402,7 @@ class BaseWorkflow():
         runtime_max_iterations = _react_max_iterations(self.bundle_props, settings)
         runtime_render_thinking = _react_render_thinking(self.bundle_props, settings)
         runtime_line_numbers_mode = _react_line_numbers_mode(self.bundle_props, settings)
+        runtime_story_snapshots_enabled = _react_story_snapshots_enabled(self.bundle_props)
         runtime_debug_timeline_root = _react_debug_timeline_root(settings)
         runtime_debug_timeline_keep_files = _react_debug_timeline_keep_files(settings)
         try:
@@ -420,6 +428,7 @@ class BaseWorkflow():
                 tool_result_preview_max_text_symbols=_positive_int(getattr(settings, "AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS", None)),
                 render_thinking=runtime_render_thinking,
                 line_numbers_mode=runtime_line_numbers_mode,
+                story_snapshots_enabled=runtime_story_snapshots_enabled,
                 debug_timeline_root=runtime_debug_timeline_root,
                 debug_timeline_keep_files=runtime_debug_timeline_keep_files,
                 bundle_storage=self._resolve_runtime_ctx_bundle_storage(),
@@ -452,6 +461,7 @@ class BaseWorkflow():
                 tool_result_preview_max_text_symbols=_positive_int(getattr(settings, "AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS", None)),
                 render_thinking=runtime_render_thinking,
                 line_numbers_mode=runtime_line_numbers_mode,
+                story_snapshots_enabled=runtime_story_snapshots_enabled,
                 debug_timeline_root=runtime_debug_timeline_root,
                 debug_timeline_keep_files=runtime_debug_timeline_keep_files,
                 workspace_implementation=settings.REACT_WORKSPACE_IMPLEMENTATION,
@@ -524,6 +534,7 @@ class BaseWorkflow():
             settings = get_settings()
             runtime_ctx.render_thinking = _react_render_thinking(self.bundle_props, settings)
             runtime_ctx.line_numbers_mode = _react_line_numbers_mode(self.bundle_props, settings)
+            runtime_ctx.story_snapshots_enabled = _react_story_snapshots_enabled(self.bundle_props)
             runtime_ctx.debug_timeline_root = _react_debug_timeline_root(settings)
             runtime_ctx.debug_timeline_keep_files = _react_debug_timeline_keep_files(settings)
         except Exception:
@@ -1755,6 +1766,7 @@ class BaseWorkflow():
                     additional_instructions: Optional[str] = None,
                     instruction_body: Optional[str] = None,
                     instruction_blocks: Optional[List[str]] = None,
+                    story_snapshots_enabled: Optional[bool] = None,
                     include_tool_catalog: Optional[bool] = None,
                     include_skill_gallery: Optional[bool] = None) -> Any:
 
@@ -1883,6 +1895,31 @@ class BaseWorkflow():
         extra_instructions = str(additional_instructions or "").strip()
         custom_instruction_body = str(instruction_body or "").strip()
         custom_instruction_blocks = _str_list(instruction_blocks)
+        effective_story_snapshots_enabled = (
+            bool(story_snapshots_enabled)
+            if story_snapshots_enabled is not None
+            else bool(getattr(self.runtime_ctx, "story_snapshots_enabled", False))
+        )
+        if effective_story_snapshots_enabled:
+            try:
+                from kdcube_ai_app.apps.chat.sdk.skills.instructions.shared_instructions_lite import (
+                    get_lite_instruction_block,
+                )
+
+                story_snapshot_block = get_lite_instruction_block("REACT_LITE_STORY_SNAPSHOTS")
+            except Exception:
+                story_snapshot_block = ""
+            already_present = (
+                "[STORY SNAPSHOTS]" in extra_instructions
+                or "[STORY SNAPSHOTS]" in custom_instruction_body
+                or any(
+                    str(item or "").strip() == "REACT_LITE_STORY_SNAPSHOTS"
+                    or "[STORY SNAPSHOTS]" in str(item or "")
+                    for item in custom_instruction_blocks
+                )
+            )
+            if story_snapshot_block and not already_present:
+                extra_instructions = f"{extra_instructions}\n\n{story_snapshot_block}".strip()
         try:
             if extra_instructions:
                 compact = re.sub(r"\s+", " ", extra_instructions)
@@ -1904,7 +1941,8 @@ class BaseWorkflow():
                     f"body={'yes' if custom_instruction_body else 'no'} "
                     f"blocks={len(custom_instruction_blocks)} "
                     f"include_tool_catalog={bool(include_tool_catalog)} "
-                    f"include_skill_gallery={bool(include_skill_gallery)}",
+                    f"include_skill_gallery={bool(include_skill_gallery)} "
+                    f"story_snapshots_enabled={effective_story_snapshots_enabled}",
                     level="INFO",
                 )
         except Exception:
@@ -1929,7 +1967,8 @@ class BaseWorkflow():
         try:
             self.logger.log(
                 f"[react.{react_version}] build_react version={react_version} "
-                f"multi_action_mode={getattr(self.runtime_ctx, 'multi_action_mode', None)}",
+                f"multi_action_mode={getattr(self.runtime_ctx, 'multi_action_mode', None)} "
+                f"story_snapshots_enabled={effective_story_snapshots_enabled}",
                 level="INFO",
             )
         except Exception:

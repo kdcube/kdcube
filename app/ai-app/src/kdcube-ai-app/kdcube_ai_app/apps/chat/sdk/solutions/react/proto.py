@@ -133,6 +133,7 @@ class RuntimeCtx:
     debug_timeline_root: Optional[str] = None
     debug_timeline_keep_files: int = 100
     announce_mode: str = "full"  # "full" or "budget"
+    story_snapshots_enabled: bool = False
     render_decision_raw: bool = False
     render_react_state: bool = False
     render_react_exit: bool = False
@@ -202,6 +203,7 @@ class RuntimeCtx:
             "debug_timeline_root": self.debug_timeline_root,
             "debug_timeline_keep_files": int(self.debug_timeline_keep_files or 100),
             "announce_mode": self.announce_mode,
+            "story_snapshots_enabled": bool(self.story_snapshots_enabled),
             "render_decision_raw": bool(self.render_decision_raw),
             "render_react_state": bool(self.render_react_state),
             "render_react_exit": bool(self.render_react_exit),

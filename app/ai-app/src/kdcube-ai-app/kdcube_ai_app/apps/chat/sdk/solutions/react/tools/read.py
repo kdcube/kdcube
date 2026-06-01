@@ -19,6 +19,7 @@ from kdcube_ai_app.apps.chat.sdk.util import (
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
     build_artifact_meta_block,
+    split_logical_artifact_ref,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.solution_workspace import (
     read_artifact_for_react,
@@ -82,7 +83,8 @@ TOOL_SPEC = {
             "sources via so:sources_pool[...], "
             "skills via sk:<skill_id or num>, "
             "knowledge space via ks:<relpath> (read-only reference files). "
-            "fi: normally yields full text for text files and multimodal/base64 payloads for PDF/images only."
+            "fi: normally yields full text for text files and multimodal/base64 payloads for PDF/images only. "
+            "An fi:conv_<conversation_id>.turn_<id>... path belongs to another conversation and is resolved in that conversation."
         ),
         "items": (
             "optional list of read specs, each with path plus optional line_start/line_count or "
@@ -492,12 +494,23 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
     last_decision = state.get("last_decision") or {}
     tool_call = last_decision.get("tool_call") or {}
     tool_id = "react.read"
-    params = tool_call.get("params") or {}
+    raw_params = tool_call.get("params") or {}
+    params = raw_params if isinstance(raw_params, dict) else {}
     raw_paths = params.get("paths")
-    if raw_paths is None and isinstance(params, list):
-        raw_paths = params
+    if raw_paths is None and isinstance(raw_params, list):
+        raw_paths = raw_params
     raw_paths = raw_paths if isinstance(raw_paths, list) else []
-    paths = [str(p).strip() for p in raw_paths if str(p).strip()]
+    paths: List[str] = []
+    for raw_path in raw_paths:
+        if isinstance(raw_path, dict):
+            path = str(raw_path.get("path") or "").strip()
+            if not path:
+                continue
+            paths.append(path)
+            continue
+        path = str(raw_path).strip()
+        if path:
+            paths.append(path)
     read_item_requests = _read_item_requests(params)
     stats_only = _bool_param(params.get("stats_only"))
     configured_line_numbers = normalize_line_numbers_mode(
@@ -1145,9 +1158,16 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
         })
         return {"added": added, "tokens": total}
 
+    def _conversation_id_for_path(ctx_path: str, item_req: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        item_req = item_req or {}
+        embedded_conversation_id, _, _, _ = split_logical_artifact_ref(ctx_path)
+        conversation_id = str(embedded_conversation_id or "").strip()
+        return conversation_id or None
+
     async def _emit_fi_path(ctx_path: str, item_req: Optional[Dict[str, Any]] = None) -> None:
         nonlocal total_tokens
         item_req = item_req or {}
+        source_conversation_id = _conversation_id_for_path(ctx_path, item_req)
         item_has_range = _has_range_request(item_req)
         item_max_text_symbols = _positive_int(item_req.get("max_text_symbols")) or requested_read_text_symbols or visible_read_text_symbol_cap
         item_line_numbers = _line_numbers_param(
@@ -1167,6 +1187,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                     ctx_browser=ctx_browser,
                     path=ctx_path,
                     outdir=outdir,
+                    conversation_id=source_conversation_id,
                     max_bytes=visible_read_byte_cap,
                     max_text_symbols=item_max_text_symbols,
                     stats_only=stats_only,
@@ -1182,7 +1203,10 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
 
         if res.get("missing"):
             missing_artifacts.append(ctx_path)
-            per_path.append({"path": ctx_path, "missing": True})
+            missing_entry = {"path": ctx_path, "missing": True}
+            if source_conversation_id:
+                missing_entry["conversation_id"] = source_conversation_id
+            per_path.append(missing_entry)
             return
         if res.get("error") == "file_too_large_for_visible_context":
             size_bytes = int(res.get("size_bytes") or 0)
@@ -1197,6 +1221,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             )
             per_path.append({
                 "path": ctx_path,
+                **({"conversation_id": source_conversation_id} if source_conversation_id else {}),
                 "bytes": size_bytes,
                 "status": "too_large_for_visible_context_bytes",
                 "visible_read_limit_bytes": visible_read_byte_cap,
@@ -1218,6 +1243,8 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 "mime": art_mime,
                 "content_materialized": False,
             }
+            if source_conversation_id:
+                entry["conversation_id"] = source_conversation_id
             if size_bytes is not None:
                 entry["bytes"] = size_bytes
             if artifact.get("visibility"):
@@ -1249,6 +1276,8 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             })
 
         meta_extra = {"tool_call_id": tool_call_id, "turn_id": turn_id, "tool_id": tool_id}
+        if source_conversation_id:
+            meta_extra["source_conversation_id"] = source_conversation_id
         for key in ("hosted_uri", "rn", "key", "physical_path", "digest"):
             val = artifact.get(key)
             if val:
@@ -1302,6 +1331,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 )
                 per_path.append({
                     "path": ctx_path,
+                    **({"conversation_id": source_conversation_id} if source_conversation_id else {}),
                     "bytes": estimated_bytes,
                     "status": "too_large_for_visible_context_bytes",
                     "visible_read_limit_bytes": visible_read_byte_cap,
@@ -1321,6 +1351,8 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 added_any = True
 
         per_path_entry = {"path": ctx_path}
+        if source_conversation_id:
+            per_path_entry["conversation_id"] = source_conversation_id
         if text_view_meta:
             per_path_entry["read_range"] = text_view_meta
         if image_view_meta:
@@ -1513,8 +1545,9 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             exists_paths.append(ctx_path)
             per_path.append({"path": ctx_path, "status": "exists_in_visible_context"})
 
-    async def _emit_turn_index_path(ctx_path: str) -> None:
+    async def _emit_turn_index_path(ctx_path: str, item_req: Optional[Dict[str, Any]] = None) -> None:
         nonlocal total_tokens
+        source_conversation_id = _conversation_id_for_path(ctx_path, item_req)
         source_turn_id = parse_turn_index_path(ctx_path)
         if not source_turn_id:
             missing_artifacts.append(ctx_path)
@@ -1534,7 +1567,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
 
         if not blocks:
             try:
-                turn_log = await ctx_browser.get_turn_log(turn_id=source_turn_id)
+                turn_log = await ctx_browser.get_turn_log(turn_id=source_turn_id, conversation_id=source_conversation_id)
             except Exception:
                 turn_log = {}
             if isinstance(turn_log, dict):
@@ -1581,12 +1614,15 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 "tool_call_id": tool_call_id,
                 "tool_id": tool_id,
                 "source_turn_id": source_turn_id,
+                **({"source_conversation_id": source_conversation_id} if source_conversation_id else {}),
                 "artifact_kind": "react.turn.index",
                 "generated": "on_demand",
             },
         }
         _maybe_add_block(blk)
         entry = {"path": ctx_path, "source_turn_id": source_turn_id}
+        if source_conversation_id:
+            entry["conversation_id"] = source_conversation_id
         if tokens:
             entry["tokens"] = tokens
         per_path.append(entry)
@@ -1600,6 +1636,9 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             continue
         if item_path.startswith("ks:"):
             await _emit_ks_path(item_path, item_req)
+            continue
+        if parse_turn_index_path(item_path):
+            await _emit_turn_index_path(item_path, item_req)
             continue
 
     if turn_index_paths:

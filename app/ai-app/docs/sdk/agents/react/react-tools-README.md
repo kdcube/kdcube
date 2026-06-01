@@ -86,6 +86,10 @@ Reads existing logical artifacts back into the visible timeline.
   attached only when it is under the byte cap; otherwise `react.read` returns a
   recovery marker.
 - accepted paths: `ar:`, `tc:`, `fi:`, `so:`, `su:`, `ws:`, `ks:`, `sk:`
+- cross-conversation `fi:` paths: if a path starts
+  `fi:conv_<conversation_id>.turn_<id>...`, it belongs to another
+  conversation. Current-conversation `fi:` paths do not have this segment; use
+  scoped paths exactly as supplied.
 - emits: one JSON status/result block plus one visible content block per reopened path
 - deduplication: full visible blocks are not duplicated; ranged reads are
   emitted as distinct range blocks
@@ -166,6 +170,8 @@ Materializes historical `fi:` refs locally so code or later tools can use them b
 
 - input: `paths: list[str]`
 - accepted paths: exact `fi:` refs
+- cross-conversation refs: `fi:conv_<conversation_id>.turn_<id>...` belongs to
+  another conversation and is resolved with that scope
 - output: local files plus a result block listing pulled paths
 - workspace effect: does not define or replace the active current-turn workspace
 - historical layout: keeps historical material under its historical turn root
@@ -180,6 +186,8 @@ Copies materialized historical `fi:<turn>.files/...` refs into the active curren
 
 - input: `paths: list[str]`, `mode: replace|overlay`
 - accepted paths: workspace `fi:<turn>.files/...` refs
+- cross-conversation refs: `fi:conv_<conversation_id>.turn_<id>.files/...`
+  belongs to another conversation and is resolved with that scope
 - output: current-turn workspace files plus a compact checkout result block
 - checkout result: includes `checked_out_from`, per-source file counts, and a tree-like `materialized` summary under `turn_<current>/files`; it is not a per-file manifest
 - `mode=replace`: clears and rebuilds the current-turn workspace
@@ -310,6 +318,7 @@ Searches safely over files already materialized in the local artifact workspace 
 - input: file name regex and/or content regex
 - scope: rooted search only, under runtime-managed artifact files already present on this worker; root can be a file or a subtree
 - preferred roots: omit `root`, or use `files/...`, `outputs/...`, `attachments/...`, `turn_<id>/files/...`, `turn_<id>/outputs/...`, `turn_<id>/attachments/...`, or matching `fi:` artifact paths such as `fi:<turn_id>.files/...`, `fi:<turn_id>.outputs/...`, and `fi:<turn_id>.user.attachments/...`
+- cross-conversation roots: if the root starts `fi:conv_<conversation_id>.turn_<id>...`, it belongs to another conversation and is resolved with that scope after the file has been pulled locally
 - legacy roots: `outdir` and `outdir/<path>` are still accepted for older callers, but new calls should use visible path forms
 - not a search over hidden/pruned timeline, unpulled historical snapshots, or `ks:`; locate older refs first, then `react.pull` them before local search; checkout only when you need an editable current-turn copy
 - hits: include logical paths suitable for `react.read`
