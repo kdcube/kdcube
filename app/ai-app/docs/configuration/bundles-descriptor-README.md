@@ -176,6 +176,38 @@ route; the memory mixin supplies the default source folder/build command.
 SDK UI source into that widget build workspace; this is useful for external-git
 bundles that want to mount platform widgets as direct React components.
 
+`config.events` overrides the platform event recording defaults for this bundle.
+Platform defaults come from `assembly.yaml -> events.record.*`. Bundle-level
+fields are merged on top of assembly defaults field-by-field: a bundle can
+override only `enabled`, only `selector`, or both. The `selector` list is
+replaced as a whole when present — lists are not concatenated.
+
+```yaml
+bundles:
+  items:
+    - id: "my.bundle@1-0"
+      config:
+        events:
+          record:
+            persist:
+              enabled: true
+              selector:
+                - "accounting.usage"
+                - "chat.turn.summary"
+                - "chat.conversation.accepted"
+            telemetry:
+              enabled: true
+              selector:
+                - "accounting.usage"
+```
+
+| Key | Effect |
+|---|---|
+| `events.record.persist.enabled` | enables/disables `conv.artifacts.events` artifact for this bundle |
+| `events.record.persist.selector` | event types saved into the artifact; replaces the assembly default list |
+| `events.record.telemetry.enabled` | enables/disables telemetry sink flush for this bundle |
+| `events.record.telemetry.selector` | event types shipped to the telemetry sink; replaces the assembly default list |
+
 ## Two supported bundle styles
 
 ### 1. Git bundles

@@ -214,7 +214,7 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
         raise NotImplementedError("execute_core() must be implemented by subclasses")
 
     async def pre_run_hook(self, *, state: Dict[str, Any], econ_ctx: Dict[str, Any]) -> None:
-        return None
+        await super().pre_run_hook(state=state)
 
     async def post_run_hook(self, *, state: Dict[str, Any], result: Dict[str, Any], econ_ctx: Dict[str, Any]) -> None:
         return None

@@ -29,7 +29,7 @@ UI_ARTIFACT_TAGS = {
     "artifact:user.attachment",
     "artifact:turn.log.reaction",
     "artifact:conv.user_shortcuts",
-    "artifact:conv.artifacts.steps",
+    "artifact:conv.artifacts.events",
     "chat:user",
     "chat:assistant"
 }

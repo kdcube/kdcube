@@ -70,6 +70,13 @@ class BaseEntrypoint:
 
     BUNDLE_ID = "kdcube.bundle.base"
 
+    # Platform-level defaults for events.record.*.
+    # Overridden by assembly.yaml (a:events.record.*) and then by
+    # per-bundle bundles.yaml (config.events.record.*).
+    _PERSIST_EVENTS_DEFAULT: list[str] = ["accounting.usage", "chat.turn.summary"]
+    _PERSIST_EVENTS_ENABLED_DEFAULT: bool = True
+    _TELEMETRY_EVENTS_ENABLED_DEFAULT: bool = True
+
     def __init__(
         self,
         config: Config,
@@ -1286,8 +1293,80 @@ class BaseEntrypoint:
     async def execute_core(self, *, state: Dict[str, Any], thread_id: str, params: Dict[str, Any]):
         raise NotImplementedError("execute_core() must be implemented by subclasses")
 
+    def _events_record_config(self, section: str) -> dict:
+        """Resolve events.record.<section> config: field-level merge of assembly defaults and bundle props.
+
+        Assembly sets the platform baseline. Bundle props override individual fields
+        (enabled, selector) without replacing the entire section. selector is replaced
+        as a whole when present in bundle props — lists are not concatenated.
+        """
+        from kdcube_ai_app.apps.chat.sdk.config_scopes import _load_assembly_plain
+        assembly = _load_assembly_plain(f"events.record.{section}") or {}
+        bundle = self.get_prop_path(self.bundle_props or {}, f"events.record.{section}") or {}
+        if not bundle:
+            return assembly
+        return {**assembly, **bundle}
+
+    def _persist_events_config(self) -> dict:
+        return self._events_record_config("persist")
+
+    def _telemetry_events_config(self) -> dict:
+        return self._events_record_config("telemetry")
+
+    def _persist_event_types(self) -> list[str]:
+        cfg = self._persist_events_config()
+        selector = cfg.get("selector")
+        if isinstance(selector, list) and selector:
+            return [str(t) for t in selector if t]
+        return list(self._PERSIST_EVENTS_DEFAULT)
+
+    def _persist_events_enabled(self) -> bool:
+        cfg = self._persist_events_config()
+        v = cfg.get("enabled")
+        if v is None:
+            return self._PERSIST_EVENTS_ENABLED_DEFAULT
+        return bool(v)
+
+    def _telemetry_event_types(self) -> list[str]:
+        from kdcube_ai_app.apps.chat.sdk.comm.sink.telemetry import STATS_COMM_EVENT_TYPES
+        cfg = self._telemetry_events_config()
+        selector = cfg.get("selector")
+        if isinstance(selector, list) and selector:
+            return [str(t) for t in selector if t]
+        return list(STATS_COMM_EVENT_TYPES)
+
+    def _telemetry_events_enabled(self) -> bool:
+        cfg = self._telemetry_events_config()
+        v = cfg.get("enabled")
+        if v is None:
+            return self._TELEMETRY_EVENTS_ENABLED_DEFAULT
+        return bool(v)
+
+    def _build_telemetry_selector(self) -> dict:
+        """Build a comm recording selector from events.record.telemetry config."""
+        from kdcube_ai_app.apps.chat.sdk.comm.sink.telemetry import STATS_COMM_DATA_KEYS
+        return {
+            "include": {"types": self._telemetry_event_types()},
+            "privacy": {"data_keys": STATS_COMM_DATA_KEYS},
+        }
+
+    def _start_steps_recording(self) -> None:
+        if not self._persist_events_enabled():
+            return
+        step_types = self._persist_event_types()
+        if not step_types:
+            return
+        from kdcube_ai_app.apps.chat.sdk.comm.sink.telemetry import STATS_COMM_DATA_KEYS
+        self.comm.record(
+            {
+                "include": {"types": step_types},
+                "privacy": {"data_keys": STATS_COMM_DATA_KEYS + ["elapsed_ms"]},
+            },
+            scope={"owner": "steps_artifact"},
+        )
+
     async def pre_run_hook(self, *, state: Dict[str, Any]) -> None:
-        return None
+        self._start_steps_recording()
 
     async def post_run_hook(self, *, state: Dict[str, Any], result: Dict[str, Any]) -> None:
         return None
@@ -2007,13 +2086,12 @@ class BaseEntrypoint:
         return self.ctx_client
 
     async def _persist_steps_artifacts(self, *, state: Dict[str, Any]) -> None:
-        """Save accounting.usage and chat.turn.summary recorded events as a conv.artifacts.steps artifact.
-
-        Call this from post_run_hook BEFORE sending/clearing the recorded-events buffer.
-        Both events must already be in the buffer: accounting.usage is emitted by run_accounting()
-        and chat.turn.summary is emitted inside finish_turn() during execute_core().
-        """
         try:
+            if not self._persist_events_enabled():
+                return
+            step_types = self._persist_event_types()
+            if not step_types:
+                return
             ctx_client = await self.get_ctx_client()
             if ctx_client is None:
                 return
@@ -2026,14 +2104,22 @@ class BaseEntrypoint:
             bundle_id = str(getattr(getattr(self.config, "ai_bundle_spec", None), "id", "") or "")
             if not (tenant and project and user_id and conversation_id and turn_id):
                 return
-            step_items = self.comm.get_step_events(
-                conversation_id=conversation_id, turn_id=turn_id
-            )
+            raw_items = self.comm.export_recorded_events({"include": {"types": step_types}})
+            # accounting.usage is emitted on both comm.event() (chat_step) and
+            # comm.service_event() (chat_service). Drop the chat_service copy to
+            # avoid duplicates while keeping all other chat_service events intact
+            # (e.g. react.tool.call is only emitted via service_event).
+            step_items = [
+                item for item in raw_items
+                if not (
+                    item.get("type") == "accounting.usage"
+                    and item.get("route_key") == "chat_service"
+                )
+            ]
             if not step_items:
                 return
-            self.comm.clear_step_events(conversation_id=conversation_id, turn_id=turn_id)
             await ctx_client.save_artifact(
-                kind="conv.artifacts.steps",
+                kind="conv.artifacts.events",
                 tenant=tenant, project=project,
                 turn_id=turn_id,
                 user_id=user_id,
@@ -2041,7 +2127,7 @@ class BaseEntrypoint:
                 bundle_id=bundle_id,
                 user_type=user_type,
                 content={"version": "v1", "items": step_items},
-                extra_tags=["conversation", "steps"],
+                extra_tags=["conversation", "events"],
             )
         except Exception:
             self.logger.log(traceback.format_exc(), "WARNING")

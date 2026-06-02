@@ -443,6 +443,60 @@ The scheduler still reconciles on proc startup and on bundle update
 notifications. The periodic loop is only the catch-up path for environments
 that want scheduler convergence even if a notification is missed.
 
+### `events`
+
+`events.record` sets the platform-level defaults for comm event recording. Two
+independent subsystems share this configuration:
+
+- `telemetry` — which event types are buffered and shipped to the telemetry sink
+  at end of turn
+- `persist` — which event types are saved into the `conv.artifacts.events`
+  artifact at end of turn
+
+Per-bundle overrides go in `bundles.yaml -> items[].config.events`. Bundle-level
+fields are merged on top of the assembly defaults field-by-field: a bundle can
+override only `enabled`, only `selector`, or both. The `selector` list is
+replaced as a whole when present — lists are not concatenated.
+
+```yaml
+events:
+  record:
+    telemetry:
+      enabled: true
+      selector:
+        - "accounting.usage"
+        - "chat.complete"
+        - "chat.error"
+        - "chat.conversation.accepted"
+        - "chat.conversation.turn.completed"
+        - "react.tool.call"
+        - "react.skill.read"
+        - "queue.continuation.accepted"
+        - "timeline.external.accepted"
+        - "kdcube.copilot.workflow.turn.started"
+        - "kdcube.copilot.workflow.turn.completed"
+        - "kdcube.copilot.workflow.turn.failed"
+        - "kdcube.copilot.mcp.call"
+        - "chat.turn.summary"
+    persist:
+      # Types must be emitted through the bundle entrypoint comm. Types emitted
+      # by the processor comm (e.g. chat.complete) are not accessible because
+      # the artifact is saved before the processor runs.
+      enabled: true
+      selector:
+        - "accounting.usage"
+        - "chat.turn.summary"
+```
+
+| Field | Meaning |
+|---|---|
+| `events.record.telemetry.enabled` | enables telemetry recording for the turn; `false` skips the sink flush entirely |
+| `events.record.telemetry.selector` | event types recorded and shipped to the configured telemetry sink |
+| `events.record.persist.enabled` | enables the `conv.artifacts.events` artifact; `false` produces no artifact |
+| `events.record.persist.selector` | event types saved into the artifact; must be emitted through the bundle entrypoint comm |
+
+Resolution order for each bundle: bundle props > `assembly.yaml` > code defaults.
+
 ## Fields that are local-run only
 
 `paths.*` is local-run topology, not cloud deployment topology.

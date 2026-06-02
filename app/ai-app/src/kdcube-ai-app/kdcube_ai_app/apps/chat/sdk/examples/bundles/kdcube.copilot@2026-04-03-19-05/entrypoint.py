@@ -523,6 +523,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
                 "followup_count": len((result or {}).get("followups") or []),
             },
         )
+        await self._persist_steps_artifacts(state=state)
         await self._send_recorded_events()
 
     def _bundle_id(self) -> str:
@@ -555,15 +556,17 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
         try:
             comm = self.comm
             sink = await self._make_event_sink()
-            if sink is None:
+            telemetry_enabled = self._telemetry_events_enabled()
+            if sink is None or not telemetry_enabled:
                 comm.stop_recording()
                 comm.set_event_sink(None)
                 comm.clear_recorded_events(STATS_COMM_EVENT_SELECTOR)
                 return
+            selector = self._build_telemetry_selector()
             configure_stats_event_recording(
                 comm,
                 sink,
-                selector=STATS_COMM_EVENT_SELECTOR,
+                selector=selector,
                 scope={"owner": "react", "bundle": self._bundle_id(), "runtime": "on_message"},
                 max_events=EVENT_RECORD_MAX,
             )
@@ -591,7 +594,8 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
 
     async def _send_recorded_events(self) -> Dict[str, Any]:
         try:
-            return await self.comm.send_recorded_events(STATS_COMM_EVENT_SELECTOR)
+            selector = self._build_telemetry_selector()
+            return await self.comm.send_recorded_events(selector)
         except Exception:
             self.logger.log(traceback.format_exc(), "WARNING")
             return {"ok": False, "error": "Unable to flush recorded copilot events."}

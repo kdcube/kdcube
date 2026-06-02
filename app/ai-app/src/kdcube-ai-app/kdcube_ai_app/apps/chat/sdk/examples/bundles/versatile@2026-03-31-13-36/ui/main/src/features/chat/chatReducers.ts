@@ -530,7 +530,7 @@ export function hydrateHistoricalConversation(conversation: ConversationDTO): Ch
           }
           break
         }
-        case 'artifact:conv.artifacts.steps': {
+        case 'artifact:conv.artifacts.events': {
           const items = Array.isArray(payload.items) ? payload.items : []
           let costUsd = turn.costUsd ?? null
           let elapsedMs = turn.elapsedMs ?? null

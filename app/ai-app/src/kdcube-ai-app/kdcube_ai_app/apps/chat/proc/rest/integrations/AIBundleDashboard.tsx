@@ -1405,6 +1405,14 @@ const AIBundleDashboard: React.FC = () => {
     const [bundleRolesSaving, setBundleRolesSaving] = useState<boolean>(false);
     const [bundleRolesFlash, setBundleRolesFlash] = useState<string | null>(null);
     const [bundleRolesError, setBundleRolesError] = useState<string | null>(null);
+    const [formPersistSelector, setFormPersistSelector] = useState<string>('');
+    const [persistSelectorSaving, setPersistSelectorSaving] = useState<boolean>(false);
+    const [persistSelectorFlash, setPersistSelectorFlash] = useState<string | null>(null);
+    const [persistSelectorError, setPersistSelectorError] = useState<string | null>(null);
+    const [formTelemetrySelector, setFormTelemetrySelector] = useState<string>('');
+    const [telemetrySelectorSaving, setTelemetrySelectorSaving] = useState<boolean>(false);
+    const [telemetrySelectorFlash, setTelemetrySelectorFlash] = useState<string | null>(null);
+    const [telemetrySelectorError, setTelemetrySelectorError] = useState<string | null>(null);
     const registryScope = useMemo(() => normalizeScope(scopeTenant, scopeProject), [scopeTenant, scopeProject]);
     const propsScope = useMemo(() => normalizeScope(scopeTenant, scopeProject), [scopeTenant, scopeProject]);
     const draftScope = useMemo(() => parseScopeValue(scopeInput), [scopeInput]);
@@ -1743,10 +1751,21 @@ const AIBundleDashboard: React.FC = () => {
     }, [interfaceBundleId, scopeTenant, scopeProject]);
 
     useEffect(() => {
+        const persistSel = readDotPath(editorProps, 'events.record.persist.selector');
+        setFormPersistSelector(Array.isArray(persistSel) ? persistSel.join(', ') : '');
+        const telemetrySel = readDotPath(editorProps, 'events.record.telemetry.selector');
+        setFormTelemetrySelector(Array.isArray(telemetrySel) ? telemetrySel.join(', ') : '');
+    }, [editorProps]);
+
+    useEffect(() => {
         const b = interfaceBundleId ? bundles[interfaceBundleId] : null;
         setBundleRolesFlash(null);
         setBundleRolesError(null);
         setFormBundleRoles(b && Array.isArray(b.allowed_roles) ? b.allowed_roles.join(', ') : '');
+        setPersistSelectorFlash(null);
+        setPersistSelectorError(null);
+        setTelemetrySelectorFlash(null);
+        setTelemetrySelectorError(null);
     }, [interfaceBundleId, bundles]);
 
     // Apply a merge-patch to the current bundle's props, then quietly refresh
@@ -2473,6 +2492,113 @@ const AIBundleDashboard: React.FC = () => {
                                             {bundleRolesError && <span className="text-xs text-red-700">{bundleRolesError}</span>}
                                         </div>
                                     </FieldRow>
+
+                                    {/* ── events.record.persist ── */}
+                                    {(['persist', 'telemetry'] as const).map(section => {
+                                        const isPersist = section === 'persist';
+                                        const override = readDotPath(editorProps, `events.record.${section}`);
+                                        const isOverridden = override != null && typeof override === 'object';
+                                        const enabledRaw = readDotPath(editorProps, `events.record.${section}.enabled`);
+                                        const enabledEffective = enabledRaw === false ? false : true;
+                                        const [formSelector, setFormSelector] = isPersist
+                                            ? [formPersistSelector, setFormPersistSelector]
+                                            : [formTelemetrySelector, setFormTelemetrySelector];
+                                        const [saving, setSaving] = isPersist
+                                            ? [persistSelectorSaving, setPersistSelectorSaving]
+                                            : [telemetrySelectorSaving, setTelemetrySelectorSaving];
+                                        const [flash, setFlash] = isPersist
+                                            ? [persistSelectorFlash, setPersistSelectorFlash]
+                                            : [telemetrySelectorFlash, setTelemetrySelectorFlash];
+                                        const [err, setErr] = isPersist
+                                            ? [persistSelectorError, setPersistSelectorError]
+                                            : [telemetrySelectorError, setTelemetrySelectorError];
+                                        const placeholder = isPersist
+                                            ? 'accounting.usage, chat.turn.summary'
+                                            : 'accounting.usage, chat.complete, react.tool.call, …';
+                                        return (
+                                            <FieldRow
+                                                key={section}
+                                                label={`events.record.${section}`}
+                                                overridden={isOverridden}
+                                                configurable
+                                                onResetToDefault={isOverridden ? async () => {
+                                                    setErr(null);
+                                                    try {
+                                                        setSaving(true);
+                                                        await saveOverrideAndRefresh(nestedDotPathPatch(`events.record.${section}`, null));
+                                                        setFlash('Reset ✓');
+                                                        window.setTimeout(() => setFlash(null), 1800);
+                                                    } catch (e: any) {
+                                                        setErr(e?.message || 'Reset failed');
+                                                    } finally {
+                                                        setSaving(false);
+                                                    }
+                                                } : undefined}
+                                                hint={<>
+                                                    Bundle-level override for <code>events.record.{section}</code>.
+                                                    Overrides assembly.yaml defaults for this bundle. Reset clears the override.
+                                                    {isPersist && <> Types emitted through processor comm (e.g. <code>chat.complete</code>) will not appear in artifacts even if listed.</>}
+                                                </>}
+                                            >
+                                                <div className="space-y-2">
+                                                    <label className="inline-flex items-center gap-2 cursor-pointer">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={enabledEffective}
+                                                            disabled={saving || editorPropsLoading}
+                                                            onChange={async e => {
+                                                                setErr(null);
+                                                                try {
+                                                                    setSaving(true);
+                                                                    await saveOverrideAndRefresh(nestedDotPathPatch(`events.record.${section}.enabled`, e.target.checked));
+                                                                    setFlash('Saved ✓');
+                                                                    window.setTimeout(() => setFlash(null), 1800);
+                                                                } catch (ex: any) {
+                                                                    setErr(ex?.message || 'Save failed');
+                                                                } finally {
+                                                                    setSaving(false);
+                                                                }
+                                                            }}
+                                                        />
+                                                        <span className={`text-sm font-semibold ${enabledEffective ? 'text-emerald-700' : 'text-gray-500'}`}>
+                                                            {enabledEffective ? 'enabled' : 'disabled'}
+                                                        </span>
+                                                        <span className="text-xs text-gray-400">(events.record.{section}.enabled)</span>
+                                                    </label>
+                                                    <div className="flex items-center gap-2">
+                                                        <input
+                                                            value={formSelector}
+                                                            onChange={e => setFormSelector(e.target.value)}
+                                                            disabled={saving || editorPropsLoading}
+                                                            placeholder={placeholder}
+                                                            className="flex-1 px-3 py-2 border border-gray-200/80 rounded-xl bg-white text-sm font-mono disabled:bg-gray-50 disabled:text-gray-400"
+                                                        />
+                                                        <Button
+                                                            variant="primary"
+                                                            disabled={saving || editorPropsLoading}
+                                                            onClick={async () => {
+                                                                setErr(null);
+                                                                try {
+                                                                    setSaving(true);
+                                                                    await saveOverrideAndRefresh(nestedDotPathPatch(`events.record.${section}.selector`, parseChips(formSelector)));
+                                                                    setFlash('Saved ✓');
+                                                                    window.setTimeout(() => setFlash(null), 1800);
+                                                                } catch (e: any) {
+                                                                    setErr(e?.message || 'Save failed');
+                                                                } finally {
+                                                                    setSaving(false);
+                                                                }
+                                                            }}
+                                                        >
+                                                            {saving ? 'Saving…' : 'Save selector'}
+                                                        </Button>
+                                                        {flash && <span className="text-xs text-emerald-700 font-semibold">{flash}</span>}
+                                                        {err && <span className="text-xs text-red-700">{err}</span>}
+                                                    </div>
+                                                </div>
+                                            </FieldRow>
+                                        );
+                                    })}
 
                                     {(b.on_message || b.on_job) && (
                                         <div className="flex flex-wrap gap-3 text-xs text-gray-600">

@@ -450,3 +450,40 @@ platform:
           job_name: "kdcube_metrics"       # METRICS_PROM_JOB_NAME
           grouping_labels_json: ""         # METRICS_PROM_GROUPING_LABELS_JSON
           scrape_ttl_sec: 10               # METRICS_PROM_SCRAPE_TTL_SEC
+
+# ---------------------------------------------------------------------------
+# Event recording configuration (platform-level defaults).
+# Per-bundle overrides go in bundles.yaml -> items[].config.events.
+# A bundle-level events section fully replaces what is set here.
+# Both `telemetry` and `persist` sections are overridable per bundle.
+events:
+  record:
+    telemetry:
+      enabled: true
+      selector:
+        - "accounting.usage"
+        - "chat.complete"
+        - "chat.error"
+        - "chat.conversation.accepted"
+        - "chat.conversation.turn.completed"
+        - "react.tool.call"
+        - "react.skill.read"
+        - "queue.continuation.accepted"
+        - "timeline.external.accepted"
+        - "kdcube.copilot.workflow.turn.started"
+        - "kdcube.copilot.workflow.turn.completed"
+        - "kdcube.copilot.workflow.turn.failed"
+        - "kdcube.copilot.mcp.call"
+        - "chat.turn.summary"
+    persist:
+      # Types captured here must be emitted through the bundle entrypoint comm
+      # (BaseEntrypoint.self.comm). Types emitted by the processor comm are not
+      # accessible — notably chat.complete, which is emitted by processor.py
+      # AFTER the bundle handler returns, past the point where the artifact is
+      # persisted. Including such types in the selector is harmless (they will
+      # simply not be found in the recording buffer), but they will never appear
+      # in the saved artifact.
+      enabled: true
+      selector:
+        - "accounting.usage"
+        - "chat.turn.summary"
