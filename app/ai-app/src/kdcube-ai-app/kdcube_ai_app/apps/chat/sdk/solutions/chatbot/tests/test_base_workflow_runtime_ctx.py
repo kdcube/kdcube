@@ -315,6 +315,15 @@ def test_react_render_thinking_prefers_bundle_props_over_settings():
     assert workflow_mod._react_render_thinking({}, settings) is True
 
 
+def test_react_event_source_pipeline_enabled_prefers_bundle_props_over_settings():
+    settings = SimpleNamespace(AI_REACT_EVENT_SOURCE_PIPELINE_ENABLED=False)
+
+    assert workflow_mod._react_event_source_pipeline_enabled({"react": {"event_source_pipeline": {"enabled": True}}}, settings) is True
+    assert workflow_mod._react_event_source_pipeline_enabled({"react": {"event_source_pipeline_enabled": "yes"}}, settings) is True
+    assert workflow_mod._react_event_source_pipeline_enabled({"config": {"react": {"event_source_pipeline": {"enabled": "off"}}}}, settings) is False
+    assert workflow_mod._react_event_source_pipeline_enabled({}, SimpleNamespace(AI_REACT_EVENT_SOURCE_PIPELINE_ENABLED=True)) is True
+
+
 def test_react_debug_timeline_enabled_prefers_bundle_props_over_settings():
     settings = SimpleNamespace(AI_REACT_DEBUG_TIMELINE=True)
 

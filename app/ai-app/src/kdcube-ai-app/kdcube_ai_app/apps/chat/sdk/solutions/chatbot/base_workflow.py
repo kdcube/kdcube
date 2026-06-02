@@ -213,6 +213,43 @@ def _react_story_snapshots_enabled(bundle_props: Dict[str, Any]) -> bool:
     return bool(configured) if configured is not None else False
 
 
+def _react_event_source_pipeline_enabled(bundle_props: Dict[str, Any], settings: Any) -> bool:
+    configured = _bool_or_none(_get_prop_path(bundle_props or {}, "react.event_source_pipeline.enabled"))
+    if configured is None:
+        configured = _bool_or_none(_get_prop_path(bundle_props or {}, "react.event_source_pipeline_enabled"))
+    if configured is None:
+        configured = _bool_or_none(_get_prop_path(bundle_props or {}, "config.react.event_source_pipeline.enabled"))
+    if configured is None:
+        configured = _bool_or_none(_get_prop_path(bundle_props or {}, "config.react.event_source_pipeline_enabled"))
+    if configured is not None:
+        return configured
+    return bool(getattr(settings, "AI_REACT_EVENT_SOURCE_PIPELINE_ENABLED", False))
+
+
+def _react_event_source_pipeline_config_report(bundle_props: Dict[str, Any], settings: Any) -> Dict[str, Any]:
+    paths = (
+        "react.event_source_pipeline.enabled",
+        "react.event_source_pipeline_enabled",
+        "config.react.event_source_pipeline.enabled",
+        "config.react.event_source_pipeline_enabled",
+    )
+    for path in paths:
+        raw = _get_prop_path(bundle_props or {}, path)
+        configured = _bool_or_none(raw)
+        if configured is not None:
+            return {
+                "source": f"bundle_props.{path}",
+                "raw": raw,
+                "effective": configured,
+            }
+    raw = getattr(settings, "AI_REACT_EVENT_SOURCE_PIPELINE_ENABLED", False)
+    return {
+        "source": "settings.AI_REACT_EVENT_SOURCE_PIPELINE_ENABLED",
+        "raw": raw,
+        "effective": bool(raw),
+    }
+
+
 def _react_debug_timeline_enabled(bundle_props: Dict[str, Any], settings: Any, *, default: bool = False) -> bool:
     configured = _bool_or_none(_get_prop_path(bundle_props or {}, "react.debug_timeline"))
     if configured is None:
@@ -261,6 +298,42 @@ def _apply_react_session_settings(runtime_ctx: Any, settings: Any) -> None:
     mode = str(getattr(settings, "AI_REACT_PRUNED_TURN_SUMMARY_MODE", "working_summary") or "working_summary").strip()
     if mode:
         session.pruned_turn_summary_mode = mode
+
+
+def _effective_runtime_ctx_log_payload(runtime_ctx: Any, bundle_props: Dict[str, Any], settings: Any) -> Dict[str, Any]:
+    session = getattr(runtime_ctx, "session", None)
+    cache = getattr(runtime_ctx, "cache", None)
+    exec_runtime = getattr(runtime_ctx, "exec_runtime", None)
+    exec_runtime_keys = sorted(exec_runtime.keys()) if isinstance(exec_runtime, dict) else []
+    return {
+        "tenant": getattr(runtime_ctx, "tenant", None),
+        "project": getattr(runtime_ctx, "project", None),
+        "user_id": getattr(runtime_ctx, "user_id", None),
+        "user_type": getattr(runtime_ctx, "user_type", None),
+        "conversation_id": getattr(runtime_ctx, "conversation_id", None),
+        "turn_id": getattr(runtime_ctx, "turn_id", None),
+        "bundle_id": getattr(runtime_ctx, "bundle_id", None),
+        "react_agent_version": _react_agent_version(),
+        "max_tokens": getattr(runtime_ctx, "max_tokens", None),
+        "max_iterations": getattr(runtime_ctx, "max_iterations", None),
+        "render_thinking": bool(getattr(runtime_ctx, "render_thinking", True)),
+        "line_numbers_mode": getattr(runtime_ctx, "line_numbers_mode", None),
+        "story_snapshots_enabled": bool(getattr(runtime_ctx, "story_snapshots_enabled", False)),
+        "event_source_pipeline_enabled": bool(getattr(runtime_ctx, "event_source_pipeline_enabled", False)),
+        "event_source_pipeline_config": _react_event_source_pipeline_config_report(bundle_props, settings),
+        "debug_timeline": bool(getattr(runtime_ctx, "debug_timeline", False)),
+        "debug_timeline_root": getattr(runtime_ctx, "debug_timeline_root", None),
+        "debug_timeline_keep_files": getattr(runtime_ctx, "debug_timeline_keep_files", None),
+        "workspace_implementation": getattr(runtime_ctx, "workspace_implementation", None),
+        "workspace_git_repo": getattr(runtime_ctx, "workspace_git_repo", None),
+        "bundle_storage": getattr(runtime_ctx, "bundle_storage", None),
+        "multi_action_mode": getattr(runtime_ctx, "multi_action_mode", None),
+        "memory_enabled": bool(getattr(runtime_ctx, "memory_enabled", False)),
+        "memory_announce_enabled": bool(getattr(runtime_ctx, "memory_announce_enabled", False)),
+        "session": session.to_dict() if hasattr(session, "to_dict") else {},
+        "cache": cache.to_dict() if hasattr(cache, "to_dict") else {},
+        "exec_runtime_keys": exec_runtime_keys,
+    }
 
 
 def _react_module(module_suffix: str):
@@ -403,6 +476,7 @@ class BaseWorkflow():
         runtime_render_thinking = _react_render_thinking(self.bundle_props, settings)
         runtime_line_numbers_mode = _react_line_numbers_mode(self.bundle_props, settings)
         runtime_story_snapshots_enabled = _react_story_snapshots_enabled(self.bundle_props)
+        runtime_event_source_pipeline_enabled = _react_event_source_pipeline_enabled(self.bundle_props, settings)
         runtime_debug_timeline_root = _react_debug_timeline_root(settings)
         runtime_debug_timeline_keep_files = _react_debug_timeline_keep_files(settings)
         try:
@@ -429,6 +503,7 @@ class BaseWorkflow():
                 render_thinking=runtime_render_thinking,
                 line_numbers_mode=runtime_line_numbers_mode,
                 story_snapshots_enabled=runtime_story_snapshots_enabled,
+                event_source_pipeline_enabled=runtime_event_source_pipeline_enabled,
                 debug_timeline_root=runtime_debug_timeline_root,
                 debug_timeline_keep_files=runtime_debug_timeline_keep_files,
                 bundle_storage=self._resolve_runtime_ctx_bundle_storage(),
@@ -446,6 +521,18 @@ class BaseWorkflow():
                 runtime_ctx=self.runtime_ctx,
             )
             self._sync_runtime_ctx_bundle_props()
+            try:
+                self.logger.log(
+                    "[react.runtime_ctx.effective] "
+                    + json.dumps(
+                        _effective_runtime_ctx_log_payload(self.runtime_ctx, self.bundle_props, settings),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    level="INFO",
+                )
+            except Exception:
+                pass
         except Exception:
             self.runtime_ctx = RuntimeCtx(
                 max_tokens=runtime_max_tokens,
@@ -462,6 +549,7 @@ class BaseWorkflow():
                 render_thinking=runtime_render_thinking,
                 line_numbers_mode=runtime_line_numbers_mode,
                 story_snapshots_enabled=runtime_story_snapshots_enabled,
+                event_source_pipeline_enabled=runtime_event_source_pipeline_enabled,
                 debug_timeline_root=runtime_debug_timeline_root,
                 debug_timeline_keep_files=runtime_debug_timeline_keep_files,
                 workspace_implementation=settings.REACT_WORKSPACE_IMPLEMENTATION,
@@ -478,6 +566,18 @@ class BaseWorkflow():
                 runtime_ctx=self.runtime_ctx,
             )
             self._sync_runtime_ctx_bundle_props()
+            try:
+                self.logger.log(
+                    "[react.runtime_ctx.effective] "
+                    + json.dumps(
+                        _effective_runtime_ctx_log_payload(self.runtime_ctx, self.bundle_props, settings),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    level="INFO",
+                )
+            except Exception:
+                pass
 
     @property
     def continuation_source(self) -> Optional[Any]:
@@ -535,6 +635,7 @@ class BaseWorkflow():
             runtime_ctx.render_thinking = _react_render_thinking(self.bundle_props, settings)
             runtime_ctx.line_numbers_mode = _react_line_numbers_mode(self.bundle_props, settings)
             runtime_ctx.story_snapshots_enabled = _react_story_snapshots_enabled(self.bundle_props)
+            runtime_ctx.event_source_pipeline_enabled = _react_event_source_pipeline_enabled(self.bundle_props, settings)
             runtime_ctx.debug_timeline_root = _react_debug_timeline_root(settings)
             runtime_ctx.debug_timeline_keep_files = _react_debug_timeline_keep_files(settings)
         except Exception:
@@ -1828,6 +1929,10 @@ class BaseWorkflow():
             event_specs=event_source_specs,
             hosting_service=self.hosting_service,
         )
+        try:
+            self.runtime_ctx.event_sources = getattr(tools, "event_sources", None)
+        except Exception:
+            pass
         skills = SkillsSubsystem(
             descriptor={
                 "custom_skills_root": str(custom_skills_root) if custom_skills_root else None,

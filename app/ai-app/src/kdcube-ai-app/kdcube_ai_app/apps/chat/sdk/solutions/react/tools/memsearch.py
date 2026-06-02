@@ -477,7 +477,7 @@ async def handle_react_memsearch(*, ctx_browser: Any, state: Dict[str, Any], too
     summary_payload = {"mode": effective_mode, "hits": summary_hits, "tokens": total_tokens}
     if warnings:
         summary_payload["warnings"] = warnings
-    add_block(ctx_browser, {
+    summary_block = {
         "turn": turn_id,
         "type": "react.tool.result",
         "call_id": tool_call_id,
@@ -488,7 +488,8 @@ async def handle_react_memsearch(*, ctx_browser: Any, state: Dict[str, Any], too
             "tool_call_id": tool_call_id,
             "render_role": "summary",
         },
-    })
+    }
+    add_block(ctx_browser, summary_block)
     for hit in search_hits_formatted:
         for sn in hit.get("snippets") or []:
             if not isinstance(sn, dict):
@@ -503,7 +504,7 @@ async def handle_react_memsearch(*, ctx_browser: Any, state: Dict[str, Any], too
                 source_conversation_id=sconv,
                 current_conversation_id=conversation_id,
             )
-            add_block(ctx_browser, {
+            snippet_block = {
                 "turn": turn_id,
                 "type": "react.tool.result",
                 "call_id": tool_call_id,
@@ -518,6 +519,7 @@ async def handle_react_memsearch(*, ctx_browser: Any, state: Dict[str, Any], too
                     **({"rn": (sn.get("meta") or {}).get("rn")} if isinstance(sn.get("meta"), dict) else {}),
                     **({"key": (sn.get("meta") or {}).get("key")} if isinstance(sn.get("meta"), dict) else {}),
                 },
-            })
+            }
+            add_block(ctx_browser, snippet_block)
     state["last_tool_result"] = search_hits_formatted
     return state

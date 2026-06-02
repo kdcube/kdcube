@@ -614,6 +614,7 @@ class Settings(PLATFORM_CONFIG):
     AI_REACT_WORKING_SUMMARY_ENABLED: bool = Field(default=True)
     AI_REACT_PRUNED_TURN_SUMMARY_MODE: str = Field(default="working_summary")
     AI_REACT_RENDER_THINKING: bool = Field(default=True)
+    AI_REACT_EVENT_SOURCE_PIPELINE_ENABLED: bool = Field(default=False)
     AI_REACT_DEBUG_TIMELINE: bool | None = Field(default=None)
     CLAUDE_CODE_SESSION_STORE_IMPLEMENTATION: str = Field(default="local")
     CLAUDE_CODE_SESSION_GIT_REPO: str | None = None
@@ -1178,6 +1179,11 @@ class Settings(PLATFORM_CONFIG):
             "AI_REACT_RENDER_THINKING",
             "ai.react.render_thinking",
             self.AI_REACT_RENDER_THINKING,
+        )
+        self.AI_REACT_EVENT_SOURCE_PIPELINE_ENABLED = self._resolve_bool(
+            "AI_REACT_EVENT_SOURCE_PIPELINE_ENABLED",
+            "ai.react.event_source_pipeline_enabled",
+            self.AI_REACT_EVENT_SOURCE_PIPELINE_ENABLED,
         )
         configured_debug_timeline = self._assembly_bool("ai.react.debug_timeline")
         if configured_debug_timeline is None and self._env_present("AI_REACT_DEBUG_TIMELINE"):

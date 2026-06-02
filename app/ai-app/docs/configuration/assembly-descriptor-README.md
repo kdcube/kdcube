@@ -94,6 +94,7 @@ These env vars are the direct runtime surface for assembly-backed settings.
 | `AI_REACT_WORKING_SUMMARY_ENABLED` | `ai.react.working_summary_enabled` | `get_settings()` | all modes |
 | `AI_REACT_PRUNED_TURN_SUMMARY_MODE` | `ai.react.pruned_turn_summary_mode` | `get_settings()` | all modes |
 | `AI_REACT_RENDER_THINKING` | `ai.react.render_thinking` | `get_settings()` / `RuntimeCtx.render_thinking` | all modes |
+| `AI_REACT_EVENT_SOURCE_PIPELINE_ENABLED` | `ai.react.event_source_pipeline_enabled` | `get_settings()` / `RuntimeCtx.event_source_pipeline_enabled` | all modes |
 | `CLAUDE_CODE_SESSION_STORE_IMPLEMENTATION` | `storage.claude_code_session.type` | `get_settings()` | CLI local compose, direct local service run |
 | `CLAUDE_CODE_SESSION_GIT_REPO` | `storage.claude_code_session.repo` | `get_settings()` | CLI local compose, direct local service run |
 | `BUNDLES_PRELOAD_BUNDLE_LOCK_TTL_SECONDS` | `platform.services.proc.bundles.bundles_preload_bundle_lock_ttl_seconds` | `get_settings().PLATFORM.APPLICATIONS` | proc in all modes |
@@ -308,6 +309,7 @@ ai:
 | `working_summary_enabled` | `AI_REACT_WORKING_SUMMARY_ENABLED` | Capture React `channel:summary` on complete/exit, emit it as `conv.working.summary`, and embed it for memory search; default `true` |
 | `pruned_turn_summary_mode` | `AI_REACT_PRUNED_TURN_SUMMARY_MODE` | Prefer working-summary cards when rendering pruned historical turns; multiple same-turn summaries are preserved; set to `working_summary` by default |
 | `render_thinking` | `AI_REACT_RENDER_THINKING` | Render live model thinking blocks in the active ReAct timeline; bundle `config.react.render_thinking` / `react.render_thinking` overrides this default; pruned thinking is never rendered |
+| `event_source_pipeline_enabled` | `AI_REACT_EVENT_SOURCE_PIPELINE_ENABLED` | Enables the alternate event-source policy pipeline for ReAct blocks; bundle `config.react.event_source_pipeline.enabled` / `react.event_source_pipeline.enabled` overrides this default; keep `false` unless explicitly testing |
 | `debug_timeline` | `AI_REACT_DEBUG_TIMELINE` | Enable rendered prompt snapshot files for ReAct timelines; bundle `config.react.debug_timeline` / `react.debug_timeline` overrides this default; keep `false` for normal deployments |
 
 Visible read limits use separate units:

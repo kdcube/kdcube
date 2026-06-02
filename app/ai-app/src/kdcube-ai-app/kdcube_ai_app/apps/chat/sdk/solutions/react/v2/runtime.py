@@ -818,9 +818,24 @@ class ReactSolverV2:
                         self.log.log(f"[react.v2] sources_pool:\n{sources_text}", level="INFO")
                 except Exception:
                     pass
-            self.ctx_browser.announce(
-                blocks=[{"text": active_block}],
-            )
+            announce_blocks = [{"text": active_block}]
+            try:
+                from kdcube_ai_app.apps.chat.sdk.solutions.react.events.common import event_source_pipeline_enabled
+                from kdcube_ai_app.apps.chat.sdk.solutions.react.events.projection import produce_event_source_announce_blocks
+
+                if event_source_pipeline_enabled(runtime_ctx):
+                    announce_blocks.extend(produce_event_source_announce_blocks(
+                        event_sources=getattr(runtime_ctx, "event_sources", None),
+                        timeline_blocks=list(self.ctx_browser.timeline.blocks or []),
+                        iteration=iteration,
+                        max_iterations=max_iterations,
+                        base_max_iterations=base_max_iterations,
+                        reactive_iteration_credit=reactive_iteration_credit,
+                        current_turn_id=str(getattr(runtime_ctx, "turn_id", "") or ""),
+                    ))
+            except Exception:
+                pass
+            self.ctx_browser.announce(blocks=announce_blocks)
         except Exception:
             pass
 

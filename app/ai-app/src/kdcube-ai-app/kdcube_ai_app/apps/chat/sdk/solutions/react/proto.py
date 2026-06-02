@@ -123,6 +123,8 @@ class RuntimeCtx:
     model_service: Optional[Any] = None
     continuation_source: Optional[Any] = None
     external_event_source: Optional[Any] = None
+    # Runtime-only event-source policy registry populated from ToolSubsystem.
+    event_sources: Optional[Any] = None
     on_before_compaction: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None
     on_after_compaction: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None
     save_summary: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None
@@ -134,6 +136,7 @@ class RuntimeCtx:
     debug_timeline_keep_files: int = 100
     announce_mode: str = "full"  # "full" or "budget"
     story_snapshots_enabled: bool = False
+    event_source_pipeline_enabled: bool = False
     render_decision_raw: bool = False
     render_react_state: bool = False
     render_react_exit: bool = False
@@ -204,6 +207,7 @@ class RuntimeCtx:
             "debug_timeline_keep_files": int(self.debug_timeline_keep_files or 100),
             "announce_mode": self.announce_mode,
             "story_snapshots_enabled": bool(self.story_snapshots_enabled),
+            "event_source_pipeline_enabled": bool(self.event_source_pipeline_enabled),
             "render_decision_raw": bool(self.render_decision_raw),
             "render_react_state": bool(self.render_react_state),
             "render_react_exit": bool(self.render_react_exit),

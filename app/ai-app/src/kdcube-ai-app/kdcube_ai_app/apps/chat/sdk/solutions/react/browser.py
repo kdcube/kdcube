@@ -33,6 +33,11 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.timeline import (
 from kdcube_ai_app.apps.chat.sdk.solutions.react.proto import RuntimeCtx
 from kdcube_ai_app.apps.chat.sdk.solutions.react.workspace import get_workspace_implementation
 from kdcube_ai_app.tools.content_type import is_text_mime_type
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events import (
+    event_source_id_for_external_kind,
+    event_source_pipeline_enabled,
+    stamp_event_identity_many,
+)
 
 PROJECT_LOG_SLOTS = { "project_log" }
 SOURCES_POOL_ARTIFACT_TAG = f"artifact:{SOURCES_POOL_KIND}"
@@ -588,10 +593,10 @@ class ContextBrowser:
             path=path,
             meta=meta,
         )]
+        event_id = str(getattr(event, "message_id", "") or "").strip() or f"seq_{int(getattr(event, 'sequence', 0) or 0)}"
         if attachments:
             from kdcube_ai_app.apps.chat.sdk.solutions.react.layout import build_user_attachment_blocks
 
-            event_id = str(getattr(event, "message_id", "") or "").strip() or "mext"
             blocks.extend(build_user_attachment_blocks(
                 turn_id=turn_id,
                 ts=event_ts,
@@ -606,6 +611,12 @@ class ContextBrowser:
                     "sequence": int(getattr(event, "sequence", 0) or 0),
                 },
             ))
+        if event_source_pipeline_enabled(self._runtime_ctx):
+            stamp_event_identity_many(
+                blocks,
+                event_source_id=event_source_id_for_external_kind(kind),
+                event_id=event_id,
+            )
         return blocks
 
     async def _hydrate_external_event_attachments(self, attachments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

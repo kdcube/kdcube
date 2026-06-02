@@ -7,6 +7,7 @@ import json
 import pytest
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.proto import RuntimeCtx
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events import block_event_id, block_event_source_id
 from kdcube_ai_app.apps.chat.sdk.solutions.react.timeline import Timeline
 from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.memsearch import handle_react_memsearch
 
@@ -56,6 +57,7 @@ async def test_memsearch_attachment_target_includes_external_followup_attachment
         workdir=str(tmp_path / "work"),
         conversation_id="conv_1",
         user_id="user_1",
+        event_source_pipeline_enabled=True,
     )
     ctx = FakeBrowser(runtime)
 
@@ -142,6 +144,14 @@ async def test_memsearch_attachment_target_includes_external_followup_attachment
         "role": "attachment",
         "ts": "2026-04-26T10:00:00Z",
     }]
+    result_blocks = [
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result" and b.get("call_id") == "ms1"
+    ]
+    assert result_blocks
+    call_meta = {"ms1": {"tool_id": "react.memsearch"}}
+    assert all(block_event_source_id(b, call_meta=call_meta) == "react.memsearch" for b in result_blocks)
+    assert all(block_event_id(b) == "ms1" for b in result_blocks)
 
 
 @pytest.mark.asyncio

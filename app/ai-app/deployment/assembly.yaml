@@ -144,6 +144,7 @@ ai:
     working_summary_enabled: true   # AI_REACT_WORKING_SUMMARY_ENABLED: emit/embed channel:summary as conv.working.summary timeline events
     pruned_turn_summary_mode: "working_summary"  # AI_REACT_PRUNED_TURN_SUMMARY_MODE: collapse pruned old turns to conv.working.summary when available
     render_thinking: true           # AI_REACT_RENDER_THINKING: render live model thinking blocks; bundle config react.render_thinking overrides
+    event_source_pipeline_enabled: false # AI_REACT_EVENT_SOURCE_PIPELINE_ENABLED: alternate event-source policy pipeline; keep false until explicitly testing
     debug_timeline: false           # AI_REACT_DEBUG_TIMELINE: write rendered model-context snapshots to REACT_DEBUG_ROOT; keep false unless diagnosing prompt/timeline issues
     # Browser-tool sessions are scoped to the current turn and cleaned by workflow/processor finalizers.
     # Idle janitor settings are backend constants today, not assembly-backed operator settings.

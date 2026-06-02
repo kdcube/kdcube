@@ -168,8 +168,20 @@ class ToolSubsystem:
 
         try:
             from kdcube_ai_app.apps.chat.sdk.events import EventSourceSubsystem
+            event_modules = list(self._modules)
+            try:
+                from kdcube_ai_app.apps.chat.sdk.solutions.react.events import core as react_core_events
+                event_modules.append({
+                    "name": react_core_events.__name__,
+                    "mod": react_core_events,
+                    "alias": "react",
+                    "file": getattr(react_core_events, "__file__", None),
+                })
+            except Exception:
+                pass
             self.event_sources = EventSourceSubsystem.from_tool_subsystem(
                 self,
+                modules=event_modules,
                 event_specs=self.raw_event_specs,
                 logger=self.log,
             )

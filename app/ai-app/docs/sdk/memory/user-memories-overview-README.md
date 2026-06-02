@@ -399,15 +399,70 @@ job_memory_tools = make_user_memory_tools(
 )
 ```
 
-Provided functions:
+Bundles normally include the portable module in `tools_descriptor.py`:
+
+```python
+TOOLS_SPECS = [
+    {
+        "module": "kdcube_ai_app.apps.chat.sdk.context.memory.tools",
+        "alias": "memory",
+        "use_sk": True,
+    },
+]
+```
+
+This exposes the callable tools with ids:
 
 ```text
-search_memory
-recent_memories
-record_memory
-confirm_memory
-retire_memory
+memory.search_memory
+memory.recent_memories
+memory.record_memory
+memory.confirm_memory
+memory.retire_memory
 ```
+
+The module-level functions bind to the current bundle request context at call
+time. They resolve tenant, project, user id, bundle id, conversation id, turn
+id, `pg_pool`, and the configured memory tool options from the runtime.
+`make_user_memory_tools(...)` is the explicit construction path for jobs or
+custom bundle code that already has its own scope provider.
+
+Tool availability is gated by bundle config:
+
+```yaml
+config:
+  memory:
+    enabled: true
+    tools:
+      enabled: true
+      allow_write: false
+      default_scope_filter: current_bundle
+      embedding_enabled: true
+```
+
+`memory.enabled` and `memory.tools.enabled` must both be true. Write tools also
+require `memory.tools.allow_write=true`.
+
+Provided functions:
+
+| Tool | Purpose | Result shape |
+| --- | --- | --- |
+| `memory.search_memory` | Search durable cross-conversation user memory by hybrid/text/labels/keywords/recency modes. | `{ok:true, memories:[...], count:n}` or `{ok:true, events:[...], count:n}` for `mode="recent_events"` |
+| `memory.recent_memories` | Return recent durable memories for the configured scope. | `{ok:true, memories:[...], count:n}` |
+| `memory.record_memory` | Create or refine durable memory from a signal. | `{ok:true, memory:{...}}` |
+| `memory.confirm_memory` | Confirm an existing memory by id. | `{ok:true, memory:{...}}` |
+| `memory.retire_memory` | Retire an existing memory by id. | `{ok:true, memory:{...}}` |
+
+Errors use:
+
+```json
+{"ok": false, "error": "memory_tools_disabled", "message": "..."}
+```
+
+The ReAct event-source pipeline treats these as structured JSON tool results.
+They do not produce source-pool rows, hosted files, or snapshot artifacts by
+default; they use the shared structured-result block-production policies so
+their timeline blocks match ordinary external tool results.
 
 ## Announce Hotset
 

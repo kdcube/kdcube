@@ -1,3 +1,34 @@
+"""Reusable cross-conversation memory tools for bundles.
+
+Bundles normally include this module in `tools_descriptor.py` with alias
+`memory` and `use_sk: true`. The exported tool ids are therefore:
+
+```text
+memory.search_memory
+memory.recent_memories
+memory.record_memory
+memory.confirm_memory
+memory.retire_memory
+```
+
+The module-level functions are the portable callable surface used by isolated
+tool runtimes. They bind to the current bundle request context at call time,
+then delegate to `UserMemoryTools`, which owns scope resolution, store access,
+embedding lookup, and write gating. The `UserMemoryTools` class remains
+available for bundles or jobs that want to instantiate the same tools with an
+explicit scope provider.
+
+Agent tool calls do not accept an `originator` parameter. Tool writes are
+recorded with the originator supplied by the runtime scope, defaulting to
+`agent`. User-facing widgets and service APIs set user-originated events
+directly on `UserMemoryStore`.
+
+Memory tool results are ordinary structured tool results. They do not produce
+files, hosted artifacts, or source-pool rows. In the ReAct event-source policy
+pipeline they use the generic structured-result block-production policies so
+the visible timeline shape stays aligned with the legacy external-tool path.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -5,7 +36,10 @@ import hashlib
 import json
 import sys
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, Optional, Sequence
+from typing import Annotated, Any, Awaitable, Callable, Dict, Optional, Sequence
+
+from kdcube_ai_app.apps.chat.sdk.events import event_source_declaration
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events import structured_result_source_policies
 
 from .models import MemoryScope, MemorySearchRequest, MemorySignal, normalize_scope_filter, normalize_terms
 from .store import UserMemoryStore
@@ -30,6 +64,49 @@ Embedder = Callable[[Sequence[str]], Awaitable[Sequence[Sequence[float]]]]
 REGISTRY: Dict[str, Any] = {}
 _SERVICE: Any = None
 SERVICE: Any = None
+
+_MEMORY_TOOL_EVENT_SOURCE_DESCRIPTIONS: Dict[str, str] = {
+    "search_memory": (
+        "Search durable cross-conversation user memory and return structured memory or event rows."
+    ),
+    "recent_memories": "Return recent durable user memories for the current configured scope.",
+    "record_memory": "Create or refine durable user memory when the bundle config permits writes.",
+    "confirm_memory": "Confirm an existing durable memory by id when the bundle config permits writes.",
+    "retire_memory": "Retire an existing durable memory by id when the bundle config permits writes.",
+}
+
+
+def list_event_sources() -> list[Any]:
+    """Declare ReAct event sources for the module-level memory tools.
+
+    The declarations are alias-relative because the runtime tool id is produced
+    by `tools_descriptor.py`: `alias + "." + callable_name`. Current reference
+    bundles use alias `memory`, yielding ids such as `memory.search_memory`.
+
+    Memory tools return JSON dictionaries with `ok`, `memory`, `memories`,
+    `events`, `count`, `error`, and `message` fields. They do not own special
+    artifact production, so they bind to the shared structured-result policies:
+
+    - `react.block_production.tool_default` for the ordinary tool result;
+    - `react.block_production.generic_result_item` for the existing result
+      block shape;
+    - `react.block_production.declared_file_items` for parity with the generic
+      structured-result path when a memory tool deliberately declares files.
+
+    Timeline, compaction, and announce phases currently use the default
+    identity behavior. Add a memory-specific ReAct policy only when a memory
+    result needs a different projection than ordinary structured tool output.
+    """
+
+    return [
+        event_source_declaration(
+            event_source_id=f"{{alias}}.{name}",
+            policies=structured_result_source_policies(),
+            description=description,
+            kind="react.tool",
+        )
+        for name, description in _MEMORY_TOOL_EVENT_SOURCE_DESCRIPTIONS.items()
+    ]
 
 
 def _ok(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -179,9 +256,18 @@ class UserMemoryToolConfig:
 class UserMemoryTools:
     """Reusable bundle tools for SDK cross-conversation memory.
 
-    The bundle supplies a scope provider and optionally a store factory.  This
+    The bundle supplies a scope provider and optionally a store factory. This
     keeps auth/runtime ownership outside the tool while avoiding copy/paste
     memory tools in every bundle.
+
+    The scope provider must return enough runtime context to resolve:
+
+    - tenant/project/user/bundle scope;
+    - processor `pg_pool`, unless a custom store factory is provided;
+    - optional conversation/turn provenance for memory events.
+
+    `allow_write` controls the state-changing tools. Read tools still respect
+    the user-level "memory enabled" preference stored by the memory subsystem.
     """
 
     def __init__(
@@ -260,16 +346,16 @@ class UserMemoryTools:
     )
     async def search_memory(
         self,
-        query: str = "",
-        mode: str = "hybrid",
-        labels: str = "",
-        keywords: str = "",
-        kind: str = "",
-        status: str = "active",
-        visible_to_user: str = "",
-        scope_filter: str = "",
-        limit: int = 8,
-    ) -> Dict[str, Any]:
+        query: Annotated[str, "Search text. Use for semantic/text lookup. Leave empty for recency/important/confirmed modes."] = "",
+        mode: Annotated[str, "Search mode: hybrid|recent|recent_created|recent_events|important|confirmed|hotset."] = "hybrid",
+        labels: Annotated[str, "Optional comma/space separated label filters, e.g. communication-style, project-scope."] = "",
+        keywords: Annotated[str, "Optional comma/space separated keyword filters or aliases."] = "",
+        kind: Annotated[str, "Optional memory kind filter, e.g. fact, preference, decision, communication_style."] = "",
+        status: Annotated[str, "Memory status filter. Usually active; use any only for explicit inspection flows."] = "active",
+        visible_to_user: Annotated[str, "Optional boolean string filter: true|false|yes|no|1|0. Empty means no visibility filter."] = "",
+        scope_filter: Annotated[str, "Scope filter: current_bundle|all_user_memories|global_only|current_bundle_or_global. Empty uses bundle config default."] = "",
+        limit: Annotated[int, "Maximum rows to return. Keep small for chat context; default 8."] = 8,
+    ) -> Annotated[Dict[str, Any], "Envelope. Success returns {ok:true, memories:[...], count:n}; mode=recent_events returns {ok:true, events:[...], count:n}. Failure returns {ok:false,error,message}."]:
         try:
             store, scope, _raw = await self._store_and_scope()
             disabled = await self._disabled_by_user(store, scope)
@@ -303,11 +389,11 @@ class UserMemoryTools:
     @kernel_function(name="recent_memories", description="Return the last N durable user memories.")
     async def recent_memories(
         self,
-        limit: int = 10,
-        created: str = "",
-        visible_to_user: str = "",
-        scope_filter: str = "",
-    ) -> Dict[str, Any]:
+        limit: Annotated[int, "Maximum recent memory rows to return. Keep small for chat context; default 10."] = 10,
+        created: Annotated[str, "Optional boolean string. true sorts by creation time; false/default sorts by recent update."] = "",
+        visible_to_user: Annotated[str, "Optional boolean string filter: true|false|yes|no|1|0. Empty means no visibility filter."] = "",
+        scope_filter: Annotated[str, "Scope filter: current_bundle|all_user_memories|global_only|current_bundle_or_global. Empty uses bundle config default."] = "",
+    ) -> Annotated[Dict[str, Any], "Envelope. Success returns {ok:true, memories:[...], count:n}. Failure returns {ok:false,error,message}."]:
         try:
             store, scope, _raw = await self._store_and_scope()
             disabled = await self._disabled_by_user(store, scope)
@@ -337,19 +423,17 @@ class UserMemoryTools:
     )
     async def record_memory(
         self,
-        memory: str,
-        context: str = "",
-        kind: str = "fact",
-        event_type: str = "agent_observation",
-        originator: str = "agent",
-        labels: str = "",
-        keywords: str = "",
-        visibility: str = "user",
-        confidence: float = 0.5,
-        importance: float = 0.5,
-        match_memory_id: str = "",
-    ) -> Dict[str, Any]:
-        del originator
+        memory: Annotated[str, "Compact durable memory text. Put the trigger/condition first, then the rule/fact/preference."],
+        context: Annotated[str, "Why/provenance/examples/disambiguation only. Do not repeat the memory text unless needed."] = "",
+        kind: Annotated[str, "Memory kind, e.g. fact, preference, decision, constraint, communication_style."] = "fact",
+        event_type: Annotated[str, "Evidence event type, e.g. agent_observation, user_edit, confirmation, refinement."] = "agent_observation",
+        labels: Annotated[str, "Optional comma/space separated stable facets for grouping/filtering."] = "",
+        keywords: Annotated[str, "Optional comma/space separated retrieval hooks, aliases, names, and likely future terms."] = "",
+        visibility: Annotated[str, "Visibility value. user/owner/public are user-visible; private/internal are not user-visible."] = "user",
+        confidence: Annotated[float, "Confidence score from 0.0 to 1.0."] = 0.5,
+        importance: Annotated[float, "Importance score from 0.0 to 1.0."] = 0.5,
+        match_memory_id: Annotated[str, "Existing memory id to refine/update. Search first; leave empty only when creating a new memory."] = "",
+    ) -> Annotated[Dict[str, Any], "Envelope. Success returns {ok:true, memory:{...}}. Failure returns {ok:false,error,message}."]:
         if not self._config.allow_write:
             return _error("memory_write_disabled", "This memory tool instance is read-only")
         try:
@@ -397,12 +481,10 @@ class UserMemoryTools:
     @kernel_function(name="confirm_memory", description="Confirm an existing durable memory by id.")
     async def confirm_memory(
         self,
-        memory_id: str,
-        note: str = "confirmed",
-        originator: str = "user",
-        importance: float = 0.7,
-    ) -> Dict[str, Any]:
-        del originator
+        memory_id: Annotated[str, "Existing durable memory id to confirm. Search first when the id is not already known."],
+        note: Annotated[str, "Short confirmation note/evidence text."] = "confirmed",
+        importance: Annotated[float, "Importance score for this confirmation event, from 0.0 to 1.0."] = 0.7,
+    ) -> Annotated[Dict[str, Any], "Envelope. Success returns {ok:true, memory:{...}} or {ok:false,error:'memory_not_found',message}."]:
         if not self._config.allow_write:
             return _error("memory_write_disabled", "This memory tool instance is read-only")
         try:
@@ -427,11 +509,9 @@ class UserMemoryTools:
     @kernel_function(name="retire_memory", description="Retire an existing durable memory by id.")
     async def retire_memory(
         self,
-        memory_id: str,
-        reason: str = "retired",
-        originator: str = "user",
-    ) -> Dict[str, Any]:
-        del originator
+        memory_id: Annotated[str, "Existing durable memory id to retire. Search first when the id is not already known."],
+        reason: Annotated[str, "Short reason for retiring the memory."] = "retired",
+    ) -> Annotated[Dict[str, Any], "Envelope. Success returns {ok:true, memory:{...}} or {ok:false,error:'memory_not_found',message}."]:
         if not self._config.allow_write:
             return _error("memory_write_disabled", "This memory tool instance is read-only")
         try:
@@ -576,17 +656,17 @@ def _disabled_error() -> Dict[str, Any]:
 
 
 async def search_memory(
-    query: str = "",
-    mode: str = "hybrid",
-    labels: str = "",
-    keywords: str = "",
-    kind: str = "",
-    status: str = "active",
-    visible_to_user: str = "",
-    scope_filter: str = "",
-    limit: int = 8,
-) -> Dict[str, Any]:
-    """Search durable cross-conversation user memory."""
+    query: Annotated[str, "Search text. Use for semantic/text lookup. Leave empty for recency/important/confirmed modes."] = "",
+    mode: Annotated[str, "Search mode: hybrid|recent|recent_created|recent_events|important|confirmed|hotset."] = "hybrid",
+    labels: Annotated[str, "Optional comma/space separated label filters, e.g. communication-style, project-scope."] = "",
+    keywords: Annotated[str, "Optional comma/space separated keyword filters or aliases."] = "",
+    kind: Annotated[str, "Optional memory kind filter, e.g. fact, preference, decision, communication_style."] = "",
+    status: Annotated[str, "Memory status filter. Usually active; use any only for explicit inspection flows."] = "active",
+    visible_to_user: Annotated[str, "Optional boolean string filter: true|false|yes|no|1|0. Empty means no visibility filter."] = "",
+    scope_filter: Annotated[str, "Scope filter: current_bundle|all_user_memories|global_only|current_bundle_or_global. Empty uses bundle config default."] = "",
+    limit: Annotated[int, "Maximum rows to return. Keep small for chat context; default 8."] = 8,
+) -> Annotated[Dict[str, Any], "Envelope. Success returns {ok:true, memories:[...], count:n}; mode=recent_events returns {ok:true, events:[...], count:n}. Failure returns {ok:false,error,message}."]:
+    """Search durable cross-conversation user memory for the current runtime user scope."""
     tools = _configured_tools()
     if tools is None:
         return _disabled_error()
@@ -604,12 +684,12 @@ async def search_memory(
 
 
 async def recent_memories(
-    limit: int = 10,
-    created: str = "",
-    visible_to_user: str = "",
-    scope_filter: str = "",
-) -> Dict[str, Any]:
-    """Return recent durable user memories."""
+    limit: Annotated[int, "Maximum recent memory rows to return. Keep small for chat context; default 10."] = 10,
+    created: Annotated[str, "Optional boolean string. true sorts by creation time; false/default sorts by recent update."] = "",
+    visible_to_user: Annotated[str, "Optional boolean string filter: true|false|yes|no|1|0. Empty means no visibility filter."] = "",
+    scope_filter: Annotated[str, "Scope filter: current_bundle|all_user_memories|global_only|current_bundle_or_global. Empty uses bundle config default."] = "",
+) -> Annotated[Dict[str, Any], "Envelope. Success returns {ok:true, memories:[...], count:n}. Failure returns {ok:false,error,message}."]:
+    """Return recent durable user memories for the current runtime user scope."""
     tools = _configured_tools()
     if tools is None:
         return _disabled_error()
@@ -622,17 +702,17 @@ async def recent_memories(
 
 
 async def record_memory(
-    memory: str,
-    context: str = "",
-    kind: str = "fact",
-    event_type: str = "agent_observation",
-    labels: str = "",
-    keywords: str = "",
-    visibility: str = "user",
-    confidence: float = 0.5,
-    importance: float = 0.5,
-    match_memory_id: str = "",
-) -> Dict[str, Any]:
+    memory: Annotated[str, "Compact durable memory text. Put the trigger/condition first, then the rule/fact/preference."],
+    context: Annotated[str, "Why/provenance/examples/disambiguation only. Do not repeat the memory text unless needed."] = "",
+    kind: Annotated[str, "Memory kind, e.g. fact, preference, decision, constraint, communication_style."] = "fact",
+    event_type: Annotated[str, "Evidence event type, e.g. agent_observation, user_edit, confirmation, refinement."] = "agent_observation",
+    labels: Annotated[str, "Optional comma/space separated stable facets for grouping/filtering."] = "",
+    keywords: Annotated[str, "Optional comma/space separated retrieval hooks, aliases, names, and likely future terms."] = "",
+    visibility: Annotated[str, "Visibility value. user/owner/public are user-visible; private/internal are not user-visible."] = "user",
+    confidence: Annotated[float, "Confidence score from 0.0 to 1.0."] = 0.5,
+    importance: Annotated[float, "Importance score from 0.0 to 1.0."] = 0.5,
+    match_memory_id: Annotated[str, "Existing memory id to refine/update. Search first; leave empty only when creating a new memory."] = "",
+) -> Annotated[Dict[str, Any], "Envelope. Success returns {ok:true, memory:{...}}. Failure returns {ok:false,error,message}."]:
     """Create or update durable user memory when the bundle policy permits writes."""
     tools = _configured_tools()
     if tools is None:
@@ -652,10 +732,10 @@ async def record_memory(
 
 
 async def confirm_memory(
-    memory_id: str,
-    note: str = "confirmed",
-    importance: float = 0.7,
-) -> Dict[str, Any]:
+    memory_id: Annotated[str, "Existing durable memory id to confirm. Search first when the id is not already known."],
+    note: Annotated[str, "Short confirmation note/evidence text."] = "confirmed",
+    importance: Annotated[float, "Importance score for this confirmation event, from 0.0 to 1.0."] = 0.7,
+) -> Annotated[Dict[str, Any], "Envelope. Success returns {ok:true, memory:{...}} or {ok:false,error:'memory_not_found',message}."]:
     """Confirm an existing durable memory by id when writes are enabled."""
     tools = _configured_tools()
     if tools is None:
@@ -664,9 +744,9 @@ async def confirm_memory(
 
 
 async def retire_memory(
-    memory_id: str,
-    reason: str = "retired",
-) -> Dict[str, Any]:
+    memory_id: Annotated[str, "Existing durable memory id to retire. Search first when the id is not already known."],
+    reason: Annotated[str, "Short reason for retiring the memory."] = "retired",
+) -> Annotated[Dict[str, Any], "Envelope. Success returns {ok:true, memory:{...}} or {ok:false,error:'memory_not_found',message}."]:
     """Retire an existing durable memory by id when writes are enabled."""
     tools = _configured_tools()
     if tools is None:

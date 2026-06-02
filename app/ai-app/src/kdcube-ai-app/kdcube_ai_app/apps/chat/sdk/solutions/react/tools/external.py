@@ -32,6 +32,13 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.common import (
     tc_result_path,
     enrich_artifact_file_metadata,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events import (
+    ReactEventPolicies,
+    emit_policy_artifact_blocks,
+    event_source_pipeline_enabled,
+    structured_result_source_policies,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events.heuristics import should_attach_binary_to_prompt
 from kdcube_ai_app.apps.chat.sdk.solutions.react.workspace import (
     extract_code_file_paths,
 )
@@ -47,62 +54,9 @@ import kdcube_ai_app.apps.chat.sdk.tools.tools_insights as tools_insights
 from kdcube_ai_app.tools.content_type import is_text_mime_type
 from kdcube_ai_app.apps.chat.sdk.util import normalize_artifact_visibility
 
-DEFAULT_VISIBLE_BINARY_BYTES = 10 * 1024 * 1024
-def _positive_int(value: Any) -> int:
-    try:
-        out = int(value)
-    except Exception:
-        return 0
-    return out if out > 0 else 0
-
-
-def _auto_binary_visibility_limit(runtime_ctx: Any) -> Dict[str, Any]:
-    read_cap = _positive_int(getattr(runtime_ctx, "read_visible_max_bytes", None)) or DEFAULT_VISIBLE_BINARY_BYTES
-    session = getattr(runtime_ctx, "session", None)
-    keep_images = _positive_int(getattr(session, "cache_truncation_keep_recent_images", None))
-    if session is not None and getattr(session, "cache_truncation_keep_recent_images", None) == 0:
-        return {
-            "bytes": 0,
-            "source": "cache_truncation_keep_recent_images",
-            "read_visible_max_bytes": read_cap,
-            "cache_truncation_keep_recent_images": 0,
-        }
-    b64_sum = _positive_int(getattr(session, "cache_truncation_max_image_pdf_b64_sum", None))
-    b64_raw_cap = (b64_sum * 3) // 4 if b64_sum else 0
-    candidates = [read_cap]
-    if b64_raw_cap:
-        candidates.append(b64_raw_cap)
-    return {
-        "bytes": min(candidates),
-        "source": "min(read_visible_max_bytes, cache_truncation_max_image_pdf_b64_sum_as_bytes)" if b64_raw_cap else "read_visible_max_bytes",
-        "read_visible_max_bytes": read_cap,
-        "cache_truncation_max_image_pdf_b64_sum": b64_sum or None,
-        "cache_truncation_keep_recent_images": keep_images or None,
-    }
-
 
 def _should_attach_binary_to_prompt(*, runtime_ctx: Any, abs_path: pathlib.Path) -> tuple[bool, Dict[str, Any]]:
-    try:
-        size_bytes = abs_path.stat().st_size
-    except Exception:
-        return True, {}
-    limit = _auto_binary_visibility_limit(runtime_ctx)
-    cap = int(limit.get("bytes") or 0)
-    if cap <= 0 or size_bytes > cap:
-        return False, {
-            "multimodal_status": "too_large_for_visible_context",
-            "size_bytes": size_bytes,
-            "visible_image_limit_bytes": cap,
-            "visible_image_limit_source": limit.get("source"),
-            "read_visible_max_bytes": limit.get("read_visible_max_bytes"),
-            "cache_truncation_max_image_pdf_b64_sum": limit.get("cache_truncation_max_image_pdf_b64_sum"),
-            "recover_with": "request a smaller screenshot/viewport, downsample/crop with exec, or inspect with react.read only if under byte caps",
-        }
-    return True, {
-        "visible_image_limit_bytes": cap,
-        "visible_image_limit_source": limit.get("source"),
-    }
-
+    return should_attach_binary_to_prompt(runtime_ctx=runtime_ctx, abs_path=abs_path)
 
 def _format_sources_pool_path(sids: List[int]) -> str:
     sids = sorted({int(s) for s in (sids or []) if isinstance(s, int) and s > 0})
@@ -373,6 +327,364 @@ def _remap_tool_sources(
         remapped.append(new_row)
     return remapped, used_sids
 
+
+def _tool_result_block_production_target(
+    *,
+    tool_id: str,
+    tool_call_id: str,
+    output: Any,
+    final_params: Dict[str, Any] | None = None,
+    turn_id: str = "",
+    summary: str = "",
+    error: Any = None,
+    call_error: Any = None,
+    raw_response: Any = None,
+) -> Dict[str, Any]:
+    ok = None
+    ret = output
+    err = error or call_error
+    if isinstance(output, dict) and ("ok" in output or "ret" in output or "error" in output):
+        ok = output.get("ok") if "ok" in output else ok
+        ret = output.get("ret") if "ret" in output else output
+        err = output.get("error") or err
+    return {
+        "tool_id": tool_id,
+        "event_source_id": tool_id,
+        "tool_call_id": tool_call_id,
+        "event_id": tool_call_id,
+        "turn_id": turn_id,
+        "tool_result_path": tc_result_path(turn_id=turn_id, call_id=tool_call_id) if turn_id else "",
+        "final_params": dict(final_params or {}),
+        "ok": ok,
+        "error": err,
+        "tool_error": error,
+        "call_error": call_error,
+        "ret": ret,
+        "raw": raw_response if raw_response is not None else output,
+        "summary": summary or "",
+        "blocks": [],
+        "result_items": [],
+        "source_rows": [],
+        "artifact_rows": [],
+        "declared_file_items": [],
+        "snapshot_refs": [],
+        "announce_candidates": [],
+        "notice_rows": [],
+        "source_rows_merge": False,
+        "result_items_produced": False,
+        "declared_file_items_produced": False,
+        "notice_rows_produced": False,
+    }
+
+
+def _apply_tool_block_production(
+    *,
+    react: Any,
+    tool_id: str,
+    tool_call_id: str,
+    output: Any,
+    final_params: Dict[str, Any] | None = None,
+    turn_id: str = "",
+    summary: str = "",
+    error: Any = None,
+    call_error: Any = None,
+    raw_response: Any = None,
+) -> Dict[str, Any] | None:
+    event_sources = getattr(getattr(react, "tools_subsystem", None), "event_sources", None)
+    if not event_source_pipeline_enabled(react):
+        return None
+    try:
+        target = _tool_result_block_production_target(
+            tool_id=tool_id,
+            tool_call_id=tool_call_id,
+            output=output,
+            final_params=final_params,
+            turn_id=turn_id,
+            summary=summary,
+            error=error,
+            call_error=call_error,
+            raw_response=raw_response,
+        )
+        source = None
+        if event_sources is not None:
+            by_event_source_id = getattr(event_sources, "by_event_source_id", None)
+            source = by_event_source_id(tool_id) if callable(by_event_source_id) else None
+        if source is not None:
+            event_sources.apply_react_phase_policies(
+                "block_production",
+                tool_id,
+                target,
+                tool_id=tool_id,
+                tool_call_id=tool_call_id,
+            )
+        else:
+            ReactEventPolicies.from_specs(structured_result_source_policies()).apply_react_phase(
+                "block_production",
+                target,
+                tool_id=tool_id,
+                tool_call_id=tool_call_id,
+            )
+        return target
+    except Exception:
+        return None
+    return None
+
+
+def _tool_call_validation_target(
+    *,
+    tool_id: str,
+    tool_call_id: str,
+    base_params: Dict[str, Any],
+    final_params: Dict[str, Any],
+    state: Dict[str, Any],
+    turn_id: str = "",
+    outdir: str = "",
+    workdir: str = "",
+    exec_streamer: Any = None,
+) -> Dict[str, Any]:
+    return {
+        "tool_id": tool_id,
+        "event_source_id": tool_id,
+        "tool_call_id": tool_call_id,
+        "event_id": tool_call_id,
+        "base_params": dict(base_params or {}),
+        "final_params": final_params,
+        "state": state,
+        "turn_id": turn_id,
+        "outdir": outdir,
+        "workdir": workdir,
+        "exec_streamer": exec_streamer,
+        "blocks": [],
+        "notice_rows": [],
+        "state_updates": {},
+        "log_rows": [],
+        "retry_decision": False,
+        "stop": False,
+    }
+
+
+async def _apply_tool_call_validation(
+    *,
+    react: Any,
+    ctx_browser: Any,
+    tool_id: str,
+    tool_call_id: str,
+    base_params: Dict[str, Any],
+    final_params: Dict[str, Any],
+    state: Dict[str, Any],
+    turn_id: str = "",
+    outdir: str = "",
+    workdir: str = "",
+    exec_streamer: Any = None,
+) -> Dict[str, Any] | None:
+    event_sources = getattr(getattr(react, "tools_subsystem", None), "event_sources", None)
+    if event_sources is not None and event_source_pipeline_enabled(react):
+        try:
+            by_event_source_id = getattr(event_sources, "by_event_source_id", None)
+            source = by_event_source_id(tool_id) if callable(by_event_source_id) else None
+            if source is not None and getattr(source.react, "tool_call_validation", ()):
+                target = _tool_call_validation_target(
+                    tool_id=tool_id,
+                    tool_call_id=tool_call_id,
+                    base_params=base_params,
+                    final_params=final_params,
+                    state=state,
+                    turn_id=turn_id,
+                    outdir=outdir,
+                    workdir=workdir,
+                    exec_streamer=exec_streamer,
+                )
+                await event_sources.apply_react_phase_policies_async(
+                    "tool_call_validation",
+                    tool_id,
+                    target,
+                    tool_id=tool_id,
+                    tool_call_id=tool_call_id,
+                    ctx_browser=ctx_browser,
+                )
+                return target
+        except Exception:
+            return None
+
+    if tools_insights.is_exec_tool(tool_id):
+        try:
+            from kdcube_ai_app.apps.chat.sdk.tools.exec_tools import exec_tool_call_validation_policy
+
+            target = _tool_call_validation_target(
+                tool_id=tool_id,
+                tool_call_id=tool_call_id,
+                base_params=base_params,
+                final_params=final_params,
+                state=state,
+                turn_id=turn_id,
+                outdir=outdir,
+                workdir=workdir,
+                exec_streamer=exec_streamer,
+            )
+            result = exec_tool_call_validation_policy(target)
+            if result is not None:
+                target = result
+            return target
+        except Exception:
+            return None
+    return None
+
+
+def _emit_validation_target_outputs(
+    *,
+    react: Any,
+    ctx_browser: Any,
+    state: Dict[str, Any],
+    target: Dict[str, Any],
+    tool_id: str,
+    tool_call_id: str,
+) -> None:
+    for row in target.get("notice_rows") or []:
+        if not isinstance(row, dict):
+            continue
+        code = str(row.get("code") or "").strip()
+        message = str(row.get("message") or "").strip()
+        if not code or not message:
+            continue
+        extra = row.get("extra")
+        notice_block(
+            ctx_browser=ctx_browser,
+            tool_call_id=tool_call_id,
+            code=code,
+            message=message,
+            extra=dict(extra) if isinstance(extra, dict) else None,
+        )
+
+    decision_reason = str(target.get("decision_raw_reason") or "").strip()
+    if decision_reason:
+        try:
+            from kdcube_ai_app.apps.chat.sdk.solutions.react.round import ReactRound
+
+            ReactRound.decision_raw(
+                ctx_browser=ctx_browser,
+                decision=state.get("last_decision_raw") or state.get("last_decision") or {},
+                iteration=int(state.get("iteration") or 0),
+                reason=decision_reason,
+            )
+        except Exception:
+            pass
+
+    for block in target.get("blocks") or []:
+        if not isinstance(block, dict):
+            continue
+        add_block(
+            ctx_browser,
+            _maybe_with_tool_event_source(
+                block,
+                react=react,
+                tool_id=tool_id,
+                tool_call_id=tool_call_id,
+            ),
+        )
+
+    if target.get("write_timeline_local"):
+        try:
+            if ctx_browser.timeline:
+                ctx_browser.timeline.write_local()
+        except Exception:
+            pass
+
+    for row in target.get("log_rows") or []:
+        if not isinstance(row, dict):
+            continue
+        message = str(row.get("message") or "").strip()
+        if not message:
+            continue
+        try:
+            ctx_browser.log.log(message, level=str(row.get("level") or "INFO"))
+        except Exception:
+            pass
+
+    updates = target.get("state_updates")
+    if isinstance(updates, dict):
+        state.update(updates)
+
+
+def _should_merge_tool_source_rows(*, react: Any, tool_id: str, rows: List[Dict[str, Any]]) -> bool:
+    event_sources = getattr(getattr(react, "tools_subsystem", None), "event_sources", None)
+    if event_sources is not None and event_source_pipeline_enabled(react):
+        try:
+            return bool(event_sources.should_merge_to_sources_pool(tool_id))
+        except Exception:
+            pass
+    return tools_insights.is_search_tool(tool_id) or tools_insights.is_fetch_uri_content_tool(tool_id)
+
+
+def _production_flag(target: Any, key: str) -> bool:
+    return bool(isinstance(target, dict) and target.get(key) is True)
+
+
+def _production_rows(target: Any, key: str) -> List[Dict[str, Any]]:
+    if not isinstance(target, dict):
+        return []
+    rows = target.get(key)
+    if not isinstance(rows, list):
+        return []
+    return [dict(row) for row in rows if isinstance(row, dict)]
+
+
+def _source_pool_sids_for_item(output: Any, remapped_source_sids: List[int]) -> List[int]:
+    sids = [int(s) for s in (remapped_source_sids or []) if isinstance(s, int) and s > 0]
+    if sids:
+        return sids
+    data = output
+    if isinstance(data, dict) and "ret" in data:
+        data = data.get("ret")
+    if not isinstance(data, list):
+        return []
+    out: List[int] = []
+    for row in data:
+        if not isinstance(row, dict) or row.get("sid") is None:
+            continue
+        try:
+            sid = int(row.get("sid") or 0)
+        except Exception:
+            sid = 0
+        if sid > 0:
+            out.append(sid)
+    return out
+
+
+def _emit_notice_rows(
+    *,
+    ctx_browser: Any,
+    tool_call_id: str,
+    rows: List[Dict[str, Any]],
+) -> None:
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        code = str(row.get("code") or "").strip()
+        message = str(row.get("message") or "").strip()
+        if not code or not message:
+            continue
+        extra = row.get("extra")
+        notice_block(
+            ctx_browser=ctx_browser,
+            tool_call_id=tool_call_id,
+            code=code,
+            message=message,
+            extra=dict(extra) if isinstance(extra, dict) else None,
+        )
+
+
+def _with_tool_event_source(block: Dict[str, Any], *, tool_id: str, tool_call_id: str) -> Dict[str, Any]:
+    # Tool-backed blocks already carry their policy source and occurrence via
+    # `tool_id` / `call_id` (or `meta.tool_call_id`). ReAct projection derives
+    # event-source identity from those fields instead of duplicating
+    # `event_source_id` / `event_id` on durable timeline blocks.
+    return block
+
+
+def _maybe_with_tool_event_source(block: Dict[str, Any], *, react: Any, tool_id: str, tool_call_id: str) -> Dict[str, Any]:
+    return block
+
+
 TOOL_SPEC = None  # external tools are dynamic
 
 
@@ -399,49 +711,239 @@ def _extract_exec_code_from_state(state: Dict[str, Any]) -> str:
     return ""
 
 
-def _exec_code_contamination(code: str) -> Dict[str, Any] | None:
-    text = code or ""
-    if not text.strip():
-        return None
-    markers = [
-        "<channel:",
-        "</channel:",
-        "<thinking>",
-        "</thinking>",
-        "<channel:thinking>",
-        "</channel:thinking>",
-        "<channel:action>",
-        "</channel:action>",
-    ]
-    lower = text.lower()
-    marker = next((m for m in markers if m.lower() in lower), "")
-    first_nonempty = ""
-    for line in text.splitlines():
-        if line.strip():
-            first_nonempty = line.strip()
-            break
-    if not marker and not first_nonempty.startswith(("```", "`")):
-        return None
-    line_no = 0
-    offending = first_nonempty
-    if marker:
-        marker_l = marker.lower()
-        for idx, line in enumerate(text.splitlines(), start=1):
-            if marker_l in line.lower():
-                line_no = idx
-                offending = line.strip()
-                break
-    return {
-        "code": "exec_code_contaminated",
-        "message": "Exec code channel contained non-code text or channel tags; no code was executed.",
-        "where": "react.exec_code_validation",
-        "marker": marker or "markdown_fence_or_backtick",
-        "line": line_no or 1,
-        "excerpt": offending[:500],
-    }
-
-
 async def handle_external_tool(*,
+                               react: Any,
+                               ctx_browser: Any,
+                               state: Dict[str, Any], tool_call_id: str) -> Dict[str, Any]:
+    if event_source_pipeline_enabled(react):
+        return await _handle_external_tool_policy_pipeline(
+            react=react,
+            ctx_browser=ctx_browser,
+            state=state,
+            tool_call_id=tool_call_id,
+        )
+    return await _handle_external_tool_legacy(
+        react=react,
+        ctx_browser=ctx_browser,
+        state=state,
+        tool_call_id=tool_call_id,
+    )
+
+
+async def _handle_external_tool_policy_pipeline(*,
+                               react: Any,
+                               ctx_browser: Any,
+                               state: Dict[str, Any], tool_call_id: str) -> Dict[str, Any]:
+    last_decision = state.get("last_decision") or {}
+    tool_call = last_decision.get("tool_call") or {}
+    tool_id = (tool_call.get("tool_id") or "").strip()
+    root_notes = (last_decision.get("notes") or "").strip()
+
+    base_params = tool_call.get("params") or {}
+    visible_paths = None
+    try:
+        visible_paths = ctx_browser.timeline_visible_paths()
+    except Exception:
+        visible_paths = None
+    final_params, content_lineage, violations = ctx_browser.bind_params_with_refs(
+        base_params=base_params,
+        tool_id=tool_id,
+        visible_paths=visible_paths,
+    )
+    ref_warnings = [
+        violation for violation in (violations or [])
+        if isinstance(violation, dict) and violation.get("severity") == "warning"
+    ]
+    violations = [
+        violation for violation in (violations or [])
+        if not (isinstance(violation, dict) and violation.get("severity") == "warning")
+    ]
+    for warning in ref_warnings:
+        notice_block(
+            ctx_browser=ctx_browser,
+            tool_call_id=tool_call_id,
+            code="protocol_warning.ref_path_normalized",
+            message=str(warning.get("message") or "A ref: binding was normalized to a visible artifact path."),
+            extra={"warning": warning, "tool_id": tool_id},
+        )
+    if violations:
+        details: List[str] = []
+        for violation in violations:
+            if not isinstance(violation, dict):
+                continue
+            msg = str(violation.get("message") or "").strip()
+            if msg:
+                details.append(msg)
+            suggested = str(violation.get("suggested_ref") or "").strip()
+            bad_path = str(violation.get("path") or "").strip()
+            if suggested and bad_path:
+                details.append(f"Use `ref:{suggested}` instead of `ref:{bad_path}`.")
+        notice_block(
+            ctx_browser=ctx_browser,
+            tool_call_id=tool_call_id,
+            code="protocol_violation.param_ref_not_visible",
+            message=" ".join(dict.fromkeys(details)) or (
+                "One or more ref: bindings are not visible to this tool call. channel=internal artifacts are private. "
+                "For rendering_tools.write_* source refs, write the source as an external artifact first "
+                "(react.write channel=canvas, or exec visibility=external)."
+            ),
+            extra={"violations": violations, "tool_id": tool_id, "protocol_violation": True},
+        )
+        state["retry_decision"] = True
+        return state
+
+    exec_streamer = state.get("exec_code_streamer")
+    validation_target = await _apply_tool_call_validation(
+        react=react,
+        ctx_browser=ctx_browser,
+        tool_id=tool_id,
+        tool_call_id=tool_call_id,
+        base_params=base_params,
+        final_params=final_params,
+        state=state,
+        turn_id=(ctx_browser.runtime_ctx.turn_id or "").strip(),
+        outdir=str(state.get("outdir") or ""),
+        workdir=str(state.get("workdir") or ""),
+        exec_streamer=exec_streamer,
+    )
+    if validation_target is not None:
+        final_params = validation_target.get("final_params") or final_params
+        _emit_validation_target_outputs(
+            react=react,
+            ctx_browser=ctx_browser,
+            state=state,
+            target=validation_target,
+            tool_id=tool_id,
+            tool_call_id=tool_call_id,
+        )
+        if validation_target.get("stop") or state.get("retry_decision"):
+            return state
+
+    tool_call_block(
+        ctx_browser=ctx_browser,
+        tool_call_id=tool_call_id,
+        tool_id=tool_id,
+        payload={
+            "tool_id": tool_id,
+            "tool_call_id": tool_call_id,
+            "params": tool_call.get("params") or {},
+        },
+    )
+
+    tool_response = await execute_tool(
+        runtime_ctx=ctx_browser.runtime_ctx,
+        tool_execution_context={
+            "tool_id": tool_id,
+            "params": final_params,
+            "reasoning": root_notes,
+        },
+        workdir=pathlib.Path(state["workdir"]),
+        outdir=pathlib.Path(state["outdir"]),
+        tool_manager=react.tools_subsystem,
+        logger=react.log,
+        tool_call_id=tool_call_id,
+        exec_streamer=exec_streamer,
+    )
+
+    call_error = tool_response.get("call_error") if isinstance(tool_response, dict) else None
+    def _strip_managed(err: Any) -> Any:
+        if not isinstance(err, dict):
+            return err
+        cleaned = {k: v for k, v in err.items() if k != "managed"}
+        details = cleaned.get("details")
+        if isinstance(details, dict):
+            if "managed" in details:
+                details = {k: v for k, v in details.items() if k != "managed"}
+            tool_err = details.get("tool_error")
+            if isinstance(tool_err, dict) and "managed" in tool_err:
+                tool_err = {k: v for k, v in tool_err.items() if k != "managed"}
+                details["tool_error"] = tool_err
+            cleaned["details"] = details
+        return cleaned
+    call_error = _strip_managed(call_error) if call_error else call_error
+    output = tool_response.get("output") if isinstance(tool_response, dict) else None
+    summary = tool_response.get("summary") if isinstance(tool_response, dict) else ""
+    tool_err = tool_response.get("error") if isinstance(tool_response, dict) else None
+
+    remapped_source_sids: List[int] = []
+    production_target = _apply_tool_block_production(
+        react=react,
+        tool_id=tool_id,
+        tool_call_id=tool_call_id,
+        output=output,
+        final_params=final_params,
+        turn_id=ctx_browser.runtime_ctx.turn_id or "",
+        summary=summary or "",
+        error=tool_err,
+        call_error=call_error,
+        raw_response=tool_response,
+    )
+    if isinstance(production_target, dict):
+        try:
+            rows = [dict(row) for row in production_target.get("source_rows", []) if isinstance(row, dict)]
+            if rows and _production_flag(production_target, "source_rows_merge"):
+                remapped_rows, remapped_source_sids = _remap_tool_sources(
+                    ctx_browser=ctx_browser,
+                    rows=rows,
+                )
+                if remapped_rows:
+                    output = remapped_rows
+                    for item in production_target.get("result_items") or []:
+                        if not isinstance(item, dict):
+                            continue
+                        item_output = item.get("output")
+                        if item_output is production_target.get("ret") or (
+                            isinstance(item_output, list)
+                            and any(isinstance(row, dict) and row.get("url") for row in item_output)
+                        ):
+                            item["output"] = remapped_rows
+        except Exception:
+            pass
+    if isinstance(production_target, dict) and production_target.get("blocks"):
+        for block in production_target.get("blocks") or []:
+            if not isinstance(block, dict):
+                continue
+            add_block(ctx_browser, _maybe_with_tool_event_source(
+                block,
+                react=react,
+                tool_id=tool_id,
+                tool_call_id=tool_call_id,
+            ))
+    items = []
+    if isinstance(production_target, dict):
+        items.extend(_production_rows(production_target, "result_items"))
+        items.extend(_production_rows(production_target, "artifact_rows"))
+    if _production_flag(production_target, "notice_rows_produced"):
+        _emit_notice_rows(
+            ctx_browser=ctx_browser,
+            tool_call_id=tool_call_id,
+            rows=_production_rows(production_target, "notice_rows"),
+        )
+    declared_file_items = (
+        _production_rows(production_target, "declared_file_items")
+        if _production_flag(production_target, "declared_file_items_produced")
+        else []
+    )
+    items = await emit_policy_artifact_blocks(
+        react=react,
+        ctx_browser=ctx_browser,
+        state=state,
+        tool_id=tool_id,
+        tool_call_id=tool_call_id,
+        final_params=final_params,
+        tool_response=tool_response,
+        content_lineage=content_lineage,
+        items=items,
+        declared_file_items=declared_file_items,
+        remapped_source_sids=remapped_source_sids,
+        notice_rows_produced=_production_flag(production_target, "notice_rows_produced"),
+    )
+    state["last_tool_result"] = items
+    state["last_tool_id"] = tool_id
+    return state
+
+
+async def _handle_external_tool_legacy(*,
                                react: Any,
                                ctx_browser: Any,
                                state: Dict[str, Any], tool_call_id: str) -> Dict[str, Any]:
@@ -508,6 +1010,7 @@ async def handle_external_tool(*,
     # If exec tool: normalize contract/code + rehost any referenced historical files before execution
     if tools_insights.is_exec_tool(tool_id):
         from kdcube_ai_app.apps.chat.sdk.tools.exec_tools import (
+            detect_exec_code_contamination,
             normalize_exec_contract_for_turn,
             rewrite_exec_code_paths,
         )
@@ -587,7 +1090,7 @@ async def handle_external_tool(*,
                 pass
             state["retry_decision"] = True
             return state
-        contamination = _exec_code_contamination(code_txt)
+        contamination = detect_exec_code_contamination(code_txt)
         if contamination:
             notice_block(
                 ctx_browser=ctx_browser,
@@ -1024,9 +1527,17 @@ async def handle_external_tool(*,
             isinstance(raw_value_for_host, dict)
             and (raw_value_for_host.get("type") == "file" or raw_value_for_host.get("path"))
         )
+        path_backed_artifact = bool(
+            value_looks_like_file
+            or tools_insights.is_exec_tool(tool_id)
+            or tools_insights.is_write_tool(tool_id)
+        )
         should_host_artifact = bool(
-            visibility == "external"
-            or (visibility == "internal" and value_looks_like_file)
+            path_backed_artifact
+            and (
+                visibility == "external"
+                or (visibility == "internal" and value_looks_like_file)
+            )
         )
         if should_host_artifact:
             hosted = await host_artifact_file(
@@ -1045,7 +1556,7 @@ async def handle_external_tool(*,
 
         phys_path = ""
         rel_path = ""
-        should_resolve_file_path = visibility in {"external", "internal"} or tools_insights.is_exec_tool(tool_id)
+        should_resolve_file_path = path_backed_artifact
         if should_resolve_file_path:
             if phys_path_override or rel_path_override:
                 phys_path = phys_path_override

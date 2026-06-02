@@ -8,10 +8,12 @@ import asyncio
 import json
 import re
 import pathlib
+import time
 import traceback
 import uuid
 import tarfile
 import zipfile
+from collections.abc import Mapping, MutableMapping
 from typing import Any, Dict, Optional, Annotated, Tuple, List
 
 import semantic_kernel as sk
@@ -39,6 +41,17 @@ from kdcube_ai_app.apps.chat.sdk.runtime.workspace import (
 from kdcube_ai_app.apps.chat.sdk.runtime.snapshot import build_portable_spec
 from kdcube_ai_app.apps.chat.sdk.runtime.exec_runtime_config import resolve_exec_runtime_profile
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
+from kdcube_ai_app.apps.chat.sdk.events import event_source
+from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
+    build_tool_result_error_block,
+    physical_path_to_logical_path,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events import (
+    block_production_policy,
+    default_tool_event_policies,
+    tool_call_validation_policy,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.react.workspace import extract_code_file_paths
 from kdcube_ai_app.apps.chat.sdk.util import (
     LINE_NUMBERS_DISABLED,
     LINE_NUMBERS_LINES,
@@ -593,6 +606,334 @@ def rewrite_exec_code_paths(
     return "".join(out_parts), rewrites
 
 
+EXEC_TOOL_CALL_VALIDATION_POLICY_ID = "exec_tools.tool_call_validation.exec_preflight"
+
+
+def _validation_notices(target: MutableMapping[str, Any]) -> List[Dict[str, Any]]:
+    rows = target.setdefault("notice_rows", [])
+    return rows if isinstance(rows, list) else []
+
+
+def _validation_blocks(target: MutableMapping[str, Any]) -> List[Dict[str, Any]]:
+    rows = target.setdefault("blocks", [])
+    return rows if isinstance(rows, list) else []
+
+
+def _validation_state_updates(target: MutableMapping[str, Any]) -> MutableMapping[str, Any]:
+    updates = target.setdefault("state_updates", {})
+    return updates if isinstance(updates, MutableMapping) else {}
+
+
+def _add_validation_notice(
+    target: MutableMapping[str, Any],
+    *,
+    code: str,
+    message: str,
+    extra: Mapping[str, Any] | None = None,
+) -> None:
+    _validation_notices(target).append(
+        {
+            "code": str(code or "").strip(),
+            "message": str(message or "").strip(),
+            "extra": dict(extra or {}),
+        }
+    )
+
+
+def _stop_exec_validation(
+    target: MutableMapping[str, Any],
+    *,
+    error_code: str,
+    message: str,
+    details: Mapping[str, Any] | None = None,
+    last_tool_result: List[Dict[str, Any]] | None = None,
+) -> None:
+    tool_id = str(target.get("tool_id") or target.get("event_source_id") or "").strip()
+    tool_call_id = str(target.get("tool_call_id") or target.get("event_id") or "").strip()
+    turn_id = str(target.get("turn_id") or "").strip()
+    _validation_blocks(target).append(
+        build_tool_result_error_block(
+            turn_id=turn_id,
+            tool_call_id=tool_call_id,
+            code=error_code,
+            message=message,
+            details=dict(details or {}),
+        )
+    )
+    target["retry_decision"] = True
+    target["stop"] = True
+    updates = _validation_state_updates(target)
+    updates["retry_decision"] = True
+    updates["last_tool_id"] = tool_id
+    updates["last_tool_result"] = list(last_tool_result or [])
+
+
+def _exec_validation_extract_code(state: Mapping[str, Any]) -> str:
+    exec_streamer = state.get("exec_code_streamer")
+    if exec_streamer:
+        try:
+            code_txt = exec_streamer.get_code() or ""
+            if isinstance(code_txt, str) and code_txt:
+                return code_txt
+        except Exception:
+            pass
+
+    packet = state.get("last_decision_raw")
+    if isinstance(packet, Mapping):
+        channels = packet.get("channels") or {}
+        if isinstance(channels, Mapping):
+            code = channels.get("code") or {}
+            if isinstance(code, Mapping):
+                text = code.get("text")
+                if isinstance(text, str) and text:
+                    return text
+
+    return ""
+
+
+def detect_exec_code_contamination(code: str) -> Dict[str, Any] | None:
+    """Return a managed validation error when an exec code channel is contaminated.
+
+    Exec accepts raw Python only. This detector rejects channel tags, thinking
+    markup, and markdown fences before the code reaches any runtime. It is used
+    by the exec tool-call validation policy and by the legacy external-tool
+    fallback while the policy pipeline is feature-flagged.
+    """
+    text = code or ""
+    if not text.strip():
+        return None
+    markers = [
+        "<channel:",
+        "</channel:",
+        "<thinking>",
+        "</thinking>",
+        "<channel:thinking>",
+        "</channel:thinking>",
+        "<channel:action>",
+        "</channel:action>",
+    ]
+    lower = text.lower()
+    marker = next((m for m in markers if m.lower() in lower), "")
+    first_nonempty = ""
+    for line in text.splitlines():
+        if line.strip():
+            first_nonempty = line.strip()
+            break
+    if not marker and not first_nonempty.startswith(("```", "`")):
+        return None
+    line_no = 0
+    offending = first_nonempty
+    if marker:
+        marker_l = marker.lower()
+        for idx, line in enumerate(text.splitlines(), start=1):
+            if marker_l in line.lower():
+                line_no = idx
+                offending = line.strip()
+                break
+    return {
+        "code": "exec_code_contaminated",
+        "message": "Exec code channel contained non-code text or channel tags; no code was executed.",
+        "where": "react.exec_code_validation",
+        "marker": marker or "markdown_fence_or_backtick",
+        "line": line_no or 1,
+        "excerpt": offending[:500],
+    }
+
+
+@tool_call_validation_policy(event_policy_id=EXEC_TOOL_CALL_VALIDATION_POLICY_ID)
+def exec_tool_call_validation_policy(
+    target: MutableMapping[str, Any],
+    **_: Any,
+) -> MutableMapping[str, Any]:
+    """Validate and normalize an exec ReAct tool call before execution.
+
+    This policy owns the exec-specific preflight behavior that used to live in
+    the shared external-tool handler:
+
+    - normalize the output contract to the current turn;
+    - require code in the code channel and reject contaminated code;
+    - rewrite current-turn relative artifact refs inside code;
+    - emit the model-visible `react.tool.code` block;
+    - require `react.pull` for historical files that are not materialized.
+
+    The policy mutates the call-validation target. It never executes code.
+    """
+    if not isinstance(target, MutableMapping):
+        return target
+    final_params = target.get("final_params")
+    if not isinstance(final_params, MutableMapping):
+        final_params = {}
+        target["final_params"] = final_params
+    state = target.get("state") if isinstance(target.get("state"), Mapping) else {}
+    tool_id = str(target.get("tool_id") or target.get("event_source_id") or "").strip()
+    tool_call_id = str(target.get("tool_call_id") or target.get("event_id") or "").strip()
+    turn_id = str(target.get("turn_id") or "").strip()
+
+    base_contract = final_params.get("contract")
+    normalized_contract, contract_rewrites, contract_err = normalize_exec_contract_for_turn(
+        base_contract,
+        turn_id=turn_id,
+    )
+    if contract_err:
+        _add_validation_notice(
+            target,
+            code="protocol_violation.exec_contract_invalid",
+            message=contract_err.get("message") or "Invalid exec contract",
+            extra={"error": contract_err, "tool_id": tool_id, "protocol_violation": True},
+        )
+        target["retry_decision"] = True
+        target["stop"] = True
+        _validation_state_updates(target)["retry_decision"] = True
+        return target
+    if contract_rewrites:
+        _add_validation_notice(
+            target,
+            code="protocol_violation.exec_contract_rewritten",
+            message="Exec contract filenames were rewritten to current turn files/ paths.",
+            extra={"rewritten": contract_rewrites, "tool_id": tool_id},
+        )
+    if normalized_contract is not None:
+        final_params["contract"] = normalized_contract
+
+    code_txt = _exec_validation_extract_code(state)
+    if not code_txt:
+        _add_validation_notice(
+            target,
+            code="protocol_violation.exec_missing_code",
+            message="Exec tool requires code in <channel:code>; no code was received.",
+            extra={"tool_id": tool_id},
+        )
+        error_payload = {
+            "tool_id": tool_id,
+            "reason": "missing_channel.code",
+            "recovery": (
+                "Use exec only when raw Python is emitted in channel:code. "
+                "For ordinary PDF/PPTX/DOCX rendering, call rendering_tools.write_* directly."
+            ),
+        }
+        target["decision_raw_reason"] = "missing_channel.code"
+        _stop_exec_validation(
+            target,
+            error_code="exec_missing_code",
+            message="Exec tool requires raw Python in channel:code; no code was received.",
+            details=error_payload,
+            last_tool_result=[{
+                "artifact_id": tool_id,
+                "output": None,
+                "summary": "",
+                "error": {
+                    "code": "exec_missing_code",
+                    "message": "Exec tool requires raw Python in channel:code; no code was received.",
+                    "details": error_payload,
+                },
+            }],
+        )
+        return target
+
+    contamination = detect_exec_code_contamination(code_txt)
+    if contamination:
+        _add_validation_notice(
+            target,
+            code="protocol_violation.exec_code_contaminated",
+            message=contamination["message"],
+            extra={**contamination, "tool_id": tool_id},
+        )
+        _stop_exec_validation(
+            target,
+            error_code=contamination["code"],
+            message=contamination["message"],
+            details=contamination,
+            last_tool_result=[{
+                "artifact_id": tool_id,
+                "output": None,
+                "summary": "",
+                "error": contamination,
+            }],
+        )
+        return target
+
+    rewritten_code, code_rewrites = rewrite_exec_code_paths(code_txt, turn_id=turn_id)
+    if rewritten_code != code_txt:
+        code_txt = rewritten_code
+        final_params["code"] = rewritten_code
+        exec_streamer = target.get("exec_streamer")
+        if exec_streamer:
+            try:
+                exec_streamer.set_code(rewritten_code)
+            except Exception:
+                pass
+    elif code_txt:
+        final_params["code"] = code_txt
+    if code_rewrites:
+        _add_validation_notice(
+            target,
+            code="protocol_violation.exec_code_rewritten",
+            message="Exec code contained relative files/ or attachments/ paths; rewritten to current turn.",
+            extra={"rewritten": code_rewrites, "tool_id": tool_id},
+        )
+
+    if code_txt:
+        lang = ""
+        exec_streamer = target.get("exec_streamer")
+        if exec_streamer:
+            try:
+                lang = (exec_streamer.subsystem_language or "").strip()
+            except Exception:
+                lang = ""
+        mime = "text/x-python" if (lang or "").lower() in {"python", "py"} else "text/plain"
+        _validation_blocks(target).append(
+            {
+                "type": "react.tool.code",
+                "call_id": tool_call_id,
+                "tool_id": tool_id,
+                "mime": mime,
+                "path": f"fi:{turn_id}.code.{tool_call_id}" if turn_id else "",
+                "text": code_txt,
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "meta": {
+                    "lang": lang or "python",
+                    "kind": "file",
+                    "tool_call_id": tool_call_id,
+                    "tool_id": tool_id,
+                },
+            }
+        )
+
+    paths, rewritten_paths = extract_code_file_paths(code_txt, turn_id=turn_id) if code_txt else ([], [])
+    target["write_timeline_local"] = True
+    if rewritten_paths:
+        _add_validation_notice(
+            target,
+            code="protocol_violation.exec_path_rewritten",
+            message="Exec code referenced relative files/… paths; rewritten to current turn.",
+            extra={"rewritten": rewritten_paths},
+        )
+        target.setdefault("log_rows", []).append(
+            {
+                "level": "WARNING",
+                "message": f"[react] exec_path_rewritten: {rewritten_paths}",
+            }
+        )
+    if paths:
+        outdir = pathlib.Path(str(target.get("outdir") or ""))
+        missing_local = [p for p in paths if not resolve_artifact_path(outdir, p).exists()]
+        if missing_local:
+            logical_missing = [physical_path_to_logical_path(p) or p for p in missing_local]
+            pull_hint = f"react.pull(paths={json.dumps(logical_missing, ensure_ascii=False)})"
+            _stop_exec_validation(
+                target,
+                error_code="pre_exec_pull_required",
+                message="Exec code referenced historical files that are not materialized locally. Use react.pull(paths=[...]) first.",
+                details={
+                    "missing": missing_local,
+                    "logical_missing": logical_missing,
+                    "pull_hint": pull_hint,
+                },
+                last_tool_result=[],
+            )
+    return target
+
+
 def build_exec_output_contract(
     artifacts: Any,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[List[Dict[str, Any]]], Optional[Dict[str, Any]]]:
@@ -706,7 +1047,85 @@ def _build_exec_error_payload(
     }
 
 
+EXEC_RESULT_BLOCK_PRODUCTION_POLICY_ID = "exec_tools.block_production.exec_result"
+
+
+def exec_tool_event_policies() -> list[dict[str, Any]]:
+    """Return ReAct event policies for the Python exec tool.
+
+    Exec is not an exploration tool by default. Its tool result has an
+    exec-specific shape: `raw.report_text` is a human-readable execution report
+    and `raw.items` are artifact rows produced by the isolated runtime.
+    """
+    return [
+        *default_tool_event_policies(),
+        {
+            "react_phase": "tool_call_validation",
+            "event_policy_id": EXEC_TOOL_CALL_VALIDATION_POLICY_ID,
+        },
+        {
+            "react_phase": "block_production",
+            "event_policy_id": EXEC_RESULT_BLOCK_PRODUCTION_POLICY_ID,
+        },
+    ]
+
+
+@block_production_policy(event_policy_id=EXEC_RESULT_BLOCK_PRODUCTION_POLICY_ID)
+def exec_result_block_production_policy(
+    target: MutableMapping[str, Any],
+    **_: Any,
+) -> MutableMapping[str, Any]:
+    """Project exec raw result surfaces into the production accumulator.
+
+    The generic `react.tool.call` block is already produced by the harness before
+    execution. This policy only handles the result side:
+
+    - `raw.report_text` becomes a `react.tool.result` markdown block candidate;
+    - `raw.items` become `artifact_rows`, preserving the current exec artifact
+      loop shape used by `external.py`;
+    - no exploration/source-pool rows are produced by default.
+    """
+    if not isinstance(target, MutableMapping):
+        return target
+    raw = target.get("raw") if isinstance(target.get("raw"), Mapping) else {}
+    target.setdefault("blocks", [])
+    target.setdefault("artifact_rows", [])
+
+    report_text = str(raw.get("report_text") or "").strip()
+    if report_text and isinstance(target.get("blocks"), list):
+        turn_id = str(target.get("turn_id") or "").strip()
+        tool_call_id = str(target.get("tool_call_id") or target.get("event_id") or "").strip()
+        path = str(target.get("tool_result_path") or "").strip()
+        target["blocks"].append({
+            "turn": turn_id,
+            "type": "react.tool.result",
+            "call_id": tool_call_id,
+            "mime": "text/markdown",
+            "path": path,
+            "text": report_text,
+            "meta": {"tool_call_id": tool_call_id},
+        })
+
+    raw_items = raw.get("items")
+    if isinstance(raw_items, list) and isinstance(target.get("artifact_rows"), list):
+        for item in raw_items:
+            if not isinstance(item, Mapping):
+                continue
+            row = dict(item)
+            row.setdefault("visibility", "external")
+            row.setdefault("emit_hosted_file", True)
+            row.setdefault("resolve_file_path", True)
+            target["artifact_rows"].append(row)
+    return target
+
+
 class ExecTools:
+    @event_source(
+        event_source_id="{alias}.execute_code_python",
+        policies=exec_tool_event_policies(),
+        description="Execute generated Python in the isolated runtime and produce existing ReAct execution report/artifact blocks.",
+        kind="react.tool",
+    )
     @kernel_function(
         name="execute_code_python",
         description=(

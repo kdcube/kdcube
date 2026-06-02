@@ -10,6 +10,12 @@ from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Optional, Tuple
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.proto import ToolCallView
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events.common import event_source_pipeline_enabled
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events.projection import (
+    apply_event_source_transformers,
+    clear_timeline_segment_marks,
+    patch_timeline_segment_marks,
+)
 import kdcube_ai_app.apps.chat.sdk.tools.tools_insights as tools_insights
 from kdcube_ai_app.apps.chat.sdk.util import token_count
 
@@ -1071,6 +1077,43 @@ def apply_cache_ttl_pruning(
                 call_meta[call_id] = {"tool_id": tool_id, "payload": payload}
             continue
 
+    def _event_source_timeline_segment(block: Dict[str, Any]) -> str:
+        turn_id = _extract_turn_id(block)
+        current_turn_id = str(getattr(getattr(timeline, "runtime", None), "turn_id", "") or "").strip()
+        if current_turn_id and turn_id == current_turn_id:
+            return "current"
+        if turn_id and turn_id in intact_turns:
+            return "intact_recent"
+        if turn_id and turn_id in recent_turns:
+            return "recent"
+        return "old"
+
+    event_policy_applied = False
+    try:
+        runtime = getattr(timeline, "runtime", None)
+        event_sources = getattr(runtime, "event_sources", None)
+        if event_sources is not None and event_source_pipeline_enabled(runtime):
+            patch_timeline_segment_marks(blocks, timeline_segment_fn=_event_source_timeline_segment)
+            apply_event_source_transformers(
+                event_sources=event_sources,
+                react_phase="timeline_projection",
+                timeline_blocks=blocks,
+                recent_turns=recent_turns,
+                intact_turns=intact_turns,
+                keep_recent_turns=keep_recent_turns,
+                keep_recent_intact_turns=keep_recent_intact_turns,
+                call_meta=call_meta,
+                cfg=cfg,
+            )
+            event_policy_applied = True
+    except Exception:
+        pass
+    finally:
+        try:
+            clear_timeline_segment_marks(blocks)
+        except Exception:
+            pass
+
     # Image/PDF keep set (only within recent turns)
     image_candidates: List[Tuple[int, str, int]] = []
     for idx, blk in enumerate(blocks):
@@ -1135,6 +1178,9 @@ def apply_cache_ttl_pruning(
 
         btype = (blk.get("type") or "").strip()
         if btype == "react.plan.history":
+            continue
+        meta_existing = blk.get("meta") if isinstance(blk.get("meta"), dict) else {}
+        if event_policy_applied and (blk.get("hidden") or meta_existing.get("hidden")):
             continue
         if btype in SUPPRESS_OLD_TTL_REPLACEMENT_TYPES:
             rep = ""

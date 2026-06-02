@@ -50,6 +50,12 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
 from kdcube_ai_app.apps.chat.sdk.solutions.react.compaction_memory import (
     build_internal_note_compaction_result,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events.common import event_source_pipeline_enabled
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events.projection import (
+    apply_event_source_transformers,
+    clear_timeline_segment_marks,
+    patch_timeline_segment_marks,
+)
 from kdcube_ai_app.infra.service_hub.multimodality import (
     MODALITY_DOC_MIME,
     MODALITY_IMAGE_MIME,
@@ -1525,6 +1531,83 @@ class Timeline:
             self.announce_blocks = []
         else:
             self.announce_blocks = [b for b in (blocks or []) if isinstance(b, dict)]
+
+    def _event_sources(self) -> Any:
+        return getattr(self.runtime, "event_sources", None)
+
+    def _event_source_pipeline_enabled(self) -> bool:
+        return bool(event_source_pipeline_enabled(self.runtime) and self._event_sources() is not None)
+
+    def _timeline_segment_for_render(self, block: Dict[str, Any]) -> str:
+        turn_id = str(block.get("turn_id") or block.get("turn") or "").strip()
+        current_turn_id = str(getattr(self.runtime, "turn_id", "") or "").strip()
+        if current_turn_id and turn_id == current_turn_id:
+            return "current"
+        meta = block.get("meta") if isinstance(block.get("meta"), dict) else {}
+        hidden_scope = str(meta.get("hidden_prune_scope") or "").strip()
+        if hidden_scope == "cold_recent":
+            return "recent"
+        if hidden_scope == "old_turn":
+            return "old"
+        return ""
+
+    def _apply_event_source_timeline_projection(
+        self,
+        blocks: List[Dict[str, Any]],
+        *,
+        timeline_blocks: Optional[List[Dict[str, Any]]] = None,
+        **context: Any,
+    ) -> List[Dict[str, Any]]:
+        if not self._event_source_pipeline_enabled() or not blocks:
+            return blocks
+        try:
+            patch_timeline_segment_marks(blocks, timeline_segment_fn=self._timeline_segment_for_render)
+            apply_event_source_transformers(
+                event_sources=self._event_sources(),
+                react_phase="timeline_projection",
+                timeline_blocks=blocks,
+                current_turn_id=str(getattr(self.runtime, "turn_id", "") or ""),
+                full_timeline_blocks=timeline_blocks or self._collect_blocks(),
+                **context,
+            )
+            return blocks
+        except Exception:
+            logger.debug("[react.event_source.timeline_projection_failed]", exc_info=True)
+            return blocks
+        finally:
+            try:
+                clear_timeline_segment_marks(blocks)
+            except Exception:
+                pass
+
+    def _apply_event_source_compaction_projection(
+        self,
+        blocks: List[Dict[str, Any]],
+        *,
+        timeline_blocks: Optional[List[Dict[str, Any]]] = None,
+        **context: Any,
+    ) -> List[Dict[str, Any]]:
+        if not self._event_source_pipeline_enabled() or not blocks:
+            return blocks
+        try:
+            patch_timeline_segment_marks(blocks, timeline_segment_fn=self._timeline_segment_for_render)
+            apply_event_source_transformers(
+                event_sources=self._event_sources(),
+                react_phase="compaction_projection",
+                timeline_blocks=blocks,
+                current_turn_id=str(getattr(self.runtime, "turn_id", "") or ""),
+                full_timeline_blocks=timeline_blocks or self._collect_blocks(),
+                **context,
+            )
+            return blocks
+        except Exception:
+            logger.debug("[react.event_source.compaction_projection_failed]", exc_info=True)
+            return blocks
+        finally:
+            try:
+                clear_timeline_segment_marks(blocks)
+            except Exception:
+                pass
 
     def is_cache_hot(self, *, buffer_seconds: Optional[int] = None) -> bool:
         """
@@ -4471,6 +4554,14 @@ class Timeline:
             original_cut_index = cut_index
             prefix_summary = ""
             prefix_blocks_for_summary = copy.deepcopy(blocks[protected_turn_start_index:original_cut_index])
+            prefix_blocks_for_summary = self._apply_event_source_compaction_projection(
+                prefix_blocks_for_summary,
+                timeline_blocks=blocks,
+                compaction_kind=compaction_kind,
+                compaction_id=compaction_id,
+                compaction_slice="current_turn_prefix",
+                split_turn_id=split_turn_id,
+            )
             if prefix_blocks_for_summary:
                 try:
                     prefix_working_summary_blocks = self._working_summary_blocks_for_turns(
@@ -4552,6 +4643,16 @@ class Timeline:
             for blk in raw_history_blocks
         )
         history_blocks = raw_history_blocks if history_has_meaningful_blocks else []
+        if history_blocks:
+            history_blocks = self._apply_event_source_compaction_projection(
+                history_blocks,
+                timeline_blocks=blocks,
+                compaction_kind=compaction_kind,
+                compaction_id=compaction_id,
+                compaction_slice="history",
+                boundary_start=boundary_start,
+                cut_index=cut_index,
+            )
 
         if split_current_turn and not history_blocks:
             self.blocks = list(blocks)
@@ -4623,6 +4724,14 @@ class Timeline:
 
         prefix_summary: Optional[str] = None
         if turn_prefix_blocks:
+            turn_prefix_blocks = self._apply_event_source_compaction_projection(
+                turn_prefix_blocks,
+                timeline_blocks=blocks,
+                compaction_kind=compaction_kind,
+                compaction_id=compaction_id,
+                compaction_slice="split_turn_prefix",
+                split_turn_id=split_turn_id,
+            )
             prefix_working_summary_blocks = self._working_summary_blocks_for_turns(
                 blocks=blocks,
                 turn_ids=extract_turn_ids_from_blocks(turn_prefix_blocks),
@@ -5076,6 +5185,13 @@ class Timeline:
         visible_blocks = self._slice_after_compaction_summary(blocks)
         visible_blocks = self._restore_missing_turn_headers_for_render(visible_blocks)
         visible_blocks = self._apply_hidden_replacements(visible_blocks)
+        visible_blocks = self._apply_event_source_timeline_projection(
+            visible_blocks,
+            timeline_blocks=blocks,
+            cache_last=bool(cache_last),
+            include_sources=bool(include_sources),
+            include_announce=bool(include_announce),
+        )
         visible_blocks = self._apply_render_directives_before_cache(visible_blocks)
         self._apply_cache_markers(visible_blocks, cache_last=cache_last)
         if debug_cache_trace:

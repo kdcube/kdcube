@@ -31,10 +31,10 @@ bundle config
   |     inject compact memory hotset into ReAct announce
   |
   +-- memory.tools.enabled
-        future read/search/write tools for agents
+        search/recent/read-write tools for agents, gated by allow_write
 ```
 
-Current safe phase:
+Safe rollout shape:
 
 ```text
 user creates/edits memories in widget
@@ -50,6 +50,28 @@ Postgres user_memory_entries/events/aliases
 In this phase, the user widget is the primary write surface. ReAct can see
 memories through announce when configured, but conversational write tools should
 remain disabled until memory-write policy is explicitly enabled.
+
+When `memory.tools.enabled=true`, the SDK memory tool module exposes these
+ReAct tool ids when registered with alias `memory`:
+
+```text
+memory.search_memory
+memory.recent_memories
+memory.record_memory
+memory.confirm_memory
+memory.retire_memory
+```
+
+`search_memory` and `recent_memories` are read tools. `record_memory`,
+`confirm_memory`, and `retire_memory` are state-changing tools and require
+`memory.tools.allow_write=true`. The tools return structured JSON result
+envelopes and are declared as ReAct event sources through
+`list_event_sources()` in
+`kdcube_ai_app.apps.chat.sdk.context.memory.tools`. Their default block
+production is the shared structured-result path, so memory results render as
+ordinary tool-result blocks and do not inject files, source rows, snapshots, or
+announce entries unless a later memory-specific policy explicitly adds that
+surface.
 
 ## Full Bundle Config
 

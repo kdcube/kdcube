@@ -8,6 +8,8 @@ except Exception:
     from semantic_kernel.utils.function_decorator import kernel_function
 
 from kdcube_ai_app.apps.chat.sdk.tools.backends.browser_backend import run_browser_action
+from kdcube_ai_app.apps.chat.sdk.events import event_source
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events import structured_result_source_policies
 
 
 _SERVICE = None
@@ -81,6 +83,12 @@ async def _host_internal_files(ret: Any) -> Any:
 
 
 class BrowserTools:
+    @event_source(
+        event_source_id="{alias}.open_page",
+        policies=structured_result_source_policies(),
+        description="Open or inspect a page in the turn-scoped browser and produce existing ReAct page-state/artifact blocks.",
+        kind="react.tool",
+    )
     @kernel_function(
         name="open_page",
         description=(
@@ -130,6 +138,12 @@ class BrowserTools:
         except Exception as exc:
             return _err(where="browser_tools.open_page", exc=exc)
 
+    @event_source(
+        event_source_id="{alias}.click",
+        policies=structured_result_source_policies(),
+        description="Click in the turn-scoped browser and produce existing ReAct page-state/artifact blocks.",
+        kind="react.tool",
+    )
     @kernel_function(
         name="click",
         description=(
@@ -171,6 +185,12 @@ class BrowserTools:
         except Exception as exc:
             return _err(where="browser_tools.click", exc=exc)
 
+    @event_source(
+        event_source_id="{alias}.fill",
+        policies=structured_result_source_policies(),
+        description="Fill a browser control and produce existing ReAct page-state/artifact blocks.",
+        kind="react.tool",
+    )
     @kernel_function(
         name="fill",
         description=(
@@ -213,6 +233,12 @@ class BrowserTools:
         except Exception as exc:
             return _err(where="browser_tools.fill", exc=exc)
 
+    @event_source(
+        event_source_id="{alias}.scroll",
+        policies=structured_result_source_policies(),
+        description="Scroll an open browser tab and produce existing ReAct page-state/artifact blocks.",
+        kind="react.tool",
+    )
     @kernel_function(
         name="scroll",
         description=(
@@ -261,6 +287,12 @@ class BrowserTools:
         except Exception as exc:
             return _err(where="browser_tools.scroll", exc=exc)
 
+    @event_source(
+        event_source_id="{alias}.status",
+        policies=structured_result_source_policies(),
+        description="Inspect an open browser tab and produce existing ReAct page-state/artifact blocks.",
+        kind="react.tool",
+    )
     @kernel_function(
         name="status",
         description=(
@@ -296,6 +328,12 @@ class BrowserTools:
         except Exception as exc:
             return _err(where="browser_tools.status", exc=exc)
 
+    @event_source(
+        event_source_id="{alias}.close",
+        policies=structured_result_source_policies(),
+        description="Close a browser tab/session and produce the existing ReAct tool-result block.",
+        kind="react.tool",
+    )
     @kernel_function(
         name="close",
         description=(

@@ -177,6 +177,7 @@ The proc service reads these non-secret ReAct limits from `assembly.yaml` throug
 | `AI_REACT_WORKING_SUMMARY_ENABLED` | `ai.react.working_summary_enabled` | `assembly.yaml` | all modes | emits and indexes React working-summary cards |
 | `AI_REACT_PRUNED_TURN_SUMMARY_MODE` | `ai.react.pruned_turn_summary_mode` | `assembly.yaml` | all modes | controls whether pruned historical turns prefer working-summary cards |
 | `AI_REACT_RENDER_THINKING` | `ai.react.render_thinking` | `assembly.yaml` | all modes | renders live model thinking blocks in the active ReAct timeline; bundle `config.react.render_thinking` overrides this default |
+| `AI_REACT_EVENT_SOURCE_PIPELINE_ENABLED` | `ai.react.event_source_pipeline_enabled` | `assembly.yaml` | all modes | enables the alternate event-source policy pipeline; bundle `config.react.event_source_pipeline.enabled` overrides this default |
 | `AI_REACT_DEBUG_TIMELINE` | `ai.react.debug_timeline` | `assembly.yaml` | all modes | enables rendered prompt snapshot files; bundle `config.react.debug_timeline` overrides this default |
 
 Unit contract:

@@ -3,8 +3,39 @@
 import pytest
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.proto import RuntimeCtx
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events import block_event_id, block_event_source_id
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.write import handle_react_write
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.tests.helpers import FakeBrowser, FakeReact
+
+
+@pytest.mark.asyncio
+async def test_write_blocks_resolve_tool_event_identity_when_pipeline_enabled(tmp_path):
+    runtime = RuntimeCtx(
+        turn_id="turn_cur",
+        outdir=str(tmp_path),
+        workdir=str(tmp_path),
+        event_source_pipeline_enabled=True,
+    )
+    ctx = FakeBrowser(runtime)
+    state = {"last_decision": {"tool_call": {"params": {
+        "path": "turn_cur/outputs/report.md",
+        "channel": "canvas",
+        "content": "# Report",
+        "kind": "display",
+    }}}, "outdir": str(tmp_path)}
+
+    await handle_react_write(react=FakeReact(), ctx_browser=ctx, state=state, tool_call_id="c_evt")
+
+    occurrence_blocks = [
+        b for b in ctx.timeline.blocks
+        if b.get("call_id") == "c_evt" and b.get("type") != "react.notice"
+    ]
+    assert occurrence_blocks
+    assert all("event_source_id" not in b for b in occurrence_blocks)
+    assert all("event_id" not in b for b in occurrence_blocks)
+    call_meta = {"c_evt": {"tool_id": "react.write"}}
+    assert all(block_event_source_id(b, call_meta=call_meta) == "react.write" for b in occurrence_blocks)
+    assert all(block_event_id(b) == "c_evt" for b in occurrence_blocks)
 
 
 @pytest.mark.asyncio

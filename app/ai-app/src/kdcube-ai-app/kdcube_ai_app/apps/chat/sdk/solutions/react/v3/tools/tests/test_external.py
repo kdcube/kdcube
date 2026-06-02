@@ -1,10 +1,18 @@
 # SPDX-License-Identifier: MIT
 
 import pytest
+from types import SimpleNamespace
 
+from kdcube_ai_app.apps.chat.sdk.events import EventSourceSubsystem
+from kdcube_ai_app.apps.chat.sdk.runtime.workspace import artifact_outdir_for
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events import block_event_id, block_event_source_id
 from kdcube_ai_app.apps.chat.sdk.solutions.react.proto import RuntimeCtx
-from kdcube_ai_app.apps.chat.sdk.solutions.react.v3.tools.external import handle_external_tool
+from kdcube_ai_app.apps.chat.sdk.solutions.react.v3.tools.external import (
+    _apply_tool_block_production,
+    handle_external_tool,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.tests.helpers import FakeBrowser, FakeReact
+from kdcube_ai_app.apps.chat.sdk.tools import exec_tools, rendering_tools, web_tools
 
 
 class _FakeExecStreamer:
@@ -43,6 +51,42 @@ class _HostingRecorder:
 
     async def emit_solver_artifacts(self, *, files, citations):
         self.emit_calls.append({"files": files, "citations": citations})
+
+
+def test_undeclared_external_tool_gets_generic_event_source_production_target():
+    react = FakeReact()
+    react.event_source_pipeline_enabled = True
+    react.tools_subsystem = SimpleNamespace(event_sources=EventSourceSubsystem(modules=[]))
+
+    target = _apply_tool_block_production(
+        react=react,
+        tool_id="bundle_tools.create_report",
+        tool_call_id="custom_1",
+        output={
+            "artifact_type": "files",
+            "files": [
+                {
+                    "path": "turn_1/outputs/report.md",
+                    "filename": "report.md",
+                    "mime": "text/markdown",
+                    "description": "Report",
+                    "visibility": "external",
+                }
+            ],
+        },
+        final_params={"topic": "status"},
+        turn_id="turn_1",
+        summary="created report",
+        error=None,
+        call_error=None,
+        raw_response={"status": "success"},
+    )
+
+    assert isinstance(target, dict)
+    assert target["result_items_produced"] is True
+    assert target["declared_file_items_produced"] is True
+    assert target["result_items"][0]["artifact_id"] == "bundle_tools.create_report"
+    assert target["declared_file_items"][0]["artifact_id"] == "bundle_tools.create_report_file_1"
 
 
 @pytest.mark.asyncio
@@ -208,6 +252,223 @@ async def test_rendering_tool_stats_resolve_split_artifact_outdir(monkeypatch, t
     assert '"artifact_path": "fi:turn_exec.outputs/report.pdf"' in meta_text
     assert '"status": "error"' not in meta_text
     assert '"file_not_found"' not in meta_text
+
+
+@pytest.mark.asyncio
+async def test_rendering_tool_event_source_policy_feeds_write_artifact_loop(monkeypatch, tmp_path):
+    runtime = RuntimeCtx(
+        turn_id="turn_exec",
+        outdir=str(tmp_path),
+        workdir=str(tmp_path),
+        event_source_pipeline_enabled=True,
+    )
+    ctx = FakeBrowser(runtime)
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "tool_id": "rendering_tools.write_pdf",
+                "params": {"path": "outputs/report.pdf", "content": "<html><body>ok</body></html>"},
+            }
+        },
+        "outdir": str(tmp_path),
+        "workdir": str(tmp_path),
+    }
+
+    async def _fake_execute_tool(**kwargs):
+        target = tmp_path / "workdir" / kwargs["tool_execution_context"]["params"]["path"]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"%PDF-1.4\n" + (b"x" * 2048))
+        return {"status": "success", "output": None, "summary": "", "error": None, "call_error": None}
+
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v3.tools.external.execute_tool", _fake_execute_tool)
+
+    react = FakeReact()
+    react.event_source_pipeline_enabled = True
+    react.tools_subsystem = SimpleNamespace(
+        event_sources=EventSourceSubsystem(modules=[{"mod": rendering_tools, "alias": "rendering_tools"}])
+    )
+
+    await handle_external_tool(react=react, ctx_browser=ctx, state=state, tool_call_id="pdf_policy")
+
+    result_blocks = [
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result" and b.get("call_id") == "pdf_policy"
+    ]
+    assert any('"artifact_path": "fi:turn_exec.outputs/report.pdf"' in (b.get("text") or "") for b in result_blocks)
+    call_meta = {"pdf_policy": {"tool_id": "rendering_tools.write_pdf"}}
+    assert all("event_source_id" not in b for b in result_blocks)
+    assert all("event_id" not in b for b in result_blocks)
+    assert all(block_event_source_id(b, call_meta=call_meta) == "rendering_tools.write_pdf" for b in result_blocks)
+    assert all(block_event_id(b) == "pdf_policy" for b in result_blocks)
+
+
+@pytest.mark.asyncio
+async def test_web_tool_event_source_policy_feeds_sources_and_result_loop(monkeypatch, tmp_path):
+    runtime = RuntimeCtx(
+        turn_id="turn_web",
+        outdir=str(tmp_path),
+        workdir=str(tmp_path),
+        event_source_pipeline_enabled=True,
+    )
+    ctx = FakeBrowser(runtime)
+    ctx.sources_pool = []
+    ctx.set_sources_pool = lambda *, sources_pool: setattr(ctx, "sources_pool", sources_pool)
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "tool_id": "web_tools.web_search",
+                "params": {"queries": ["kdcube"], "objective": "find docs"},
+            }
+        },
+        "outdir": str(tmp_path),
+        "workdir": str(tmp_path),
+    }
+
+    async def _fake_execute_tool(**kwargs):
+        return {
+            "status": "success",
+            "output": [
+                {
+                    "title": "KDCube Docs",
+                    "url": "https://example.test/docs",
+                    "content": "KDCube bundle docs",
+                }
+            ],
+            "summary": "",
+            "error": None,
+            "call_error": None,
+        }
+
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v3.tools.external.execute_tool", _fake_execute_tool)
+
+    react = FakeReact()
+    react.event_source_pipeline_enabled = True
+    react.tools_subsystem = SimpleNamespace(
+        event_sources=EventSourceSubsystem(modules=[{"mod": web_tools, "alias": "web_tools"}])
+    )
+
+    await handle_external_tool(react=react, ctx_browser=ctx, state=state, tool_call_id="web_policy")
+
+    assert ctx.sources_pool
+    assert ctx.sources_pool[0]["url"] == "https://example.test/docs"
+    result_blocks = [
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result" and b.get("call_id") == "web_policy"
+    ]
+    assert any(str(b.get("path") or "").startswith("so:sources_pool[") for b in result_blocks)
+    call_meta = {"web_policy": {"tool_id": "web_tools.web_search"}}
+    assert all("event_source_id" not in b for b in result_blocks)
+    assert all("event_id" not in b for b in result_blocks)
+    assert all(block_event_source_id(b, call_meta=call_meta) == "web_tools.web_search" for b in result_blocks)
+    assert all(block_event_id(b) == "web_policy" for b in result_blocks)
+
+
+@pytest.mark.asyncio
+async def test_policy_generic_json_result_does_not_resolve_tool_id_as_file_path(monkeypatch, tmp_path):
+    runtime = RuntimeCtx(
+        turn_id="turn_memory",
+        outdir=str(tmp_path),
+        workdir=str(tmp_path),
+        event_source_pipeline_enabled=True,
+    )
+    ctx = FakeBrowser(runtime)
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "tool_id": "memory.search_memory",
+                "params": {"query": "preferred communication style", "limit": 3},
+            }
+        },
+        "outdir": str(tmp_path),
+        "workdir": str(tmp_path),
+    }
+
+    async def _fake_execute_tool(**kwargs):
+        return {
+            "status": "success",
+            "output": {"ok": True, "memories": [], "count": 0},
+            "summary": "memory.search_memory",
+            "error": None,
+            "call_error": None,
+        }
+
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v3.tools.external.execute_tool", _fake_execute_tool)
+
+    react = FakeReact()
+    react.event_source_pipeline_enabled = True
+    react.tools_subsystem = SimpleNamespace(event_sources=EventSourceSubsystem(modules=[]))
+
+    await handle_external_tool(react=react, ctx_browser=ctx, state=state, tool_call_id="mem_policy")
+
+    assert not any(
+        b.get("type") == "react.notice" and "path_rewritten" in (b.get("text") or "")
+        for b in ctx.timeline.blocks
+    )
+    result_blocks = [
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result" and b.get("call_id") == "mem_policy"
+    ]
+    assert result_blocks
+    assert any(b.get("path") == "tc:turn_memory.mem_policy.result" for b in result_blocks)
+    assert not any(
+        str(b.get("path") or "").startswith("fi:turn_memory.files/memory.search_memory")
+        or "fi:turn_memory.files/memory.search_memory" in (b.get("text") or "")
+        for b in ctx.timeline.blocks
+    )
+
+
+@pytest.mark.asyncio
+async def test_legacy_generic_json_result_does_not_resolve_tool_id_as_file_path(monkeypatch, tmp_path):
+    runtime = RuntimeCtx(
+        turn_id="turn_memory",
+        outdir=str(tmp_path),
+        workdir=str(tmp_path),
+        event_source_pipeline_enabled=False,
+    )
+    ctx = FakeBrowser(runtime)
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "tool_id": "memory.search_memory",
+                "params": {"query": "preferred communication style", "limit": 3},
+            }
+        },
+        "outdir": str(tmp_path),
+        "workdir": str(tmp_path),
+    }
+
+    async def _fake_execute_tool(**kwargs):
+        return {
+            "status": "success",
+            "output": {"ok": True, "memories": [], "count": 0},
+            "summary": "memory.search_memory",
+            "error": None,
+            "call_error": None,
+        }
+
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v3.tools.external.execute_tool", _fake_execute_tool)
+
+    react = FakeReact()
+    react.event_source_pipeline_enabled = False
+    react.tools_subsystem = None
+
+    await handle_external_tool(react=react, ctx_browser=ctx, state=state, tool_call_id="mem_legacy")
+
+    assert not any(
+        b.get("type") == "react.notice" and "path_rewritten" in (b.get("text") or "")
+        for b in ctx.timeline.blocks
+    )
+    result_blocks = [
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result" and b.get("call_id") == "mem_legacy"
+    ]
+    assert result_blocks
+    assert any(b.get("path") == "tc:turn_memory.mem_legacy.result" for b in result_blocks)
+    assert not any(
+        str(b.get("path") or "").startswith("fi:turn_memory.files/memory.search_memory")
+        or "fi:turn_memory.files/memory.search_memory" in (b.get("text") or "")
+        for b in ctx.timeline.blocks
+    )
 
 
 @pytest.mark.asyncio
@@ -915,6 +1176,94 @@ async def test_external_exec_falls_back_to_decision_packet_code_channel(monkeypa
     await handle_external_tool(react=react, ctx_browser=ctx, state=state, tool_call_id="e_packet")
 
     assert captured["params"]["code"] == code_text
+
+
+@pytest.mark.asyncio
+async def test_external_exec_event_source_policy_feeds_artifact_loop(monkeypatch, tmp_path):
+    runtime = RuntimeCtx(
+        turn_id="turn_exec",
+        outdir=str(tmp_path),
+        workdir=str(tmp_path),
+        event_source_pipeline_enabled=True,
+    )
+    artifact_root = artifact_outdir_for(tmp_path)
+    target_file = artifact_root / "turn_exec" / "files" / "summary.txt"
+    target_file.parent.mkdir(parents=True, exist_ok=True)
+    target_file.write_text("summary\n", encoding="utf-8")
+
+    ctx = FakeBrowser(runtime)
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "tool_id": "exec_tools.execute_code_python",
+                "params": {
+                    "contract": [{
+                        "filename": "turn_exec/files/summary.txt",
+                        "description": "test output",
+                    }],
+                    "prog_name": "snippet.py",
+                },
+            }
+        },
+        "outdir": str(tmp_path),
+        "workdir": str(tmp_path),
+        "exec_code_streamer": _FakeExecStreamer("print('ok')\n"),
+    }
+
+    async def _fake_execute_tool(**kwargs):
+        return {
+            "report_text": "Program finished.",
+            "items": [
+                {
+                    "artifact_id": "summary",
+                    "output": {
+                        "type": "file",
+                        "path": "turn_exec/files/summary.txt",
+                        "filename": "summary.txt",
+                        "mime": "text/plain",
+                    },
+                    "summary": "Summary output",
+                    "visibility": "external",
+                }
+            ],
+        }
+
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v3.tools.external.execute_tool", _fake_execute_tool)
+
+    hosting = _HostingRecorder()
+    react = FakeReact(hosting_service=hosting, comm=SimpleNamespace(
+        user_id="u1",
+        user_type="registered",
+        service={
+            "tenant": "demo-tenant",
+            "project": "demo-project",
+            "user": "u1",
+            "conversation_id": "conv-1",
+            "request_id": "req-1",
+        },
+    ))
+    react.event_source_pipeline_enabled = True
+    react.tools_subsystem = SimpleNamespace(
+        event_sources=EventSourceSubsystem(modules=[{"mod": exec_tools, "alias": "exec_tools"}])
+    )
+
+    await handle_external_tool(react=react, ctx_browser=ctx, state=state, tool_call_id="e_policy")
+
+    assert hosting.host_calls
+    result_blocks = [
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result" and b.get("call_id") == "e_policy"
+    ]
+    assert any((b.get("text") or "") == "Program finished." for b in result_blocks)
+    assert any(
+        '"artifact_path": "fi:turn_exec.files/summary.txt"' in (b.get("text") or "")
+        for b in result_blocks
+    )
+    call_meta = {"e_policy": {"tool_id": "exec_tools.execute_code_python"}}
+    assert all("event_source_id" not in b for b in result_blocks)
+    assert all("event_id" not in b for b in result_blocks)
+    assert all(block_event_source_id(b, call_meta=call_meta) == "exec_tools.execute_code_python" for b in result_blocks)
+    assert all(block_event_id(b) == "e_policy" for b in result_blocks)
 
 
 @pytest.mark.asyncio

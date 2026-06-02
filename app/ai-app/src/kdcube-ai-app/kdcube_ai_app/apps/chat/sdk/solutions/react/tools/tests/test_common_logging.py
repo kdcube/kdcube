@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.common import add_block, tool_call_block
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events import block_event_id, block_event_source_id
 from kdcube_ai_app.apps.chat.sdk.solutions.react.round import ReactRound
 import kdcube_ai_app.apps.chat.sdk.solutions.react.round as react_round
 from kdcube_ai_app.apps.chat.sdk.solutions.react.timeline import resolve_artifact_from_timeline
@@ -43,6 +44,33 @@ def test_tool_call_block_logs_payload(caplog):
     assert "do not log notes" not in caplog.text
 
 
+def test_tool_call_block_event_identity_is_derived_from_tool_fields():
+    ctx = _Ctx()
+    tool_call_block(
+        ctx_browser=ctx,
+        tool_call_id="tc_old",
+        tool_id="react.read",
+        payload={"tool_id": "react.read", "tool_call_id": "tc_old", "params": {"paths": ["sk:x"]}},
+    )
+    assert "event_source_id" not in ctx.blocks[0]
+    assert "event_id" not in ctx.blocks[0]
+    assert block_event_source_id(ctx.blocks[0]) == "react.read"
+    assert block_event_id(ctx.blocks[0]) == "tc_old"
+
+    ctx_enabled = _Ctx()
+    ctx_enabled.runtime_ctx = SimpleNamespace(turn_id="turn_test", event_source_pipeline_enabled=True)
+    tool_call_block(
+        ctx_browser=ctx_enabled,
+        tool_call_id="tc_new",
+        tool_id="react.read",
+        payload={"tool_id": "react.read", "tool_call_id": "tc_new", "params": {"paths": ["sk:x"]}},
+    )
+    assert "event_source_id" not in ctx_enabled.blocks[0]
+    assert "event_id" not in ctx_enabled.blocks[0]
+    assert block_event_source_id(ctx_enabled.blocks[0]) == "react.read"
+    assert block_event_id(ctx_enabled.blocks[0]) == "tc_new"
+
+
 def test_tool_blocks_inherit_current_react_iteration():
     ctx = _Ctx()
     ctx.runtime_ctx._current_react_iteration = 4
@@ -73,7 +101,7 @@ async def test_react_round_execute_uses_origin_iteration_after_state_advance(mon
     ctx = _Ctx()
     react = SimpleNamespace(ctx_browser=ctx)
 
-    async def fake_read_handler(*, ctx_browser, state, tool_call_id):
+    async def fake_read_handler(*, react=None, ctx_browser, state, tool_call_id):
         assert ctx_browser.runtime_ctx._current_react_iteration == 2
         add_block(ctx_browser, {
             "turn": "turn_test",

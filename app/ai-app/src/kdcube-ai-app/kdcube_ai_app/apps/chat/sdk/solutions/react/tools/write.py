@@ -407,7 +407,7 @@ async def handle_react_write(*, react: Any, ctx_browser: Any, state: Dict[str, A
             mime = "text/html"
         else:
             mime = "text/markdown"
-        add_block(ctx_browser, {
+        result_block = {
             "turn": turn_id,
             "type": "react.note" if channel == "internal" else "react.tool.result",
             "call_id": tool_call_id,
@@ -418,6 +418,7 @@ async def handle_react_write(*, react: Any, ctx_browser: Any, state: Dict[str, A
                 **meta_extra,
                 **({"channel": channel} if channel == "internal" else {}),
             },
-        })
+        }
+        add_block(ctx_browser, result_block)
     state["last_tool_result"] = []
     return state

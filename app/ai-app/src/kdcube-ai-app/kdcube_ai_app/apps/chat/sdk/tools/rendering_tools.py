@@ -11,6 +11,7 @@ import re
 import json
 import textwrap
 import asyncio
+from collections.abc import MutableMapping
 from typing import Annotated, Optional, Any, Dict, List
 
 import semantic_kernel as sk
@@ -26,11 +27,17 @@ from kdcube_ai_app.apps.chat.sdk.runtime.workdir_discovery import resolve_output
     load_sources_pool_from_disk
 from kdcube_ai_app.apps.chat.sdk.tools.citations import extract_citation_sids_any, extract_local_paths_any
 from kdcube_ai_app.apps.chat.sdk.tools.ctx_tools import SourcesUsedStore
-from kdcube_ai_app.apps.chat.sdk.tools.docx_renderer import render_docx, KDCUBE_THEME
 from kdcube_ai_app.apps.chat.sdk.tools.pptx_renderer import render_pptx
 from kdcube_ai_app.apps.chat.sdk.tools.md2pdf_async import AsyncMarkdownPDF, PDFOptions, get_shared_md2pdf
 from kdcube_ai_app.apps.chat.sdk.util import _defence
 from kdcube_ai_app.apps.chat.sdk.config import get_plain, _resolve_current_bundle_id
+from kdcube_ai_app.apps.chat.sdk.events import event_source
+from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import normalize_physical_path
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events import (
+    tool_call_validation_policy,
+    write_tool_source_policies,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.react.sources import ensure_rendering_assets
 
 # Bound at runtime by ToolManager
 _SERVICE = None
@@ -46,6 +53,7 @@ def bind_integrations(integrations):
 
 logger = logging.getLogger("rendering_tools")
 _DATA_URI_RE = re.compile(r"data:[^;]+;base64,", re.IGNORECASE)
+RENDERING_TOOL_CALL_VALIDATION_POLICY_ID = "rendering_tools.tool_call_validation.prepare_inputs"
 
 _FOOTER_DIV_STYLE = (
     "font-size:8pt;color:#6b7280;text-align:center;"
@@ -263,6 +271,114 @@ def _error_result(*, code: str, message: str, where: str, managed: bool) -> dict
     }
 
 
+def _validation_notice_rows(target: MutableMapping[str, Any]) -> list[dict[str, Any]]:
+    rows = target.setdefault("notice_rows", [])
+    return rows if isinstance(rows, list) else []
+
+
+def _add_validation_notice(
+    target: MutableMapping[str, Any],
+    *,
+    code: str,
+    message: str,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    payload = {
+        "code": str(code or "").strip(),
+        "message": str(message or "").strip(),
+        "extra": dict(extra or {}),
+    }
+    if payload["code"] and payload["message"]:
+        _validation_notice_rows(target).append(payload)
+
+
+@tool_call_validation_policy(event_policy_id=RENDERING_TOOL_CALL_VALIDATION_POLICY_ID)
+async def rendering_tool_call_validation_policy(
+    target: MutableMapping[str, Any],
+    *,
+    ctx_browser: Any = None,
+    **_: Any,
+) -> MutableMapping[str, Any]:
+    """Normalize rendering/write tool inputs before execution.
+
+    Rendering tools must write under the current turn's file namespace and must
+    have local assets materialized before the isolated renderer runs. This
+    policy owns the rendering-specific preflight behavior:
+
+    - rewrite `params.path` from `fi:` or turn-prefixed refs to the current
+      turn physical path shape expected by the renderer;
+    - redirect attempted writes to `attachments/` into `files/`;
+    - hydrate referenced local assets from visible file/attachment refs into
+      `OUT_DIR`;
+    - emit validation notices through `notice_rows` only. The external-tool
+      harness only transports those notices and executes the tool.
+    """
+    if not isinstance(target, MutableMapping):
+        return target
+    final_params = target.get("final_params")
+    if not isinstance(final_params, MutableMapping):
+        final_params = {}
+        target["final_params"] = final_params
+
+    tool_id = str(target.get("tool_id") or target.get("event_source_id") or "").strip()
+    tool_call_id = str(target.get("tool_call_id") or target.get("event_id") or "").strip()
+    turn_id = str(target.get("turn_id") or "").strip()
+    target["write_timeline_local"] = True
+
+    path_val = final_params.get("path")
+    if isinstance(path_val, str) and path_val.strip():
+        physical, rel, rewritten = normalize_physical_path(
+            path_val,
+            turn_id=turn_id,
+            allow_generic_fi=True,
+        )
+        if "/attachments/" in physical:
+            rel = rel.split("/", 1)[-1] if rel else "output"
+            physical = f"{turn_id}/files/{rel}"
+            rewritten = True
+        if physical and physical != path_val:
+            final_params["path"] = physical
+            if rewritten:
+                _add_validation_notice(
+                    target,
+                    code="protocol_violation.path_rewritten",
+                    message="Rendering tool path was rewritten to current turn files/.",
+                    extra={"original": path_val, "rewritten": physical, "tool_id": tool_id},
+                )
+
+    if ctx_browser is None:
+        return target
+    outdir_raw = str(target.get("outdir") or "").strip()
+    if not outdir_raw:
+        return target
+
+    def _notice_proxy(**kwargs: Any) -> None:
+        _add_validation_notice(
+            target,
+            code=str(kwargs.get("code") or ""),
+            message=str(kwargs.get("message") or ""),
+            extra=dict(kwargs.get("extra") or {}),
+        )
+
+    try:
+        await ensure_rendering_assets(
+            ctx_browser=ctx_browser,
+            tool_call_id=tool_call_id,
+            tool_id=tool_id,
+            content=final_params.get("content"),
+            outdir=pathlib.Path(outdir_raw),
+            notice_fn=_notice_proxy,
+        )
+    except Exception as exc:
+        target.setdefault("log_rows", []).append(
+            {
+                "level": "WARNING",
+                "message": f"[rendering.assets] validation failed: {type(exc).__name__}: {exc}",
+            }
+        )
+    return target
+
+
 REACT_RENDER_REF_NOTE = (
     "REACT REF SOURCE: If content is `ref:<path>`, the ref must point to an external artifact "
     "(react.write channel=canvas, or exec visibility=external). `ref:fi:turn_<id>.outputs/<scope>/<file>` and "
@@ -285,6 +401,12 @@ class RenderingTools:
             self._md2pdf = await get_shared_md2pdf()
         return self._md2pdf
 
+    @event_source(
+        event_source_id="{alias}.write_pptx",
+        policies=write_tool_source_policies(),
+        description="Render HTML into a PPTX artifact using the existing ReAct tool/artifact block builders.",
+        kind="react.tool",
+    )
     @kernel_function(
         name="write_pptx",
         description=(
@@ -386,6 +508,12 @@ class RenderingTools:
                 managed=False,
             )
 
+    @event_source(
+        event_source_id="{alias}.write_png",
+        policies=write_tool_source_policies(),
+        description="Render Markdown, HTML, or Mermaid into a PNG artifact using the existing ReAct tool/artifact block builders.",
+        kind="react.tool",
+    )
     @kernel_function(
         name="write_png",
         description=(
@@ -856,6 +984,12 @@ class RenderingTools:
                 managed=False,
             )
 
+    @event_source(
+        event_source_id="{alias}.write_pdf",
+        policies=write_tool_source_policies(),
+        description="Render Markdown, HTML, or Mermaid into a PDF artifact using the existing ReAct tool/artifact block builders.",
+        kind="react.tool",
+    )
     @kernel_function(
         name="write_pdf",
         description=(
@@ -1219,6 +1353,12 @@ class RenderingTools:
                 managed=False,
             )
 
+    @event_source(
+        event_source_id="{alias}.write_docx",
+        policies=write_tool_source_policies(),
+        description="Render Markdown into a DOCX artifact using the existing ReAct tool/artifact block builders.",
+        kind="react.tool",
+    )
     @kernel_function(
         name="write_docx",
         description=(
@@ -1258,6 +1398,8 @@ class RenderingTools:
                         final_md,
                         {k: {"title": v.get("title", ""), "url": v.get("url", "")} for k, v in by_id.items()},
                     )
+
+            from kdcube_ai_app.apps.chat.sdk.tools.docx_renderer import render_docx, KDCUBE_THEME
 
             await asyncio.to_thread(
                 render_docx,
