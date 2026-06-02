@@ -10,6 +10,7 @@ see_also:
   - ks:docs/sdk/agents/react/context-layout.md
   - ks:docs/sdk/agents/react/session-view-README.md
   - ks:docs/sdk/agents/react/memory-recovery-path-README.md
+  - ks:docs/sdk/agents/react/event-source/compaction-projection-README.md
 ---
 # Context Compaction (v2)
 

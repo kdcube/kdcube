@@ -9,6 +9,7 @@ see_also:
   - ks:docs/sdk/agents/react/turn-log-README.md
   - ks:docs/sdk/agents/react/artifact-discovery-README.md
   - ks:docs/sdk/agents/react/session-view-README.md
+  - ks:docs/sdk/agents/react/event-source/events-blocks-and-rendering-README.md
 ---
 # Timeline (React)
 

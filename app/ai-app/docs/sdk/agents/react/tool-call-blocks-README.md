@@ -7,6 +7,8 @@ keywords: ["react.write", "exec_tools.execute_code", "rendering_tools", "tool re
 see_also:
   - ks:docs/sdk/agents/react/react-round-README.md
   - ks:docs/sdk/agents/react/event-blocks-README.md
+  - ks:docs/sdk/agents/react/event-source/block-production-README.md
+  - ks:docs/sdk/agents/react/event-source/event-source-README.md
   - ks:docs/sdk/agents/react/context-progression.md
 ---
 # Tool Call Blocks

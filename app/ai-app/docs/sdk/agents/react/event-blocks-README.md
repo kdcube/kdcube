@@ -6,6 +6,8 @@ tags: ["sdk", "agents", "react", "events", "blocks"]
 keywords: ["block types", "mime", "path", "tool results", "timeline events"]
 see_also:
   - ks:docs/sdk/agents/react/tool-call-blocks-README.md
+  - ks:docs/sdk/agents/react/event-source/event-source-README.md
+  - ks:docs/sdk/agents/react/event-source/events-blocks-and-rendering-README.md
   - ks:docs/sdk/agents/react/context-progression.md
   - ks:docs/sdk/agents/react/react-round-README.md
 ---
