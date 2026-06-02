@@ -297,7 +297,7 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
         econ_ctx: Optional[Dict[str, Any]] = None,
     ) -> None:
         await super().post_run_hook(state=state, result=result, econ_ctx=econ_ctx or {})
-        await self._persist_steps_artifacts(state=state)
+        await self._save_events_artifact(state=state)
         await self._send_recorded_events()
 
     def _bundle_id(self) -> str:

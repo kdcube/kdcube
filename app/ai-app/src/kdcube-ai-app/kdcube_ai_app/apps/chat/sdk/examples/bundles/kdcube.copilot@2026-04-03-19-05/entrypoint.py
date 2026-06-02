@@ -523,7 +523,7 @@ class ReactWorkflow(BaseEntrypointWithEconomicsAndMemory):
                 "followup_count": len((result or {}).get("followups") or []),
             },
         )
-        await self._persist_steps_artifacts(state=state)
+        await self._save_events_artifact(state=state)
         await self._send_recorded_events()
 
     def _bundle_id(self) -> str:

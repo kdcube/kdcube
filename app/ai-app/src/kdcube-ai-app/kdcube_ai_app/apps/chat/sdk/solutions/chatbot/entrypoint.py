@@ -1350,7 +1350,7 @@ class BaseEntrypoint:
             "privacy": {"data_keys": STATS_COMM_DATA_KEYS},
         }
 
-    def _start_steps_recording(self) -> None:
+    def _start_persist_events_recording(self) -> None:
         if not self._persist_events_enabled():
             return
         step_types = self._persist_event_types()
@@ -1362,11 +1362,11 @@ class BaseEntrypoint:
                 "include": {"types": step_types},
                 "privacy": {"data_keys": STATS_COMM_DATA_KEYS + ["elapsed_ms"]},
             },
-            scope={"owner": "steps_artifact"},
+            scope={"owner": "persist_events"},
         )
 
     async def pre_run_hook(self, *, state: Dict[str, Any]) -> None:
-        self._start_steps_recording()
+        self._start_persist_events_recording()
 
     async def post_run_hook(self, *, state: Dict[str, Any], result: Dict[str, Any]) -> None:
         return None
@@ -2085,7 +2085,7 @@ class BaseEntrypoint:
         )
         return self.ctx_client
 
-    async def _persist_steps_artifacts(self, *, state: Dict[str, Any]) -> None:
+    async def _save_events_artifact(self, *, state: Dict[str, Any]) -> None:
         try:
             if not self._persist_events_enabled():
                 return
