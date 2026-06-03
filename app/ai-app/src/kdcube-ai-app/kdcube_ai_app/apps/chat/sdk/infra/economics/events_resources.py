@@ -19,6 +19,17 @@ def msg_denied_quota_reset(reset_text: str) -> str:
     return f"You've reached your usage limit. Your quota resets {reset_text}."
 
 
+def msg_denied_quota_insufficient_for_request(
+    needed_k: int, remaining_k: int, reset_text: str
+) -> str:
+    """Quota not exhausted but remaining tokens are fewer than this request needs."""
+    return (
+        f"Not enough tokens for this request "
+        f"(~{needed_k}K needed, ~{remaining_k}K available this hour). "
+        f"Your quota resets {reset_text}."
+    )
+
+
 MSG_DENIED_LOCK_TIMEOUT = (
     "Too many requests are being processed right now. Please try again in a moment."
 )
@@ -60,6 +71,11 @@ def msg_warning_low_tokens(tokens_k: int) -> str:
 
 
 MSG_WARNING_APPROACHING = "You're approaching your usage limit."
+
+
+def msg_warning_approaching_approx(messages_approx: int) -> str:
+    word = "message" if messages_approx == 1 else "messages"
+    return f"You're approaching your usage limit (approx. {messages_approx} {word} remaining)."
 
 
 # ── rate_limit.no_funding ────────────────────────────────────────────────────

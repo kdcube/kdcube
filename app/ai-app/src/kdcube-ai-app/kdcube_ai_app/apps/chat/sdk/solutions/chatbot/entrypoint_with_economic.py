@@ -23,6 +23,7 @@ from kdcube_ai_app.infra.plugin.bundle_loader import on_reactive_event
 from kdcube_ai_app.infra.service_hub.inventory import Config, _mid
 from kdcube_ai_app.apps.chat.sdk.infra.economics.events_resources import (
     msg_denied_quota_reset,
+    msg_denied_quota_insufficient_for_request,
     MSG_DENIED_LOCK_TIMEOUT,
     MSG_DENIED_CONCURRENCY,
     MSG_DENIED_TOKEN_LIMIT,
@@ -33,6 +34,7 @@ from kdcube_ai_app.apps.chat.sdk.infra.economics.events_resources import (
     MSG_WARNING_ONE_REQUEST_REMAINING,
     msg_warning_low_tokens,
     MSG_WARNING_APPROACHING,
+    msg_warning_approaching_approx,
     MSG_NO_FUNDING,
     MSG_SUBSCRIPTION_EXHAUSTED,
     MSG_PROJECT_EXHAUSTED,
@@ -387,8 +389,23 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
             date_str = reset_at.strftime("%B %-d")
             return f"on {date_str} at {time_str}"
 
-        def _build_user_message(*, reason: Optional[str], reset_text: Optional[str]) -> str:
+        def _build_user_message(
+            *,
+            reason: Optional[str],
+            reset_text: Optional[str],
+            needed_tokens: Optional[int] = None,
+            remaining_tokens: Optional[int] = None,
+        ) -> str:
             if reset_text:
+                if (
+                    needed_tokens is not None
+                    and remaining_tokens is not None
+                    and remaining_tokens > 0
+                    and remaining_tokens < needed_tokens
+                ):
+                    needed_k = max(1, needed_tokens // 1000)
+                    remaining_k = max(0, remaining_tokens // 1000)
+                    return msg_denied_quota_insufficient_for_request(needed_k, remaining_k, reset_text)
                 return msg_denied_quota_reset(reset_text)
             if reason == "quota_lock_timeout":
                 return MSG_DENIED_LOCK_TIMEOUT
@@ -467,6 +484,7 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
             reason: Optional[str],
             used_plan_override: bool = False,
             needed_tokens: Optional[int] = None,
+            remaining_tokens: Optional[int] = None,
             now: Optional[datetime] = None,
         ) -> dict:
             insight = compute_quota_insight(
@@ -502,7 +520,12 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                 )
             payload["retry_after_hours"] = retry_after_hours
             payload["reset_text"] = reset_text
-            payload["user_message"] = _build_user_message(reason=reason, reset_text=reset_text)
+            payload["user_message"] = _build_user_message(
+                reason=reason,
+                reset_text=reset_text,
+                needed_tokens=int(needed_tokens) if needed_tokens is not None else None,
+                remaining_tokens=remaining_tokens if remaining_tokens is not None else insight.total_token_remaining,
+            )
             payload["notification_type"] = "error"
             if needed_tokens is not None:
                 payload["needed_tokens"] = int(needed_tokens)
@@ -1512,7 +1535,8 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                                     snapshot=admit.snapshot,
                                     reason=admit.reason or "plan_token_overflow",
                                     used_plan_override=admit.used_plan_override,
-                                    needed_tokens=int(overflow_tokens_est),
+                                    needed_tokens=int(est_turn_tokens),
+                                    remaining_tokens=int(plan_project_tokens_est),
                                 )
                                 await _econ_fail(
                                     code="personal_reservation_failed_plan",
@@ -2268,10 +2292,11 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                         request_remaining = min(req_candidates) if req_candidates else None
                         if request_remaining is not None and request_remaining <= 1:
                             warning_user_message = MSG_WARNING_ONE_REQUEST_REMAINING
-                        elif pr_tok is not None:
-                            warning_user_message = msg_warning_low_tokens(pr_tok // 1000)
                         else:
-                            warning_user_message = MSG_WARNING_ONE_REQUEST_REMAINING
+                            # Token-limited: post-run simulation can be off by ~est_turn_tokens,
+                            # so show approximate count rather than promising an exact value.
+                            approx = pr_mr if pr_mr is not None and pr_mr >= 1 else 1
+                            warning_user_message = msg_warning_approaching_approx(approx)
                     elif pr_tok is not None:
                         warning_user_message = msg_warning_low_tokens(pr_tok // 1000)
                     else:
