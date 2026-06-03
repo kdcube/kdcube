@@ -43,7 +43,11 @@ _TURN_ID_PATTERN = (
     r"(?:turn_[A-Za-z0-9_.:-]+|telegram_turn_[A-Za-z0-9_.:-]+|"
     r"\d{4}-\d{2}-\d{2}-\d{2}-\d{2}(?:-\d{2})?(?:-\d{3,6})?)"
 )
-_CODE_PATH_RE = re.compile(rf"({_TURN_ID_PATTERN}/(files|outputs|snapshots|attachments)/[^\s'\"\)\];,]+)")
+_CONVERSATION_ID_PATTERN = r"conv_[A-Za-z0-9_.:-]+"
+_ARTIFACT_PHYSICAL_ROOT_PATTERN = r"(?:files|outputs|snapshots|attachments|external)"
+_CODE_PATH_RE = re.compile(
+    rf"((?:{_CONVERSATION_ID_PATTERN}/)?{_TURN_ID_PATTERN}/{_ARTIFACT_PHYSICAL_ROOT_PATTERN}/[^\s'\"\)\];,]+)"
+)
 _PATH_TOKEN_RE = re.compile(r"[^\s'\"\)\];,]+")
 _UNQUALIFIED_ARTIFACT_PREFIXES = ("files/", "outputs/", "snapshots/", "attachments/")
 _FETCH_CTX_PATH_RE = re.compile(r"([a-z]{2}:[A-Za-z0-9_./\\-]+)")
@@ -86,6 +90,7 @@ def extract_code_file_paths(code: str, *, turn_id: str = "") -> tuple[List[str],
     current_outputs_prefix = f"{turn_id}/outputs/" if turn_id else ""
     current_snapshots_prefix = f"{turn_id}/snapshots/" if turn_id else ""
     current_att_prefix = f"{turn_id}/attachments/" if turn_id else ""
+    current_external_prefix = f"{turn_id}/external/" if turn_id else ""
     for p in cleaned:
         if p in seen:
             continue
@@ -99,6 +104,8 @@ def extract_code_file_paths(code: str, *, turn_id: str = "") -> tuple[List[str],
             current_snapshots_prefix and p.startswith(current_snapshots_prefix)
         ) or (
             current_att_prefix and p.startswith(current_att_prefix)
+        ) or (
+            current_external_prefix and p.startswith(current_external_prefix)
         ):
             continue
         out.append(p)

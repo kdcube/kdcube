@@ -1133,6 +1133,62 @@ async def test_external_exec_requires_pull_for_unmaterialized_historical_file(mo
 
 
 @pytest.mark.asyncio
+async def test_external_exec_accepts_materialized_cross_conversation_artifact_path(monkeypatch, tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path))
+    ctx = FakeBrowser(runtime)
+    cross_conv_path = (
+        "conv_81920790-790d-479e-9c5c-ec407d6298d3/"
+        "turn_2026-05-26-16-29-44-474/"
+        "outputs/science_news/top3_science_news.pdf"
+    )
+    target = tmp_path / cross_conv_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"%PDF-1.4\n")
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "tool_id": "exec_tools.execute_code_python",
+                "params": {
+                    "contract": [{
+                        "filename": "turn_exec/files/out.txt",
+                        "description": "test output",
+                    }],
+                    "prog_name": "snippet.py",
+                },
+            }
+        },
+        "outdir": str(tmp_path),
+        "workdir": str(tmp_path),
+        "exec_code_streamer": _FakeExecStreamer(
+            f"from pathlib import Path\n"
+            f"src = Path(OUTPUT_DIR) / \"{cross_conv_path}\"\n"
+            f"print(src.exists())\n"
+        ),
+    }
+
+    called = {"execute": False}
+
+    async def _fake_execute_tool(**kwargs):
+        called["execute"] = True
+        return {"items": []}
+
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v3.tools.external.execute_tool", _fake_execute_tool)
+
+    react = FakeReact()
+    react.tools_subsystem = None
+
+    out = await handle_external_tool(react=react, ctx_browser=ctx, state=state, tool_call_id="e_cross")
+
+    assert called["execute"] is True
+    assert out.get("retry_decision") is not True
+    result_blocks = [
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result" and b.get("mime") == "application/json"
+    ]
+    assert not any("pre_exec_pull_required" in (b.get("text") or "") for b in result_blocks)
+
+
+@pytest.mark.asyncio
 async def test_external_exec_falls_back_to_decision_packet_code_channel(monkeypatch, tmp_path):
     runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path))
     ctx = FakeBrowser(runtime)
