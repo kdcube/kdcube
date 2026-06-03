@@ -331,10 +331,16 @@ const slice = createSlice({
       const existingIndex = state.turns.findIndex((turn) => turn.id === serverTurnId)
       if (existingIndex >= 0) {
         const existing = state.turns[existingIndex]
+        /* Prefer draftText over whatever chat.start may have seeded the turn
+         * with. The server's chat.start envelope used to carry a 100-char
+         * preview as data.message; if the SSE event won the race, the
+         * existing.userMessage was that truncated preview. Even after the
+         * server fix this client-side preference is the safer default: the
+         * client is authoritative for what was actually sent. */
         state.turns[existingIndex] = {
           ...existing,
           state: existing.state === 'idle' as never ? 'pending' : existing.state,
-          userMessage: existing.userMessage || draftText,
+          userMessage: draftText || existing.userMessage,
           userAttachments: existing.userAttachments.length
             ? existing.userAttachments
             : draftAttachments,

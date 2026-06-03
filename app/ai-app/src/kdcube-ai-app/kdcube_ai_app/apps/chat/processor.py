@@ -2450,11 +2450,11 @@ class EnhancedChatRequestProcessor:
             logger.info(
                 f"Starting task {task_id} queue_wait_ms={queue_wait_ms} current_load={self._current_load}"
             )
-        msg = (
-            (payload.request.message[:100] + "...")
-            if payload.request.message and len(payload.request.message) > 100
-            else (payload.request.message or f"operation={payload.request.operation}")
-        )
+        # Send the full request message in chat.start.data.message — clients
+        # treat it as the authoritative user-bubble text (e.g. when the SSE
+        # event wins a race against the POST ack). Truncating here previously
+        # left the user bubble stuck at "<first 100 chars>..." until reload.
+        start_message = payload.request.message or f"operation={payload.request.operation}"
 
         success = False
         task_cancelled = False
@@ -2474,7 +2474,7 @@ class EnhancedChatRequestProcessor:
                         extra_ttl_sec=self.started_marker_ttl_sec if started_key else None,
                 ):
                     exec_started_at = time.monotonic()
-                    await tracked_comm.start(message=msg, queue_stats={})
+                    await tracked_comm.start(message=start_message, queue_stats={})
                     await tracked_comm.step(
                         step="workflow_start",
                         status="started",
