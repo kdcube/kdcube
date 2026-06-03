@@ -37,6 +37,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.events import (
     acquire_live_external_event_owner,
     event_source_id_for_external_kind,
     event_source_pipeline_enabled,
+    REACT_USER_ATTACHMENT_EVENT_SOURCE_ID,
     release_live_external_event_owner,
     run_live_external_event_listener_loop,
     stamp_event_identity_many,
@@ -624,12 +625,27 @@ class ContextBrowser:
         if not target.get("blocks") and not target.get("blocks_produced"):
             try:
                 from kdcube_ai_app.apps.chat.sdk.solutions.react.events.policies import (
+                    canvas_event_default_block_production_policy,
                     external_event_default_block_production_policy,
                     snapshot_event_default_block_production_policy,
+                    user_followup_default_block_production_policy,
+                    user_attachment_default_block_production_policy,
+                    user_prompt_default_block_production_policy,
+                    user_steer_default_block_production_policy,
                 )
                 block_type = str(target.get("block_type") or "").strip()
                 if block_type == "event.snapshot":
                     snapshot_event_default_block_production_policy(target)
+                elif block_type == "event.canvas":
+                    canvas_event_default_block_production_policy(target)
+                elif block_type == "event.user.prompt":
+                    user_prompt_default_block_production_policy(target)
+                elif block_type == "event.user.followup":
+                    user_followup_default_block_production_policy(target)
+                elif block_type == "event.user.steer":
+                    user_steer_default_block_production_policy(target)
+                elif block_type.startswith("event.user.attachment"):
+                    user_attachment_default_block_production_policy(target)
                 else:
                     external_event_default_block_production_policy(target)
             except Exception:
@@ -749,59 +765,44 @@ class ContextBrowser:
         builtin_user_steer = block_type == "event.user.steer"
         if is_prompt_event or builtin_user_prompt:
             meta["prompt_origin"] = "external_event_lane"
-        if kind == "external_event" and not (builtin_user_prompt or builtin_user_followup or builtin_user_steer):
-            target = {
+        target = {
+            "event": dict(accepted_event or {}),
+            "event_source_id": event_source_id,
+            "event_id": event_id,
+            "block_type": block_type,
+            "logical_path": logical_path,
+            "hosted_uri": hosted_uri,
+            "story_id": story_id,
+            "reactive": reactive,
+            "text": text,
+            "path": logical_path if kind == "external_event" and logical_path else path,
+            "turn_id": turn_id,
+            "ts": event_ts,
+            "mime": "text/markdown",
+            "author": "user",
+            "meta": meta,
+            "blocks": [],
+            "block_factory": self._timeline.block,
+        }
+        blocks = await self._produce_external_event_blocks(
+            event_source_id=event_source_id,
+            target=target,
+        )
+        if attachments:
+            attachment_target = {
                 "event": dict(accepted_event or {}),
-                "event_source_id": event_source_id,
+                "event_source_id": REACT_USER_ATTACHMENT_EVENT_SOURCE_ID,
                 "event_id": event_id,
-                "block_type": block_type,
-                "logical_path": logical_path,
-                "hosted_uri": hosted_uri,
+                "block_type": "event.user.attachment",
+                "logical_path": path_root,
                 "story_id": story_id,
-                "reactive": reactive,
-                "text": text,
-                "path": logical_path or path,
+                "reactive": False,
                 "turn_id": turn_id,
                 "ts": event_ts,
-                "mime": "text/markdown",
-                "author": "user",
-                "meta": meta,
-                "blocks": [],
-                "block_factory": self._timeline.block,
-            }
-            blocks = await self._produce_external_event_blocks(
-                event_source_id=event_source_id,
-                target=target,
-            )
-        else:
-            physical_type = (
-                "user.prompt"
-                if is_prompt_event or builtin_user_prompt
-                else "user.followup"
-                if kind == "followup" or builtin_user_followup
-                else "user.steer"
-            )
-            blocks = [self._timeline.block(
-                type=physical_type,
-                author="user",
-                turn_id=turn_id,
-                ts=event_ts,
-                mime="text/markdown",
-                text=text,
-                path=path,
-                meta=meta,
-            )]
-        if attachments:
-            from kdcube_ai_app.apps.chat.sdk.solutions.react.layout import build_user_attachment_blocks
-
-            blocks.extend(build_user_attachment_blocks(
-                turn_id=turn_id,
-                ts=event_ts,
-                user_attachments=attachments,
-                block_factory=self._timeline.block,
-                path_root=path_root,
-                synthetic_physical_root=physical_root,
-                meta_extra={
+                "attachments": attachments,
+                "path_root": path_root,
+                "physical_root": physical_root,
+                "meta_extra": {
                     "event_kind": kind,
                     "event_type": "event.user.attachment",
                     "event_source_id": event_source_id,
@@ -810,6 +811,12 @@ class ContextBrowser:
                     "is_continuation": bool(getattr(event, "is_continuation", False)),
                     "attachment_origin": attachment_kind,
                 },
+                "blocks": [],
+                "block_factory": self._timeline.block,
+            }
+            blocks.extend(await self._produce_external_event_blocks(
+                event_source_id=REACT_USER_ATTACHMENT_EVENT_SOURCE_ID,
+                target=attachment_target,
             ))
         if event_source_pipeline_enabled(self._runtime_ctx):
             stamp_event_identity_many(
@@ -963,6 +970,11 @@ class ContextBrowser:
                 body = accepted_payload.get("event") if isinstance(accepted_payload.get("event"), dict) else {}
                 if body:
                     attachments.append(dict(body))
+            if attachments:
+                return attachments
+            payload = request.get("payload") if isinstance(request.get("payload"), dict) else {}
+            legacy_attachments = payload.get("attachments") if isinstance(payload.get("attachments"), list) else []
+            attachments = [dict(item) for item in legacy_attachments if isinstance(item, dict)]
             if attachments:
                 return attachments
         try:

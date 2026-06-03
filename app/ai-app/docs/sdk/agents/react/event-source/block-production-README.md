@@ -113,6 +113,18 @@ not become durable ReAct history.
 | `composite_artifact_source_policies()` | `hosted_artifacts`, `snapshot_refs`, `announce_candidates` | Composite custom results with several result surfaces. |
 | custom event bus-only policy | `react.block_production.no_timeline` | Suppresses default event-block fallback after the bundle/runtime callback has observed the event. |
 
+## Default Authored Event Producers
+
+| Policy ID | Input event type | Default timeline output |
+|---|---|---|
+| `react.block_production.event_default` | `event.external` and other generic domain events | One `event.<type>` JSON block at the accepted event's `ev:` path. The body stores `ok`, `status`, `ret`, optional `error`, optional `event_ref`, and extracted `surfaces`. |
+| `react.block_production.snapshot_default` | `event.snapshot` | One `event.snapshot` JSON block at the `ev:` path. The body preserves snapshot refs and ANNOUNCE candidates as read-only projection data. |
+| `react.block_production.canvas_default` | `event.canvas` | One `event.canvas` JSON block at the `ev:` path. The body preserves the canvas revision/state as collaborative domain state; edits must still go through a bundle API/tool that emits a later canvas event. |
+| `react.block_production.user_prompt_default` | `event.user.prompt` | Compatibility `user.prompt` block with event identity in metadata. |
+| `react.block_production.user_followup_default` | `event.user.followup` | Compatibility `user.followup` block with event identity and `is_continuation` metadata. |
+| `react.block_production.user_steer_default` | `event.user.steer` | Compatibility `user.steer` block with event identity and `is_continuation` metadata. |
+| `react.block_production.user_attachment_default` | `event.user.attachment.*` or attachments carried alongside a prompt/followup/domain event | Compatibility `user.attachment.meta`, `user.attachment`, and `user.attachment.text` blocks through the shared attachment builder. Hosted metadata such as `hosted_uri`, `rn`, `key`, and `physical_path` is preserved in block metadata. |
+
 ## Generic JSON Is Not A File
 
 Structured JSON results are represented as `tc:<turn>.<call>.result`. They must
@@ -189,7 +201,8 @@ path is expected to preserve the visible timeline shape of the old path while
 making result production configurable by event-source policy.
 
 For authored external events, the default single event-block production path is
-implemented for unregistered sources and snapshot events.
+implemented for unregistered sources, snapshots, canvas state, prompt, followup,
+steer, and attachment events.
 The async artifact-hosting consumer is still tool-shaped; event result surfaces
 are preserved durably first, then later phase policies can project or announce
 them.

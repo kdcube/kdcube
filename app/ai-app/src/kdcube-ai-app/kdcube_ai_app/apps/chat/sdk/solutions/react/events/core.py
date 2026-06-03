@@ -8,9 +8,17 @@ from kdcube_ai_app.apps.chat.sdk.events import event_source_declaration
 REACT_FOLLOWUP_EVENT_SOURCE_ID = "react.followup"
 REACT_STEER_EVENT_SOURCE_ID = "react.steer"
 REACT_MESSAGE_EVENT_SOURCE_ID = "react.message"
+REACT_USER_ATTACHMENT_EVENT_SOURCE_ID = "react.user_attachment"
 REACT_EXTERNAL_EVENT_SOURCE_ID = "react.external_event"
 REACT_WRITE_EVENT_SOURCE_ID = "react.write"
 REACT_MEMSEARCH_EVENT_SOURCE_ID = "react.memsearch"
+
+
+def _block_production_policy(event_policy_id: str) -> dict[str, str]:
+    return {
+        "react_phase": "block_production",
+        "event_policy_id": event_policy_id,
+    }
 
 
 def native_react_tool_policies() -> list[dict[str, str]]:
@@ -57,21 +65,28 @@ def list_event_sources():
     return [
         event_source_declaration(
             event_source_id=REACT_MESSAGE_EVENT_SOURCE_ID,
-            policies=[],
+            policies=[_block_production_policy("react.block_production.user_prompt_default")],
             description="User message events that start or contribute prompt blocks to a ReAct turn timeline.",
             kind="react.external",
             reactive=True,
         ),
         event_source_declaration(
+            event_source_id=REACT_USER_ATTACHMENT_EVENT_SOURCE_ID,
+            policies=[_block_production_policy("react.block_production.user_attachment_default")],
+            description="User attachment events materialized as ReAct attachment blocks.",
+            kind="react.external",
+            reactive=False,
+        ),
+        event_source_declaration(
             event_source_id=REACT_FOLLOWUP_EVENT_SOURCE_ID,
-            policies=[],
+            policies=[_block_production_policy("react.block_production.user_followup_default")],
             description="User followup events appended to the active ReAct timeline while a turn is running.",
             kind="react.external",
             reactive=True,
         ),
         event_source_declaration(
             event_source_id=REACT_STEER_EVENT_SOURCE_ID,
-            policies=[],
+            policies=[_block_production_policy("react.block_production.user_steer_default")],
             description="User steer events appended to the active ReAct timeline while a turn is running.",
             kind="react.external",
             reactive=False,
@@ -79,7 +94,7 @@ def list_event_sources():
         ),
         event_source_declaration(
             event_source_id=REACT_EXTERNAL_EVENT_SOURCE_ID,
-            policies=[],
+            policies=[_block_production_policy("react.block_production.event_default")],
             description="Generic bundle-authored external events transported over chat ingress.",
             kind="react.external",
             reactive=False,

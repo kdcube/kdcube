@@ -132,6 +132,21 @@ The conceptual event group is the same layer as a tool occurrence:
 | Canvas state event | One `event.canvas` block at the event `ev:` path |
 | Event with attachments | Event block plus `user.attachment.*` / external attachment blocks |
 
+The built-in prompt/followup/steer compatibility blocks are produced by
+block-production policies:
+
+- `react.block_production.user_prompt_default`
+- `react.block_production.user_followup_default`
+- `react.block_production.user_steer_default`
+- `react.block_production.user_attachment_default`
+
+Generic authored events use `react.block_production.event_default`. Snapshot and
+canvas events have explicit defaults:
+`react.block_production.snapshot_default` and
+`react.block_production.canvas_default`. The attachment default preserves hosted
+artifact metadata (`hosted_uri`, `rn`, `key`, `physical_path`) on the produced
+attachment blocks.
+
 The default event block body has the tool-result-like shape: `ok`, `status`,
 optional `error`, optional `ret`, and optional `surfaces`. `payload.event` is
 the `ret` analogue. If the body is hosted, `payload.event_ref` is represented

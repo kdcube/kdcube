@@ -549,47 +549,6 @@ def _default_event_block(target: MutableMapping[str, Any], *, snapshot: bool = F
     ))
 
 
-@block_production_policy(event_policy_id="react.block_production.event_default")
-def external_event_default_block_production_policy(
-    target: MutableMapping[str, Any],
-    **_: Any,
-) -> MutableMapping[str, Any]:
-    """Produce the default timeline block for an authored external event.
-
-    This is the fallback for unregistered event sources and for registered
-    sources that do not override external-event block production. The caller
-    supplies a `block_factory` compatible with `Timeline.block`. The event
-    payload is normalized into the same `{ok,error,ret,raw}` accumulator shape
-    used for tool results, then common result-surface policies extract hosted
-    artifacts, exploration rows, snapshot refs, announce candidates, and
-    declared file rows. Those surfaces are stored in the durable event block
-    block for later projection, announce, or compaction policies.
-    """
-    if not isinstance(target, MutableMapping):
-        return target
-    _normalize_event_payload_target(target)
-    _apply_standard_event_surface_policies(target)
-    _default_event_block(target)
-    target["blocks_produced"] = True
-    return target
-
-
-@block_production_policy(event_policy_id="react.block_production.snapshot_default")
-def snapshot_event_default_block_production_policy(
-    target: MutableMapping[str, Any],
-    **_: Any,
-) -> MutableMapping[str, Any]:
-    """Produce the default durable timeline block for a snapshot event."""
-    if not isinstance(target, MutableMapping):
-        return target
-    target["block_type"] = "event.snapshot"
-    _normalize_event_payload_target(target)
-    _apply_standard_event_surface_policies(target)
-    _default_event_block(target, snapshot=True)
-    target["blocks_produced"] = True
-    return target
-
-
 @block_production_policy(event_policy_id="react.block_production.tool_default")
 def tool_default_block_production_policy(
     target: MutableMapping[str, Any],
@@ -1157,7 +1116,36 @@ def hide_by_segment_policy(
     return timeline
 
 
-DEFAULT_REACT_EVENT_POLICIES: dict[str, ReactEventPolicy] = discover_react_event_policies(globals())
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events.policies import canvas as _canvas_policies
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events.policies import external as _external_policies
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events.policies import snapshot as _snapshot_policies
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events.policies import user_events as _user_event_policies
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events.policies.canvas import (
+    canvas_event_default_block_production_policy,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events.policies.external import (
+    external_event_default_block_production_policy,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events.policies.snapshot import (
+    snapshot_event_default_block_production_policy,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events.policies.user_events import (
+    user_attachment_default_block_production_policy,
+    user_followup_default_block_production_policy,
+    user_prompt_default_block_production_policy,
+    user_steer_default_block_production_policy,
+)
+
+
+DEFAULT_REACT_EVENT_POLICIES: dict[str, ReactEventPolicy] = {}
+for _policy_owner in (
+    globals(),
+    _external_policies,
+    _snapshot_policies,
+    _canvas_policies,
+    _user_event_policies,
+):
+    DEFAULT_REACT_EVENT_POLICIES.update(discover_react_event_policies(_policy_owner))
 
 
 def unknown_policy_paths(

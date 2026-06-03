@@ -15,6 +15,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.events import (
     REACT_FOLLOWUP_EVENT_SOURCE_ID,
     REACT_MEMSEARCH_EVENT_SOURCE_ID,
     REACT_STEER_EVENT_SOURCE_ID,
+    REACT_USER_ATTACHMENT_EVENT_SOURCE_ID,
     REACT_WRITE_EVENT_SOURCE_ID,
     TIMELINE_SEGMENT_META_KEY,
     announce_event_policy,
@@ -770,23 +771,33 @@ def test_builtin_react_external_event_sources_are_discoverable():
 
     followup = subsystem.by_event_source_id(REACT_FOLLOWUP_EVENT_SOURCE_ID)
     steer = subsystem.by_event_source_id(REACT_STEER_EVENT_SOURCE_ID)
+    attachment = subsystem.by_event_source_id(REACT_USER_ATTACHMENT_EVENT_SOURCE_ID)
     write = subsystem.by_event_source_id(REACT_WRITE_EVENT_SOURCE_ID)
     memsearch = subsystem.by_event_source_id(REACT_MEMSEARCH_EVENT_SOURCE_ID)
     assert followup is not None
     assert steer is not None
+    assert attachment is not None
     assert write is not None
     assert memsearch is not None
-    assert followup.react.block_production == ()
+    assert [binding.event_policy_id for binding in followup.react.block_production] == [
+        "react.block_production.user_followup_default",
+    ]
     assert followup.react.timeline_projection == ()
     assert followup.react.compaction_projection == ()
     assert followup.react.announce_production == ()
     assert followup.reactive is True
-    assert steer.react.block_production == ()
+    assert [binding.event_policy_id for binding in steer.react.block_production] == [
+        "react.block_production.user_steer_default",
+    ]
     assert steer.react.timeline_projection == ()
     assert steer.react.compaction_projection == ()
     assert steer.react.announce_production == ()
     assert steer.reactive is False
     assert steer.iteration_credit == 0
+    assert [binding.event_policy_id for binding in attachment.react.block_production] == [
+        "react.block_production.user_attachment_default",
+    ]
+    assert attachment.reactive is False
     assert write.kind == "react.native_tool.write"
     assert [binding.event_policy_id for binding in write.react.timeline_projection] == [
         "react.timeline_projection.identity",
