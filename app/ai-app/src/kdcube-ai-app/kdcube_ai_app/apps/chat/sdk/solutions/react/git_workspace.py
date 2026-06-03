@@ -31,6 +31,8 @@ from kdcube_ai_app.apps.chat.sdk.runtime.workspace import artifact_outdir_for, r
 
 _SKIP_WORKSPACE_DIRS = {".git", "__pycache__", ".pytest_cache", "node_modules", ".venv", "logs", "executed_programs"}
 _GIT_WORKSPACE_NAMESPACES = (ARTIFACT_NAMESPACE_FILES, ARTIFACT_NAMESPACE_SNAPSHOTS)
+_WORKSPACE_BRANCH = "workspace"
+_WORKSPACE_BRANCH_REF = f"refs/heads/{_WORKSPACE_BRANCH}"
 
 
 class _ConversationScopedRuntimeCtx:
@@ -296,16 +298,25 @@ def _ensure_workspace_repo(
     return repo_root
 
 
-def _git_has_ref(*, repo_root: pathlib.Path, ref_name: str) -> bool:
+def _git_ref_points_to_commit(*, repo_root: pathlib.Path, ref_name: str) -> bool:
     try:
         subprocess.run(
-            _git_cmd(repo_root, ["show-ref", "--verify", "--quiet", ref_name]),
+            _git_cmd(repo_root, ["cat-file", "-e", f"{ref_name}^{{commit}}"]),
             check=True,
             capture_output=True,
         )
         return True
     except subprocess.CalledProcessError:
         return False
+
+
+def _git_rev_parse(*, repo_root: pathlib.Path, ref_name: str) -> str:
+    proc = _run_git_checked(
+        repo_root,
+        ["rev-parse", "--verify", ref_name],
+        op=f"resolve git ref {ref_name}",
+    )
+    return (proc.stdout or "").strip()
 
 
 def _ensure_local_version_ref(
@@ -320,7 +331,7 @@ def _ensure_local_version_ref(
         raise ValueError("missing_workspace_version_ref")
     segs = workspace_lineage_segments(runtime_ctx)
     local_ref = f"refs/kdcube-local/versions/{segs['conversation_id']}/{version_id}"
-    if _git_has_ref(repo_root=repo_root, ref_name=local_ref):
+    if _git_ref_points_to_commit(repo_root=repo_root, ref_name=local_ref):
         return local_ref
     subprocess.run(
         _git_cmd(repo_root, ["fetch", "--no-tags", "origin", f"+{remote_ref}:{local_ref}"]),
@@ -328,6 +339,13 @@ def _ensure_local_version_ref(
         capture_output=True,
         env=env,
     )
+    if not _git_ref_points_to_commit(repo_root=repo_root, ref_name=local_ref):
+        raise GitWorkspaceCommandError(
+            op="resolve fetched workspace version ref",
+            cmd=_git_cmd(repo_root, ["cat-file", "-e", f"{local_ref}^{{commit}}"]),
+            returncode=128,
+            stderr=f"fetched ref does not point to a local commit object: {local_ref}",
+        )
     return local_ref
 
 
@@ -340,7 +358,7 @@ def _ensure_local_lineage_branch_ref(
     remote_ref = workspace_lineage_branch_ref(runtime_ctx)
     if not remote_ref:
         return ""
-    local_ref = "refs/heads/workspace"
+    local_ref = _WORKSPACE_BRANCH_REF
     try:
         subprocess.run(
             _git_cmd(repo_root, ["fetch", "--no-tags", "origin", f"+{remote_ref}:{local_ref}"]),
@@ -349,8 +367,10 @@ def _ensure_local_lineage_branch_ref(
             env=env,
         )
     except subprocess.CalledProcessError:
-        if _git_has_ref(repo_root=repo_root, ref_name=local_ref):
+        if _git_ref_points_to_commit(repo_root=repo_root, ref_name=local_ref):
             return local_ref
+        return ""
+    if not _git_ref_points_to_commit(repo_root=repo_root, ref_name=local_ref):
         return ""
     return local_ref
 
@@ -378,6 +398,75 @@ def _workspace_commit_identity(runtime_ctx: Any) -> tuple[str, str]:
     return name, email
 
 
+def _configure_turn_git_workspace_repo(*, turn_root: pathlib.Path, runtime_ctx: Any) -> None:
+    name, email = _workspace_commit_identity(runtime_ctx)
+    _ensure_git_commit_identity(repo_root=turn_root, name=name, email=email)
+    _run_git_checked(
+        turn_root,
+        ["config", "advice.detachedHead", "false"],
+        op="configure detached-head advice",
+    )
+    _run_git_checked(
+        turn_root,
+        ["config", "core.sparseCheckout", "true"],
+        op="configure sparse checkout",
+    )
+    sparse_file = turn_root / ".git" / "info" / "sparse-checkout"
+    sparse_file.parent.mkdir(parents=True, exist_ok=True)
+    if not sparse_file.exists():
+        sparse_file.write_text("", encoding="utf-8")
+
+
+def _repair_existing_turn_git_workspace(
+    *,
+    turn_root: pathlib.Path,
+    source_repo_root: pathlib.Path,
+    lineage_ref: str,
+) -> None:
+    if _git_ref_points_to_commit(repo_root=turn_root, ref_name=_WORKSPACE_BRANCH_REF):
+        return
+
+    _run_git_checked(
+        turn_root,
+        ["update-ref", "-d", _WORKSPACE_BRANCH_REF],
+        op="remove invalid workspace branch ref before repair",
+    )
+
+    if lineage_ref and _git_ref_points_to_commit(repo_root=source_repo_root, ref_name=lineage_ref):
+        repair_ref = "refs/kdcube-local/repair/workspace"
+        _run_git_checked(
+            turn_root,
+            ["fetch", "--no-tags", str(source_repo_root), f"+{lineage_ref}:{repair_ref}"],
+            op="fetch workspace lineage for turn repo repair",
+        )
+        repair_sha = _git_rev_parse(repo_root=turn_root, ref_name=repair_ref)
+        _run_git_checked(
+            turn_root,
+            ["update-ref", _WORKSPACE_BRANCH_REF, repair_sha],
+            op="repair turn workspace branch ref",
+        )
+        _run_git_checked(
+            turn_root,
+            ["reset", "--mixed", "-q", _WORKSPACE_BRANCH],
+            op="reset repaired workspace index",
+        )
+        try:
+            _run_git_checked(
+                turn_root,
+                ["update-ref", "-d", repair_ref],
+                op="cleanup turn workspace repair ref",
+            )
+        except GitWorkspaceCommandError:
+            pass
+        return
+
+    _run_git_checked(
+        turn_root,
+        ["symbolic-ref", "HEAD", _WORKSPACE_BRANCH_REF],
+        op="point HEAD at workspace branch",
+    )
+
+
 def _ensure_current_turn_git_workspace_sync(
     *,
     runtime_ctx: Any,
@@ -396,6 +485,12 @@ def _ensure_current_turn_git_workspace_sync(
     turn_root = _artifact_outdir(outdir) / turn_id
     git_dir = turn_root / ".git"
     if git_dir.exists():
+        _configure_turn_git_workspace_repo(turn_root=turn_root, runtime_ctx=runtime_ctx)
+        _repair_existing_turn_git_workspace(
+            turn_root=turn_root,
+            source_repo_root=repo_root,
+            lineage_ref=lineage_ref,
+        )
         return turn_root
 
     turn_root.mkdir(parents=True, exist_ok=True)
@@ -404,36 +499,22 @@ def _ensure_current_turn_git_workspace_sync(
         check=True,
         capture_output=True,
     )
-    name, email = _workspace_commit_identity(runtime_ctx)
-    _ensure_git_commit_identity(repo_root=turn_root, name=name, email=email)
-    subprocess.run(
-        _git_cmd(turn_root, ["config", "advice.detachedHead", "false"]),
-        check=True,
-        capture_output=True,
-    )
-    subprocess.run(
-        _git_cmd(turn_root, ["config", "core.sparseCheckout", "true"]),
-        check=True,
-        capture_output=True,
-    )
-    sparse_file = turn_root / ".git" / "info" / "sparse-checkout"
-    sparse_file.parent.mkdir(parents=True, exist_ok=True)
-    sparse_file.write_text("", encoding="utf-8")
+    _configure_turn_git_workspace_repo(turn_root=turn_root, runtime_ctx=runtime_ctx)
 
     if lineage_ref:
         subprocess.run(
-            _git_cmd(turn_root, ["fetch", "--no-tags", str(repo_root), f"+{lineage_ref}:refs/heads/workspace"]),
+            _git_cmd(turn_root, ["fetch", "--no-tags", str(repo_root), f"+{lineage_ref}:{_WORKSPACE_BRANCH_REF}"]),
             check=True,
             capture_output=True,
         )
         subprocess.run(
-            _git_cmd(turn_root, ["checkout", "-f", "workspace"]),
+            _git_cmd(turn_root, ["checkout", "-f", _WORKSPACE_BRANCH]),
             check=True,
             capture_output=True,
         )
     else:
         subprocess.run(
-            _git_cmd(turn_root, ["checkout", "--orphan", "workspace"]),
+            _git_cmd(turn_root, ["checkout", "--orphan", _WORKSPACE_BRANCH]),
             check=True,
             capture_output=True,
         )
@@ -510,15 +591,7 @@ def _write_blob(target: pathlib.Path, data: bytes) -> None:
 
 
 def _git_has_head(*, repo_root: pathlib.Path) -> bool:
-    try:
-        subprocess.run(
-            _git_cmd(repo_root, ["rev-parse", "--verify", "HEAD"]),
-            check=True,
-            capture_output=True,
-        )
-        return True
-    except subprocess.CalledProcessError:
-        return False
+    return _git_ref_points_to_commit(repo_root=repo_root, ref_name="HEAD")
 
 
 def _git_head_sha(*, repo_root: pathlib.Path) -> str:

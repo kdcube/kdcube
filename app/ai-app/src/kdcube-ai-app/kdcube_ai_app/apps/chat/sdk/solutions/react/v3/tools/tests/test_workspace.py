@@ -454,6 +454,76 @@ async def test_publish_current_turn_git_workspace_pushes_lineage_and_version_ref
 
 
 @pytest.mark.asyncio
+async def test_publish_current_turn_git_workspace_repairs_existing_turn_repo_bad_workspace_ref(tmp_path, monkeypatch):
+    monkeypatch.setenv("GIT_HTTP_TOKEN", "test-token")
+    monkeypatch.setenv("GIT_HTTP_USER", "x-access-token")
+    outdir = tmp_path / "out"
+    outdir.mkdir(parents=True, exist_ok=True)
+    remote_repo = _init_git_workspace_repo(tmp_path)
+    runtime = RuntimeCtx(
+        turn_id="turn_ctx",
+        outdir=str(outdir),
+        workdir=str(tmp_path / "work"),
+        tenant="demo-tenant",
+        project="demo-project",
+        user_id="admin-user",
+        conversation_id="conversation-1",
+        workspace_implementation="git",
+        workspace_git_repo=str(remote_repo),
+    )
+
+    turn_root = await ensure_current_turn_git_workspace(runtime_ctx=runtime, outdir=outdir)
+    bad_ref = "1800c3a8d610fd01a04ba91c069c724a364f03d8"
+    ref_path = turn_root / ".git" / "refs" / "heads" / "workspace"
+    ref_path.parent.mkdir(parents=True, exist_ok=True)
+    ref_path.write_text(f"{bad_ref}\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(turn_root), "symbolic-ref", "HEAD", "refs/heads/workspace"],
+        check=True,
+        capture_output=True,
+    )
+    bad_head = subprocess.run(
+        ["git", "-C", str(turn_root), "cat-file", "-e", "HEAD^{commit}"],
+        check=False,
+        capture_output=True,
+    )
+    assert bad_head.returncode != 0
+
+    (turn_root / "files" / "projectA" / "src").mkdir(parents=True, exist_ok=True)
+    (turn_root / "files" / "projectA" / "src" / "new.py").write_text("print('new')\n", encoding="utf-8")
+
+    result = await publish_current_turn_git_workspace(runtime_ctx=runtime, outdir=outdir)
+
+    assert result["committed"] is True
+    old_file = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(remote_repo),
+            "show",
+            "refs/heads/kdcube/demo-tenant/demo-project/admin-user/conversation-1:files/projectA/src/app.py",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert (old_file.stdout or "") == "print('git')\n"
+    new_file = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(remote_repo),
+            "show",
+            "refs/heads/kdcube/demo-tenant/demo-project/admin-user/conversation-1:files/projectA/src/new.py",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert (new_file.stdout or "") == "print('new')\n"
+
+
+@pytest.mark.asyncio
 async def test_publish_current_turn_git_workspace_skips_missing_materialized_workspace(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_HTTP_TOKEN", "test-token")
     monkeypatch.setenv("GIT_HTTP_USER", "x-access-token")

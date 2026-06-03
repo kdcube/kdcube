@@ -85,3 +85,8 @@ folium
 
 stripe
 mcp
+
+# Test utilities for the chat processor venv.
+pytest
+pytest-asyncio
+coverage
