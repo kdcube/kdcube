@@ -20,6 +20,7 @@ import inspect
 
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv, find_dotenv
 
@@ -571,6 +572,11 @@ async def root():
 # think of replacing with auth_without_pressure
 async def get_profile(session: UserSession = Depends(get_user_session_dependency())):
     """Get user profile - works for both anonymous and registered users"""
+    def _user_type_value(user_type: Any) -> str:
+        if isinstance(user_type, UserType):
+            return user_type.value
+        return str(user_type or "").split(".")[-1].lower()
+
     if os.getenv("AUTH_DEBUG", "").lower() in {"1", "true", "yes", "on"}:
         logger.info(
             "Profile session: type=%s user=%s roles=%s perms=%s session_id=%s",
@@ -580,9 +586,10 @@ async def get_profile(session: UserSession = Depends(get_user_session_dependency
             len(session.permissions or []),
             session.session_id,
             )
-    if session.user_type in [UserType.REGISTERED, UserType.PRIVILEGED]:
+    user_type = _user_type_value(session.user_type)
+    if user_type and user_type != UserType.ANONYMOUS.value:
         return {
-            "user_type": "registered" if session.user_type == UserType.REGISTERED else "privileged",
+            "user_type": user_type.upper(),
             "username": session.username,
             "user_id": session.user_id,
             "roles": session.roles,
@@ -592,7 +599,7 @@ async def get_profile(session: UserSession = Depends(get_user_session_dependency
         }
     else:
         return {
-            "user_type": "anonymous",
+            "user_type": UserType.ANONYMOUS.value.upper(),
             "fingerprint": session.fingerprint[:8] + "...",
             "session_id": session.session_id,
             "created_at": session.created_at

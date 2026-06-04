@@ -3,6 +3,7 @@ import {Blocks, Loader, LogOut, Wifi, WifiOff} from "lucide-react";
 import {useAppDispatch, useAppSelector} from "../../app/store.ts";
 import {selectChatConnected, selectChatStayConnected} from "../chat/chatStateSlice.ts";
 import {logOut} from "../auth/authMiddleware.ts";
+import {selectAppUser} from "../auth/authSlice.ts";
 import {useGetBundlesListQuery} from "../bundles/bundlesAPI.ts";
 import {selectProject, selectTenant} from "../chat/chatSettingsSlice.ts";
 import {selectCurrentBundle, setCurrentBundle} from "../bundles/bundlesSlice.ts";
@@ -15,6 +16,8 @@ const ChatHeader = () => {
     const dispatch = useAppDispatch()
     const stayConnected = useAppSelector(selectChatStayConnected)
     const connected = useAppSelector(selectChatConnected)
+    const user = useAppSelector(selectAppUser)
+    const userEmail = user?.email ?? user?.username ?? null
 
     const connectionStatus = useMemo(() => {
         if (stayConnected && !connected) return {
@@ -78,11 +81,19 @@ const ChatHeader = () => {
                     {bundlesSelector}
                     <div className="flex items-center gap-2">
 
-
                         <div className={`flex items-center px-3 py-1 rounded-lg text-sm ${connectionStatus.color}`}>
                             {connectionStatus.icon}
                             <span className="ml-2 font-medium">{connectionStatus.text}</span>
                         </div>
+
+                        {userEmail && (
+                            <div
+                                className="max-w-[18rem] truncate rounded-lg bg-gray-50 px-3 py-1 text-sm font-medium text-gray-700"
+                                title={userEmail}
+                            >
+                                {userEmail}
+                            </div>
+                        )}
 
                         {/*<button*/}
                         {/*    onClick={() => setShowKB(!showKB)}*/}
@@ -123,7 +134,7 @@ const ChatHeader = () => {
                 </div>
             </div>
         )
-    }, [bundlesSelector, connectionStatus.color, connectionStatus.icon, connectionStatus.text, handleLogout])
+    }, [bundlesSelector, connectionStatus.color, connectionStatus.icon, connectionStatus.text, handleLogout, userEmail])
 }
 
 export default ChatHeader;
