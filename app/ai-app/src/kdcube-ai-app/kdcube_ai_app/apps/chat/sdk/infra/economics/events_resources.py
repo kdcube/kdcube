@@ -65,7 +65,7 @@ MSG_WARNING_APPROACHING = "You're approaching your usage limit."
 # ── rate_limit.no_funding ────────────────────────────────────────────────────
 
 MSG_NO_FUNDING = (
-    "This service is not available for your account type. Please contact support."
+    "No plan or project funding is available for this request. Please add credits or contact support."
 )
 
 

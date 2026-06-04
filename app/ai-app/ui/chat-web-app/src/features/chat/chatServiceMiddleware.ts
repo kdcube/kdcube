@@ -255,7 +255,7 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
                 }
                 case "rate_limit.no_funding": {
                     const serverMessage = (data.user_message as string | undefined) ?? null;
-                    const message = serverMessage ?? "This service is not available for your account type. Please contact support.";
+                    const message = serverMessage ?? "No plan or project funding is available for this request. Please add credits or contact support.";
                     const notificationType = ((data.notification_type as string | undefined) ?? "error") as NotificationType;
                     showPopup(notificationType, message)
                     lockInputOnError(notificationType)

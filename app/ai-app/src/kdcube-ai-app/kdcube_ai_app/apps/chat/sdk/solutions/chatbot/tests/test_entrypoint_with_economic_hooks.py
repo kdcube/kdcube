@@ -5,6 +5,33 @@ import pytest
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_economic import BaseEntrypointWithEconomics
 
 
+def test_non_anonymous_plan_lanes_can_use_project_budget_without_plan_name_hardcoding():
+    entrypoint = object.__new__(BaseEntrypointWithEconomics)
+
+    assert entrypoint.wallet_users_use_project_budget_first() is True
+    assert entrypoint.project_budget_allowed_for_plan(
+        user_type="paid",
+        plan_id="starter",
+        plan_source="role",
+        has_wallet=True,
+        has_active_subscription=False,
+    ) is True
+    assert entrypoint.project_budget_allowed_for_plan(
+        user_type="known",
+        plan_id="team-zero",
+        plan_source="role",
+        has_wallet=False,
+        has_active_subscription=False,
+    ) is True
+    assert entrypoint.project_budget_allowed_for_plan(
+        user_type="anonymous",
+        plan_id="anonymous",
+        plan_source="role",
+        has_wallet=False,
+        has_active_subscription=False,
+    ) is False
+
+
 @pytest.mark.asyncio
 async def test_economics_pre_run_hook_accepts_legacy_state_only_signature():
     class LegacyHookEntrypoint(BaseEntrypointWithEconomics):

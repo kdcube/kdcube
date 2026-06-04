@@ -245,12 +245,29 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
             kwargs["econ_ctx"] = econ_ctx
         await self.post_run_hook(**kwargs)
 
-    def project_budget_user_types(self) -> set[str]:
+    def project_budget_allowed_for_plan(
+        self,
+        *,
+        user_type: str,
+        plan_id: Optional[str],
+        plan_source: Optional[str],
+        has_wallet: bool,
+        has_active_subscription: bool,
+    ) -> bool:
         """
-        User types allowed to use project budget when no active subscription.
-        Override in subclasses to customize.
+        Return whether the current plan lane may use project budget.
+
+        Runtime user type is not a plan identifier. A known user can be routed
+        as paid because they have wallet credits, while still having a
+        role/default plan lane backed by project budget. Anonymous traffic has
+        no project-backed plan lane by default.
         """
-        return {"registered"}
+        del plan_id, plan_source
+        if has_active_subscription:
+            return False
+        if has_wallet and not self.wallet_users_use_project_budget_first():
+            return False
+        return str(user_type or "").lower() != "anonymous"
 
     def wallet_users_use_project_budget_first(self) -> bool:
         """
@@ -869,9 +886,13 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                 snapshot=subscription_budget,
             )
 
-        project_budget_allowed = user_type in self.project_budget_user_types()
-        if has_wallet and not has_active_subscription and not self.wallet_users_use_project_budget_first():
-            project_budget_allowed = False
+        project_budget_allowed = self.project_budget_allowed_for_plan(
+            user_type=str(user_type or ""),
+            plan_id=plan_id,
+            plan_source=plan_source,
+            has_wallet=has_wallet,
+            has_active_subscription=has_active_subscription,
+        )
 
         project_budget = None
         project_available_usd = 0.0
@@ -1035,7 +1056,7 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                     await _econ_fail(
                         code="no_funding_source",
                         title="No funding source",
-                        message="No funding source available for this user type (subscription inactive and project funding not allowed).",
+                        message="No plan or project funding source is available for this user type.",
                         event_type="rate_limit.no_funding",
                         data={
                             "reason": "no_funding_source",
