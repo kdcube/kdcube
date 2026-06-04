@@ -22,8 +22,38 @@ CREATE TABLE IF NOT EXISTS <SCHEMA>.conv_messages (
     user_type        TEXT NOT NULL DEFAULT 'anonymous',
     tags             TEXT[] NOT NULL DEFAULT '{}',
     embedding        VECTOR(1536),
-    turn_id          TEXT
+    turn_id          TEXT,
+    anchors_text     TEXT NOT NULL DEFAULT '',
+    search_tsv       TSVECTOR GENERATED ALWAYS AS (
+        setweight(to_tsvector('simple',  coalesce(anchors_text, '')), 'A') ||
+        setweight(to_tsvector('english', coalesce(text,         '')), 'B')
+    ) STORED
     );
+
+-- Idempotent column upgrades for existing deployments
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = '<SCHEMA>' AND table_name = 'conv_messages'
+      AND column_name = 'anchors_text'
+  ) THEN
+    ALTER TABLE <SCHEMA>.conv_messages
+      ADD COLUMN anchors_text TEXT NOT NULL DEFAULT '';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = '<SCHEMA>' AND table_name = 'conv_messages'
+      AND column_name = 'search_tsv'
+  ) THEN
+    ALTER TABLE <SCHEMA>.conv_messages
+      ADD COLUMN search_tsv TSVECTOR GENERATED ALWAYS AS (
+        setweight(to_tsvector('simple',  coalesce(anchors_text, '')), 'A') ||
+        setweight(to_tsvector('english', coalesce(text,         '')), 'B')
+      ) STORED;
+  END IF;
+END $$;
 
 -- Handle historical rename of table column s3_uri -> hosted_uri
 DO $$
@@ -72,6 +102,10 @@ CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_cm_scope_time ON <SCHEMA>.conv_messages
 
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_cm_text_trgm
 ON <SCHEMA>.conv_messages USING gin (text gin_trgm_ops);
+
+-- BM25-style lexical (anchors A, body B); see anchors_text + search_tsv columns above
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_cm_search_tsv
+ON <SCHEMA>.conv_messages USING gin (search_tsv);
 
 -- ANN (embeddings)
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_conv_embedding

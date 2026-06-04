@@ -1483,6 +1483,12 @@ class BaseWorkflow():
                 tags.append(f"summary_scope:{scope}")
             if meta.get("assistant_completion_attempt_index") is not None:
                 tags.append(f"summary_attempt:{meta.get('assistant_completion_attempt_index')}")
+            anchors_text = ""
+            try:
+                from kdcube_ai_app.apps.chat.sdk.context.vector.anchors import parse_retrieval_anchors
+                anchors_text = parse_retrieval_anchors(text)
+            except Exception:
+                anchors_text = ""
             await self.conv_idx.add_message(
                 user_id=user,
                 conversation_id=conversation_id,
@@ -1497,6 +1503,7 @@ class BaseWorkflow():
                 user_type=user_type,
                 embedding=avec,
                 message_id=msgid_a,
+                anchors_text=anchors_text,
             )
             scratchpad.persisted_turn_entry_paths.add(path)
             persisted += 1

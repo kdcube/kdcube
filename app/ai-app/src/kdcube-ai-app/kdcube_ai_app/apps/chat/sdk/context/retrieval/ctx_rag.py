@@ -2923,23 +2923,25 @@ async def search_context(
         (best_turn_id, all_hits_sorted)
     """
 
+    def _resolve_roles_and_tags(where: str):
+        search_tags = None
+        if where in ("notes", "react_note", "react.notes"):
+            where = "artifact"
+            search_tags = ["kind:react.note"]
+        elif where in ("assistant_artifact", "artifact", "project_log"):
+            where = "artifact"
+            search_tags = ["artifact:react.log.presentation", "artifact:solver.failure"]
+        if where == "user":
+            search_roles = ("user", "artifact")
+            search_tags = ["chat:user", "artifact:user.attachment"]
+        else:
+            search_roles = (where,)
+        return where, search_roles, search_tags
+
     async def _search_one(where: str, query: str, embedding: List[float]|None = None) -> list[dict]:
         try:
-
-            search_tags = None
             [qvec] = [embedding] if embedding else await model_service.embed_texts([query])
-            if where in ("notes", "react_note", "react.notes"):
-                where = "artifact"
-                search_tags = ["kind:react.note"]
-            elif where in ("assistant_artifact", "artifact", "project_log"):
-                where = "artifact"
-                # search_tags = ["artifact:project.log"]
-                search_tags = ["artifact:react.log.presentation", "artifact:solver.failure"]
-            if where == "user":
-                search_roles = ("user", "artifact")
-                search_tags = ["chat:user", "artifact:user.attachment"]
-            else:
-                search_roles = (where,)
+            where, search_roles, search_tags = _resolve_roles_and_tags(where)
             res = await conv_idx.search_turn_logs_via_content(
                 user_id=user,
                 conversation_id=conv,
@@ -2958,8 +2960,74 @@ async def search_context(
                 logger.log(f"Search failed for where={where}: {e}", "WARN")
             return []
 
+    async def _search_one_lexical(where: str, query: str) -> list[dict]:
+        try:
+            where, search_roles, search_tags = _resolve_roles_and_tags(where)
+            res = await conv_idx.search_turn_logs_via_content_lexical(
+                user_id=user,
+                conversation_id=conv,
+                query_text=query,
+                search_roles=search_roles,
+                search_tags=search_tags,
+                top_k=top_k,
+                days=days,
+                scope=scope,
+                half_life_days=half_life_days,
+                timestamp_filters=timestamp_filters,
+            )
+            return res or []
+        except Exception as e:
+            if logger:
+                logger.log(f"Lexical search failed for where={where}: {e}", "WARN")
+            return []
+
     # Collect all hits
     hits = []
+
+    # RRF constants — k=60 is the de-facto literature default; 0.25 recency lift
+    # is multiplicative on the RRF score so recency nudges fresh turns up without
+    # swamping the rank fusion. Tuneable from telemetry once we have it.
+    _RRF_K = 60
+    _RECENCY_LIFT = 0.25
+
+    def _row_to_hit(r: dict, *, query: str, where: str, score_override: Optional[float] = None,
+                     sim_override: Optional[float] = None, rec_override: Optional[float] = None,
+                     extra: Optional[dict] = None) -> dict:
+        sim = float(r.get("sim") or 0.0)
+        rec = float(r.get("rec") or 0.0)
+        score = float(r.get("score") or 0.0)
+        if sim == 0.0 and "relevance_score" in r:
+            sim = float(r.get("relevance_score") or 0.0)
+            score = sim if score == 0.0 else score
+        if sim_override is not None:
+            sim = float(sim_override)
+        if rec_override is not None:
+            rec = float(rec_override)
+        if score_override is not None:
+            final_score = float(score_override)
+        else:
+            final_score = score
+        tid = r.get("turn_id") or _turn_id_from_tags_safe(r.get("tags") or [])
+        hit = {
+            "turn_id": tid,
+            "conversation_id": r.get("conversation_id") or conv,
+            "role": r.get("role", "artifact"),
+            "ts": r.get("ts"),
+            "sim": sim,
+            "rec": rec,
+            "score": final_score,
+            "original_score": score,
+            "matched_via_role": r.get("matched_role"),
+            "source_query": query,
+            "source_where": where,
+            "text": r.get("text", ""),
+            "hosted_uri": r.get("hosted_uri"),
+        }
+        if extra:
+            hit.update(extra)
+        if "deps" in r:
+            hit["deps"] = r["deps"]
+        return hit
 
     for t in targets:
         if not isinstance(t, dict):
@@ -2971,13 +3039,61 @@ async def search_context(
         if not query:
             continue
 
-        rows = await _search_one(where, query, embedding=t.get("embedding"))
+        if scoring_mode == "rrf_hybrid":
+            sem_rows, lex_rows = await asyncio.gather(
+                _search_one(where, query, embedding=t.get("embedding")),
+                _search_one_lexical(where, query),
+            )
 
+            def _rank_map(rows: list[dict]) -> dict:
+                # ConvIndex returns rows already ordered by their respective relevance.
+                ranks: dict = {}
+                for idx, r in enumerate(rows):
+                    tid = r.get("turn_id") or _turn_id_from_tags_safe(r.get("tags") or [])
+                    if tid and tid not in ranks:
+                        ranks[tid] = idx + 1
+                return ranks
+
+            sem_rank = _rank_map(sem_rows)
+            lex_rank = _rank_map(lex_rows)
+
+            # Prefer the semantic row's payload (text/hosted_uri/log artifact);
+            # fall back to lexical when only lexical produced the turn.
+            by_tid: dict = {}
+            for r in sem_rows:
+                tid = r.get("turn_id") or _turn_id_from_tags_safe(r.get("tags") or [])
+                if tid and tid not in by_tid:
+                    by_tid[tid] = ("sem", r)
+            for r in lex_rows:
+                tid = r.get("turn_id") or _turn_id_from_tags_safe(r.get("tags") or [])
+                if tid and tid not in by_tid:
+                    by_tid[tid] = ("lex", r)
+
+            for tid, (origin, row) in by_tid.items():
+                rrf_score = 0.0
+                if tid in sem_rank:
+                    rrf_score += 1.0 / (_RRF_K + sem_rank[tid])
+                if tid in lex_rank:
+                    rrf_score += 1.0 / (_RRF_K + lex_rank[tid])
+                rec = float(row.get("rec") or 0.0)
+                final_score = rrf_score * (1.0 + _RECENCY_LIFT * rec)
+                extra = {
+                    "rrf_score": rrf_score,
+                    "sem_rank": sem_rank.get(tid),
+                    "lex_rank": lex_rank.get(tid),
+                    "primary_source": origin,
+                }
+                hits.append(_row_to_hit(
+                    row, query=query, where=where,
+                    score_override=final_score, rec_override=rec, extra=extra,
+                ))
+            continue
+
+        rows = await _search_one(where, query, embedding=t.get("embedding"))
         for r in rows:
             sim = float(r.get("sim") or 0.0)
             rec = float(r.get("rec") or 0.0)
             score = float(r.get("score") or 0.0)
-
             if sim == 0.0 and "relevance_score" in r:
                 sim = float(r.get("relevance_score") or 0.0)
                 score = sim if score == 0.0 else score
@@ -2991,28 +3107,10 @@ async def search_context(
             else:
                 final_score = sim_weight * sim + rec_weight * rec
 
-            tid = r.get("turn_id") or _turn_id_from_tags_safe(r.get("tags") or [])
-
-            hit = {
-                "turn_id": tid,
-                "conversation_id": r.get("conversation_id") or conv,
-                "role": r.get("role", "artifact"),
-                "ts": r.get("ts"),
-                "sim": sim,
-                "rec": rec,
-                "score": final_score,
-                "original_score": score,
-                "matched_via_role": r.get("matched_role"),
-                "source_query": query,
-                "source_where": where,
-                "text": r.get("text", ""),
-                "hosted_uri": r.get("hosted_uri"),
-            }
-
-            if "deps" in r:
-                hit["deps"] = r["deps"]
-
-            hits.append(hit)
+            hits.append(_row_to_hit(
+                r, query=query, where=where,
+                score_override=final_score, sim_override=sim, rec_override=rec,
+            ))
 
     # Sort all hits by score (descending)
     hits.sort(key=lambda h: h["score"], reverse=True)

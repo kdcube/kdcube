@@ -377,14 +377,15 @@ class ConvIndex:
             message_id: Optional[str] = None,
             turn_id: Optional[str] = None,
             bundle_id: Optional[str] = None,
+            anchors_text: str = "",
     ) -> int:
         ts_dt = _coerce_ts(ts)
         async with self._pool.acquire() as con:
             q = f"""
                 INSERT INTO {self.schema}.conv_messages
                   (user_id, conversation_id, message_id, role, text, hosted_uri, ts,
-                   ttl_days, user_type, tags, embedding, turn_id, bundle_id)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::vector,$12,$13)
+                   ttl_days, user_type, tags, embedding, turn_id, bundle_id, anchors_text)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::vector,$12,$13,$14)
                 RETURNING id
             """
             rec = await con.fetchrow(
@@ -402,6 +403,7 @@ class ConvIndex:
                 convert_embedding_to_string(embedding) if embedding else None,
                 turn_id,
                 bundle_id,
+                (anchors_text or ""),
             )
             return int(rec["id"])
 
@@ -1929,6 +1931,148 @@ class ConvIndex:
             LIMIT {int(top_k)}
         )
         SELECT 
+            log.id, log.message_id, log.role, log.text, log.hosted_uri, log.ts, log.tags,
+            log.turn_id, log.conversation_id, log.bundle_id,
+            ut.sim,
+            ut.rec,
+            ut.score,
+            ut.sim AS relevance_score,
+            ut.matched_role,
+            ut.matched_ts
+        FROM unique_turns ut
+        JOIN LATERAL (
+            SELECT *
+            FROM {self.schema}.conv_messages
+            WHERE user_id = $1
+              AND turn_id = ut.turn_id
+              AND conversation_id = ut.conversation_id
+              AND role = 'artifact'
+              AND tags @> ARRAY['artifact:turn.log']::text[]
+              AND ts + (ttl_days || ' days')::interval >= now()
+            ORDER BY ts DESC
+            LIMIT 1
+        ) log ON TRUE
+        ORDER BY ut.score DESC, ut.matched_ts DESC
+        """
+
+        async with self._pool.acquire() as con:
+            rows = await con.fetch(q, *args)
+
+        return [dict(r) for r in rows]
+
+    async def search_turn_logs_via_content_lexical(
+            self,
+            *,
+            user_id: str,
+            conversation_id: Optional[str],
+            query_text: str,
+            search_roles: tuple[str, ...] = ("user", "assistant", "artifact"),
+            search_tags: Optional[Sequence[str]] = None,
+            role_tag_filters: Optional[List[Dict[str, Any]]] = None,
+            top_k: int = 8,
+            days: int = 90,
+            scope: str = "conversation",
+            bundle_id: Optional[str] = None,
+            half_life_days: float = 7.0,
+            timestamp_filters: Optional[List[Dict[str, Any]]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Lexical sibling of search_turn_logs_via_content.
+
+        Scores per message via `ts_rank_cd(search_tsv, websearch_to_tsquery('english', $q))`,
+        which honors the BM25F-style setweight ('A' on anchors_text, 'B' on body)
+        applied by the generated search_tsv column. Recency is computed with the
+        same half-life decay as the semantic path so the two scores are comparable
+        in shape (each on its own scale; RRF at the caller level fuses them
+        rank-wise rather than score-wise).
+
+        Returns rows with the same shape as the semantic method: one turn.log
+        artifact per matched turn_id, plus `sim` (here the lexical rank), `rec`,
+        and `score` (a weighted blend for callers that don't fuse via RRF).
+        """
+        q_text = (query_text or "").strip()
+        if not q_text:
+            return []
+
+        args: List[Any] = [user_id, str(days), q_text]
+        where = [
+            "m.user_id = $1",
+            "m.ts >= now() - ($2::text || ' days')::interval",
+            "m.ts + (m.ttl_days || ' days')::interval >= now()",
+            "m.search_tsv @@ websearch_to_tsquery('english', $3)",
+        ]
+
+        def _role_tag_clause(roles: Sequence[str], tags: Optional[Sequence[str]]) -> str:
+            args.append(list(roles))
+            role_cond = f"m.role = ANY(${len(args)})"
+            if tags:
+                args.append(list(tags))
+                return f"({role_cond} AND m.tags && ${len(args)}::text[])"
+            return f"({role_cond})"
+
+        role_clauses: List[str] = []
+        if search_roles:
+            role_clauses.append(_role_tag_clause(search_roles, search_tags))
+        for filt in (role_tag_filters or []):
+            roles = list(filt.get("roles") or [])
+            if not roles:
+                continue
+            tags = filt.get("tags")
+            role_clauses.append(_role_tag_clause(roles, tags))
+        if role_clauses:
+            where.append("(" + " OR ".join(role_clauses) + ")")
+
+        if scope == "conversation" and conversation_id:
+            args.append(conversation_id)
+            where.append(f"m.conversation_id = ${len(args)}")
+
+        if bundle_id:
+            args.append(bundle_id)
+            where.append(f"m.bundle_id = ${len(args)}")
+
+        valid_ops = {"<", "<=", "=", ">=", ">", "<>"}
+        for tf in (timestamp_filters or []):
+            op = str(tf.get("op", "")).strip()
+            if op not in valid_ops:
+                continue
+            val = _coerce_ts(tf.get("value") or datetime.utcnow())
+            args.append(val)
+            where.append(f"m.ts {op} ${len(args)}::timestamptz")
+
+        args.append(max(0.1, float(half_life_days)))
+        half_life_days_param = f"${len(args)}::float"
+
+        q = f"""
+        WITH content_matches AS (
+            SELECT
+                m.turn_id,
+                m.conversation_id,
+                m.role AS matched_role,
+                m.ts AS matched_ts,
+                ts_rank_cd(m.search_tsv, websearch_to_tsquery('english', $3), 32) AS sim,
+                exp(-ln(2) * EXTRACT(EPOCH FROM (now() - m.ts)) / ({half_life_days_param}*24*3600.0)) AS rec,
+                ROW_NUMBER() OVER (PARTITION BY m.conversation_id, m.turn_id ORDER BY m.ts DESC) AS rn
+            FROM {self.schema}.conv_messages m
+            WHERE {' AND '.join(where)}
+              AND m.turn_id IS NOT NULL
+            ORDER BY sim DESC, m.ts DESC
+            LIMIT {int(top_k * 2)}
+        ),
+        unique_turns AS (
+            SELECT
+                turn_id,
+                conversation_id,
+                matched_role,
+                matched_ts,
+                sim,
+                rec,
+                (0.80 * sim + 0.20 * rec) AS score
+            FROM content_matches
+            WHERE rn = 1
+            ORDER BY score DESC, matched_ts DESC
+            LIMIT {int(top_k)}
+        )
+        SELECT
             log.id, log.message_id, log.role, log.text, log.hosted_uri, log.ts, log.tags,
             log.turn_id, log.conversation_id, log.bundle_id,
             ut.sim,

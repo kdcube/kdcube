@@ -16,6 +16,7 @@ DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_conv_user_conv_turn;
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_conv_user_type_ts;
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_cm_scope_time;
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_cm_text_trgm;
+DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_cm_search_tsv;
 
 DROP INDEX IF EXISTS <SCHEMA>.conv_messages_bundle_id_idx;
 DROP INDEX IF EXISTS <SCHEMA>.conv_messages_user_conv_bundle_ts_idx;

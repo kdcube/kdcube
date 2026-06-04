@@ -30,11 +30,12 @@ TOOL_SPEC = {
     "purpose": (
         "Search prior conversation memory and return turn-level recovery handles. "
         "Use only when the exact needed path is not already visible. "
-        "Semantic mode searches by topic. Ordinal/temporal/timeline modes use the persisted turn catalog. "
-        "Scenarios: topic clue -> query+targets; broad conversation overview -> mode=timeline+targets=['summary'] with no query; "
-        "second/first/nth turn -> mode=ordinal+ordinal with no query; date-only clue -> mode=temporal+from/to with no query; "
-        "topic inside date range -> query+from/to with semantic/default mode. "
-        "Do not pass generic queries like 'conversation topics discussed' in catalog modes; they are ignored. "
+        "Behavior is inferred from which fields you set: "
+        "topic clue -> set `query` (hybrid semantic+lexical+recency search); "
+        "topic inside a time window -> `query` + `from`/`to`; "
+        "second/first/nth turn -> `ordinal` (no `query`); "
+        "date-only clue with no topic -> `from`/`to` (no `query`); "
+        "broad conversation overview -> no `query`, no `ordinal`, no bounds, with `targets=['summary']`. "
         "Recovery path: memsearch -> read returned refs; if refs are incomplete, "
         "read ar:turn_<id>.react.turn.index, then batch-read/pull exact ar:/tc:/fi:/so: refs. "
         "If a returned `fi:` path starts `fi:conv_<conversation_id>.turn_<id>...`, the `conv_` segment is the "
@@ -42,14 +43,13 @@ TOOL_SPEC = {
         "react.read/react.pull/react.checkout/react.rg."
     ),
     "args": {
-        "query": "str (FIRST FIELD). Natural-language query. Required in semantic mode. Omit in ordinal/temporal/timeline catalog modes.",
+        "query": "str (FIRST FIELD). Natural-language query. Required for topic search. Omit when you only want a catalog lookup (ordinal/date-window/overview).",
         "targets": "list[str] (SECOND FIELD). Any of: assistant|user|attachment|summary|notes. Defaults to all except notes.",
-        "mode": "str (optional). semantic|temporal|ordinal|timeline. Default semantic.",
         "scope": "str (optional). conversation|user. Default conversation.",
         "from": "ISO timestamp (optional). Start of temporal window.",
         "to": "ISO timestamp (optional). End of temporal window, exclusive.",
         "ordinal": "int (optional). 1-based turn ordinal in the selected scope/window.",
-        "order": "str (optional). asc|desc for timeline/temporal catalog results. Default asc.",
+        "order": "str (optional). asc|desc for catalog results. Default asc.",
         "top_k": "int (optional). Max hits to return (default 5).",
         "days": "int (optional). Lookback window in days (default 365).",
     },
@@ -208,9 +208,6 @@ async def handle_react_memsearch(*, ctx_browser: Any, state: Dict[str, Any], too
         },
     )
 
-    def score_function(sim: float, rec: float, ts: str) -> float:
-        return 0.8 * sim + 0.2 * rec
-
     search_hits_formatted: List[Dict[str, Any]] = []
     total_tokens = 0
     user = ctx_browser.runtime_ctx.user_id
@@ -274,12 +271,11 @@ async def handle_react_memsearch(*, ctx_browser: Any, state: Dict[str, Any], too
                 seen_where.add(where)
 
             best_tid, hits = await ctx_browser.search(
-                custom_score_fn=score_function,
                 targets=search_targets,
                 user=user,
                 conv=conversation_id,
                 scope=scope,
-                scoring_mode="hybrid",
+                scoring_mode="rrf_hybrid",
                 half_life_days=7.0,
                 top_k=top_k,
                 days=days,
@@ -425,7 +421,7 @@ async def handle_react_memsearch(*, ctx_browser: Any, state: Dict[str, Any], too
                         "meta": dict(att),
                     })
 
-            search_hits_formatted.append({
+            hit_out_meta = {
                 "conversation_id": hit_conversation_id,
                 "turn_id": tid,
                 "turn_index_path": f"ar:{tid}.react.turn.index",
@@ -437,7 +433,11 @@ async def handle_react_memsearch(*, ctx_browser: Any, state: Dict[str, Any], too
                 "source_query": h.get("source_query"),
                 "ts": h["ts"].isoformat() if hasattr(h.get("ts"), "isoformat") else h.get("ts"),
                 "best_turn_id": best_tid,
-            })
+            }
+            for key in ("rrf_score", "sem_rank", "lex_rank", "primary_source"):
+                if key in h:
+                    hit_out_meta[key] = h[key]
+            search_hits_formatted.append(hit_out_meta)
     except Exception as exc:
         state["exit_reason"] = "error"
         state["error"] = {"where": "tool_execution", "error": f"memsearch_failed:{exc}", "managed": True}
