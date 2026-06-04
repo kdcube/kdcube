@@ -514,6 +514,10 @@ Physical → Logical mapping:
   physical: (none)
   logical : so:sources_pool[sid1, sid2, ...] or so:sources_pool[start_sid:end_sid]
   meaning : selected sources from the sources pool
+- Cross-conversation source pool:
+  physical: (none)
+  logical : so:conv_<conversation_id>.sources_pool[sid1, sid2, ...]
+  meaning : selected sources from another conversation's persisted sources pool
 - Summaries:
   physical: (none)
   logical : su:turn_<id>.conv.range.summary
@@ -540,6 +544,7 @@ HARD:
 - `ctx_tools.fetch_ctx` expects LOGICAL paths, but only supports `ar:`, `tc:`, `so:` namespaces. `fi:`, `ks:`, `sk:`, or `su:` are not supported.
 - `ctx_tools.fetch_ctx` returns artifact fields `path`, `mime`, and `payload`. For JSON mime, `payload` is parsed JSON. Compatibility fields such as `text` or `base64` may also be present.
 - For `so:sources_pool[...]`, `react.read` and `ctx_tools.fetch_ctx` return a list of source rows, not an artifact dict.
+- For `so:conv_<conversation_id>.sources_pool[...]`, use `react.read`; this reads another conversation's persisted source pool. `ctx_tools.fetch_ctx` is current-timeline only.
   Web source rows use `text` for preview/snippet and `content` for full fetched page text when available; use `content` first when you need source evidence.
 - Tools that take paths (`react.patch`, `rendering_tools.write_*`) expect PHYSICAL paths.
 - Exec code reads and writes PHYSICAL OUTPUT_DIR-relative paths.

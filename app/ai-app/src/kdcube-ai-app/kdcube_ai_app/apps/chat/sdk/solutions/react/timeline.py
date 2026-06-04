@@ -346,6 +346,34 @@ def _parse_meta_json(text: str) -> Dict[str, Any]:
         return {}
 
 
+def parse_sources_pool_ref(path: str) -> tuple[Optional[str], str]:
+    """
+    Parse a sources-pool reference.
+
+    Supported forms:
+      - so:sources_pool[1,3-5]
+      - sources_pool[1,3-5]
+      - so:conv_<conversation_id>.sources_pool[1,3-5]
+
+    Returns (conversation_id, selector). conversation_id is None for the
+    currently loaded timeline.
+    """
+    raw = str(path or "").strip()
+    if raw.startswith("so:"):
+        raw = raw[len("so:"):]
+    if raw.startswith("sources_pool["):
+        return None, raw
+    if raw.startswith("conv_"):
+        marker = ".sources_pool["
+        marker_at = raw.find(marker)
+        if marker_at > len("conv_") and raw.endswith("]"):
+            conversation_id = raw[len("conv_"):marker_at].strip()
+            selector = "sources_pool[" + raw[marker_at + len(marker):]
+            if conversation_id and selector.endswith("]"):
+                return conversation_id, selector
+    return None, ""
+
+
 def resolve_sources_pool_selector(timeline: Dict[str, Any], selector: str) -> List[Dict[str, Any]]:
     """
     selector: sources_pool[<sid>,<sid>]
@@ -359,8 +387,9 @@ def resolve_sources_pool_selector(timeline: Dict[str, Any], selector: str) -> Li
         if not tok:
             continue
         # Support ranges like "1-5"
-        if "-" in tok:
-            parts = [p.strip() for p in tok.split("-", 1)]
+        range_sep = ":" if ":" in tok else "-" if "-" in tok else ""
+        if range_sep:
+            parts = [p.strip() for p in tok.split(range_sep, 1)]
             if len(parts) == 2:
                 try:
                     start = int(parts[0])
@@ -1149,10 +1178,11 @@ def resolve_artifact_from_timeline(timeline: Dict[str, Any], path: str) -> Optio
     if not isinstance(path, str) or not path.strip():
         return None
     p = path.strip()
-    if p.startswith("so:"):
-        p = p[len("so:"):]
-    if p.startswith("sources_pool["):
-        return {"kind": "sources_pool", "items": resolve_sources_pool_selector(timeline, p)}
+    source_conversation_id, source_selector = parse_sources_pool_ref(p)
+    if source_selector:
+        if source_conversation_id:
+            return None
+        return {"kind": "sources_pool", "items": resolve_sources_pool_selector(timeline, source_selector)}
     lookup_paths = {p}
     logical_from_physical = physical_path_to_logical_path(p)
     if logical_from_physical:

@@ -27,6 +27,8 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.solution_workspace import (
 from kdcube_ai_app.apps.chat.sdk.solutions.react.timeline import (
     build_turn_index_text,
     parse_turn_index_path,
+    parse_sources_pool_ref,
+    resolve_sources_pool_selector,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.common import (
     tool_call_block,
@@ -66,6 +68,7 @@ TOOL_SPEC = {
         "For fi: files, normal readable content is text, plus multimodal PDF/image payloads. "
         "For so:sources_pool[...] paths, react.read returns JSON source rows; web rows use content for full fetched text "
         "when available and text for the search preview/snippet. Source rows are materialized in full by default. "
+        "Use so:conv_<conversation_id>.sources_pool[...] for source rows from another conversation's persisted source pool. "
         "⚠️ BINARY FILE RESTRICTION (HARD): Other binary files such as xlsx/xls/pptx/docx/zip are not decoded into usable content by react.read; "
         "calling react.read on unsupported binary files returns only metadata, NOT content."
         "Inspect those with code and exec tool against their physical OUTPUT_DIR path. "
@@ -83,7 +86,7 @@ TOOL_SPEC = {
             "turn indexes via ar:turn_<id>.react.turn.index, "
             "files via fi:turn_<id>.files/<filepath>, "
             "event blocks via ev:turn_<id>.events/<event_path>, "
-            "sources via so:sources_pool[...], "
+            "sources via so:sources_pool[...] or so:conv_<conversation_id>.sources_pool[...], "
             "skills via sk:<skill_id or num>, "
             "knowledge space via ks:<relpath> (read-only reference files). "
             "fi: normally yields full text for text files and multimodal/base64 payloads for PDF/images only. "
@@ -1659,23 +1662,55 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             continue
 
         if isinstance(raw_path, str) and raw_path.startswith("so:"):
-            selector = raw_path[len("so:"):]
-            if selector.startswith("sources_pool["):
+            source_conversation_id, selector = parse_sources_pool_ref(raw_path)
+            if selector:
+                resolver_status = ""
                 try:
-                    rows = ctx_browser.timeline.resolve_sources_pool(selector)
+                    if source_conversation_id:
+                        runtime_ctx = getattr(ctx_browser, "runtime_ctx", None)
+                        source_user_id = str(getattr(runtime_ctx, "user_id", "") or "").strip()
+                        ctx_client = getattr(ctx_browser, "ctx_client", None)
+                        if not ctx_client:
+                            rows = []
+                            resolver_status = "ctx_client_missing"
+                        elif not source_user_id:
+                            rows = []
+                            resolver_status = "user_id_missing"
+                        else:
+                            runtime_ctx_payload = (
+                                runtime_ctx.to_dict()
+                                if hasattr(runtime_ctx, "to_dict")
+                                else {}
+                            )
+                            conv_sources = await ctx_client.fetch_conversation_sources_pool(
+                                user_id=source_user_id,
+                                conversation_id=source_conversation_id,
+                                ctx=runtime_ctx_payload,
+                                bundle_id=None,
+                            )
+                            rows = resolve_sources_pool_selector(
+                                {"sources_pool": conv_sources.get("sources_pool") or []},
+                                selector,
+                            )
+                    else:
+                        rows = ctx_browser.timeline.resolve_sources_pool(selector)
                 except Exception:
                     rows = []
+                    resolver_status = "resolver_error"
                 if rows:
                     items_stats = build_sources_pool_items_stats(rows)
                     if stats_only:
-                        per_path.append({
+                        entry = {
                             "path": raw_path,
                             "status": "stats_only",
                             "kind": "sources_pool",
                             "items": len(rows),
                             "items_stats": items_stats,
                             "content_materialized": False,
-                        })
+                        }
+                        if source_conversation_id:
+                            entry["conversation_id"] = source_conversation_id
+                        per_path.append(entry)
                         continue
                     art_text, source_text_truncated = _source_rows_json_text(
                         rows,
@@ -1690,6 +1725,8 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                         "items_stats": items_stats,
                         "content_policy": "full_source_rows" if not source_text_truncated else "content_fields_truncated_by_request",
                     }
+                    if source_conversation_id:
+                        meta_extra["source_conversation_id"] = source_conversation_id
                     if requested_read_text_symbols is not None:
                         meta_extra["requested_text_symbols"] = requested_read_text_symbols
                     added = _maybe_add_block({
@@ -1710,6 +1747,8 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                         "content_materialized": True,
                         "content_policy": meta_extra["content_policy"],
                     }
+                    if source_conversation_id:
+                        entry["conversation_id"] = source_conversation_id
                     if tokens:
                         entry["tokens"] = tokens
                     if requested_read_text_symbols is not None:
@@ -1721,6 +1760,15 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                         entry["status"] = "exists_in_visible_context"
                     per_path.append(entry)
                     continue
+                missing_artifacts.append(raw_path)
+                per_path.append({
+                    "path": raw_path,
+                    "missing": True,
+                    "kind": "sources_pool",
+                    "status": resolver_status or "sources_pool_rows_missing",
+                    **({"conversation_id": source_conversation_id} if source_conversation_id else {}),
+                })
+                continue
 
         path = raw_path
         display_path = raw_path

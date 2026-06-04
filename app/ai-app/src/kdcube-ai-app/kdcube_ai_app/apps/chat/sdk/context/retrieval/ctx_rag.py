@@ -87,6 +87,75 @@ class ContextRAGClient:
         bundle = bundle_id or ctx.get("bundle_id") or ctx.get("app_bundle_id")
         return user, conv, bundle
 
+    async def fetch_conversation_sources_pool(
+        self,
+        *,
+        user_id: str,
+        conversation_id: str,
+        days: int = 365,
+        bundle_id: Optional[str] = None,
+        bundle_ids: Optional[Sequence[str]] = None,
+        ctx: Optional[dict] = None,
+    ) -> Dict[str, Any]:
+        """
+        Load the latest persisted conversation timeline metadata and return its
+        conversation-level sources_pool.
+
+        This intentionally mirrors the timeline lookup in fetch_conversation_artifacts
+        without materializing turn artifacts.
+        """
+        query_ctx = dict(self._load_ctx(ctx) or {})
+        if bundle_id is None:
+            query_ctx.pop("bundle_id", None)
+            query_ctx.pop("app_bundle_id", None)
+
+        conversation_title = None
+        conversation_started_at = None
+        sources_pool: List[Dict[str, Any]] = []
+        timeline_bundle_id = None
+        try:
+            res_ws = await self.recent(
+                kinds=(f"artifact:{TIMELINE_KIND}",),
+                roles=("artifact",),
+                limit=1,
+                days=days,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                with_payload=False,
+                bundle_id=bundle_id,
+                bundle_ids=bundle_ids,
+                ctx=query_ctx,
+            )
+            ws_items = list(res_ws.get("items") or [])
+            if ws_items:
+                timeline_metadata = ws_items[0]
+                timeline_bundle_id = timeline_metadata.get("bundle_id")
+                timeline_payload = json.loads(timeline_metadata.get("text") or "{}") or {}
+                title = (timeline_payload.get("conversation_title") or "").strip()
+                if title:
+                    conversation_title = title
+                conversation_started_at = (timeline_payload.get("conversation_started_at") or "").strip() or None
+                if isinstance(timeline_payload.get("sources_pool"), list):
+                    sources_pool = [r for r in (timeline_payload.get("sources_pool") or []) if isinstance(r, dict)]
+        except Exception:
+            logger.exception(
+                "fetch_conversation_sources_pool failed conversation_id=%s",
+                conversation_id,
+            )
+            sources_pool = []
+            conversation_title = None
+            conversation_started_at = None
+            timeline_bundle_id = None
+
+        return {
+            "user_id": user_id,
+            "conversation_id": conversation_id,
+            "conversation_title": conversation_title,
+            "conversation_started_at": conversation_started_at,
+            "timeline_bundle_id": timeline_bundle_id,
+            "sources_pool": sources_pool,
+        }
+
     async def _materialize_payloads_for_items(
             self,
             items: List[Dict[str, Any]],

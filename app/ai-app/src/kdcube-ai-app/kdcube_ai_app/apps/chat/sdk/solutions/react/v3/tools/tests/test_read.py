@@ -195,6 +195,59 @@ async def test_read_sources_pool_max_text_symbols_preserves_json_items(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_read_cross_conversation_sources_pool_uses_ctx_client(tmp_path):
+    class FakeCtxClient:
+        def __init__(self):
+            self.calls = []
+
+        async def fetch_conversation_sources_pool(self, **kwargs):
+            self.calls.append(kwargs)
+            return {
+                "conversation_id": kwargs["conversation_id"],
+                "sources_pool": [
+                    {"sid": 1, "url": "https://example.com/one", "title": "One", "content": "first"},
+                    {"sid": 2, "url": "https://example.com/two", "title": "Two", "content": "second"},
+                ],
+            }
+
+    runtime = RuntimeCtx(
+        user_id="user-1",
+        conversation_id="current-conv",
+        turn_id="turn_read",
+        outdir=str(tmp_path),
+        workdir=str(tmp_path),
+        max_tokens=80_000,
+    )
+    ctx = FakeBrowser(runtime)
+    ctx.ctx_client = FakeCtxClient()
+    path = "so:conv_other-conv.sources_pool[2]"
+
+    state = {"last_decision": {"tool_call": {"params": {"paths": [path]}}}}
+    await handle_react_read(ctx_browser=ctx, state=state, tool_call_id="r_cross_source")
+
+    assert ctx.ctx_client.calls
+    assert ctx.ctx_client.calls[0]["user_id"] == "user-1"
+    assert ctx.ctx_client.calls[0]["conversation_id"] == "other-conv"
+
+    block = next(
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result"
+        and b.get("path") == path
+        and b.get("call_id") == "r_cross_source"
+    )
+    rows = json.loads(block.get("text") or "[]")
+    assert rows == [{"sid": 2, "url": "https://example.com/two", "title": "Two", "content": "second"}]
+    assert block["meta"]["source_conversation_id"] == "other-conv"
+
+    status = next(
+        json.loads(b["text"])
+        for b in ctx.timeline.blocks
+        if b.get("path") == "tc:turn_read.r_cross_source.result"
+    )
+    assert status["paths"][0]["conversation_id"] == "other-conv"
+
+
+@pytest.mark.asyncio
 async def test_read_large_tc_result_returns_configured_preview_not_full_payload(tmp_path):
     runtime = RuntimeCtx(turn_id="turn_read", outdir=str(tmp_path), workdir=str(tmp_path), max_tokens=80_000)
     ctx = FakeBrowser(runtime)

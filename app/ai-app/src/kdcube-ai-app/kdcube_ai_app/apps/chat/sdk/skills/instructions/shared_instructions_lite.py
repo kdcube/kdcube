@@ -159,7 +159,8 @@ REACT_LITE_PATHS_AND_NAMESPACES = """
   - `fi:turn_<id>.external.<event_kind>.attachments/<event_id>/<name>` for followup/steer/external-event attachments
 - If an `fi:` path starts `fi:conv_<conversation_id>.turn_<id>...`, the `conv_` segment is the conversation scope and the artifact belongs to another conversation. Current-conversation `fi:` paths do not have this segment. Use scoped paths exactly as supplied.
 - `tc:turn_<id>.<tool_call_id>.call` and `.result` address tool call inputs/results.
-- `so:sources_pool[1,3]` and `so:sources_pool[2:6]` address source rows.
+- `so:sources_pool[1,3]` and `so:sources_pool[2:6]` address current conversation source rows.
+- `so:conv_<conversation_id>.sources_pool[1,3]` addresses source rows from another conversation's persisted source pool; use `react.read` for this form.
 - `ws:turn_<id>.conv.working.summary` addresses the latest working summary for a turn.
 - `su:turn_<id>.conv.range.summary` addresses a compacted range summary.
 - `ks:<path>` addresses read-only bundle knowledge space. `sk:<skill_id>` addresses skill text.
