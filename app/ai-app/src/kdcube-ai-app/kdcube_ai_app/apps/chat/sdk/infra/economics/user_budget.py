@@ -1196,6 +1196,7 @@ class UserBudgetBreakdownService:
         tok_day = int(totals.get("tokens_today") or 0)
         tok_month = int(totals.get("tokens_this_month") or 0)
         tok_hour = int(totals.get("tokens_this_hour") or 0)
+        tok_reserved = int(totals.get("tokens_reserved") or 0)
 
         # -------- effective policy (override semantics) --------
         effective_policy = _merge_policy_with_plan_override(base_policy, plan_effective) if plan_effective else base_policy
@@ -1242,9 +1243,9 @@ class UserBudgetBreakdownService:
         # Remaining (NOTE: not clamped to >=0; admin wants to see negative headroom too)
         remaining_req_day = self._calc_remaining(getattr(effective_policy, "requests_per_day", None), req_day)
         remaining_req_month = self._calc_remaining(getattr(effective_policy, "requests_per_month", None), req_month)
-        remaining_tok_hour = self._calc_remaining(getattr(effective_policy, "tokens_per_hour", None), tok_hour)
-        remaining_tok_day = self._calc_remaining(getattr(effective_policy, "tokens_per_day", None), tok_day)
-        remaining_tok_month = self._calc_remaining(getattr(effective_policy, "tokens_per_month", None), tok_month)
+        remaining_tok_hour = self._calc_remaining(getattr(effective_policy, "tokens_per_hour", None), tok_hour + tok_reserved)
+        remaining_tok_day = self._calc_remaining(getattr(effective_policy, "tokens_per_day", None), tok_day + tok_reserved)
+        remaining_tok_month = self._calc_remaining(getattr(effective_policy, "tokens_per_month", None), tok_month + tok_reserved)
 
         percentage_used = None
         if getattr(effective_policy, "requests_per_day", None):
@@ -1424,9 +1425,11 @@ class UserBudgetBreakdownService:
                 "tokens_this_hour": tok_hour,
                 "tokens_today": tok_day,
                 "tokens_this_month": tok_month,
+                "tokens_reserved": tok_reserved,
                 "tokens_this_hour_usd": _usd(tok_hour),
                 "tokens_today_usd": _usd(tok_day),
                 "tokens_this_month_usd": _usd(tok_month),
+                "tokens_reserved_usd": _usd(tok_reserved),
                 "concurrent": 0,
             },
             "reset_windows": reset_windows,

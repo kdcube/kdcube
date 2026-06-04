@@ -55,6 +55,9 @@ interface QuotaBreakdown {
         tokens_per_hour: number | null;
         tokens_per_day: number | null;
         tokens_per_month: number | null;
+        usd_per_hour?: number | null;
+        usd_per_day?: number | null;
+        usd_per_month?: number | null;
     };
     current_usage: {
         requests_today: number;
@@ -62,9 +65,11 @@ interface QuotaBreakdown {
         tokens_this_hour: number;
         tokens_today: number;
         tokens_this_month: number;
+        tokens_reserved?: number;
         tokens_this_hour_usd?: number | null;
         tokens_today_usd?: number | null;
         tokens_this_month_usd?: number | null;
+        tokens_reserved_usd?: number | null;
     };
     reset_windows?: {
         bundle_id?: string | null;
@@ -86,8 +91,12 @@ interface QuotaBreakdown {
         has_lifetime_credits: boolean;
         tokens_purchased: number;
         tokens_consumed: number;
+        tokens_gross_remaining?: number;
+        tokens_reserved?: number;
         tokens_available: number;
         available_usd: number;
+        lifetime_usd_purchased?: number | null;
+        reference_model?: string;
     } | null;
     subscription_balance?: {
         has_subscription?: boolean;
@@ -427,8 +436,8 @@ function formatUsd(value: number | null | undefined): string {
     return `$${amount.toFixed(2)}`;
 }
 
-function formatUsdMaybe(value: number | null | undefined): string {
-    if (value == null) return 'unlimited';
+function formatUsdLimit(value: number | null | undefined): string {
+    if (value == null) return '∞';
     return formatUsd(value);
 }
 
@@ -459,19 +468,56 @@ const MetricRow: React.FC<{
     limit: number | null | undefined;
     remaining: number | null | undefined;
     usedUsd?: number | null;
+    limitUsd?: number | null;
     remainingUsd?: number | null;
-}> = ({ label, used, limit, remaining, usedUsd, remainingUsd }) => (
-    <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
-        <div className="flex items-center justify-between gap-3 text-sm">
-            <span className="text-gray-500">{label}</span>
-            <span className="font-medium text-gray-900">{formatCount(used)} / {formatCount(limit)}</span>
-        </div>
-        <div className="mt-1 flex items-center justify-between gap-3 text-xs text-gray-500">
-            <span>Remaining: {formatCount(remaining)}</span>
-            {(usedUsd != null || remainingUsd != null) && (
-                <span>Used {formatUsd(usedUsd)} • Left {formatUsdMaybe(remainingUsd)}</span>
+}> = ({ label, used, limit, remaining, usedUsd, limitUsd, remainingUsd }) => {
+    const hasUsd = usedUsd != null || limitUsd != null || remainingUsd != null;
+    return (
+        <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
+            <div className="flex items-center justify-between gap-3 text-sm">
+                <span className="text-gray-500">{label}</span>
+                <span className="font-semibold text-gray-900">
+                    {hasUsd ? `${formatUsd(usedUsd)} / ${formatUsdLimit(limitUsd)}` : `${formatCount(used)} / ${formatCount(limit)}`}
+                </span>
+            </div>
+            <div className="mt-1 flex items-center justify-between gap-3 text-xs text-gray-500">
+                <span>
+                    Remaining: {hasUsd ? formatUsdLimit(remainingUsd) : formatCount(remaining)}
+                </span>
+            </div>
+            {hasUsd && (
+                <div className="mt-1 text-xs text-gray-400">
+                    Tokens: {formatCount(used)} / {formatCount(limit)} · remaining {formatCount(remaining)}
+                </div>
             )}
         </div>
+    );
+};
+
+const PlanReservationMetric: React.FC<{
+    tokens: number;
+    usd?: number | null;
+}> = ({ tokens, usd }) => (
+    <div className="rounded-xl border border-amber-100 bg-amber-50 px-4 py-3">
+        <div className="flex items-center justify-between gap-3 text-sm">
+            <span className="text-amber-800">Plan reserved</span>
+            <span className="font-semibold text-amber-950">{formatUsd(usd)}</span>
+        </div>
+        <div className="mt-1 text-xs text-amber-800">
+            {formatCount(tokens)} tokens held by in-flight requests
+        </div>
+    </div>
+);
+
+const WalletMetric: React.FC<{
+    label: string;
+    value: string;
+    hint?: string;
+}> = ({ label, value, hint }) => (
+    <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3">
+        <div className="text-xs font-semibold uppercase tracking-wider text-emerald-700">{label}</div>
+        <div className="mt-1 text-sm font-semibold text-emerald-950">{value}</div>
+        {hint && <div className="mt-1 text-xs text-emerald-800">{hint}</div>}
     </div>
 );
 
@@ -581,18 +627,19 @@ const UserBillingDashboard: React.FC = () => {
     if (configStatus === 'initializing') return <LoadingSpinner />;
 
     const currentPlanId = breakdown?.plan_id || subscription?.plan_id || 'free';
-    const availablePersonalCreditsUsd = breakdown?.lifetime_credits?.available_usd || 0;
-    const availablePersonalCreditTokens = breakdown?.lifetime_credits?.tokens_available || 0;
+    const personalCredits = breakdown?.lifetime_credits;
+    const availablePersonalCreditsUsd = personalCredits?.available_usd || 0;
+    const availablePersonalCreditTokens = personalCredits?.tokens_available || 0;
     const hasPersonalOverflowCover = availablePersonalCreditTokens > 0;
 
     return (
-        <div className="min-h-screen bg-gray-50/50 p-4 md:p-8 font-sans text-gray-900">
-            <div className="max-w-4xl mx-auto space-y-6">
+        <div className="h-screen overflow-hidden bg-gray-50/50 p-3 md:p-4 font-sans text-gray-900">
+            <div className="mx-auto flex h-full max-w-5xl flex-col gap-4 overflow-hidden">
                 
-                <div className="mb-8 flex items-start justify-between gap-4">
+                <div className="flex shrink-0 items-start justify-between gap-4">
                     <div>
-                        <h1 className="text-3xl font-bold tracking-tight">Billing & Plans</h1>
-                        <p className="text-gray-500 mt-2">Manage your subscription and lifetime token balance.</p>
+                        <h1 className="text-2xl font-bold tracking-tight">Billing & Plans</h1>
+                        <p className="mt-1 text-sm text-gray-500">Manage your plan quota and personal wallet.</p>
                     </div>
                     <div className="shrink-0 flex items-center gap-2">
                         <button
@@ -627,24 +674,24 @@ const UserBillingDashboard: React.FC = () => {
                 {loading && !breakdown && <LoadingSpinner />}
 
                 {!loading && breakdown && (
-                    <>
-                        <div className="flex flex-col gap-6">
+                    <div className="min-h-0 overflow-y-auto pr-1">
+                        <div className="flex flex-col gap-4">
                             {/* Current Plan Overview */}
-                            <Card className="p-6">
-                                <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-4">Current Plan</h3>
-                                <div className="text-2xl font-bold mb-2 capitalize">{currentPlanId}</div>
+                            <Card className="p-4">
+                                <h3 className="mb-3 text-sm font-semibold uppercase tracking-wider text-gray-500">Plan quota</h3>
+                                <div className="text-xl font-bold capitalize">{currentPlanId}</div>
                                 {subscription?.status === 'active' && (
-                                    <div className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                    <div className="mt-2 inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-800">
                                         Active Subscription
                                     </div>
                                 )}
-                                <div className="mt-6 rounded-xl border border-sky-100 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+                                <div className="mt-4 rounded-xl border border-sky-100 bg-sky-50 px-4 py-3 text-sm text-sky-900">
                                     <div className="font-semibold">Usage windows are rolling</div>
                                     <p className="mt-1 text-sky-800">
                                         The numbers below reflect your combined usage across all apps in this workspace. The hourly numbers are for the last 60 minutes, the daily numbers are for the last 24 hours, and the monthly numbers are for a rolling 30-day window.
                                     </p>
                                 </div>
-                                <div className="mt-6 space-y-4">
+                                <div className="mt-4 space-y-3">
                                     {subscription?.started_at && (
                                         <div className="flex justify-between text-sm">
                                             <span className="text-gray-500">Started</span>
@@ -657,14 +704,15 @@ const UserBillingDashboard: React.FC = () => {
                                             <span className="font-medium">{new Date(subscription.next_charge_at).toLocaleString()}</span>
                                         </div>
                                     )}
-                                    <div className="border-t border-gray-100 pt-4">
-                                        <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Last 60 minutes</div>
+                                    <div className="border-t border-gray-100 pt-3">
+                                        <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400">Last 60 minutes</div>
                                         <MetricRow
                                             label="Tokens"
                                             used={breakdown.current_usage.tokens_this_hour}
                                             limit={breakdown.effective_policy.tokens_per_hour}
                                             remaining={breakdown.remaining.tokens_this_hour}
                                             usedUsd={breakdown.current_usage.tokens_this_hour_usd}
+                                            limitUsd={breakdown.effective_policy.usd_per_hour}
                                             remainingUsd={breakdown.remaining.tokens_this_hour_usd}
                                         />
                                         {breakdown.reset_windows?.hour_reset_at && (
@@ -673,8 +721,8 @@ const UserBillingDashboard: React.FC = () => {
                                             </div>
                                         )}
                                     </div>
-                                    <div className="border-t border-gray-100 pt-4">
-                                        <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Last 24 hours</div>
+                                    <div className="border-t border-gray-100 pt-3">
+                                        <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400">Last 24 hours</div>
                                         <MetricRow
                                             label="Requests"
                                             used={breakdown.current_usage.requests_today}
@@ -688,12 +736,13 @@ const UserBillingDashboard: React.FC = () => {
                                                 limit={breakdown.effective_policy.tokens_per_day}
                                                 remaining={breakdown.remaining.tokens_today}
                                                 usedUsd={breakdown.current_usage.tokens_today_usd}
+                                                limitUsd={breakdown.effective_policy.usd_per_day}
                                                 remainingUsd={breakdown.remaining.tokens_today_usd}
                                             />
                                         </div>
                                     </div>
-                                    <div className="border-t border-gray-100 pt-4">
-                                        <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">Rolling 30-day window</div>
+                                    <div className="border-t border-gray-100 pt-3">
+                                        <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400">Rolling 30-day window</div>
                                         <MetricRow
                                             label="Requests"
                                             used={breakdown.current_usage.requests_this_month}
@@ -707,6 +756,7 @@ const UserBillingDashboard: React.FC = () => {
                                                 limit={breakdown.effective_policy.tokens_per_month}
                                                 remaining={breakdown.remaining.tokens_this_month}
                                                 usedUsd={breakdown.current_usage.tokens_this_month_usd}
+                                                limitUsd={breakdown.effective_policy.usd_per_month}
                                                 remainingUsd={breakdown.remaining.tokens_this_month_usd}
                                             />
                                         </div>
@@ -716,6 +766,10 @@ const UserBillingDashboard: React.FC = () => {
                                             </div>
                                         )}
                                     </div>
+                                    <PlanReservationMetric
+                                        tokens={breakdown.current_usage.tokens_reserved || 0}
+                                        usd={breakdown.current_usage.tokens_reserved_usd}
+                                    />
                                     <div className={`rounded-xl border px-4 py-3 text-sm ${hasPersonalOverflowCover ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>
                                         <div className="font-semibold">If one request is larger than your remaining plan tokens</div>
                                         <p className="mt-1">
@@ -762,37 +816,36 @@ const UserBillingDashboard: React.FC = () => {
                                 )}
                             </Card>
 
-                            {/* Lifetime Tokens Overview */}
-                            <Card className="p-6">
-                                <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-4">Lifetime Tokens</h3>
-                                <div className="text-2xl font-bold mb-2">
+                            {/* Wallet Overview */}
+                            <Card className="p-4">
+                                <h3 className="mb-3 text-sm font-semibold uppercase tracking-wider text-gray-500">Wallet / Personal Credits</h3>
+                                <div className="text-xl font-bold">
                                     ${(breakdown.lifetime_credits?.available_usd || 0).toFixed(2)}
                                 </div>
-                                <div className="text-sm text-gray-500 mb-6">
+                                <div className="mb-4 text-sm text-gray-500">
                                     {breakdown.lifetime_credits?.tokens_available.toLocaleString() || 0} tokens available
                                 </div>
-                                <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
-                                    <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
-                                        <div className="text-xs font-semibold uppercase tracking-wider text-gray-400">Purchased</div>
-                                        <div className="mt-1 text-sm font-medium text-gray-900">
-                                            {formatCount(breakdown.lifetime_credits?.tokens_purchased || 0)} tokens
-                                        </div>
-                                    </div>
-                                    <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
-                                        <div className="text-xs font-semibold uppercase tracking-wider text-gray-400">Consumed</div>
-                                        <div className="mt-1 text-sm font-medium text-gray-900">
-                                            {formatCount(breakdown.lifetime_credits?.tokens_consumed || 0)} tokens
-                                        </div>
-                                    </div>
-                                    <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
-                                        <div className="text-xs font-semibold uppercase tracking-wider text-gray-400">Available</div>
-                                        <div className="mt-1 text-sm font-medium text-gray-900">
-                                            {formatUsd(breakdown.lifetime_credits?.available_usd || 0)}
-                                        </div>
-                                    </div>
+                                <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-4">
+                                    <WalletMetric
+                                        label="Purchased"
+                                        value={`${formatCount(personalCredits?.tokens_purchased || 0)} tokens`}
+                                    />
+                                    <WalletMetric
+                                        label="Consumed"
+                                        value={`${formatCount(personalCredits?.tokens_consumed || 0)} tokens`}
+                                    />
+                                    <WalletMetric
+                                        label="Reserved"
+                                        value={`${formatCount(personalCredits?.tokens_reserved || 0)} tokens`}
+                                    />
+                                    <WalletMetric
+                                        label="Available"
+                                        value={formatUsd(personalCredits?.available_usd || 0)}
+                                        hint={`${formatCount(personalCredits?.tokens_available || 0)} tokens`}
+                                    />
                                 </div>
                                 
-                                <div className="bg-gray-50 rounded-xl p-4 border border-gray-100">
+                                <div className="rounded-xl border border-gray-100 bg-gray-50 p-3">
                                     <label className="block text-xs font-semibold text-gray-700 mb-2">Top up balance (USD)</label>
                                     <div className="flex gap-2">
                                         <div className="relative flex-1">
@@ -809,8 +862,8 @@ const UserBillingDashboard: React.FC = () => {
                                 </div>
                             </Card>
                             {breakdown.subscription_balance?.has_subscription && (
-                                <Card className="p-6">
-                                    <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-4">Subscription Balance</h3>
+                                <Card className="p-4">
+                                    <h3 className="mb-3 text-sm font-semibold uppercase tracking-wider text-gray-500">Subscription Balance</h3>
                                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                                         <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
                                             <div className="text-xs font-semibold uppercase tracking-wider text-gray-400">Available</div>
@@ -836,13 +889,13 @@ const UserBillingDashboard: React.FC = () => {
                         </div>
 
                         {/* Available Plans */}
-                        <div className="mt-10">
-                            <h3 className="text-xl font-bold mb-4">Available Subscriptions</h3>
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div className="mt-4">
+                            <h3 className="mb-3 text-lg font-bold">Available Subscriptions</h3>
+                            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                                 {plans.map(plan => {
                                     const isCurrent = plan.plan_id === currentPlanId;
                                     return (
-                                        <Card key={plan.plan_id} className={`p-6 flex flex-col ${isCurrent ? 'ring-2 ring-gray-900' : ''}`}>
+                                        <Card key={plan.plan_id} className={`flex flex-col p-4 ${isCurrent ? 'ring-2 ring-gray-900' : ''}`}>
                                             {isCurrent && (
                                                 <span className="self-start px-2 py-1 bg-gray-900 text-white text-xs font-bold rounded mb-4">CURRENT</span>
                                             )}
@@ -873,7 +926,7 @@ const UserBillingDashboard: React.FC = () => {
                                 )}
                             </div>
                         </div>
-                    </>
+                    </div>
                 )}
 
             </div>

@@ -1858,6 +1858,7 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                         quota_reserved_tokens=int(quota_reserved_tokens),
                         primary_funding_available_usd=primary_funding_available_usd,
                         primary_funding_reserved_usd=float(app_reserved_usd or 0.0) if app_reservation_active else 0.0,
+                        primary_funding_reserved_tokens=int(plan_project_tokens_est or 0),
                         wallet_available_tokens=int(wallet_available_tokens),
                         wallet_reserved_tokens=int(personal_reserved_tokens or 0) if personal_reservation_active else 0,
                     )
@@ -1885,6 +1886,7 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                 wallet_tokens=int(plan_settlement_allocation.wallet_tokens) if plan_settlement_allocation else None,
                 project_absorption_tokens=project_absorption_tokens,
                 quota_tokens=plan_quota_commit_tokens if lane == "plan" else None,
+                primary_funding_reserved_tokens=int(plan_project_tokens_est or 0) if lane == "plan" else None,
                 total_cost=total_cost,
                 plan_covered_usd=plan_covered_usd,
                 overflow_usd=overflow_usd,
@@ -2293,13 +2295,14 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
 
             if post_run_violations and not budget_bypass:
                 post_reason = "|".join(post_run_violations)
+                post_needed_tokens = int(plan_quota_commit_tokens) if lane == "plan" else int(ranked_tokens)
                 rate_limit_payload = _build_rate_limit_payload(
                     policy=effective_policy,
                     snapshot=post_run_snapshot or {},
                     reason=post_reason,
                     used_plan_override=admit.used_plan_override if admit else False,
                     now=now,
-                    needed_tokens=int(ranked_tokens),
+                    needed_tokens=post_needed_tokens,
                 )
                 rate_limit_payload["notification_type"] = "warning"
                 payload = {
@@ -2308,6 +2311,7 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                     "user_type": user_type,
                     "lane": lane,
                     "ranked_tokens": int(ranked_tokens),
+                    "quota_tokens": int(plan_quota_commit_tokens) if lane == "plan" else None,
                     "snapshot": post_run_snapshot,
                     "reason": post_reason,
                     "rate_limit": rate_limit_payload,
@@ -2318,12 +2322,14 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                     title="Post-run limit exceeded",
                     data=payload,
                 )
-                await _econ_fail(
-                    code="post_run_limit_exceeded",
-                    title="Limit exceeded",
-                    message="Request exceeded your plan limit after completion. Please try again later.",
-                    event_type="rate_limit.post_run_exceeded",
-                    data=payload,
+                _log(
+                    "rate_limit",
+                    "Post-run quota exceeded after successful settlement; recorded warning only",
+                    "WARN",
+                    reason=post_reason,
+                    ranked_tokens=int(ranked_tokens),
+                    quota_tokens=int(plan_quota_commit_tokens) if lane == "plan" else None,
+                    snapshot=post_run_snapshot,
                 )
 
         except EconomicsLimitException:

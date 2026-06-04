@@ -1,4 +1,4 @@
-// COMPLETE PROFESSIONAL VERSION - Control Plane Admin React App (TypeScript)
+// Economics Admin React App (TypeScript)
 
 import React, { useState, useEffect, useMemo } from 'react';
 import ReactDOM from 'react-dom/client';
@@ -215,10 +215,14 @@ interface QuotaBreakdown {
         requests_today: number;
         requests_this_month: number;
         requests_total: number;
+        tokens_this_hour: number;
         tokens_today: number;
         tokens_this_month: number;
+        tokens_reserved?: number;
+        tokens_this_hour_usd?: number | null;
         tokens_today_usd?: number | null;
         tokens_this_month_usd?: number | null;
+        tokens_reserved_usd?: number | null;
         concurrent: number;
     };
 
@@ -231,8 +235,10 @@ interface QuotaBreakdown {
     remaining: {
         requests_today: number | null;
         requests_this_month: number | null;
+        tokens_this_hour: number | null;
         tokens_today: number | null;
         tokens_this_month: number | null;
+        tokens_this_hour_usd?: number | null;
         tokens_today_usd?: number | null;
         tokens_this_month_usd?: number | null;
         percentage_used: number | null;
@@ -589,10 +595,10 @@ function makeAuthHeaders(base?: HeadersInit): Headers {
 }
 
 // =============================================================================
-// Control Plane API Client
+// Economics API Client
 // =============================================================================
 
-class ControlPlaneAPI {
+class EconomicsAPI {
     constructor(private basePath: string = '/api/admin/control-plane') {}
 
     private getFullUrl(path: string): string {
@@ -1200,17 +1206,17 @@ class ControlPlaneAPI {
 // =============================================================================
 
 const Card: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className = '' }) => (
-    <div className={`bg-white rounded-2xl shadow-sm border border-gray-200/70 ${className}`}>
+    <div className={`rounded-xl border border-gray-200/70 bg-white shadow-sm ${className}`}>
         {children}
     </div>
 );
 
 const CardHeader: React.FC<{ title: string; subtitle?: string; action?: React.ReactNode }> = ({ title, subtitle, action }) => (
-    <div className="px-6 py-5 border-b border-gray-200/70">
+    <div className="border-b border-gray-200/70 px-4 py-3">
         <div className="flex items-start justify-between gap-4">
             <div>
-                <h2 className="text-xl font-semibold text-gray-900">{title}</h2>
-                {subtitle && <p className="mt-1 text-sm text-gray-600 leading-relaxed">{subtitle}</p>}
+                <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
+                {subtitle && <p className="mt-1 text-sm leading-relaxed text-gray-600">{subtitle}</p>}
             </div>
             {action && <div className="pt-1">{action}</div>}
         </div>
@@ -1218,7 +1224,7 @@ const CardHeader: React.FC<{ title: string; subtitle?: string; action?: React.Re
 );
 
 const CardBody: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className = '' }) => (
-    <div className={`px-6 py-5 ${className}`}>
+    <div className={`px-4 py-4 ${className}`}>
         {children}
     </div>
 );
@@ -1235,7 +1241,7 @@ const Callout: React.FC<{
         success: 'bg-emerald-50 border-emerald-200 text-emerald-900',
     };
     return (
-        <div className={`rounded-xl border p-4 ${tones[tone]}`}>
+        <div className={`rounded-xl border p-3 ${tones[tone]}`}>
             {title && <div className="text-sm font-semibold mb-1">{title}</div>}
             <div className="text-sm leading-relaxed">{children}</div>
         </div>
@@ -1261,7 +1267,7 @@ const Button: React.FC<{
             type={type}
             onClick={onClick}
             disabled={disabled}
-            className={`px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${variants[variant]} ${className}`}
+            className={`rounded-lg px-3 py-2 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${variants[variant]} ${className}`}
         >
             {children}
         </button>
@@ -1276,12 +1282,13 @@ const Input: React.FC<{
     placeholder?: string;
     required?: boolean;
     min?: string | number;
+    max?: string | number;
     step?: string;
     list?: string;
     className?: string;
-}> = ({ label, value, onChange, type = 'text', placeholder, required, min, step, list, className = '' }) => (
+}> = ({ label, value, onChange, type = 'text', placeholder, required, min, max, step, list, className = '' }) => (
     <div className={className}>
-        {label && <label className="block text-sm font-medium text-gray-800 mb-2">{label}</label>}
+        {label && <label className="mb-1.5 block text-sm font-medium text-gray-800">{label}</label>}
         <input
             type={type}
             value={value}
@@ -1289,9 +1296,10 @@ const Input: React.FC<{
             placeholder={placeholder}
             required={required}
             min={min}
+            max={max}
             step={step}
             list={list}
-            className="w-full px-4 py-2.5 border border-gray-200/80 rounded-xl bg-white
+            className="w-full rounded-lg border border-gray-200/80 bg-white px-3 py-2
                  focus:ring-2 focus:ring-gray-900/10 focus:border-gray-300 transition-colors
                  placeholder:text-gray-400"
         />
@@ -1307,11 +1315,11 @@ const Select: React.FC<{
     className?: string;
 }> = ({ label, value, onChange, options, children, className = '' }) => (
     <div className={className}>
-        {label && <label className="block text-sm font-medium text-gray-800 mb-2">{label}</label>}
+        {label && <label className="mb-1.5 block text-sm font-medium text-gray-800">{label}</label>}
         <select
             value={value}
             onChange={onChange}
-            className="w-full px-4 py-2.5 border border-gray-200/80 rounded-xl bg-white
+            className="w-full rounded-lg border border-gray-200/80 bg-white px-3 py-2
                  focus:ring-2 focus:ring-gray-900/10 focus:border-gray-300 transition-colors"
         >
             {options ? options.map(o => <option key={o.value} value={o.value}>{o.label}</option>) : children}
@@ -1328,13 +1336,13 @@ const TextArea: React.FC<{
     className?: string;
 }> = ({ label, value, onChange, placeholder, rows = 3, className = '' }) => (
     <div className={className}>
-        {label && <label className="block text-sm font-medium text-gray-800 mb-2">{label}</label>}
+        {label && <label className="mb-1.5 block text-sm font-medium text-gray-800">{label}</label>}
         <textarea
             value={value}
             onChange={onChange}
             placeholder={placeholder}
             rows={rows}
-            className="w-full px-4 py-2.5 border border-gray-200/80 rounded-xl bg-white
+            className="w-full rounded-lg border border-gray-200/80 bg-white px-3 py-2
                  focus:ring-2 focus:ring-gray-900/10 focus:border-gray-300 transition-colors
                  placeholder:text-gray-400"
         />
@@ -1346,22 +1354,22 @@ const StatCard: React.FC<{
     value: string | number;
     hint?: string;
 }> = ({ label, value, hint }) => (
-    <div className="rounded-2xl border border-gray-200/70 bg-white px-5 py-4 shadow-sm">
+    <div className="rounded-xl border border-gray-200/70 bg-white px-4 py-3 shadow-sm">
         <p className="text-xs font-semibold text-gray-500 tracking-wide uppercase">{label}</p>
-        <p className="mt-2 text-2xl font-semibold text-gray-900">{value}</p>
-        {hint && <p className="mt-1 text-sm text-gray-600">{hint}</p>}
+        <p className="mt-1 text-xl font-semibold text-gray-900">{value}</p>
+        {hint && <p className="mt-1 text-xs text-gray-600">{hint}</p>}
     </div>
 );
 
 const LoadingSpinner: React.FC = () => (
-    <div className="flex justify-center items-center py-10">
-        <div className="animate-spin rounded-full h-10 w-10 border-2 border-gray-200 border-t-gray-900"></div>
+    <div className="flex items-center justify-center py-8">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-200 border-t-gray-900"></div>
     </div>
 );
 
 const EmptyState: React.FC<{ message: string; icon?: string }> = ({ message, icon = '📭' }) => (
-    <div className="text-center py-10">
-        <div className="text-5xl mb-3">{icon}</div>
+    <div className="py-8 text-center">
+        <div className="mb-3 text-4xl">{icon}</div>
         <p className="text-gray-600">{message}</p>
     </div>
 );
@@ -1460,6 +1468,68 @@ function DuePill({ sub }: { sub: Subscription }) {
     return <Pill tone={tone}>{due.label}</Pill>;
 }
 
+function formatCount(value: number | null | undefined): string {
+    if (value == null) return '∞';
+    return Number(value).toLocaleString();
+}
+
+function formatUsdLimit(value: number | null | undefined): string {
+    if (value == null) return '∞';
+    return `$${Number(value || 0).toFixed(2)}`;
+}
+
+const CompactUsageRow: React.FC<{
+    label: string;
+    used: number;
+    limit: number | null | undefined;
+    remaining: number | null | undefined;
+    usedUsd?: number | null;
+    limitUsd?: number | null;
+    remainingUsd?: number | null;
+}> = ({ label, used, limit, remaining, usedUsd, limitUsd, remainingUsd }) => {
+    const hasUsd = usedUsd != null || limitUsd != null || remainingUsd != null;
+    return (
+    <div className="rounded-lg border border-gray-200/70 bg-white px-3 py-2 text-sm">
+        <div className="flex items-center justify-between gap-3">
+            <span className="text-gray-600">{label}</span>
+            <span className="font-semibold text-gray-900">
+                {hasUsd ? `$${Number(usedUsd || 0).toFixed(2)} / ${formatUsdLimit(limitUsd)}` : `${formatCount(used)} / ${formatCount(limit)}`}
+            </span>
+        </div>
+        <div className="mt-1 text-xs text-gray-500">
+            Remaining: {hasUsd ? formatUsdLimit(remainingUsd) : formatCount(remaining)}
+        </div>
+        {hasUsd && (
+            <div className="mt-1 text-xs text-gray-400">
+                Tokens: {formatCount(used)} / {formatCount(limit)} · remaining {formatCount(remaining)}
+            </div>
+        )}
+    </div>
+    );
+};
+
+const PolicyMetricList: React.FC<{
+    policy: {
+        requests_per_day?: number | null;
+        requests_per_month?: number | null;
+        tokens_per_hour?: number | null;
+        tokens_per_day?: number | null;
+        tokens_per_month?: number | null;
+        usd_per_month?: number | null;
+    };
+}> = ({ policy }) => (
+    <div className="space-y-1 text-xs text-gray-600">
+        <div>req/day: <span className="font-semibold text-gray-900">{formatCount(policy.requests_per_day)}</span></div>
+        <div>req/month: <span className="font-semibold text-gray-900">{formatCount(policy.requests_per_month)}</span></div>
+        <div>tok/hour: <span className="font-semibold text-gray-900">{formatCount(policy.tokens_per_hour)}</span></div>
+        <div>tok/day: <span className="font-semibold text-gray-900">{formatCount(policy.tokens_per_day)}</span></div>
+        <div>tok/month: <span className="font-semibold text-gray-900">{formatCount(policy.tokens_per_month)}</span></div>
+        {policy.usd_per_month != null && (
+            <div>month value: <span className="font-semibold text-gray-900">${Number(policy.usd_per_month).toFixed(2)}</span></div>
+        )}
+    </div>
+);
+
 const Tabs: React.FC<{
     active: string;
     onChange: (id: string) => void;
@@ -1473,7 +1543,7 @@ const Tabs: React.FC<{
                     key={t.id}
                     onClick={() => onChange(t.id)}
                     className={[
-                        "px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors border",
+                        "rounded-lg border px-3 py-2 text-sm font-semibold transition-colors",
                         isActive
                             ? "bg-gray-900 text-white border-gray-900"
                             : "bg-white text-gray-700 border-gray-200/80 hover:bg-gray-50",
@@ -1488,14 +1558,14 @@ const Tabs: React.FC<{
 
 const DividerTitle: React.FC<{ title: string; subtitle?: string }> = ({ title, subtitle }) => (
     <div className="text-center">
-        <h1 className="text-4xl md:text-5xl font-semibold text-gray-900 tracking-tight">
+        <h1 className="text-2xl font-semibold tracking-tight text-gray-900 md:text-3xl">
             {title}
         </h1>
-        <div className="mt-3 flex justify-center">
-            <div className="h-1 w-24 bg-gray-900 rounded-full opacity-80"></div>
+        <div className="mt-2 flex justify-center">
+            <div className="h-0.5 w-16 rounded-full bg-gray-900 opacity-80"></div>
         </div>
         {subtitle && (
-            <p className="mt-4 text-gray-600 text-base md:text-lg leading-relaxed">
+            <p className="mt-2 text-sm leading-relaxed text-gray-600">
                 {subtitle}
             </p>
         )}
@@ -1514,130 +1584,45 @@ const Details: React.FC<{ title: string; children: React.ReactNode }> = ({ title
 );
 
 const EconomicsOverview: React.FC<{ goTo?: (tabId: string) => void }> = ({ goTo }) => (
-    <Callout tone="neutral" title="Economics: how it works (and what you can control)">
-        <div className="space-y-4">
-            <div className="text-sm text-gray-700 leading-relaxed">
-                There are <strong>two funding lanes</strong>. Which lane is used determines <em>who pays</em> and which counters move.
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                    <div className="text-sm font-semibold text-gray-900">Lane A — Plan lane ✅ (company-funded)</div>
-                    <div className="mt-2 text-sm text-gray-700 space-y-1 leading-relaxed">
-                        <div><strong>Used when:</strong> user is within effective plan limits <em>and</em> project (app) budget has funds.</div>
-                        <div><strong>Who pays:</strong> <strong>App Budget</strong> (tenant/project wallet).</div>
-                        <div><strong>What moves:</strong> plan counters (requests/tokens) are committed.</div>
-                        <div className="text-gray-600">
-                            Effective plan = base policy (<code>plan_id</code>) possibly replaced by a user’s plan override.
-                        </div>
+    <details className="rounded-xl border border-gray-200 bg-gray-50 p-3">
+        <summary className="cursor-pointer text-sm font-semibold text-gray-900">
+            Funding rules and admin levers
+        </summary>
+        <div className="mt-3 space-y-3">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <div className="rounded-lg border border-gray-200 bg-white p-3 text-sm text-gray-700">
+                    <div className="font-semibold text-gray-900">Plan quota</div>
+                    <div className="mt-1">
+                        The effective plan is the base plan, replaced by an active user override when one exists.
+                        Plan quota is consumed first and is funded from the project budget.
                     </div>
                 </div>
-
-                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                    <div className="text-sm font-semibold text-gray-900">Lane B — Paid lane 💳 (user-funded)</div>
-                    <div className="mt-2 text-sm text-gray-700 space-y-1 leading-relaxed">
-                        <div><strong>Used when:</strong> plan admit is denied (plan quota exceeded) <em>or</em> app budget is empty, but the user has lifetime credits.</div>
-                        <div><strong>Who pays:</strong> <strong>User Lifetime Credits</strong> (purchased tokens).</div>
-                        <div><strong>What moves:</strong> plan counters are <strong>not</strong> committed (so “quota usage” can look flat).</div>
+                <div className="rounded-lg border border-gray-200 bg-white p-3 text-sm text-gray-700">
+                    <div className="font-semibold text-gray-900">Wallet / personal credits</div>
+                    <div className="mt-1">
+                        Personal credits cover the part that cannot be funded by remaining quota or available project budget.
                     </div>
                 </div>
             </div>
-
-            <details className="rounded-xl border border-gray-200 bg-white p-4">
-                <summary className="cursor-pointer text-sm font-semibold text-gray-900">
-                    Admin levers (what you can change during pilot)
-                </summary>
-                <div className="mt-3 text-sm text-gray-700 leading-relaxed space-y-2">
-                    <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
-                        <div className="font-semibold text-gray-900">1) Base plan (by plan_id)</div>
-                        <div className="text-gray-700">
-                            Configure default limits for <code>registered</code>, <code>paid</code>, <code>privileged</code>, <code>admin</code>.
-                        </div>
-                        {goTo && (
-                            <div className="mt-2">
-                                <Button variant="secondary" onClick={() => goTo('quotaPolicies')}>Open Plan Quota Policies</Button>
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
-                        <div className="font-semibold text-gray-900">2) User Tier Override (replaces base while active)</div>
-                        <div className="text-gray-700">
-                            Temporary or long override for a specific user. <strong>Not additive</strong>.
-                        </div>
-                        {goTo && (
-                            <div className="mt-2 flex flex-wrap gap-2">
-                                <Button variant="secondary" onClick={() => goTo('grantTrial')}>Grant Trial</Button>
-                                <Button variant="secondary" onClick={() => goTo('updateTier')}>Update Override</Button>
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
-                        <div className="font-semibold text-gray-900">3) User Lifetime Credits (USD → tokens, do not reset)</div>
-                        <div className="text-gray-700">
-                            Manual “top-up” for user-funded usage when we don’t have payments connected yet.
-                        </div>
-                        {goTo && (
-                            <div className="mt-2">
-                                <Button variant="secondary" onClick={() => goTo('lifetimeCredits')}>Open Lifetime Credits</Button>
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
-                        <div className="font-semibold text-gray-900">4) App Budget (tenant/project wallet)</div>
-                        <div className="text-gray-700">
-                            Company funds used for plan lane. If it hits zero, plan-funded usage stops.
-                        </div>
-                        {goTo && (
-                            <div className="mt-2">
-                                <Button variant="secondary" onClick={() => goTo('appBudget')}>Open App Budget</Button>
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
-                        <div className="font-semibold text-gray-900">5) Provider Budget Policies</div>
-                        <div className="text-gray-700">
-                            Hard caps per provider ($/hour, $/day, $/month) to prevent runaway costs.
-                        </div>
-                        {goTo && (
-                            <div className="mt-2">
-                                <Button variant="secondary" onClick={() => goTo('budgetPolicies')}>Open Budget Policies</Button>
-                            </div>
-                        )}
-                    </div>
+            {goTo && (
+                <div className="flex flex-wrap gap-2">
+                    <Button variant="secondary" onClick={() => goTo('quotaBreakdown')}>Budget Breakdown</Button>
+                    <Button variant="secondary" onClick={() => goTo('quotaPolicies')}>Plan Limits</Button>
+                    <Button variant="secondary" onClick={() => goTo('lifetimeCredits')}>Wallet Credits</Button>
+                    <Button variant="secondary" onClick={() => goTo('appBudget')}>App Budget</Button>
                 </div>
-            </details>
-
-            <details className="rounded-xl border border-gray-200 bg-white p-4">
-                <summary className="cursor-pointer text-sm font-semibold text-gray-900">
-                    Common confusion: “Why do quota counters not increase?”
-                </summary>
-                <div className="mt-3 text-sm text-gray-700 leading-relaxed space-y-2">
-                    <div>
-                        In the <strong>paid lane</strong> the system intentionally does not commit plan counters.
-                        So you can see lifetime credits decreasing while “Requests today / Tokens today” remain flat.
-                    </div>
-                    {goTo && (
-                        <div className="mt-2">
-                            <Button variant="secondary" onClick={() => goTo('quotaBreakdown')}>Open Budget Breakdown</Button>
-                        </div>
-                    )}
-                </div>
-            </details>
+            )}
         </div>
-    </Callout>
+    </details>
 );
 
 
 // =============================================================================
-// Main Control Plane Admin Component
+// Main Economics Admin Component
 // =============================================================================
 
-const ControlPlaneAdmin: React.FC = () => {
-    const api = useMemo(() => new ControlPlaneAPI(), []);
+const EconomicsAdmin: React.FC = () => {
+    const api = useMemo(() => new EconomicsAPI(), []);
 
     const [configStatus, setConfigStatus] = useState<string>('initializing');
     const [viewMode, setViewMode] = useState<string>('grantTrial');
@@ -2522,7 +2507,7 @@ const ControlPlaneAdmin: React.FC = () => {
                 <Card className="max-w-lg w-full">
                     <CardBody className="text-center">
                         <LoadingSpinner />
-                        <p className="mt-4 text-gray-600">Initializing Control Plane Admin…</p>
+                        <p className="mt-4 text-gray-600">Initializing Economics…</p>
                     </CardBody>
                 </Card>
             </div>
@@ -2552,13 +2537,13 @@ const ControlPlaneAdmin: React.FC = () => {
             : null;
 
     return (
-        <div className="min-h-screen bg-white">
-            <div className="max-w-6xl mx-auto px-6 py-10 space-y-8">
+        <div className="h-screen overflow-hidden bg-white">
+            <div className="mx-auto flex h-full max-w-6xl flex-col gap-3 overflow-hidden px-4 py-4">
                 {/* Header */}
-                <div className="space-y-6">
+                <div className="shrink-0 space-y-3">
                     <DividerTitle
-                        title="Control Plane"
-                        subtitle="Admin dashboard for user quota policies, plan overrides, purchased credits, and application budget."
+                        title="Economics"
+                        subtitle="User quota policies, overrides, wallet credits, and application budget."
                     />
 
                     <div className="max-w-4xl mx-auto">
@@ -2567,18 +2552,18 @@ const ControlPlaneAdmin: React.FC = () => {
                 </div>
 
                 {/* Navigation */}
-                <div className="max-w-5xl mx-auto">
+                <div className="mx-auto max-w-5xl shrink-0">
                     <Tabs active={viewMode} onChange={(id) => { clearMessages(); setViewMode(id); }} items={tabs} />
                 </div>
 
                 {/* Messages */}
-                <div className="max-w-5xl mx-auto space-y-3">
+                <div className="mx-auto max-w-5xl shrink-0 space-y-2">
                     {success && <Callout tone="success" title="Success">{success}</Callout>}
                     {error && <Callout tone="warning" title="Action failed">{error}</Callout>}
                 </div>
 
                 {/* Views */}
-                <div className="max-w-5xl mx-auto space-y-6">
+                <div className="mx-auto min-h-0 w-full max-w-5xl space-y-4 overflow-y-auto pr-1">
                     {/* Grant Trial */}
                     {viewMode === 'grantTrial' && (
                         <Card>
@@ -2913,17 +2898,16 @@ const ControlPlaneAdmin: React.FC = () => {
 
                                 {planBalance && (
                                     <div className="space-y-5">
-                                        <Callout tone="info" title="How requests are funded (lane selection)">
+                                        <Callout tone="info" title="How requests are funded">
                                             <div className="space-y-2">
                                                 <div>
-                                                    <strong>If Plan Admit passes:</strong> plan allowance is available and plan counters move (plan lane).
+                                                    <strong>First:</strong> use as much effective plan quota as possible, funded by the project budget.
                                                 </div>
                                                 <div>
-                                                    <strong>If Plan Admit is denied:</strong> plan allowance is NOT available. Only lifetime credits can fund the request (paid lane),
-                                                    and plan counters are not committed.
+                                                    <strong>Then:</strong> use wallet credits for any shortfall caused by quota or project budget limits.
                                                 </div>
                                                 <div className="text-gray-600">
-                                                    Note: paid lane can still be blocked by <em>concurrency</em> (max_concurrent).
+                                                    Concurrency and provider budgets are enforced separately.
                                                 </div>
                                             </div>
                                         </Callout>
@@ -3059,21 +3043,11 @@ const ControlPlaneAdmin: React.FC = () => {
                         <Card>
                             <CardHeader
                                 title="Budget Breakdown"
-                                subtitle="Explains base policy vs override vs effective policy, plus current usage and remaining headroom."
+                                subtitle="Shows effective plan quota, remaining headroom, and wallet capacity separately."
                             />
-                            <CardBody className="space-y-6">
+                            <CardBody className="space-y-4">
                                 <Callout tone="neutral" title="How to read this view">
-                                    <strong>Effective policy</strong> is what the limiter enforces right now (base plan possibly overridden).
-                                    “Remaining” is computed from the effective limits minus current counters.
-                                    <div className="mt-2 text-xs text-gray-600">
-                                        Quotas are enforced at the project scope. Use Bundle ID <code>__project__</code> to see rolling reset timestamps.
-                                    </div>
-                                </Callout>
-                                <Callout tone="warning" title="Paid lane does NOT show up in these counters">
-                                    If the user is being served from <strong>lifetime credits</strong> or a <strong>subscription balance</strong>
-                                    because plan admit is denied, plan counters are not committed.
-                                    That means <strong>requests/tokens here can stay flat</strong> while paid balances go down.
-                                    Use <em>Lifetime Balance</em> or <em>Subscription balance</em> to confirm paid-lane spend.
+                                    Effective policy is the base plan with the active user override applied. Remaining quota is computed from current counters and effective limits. Wallet values are shown separately.
                                 </Callout>
 
                                 <form onSubmit={handleGetQuotaBreakdown} className="space-y-4">
@@ -3098,39 +3072,144 @@ const ControlPlaneAdmin: React.FC = () => {
                                 </form>
 
                                 {quotaBreakdown && (
-                                    <div className="space-y-6">
-                                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                                            <StatCard label="Requests today" value={quotaBreakdown.current_usage.requests_today} />
-                                            <StatCard label="Requests (30‑day window)" value={quotaBreakdown.current_usage.requests_this_month} />
+                                    <div className="space-y-4">
+                                        <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
+                                            <StatCard label="Plan" value={quotaBreakdown.plan_id || '—'} hint={quotaBreakdown.plan_source ? `source: ${quotaBreakdown.plan_source}` : undefined} />
+                                            <StatCard label="Requests today" value={`${formatCount(quotaBreakdown.current_usage.requests_today)} / ${formatCount(quotaBreakdown.effective_policy.requests_per_day)}`} hint={`remaining ${formatCount(quotaBreakdown.remaining.requests_today)}`} />
                                             <StatCard
-                                                label="Tokens today"
-                                                value={`${(quotaBreakdown.current_usage.tokens_today / 1_000_000).toFixed(2)}M`}
-                                                hint={
-                                                    quotaBreakdown.current_usage.tokens_today_usd != null
-                                                        ? `~$${Number(quotaBreakdown.current_usage.tokens_today_usd).toFixed(2)}`
-                                                        : 'raw token counters'
-                                                }
+                                                label="Plan today"
+                                                value={`$${Number(quotaBreakdown.current_usage.tokens_today_usd || 0).toFixed(2)} / ${formatUsdLimit(quotaBreakdown.effective_policy.usd_per_day)}`}
+                                                hint={`${formatCount(quotaBreakdown.current_usage.tokens_today)} / ${formatCount(quotaBreakdown.effective_policy.tokens_per_day)} tokens`}
                                             />
                                             <StatCard
-                                                label="Daily usage %"
-                                                value={`${quotaBreakdown.remaining.percentage_used ?? 0}%`}
+                                                label="Plan reserved"
+                                                value={`$${Number(quotaBreakdown.current_usage.tokens_reserved_usd || 0).toFixed(2)}`}
+                                                hint={`${formatCount(quotaBreakdown.current_usage.tokens_reserved || 0)} tokens held`}
                                             />
+                                            <StatCard label="Wallet available" value={quotaBreakdown.lifetime_credits ? `$${Number(quotaBreakdown.lifetime_credits.available_usd || 0).toFixed(2)}` : '$0.00'} hint={quotaBreakdown.lifetime_credits ? `${formatCount(quotaBreakdown.lifetime_credits.tokens_available)} tokens` : 'no wallet record'} />
                                         </div>
-                                        {quotaBreakdown.reset_windows ? (
-                                            <div className="rounded-xl border border-gray-200/70 bg-white p-4 text-sm text-gray-700">
-                                                <div className="font-semibold text-gray-900">Rolling window resets</div>
-                                                <div className="text-xs text-gray-500 mt-1">
-                                                    Bundle: {quotaBreakdown.reset_windows.bundle_id}
-                                                </div>
-                                                <div className="mt-2">
-                                                    Hourly reset: {quotaBreakdown.reset_windows.hour_reset_at
-                                                        ? new Date(quotaBreakdown.reset_windows.hour_reset_at).toLocaleString()
-                                                        : '—'}
-                                                </div>
+
+                                        <div className="rounded-xl border border-gray-200/70 bg-gray-50 p-4">
+                                            <div className="flex items-center justify-between gap-3">
                                                 <div>
-                                                    30‑day reset: {quotaBreakdown.reset_windows.month_reset_at
-                                                        ? new Date(quotaBreakdown.reset_windows.month_reset_at).toLocaleString()
-                                                        : '—'}
+                                                    <div className="text-sm font-semibold text-gray-900">Plan limits</div>
+                                                    <div className="mt-1 text-xs text-gray-600">Base plan, active override, and enforced policy.</div>
+                                                </div>
+                                                {quotaBreakdown.reference_model && (
+                                                    <div className="text-right text-xs text-gray-500">Reference: {quotaBreakdown.reference_model}</div>
+                                                )}
+                                            </div>
+
+                                            <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+                                                <div className="rounded-lg border border-gray-200/70 bg-white p-3">
+                                                    <div className="mb-2 text-sm font-semibold text-gray-900">Base</div>
+                                                    <PolicyMetricList policy={quotaBreakdown.base_policy} />
+                                                </div>
+
+                                                <div className="rounded-lg border border-gray-200/70 bg-white p-3">
+                                                    <div className="mb-2 flex items-center justify-between gap-2">
+                                                        <span className="text-sm font-semibold text-gray-900">Override</span>
+                                                        {quotaBreakdown.plan_override ? (
+                                                            quotaBreakdown.plan_override.active ? (
+                                                                <Pill tone="success">Active</Pill>
+                                                            ) : quotaBreakdown.plan_override.expired ? (
+                                                                <Pill tone="warning">Expired</Pill>
+                                                            ) : (
+                                                                <Pill tone="neutral">Inactive</Pill>
+                                                            )
+                                                        ) : (
+                                                            <Pill tone="neutral">None</Pill>
+                                                        )}
+                                                    </div>
+                                                    {quotaBreakdown.plan_override ? (
+                                                        <>
+                                                            <PolicyMetricList policy={quotaBreakdown.plan_override.limits} />
+                                                            <div className="mt-2 text-xs text-gray-500">
+                                                                Expires: {quotaBreakdown.plan_override.expires_at ? new Date(quotaBreakdown.plan_override.expires_at).toLocaleString() : '—'}
+                                                            </div>
+                                                        </>
+                                                    ) : (
+                                                        <div className="text-xs text-gray-600">No user override is configured.</div>
+                                                    )}
+                                                </div>
+
+                                                <div className="rounded-lg border border-gray-200/70 bg-white p-3">
+                                                    <div className="mb-2 text-sm font-semibold text-gray-900">Effective</div>
+                                                    <PolicyMetricList policy={quotaBreakdown.effective_policy} />
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div className="rounded-xl border border-gray-200/70 bg-gray-50 p-4">
+                                            <div className="text-sm font-semibold text-gray-900">Plan quota now</div>
+                                            <div className="mt-1 text-xs text-gray-600">Used / limit and remaining capacity for the effective plan.</div>
+                                            <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                                                <CompactUsageRow
+                                                    label="Tokens / hour"
+                                                    used={quotaBreakdown.current_usage.tokens_this_hour || 0}
+                                                    limit={quotaBreakdown.effective_policy.tokens_per_hour}
+                                                    remaining={quotaBreakdown.remaining.tokens_this_hour}
+                                                    usedUsd={quotaBreakdown.current_usage.tokens_this_hour_usd}
+                                                    limitUsd={quotaBreakdown.effective_policy.usd_per_hour}
+                                                    remainingUsd={quotaBreakdown.remaining.tokens_this_hour_usd}
+                                                />
+                                                <CompactUsageRow
+                                                    label="Requests / day"
+                                                    used={quotaBreakdown.current_usage.requests_today}
+                                                    limit={quotaBreakdown.effective_policy.requests_per_day}
+                                                    remaining={quotaBreakdown.remaining.requests_today}
+                                                />
+                                                <CompactUsageRow
+                                                    label="Tokens / day"
+                                                    used={quotaBreakdown.current_usage.tokens_today}
+                                                    limit={quotaBreakdown.effective_policy.tokens_per_day}
+                                                    remaining={quotaBreakdown.remaining.tokens_today}
+                                                    usedUsd={quotaBreakdown.current_usage.tokens_today_usd}
+                                                    limitUsd={quotaBreakdown.effective_policy.usd_per_day}
+                                                    remainingUsd={quotaBreakdown.remaining.tokens_today_usd}
+                                                />
+                                                <CompactUsageRow
+                                                    label="Requests / 30 days"
+                                                    used={quotaBreakdown.current_usage.requests_this_month}
+                                                    limit={quotaBreakdown.effective_policy.requests_per_month}
+                                                    remaining={quotaBreakdown.remaining.requests_this_month}
+                                                />
+                                                <CompactUsageRow
+                                                    label="Tokens / 30 days"
+                                                    used={quotaBreakdown.current_usage.tokens_this_month}
+                                                    limit={quotaBreakdown.effective_policy.tokens_per_month}
+                                                    remaining={quotaBreakdown.remaining.tokens_this_month}
+                                                    usedUsd={quotaBreakdown.current_usage.tokens_this_month_usd}
+                                                    limitUsd={quotaBreakdown.effective_policy.usd_per_month}
+                                                    remainingUsd={quotaBreakdown.remaining.tokens_this_month_usd}
+                                                />
+                                                <div className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-sm">
+                                                    <div className="flex items-center justify-between gap-3">
+                                                        <span className="text-amber-800">Plan reserved</span>
+                                                        <span className="font-semibold text-amber-950">{formatUsdLimit(quotaBreakdown.current_usage.tokens_reserved_usd)}</span>
+                                                    </div>
+                                                    <div className="mt-1 text-xs text-amber-800">
+                                                        {formatCount(quotaBreakdown.current_usage.tokens_reserved || 0)} tokens held by in-flight requests
+                                                    </div>
+                                                </div>
+                                                <div className="rounded-lg border border-gray-200/70 bg-white px-3 py-2 text-sm">
+                                                    <div className="flex items-center justify-between gap-3">
+                                                        <span className="text-gray-600">Concurrent</span>
+                                                        <span className="font-semibold text-gray-900">
+                                                            {formatCount(quotaBreakdown.current_usage.concurrent)} / {formatCount(quotaBreakdown.effective_policy.max_concurrent)}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {quotaBreakdown.reset_windows ? (
+                                            <div className="rounded-xl border border-gray-200/70 bg-white p-3 text-sm text-gray-700">
+                                                <div className="font-semibold text-gray-900">Rolling resets</div>
+                                                <div className="mt-1 grid grid-cols-1 gap-1 text-xs text-gray-600 md:grid-cols-3">
+                                                    <div>Bundle: {quotaBreakdown.reset_windows.bundle_id}</div>
+                                                    <div>Hourly: {quotaBreakdown.reset_windows.hour_reset_at ? new Date(quotaBreakdown.reset_windows.hour_reset_at).toLocaleString() : '—'}</div>
+                                                    <div>30-day: {quotaBreakdown.reset_windows.month_reset_at ? new Date(quotaBreakdown.reset_windows.month_reset_at).toLocaleString() : '—'}</div>
                                                 </div>
                                             </div>
                                         ) : (
@@ -3139,141 +3218,43 @@ const ControlPlaneAdmin: React.FC = () => {
                                             </div>
                                         )}
 
-                                        {/* Credits snapshot */}
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                            <div className="rounded-2xl border border-gray-200/70 bg-gray-50 p-5">
-                                                <div className="flex items-center justify-between">
-                                                    <div>
-                                <div className="text-sm font-semibold text-gray-900">Plan envelope</div>
-                                                        <div className="text-xs text-gray-600 mt-1">Base → Override → Effective</div>
+                                        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+                                            <div className="text-sm font-semibold text-emerald-950">Wallet / personal credits</div>
+                                            <div className="mt-1 text-xs text-emerald-800">Separate from plan quota. Used for shortfall capacity.</div>
+                                            {!quotaBreakdown.lifetime_credits ? (
+                                                <div className="mt-3 text-sm text-emerald-900">No wallet record for this user.</div>
+                                            ) : (
+                                                <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-5">
+                                                    <div className="rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm">
+                                                        <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Purchased</div>
+                                                        <div className="mt-1 font-semibold text-emerald-950">{formatCount(quotaBreakdown.lifetime_credits.tokens_purchased)}</div>
                                                     </div>
-                                                    <div className="text-2xl">📊</div>
-                                                </div>
-
-                                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-4 text-sm">
-                                                    <div className="rounded-xl bg-white border border-gray-200/70 p-4">
-                                                        <div className="font-semibold text-gray-900 mb-1">Base</div>
-                                                        <div className="text-gray-600">
-                                                            req/day: {quotaBreakdown.base_policy.requests_per_day ?? '—'}<br />
-                                                            tok/month: {quotaBreakdown.base_policy.tokens_per_month?.toLocaleString?.() ?? quotaBreakdown.base_policy.tokens_per_month ?? '—'}
-                                                            {quotaBreakdown.base_policy.usd_per_month != null
-                                                                ? ` ($${Number(quotaBreakdown.base_policy.usd_per_month).toFixed(2)})`
-                                                                : ''}
-                                                        </div>
+                                                    <div className="rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm">
+                                                        <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Consumed</div>
+                                                        <div className="mt-1 font-semibold text-emerald-950">{formatCount(quotaBreakdown.lifetime_credits.tokens_consumed)}</div>
                                                     </div>
-
-                                                    <div className="rounded-xl bg-white border border-gray-200/70 p-4">
-                                                        <div className="font-semibold text-gray-900 mb-1">Override</div>
-                                                        <div className="text-gray-600">
-                                                            {quotaBreakdown.plan_override ? (
-                                                                <>
-                                                                    {quotaBreakdown.plan_override.active ? (
-                                                                        <Pill tone="success">Active</Pill>
-                                                                    ) : quotaBreakdown.plan_override.expired ? (
-                                                                        <Pill tone="warning">Expired</Pill>
-                                                                    ) : (
-                                                                        <Pill tone="neutral">Inactive</Pill>
-                                                                    )}
-                                                                    <div className="mt-2">
-                                                                        req/day: {quotaBreakdown.plan_override.limits.requests_per_day ?? '—'}<br />
-                                                                        tok/month: {quotaBreakdown.plan_override.limits.tokens_per_month?.toLocaleString?.() ?? quotaBreakdown.plan_override.limits.tokens_per_month ?? '—'}
-                                                                        {quotaBreakdown.plan_override.limits.usd_per_month != null
-                                                                            ? ` ($${Number(quotaBreakdown.plan_override.limits.usd_per_month).toFixed(2)})`
-                                                                            : ''}<br />
-                                                                        expires: {quotaBreakdown.plan_override.expires_at ? new Date(quotaBreakdown.plan_override.expires_at).toLocaleString() : '—'}
-                                                                    </div>
-                                                                </>
-                                                            ) : (
-                                                                <>No override</>
-                                                            )}
-                                                        </div>
+                                                    <div className="rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm">
+                                                        <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Reserved</div>
+                                                        <div className="mt-1 font-semibold text-emerald-950">{formatCount(quotaBreakdown.lifetime_credits.tokens_reserved)}</div>
                                                     </div>
-
-                                                    <div className="rounded-xl bg-white border border-gray-200/70 p-4">
-                                                        <div className="font-semibold text-gray-900 mb-1">Effective</div>
-                                                        <div className="text-gray-600">
-                                                            req/day: {quotaBreakdown.effective_policy.requests_per_day ?? '—'}<br />
-                                                            tok/month: {quotaBreakdown.effective_policy.tokens_per_month?.toLocaleString?.() ?? quotaBreakdown.effective_policy.tokens_per_month ?? '—'}
-                                                            {quotaBreakdown.effective_policy.usd_per_month != null
-                                                                ? ` ($${Number(quotaBreakdown.effective_policy.usd_per_month).toFixed(2)})`
-                                                                : ''}
-                                                        </div>
+                                                    <div className="rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm">
+                                                        <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Available</div>
+                                                        <div className="mt-1 font-semibold text-emerald-950">{formatCount(quotaBreakdown.lifetime_credits.tokens_available)}</div>
+                                                    </div>
+                                                    <div className="rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm">
+                                                        <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Available USD</div>
+                                                        <div className="mt-1 font-semibold text-emerald-950">${Number(quotaBreakdown.lifetime_credits.available_usd || 0).toFixed(2)}</div>
                                                     </div>
                                                 </div>
-                                                {quotaBreakdown.reference_model && (
-                                                    <div className="pt-3 text-xs text-gray-500">
-                                                        Reference: {quotaBreakdown.reference_model}
-                                                    </div>
-                                                )}
-                                            </div>
-
-                                            <div className="rounded-2xl border border-gray-200/70 bg-gray-50 p-5">
-                                                <div className="flex items-center justify-between">
-                                                    <div>
-                                                        <div className="text-sm font-semibold text-gray-900">Lifetime credits</div>
-                                                        <div className="text-xs text-gray-600 mt-1">Gross / reserved / available</div>
-                                                    </div>
-                                                    <div className="text-2xl">💳</div>
-                                                </div>
-
-                                                {!quotaBreakdown.lifetime_credits ? (
-                                                    <div className="mt-4 text-sm text-gray-600">
-                                                        No lifetime credits record for this user.
-                                                    </div>
-                                                ) : (
-                                                    <div className="mt-4 space-y-2 text-sm">
-                                                        <div className="flex justify-between gap-3">
-                                                            <span className="text-gray-600">Purchased</span>
-                                                            <span className="font-semibold text-gray-900">
-                                                                {quotaBreakdown.lifetime_credits.tokens_purchased.toLocaleString()}
-                                                            </span>
-                                                        </div>
-                                                        <div className="flex justify-between gap-3">
-                                                            <span className="text-gray-600">Consumed</span>
-                                                            <span className="font-semibold text-gray-900">
-                                                                {quotaBreakdown.lifetime_credits.tokens_consumed.toLocaleString()}
-                                                            </span>
-                                                        </div>
-                                                        <div className="flex justify-between gap-3">
-                                                            <span className="text-gray-600">Gross remaining</span>
-                                                            <span className="font-semibold text-gray-900">
-                                                                {quotaBreakdown.lifetime_credits.tokens_gross_remaining.toLocaleString()}
-                                                            </span>
-                                                        </div>
-                                                        <div className="flex justify-between gap-3">
-                                                            <span className="text-gray-600">Reserved</span>
-                                                            <span className="font-semibold text-gray-900">
-                                                                {quotaBreakdown.lifetime_credits.tokens_reserved.toLocaleString()}
-                                                            </span>
-                                                        </div>
-                                                        <div className="flex justify-between gap-3">
-                                                            <span className="text-gray-600">Available now</span>
-                                                            <span className="font-semibold text-gray-900">
-                                                                {quotaBreakdown.lifetime_credits.tokens_available.toLocaleString()}
-                                                            </span>
-                                                        </div>
-                                                        <div className="flex justify-between gap-3">
-                                                            <span className="text-gray-600">Available USD (quoted)</span>
-                                                            <span className="font-semibold text-gray-900">
-                                                                ${Number(quotaBreakdown.lifetime_credits.available_usd || 0).toFixed(2)}
-                                                            </span>
-                                                        </div>
-
-                                                        <div className="pt-3 border-t border-gray-200/70 text-xs text-gray-600">
-                                                            Reference: {quotaBreakdown.lifetime_credits.reference_model}
-                                                        </div>
-                                                    </div>
-                                                )}
-                                            </div>
+                                            )}
                                         </div>
 
-                                        <div className="rounded-2xl border border-gray-200/70 bg-gray-50 p-5">
+                                        <div className="rounded-xl border border-gray-200/70 bg-gray-50 p-4">
                                             <div className="flex items-center justify-between">
                                                 <div>
                                                     <div className="text-sm font-semibold text-gray-900">Subscription balance</div>
-                                                    <div className="text-xs text-gray-600 mt-1">Per-period subscription lane</div>
+                                                    <div className="mt-1 text-xs text-gray-600">Per-period subscription credits</div>
                                                 </div>
-                                                <div className="text-2xl">🧾</div>
                                             </div>
 
                                             {!quotaBreakdown.subscription_balance ? (
@@ -3838,7 +3819,7 @@ const ControlPlaneAdmin: React.FC = () => {
                                                         Needs at least{' '}
                                                         {Number(lifetimeBalance.minimum_required_tokens || 0).toLocaleString()} tokens
                                                         {minUsd != null ? ` (≈ $${minUsd.toFixed(2)})` : ''}
-                                                        {' '}to run in the paid lane.
+                                                        {' '}to cover wallet-funded shortfall.
                                                     </Callout>
                                                 )}
                                             </>
@@ -5303,5 +5284,5 @@ Shortfall ledger notes:
 const rootElement = document.getElementById('root');
 if (rootElement) {
     const root = ReactDOM.createRoot(rootElement);
-    root.render(<ControlPlaneAdmin />);
+    root.render(<EconomicsAdmin />);
 }

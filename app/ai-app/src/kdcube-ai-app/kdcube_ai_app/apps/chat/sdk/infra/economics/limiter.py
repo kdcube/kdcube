@@ -1164,6 +1164,7 @@ class UserEconomicsRateLimiter:
                         "requests_total": int,
                         "tokens_today": int,
                         "tokens_this_month": int,
+                        "tokens_reserved": int,
                         "concurrent": int,
                     }
                 },
@@ -1173,6 +1174,7 @@ class UserEconomicsRateLimiter:
                     "requests_total": int,
                     "tokens_today": int,
                     "tokens_this_month": int,
+                    "tokens_reserved": int,
                 }
             }
         """
@@ -1228,6 +1230,7 @@ class UserEconomicsRateLimiter:
                 "tokens_today": 0,
                 "tokens_this_month": 0,
                 "tokens_this_hour": 0,
+                "tokens_reserved": 0,
             }}
 
         # Collect usage for each bundle
@@ -1239,7 +1242,36 @@ class UserEconomicsRateLimiter:
             "tokens_today": 0,
             "tokens_this_month": 0,
             "tokens_this_hour": 0,
+            "tokens_reserved": 0,
         }
+
+        async def _active_reserved_tokens(bundle_id: str) -> int:
+            k_resv_idx = _k(self.ns, bundle_id, subject_id, "toks_resv:index")
+            k_resv_map = _k(self.ns, bundle_id, subject_id, "toks_resv:data")
+            try:
+                await self.r.eval(
+                    _LUA_RELEASE_RESERVATION,
+                    2,
+                    *_strs(k_resv_idx, k_resv_map),
+                    *_strs(int(now.timestamp()), ""),
+                )
+            except Exception:
+                pass
+            try:
+                values = await self.r.hvals(k_resv_map)
+            except Exception:
+                return 0
+
+            total = 0
+            for value in values or []:
+                if isinstance(value, (bytes, bytearray)):
+                    value = value.decode("utf-8", errors="ignore")
+                amount, *_ = str(value or "").split("|", 1)
+                try:
+                    total += max(int(amount or 0), 0)
+                except Exception:
+                    continue
+            return int(total)
 
         for bundle_id in bundle_ids:
             period_start, period_end, period_key = await self._rolling_month_period(
@@ -1287,6 +1319,7 @@ class UserEconomicsRateLimiter:
 
             bucket_prefix = _k(self.ns, bundle_id, subject_id, "toks:hour:bucket")
             tok_h, _ = await self._rolling_hour_stats(bucket_prefix, now)
+            tok_reserved = await _active_reserved_tokens(bundle_id)
 
             bundles[bundle_id] = {
                 "requests_today": req_d,
@@ -1295,6 +1328,7 @@ class UserEconomicsRateLimiter:
                 "tokens_today": tok_d,
                 "tokens_this_month": tok_m,
                 "tokens_this_hour": tok_h,
+                "tokens_reserved": tok_reserved,
                 "concurrent": concurrent,
             }
 
@@ -1305,6 +1339,7 @@ class UserEconomicsRateLimiter:
             totals["tokens_today"] += tok_d
             totals["tokens_this_month"] += tok_m
             totals["tokens_this_hour"] += tok_h
+            totals["tokens_reserved"] += tok_reserved
 
         return {"bundles": bundles, "totals": totals}
 

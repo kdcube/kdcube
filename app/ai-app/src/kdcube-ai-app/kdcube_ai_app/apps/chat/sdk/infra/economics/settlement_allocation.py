@@ -17,6 +17,11 @@ class PlanWalletSettlementInput:
     active reservations. ``*_reserved_*`` values are this request's own active
     reservations, which are added back so this request can spend what it held
     earlier without stealing capacity from concurrent requests.
+
+    ``primary_funding_reserved_tokens`` preserves the pre-run split between the
+    normal plan funding source and wallet overflow. Without it, a fresh budget
+    read at settlement time can move wallet-reserved overflow back onto plan
+    quota just because the project or subscription balance still has capacity.
     """
 
     actual_tokens: int
@@ -27,6 +32,7 @@ class PlanWalletSettlementInput:
 
     primary_funding_available_usd: Optional[float] = 0.0
     primary_funding_reserved_usd: float = 0.0
+    primary_funding_reserved_tokens: Optional[int] = None
 
     wallet_available_tokens: int = 0
     wallet_reserved_tokens: int = 0
@@ -161,6 +167,11 @@ def allocate_plan_wallet_settlement(
         actual_tokens=actual_tokens,
         actual_cost_usd=actual_cost_usd,
     )
+    if settlement.primary_funding_reserved_tokens is not None:
+        primary_funding_capacity_tokens = min(
+            primary_funding_capacity_tokens,
+            _non_negative_int(settlement.primary_funding_reserved_tokens),
+        )
 
     wallet_capacity_tokens = min(
         _non_negative_int(settlement.wallet_available_tokens)

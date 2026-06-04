@@ -14,6 +14,7 @@ def _allocate(
     quota_reserved_tokens: int = 0,
     primary_funding_available_usd: float | None,
     primary_funding_reserved_usd: float = 0.0,
+    primary_funding_reserved_tokens: int | None = None,
     wallet_available_tokens: int = 0,
     wallet_reserved_tokens: int = 0,
 ):
@@ -25,6 +26,7 @@ def _allocate(
             quota_reserved_tokens=quota_reserved_tokens,
             primary_funding_available_usd=primary_funding_available_usd,
             primary_funding_reserved_usd=primary_funding_reserved_usd,
+            primary_funding_reserved_tokens=primary_funding_reserved_tokens,
             wallet_available_tokens=wallet_available_tokens,
             wallet_reserved_tokens=wallet_reserved_tokens,
         )
@@ -132,6 +134,42 @@ def test_own_reservations_are_added_to_current_capacities():
     assert allocation.primary_funding_tokens == 50
     assert allocation.wallet_tokens == 50
     assert allocation.quota_tokens == 50
+
+
+def test_plan_project_share_is_capped_by_pre_run_reservation_split():
+    allocation = allocate_plan_wallet_settlement(
+        PlanWalletSettlementInput(
+            actual_tokens=55_833,
+            actual_cost_usd=0.83750078,
+            quota_available_tokens=102_095,
+            quota_reserved_tokens=115_943,
+            primary_funding_available_usd=0.20,
+            primary_funding_reserved_usd=0.67,
+            primary_funding_reserved_tokens=38_559,
+            wallet_available_tokens=55_949,
+            wallet_reserved_tokens=77_384,
+        )
+    )
+
+    assert allocation.primary_funding_tokens == 38_559
+    assert allocation.wallet_tokens == 17_274
+    assert allocation.project_absorption_tokens == 0
+    assert allocation.quota_tokens == 38_559
+    assert allocation.wallet_usd == pytest.approx(0.2591, rel=1e-3)
+
+
+def test_zero_pre_run_plan_share_keeps_actual_spend_on_wallet_first():
+    allocation = _allocate(
+        quota_available_tokens=100,
+        primary_funding_available_usd=10.0,
+        primary_funding_reserved_tokens=0,
+        wallet_available_tokens=100,
+    )
+
+    assert allocation.primary_funding_tokens == 0
+    assert allocation.wallet_tokens == 100
+    assert allocation.project_absorption_tokens == 0
+    assert allocation.quota_tokens == 0
 
 
 def test_unlimited_quota_still_respects_primary_funding_before_wallet():
