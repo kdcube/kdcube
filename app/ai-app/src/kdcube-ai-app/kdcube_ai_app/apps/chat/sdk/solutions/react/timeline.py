@@ -490,11 +490,43 @@ TURN_INDEX_SUFFIX = ".react.turn.index"
 
 
 def parse_turn_index_path(path: str) -> Optional[str]:
+    """
+    Extract the turn_id from a turn-index path. Accepts both the bare form
+    `ar:turn_<id>.react.turn.index` and the cross-conversation form
+    `ar:conv_<id>.turn_<id>.react.turn.index`. In the cross-conv case the
+    conv_<id> prefix is stripped silently; callers that need the
+    conversation_id can call `parse_turn_index_ref` instead.
+    """
     p = str(path or "").strip()
     if not p.startswith("ar:") or not p.endswith(TURN_INDEX_SUFFIX):
         return None
-    tid = p[len("ar:") : -len(TURN_INDEX_SUFFIX)].strip()
-    return tid or None
+    body = p[len("ar:") : -len(TURN_INDEX_SUFFIX)].strip()
+    if body.startswith("conv_"):
+        _, sep, rest = body.partition(".")
+        if sep and rest:
+            body = rest.strip()
+    return body or None
+
+
+def parse_turn_index_ref(path: str) -> Optional[tuple[str, str]]:
+    """
+    Like `parse_turn_index_path` but returns `(conversation_id, turn_id)`.
+    `conversation_id` is empty when the path has no `conv_<id>.` prefix.
+    Returns `None` when the path is not a turn-index path.
+    """
+    p = str(path or "").strip()
+    if not p.startswith("ar:") or not p.endswith(TURN_INDEX_SUFFIX):
+        return None
+    body = p[len("ar:") : -len(TURN_INDEX_SUFFIX)].strip()
+    conv_id = ""
+    if body.startswith("conv_"):
+        seg, sep, rest = body.partition(".")
+        if sep and rest:
+            conv_id = seg[len("conv_") :].strip()
+            body = rest.strip()
+    if not body:
+        return None
+    return conv_id, body
 
 
 def _compact_hint(value: Any, *, max_chars: int = 180) -> str:
@@ -1192,7 +1224,17 @@ def resolve_artifact_from_timeline(timeline: Dict[str, Any], path: str) -> Optio
     blocks = _collect_blocks(timeline)
     working_summary_suffix = ".conv.working.summary"
     if p.startswith("ws:") and p.endswith(working_summary_suffix):
-        turn_id = p[len("ws:") : -len(working_summary_suffix)].strip()
+        # Accept both bare `ws:turn_<X>.conv.working.summary` and the
+        # cross-conv form `ws:conv_<id>.turn_<X>.conv.working.summary`. The
+        # conv_<id> prefix tells the caller (and any cross-conv-aware loader
+        # higher up the stack) which conversation the path belongs to; the
+        # block lookup itself filters by turn_id, which is globally unique.
+        body = p[len("ws:") : -len(working_summary_suffix)].strip()
+        if body.startswith("conv_"):
+            _, sep, rest = body.partition(".")
+            if sep and rest:
+                body = rest.strip()
+        turn_id = body
         if turn_id:
             latest_summary = None
             for b in reversed(blocks):
@@ -5762,9 +5804,14 @@ class Timeline:
                     tail = p.split(".tool_calls.", 1)[1]
                     call_id = tail.split(".", 1)[0]
                     return call_id
-                # tc:turn_<id>.<call_id>.call|result
+                # tc:turn_<id>.<call_id>.call|result — also accept the
+                # cross-conv form tc:conv_<id>.turn_<id>.<call_id>.call|result
                 if p.startswith("tc:"):
                     tail = p[len("tc:"):]
+                    if tail.startswith("conv_"):
+                        _, sep, rest = tail.partition(".")
+                        if sep and rest:
+                            tail = rest
                     parts = tail.split(".")
                     if len(parts) >= 3:
                         return parts[1]

@@ -19,6 +19,7 @@ from kdcube_ai_app.apps.chat.sdk.util import (
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
     build_artifact_meta_block,
+    peel_conversation_prefix,
     split_logical_artifact_ref,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.solution_workspace import (
@@ -1167,9 +1168,18 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
 
     def _conversation_id_for_path(ctx_path: str, item_req: Optional[Dict[str, Any]] = None) -> Optional[str]:
         item_req = item_req or {}
+        # Try the fi:-specific splitter first because it understands special
+        # shapes (external attachments, user attachments) that the generic
+        # peeler does not.
         embedded_conversation_id, _, _, _ = split_logical_artifact_ref(ctx_path)
         conversation_id = str(embedded_conversation_id or "").strip()
-        return conversation_id or None
+        if conversation_id:
+            return conversation_id
+        # Fall back to the generic peeler so cross-conv `ar:`, `ws:`, `ev:`,
+        # `tc:`, and `so:` paths (`<ns>:conv_<id>.<rest>`) resolve their
+        # source conversation too.
+        _, peeled_conv, _ = peel_conversation_prefix(ctx_path)
+        return peeled_conv or None
 
     async def _emit_fi_path(ctx_path: str, item_req: Optional[Dict[str, Any]] = None) -> None:
         nonlocal total_tokens
