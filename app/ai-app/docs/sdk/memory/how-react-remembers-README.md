@@ -5,6 +5,7 @@ summary: "Explains the different memory mechanisms available to ReAct: visible t
 tags: ["sdk", "memory", "react", "compaction", "memsearch", "internal-notes", "user-memory"]
 keywords: ["react memory", "internal memory beacons", "react.note", "react.memsearch", "conv.working.summary", "conv.range.summary", "turn index", "user memories", "compaction"]
 see_also:
+  - ks:docs/sdk/memory/conversational-memory-search-README.md
   - ks:docs/sdk/memory/user-memories-overview-README.md
   - ks:docs/sdk/memory/user-memories-react-integration-README.md
   - ks:docs/sdk/memory/user-memories-operational-README.md
@@ -21,7 +22,7 @@ The short model:
 current timeline
   immediate context for the current turn and visible conversation tail
 
-ReAct recovery memory
+ReAct recovery memory  (a.k.a. conversational memory index)
   turn summaries, turn indexes, memsearch, internal beacons
   helps recover what happened in prior turns of the conversation
 
@@ -30,6 +31,66 @@ durable user memory
   durable decisions, reusable anchors, specs, and milestones
   helps future conversations behave correctly
 ```
+
+The big picture, drawn out:
+
+```text
+                  +---------------------------------------------+
+                  |                  AGENT                      |
+                  |       (current turn / decision loop)        |
+                  +--+--------------+--------------+------------+
+                     | writes       | react.read / | memory.*
+                     | turn output  | react.       | tools,
+                     |              | memsearch    | widget
+                     v              v              v
+       +----------------+  +-------------------+  +-------------------+
+       |   VISIBLE      |  |  CONV MEMORY      |  |  DURABLE USER     |
+       |   TIMELINE     |  |  INDEX            |  |  MEMORY           |
+       |                |  |  (conv_messages)  |  |  (user_memory_*)  |
+       |  In-context    |  |                   |  |                   |
+       |  tail. Pruned  |  |  Every persistable|  |  Curated facts,   |
+       |  by compaction |  |  turn block also  |  |  preferences,     |
+       |  -> range      |  |  lives here until |  |  decisions,       |
+       |  summary +     |  |  TTL (365d def.)  |  |  anchors, specs,  |
+       |  preserved     |  |                   |  |  milestones       |
+       |  notes         |  |  text, embedding, |  |                   |
+       |                |  |  anchors_text,    |  |  user-visible,    |
+       |  Not directly  |  |  search_tsv,      |  |  user-editable    |
+       |  searchable;   |  |  tags, ts, ttl    |  |                   |
+       |  shrinks every |  |                   |  |  reads:           |
+       |  turn          |  |  retrieval:       |  |   announce hotset |
+       |                |  |   hybrid (sem+lex |  |   (turn start),   |
+       |                |  |   +RRF+recency),  |  |   memory.search,  |
+       |                |  |   catalog modes,  |  |   widget          |
+       |                |  |   scope conv|user |  |                   |
+       |                |  |                   |  |  writes (explicit |
+       |                |  |  Not user-visible,|  |  only):           |
+       |                |  |  not curated.     |  |   memory.propose, |
+       |                |  |                   |  |   reconciler,     |
+       |                |  |                   |  |   widget          |
+       +----------------+  +-------------------+  +-------------------+
+
+Cross-district flows:
+
+  agent writes a turn block       -> visible timeline      (becomes in-context)
+  runtime persists each block     -> conv memory index     (one row per block)
+  compaction prunes the tail      -> range summary +
+                                     preserved notes       (replaces pruned slice
+                                                            inside visible timeline)
+  agent calls react.read          -> visible timeline      (reads visible refs)
+  agent calls react.memsearch     -> conv memory index     (returns handles;
+                                                            agent then react.read's them)
+  agent calls memory.propose,
+   reconciler or widget commits   -> durable user memory   (explicit only;
+                                                            no auto-promotion)
+  durable memory at turn start    -> visible timeline      (announce hotset injects)
+```
+
+The three districts share an author (the agent and runtime) but have separate
+storage, separate retrieval, and separate visibility rules. The same turn output
+can land in two of them simultaneously (visible timeline + conv memory index)
+without landing in the third (durable user memory), because durable memory is
+explicit-promotion-only.
 
 A conversation is made of turns. ReAct sees the current turn plus whatever
 conversation tail, summaries, and refs are loaded into context. Older turns in
@@ -258,8 +319,15 @@ summary path is lossy and should not be treated as source of truth.
 
 ## What `react.memsearch` Actually Searches
 
-`react.memsearch` is a recovery tool for prior turns. It supports semantic,
-timeline, ordinal, and temporal lookup. Its current targets are:
+For the full retrieval-function story — hybrid semantic + lexical (BM25F) +
+RRF fusion + recency lift, the `Retrieval-anchors:` contract that powers the
+lexical side, scope semantics, and per-hit telemetry — see
+[Conversational Memory Search](conversational-memory-search-README.md). The
+short version follows.
+
+`react.memsearch` is a recovery tool for prior turns. It supports topic
+(hybrid semantic + lexical), timeline, ordinal, and temporal lookup. Its
+current targets are:
 
 ```text
 summary

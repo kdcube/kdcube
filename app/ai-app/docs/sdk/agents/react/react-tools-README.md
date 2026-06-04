@@ -9,6 +9,7 @@ see_also:
   - ks:docs/sdk/agents/react/react-round-README.md
   - ks:docs/sdk/agents/react/tool-call-blocks-README.md
   - ks:docs/sdk/agents/react/workspace/workspace-checkout-model-README.md
+  - ks:docs/sdk/memory/conversational-memory-search-README.md
 ---
 # React Tools (react.*)
 
@@ -243,18 +244,56 @@ Use it when the file already exists and React wants a targeted edit instead of a
 
 ### `react.memsearch`
 
-Searches prior conversation memory and returns turn-level recovery handles.
+Searches the **conversational memory index** — a distinct district of memory
+managed by the agent as a byproduct of operation. Every user prompt, assistant
+completion, working summary, internal note, and user attachment is persisted
+into `conv_messages` and made retrievable here. It is separate from the
+current visible timeline (which compaction prunes) and from durable user
+memory (which is a curated user-visible product surface).
+
+For the full data model, scope semantics, retrieval function, and
+`Retrieval-anchors:` contract, see
+[Conversational Memory Search](../../memory/conversational-memory-search-README.md).
+The agent-facing surface is summarized below.
+
+**What it searches.** Rows in `conv_messages` for the current user, optionally
+across the user's other conversations under the same tenant/project/storage
+boundary. Each row carries embedding (semantic), `search_tsv` (BM25F-style
+lexical with anchors at weight A and body at weight B), timestamp, and tags.
+The targets the agent selects determine which row families come back:
+
+| Target | Picks rows tagged | Useful for |
+| --- | --- | --- |
+| `summary` | `kind:working.summary` | Goal/outcome/refs of a prior turn — best first target |
+| `user` | `chat:user`, `artifact:user.attachment` | What the user said or attached |
+| `assistant` | `chat:assistant` (non-summary) | What the agent answered |
+| `attachment` | `artifact:user.attachment` and inline followup attachments | Find a turn by an attached file |
+| `notes` | `kind:react.note` | Internal beacons left in prior turns |
+
+**Scopes.**
+
+- `scope="conversation"` (default): the current conversation only. Cannot leak across conversations.
+- `scope="user"`: the same user across all of their conversations, inside the same tenant + project + storage boundary. Does not cross tenants or projects. Returned `fi:` paths shaped `fi:conv_<id>.turn_<id>...` indicate cross-conversation artifacts; pass them verbatim to `react.read` / `react.pull` / `react.checkout` / `react.rg` and they resolve against the other conversation's storage.
+
+**Retrieval function.** When `query` is set, semantic and lexical retrievals run
+in parallel and are fused by Reciprocal Rank Fusion (`k=60`) per target with a
+multiplicative recency lift (`1 + 0.25 × recency`, half-life 7 days). A turn
+does not have to appear in both lists — single-side matches still count, they
+just contribute one RRF term. Catalog routing (no-query / ordinal / date-only
+window) bypasses the hybrid path and uses the deterministic turn catalog.
 
 Inputs:
 
-- `query`: natural-language query. Required for semantic search. Optional for ordinal/temporal/timeline lookup.
-- `targets`: list of snippet families to return. Supported values: `summary`, `user`, `assistant`, `attachment`.
-- `mode`: `semantic`, `ordinal`, `temporal`, or `timeline`. Default: `semantic`.
-- `scope`: `conversation` or `user`. Default: `conversation`. `user` searches the current user across conversations while preserving the same tenant/project and storage boundary.
-- `ordinal`: 1-based turn number in the selected scope/window. Used by `mode="ordinal"`.
-- `from` / `to`: ISO timestamps. `to` is exclusive.
-- `top_k`: maximum turn hits.
-- `days`: lookback limit. Defaults wider for catalog modes than for semantic mode.
+- `query`: natural-language query. Set it for topic search (hybrid). Omit it for catalog routing.
+- `targets`: list of snippet families to return. Defaults to `["assistant", "user", "attachment", "summary"]`. Use `"notes"` explicitly when looking for internal beacons.
+- `scope`: `conversation` (default) or `user`.
+- `ordinal`: 1-based turn number in the selected scope/window. Set this to look up the N-th turn.
+- `from` / `to`: ISO timestamps. `to` is exclusive. Set without `query` to scan a date window; set with `query` to narrow hybrid search to that window.
+- `order`: `asc` (default) or `desc` for catalog results.
+- `top_k`: maximum turn hits (default 5).
+- `days`: lookback limit (default 365 for topic queries, wider for catalog).
+
+The tool infers routing from which fields are set; there is no `mode` knob.
 
 Output per hit:
 
@@ -263,15 +302,8 @@ Output per hit:
 - `working_summary_path`, usually `ws:<turn_id>.conv.working.summary`
 - `ordinal` and `total_turns` when the hit came from the turn catalog
 - `started_at` / `ended_at` when known
-- `snippets`: compact readable rows with `role`, `path`, `ts`
-- semantic scores when the hit came from vector/text search
-
-Targets:
-
-- `summary`: working-summary snippets, best first target for recovery.
-- `user`: user prompt/followup/steer snippets.
-- `assistant`: assistant completion snippets.
-- `attachment`: user attachments, including event-scoped followup attachments.
+- `snippets`: compact rows with `role`, `path`, `ts`, optional `conversation_id` for cross-scope hits
+- For hybrid hits: `score` (RRF + recency lift), `sim_score`, `recency_score`, plus telemetry fields `rrf_score`, `sem_rank`, `lex_rank`, `primary_source`
 
 Event-scoped attachment paths use:
 
@@ -283,34 +315,35 @@ Scenarios:
 
 | User intent | Tool params | Next step |
 |---|---|---|
-| "What have we talked about so far?" | `mode="timeline"`, `targets=["summary"]`, `order="asc"`, high enough `top_k`, no `query` | summarize returned turn summaries |
-| "Find the Anthropic invoice ZIP attempt" | `query`, `targets=["summary"]` | read returned `ws:` summary, then exact refs |
-| "What was the second turn about?" | `mode="ordinal"`, `ordinal=2`, `targets=["summary","user","assistant"]` | answer from snippets or read `turn_index_path` |
-| "What did we discuss in March?" | `mode="temporal"`, `from`, `to`, `targets=["summary","user"]` | scan returned turns, then read exact refs |
-| "Find invoice discussion from March" | `query`, `from`, `to`, `targets=["summary","user","assistant"]`, no `mode` | semantic search narrowed to the time window |
-| "I need the old file but only remember the topic" | `query`, `targets=["summary","attachment"]` | read/pull returned `fi:` refs or read the turn index |
+| "What have we talked about so far?" | `targets=["summary"]`, `order="asc"`, high enough `top_k`, no `query`, no bounds | summarize returned turn summaries |
+| "Find the brief on the Q2 spreadsheet" | `query`, `targets=["summary"]` | read returned `ws:` summary, then exact refs |
+| "What was the second turn about?" | `ordinal=2`, `targets=["summary","user","assistant"]` | answer from snippets or read `turn_index_path` |
+| "What did we discuss in March?" | `from`, `to`, `targets=["summary","user"]`, no `query` | scan returned turns, then read exact refs |
+| "Find the openpyxl issue from March" | `query`, `from`, `to`, `targets=["summary","user","assistant"]` | hybrid search narrowed to the time window |
+| "I need that old file but only remember the topic" | `query`, `targets=["summary","attachment"]` | read/pull returned `fi:` refs or read the turn index |
+| "Find the renderer-ref decision I left for myself" | `query`, `targets=["notes","summary"]` | read the returned note snippet, then exact refs |
 
 Examples:
 
 ```json
-{"query": "Anthropic invoice ZIP", "targets": ["summary"], "top_k": 5}
+{"query": "openpyxl IndexError", "targets": ["summary"], "top_k": 5}
 ```
 
 ```json
-{"mode": "ordinal", "ordinal": 2, "targets": ["summary", "user", "assistant"]}
+{"ordinal": 2, "targets": ["summary", "user", "assistant"]}
 ```
 
 ```json
-{"mode": "temporal", "from": "2026-03-01T00:00:00Z", "to": "2026-04-01T00:00:00Z", "targets": ["summary", "user"]}
+{"from": "2026-03-01T00:00:00Z", "to": "2026-04-01T00:00:00Z", "targets": ["summary", "user"]}
 ```
 
 Rules:
 
 - Do not use memsearch when the exact needed path is already visible; call `react.read` or `react.pull`.
-- Prefer `targets=["summary"]` first for broad recovery because summaries carry goal/outcome/refs.
-- For broad overview questions, use `mode="timeline"` with `targets=["summary"]` and no query. Generic query strings such as `"conversation topics discussed"` do not help.
-- For `mode="ordinal"`, `mode="temporal"`, and `mode="timeline"`, omit `query`. These modes use the turn catalog, not semantic matching.
-- For topic plus date range, omit `mode`; pass `query`, `from`, and `to` so semantic search is narrowed by time.
+- Prefer `targets=["summary"]` first for broad recovery because summaries carry goal/outcome/refs (and their `Retrieval-anchors:` block is what the lexical side ranks against).
+- For broad overview questions, set no `query`, no `ordinal`, no bounds, and `targets=["summary"]`. Generic queries like `"conversation topics discussed"` are not useful — they should be omitted, not invented.
+- For an exact turn position, set `ordinal` and omit `query`.
+- For a date-only window, set `from`/`to` and omit `query`. For topic plus date range, set all three; the search narrows to the window.
 - Read `turn_index_path` when the returned snippets identify the turn but do not name the needed exact `ar:`, `tc:`, `fi:`, or `so:` path.
 - Batch-read exact refs after discovery; avoid one round per path.
 
