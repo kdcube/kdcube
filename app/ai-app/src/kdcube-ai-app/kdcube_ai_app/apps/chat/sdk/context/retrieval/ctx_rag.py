@@ -3112,6 +3112,46 @@ async def search_context(
                 score_override=final_score, sim_override=sim, rec_override=rec,
             ))
 
+    # Dedupe hits by (conversation_id, turn_id). A turn that matched multiple
+    # targets ("user" + "assistant" + ...) produces one entry per matching
+    # target today; that means the same turn appears in `hits` N times with
+    # identical snippet sets downstream. Collapse them: keep the best-scored
+    # entry's scoring fields, aggregate matched_via_role / source_query /
+    # source_where into lists so the caller can see which targets matched.
+    deduped: Dict[tuple, dict] = {}
+    for h in hits:
+        key = (h.get("conversation_id") or "", h.get("turn_id") or "")
+        if not key[1]:
+            continue
+        prev = deduped.get(key)
+        if prev is None:
+            mvr = h.get("matched_via_role")
+            sq = h.get("source_query")
+            sw = h.get("source_where")
+            h["matched_via_roles"] = [mvr] if mvr else []
+            h["source_queries"] = [sq] if sq else []
+            h["source_wheres"] = [sw] if sw else []
+            deduped[key] = h
+            continue
+        for field, val in (
+            ("matched_via_roles", h.get("matched_via_role")),
+            ("source_queries", h.get("source_query")),
+            ("source_wheres", h.get("source_where")),
+        ):
+            if val and val not in prev[field]:
+                prev[field].append(val)
+        if (h.get("score") or 0.0) > (prev.get("score") or 0.0):
+            # Newer entry is the higher-scoring target — adopt its scoring
+            # fields and the payload it points at (so downstream materialization
+            # uses the best row).
+            for k in ("score", "sim", "rec", "original_score", "rrf_score",
+                      "sem_rank", "lex_rank", "primary_source",
+                      "matched_via_role", "source_query", "source_where",
+                      "text", "hosted_uri", "role", "ts"):
+                if k in h:
+                    prev[k] = h[k]
+    hits = list(deduped.values())
+
     # Sort all hits by score (descending)
     hits.sort(key=lambda h: h["score"], reverse=True)
 

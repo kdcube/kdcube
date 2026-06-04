@@ -405,7 +405,7 @@ handles without duplicating the note text:
 
 ```json
 {
-  "mode": "semantic",
+  "mode": "hybrid",
   "hits": [
     {
       "turn_id": "turn_prev",

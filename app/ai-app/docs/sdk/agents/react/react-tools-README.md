@@ -320,6 +320,7 @@ Scenarios:
 | "What was the second turn about?" | `ordinal=2`, `targets=["summary","user","assistant"]` | answer from snippets or read `turn_index_path` |
 | "What did we discuss in March?" | `from`, `to`, `targets=["summary","user"]`, no `query` | scan returned turns, then read exact refs |
 | "Find the openpyxl issue from March" | `query`, `from`, `to`, `targets=["summary","user","assistant"]` | hybrid search narrowed to the time window |
+| "Last week / yesterday we discussed X" / "you helped me with X before" | `query`, `scope="user"`, `targets=["summary","user","assistant"]` | read the cross-conversation `ws:` / `ar:` / `fi:conv_<id>...` refs returned |
 | "I need that old file but only remember the topic" | `query`, `targets=["summary","attachment"]` | read/pull returned `fi:` refs or read the turn index |
 | "Find the renderer-ref decision I left for myself" | `query`, `targets=["notes","summary"]` | read the returned note snippet, then exact refs |
 
@@ -340,6 +341,7 @@ Examples:
 Rules:
 
 - Do not use memsearch when the exact needed path is already visible; call `react.read` or `react.pull`.
+- For material the user clearly worked on with you before but not in this conversation, set `scope="user"`. The default `scope="conversation"` cannot find anything outside the current conversation, so it silently returns zero hits for cross-conversation queries.
 - Prefer `targets=["summary"]` first for broad recovery because summaries carry goal/outcome/refs (and their `Retrieval-anchors:` block is what the lexical side ranks against).
 - For broad overview questions, set no `query`, no `ordinal`, no bounds, and `targets=["summary"]`. Generic queries like `"conversation topics discussed"` are not useful — they should be omitted, not invented.
 - For an exact turn position, set `ordinal` and omit `query`.

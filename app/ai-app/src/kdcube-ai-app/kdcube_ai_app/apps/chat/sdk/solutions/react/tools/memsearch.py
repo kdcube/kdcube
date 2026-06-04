@@ -36,6 +36,10 @@ TOOL_SPEC = {
         "second/first/nth turn -> `ordinal` (no `query`); "
         "date-only clue with no topic -> `from`/`to` (no `query`); "
         "broad conversation overview -> no `query`, no `ordinal`, no bounds, with `targets=['summary']`. "
+        "Scope: the default `scope=\"conversation\"` only searches the CURRENT conversation. "
+        "To recover material from another conversation the same user has had with you "
+        "(\"last week we talked about ...\", \"yesterday you helped me with ...\", a topic "
+        "the user clearly worked on before but not in this conversation), pass `scope=\"user\"`. "
         "Recovery path: memsearch -> read returned refs; if refs are incomplete, "
         "read ar:turn_<id>.react.turn.index, then batch-read/pull exact ar:/tc:/fi:/so: refs. "
         "If a returned `fi:` path starts `fi:conv_<conversation_id>.turn_<id>...`, the `conv_` segment is the "
@@ -45,7 +49,7 @@ TOOL_SPEC = {
     "args": {
         "query": "str (FIRST FIELD). Natural-language query. Required for topic search. Omit when you only want a catalog lookup (ordinal/date-window/overview).",
         "targets": "list[str] (SECOND FIELD). Any of: assistant|user|attachment|summary|notes. Defaults to all except notes.",
-        "scope": "str (optional). conversation|user. Default conversation.",
+        "scope": "str (optional). conversation|user. Default `conversation` searches only this conversation. Set `user` to also search the same user's other conversations with you — required for cross-conversation recall.",
         "from": "ISO timestamp (optional). Start of temporal window.",
         "to": "ISO timestamp (optional). End of temporal window, exclusive.",
         "ordinal": "int (optional). 1-based turn ordinal in the selected scope/window.",
@@ -60,7 +64,38 @@ TOOL_SPEC = {
     ],
 }
 
-CATALOG_MODES = {"temporal", "ordinal", "timeline", "catalog"}
+# --- Mode labels (effective_mode in the result payload) ---
+# MODE_HYBRID is the topic-search path: parallel semantic + lexical retrieval
+# fused by Reciprocal Rank Fusion with a recency lift (see search_context
+# scoring_mode="rrf_hybrid" in ctx_rag.py). It is the only mode that runs
+# when the agent passes `query`.
+MODE_HYBRID = "hybrid"
+# Catalog modes: deterministic turn-catalog lookups, no ranking.
+MODE_ORDINAL = "ordinal"
+MODE_TEMPORAL = "temporal"
+MODE_TIMELINE = "timeline"
+MODE_CATALOG = "catalog"  # back-compat alias for an unspecified catalog request
+# Back-compat alias: older clients may still send `mode="semantic"` as input;
+# it routes to the topic-search path identically to omitting `mode`.
+MODE_SEMANTIC_LEGACY = "semantic"
+
+CATALOG_MODES = frozenset({MODE_TEMPORAL, MODE_ORDINAL, MODE_TIMELINE, MODE_CATALOG})
+
+# --- Scope ---
+SCOPE_CONVERSATION = "conversation"
+SCOPE_USER = "user"
+ALLOWED_SCOPES = frozenset({SCOPE_CONVERSATION, SCOPE_USER})
+
+# --- Order ---
+ORDER_ASC = "asc"
+ORDER_DESC = "desc"
+ALLOWED_ORDERS = frozenset({ORDER_ASC, ORDER_DESC})
+
+# Per-snippet text preview cap in the JSON result envelope. Each hit's
+# snippets carry a trimmed `text` field so the agent can triage without
+# react.read'ing every path. Full text is still materialized as separate
+# react.tool.result blocks on the timeline.
+SNIPPET_PREVIEW_CHARS = 500
 
 
 def _as_int(value: Any, default: Optional[int] = None) -> Optional[int]:
@@ -100,24 +135,54 @@ def _clip(text: Any, limit: int = 4000) -> str:
     return s[: max(0, limit - 1)].rstrip() + "…"
 
 
-def _scope_fi_path_for_conversation(*, path: Any, source_conversation_id: str, current_conversation_id: str) -> str:
+# Namespaces whose logical paths can carry a `conv_<id>.` segment after the
+# scheme prefix. Adding a new prefix here is safe — `_scope_path_for_conversation`
+# is a path-rewrite only; the read-side must understand the same convention for
+# round-trip resolution to work.
+_CROSS_CONV_NAMESPACE_PREFIXES = ("fi:", "ev:", "ws:", "ar:", "tc:", "so:")
+
+
+def _scope_path_for_conversation(*, path: Any, source_conversation_id: str, current_conversation_id: str) -> str:
+    """
+    Rewrite a logical path so it self-describes its source conversation when
+    that conversation differs from the current one. The agent can then pass
+    the path verbatim to `react.read` / `react.pull` / `react.checkout` /
+    `react.rg` without also having to track the conversation_id externally.
+
+    Convention: insert `conv_<id>.` immediately after the namespace prefix
+    (e.g. `ws:turn_X...` becomes `ws:conv_<id>.turn_X...`). If the path
+    already carries a `conv_<id>.` segment, or the source/current conversations
+    are the same, the path is returned unchanged. For `fi:` paths the canonical
+    artifact builder is used so external-attachment and other special shapes
+    stay correct.
+    """
     raw = _as_str(path)
-    if not raw.startswith("fi:"):
-        return raw
     source_conv = _as_str(source_conversation_id)
     current_conv = _as_str(current_conversation_id)
-    if not source_conv or source_conv == current_conv:
+    if not raw or not source_conv or source_conv == current_conv:
         return raw
-    existing_conv, turn_id, namespace, rel = split_logical_artifact_ref(raw)
-    if existing_conv or not (turn_id and namespace and rel):
-        return raw
-    scoped = build_logical_artifact_path(
-        turn_id=turn_id,
-        namespace=namespace,
-        relpath=rel,
-        conversation_id=source_conv,
-    )
-    return scoped or raw
+    if raw.startswith("fi:"):
+        existing_conv, turn_id, namespace, rel = split_logical_artifact_ref(raw)
+        if existing_conv or not (turn_id and namespace and rel):
+            return raw
+        scoped = build_logical_artifact_path(
+            turn_id=turn_id,
+            namespace=namespace,
+            relpath=rel,
+            conversation_id=source_conv,
+        )
+        return scoped or raw
+    for prefix in _CROSS_CONV_NAMESPACE_PREFIXES:
+        if prefix == "fi:":
+            continue
+        if not raw.startswith(prefix):
+            continue
+        body = raw[len(prefix):]
+        # Already self-scoped (or starts with a path component that looks scoped).
+        if body.startswith("conv_"):
+            return raw
+        return f"{prefix}conv_{source_conv}.{body}"
+    return raw
 
 
 def _catalog_snippets(row: Dict[str, Any], targets: List[str]) -> List[Dict[str, Any]]:
@@ -167,28 +232,37 @@ async def handle_react_memsearch(*, ctx_browser: Any, state: Dict[str, Any], too
         raw_targets = ["assistant", "user", "attachment", "summary"]
     targets = [t for t in (raw_targets or []) if isinstance(t, str) and t.strip()]
     top_k = int(params.get("top_k") or 5)
-    mode = _as_str(params.get("mode") or "semantic").lower()
-    if mode not in (CATALOG_MODES | {"semantic"}):
-        mode = "semantic"
-    scope = _as_str(params.get("scope") or "conversation").lower()
-    if scope not in {"conversation", "user"}:
-        scope = "conversation"
+    # `mode` is an input field kept for back-compat. Empty/unknown/explicit
+    # "semantic" all route to the topic-search path; only the catalog values
+    # actually steer routing. There is no agent-facing "semantic" default —
+    # the topic path runs hybrid retrieval (see MODE_HYBRID).
+    mode = _as_str(params.get("mode")).lower()
+    if mode and mode not in CATALOG_MODES and mode != MODE_SEMANTIC_LEGACY:
+        mode = ""
+    scope = _as_str(params.get("scope") or SCOPE_CONVERSATION).lower()
+    if scope not in ALLOWED_SCOPES:
+        scope = SCOPE_CONVERSATION
     ordinal = _as_int(params.get("ordinal"))
     from_ts = _as_str(params.get("from") or params.get("from_ts") or params.get("start") or params.get("start_at"))
     to_ts = _as_str(params.get("to") or params.get("to_ts") or params.get("end") or params.get("end_at"))
     has_temporal_bounds = bool(from_ts or to_ts)
-    order = _as_str(params.get("order") or "asc").lower()
-    if order not in {"asc", "desc"}:
-        order = "asc"
+    order = _as_str(params.get("order") or ORDER_ASC).lower()
+    if order not in ALLOWED_ORDERS:
+        order = ORDER_ASC
     catalog_mode = mode in CATALOG_MODES or ordinal is not None or (has_temporal_bounds and not query)
-    effective_mode = mode
-    if catalog_mode and effective_mode == "semantic":
-        effective_mode = "ordinal" if ordinal is not None else "temporal" if has_temporal_bounds else "timeline"
+    if catalog_mode:
+        effective_mode = mode if mode in CATALOG_MODES else (
+            MODE_ORDINAL if ordinal is not None
+            else MODE_TEMPORAL if has_temporal_bounds
+            else MODE_TIMELINE
+        )
+    else:
+        effective_mode = MODE_HYBRID
     ignored_catalog_query = bool(catalog_mode and query)
     warnings: List[str] = []
     if ignored_catalog_query:
         warnings.append(
-            f"query ignored in {effective_mode} catalog mode; use query only for semantic search, or omit mode for topic+time search"
+            f"query ignored in {effective_mode} catalog mode; use query only for topic search, or omit catalog signals for topic+time search"
         )
     days = int(params.get("days") or (3650 if catalog_mode or has_temporal_bounds else 365))
 
@@ -448,6 +522,12 @@ async def handle_react_memsearch(*, ctx_browser: Any, state: Dict[str, Any], too
         if not isinstance(hit, dict):
             continue
         hit_out = {k: v for k, v in hit.items() if k != "snippets"}
+        # All snippets in a hit come from the same turn, hence the same
+        # conversation. The hit-level `conversation_id` already conveys that;
+        # snippet-level conversation_id would be redundant. For cross-conv
+        # hits we encode the conv in the path itself (self-describing) via
+        # _scope_path_for_conversation.
+        hit_conv = _as_str(hit.get("conversation_id"))
         snippets_out: List[Dict[str, Any]] = []
         for sn in hit.get("snippets") or []:
             if not isinstance(sn, dict):
@@ -457,19 +537,23 @@ async def handle_react_memsearch(*, ctx_browser: Any, state: Dict[str, Any], too
                 continue
             srole = (sn.get("role") or "").strip()
             sts = sn.get("ts") or ""
-            sconv = _as_str(sn.get("conversation_id") or hit.get("conversation_id"))
-            display_path = _scope_fi_path_for_conversation(
+            display_path = _scope_path_for_conversation(
                 path=spath,
-                source_conversation_id=sconv,
+                source_conversation_id=hit_conv,
                 current_conversation_id=conversation_id,
             )
             sn_out: Dict[str, Any] = {"path": display_path}
-            if sconv and sconv != conversation_id and display_path == spath:
-                sn_out["conversation_id"] = sconv
             if srole:
                 sn_out["role"] = srole
             if sts:
                 sn_out["ts"] = sts
+            # Inline a trimmed text preview so the envelope is self-sufficient
+            # for triage. Full text still lives as separate timeline blocks.
+            stext_raw = sn.get("text")
+            if isinstance(stext_raw, str):
+                stext = stext_raw.strip()
+                if stext:
+                    sn_out["text"] = _clip(stext, limit=SNIPPET_PREVIEW_CHARS)
             snippets_out.append(sn_out)
         if snippets_out:
             hit_out["snippets"] = snippets_out
@@ -499,7 +583,7 @@ async def handle_react_memsearch(*, ctx_browser: Any, state: Dict[str, Any], too
             if not spath or not isinstance(stext, str) or not stext.strip():
                 continue
             sconv = _as_str(sn.get("conversation_id") or hit.get("conversation_id"))
-            display_path = _scope_fi_path_for_conversation(
+            display_path = _scope_path_for_conversation(
                 path=spath,
                 source_conversation_id=sconv,
                 current_conversation_id=conversation_id,

@@ -87,6 +87,52 @@ def _split_logical_conversation_prefix(raw_value: str) -> tuple[str, str]:
     return conversation_id, rest
 
 
+def peel_conversation_prefix(path: str) -> tuple[str, str, str]:
+    """
+    Generic peeler for `<ns>:conv_<conv_id>.<rest>` paths across all namespaces
+    (`fi:`, `ev:`, `ar:`, `ws:`, `tc:`, `so:`). Returns
+    `(ns_prefix, conversation_id, unscoped_path)` where `unscoped_path` retains
+    the namespace prefix (`<ns>:<rest>`). If no conv prefix is present, the
+    returned `conversation_id` is empty and `unscoped_path` equals the input.
+
+    Used by read-side resolvers to support cross-conversation paths uniformly.
+    The runtime convention: a logical path is fully self-describing — its
+    namespace tells the resolver how to interpret it, and an optional
+    `conv_<id>.` segment immediately after the namespace tells the resolver
+    which conversation to resolve it in.
+
+    Examples:
+        "ws:conv_abc.turn_X.conv.working.summary"
+          -> ("ws:", "abc", "ws:turn_X.conv.working.summary")
+        "ar:turn_Y.react.turn.index"
+          -> ("ar:", "", "ar:turn_Y.react.turn.index")
+        "sources_pool[1,2]"
+          -> ("", "", "sources_pool[1,2]")
+    """
+    raw = str(path or "").strip()
+    if not raw:
+        return "", "", raw
+    scheme_end = raw.find(":")
+    if scheme_end <= 0:
+        return "", "", raw
+    ns = raw[: scheme_end + 1]
+    # Allow lower-case ASCII namespaces only — guard against accidental matches
+    # on things like "https://" or "C:\path".
+    ns_letters = ns[:-1]
+    if not ns_letters.isalpha() or not ns_letters.islower():
+        return "", "", raw
+    body = raw[scheme_end + 1 :]
+    if not body.startswith(ARTIFACT_CONVERSATION_PREFIX):
+        return ns, "", raw
+    segment, sep, rest = body.partition(".")
+    if not sep or not rest:
+        return ns, "", raw
+    conv_id = segment[len(ARTIFACT_CONVERSATION_PREFIX) :].strip()
+    if not conv_id:
+        return ns, "", raw
+    return ns, conv_id, f"{ns}{rest}"
+
+
 def _split_physical_conversation_prefix(raw_value: str) -> tuple[str, str]:
     raw = str(raw_value or "").strip().lstrip("/")
     if not raw.startswith(ARTIFACT_CONVERSATION_PREFIX):

@@ -447,8 +447,9 @@ it is the right tool when the agent knows *where* a turn was (second turn /
 turns from March / chronological overview) and does not need topical matching.
 
 When `query` is passed to a catalog request it is reported back as ignored in
-the warnings, with a hint that omitting `mode` would have let semantic search
-narrow inside the window.
+the warnings, with a hint that omitting the catalog signals (no `ordinal`,
+no bounds without `query`) would have let hybrid search narrow inside the
+window instead.
 
 ## Per-Hit Telemetry
 
