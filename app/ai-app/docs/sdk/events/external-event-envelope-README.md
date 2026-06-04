@@ -337,6 +337,14 @@ storage and be referenced by a pullable URI inside the event body:
 If ReAct needs the bytes, it pulls `file_uri`. The event payload should not
 invent a second artifact-ref channel.
 
+An upload event does not automatically expose file text in the timeline. The
+event can produce a metadata-only block or an artifact row that points to the
+file. That is enough for ReAct to discover the logical artifact/ref and decide
+whether to call `react.pull` or `react.read`. If the event source wants a
+bounded text preview to appear immediately, its block-production policy must
+provide explicit `text_preview` or inline text and mark the produced artifact
+text block as an already-rendered `text_file_preview.v1` projection.
+
 ## Text Selection Context Event
 
 When the user selects text or a canvas area and asks for assistance, send an
@@ -394,7 +402,8 @@ policies:
 - `compaction_projection` preserves the event path, hosted URI, and summary
   instead of carrying large payload bodies into compaction.
 
-The SDK should provide default snapshot policies so bundles can start with the
-common behavior: latest snapshot block for the current story appears in
-ANNOUNCE, while the durable snapshot block stays hidden in the ordinary
-timeline render.
+The SDK provides structural defaults for snapshot/canvas/event block
+production and compact render projection. Bundle-specific policies should add
+the richer behavior: latest snapshot or canvas state appears in ANNOUNCE with a
+domain-specific projection, while durable timeline blocks retain refs and
+causality instead of large mutable bodies.

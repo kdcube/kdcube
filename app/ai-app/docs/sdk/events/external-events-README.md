@@ -147,6 +147,15 @@ sequence of JSON canvas revisions. ReAct updates canvas through a bundle
 tool/API that validates and writes the canvas, then emits a new `event.canvas`
 occurrence; it does not patch `event.snapshot`.
 
+File refs carried by events are also just refs unless a source policy chooses
+to project them. A block-production policy may preserve hosted artifact rows or
+declared file rows as timeline metadata without embedding file text. That is a
+valid ReAct integration: the rendered timeline gives the model the logical
+artifact path, and the model can call `react.read(paths=["fi:..."])` when it
+needs the content. Automatic `[TEXT FILE PREVIEW]` blocks are not implied by
+`hosted_artifacts`; producers such as exec must explicitly provide
+`text_preview` when they want source-owned bounded preview text.
+
 ## Event Source Defaults
 
 The server-side event source declaration can describe authoring defaults for a
@@ -290,10 +299,10 @@ occurrence:
 
 ```json
 {
-  "routing": {
-    "reactive": true,
-    "iteration_credit": 2
-  }
+  "type": "event.external",
+  "event_source_id": "task_tracker.canvas.assistance.requested",
+  "reactive": true,
+  "iteration_credit": 2
 }
 ```
 

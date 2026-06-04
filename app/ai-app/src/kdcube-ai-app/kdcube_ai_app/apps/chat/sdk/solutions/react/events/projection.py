@@ -7,6 +7,9 @@ from collections.abc import Callable, Mapping, MutableMapping
 from typing import Any
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.events.common import block_event_source_id
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events.policies.rendering_common import (
+    apply_structural_event_render_defaults,
+)
 
 
 TIMELINE_SEGMENT_META_KEY = "_react_timeline_segment"
@@ -98,6 +101,15 @@ def apply_event_source_transformers(
             event_sources.apply_react_phase_policies(react_phase, event_source_id, timeline_blocks, **context)
         except Exception:
             continue
+    if react_phase in {"timeline_projection", "compaction_projection"}:
+        structural_context = dict(context)
+        structural_context.pop("react_phase", None)
+        structural_context["call_meta"] = call_meta
+        apply_structural_event_render_defaults(
+            timeline_blocks,
+            react_phase=react_phase,
+            **structural_context,
+        )
     return timeline_blocks
 
 

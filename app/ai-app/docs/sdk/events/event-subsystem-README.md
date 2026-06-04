@@ -57,6 +57,13 @@ The tool still executes through the normal tool subsystem. Event-source metadata
 only tells downstream consumers how to validate, produce, project, announce, or
 compact the occurrence.
 
+Event-source policy bindings are the integration contract. For ReAct, a source
+can declare policies that find result surfaces, convert them to timeline
+blocks, project those blocks for model-visible rendering, append ANNOUNCE tail
+material, or prepare compaction views. The shared SDK events subsystem only
+discovers and names those policies; it does not itself render timeline text or
+generate file previews.
+
 Authored UI/domain events use the same source/occurrence model. Their accepted
 transport envelope is documented in
 [External Event Envelope](external-event-envelope-README.md). In that envelope,
@@ -254,6 +261,42 @@ namespace artifact URIs such as `ext:...` explicit on the timeline while giving
 agents a standard way to materialize them when they need the actual file. The
 pull result is the contract consumed by the agent: it includes the source ref
 and the resolved/rehosted `logical_path` / `physical_path` rows to use next.
+
+## File Rows And Preview Text
+
+For ReAct, file-producing event sources usually integrate by declaring
+block-production policies that produce file rows:
+
+- `artifact_rows`
+- `declared_file_items`
+- `hosted_artifacts`
+
+Those rows let the shared ReAct artifact builders preserve logical paths,
+hosted refs, physical paths, MIME, size, and other artifact metadata. They do
+not automatically imply that the file body is copied into model-visible text.
+
+A source should provide `text_preview` only when it already has the bytes and
+can create a bounded, source-owned preview during block production. Exec does
+this for text files produced in the isolated runtime. Other sources can stay
+metadata-only; ReAct can later call `react.read(paths=["fi:..."])` on the
+visible logical artifact path when exact content is needed.
+
+If a source emits a pre-rendered file preview block, the block should carry:
+
+```json
+{
+  "meta": {
+    "projection": {
+      "phase": "block_production",
+      "format": "text_file_preview.v1",
+      "already_rendered": true
+    }
+  }
+}
+```
+
+That marker tells ReAct timeline rendering not to wrap or line-number the same
+preview a second time.
 
 ## Boundary
 

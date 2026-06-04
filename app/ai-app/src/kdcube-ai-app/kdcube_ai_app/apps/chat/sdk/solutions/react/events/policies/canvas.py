@@ -11,6 +11,11 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.events.policies import (
     _default_event_block,
     _normalize_event_payload_target,
     block_production_policy,
+    compaction_event_policy,
+    timeline_projection_policy,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events.policies.rendering_common import (
+    project_event_blocks_as_text,
 )
 
 
@@ -35,3 +40,22 @@ def canvas_event_default_block_production_policy(
     _default_event_block(target)
     target["blocks_produced"] = True
     return target
+
+
+@compaction_event_policy(event_policy_id="react.compaction_projection.canvas_default")
+@timeline_projection_policy(event_policy_id="react.timeline_projection.canvas_default")
+def canvas_event_default_render_policy(
+    timeline: list[MutableMapping[str, Any]],
+    **context: Any,
+) -> list[MutableMapping[str, Any]]:
+    """Render canvas event JSON as a compact collaborative-board fact."""
+    return project_event_blocks_as_text(
+        timeline,
+        block_types={"event.canvas"},
+        label="[CANVAS EVENT]",
+        semantic="collaborative editable board event; current board projection belongs in ANNOUNCE",
+        policy_id=str(context.get("react_phase") or "react.timeline_projection.canvas_default"),
+        include_ret_preview=False,
+        source=context.get("source"),
+        call_meta=context.get("call_meta"),
+    )

@@ -6,7 +6,13 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+from types import ModuleType
 
+import pytest
+
+from kdcube_ai_app.apps.chat.sdk.events import event_source_declaration
+from kdcube_ai_app.apps.chat.sdk.events.subsystem import EventSourceSubsystem
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events.policies import announce_event_policy
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.timeline import Timeline
 from kdcube_ai_app.apps.chat.sdk.solutions.react.proto import RuntimeCtx
 from kdcube_ai_app.apps.chat.sdk.solutions.react.round import ReactRound
@@ -18,7 +24,170 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.plan import (
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
+
+
+def _module(name: str, **attrs):
+    mod = ModuleType(name)
+    for key, value in attrs.items():
+        setattr(mod, key, value)
+    return mod
+
+
+@pytest.mark.asyncio
+async def test_event_timeline_projection_renders_json_without_mutating_storage():
+    def list_event_sources():
+        return [
+            event_source_declaration(
+                event_source_id="bundle.snapshot",
+                policies=[
+                    {
+                        "react_phase": "timeline_projection",
+                        "event_policy_id": "react.timeline_projection.snapshot_default",
+                    }
+                ],
+            )
+        ]
+
+    event_sources = EventSourceSubsystem(modules=[{"mod": _module("snapshot_events", list_event_sources=list_event_sources)}])
+    ctx = RuntimeCtx(
+        turn_id="turn_cur",
+        started_at="2026-02-09T00:00:00Z",
+        event_sources=event_sources,
+        event_source_pipeline_enabled=True,
+    )
+    tl = Timeline(runtime=ctx)
+    raw_event = {
+        "event_id": "ev_1",
+        "event_source_id": "bundle.snapshot",
+        "event_type": "event.snapshot",
+        "logical_path": "ev:turn_cur.events/ev_1",
+        "story_id": "issue:BUG-1",
+        "reactive": False,
+        "status": "success",
+        "ret": {
+            "title": "Issue draft snapshot",
+            "snapshot_ref": "ext:task-tracker/snapshots/BUG-1/latest",
+            "fields": {"title": "Browser crash"},
+        },
+    }
+    tl.blocks.append(
+        tl._block(
+            type="event.snapshot",
+            author="user",
+            turn_id="turn_cur",
+            ts="2026-02-09T00:00:00Z",
+            path="ev:turn_cur.events/ev_1",
+            mime="application/json",
+            text=json.dumps(raw_event, indent=2),
+            meta={
+                "event_source_id": "bundle.snapshot",
+                "event_id": "ev_1",
+                "event_type": "event.snapshot",
+            },
+        )
+    )
+
+    rendered = await tl.render(cache_last=False, include_sources=False, include_announce=False)
+    text = "\n".join(str(block.get("text") or "") for block in rendered if isinstance(block, dict))
+
+    assert "[SNAPSHOT EVENT]" in text
+    assert "event_source_id: bundle.snapshot" in text
+    assert "story_id: issue:BUG-1" in text
+    assert "snapshot_ref: ext:task-tracker/snapshots/BUG-1/latest" in text
+    assert '"fields"' not in text
+    assert tl.blocks[0]["mime"] == "application/json"
+    assert json.loads(tl.blocks[0]["text"]) == raw_event
+    assert "event_render_policy" not in (tl.blocks[0].get("meta") or {})
+
+
+@pytest.mark.asyncio
+async def test_announce_production_runs_after_cache_markers_and_stays_uncached():
+    @announce_event_policy(event_policy_id="bundle.announce.canvas")
+    def announce_canvas(target, *, timeline_blocks, source, **_ctx):
+        latest = [
+            block
+            for block in timeline_blocks
+            if (block.get("meta") or {}).get("event_source_id") == source.event_source_id
+        ][-1]
+        target.append({
+            "type": "announce.canvas",
+            "text": f"ANNOUNCE canvas ready: {latest.get('path')}",
+            "meta": {"event_source_id": source.event_source_id},
+        })
+        return target
+
+    def list_event_sources():
+        return [
+            event_source_declaration(
+                event_source_id="bundle.canvas",
+                policies=[
+                    {
+                        "react_phase": "timeline_projection",
+                        "event_policy_id": "react.timeline_projection.canvas_default",
+                    },
+                    {
+                        "react_phase": "announce_production",
+                        "event_policy_id": "bundle.announce.canvas",
+                    },
+                ],
+            )
+        ]
+
+    event_sources = EventSourceSubsystem(modules=[{
+        "mod": _module(
+            "canvas_events",
+            list_event_sources=list_event_sources,
+            announce_canvas=announce_canvas,
+        )
+    }])
+    ctx = RuntimeCtx(
+        turn_id="turn_cur",
+        started_at="2026-02-09T00:00:00Z",
+        event_sources=event_sources,
+        event_source_pipeline_enabled=True,
+    )
+    tl = Timeline(runtime=ctx)
+    tl.blocks.extend([
+        tl._block(type="turn.header", author="system", turn_id="turn_cur", ts=ctx.started_at, text=""),
+        tl._block(
+            type="event.canvas",
+            author="user",
+            turn_id="turn_cur",
+            ts=ctx.started_at,
+            path="ev:turn_cur.events/ev_canvas",
+            mime="application/json",
+            text=json.dumps({
+                "event_id": "ev_canvas",
+                "event_source_id": "bundle.canvas",
+                "event_type": "event.canvas",
+                "logical_path": "ev:turn_cur.events/ev_canvas",
+                "status": "success",
+                "ret": {"canvas_id": "canvas:user:main", "revision": 3},
+            }),
+            meta={
+                "event_source_id": "bundle.canvas",
+                "event_id": "ev_canvas",
+                "event_type": "event.canvas",
+            },
+        ),
+    ])
+
+    rendered = await tl.render(cache_last=True, include_sources=False, include_announce=True)
+    text_blocks = [block for block in rendered if isinstance(block, dict) and block.get("type") == "text"]
+    all_text = "\n".join(str(block.get("text") or "") for block in text_blocks)
+    announce_blocks = [block for block in text_blocks if "ANNOUNCE canvas ready" in str(block.get("text") or "")]
+
+    assert "[CANVAS EVENT]" in all_text
+    assert "event_source_id: bundle.canvas" in all_text
+    assert "ANNOUNCE canvas ready: ev:turn_cur.events/ev_canvas" in all_text
+    assert announce_blocks and not announce_blocks[0].get("cache")
+    assert not any((block.get("meta") or {}).get("event_render_policy") for block in tl.blocks)
 
 
 def test_bind_params_normalizes_visible_physical_artifact_ref_to_logical_ref():
@@ -576,6 +745,78 @@ def test_small_text_artifact_is_rendered_with_line_numbers():
     assert "     1\talpha" in joined
     assert "     2\tbeta" in joined
     assert "[ARTIFACT PREVIEW TRUNCATED]" not in joined
+
+
+def test_preformatted_text_file_preview_is_not_line_numbered_twice():
+    ctx = RuntimeCtx(
+        turn_id="turn_exec_preview",
+        started_at="2026-05-08T00:00:00Z",
+        tool_result_preview_max_text_symbols=1000,
+    )
+    tl = Timeline(runtime=ctx)
+    preview_text = "\n".join([
+        "[TEXT FILE PREVIEW]",
+        "path: turn_exec_preview/files/demo/a.py",
+        "lines: [1-2]/2",
+        "line_count: 2",
+        "text_symbols: 21",
+        "visible_text_symbols: 21",
+        "preview_cap_text_symbols: 8000",
+        "line_numbers: lines",
+        "",
+        "     1\talpha = 1",
+        "     2\tbeta = 2",
+    ])
+
+    tl.blocks.extend([
+        tl._block(type="turn.header", author="system", turn_id=ctx.turn_id, ts=ctx.started_at, text=""),
+        tl._block(
+            type="react.tool.call",
+            author="agent",
+            turn_id=ctx.turn_id,
+            ts=ctx.started_at,
+            mime="application/json",
+            path="tc:turn_exec_preview.tc_exec.call",
+            text=json.dumps({
+                "tool_id": "exec_tools.execute_code_python",
+                "tool_call_id": "tc_exec",
+                "params": {"prog_name": "write_file"},
+            }),
+        ),
+        tl._block(
+            type="react.tool.result",
+            author="agent",
+            turn_id=ctx.turn_id,
+            ts=ctx.started_at,
+            mime="text/plain",
+            path="fi:turn_exec_preview.files/demo/a.py",
+            text=preview_text,
+            meta={
+                "tool_call_id": "tc_exec",
+                "text_symbols": 21,
+                "size_bytes": 21,
+                "line_count": 2,
+                "physical_path": "turn_exec_preview/files/demo/a.py",
+                "projection": {
+                    "phase": "block_production",
+                    "producer": "exec_tools.execute_code_python",
+                    "format": "text_file_preview.v1",
+                    "already_rendered": True,
+                },
+            },
+        ),
+    ])
+
+    rendered = _run(tl.render(cache_last=True))
+    joined = "\n".join(b.get("text", "") for b in rendered if b.get("type") == "text")
+
+    assert "logical_path: fi:turn_exec_preview.files/demo/a.py" in joined
+    assert "[TEXT FILE PREVIEW]" in joined
+    assert "path: turn_exec_preview/files/demo/a.py" in joined
+    assert "     1\talpha = 1" in joined
+    assert "     2\tbeta = 2" in joined
+    assert "     1\t[TEXT FILE PREVIEW]" not in joined
+    assert "content:\n     1\t[TEXT FILE PREVIEW]" not in joined
 
 
 def test_large_internal_note_and_code_are_rendered_as_bounded_previews():

@@ -193,6 +193,14 @@ ReAct timeline" are separate decisions. The bus preserves order and gives the
 bundle a callback point. The block-production policy decides whether the event
 also becomes model-visible or recoverable ReAct timeline material.
 
+When a policy does share file-related material with ReAct, it may share only
+metadata and refs. File rows such as `artifact_rows`, `declared_file_items`, or
+`hosted_artifacts` preserve logical paths and hosted refs; they do not require
+the event source to inline the file body. ReAct can use the visible `fi:` ref
+with `react.read` when it needs text content, or `react.pull` when a custom
+namespace ref such as `ext:` must be rehosted first. Immediate bounded previews
+are source-owned and opt-in through explicit `text_preview`.
+
 ## Payloads
 
 `ExternalEventPayload` is the top-level ingress-to-processor event envelope. It

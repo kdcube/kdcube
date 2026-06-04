@@ -83,10 +83,13 @@ def block_event_source_id(
     explicit = str(block.get("event_source_id") or "").strip()
     if explicit:
         return explicit
+    meta = block.get("meta") if isinstance(block.get("meta"), Mapping) else {}
+    explicit = str(meta.get("event_source_id") or "").strip()
+    if explicit:
+        return explicit
     tool_id = str(block.get("tool_id") or "").strip()
     if tool_id:
         return tool_id
-    meta = block.get("meta") if isinstance(block.get("meta"), Mapping) else {}
     tool_id = str(meta.get("tool_id") or "").strip()
     if tool_id:
         return tool_id
@@ -110,6 +113,9 @@ def block_event_id(block: Mapping[str, Any] | None) -> str:
     if explicit:
         return explicit
     meta = block.get("meta") if isinstance(block.get("meta"), Mapping) else {}
+    explicit = str(meta.get("event_id") or "").strip()
+    if explicit:
+        return explicit
     return str(block.get("call_id") or meta.get("tool_call_id") or "").strip()
 
 

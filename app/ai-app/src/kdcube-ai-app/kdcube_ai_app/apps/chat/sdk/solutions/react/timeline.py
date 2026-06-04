@@ -55,6 +55,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.events.projection import (
     apply_event_source_transformers,
     clear_timeline_segment_marks,
     patch_timeline_segment_marks,
+    produce_event_source_announce_blocks,
 )
 from kdcube_ai_app.infra.service_hub.multimodality import (
     MODALITY_DOC_MIME,
@@ -1583,6 +1584,19 @@ class Timeline:
             return "old"
         return ""
 
+    def _clone_blocks_for_policy_view(self, blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Return a shallow policy/render view that does not mutate timeline storage."""
+        out: List[Dict[str, Any]] = []
+        for block in blocks or []:
+            if not isinstance(block, dict):
+                continue
+            cloned = dict(block)
+            meta = block.get("meta")
+            if isinstance(meta, dict):
+                cloned["meta"] = dict(meta)
+            out.append(cloned)
+        return out
+
     def _apply_event_source_timeline_projection(
         self,
         blocks: List[Dict[str, Any]],
@@ -1590,16 +1604,18 @@ class Timeline:
         timeline_blocks: Optional[List[Dict[str, Any]]] = None,
         **context: Any,
     ) -> List[Dict[str, Any]]:
+        blocks = self._clone_blocks_for_policy_view(blocks)
         if not self._event_source_pipeline_enabled() or not blocks:
             return blocks
         try:
+            full_timeline_blocks = self._clone_blocks_for_policy_view(timeline_blocks or self._collect_blocks())
             patch_timeline_segment_marks(blocks, timeline_segment_fn=self._timeline_segment_for_render)
             apply_event_source_transformers(
                 event_sources=self._event_sources(),
                 react_phase="timeline_projection",
                 timeline_blocks=blocks,
                 current_turn_id=str(getattr(self.runtime, "turn_id", "") or ""),
-                full_timeline_blocks=timeline_blocks or self._collect_blocks(),
+                full_timeline_blocks=full_timeline_blocks,
                 **context,
             )
             return blocks
@@ -1619,16 +1635,18 @@ class Timeline:
         timeline_blocks: Optional[List[Dict[str, Any]]] = None,
         **context: Any,
     ) -> List[Dict[str, Any]]:
+        blocks = self._clone_blocks_for_policy_view(blocks)
         if not self._event_source_pipeline_enabled() or not blocks:
             return blocks
         try:
+            full_timeline_blocks = self._clone_blocks_for_policy_view(timeline_blocks or self._collect_blocks())
             patch_timeline_segment_marks(blocks, timeline_segment_fn=self._timeline_segment_for_render)
             apply_event_source_transformers(
                 event_sources=self._event_sources(),
                 react_phase="compaction_projection",
                 timeline_blocks=blocks,
                 current_turn_id=str(getattr(self.runtime, "turn_id", "") or ""),
-                full_timeline_blocks=timeline_blocks or self._collect_blocks(),
+                full_timeline_blocks=full_timeline_blocks,
                 **context,
             )
             return blocks
@@ -2576,6 +2594,7 @@ class Timeline:
         recovery_lines: Optional[List[str]] = None,
         line_number_visible_text: bool = False,
         display_path: str = "",
+        preformatted_preview: bool = False,
     ) -> str:
         text = raw_text if isinstance(raw_text, str) else str(raw_text or "")
         if (tool_id or "").strip() == "react.read":
@@ -2583,8 +2602,14 @@ class Timeline:
         if (path or "").strip().startswith("so:sources_pool["):
             return text
         cap = self._tool_result_preview_max_text_symbols()
+        is_structured_file_preview = (
+            bool(preformatted_preview)
+            or text.startswith("[TEXT FILE PREVIEW]")
+        )
         if len(text) <= cap:
             if line_number_visible_text:
+                if is_structured_file_preview:
+                    return text
                 total_lines = len(text.splitlines())
                 line_numbers_mode = normalize_line_numbers_mode(
                     getattr(self.runtime, "line_numbers_mode", LINE_NUMBERS_LINES),
@@ -2621,7 +2646,7 @@ class Timeline:
         )
         numbered_preview = (
             line_number_text(preview, line_numbers=line_numbers_mode)
-            if preview and line_numbers_mode != LINE_NUMBERS_DISABLED
+            if preview and not is_structured_file_preview and line_numbers_mode != LINE_NUMBERS_DISABLED
             else preview
         )
         tokens_estimate = max(1, len(text) // 4)
@@ -2643,7 +2668,7 @@ class Timeline:
             f"visible_preview_chars: {len(preview)}",
             f"preview_cap_text_symbols: {cap}",
             f"preview_lines: {format_visible_line_window(line_window)}",
-            f"line_numbers: {line_numbers_mode if line_window.get('visible_lines') else LINE_NUMBERS_DISABLED}",
+            f"line_numbers: {line_numbers_mode if line_window.get('visible_lines') and not is_structured_file_preview else LINE_NUMBERS_DISABLED}",
             f"shape_depth: {TOOL_RESULT_PREVIEW_SHAPE_DEPTH}",
         ]
         if line_window.get("partial_line") is not None:
@@ -4230,7 +4255,41 @@ class Timeline:
     def _collect_blocks(self) -> List[Dict[str, Any]]:
         return list(self.blocks or [])
 
-    def _append_tail_blocks(self, *, blocks: List[Dict[str, Any]], include_sources: bool, include_announce: bool) -> List[Dict[str, Any]]:
+    def _produce_dynamic_announce_blocks(
+        self,
+        *,
+        timeline_blocks: Optional[List[Dict[str, Any]]] = None,
+        render_blocks: Optional[List[Dict[str, Any]]] = None,
+        **context: Any,
+    ) -> List[Dict[str, Any]]:
+        if not self._event_source_pipeline_enabled():
+            return []
+        source_blocks = self._clone_blocks_for_policy_view(timeline_blocks or self._collect_blocks())
+        if not source_blocks:
+            return []
+        try:
+            produced = produce_event_source_announce_blocks(
+                event_sources=self._event_sources(),
+                timeline_blocks=source_blocks,
+                current_turn_id=str(getattr(self.runtime, "turn_id", "") or ""),
+                sources_pool=list(self.sources_pool or []),
+                render_blocks=self._clone_blocks_for_policy_view(render_blocks or []),
+                **context,
+            )
+            return [dict(block) for block in (produced or []) if isinstance(block, dict)]
+        except Exception:
+            logger.debug("[react.event_source.announce_production_failed]", exc_info=True)
+            return []
+
+    def _append_tail_blocks(
+        self,
+        *,
+        blocks: List[Dict[str, Any]],
+        include_sources: bool,
+        include_announce: bool,
+        timeline_blocks: Optional[List[Dict[str, Any]]] = None,
+        **context: Any,
+    ) -> List[Dict[str, Any]]:
         if not include_sources and not include_announce:
             return blocks
         tail: List[Dict[str, Any]] = []
@@ -4243,6 +4302,13 @@ class Timeline:
                 tail.append({"text": sources_text})
         if include_announce:
             tail.extend(self.announce_blocks or [])
+            tail.extend(
+                self._produce_dynamic_announce_blocks(
+                    timeline_blocks=timeline_blocks,
+                    render_blocks=blocks,
+                    **context,
+                )
+            )
         return list(blocks or []) + tail
 
 
@@ -5184,12 +5250,19 @@ class Timeline:
             rendered_tokens: Optional[int] = None
             trigger_visible_block_count: Optional[int] = None
             try:
-                visible_probe = self._slice_after_compaction_summary(blocks)
-                visible_probe = self._apply_hidden_replacements(visible_probe)
+                visible_probe = self._prepare_visible_blocks_for_render(
+                    blocks,
+                    cache_last=cache_last,
+                    include_sources=include_sources,
+                    include_announce=include_announce,
+                )
                 visible_probe = self._append_tail_blocks(
                     blocks=visible_probe,
                     include_sources=include_sources,
                     include_announce=include_announce,
+                    timeline_blocks=blocks,
+                    cache_last=bool(cache_last),
+                    render_probe=True,
                 )
                 msg_probe = self._blocks_to_message_blocks(visible_probe)
                 sys_probe_tokens = max(1, int(len(system_text or "") / 4))
@@ -5225,17 +5298,12 @@ class Timeline:
                 trigger_tokens_estimate=prompt_rendered_tokens,
                 trigger_visible_block_count=trigger_visible_block_count,
             )
-        visible_blocks = self._slice_after_compaction_summary(blocks)
-        visible_blocks = self._restore_missing_turn_headers_for_render(visible_blocks)
-        visible_blocks = self._apply_hidden_replacements(visible_blocks)
-        visible_blocks = self._apply_event_source_timeline_projection(
-            visible_blocks,
-            timeline_blocks=blocks,
-            cache_last=bool(cache_last),
-            include_sources=bool(include_sources),
-            include_announce=bool(include_announce),
+        visible_blocks = self._prepare_visible_blocks_for_render(
+            blocks,
+            cache_last=cache_last,
+            include_sources=include_sources,
+            include_announce=include_announce,
         )
-        visible_blocks = self._apply_render_directives_before_cache(visible_blocks)
         self._apply_cache_markers(visible_blocks, cache_last=cache_last)
         if debug_cache_trace:
             self._emit_cache_trace(
@@ -5249,6 +5317,8 @@ class Timeline:
             blocks=visible_blocks,
             include_sources=include_sources,
             include_announce=include_announce,
+            timeline_blocks=blocks,
+            cache_last=bool(cache_last),
         )
         msg_blocks = self._blocks_to_message_blocks(visible_blocks)
         if getattr(self.runtime, "debug_timeline", False):
@@ -5416,11 +5486,36 @@ class Timeline:
         return "\n".join(lines).rstrip()
 
     def render_base(self, *, cache_last: bool = False) -> List[Dict[str, Any]]:
-        blocks = self._collect_blocks()
-        blocks = self._apply_hidden_replacements(blocks)
-        blocks = self._apply_render_directives_before_cache(blocks)
+        source_blocks = self._collect_blocks()
+        blocks = self._prepare_visible_blocks_for_render(
+            source_blocks,
+            cache_last=cache_last,
+            include_sources=False,
+            include_announce=False,
+        )
         self._apply_cache_markers(blocks, cache_last=cache_last)
         return blocks
+
+    def _prepare_visible_blocks_for_render(
+        self,
+        blocks: List[Dict[str, Any]],
+        *,
+        cache_last: bool,
+        include_sources: bool,
+        include_announce: bool,
+    ) -> List[Dict[str, Any]]:
+        visible_blocks = self._slice_after_compaction_summary(blocks)
+        visible_blocks = self._restore_missing_turn_headers_for_render(visible_blocks)
+        visible_blocks = self._apply_event_source_timeline_projection(
+            visible_blocks,
+            timeline_blocks=blocks,
+            cache_last=bool(cache_last),
+            include_sources=bool(include_sources),
+            include_announce=bool(include_announce),
+        )
+        visible_blocks = self._apply_hidden_replacements(visible_blocks)
+        visible_blocks = self._apply_render_directives_before_cache(visible_blocks)
+        return visible_blocks
 
     def apply_session_cache_ttl_pruning(self) -> Dict[str, Any]:
         session = getattr(self.runtime, "session", None)
@@ -6693,6 +6788,14 @@ class Timeline:
                         if physical_path:
                             lines.append("physical_path: exists (derive)")
                         header_text = "\n".join([l for l in lines if l]).strip()
+                        projection_meta = meta.get("projection") if isinstance(meta, dict) else None
+                        preformatted_preview = bool(
+                            isinstance(projection_meta, dict)
+                            and projection_meta.get("already_rendered")
+                            and str(projection_meta.get("format") or "").strip() in {
+                                "text_file_preview.v1",
+                            }
+                        )
                         extra_text_blocks.append(self._tool_result_payload_text_for_prompt(
                             raw_text=text,
                             payload=None,
@@ -6702,6 +6805,7 @@ class Timeline:
                             recovery_lines=self._large_text_recovery_lines(path=path, physical_path=physical_path),
                             line_number_visible_text=True,
                             display_path=path,
+                            preformatted_preview=preformatted_preview,
                         ))
                         text = header_text
                     else:

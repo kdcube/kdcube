@@ -101,6 +101,50 @@ not become durable ReAct history.
 | `announce_candidates` | Data for a later ANNOUNCE phase. ANNOUNCE itself is not persisted on the timeline. |
 | `notice_rows` | Notices/errors/warnings to emit through the existing ReAct notice transport. |
 
+## File Artifact Previews
+
+File-producing sources do not automatically get text previews just because they
+produce or host files. Block production distinguishes two responsibilities:
+
+1. Find and register file rows (`artifact_rows`, `declared_file_items`, or
+   `hosted_artifacts`).
+2. Optionally provide bounded model-visible file text (`text_preview`).
+
+The shared artifact builders always preserve artifact metadata such as
+`logical_path`, `physical_path`, `hosted_uri`, `rn`, `key`, `mime`,
+`size_bytes`, and `text_symbols` when present. For image/PDF artifacts they may
+also add a bounded multimodal block according to runtime caps. For text file
+content, the builder only emits a visible preview when the producer already
+provided `text_preview` or explicit inline `text`.
+
+Exec is the current first-party source that provides `text_preview`: the exec
+runtime has the produced bytes locally, reads a bounded window, and formats it
+as `[TEXT FILE PREVIEW]` during block production. Rendering tools, hosted-file
+tools, and composite event sources may be metadata-only unless they explicitly
+provide a preview. That is valid. ReAct can inspect the file later with
+`react.read(paths=["fi:..."])` using the visible logical artifact path.
+
+If a source does provide a pre-rendered preview, it should mark the produced
+artifact text block:
+
+```json
+{
+  "meta": {
+    "projection": {
+      "phase": "block_production",
+      "producer": "my_tool.produce_file",
+      "format": "text_file_preview.v1",
+      "already_rendered": true
+    }
+  }
+}
+```
+
+The timeline renderer then treats the preview as already projected and does not
+wrap or number it a second time. Without that marker, visible artifact text is
+treated as raw text and may be rendered with the standard line window,
+`line_numbers`, and `content:` wrapper.
+
 ## Implemented Policy Packs
 
 | Policy pack | Main policy IDs | Use |
@@ -202,7 +246,7 @@ making result production configurable by event-source policy.
 
 For authored external events, the default single event-block production path is
 implemented for unregistered sources, snapshots, canvas state, prompt, followup,
-steer, and attachment events.
-The async artifact-hosting consumer is still tool-shaped; event result surfaces
-are preserved durably first, then later phase policies can project or announce
-them.
+steer, and attachment events. Event result surfaces are preserved durably first;
+later timeline, ANNOUNCE, and compaction policies project or announce them.
+Artifact rows from events may stay metadata/ref-only unless the source also
+provides `text_preview` or inline text.

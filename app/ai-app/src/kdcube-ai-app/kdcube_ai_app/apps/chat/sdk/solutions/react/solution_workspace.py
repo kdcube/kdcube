@@ -672,7 +672,7 @@ async def rehost_files_from_timeline(
 
     def _is_preview_text(value: str) -> bool:
         text = str(value or "").lstrip()
-        return text.startswith("[TEXT FILE PREVIEW]") or text.startswith("[BINARY FILE PREVIEW]")
+        return text.startswith("[TEXT FILE PREVIEW]")
 
     def _target_looks_like_preview(target: pathlib.Path) -> bool:
         try:

@@ -555,14 +555,25 @@ async def emit_policy_artifact_blocks(
                     add_block(ctx_browser, bin_block)
 
         visible_text = ""
+        visible_text_projection = None
         if isinstance(value, dict):
             preview_text = value.get("text_preview")
             if not (isinstance(preview_text, str) and preview_text.strip()):
                 preview_text = value.get("text_visible_preview")
             visible_text = preview_text if isinstance(preview_text, str) and preview_text.strip() else value.get("text")
+            if isinstance(preview_text, str) and preview_text.startswith("[TEXT FILE PREVIEW]"):
+                visible_text_projection = {
+                    "phase": "block_production",
+                    "producer": tool_id,
+                    "format": "text_file_preview.v1",
+                    "already_rendered": True,
+                }
         if isinstance(value, dict) and isinstance(visible_text, str) and visible_text.strip():
             mime_out = (value.get("mime") or "").strip() or "text/plain"
             if is_text_mime_type(mime_out):
+                text_meta_extra = dict(meta_extra)
+                if visible_text_projection:
+                    text_meta_extra["projection"] = visible_text_projection
                 add_block(ctx_browser, {
                     "turn": turn_id,
                     "type": "react.tool.result",
@@ -570,7 +581,7 @@ async def emit_policy_artifact_blocks(
                     "mime": mime_out,
                     "path": artifact_path,
                     "text": visible_text,
-                    "meta": meta_extra,
+                    "meta": text_meta_extra,
                 })
         elif visibility == "external" and meta_extra and artifact_path:
             add_block(ctx_browser, {

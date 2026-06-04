@@ -240,15 +240,34 @@ tool-specific policies use their tool namespace, for example
 |---|---|---|
 | `tool_call_validation` | One tool-call pre-execution target with `base_params`, mutable `final_params`, state updates, notices, and stop/retry markers. | Implemented for exec and rendering input preparation. |
 | `block_production` | One result-production accumulator for `{ok,error,ret}`, result items, artifact rows, source rows, snapshot refs, announce candidates, and notices. | Implemented for external SDK tools and structured custom tools. |
-| `timeline_projection` | Mutable timeline blocks before visible render and cache marker assignment. | Phase seam exists; default identity/hide-by-segment policies exist. |
-| `announce_production` | Mutable non-durable ANNOUNCE tail material, with access to the full timeline. | Policy type exists; full materialization path is pending. |
-| `compaction_projection` | Mutable blocks selected for compaction/summarization. | Phase seam exists; preservation logic is still partly hardcoded. |
+| `timeline_projection` | Phase-local mutable timeline view before visible render and cache marker assignment. | Implemented in render; default identity, hide-by-segment, event, snapshot, and canvas render policies exist. |
+| `announce_production` | Mutable non-durable ANNOUNCE tail material, with access to a cloned full timeline context. | Implemented in render tail after cache markers. |
+| `compaction_projection` | Mutable block view selected for compaction/summarization. | Phase seam exists; default event/snapshot/canvas render compaction exists, while some preservation logic is still partly hardcoded. |
+
+## File-Producing Sources
+
+File production is policy-addressable in the block-production phase, but file
+preview generation is not implicit. A source can register file rows through
+`artifact_rows`, `declared_file_items`, or `hosted_artifacts`; the shared
+artifact builder will preserve the artifact metadata and make the logical
+artifact path visible. That is enough for ReAct to recover exact content later
+with `react.read(paths=["fi:..."])`.
+
+Only producers that already have a bounded text preview should provide
+`text_preview`. Exec does this during its own result production because it has
+the generated files locally and can format a safe preview at that moment.
+Rendering tools and hosted-file/event sources may remain metadata-only unless
+they explicitly provide `text_preview` or inline text. If a source provides a
+pre-rendered preview, mark the resulting artifact text block with
+`meta.projection.already_rendered=true` and
+`meta.projection.format="text_file_preview.v1"` so timeline rendering does not
+wrap/line-number the preview again.
 
 ## Built-In Source Families
 
 | Source family | Declarations | Policy pack |
 |---|---|---|
-| ReAct external events | `react.followup`, `react.steer` | Currently identity/stamping only; external-event preservation is still partly hardcoded. |
+| ReAct external events | `react.message`, `react.user_attachment`, `react.followup`, `react.steer`, `react.external_event` | Built-in default block producers for prompt, attachment, followup, steer, and generic authored external events; snapshot/canvas defaults are selected by accepted event `type`; some legacy compaction preservation remains partly hardcoded. |
 | Native ReAct tools | `react.write`, `react.memsearch` | Native handlers produce blocks directly; timeline/compaction policies make them addressable. |
 | Web tools | `web_tools.web_search`, `web_tools.web_fetch` | `exploration_source_policies()` merges source rows into `sources_pool` and creates the ordinary result item. |
 | Browser tools | `browser_tools.open_page`, `click`, `fill`, `scroll`, `status`, `close` | `structured_result_source_policies()` creates JSON/text result items and declared-file rows. |
