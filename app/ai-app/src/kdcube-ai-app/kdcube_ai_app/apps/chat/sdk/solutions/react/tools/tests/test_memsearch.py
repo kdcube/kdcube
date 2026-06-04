@@ -149,7 +149,6 @@ async def test_memsearch_attachment_target_includes_external_followup_attachment
     assert summary["hits"][0]["snippets"] == [{
         "path": "fi:turn_prev.external.followup.attachments/msg_1/brief.txt",
         "role": "attachment",
-        "ts": "2026-04-26T10:00:00Z",
         "text": "Attachment content from followup",
     }]
     result_blocks = [
@@ -234,7 +233,6 @@ async def test_memsearch_summary_target_includes_working_summary_blocks(tmp_path
     assert summary["hits"][0]["snippets"] == [{
         "path": "ws:turn_prev.conv.working.summary.attempt.1",
         "role": "summary",
-        "ts": "2026-05-05T19:37:00Z",
         "text": "Goal: Create ZIP with all Anthropic April 2026 invoice PDFs.\nOutcome: Failed at hosted artifact boundary.",
     }]
 
@@ -307,7 +305,6 @@ async def test_memsearch_notes_target_includes_internal_note_blocks(tmp_path):
     assert summary["hits"][0]["snippets"] == [{
         "path": "fi:turn_prev.outputs/internal_notes/rendering.md",
         "role": "notes",
-        "ts": "2026-05-05T19:37:00Z",
         "text": "[K] fi:turn_prev.outputs/report.html - source for rendered PDF\n[D] Renderer refs point at text source artifacts.",
     }]
 
@@ -378,13 +375,11 @@ async def test_memsearch_ordinal_mode_uses_turn_catalog_without_query(tmp_path):
         {
             "path": "ws:turn_second.conv.working.summary",
             "role": "summary",
-            "ts": "2026-05-03T01:18:30Z",
             "text": "Goal: Find two exciting recent medicine stories. Outcome: Answered with sources.",
         },
         {
             "path": "ar:turn_second.user.prompt",
             "role": "user",
-            "ts": "2026-05-03T01:17:11Z",
             "text": "le'ts then check the 2 most exciting news in medicine for last 2 weeks",
         },
     ]
@@ -513,8 +508,9 @@ async def test_memsearch_semantic_user_scope_is_forwarded(tmp_path):
     assert out["last_tool_result"][0]["conversation_id"] == "conv_2"
     assert out["last_tool_result"][0]["snippets"][0]["conversation_id"] == "conv_2"
     summary = _latest_summary_payload(ctx)
-    # Envelope: conv_id at hit level only; cross-conv encoded in the path itself.
-    assert summary["hits"][0]["conversation_id"] == "conv_2"
+    # Envelope: no conv_id at any level — the path itself self-describes
+    # the conversation via the conv_<id>. segment.
+    assert "conversation_id" not in summary["hits"][0]
     assert "conversation_id" not in summary["hits"][0]["snippets"][0]
     assert summary["hits"][0]["snippets"][0]["path"] == "ws:conv_conv_2.turn_cross.conv.working.summary"
 
@@ -575,7 +571,6 @@ async def test_memsearch_scopes_cross_conversation_fi_refs(tmp_path):
     assert summary["hits"][0]["snippets"] == [{
         "path": "fi:conv_conv_2.turn_cross.snapshots/wizard/current.yaml",
         "role": "notes",
-        "ts": "2026-03-12T10:00:00Z",
         "text": "state: needs_triage",
     }]
     text_blocks = [

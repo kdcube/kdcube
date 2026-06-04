@@ -97,6 +97,13 @@ ALLOWED_ORDERS = frozenset({ORDER_ASC, ORDER_DESC})
 # react.tool.result blocks on the timeline.
 SNIPPET_PREVIEW_CHARS = 500
 
+# Whitelist of hit-level fields surfaced in the JSON result envelope. Anything
+# else on the rich hit (sim/rec/rrf sub-scores, ranks, matched_via_role lists,
+# source_query echoes, ts, best_turn_id, conversation_id, turn_id) is telemetry
+# or redundant with the snippet paths and is omitted from the envelope. The
+# rich struct stays available to runtime callers via state["last_tool_result"].
+_ENVELOPE_HIT_FIELDS = ("score", "turn_index_path", "ordinal", "total_turns")
+
 
 def _as_int(value: Any, default: Optional[int] = None) -> Optional[int]:
     if value is None or value == "":
@@ -521,12 +528,19 @@ async def handle_react_memsearch(*, ctx_browser: Any, state: Dict[str, Any], too
     for hit in search_hits_formatted:
         if not isinstance(hit, dict):
             continue
-        hit_out = {k: v for k, v in hit.items() if k != "snippets"}
-        # All snippets in a hit come from the same turn, hence the same
-        # conversation. The hit-level `conversation_id` already conveys that;
-        # snippet-level conversation_id would be redundant. For cross-conv
-        # hits we encode the conv in the path itself (self-describing) via
-        # _scope_path_for_conversation.
+        # Whitelist only the fields the agent acts on. Everything else (sub-
+        # scores, ranks, matched-via-role aggregates, source-query echoes,
+        # timestamps, conversation_id, turn_id) is telemetry or redundant with
+        # the snippet paths.
+        hit_out: Dict[str, Any] = {}
+        for k in _ENVELOPE_HIT_FIELDS:
+            v = hit.get(k)
+            if v is None or v == "":
+                continue
+            hit_out[k] = v
+        # Snippets all belong to the same turn → same conversation as the hit.
+        # The hit-level conversation is encoded in the snippet paths (cross-conv
+        # via _scope_path_for_conversation), so neither side needs to carry it.
         hit_conv = _as_str(hit.get("conversation_id"))
         snippets_out: List[Dict[str, Any]] = []
         for sn in hit.get("snippets") or []:
@@ -536,7 +550,6 @@ async def handle_react_memsearch(*, ctx_browser: Any, state: Dict[str, Any], too
             if not spath:
                 continue
             srole = (sn.get("role") or "").strip()
-            sts = sn.get("ts") or ""
             display_path = _scope_path_for_conversation(
                 path=spath,
                 source_conversation_id=hit_conv,
@@ -545,8 +558,6 @@ async def handle_react_memsearch(*, ctx_browser: Any, state: Dict[str, Any], too
             sn_out: Dict[str, Any] = {"path": display_path}
             if srole:
                 sn_out["role"] = srole
-            if sts:
-                sn_out["ts"] = sts
             # Inline a trimmed text preview so the envelope is self-sufficient
             # for triage. Full text still lives as separate timeline blocks.
             stext_raw = sn.get("text")

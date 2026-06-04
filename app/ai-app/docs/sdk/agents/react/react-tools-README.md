@@ -295,15 +295,18 @@ Inputs:
 
 The tool infers routing from which fields are set; there is no `mode` knob.
 
-Output per hit:
+Output per hit (the envelope is deliberately minimal — anything not listed is omitted):
 
-- `turn_id`
-- `turn_index_path`, usually `ar:<turn_id>.react.turn.index`
-- `working_summary_path`, usually `ws:<turn_id>.conv.working.summary`
-- `ordinal` and `total_turns` when the hit came from the turn catalog
-- `started_at` / `ended_at` when known
-- `snippets`: compact rows with `role`, `path`, `ts`, optional `conversation_id` for cross-scope hits
-- For hybrid hits: `score` (RRF + recency lift), `sim_score`, `recency_score`, plus telemetry fields `rrf_score`, `sem_rank`, `lex_rank`, `primary_source`
+- `score`: the fused RRF + recency-lift relevance score (for hybrid hits) — use this to rank when there are multiple hits
+- `turn_index_path`: usually `ar:<turn_id>.react.turn.index` — read this when the snippets alone are not enough material to act on
+- `ordinal` and `total_turns`: when the hit came from the turn catalog (ordinal / timeline modes)
+- `snippets`: rows with `path`, `role`, and an inline `text` preview (≤500 chars) so the envelope is self-sufficient for triage
+
+Conversation, turn_id, timestamps, sub-scores, and matched-target metadata are intentionally NOT in the envelope:
+
+- conversation and turn are encoded in the snippet paths themselves (`<ns>:[conv_<id>.]turn_<id>...`); the path is self-describing
+- timestamps don't drive agent decisions; recency is already inside `score`
+- sub-scores (`sim`, `rec`, `rrf_score`, `sem_rank`, `lex_rank`, `primary_source`) are telemetry for offline analysis, not signals the agent acts on
 
 Event-scoped attachment paths use:
 

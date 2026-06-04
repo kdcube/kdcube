@@ -451,26 +451,45 @@ the warnings, with a hint that omitting the catalog signals (no `ordinal`,
 no bounds without `query`) would have let hybrid search narrow inside the
 window instead.
 
-## Per-Hit Telemetry
+## Envelope Shape (What The Agent Sees)
 
-Every hybrid hit returns these fields alongside the snippets:
+The JSON envelope handed to the agent is deliberately minimal — every field
+either gives the agent a way to judge the result, provides material content,
+or supports a strategy correction. Telemetry and redundant metadata are
+dropped:
 
 ```text
-score          final fused score (RRF + recency lift)
-sim_score      semantic similarity from the semantic path, if matched
-recency_score  recency factor used in the lift
-rrf_score      raw RRF sum (no recency)
-sem_rank       1-based rank in the semantic list (omitted if not in that list)
-lex_rank       1-based rank in the lexical list (omitted if not in that list)
-primary_source "sem" or "lex" — which retriever produced the row payload
+top-level:
+  mode      "hybrid" | "ordinal" | "temporal" | "timeline" | "catalog"
+  tokens    total tokens of snippet text returned
+  warnings  list of strategy hints (only when present)
+  hits      [...]
+
+per hit:
+  score             fused RRF + recency score (hybrid hits)
+  turn_index_path   ar:[conv_<id>.]turn_<id>.react.turn.index — fallback handle
+                    when snippets are not enough material
+  ordinal           1-based turn position (catalog modes only)
+  total_turns       size of the catalog window (catalog modes only)
+  snippets          [{ path, role, text }, ...]
+
+per snippet:
+  path   <ns>:[conv_<id>.]turn_<id>...    self-describing, including cross-conv
+  role   "user" | "assistant" | "summary" | "attachment" | "notes"
+  text   trimmed preview (≤500 chars) of the underlying block
 ```
 
-These exist for telemetry. The agent's decisions should be driven by the
-snippets, not by inspecting the scores. The fields are intended for offline
-analysis: if `lex_rank` is consistently small for the desired turn while
-`sem_rank` is large or absent, the anchors on that turn are doing the work; if
-the opposite, semantic embeddings are doing the work; if both are present and
-small, the hybrid is winning over either alone.
+Conversation and turn are encoded in the snippet paths themselves; carrying
+them as separate fields would be redundant. Timestamps, sub-scores
+(`sim_score`, `recency_score`, `rrf_score`), per-side ranks (`sem_rank`,
+`lex_rank`), `primary_source`, `matched_via_role(s)`, and `source_query`
+echoes are all omitted — they're telemetry for offline analysis and don't
+drive agent decisions.
+
+Telemetry that *is* recorded (outside the envelope, for offline tuning of
+RRF `k` and the recency lift constant): per-hit `(sem_rank, lex_rank,
+final_score, recency_factor)` logged at memsearch's call site. The agent
+never sees those.
 
 ## TTL and Boundaries
 
@@ -478,10 +497,10 @@ small, the hybrid is winning over either alone.
   past TTL are not returned and not deleted in the same query; cleanup is a
   separate purge job.
 - `scope="user"` does not cross tenants, projects, or storage backends.
-- `react.memsearch` returns **handles** (`turn_id`, `turn_index_path`,
-  `working_summary_path`, `fi:` / `tc:` / `so:` / `ar:` refs inside snippets).
-  The agent must follow up with `react.read` / `react.pull` to load full
-  artifacts. The tool itself does not load file bytes.
+- `react.memsearch` returns **handles** (snippet `path` values, `turn_index_path`)
+  alongside trimmed text previews. When the previews are not enough, the agent
+  follows up with `react.read` / `react.pull` against the returned paths. The
+  tool itself does not load file bytes for full artifacts.
 - This district is independent of compaction. Compaction shapes the *visible
   timeline* in the current turn; the conversational memory index keeps every
   row until TTL regardless of whether the turn is currently visible.
