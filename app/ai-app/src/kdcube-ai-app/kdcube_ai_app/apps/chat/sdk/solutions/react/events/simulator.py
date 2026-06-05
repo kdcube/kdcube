@@ -256,13 +256,6 @@ async def _produce_event_blocks(
 
 def _debug_text(timeline: Timeline, blocks: list[dict[str, Any]]) -> str:
     del timeline
-
-    def _clip(text: str, limit: int = 4000) -> str:
-        s = str(text or "")
-        if len(s) <= limit:
-            return s
-        return s[:limit] + "..."
-
     lines: list[str] = []
     cache_idx = 0
     for block in blocks or []:
@@ -274,7 +267,7 @@ def _debug_text(timeline: Timeline, blocks: list[dict[str, Any]]) -> str:
             prefix = f"=>[{cache_idx}] "
         block_type = block.get("type") or "text"
         if block_type == "text":
-            lines.append(prefix + _clip(str(block.get("text") or "")))
+            lines.append(prefix + str(block.get("text") or ""))
         else:
             lines.append(prefix + f"<{block_type}>")
     return "\n".join(lines).rstrip()
