@@ -337,6 +337,7 @@ async def test_regular_attachment_only_message_is_enqueued(_patch_ingress_depend
     stored = await source.get_event(result.event_id)
     assert stored is not None
     assert stored.promoted_task_id == result.task_id
+    assert await source.claim_next_promotable(claimant_id="proc-promoter", min_idle_ms=1) is None
     payload = events[0].task_payload
     accepted_events = payload["request"]["external_events"]
     assert accepted_events[0]["type"] == "event.user.attachment"
