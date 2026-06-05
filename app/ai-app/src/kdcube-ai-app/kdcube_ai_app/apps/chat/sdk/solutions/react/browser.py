@@ -765,6 +765,15 @@ class ContextBrowser:
         builtin_user_steer = block_type == "event.user.steer"
         if is_prompt_event or builtin_user_prompt:
             meta["prompt_origin"] = "external_event_lane"
+        block_path = path
+        if builtin_user_prompt:
+            block_path = f"ar:{turn_id}.user.prompt.{event_id}" if turn_id else ""
+        elif builtin_user_followup:
+            block_path = f"ar:{turn_id}.external.followup.{event_id}" if turn_id else ""
+        elif builtin_user_steer:
+            block_path = f"ar:{turn_id}.external.steer.{event_id}" if turn_id else ""
+        elif kind == "external_event" and logical_path:
+            block_path = logical_path
         target = {
             "event": dict(accepted_event or {}),
             "event_source_id": event_source_id,
@@ -775,7 +784,7 @@ class ContextBrowser:
             "story_id": story_id,
             "reactive": reactive,
             "text": text,
-            "path": logical_path if kind == "external_event" and logical_path else path,
+            "path": block_path,
             "turn_id": turn_id,
             "ts": event_ts,
             "mime": "text/markdown",

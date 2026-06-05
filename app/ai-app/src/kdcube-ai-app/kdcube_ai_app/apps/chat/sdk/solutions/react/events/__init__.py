@@ -65,6 +65,17 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.events.policies import (
     unknown_policy_paths,
 )
 
+
+def __getattr__(name: str):
+    if name == "render_external_events_dry_run":
+        from kdcube_ai_app.apps.chat.sdk.solutions.react.events.simulator import (
+            render_external_events_dry_run,
+        )
+
+        return render_external_events_dry_run
+    raise AttributeError(name)
+
+
 __all__ = [
     "DEFAULT_REACT_EVENT_POLICIES",
     "REACT_FOLLOWUP_EVENT_SOURCE_ID",
@@ -105,6 +116,7 @@ __all__ = [
     "react_event_policy",
     "react_event_policy_definition",
     "release_live_external_event_owner",
+    "render_external_events_dry_run",
     "run_live_external_event_listener_loop",
     "stamp_event_identity",
     "stamp_event_identity_many",
