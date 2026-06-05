@@ -2028,7 +2028,7 @@ class MemoryEntrypointMixin:
         labels_list = normalize_terms(labels)
         keywords_list = normalize_terms(keywords)
         normalized_query = str(query or "").strip()
-        query_embedding = await self._memory_embed_one(normalized_query) if normalized_query else None
+        query_embedding = await self._memory_search_embed_or_downgrade(normalized_query)
         search_limit = min(page_limit + 1, 101)
         try:
             min_relevance_score = float(self._memory_widget_config().get("search_min_relevance_score") or 0.58)
@@ -2121,7 +2121,7 @@ class MemoryEntrypointMixin:
         labels_list = normalize_terms(labels)
         keywords_list = normalize_terms(keywords)
         normalized_limit = max(1, min(int(limit or 5000), 5000))
-        query_embedding = await self._memory_embed_one(normalized_query) if normalized_query else None
+        query_embedding = await self._memory_search_embed_or_downgrade(normalized_query)
         store = self._memory_store()
         if _truthy(self._memory_widget_config().get("ensure_schema"), True):
             await store.ensure_schema()
@@ -3288,6 +3288,78 @@ class MemoryEntrypointMixin:
             and getattr(self, "rl", None)
             and getattr(self, "budget_limiter", None)
         )
+
+    def _memory_search_reservation_usd(self) -> float:
+        """Feasibility-gate amount for a memory semantic-search embedding call.
+
+        Cheap by design — memory search uses a verify-only economic_preflight
+        (no reservation, no settle); this only sizes the est used to decide
+        whether the user can afford the embedding before paying for it.
+        """
+        cfg = self._memory_widget_config()
+        try:
+            return float(cfg.get("search_reservation_amount_dollars") or 0.01)
+        except Exception:
+            return 0.01
+
+    def _memory_search_econ_subject(self):
+        """EconomicsSubject for synchronous widget search.
+
+        The role comes from the authenticated session (override wins), so no DB
+        re-resolution is needed (unlike detached reconciler jobs, §4.6).
+        """
+        from kdcube_ai_app.apps.chat.sdk.infra.economics.enforcement import EconomicsSubject
+
+        scope = self._memory_scope()
+        user = getattr(self.comm_context, "user", None)
+        role = self._memory_effective_user_type(
+            str(getattr(user, "user_type", None) or "registered")
+        )
+        return EconomicsSubject(
+            tenant=scope.tenant,
+            project=scope.project,
+            user_id=scope.user_id,
+            user_type=role,
+        )
+
+    async def _memory_search_embed_or_downgrade(self, query: str) -> Optional[Sequence[float]]:
+        """Embed the query for semantic ranking, gated by economics.
+
+        Runs a verify-only economic_preflight (flow="memory.search") before
+        paying for the embedding. On an economics limit (rate/funding), returns
+        None so MemoryStore.search falls back to keyword/BM25 (Postgres FTS):
+        the user still gets results, only semantic ranking is opted out. The
+        guard's nested-detection (active econ scope -> preflight nested) keeps
+        this safe if ever invoked inside an already-accountable flow.
+        """
+        normalized = str(query or "").strip()
+        if not normalized:
+            return None
+        if self._memory_economics_enabled():
+            from kdcube_ai_app.apps.chat.sdk.infra.economics.enforcement import (
+                economic_preflight,
+                EconomicsEstimate,
+                FlowPolicy,
+            )
+            from kdcube_ai_app.apps.chat.sdk.infra.economics.policy import EconomicsLimitException
+
+            subject = self._memory_search_econ_subject()
+            if subject.tenant and subject.project and subject.user_id and subject.user_id != "anonymous":
+                try:
+                    await economic_preflight(
+                        self,
+                        subject=subject,
+                        estimate=EconomicsEstimate(reservation_usd=self._memory_search_reservation_usd()),
+                        flow="memory.search",
+                        policy=FlowPolicy(enforce_concurrency=False, emit_user_events=False),
+                    )
+                except EconomicsLimitException as exc:
+                    logger.info(
+                        "[memory.search] economics limit; degrading to keyword/BM25: user=%s code=%s",
+                        subject.user_id, getattr(exc, "code", "rate_limited"),
+                    )
+                    return None
+        return await self._memory_embed_one(normalized)
 
     def _memory_reconciliation_reservation_usd(self) -> float:
         cfg = self._memory_reconciliation_config()
