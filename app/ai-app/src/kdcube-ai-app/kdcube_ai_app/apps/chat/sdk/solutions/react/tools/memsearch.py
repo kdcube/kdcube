@@ -566,8 +566,13 @@ async def handle_react_memsearch(*, ctx_browser: Any, state: Dict[str, Any], too
                 if stext:
                     sn_out["text"] = _clip(stext, limit=SNIPPET_PREVIEW_CHARS)
             snippets_out.append(sn_out)
-        if snippets_out:
-            hit_out["snippets"] = snippets_out
+        # Drop hits with no snippet content. A hit without snippets is pure
+        # score telemetry attached to nothing — the agent can't act on it and
+        # it dilutes the envelope's signal-to-noise. The rich struct on
+        # state["last_tool_result"] still keeps everything for runtime callers.
+        if not snippets_out:
+            continue
+        hit_out["snippets"] = snippets_out
         summary_hits.append(hit_out)
     summary_payload = {"mode": effective_mode, "hits": summary_hits, "tokens": total_tokens}
     if warnings:

@@ -2130,7 +2130,7 @@ class ConvIndex:
             bundle_id: Optional[str] = None,
             half_life_days: float = 7.0,
             timestamp_filters: Optional[List[Dict[str, Any]]] = None,
-            min_word_similarity: float = 0.3,
+            min_word_similarity: float = 0.2,
     ) -> List[Dict[str, Any]]:
         """
         Trigram-similarity sibling of search_turn_logs_via_content_lexical.
@@ -2140,10 +2140,18 @@ class ConvIndex:
         variants like Vinnytsia / Vinnitsa / Viniitsa, OCR-shaped typos, and
         morphological differences that the lexical side misses entirely.
 
-        Per-row score is the max `word_similarity` of any query token against
-        the anchors_text (weight 1.0) or the body text (weight 0.5), with
-        anchors weighted higher to match the BM25F A>B intuition. Rows scoring
-        below `min_word_similarity` on both fields are excluded.
+        Per-row score is the **average** word_similarity of the query tokens
+        against the anchors_text and the body text, with anchors weighted 1.0
+        and body weighted 0.5 (the same A>B intuition as BM25F). The two
+        per-field averages are combined via GREATEST so a row only needs to
+        match well on one field to surface, but matching well on both is even
+        better. Rows below `min_word_similarity` on both fields are excluded.
+
+        Why AVG, not MAX: with a multi-token query like
+        "commute travel options Vinnitsa dates", MAX rewards a row that matches
+        *one* common token (e.g., 'commute') exactly the same as a row that
+        matches three. AVG correctly distinguishes "this turn really is about
+        Vinnitsa commute" from "this turn happens to mention commute once".
 
         Backed by the pg_trgm `gin (text gin_trgm_ops)` index for filtering;
         the per-token word_similarity computation runs over the survivors.
@@ -2221,10 +2229,10 @@ class ConvIndex:
                 m.role AS matched_role,
                 m.ts AS matched_ts,
                 GREATEST(
-                    COALESCE((SELECT MAX(word_similarity(tok, m.anchors_text))
+                    COALESCE((SELECT AVG(word_similarity(tok, m.anchors_text))
                               FROM unnest($3::text[]) AS tok
                               WHERE m.anchors_text <> ''), 0.0),
-                    COALESCE((SELECT 0.5 * MAX(word_similarity(tok, m.text))
+                    COALESCE((SELECT 0.5 * AVG(word_similarity(tok, m.text))
                               FROM unnest($3::text[]) AS tok
                               WHERE m.text <> ''), 0.0)
                 ) AS sim,

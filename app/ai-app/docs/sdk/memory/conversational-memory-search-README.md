@@ -290,14 +290,19 @@ For each target — three parallel retrievers:
   |  norm.                                       |
   +--------------------------------------------+
   +-- Trigram (fuzzy) -------------------------+
-  |  word_similarity(token, anchors_text) and   |
-  |  word_similarity(token, text) per query     |
-  |  token, weighted 1.0 on anchors / 0.5 on    |
-  |  body. Backed by gin (text gin_trgm_ops).   |
-  |  Catches spelling variants (Vinnitsa <->   |
-  |  Vinnytsia), typos, and morphological       |
-  |  drift that token-equality misses.          |
-  |  Threshold: word_similarity >= 0.3.         |
+  |  AVG(word_similarity(token, anchors_text))  |
+  |  and AVG(word_similarity(token, text)) per  |
+  |  row across the query tokens, weighted 1.0  |
+  |  on anchors / 0.5 on body. Backed by gin    |
+  |  (text gin_trgm_ops). Catches spelling      |
+  |  variants (Vinnitsa <-> Vinnytsia), typos,  |
+  |  and morphological drift. AVG (not MAX)     |
+  |  rewards rows matching multiple query       |
+  |  tokens — critical for multi-token queries  |
+  |  where MAX would tie an unrelated turn      |
+  |  matching one common token with a turn      |
+  |  matching the discriminating one.           |
+  |  Threshold: avg word_similarity >= 0.2.     |
   +--------------------------------------------+
 
 Fusion (per turn_id):
