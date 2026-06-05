@@ -255,7 +255,29 @@ async def _produce_event_blocks(
 
 
 def _debug_text(timeline: Timeline, blocks: list[dict[str, Any]]) -> str:
-    return timeline._format_message_blocks_debug(blocks)  # Reuse the normal react-debug representation.
+    del timeline
+
+    def _clip(text: str, limit: int = 4000) -> str:
+        s = str(text or "")
+        if len(s) <= limit:
+            return s
+        return s[:limit] + "..."
+
+    lines: list[str] = []
+    cache_idx = 0
+    for block in blocks or []:
+        if not isinstance(block, Mapping):
+            continue
+        prefix = "   "
+        if block.get("cache"):
+            cache_idx += 1
+            prefix = f"=>[{cache_idx}] "
+        block_type = block.get("type") or "text"
+        if block_type == "text":
+            lines.append(prefix + _clip(str(block.get("text") or "")))
+        else:
+            lines.append(prefix + f"<{block_type}>")
+    return "\n".join(lines).rstrip()
 
 
 def _join_text(blocks: list[dict[str, Any]]) -> str:
