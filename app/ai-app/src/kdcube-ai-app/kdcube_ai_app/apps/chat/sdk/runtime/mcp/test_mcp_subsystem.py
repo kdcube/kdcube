@@ -35,6 +35,22 @@ def _dummy_factory(server: MCPServerSpec):
     return _DummyAdapter(server)
 
 
+class _MemoryCache:
+    def __init__(self):
+        self.values = {}
+        self.get_calls = 0
+        self.set_calls = 0
+
+    async def get_json(self, key):
+        self.get_calls += 1
+        return self.values.get(key)
+
+    async def set_json(self, key, value, *, ttl_seconds=None):
+        self.set_calls += 1
+        self.values[key] = value
+        return True
+
+
 def test_mcp_services_env_accepts_mcpServers():
     env_json = """
     {
@@ -156,5 +172,82 @@ def test_build_entries_and_execute():
         assert all(e["id"] != "mcp.stack.get_content" for e in entries)
         out = await ss.execute_tool(alias="stack", tool_name="so_search", params={"q": "auth"})
         assert out.get("ok") is True
+
+    asyncio.run(_run())
+
+
+def test_tools_cache_key_includes_auth_fingerprint(monkeypatch):
+    services_cfg = {
+        "mcpServers": {
+            "knowledge": {
+                "transport": "http",
+                "url": "https://mcp.example.com",
+                "auth": {
+                    "type": "header",
+                    "header": "X-Knowledge-MCP-Token",
+                    "secret": "b:mcp.knowledge.token",
+                },
+            }
+        }
+    }
+    ss = MCPToolsSubsystem(
+        bundle_id="b1",
+        mcp_tool_specs=[{"server_id": "knowledge", "alias": "knowledge"}],
+        adapter_factory=_dummy_factory,
+        services_config=services_cfg,
+    )
+    server = ss._server_spec("knowledge")
+    assert server is not None
+
+    tokens = iter(["token-a", "token-b"])
+
+    async def _fake_get_secret(key):
+        assert key == "b:mcp.knowledge.token"
+        return next(tokens)
+
+    monkeypatch.setattr(
+        "kdcube_ai_app.apps.chat.sdk.runtime.mcp.mcp_tools_subsystem.get_secret",
+        _fake_get_secret,
+    )
+
+    async def _run():
+        key_a = await ss._tools_cache_key(server)
+        key_b = await ss._tools_cache_key(server)
+        assert key_a != key_b
+        assert key_a.startswith("knowledge:tools:")
+        assert key_b.startswith("knowledge:tools:")
+        assert "token-a" not in key_a
+        assert "token-b" not in key_b
+
+    asyncio.run(_run())
+
+
+def test_tools_cache_ttl_zero_disables_cache():
+    services_cfg = {
+        "mcpServers": {
+            "docs": {
+                "transport": "http",
+                "url": "https://mcp.example.com",
+                "ttl_seconds": 0,
+            }
+        }
+    }
+    cache = _MemoryCache()
+    ss = MCPToolsSubsystem(
+        bundle_id="b1",
+        mcp_tool_specs=[{"server_id": "docs", "alias": "docs"}],
+        adapter_factory=_dummy_factory,
+        cache=cache,
+        services_config=services_cfg,
+    )
+    ss.cache = cache
+    server = ss._server_spec("docs")
+    assert server is not None
+
+    async def _run():
+        tools = await ss._tools_for_server(server)
+        assert [t.id for t in tools] == ["so_search", "get_content"]
+        assert cache.get_calls == 0
+        assert cache.set_calls == 0
 
     asyncio.run(_run())

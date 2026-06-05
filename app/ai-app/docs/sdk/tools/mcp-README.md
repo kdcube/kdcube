@@ -251,6 +251,11 @@ The caller still needs the correct scheme, host, and port for its deployment.
   - `auth.secret` → `get_secret("dot.path.key")`
   - `auth.env` → env lookup / `get_secret(env_key)` fallback
 - Secrets are not written to Redis cache.
+- MCP tool-list cache keys include the server connection shape and a hash of
+  resolved auth headers. This allows principal-scoped MCP catalogs where
+  `tools/list` legitimately differs by caller token.
+- Set `ttl_seconds: 0` or `ttl: 0` on a server config to disable tool-list
+  caching for that server.
 
 ## Secret resolution: named secrets and `${secret:...}` syntax
 

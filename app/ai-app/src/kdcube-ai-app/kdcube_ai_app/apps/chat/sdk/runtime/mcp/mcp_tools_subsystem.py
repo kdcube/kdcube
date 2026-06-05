@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import logging
 import os
@@ -25,7 +26,7 @@ from kdcube_ai_app.infra.service_hub.cache import (
     ensure_namespaced_cache,
 )
 from kdcube_ai_app.infra.namespaces import REDIS
-from kdcube_ai_app.apps.chat.sdk.config import get_settings, get_plain
+from kdcube_ai_app.apps.chat.sdk.config import get_settings, get_plain, get_secret
 
 logger = logging.getLogger(__name__)
 
@@ -294,8 +295,9 @@ class MCPToolsSubsystem:
         return await self.call_tool(alias=alias, tool_id=tool_name, params=params, trace_id=trace_id)
 
     async def _tools_for_server(self, server: MCPServerSpec) -> List[MCPToolSchema]:
-        cache_key = f"{server.server_id}:tools"
-        cached = await self.cache.get_json(cache_key) if self.cache else None
+        ttl = _ttl_for_server(self._services_cfg.get(server.server_id) or {})
+        cache_key = await self._tools_cache_key(server)
+        cached = await self.cache.get_json(cache_key) if self.cache and ttl > 0 else None
         if cached:
             logger.info("MCP _tools_for_server: server=%s cache hit (%d tools)", server.server_id, len(cached))
             return [MCPToolSchema(**t) for t in cached if isinstance(t, dict)]
@@ -311,19 +313,82 @@ class MCPToolsSubsystem:
         except Exception as e:
             logger.exception("MCP list_tools failed for %s: %s", server.server_id, e)
             return []
-        ttl = _ttl_for_server(self._services_cfg.get(server.server_id) or {})
-        if self.cache:
+        if self.cache and ttl > 0:
             await self.cache.set_json(cache_key, [t.__dict__ for t in tools], ttl_seconds=ttl)
             logger.info("MCP _tools_for_server: server=%s cached %d tools (ttl=%ds)", server.server_id, len(tools), ttl)
+        elif ttl <= 0:
+            logger.info("MCP _tools_for_server: server=%s cache disabled (ttl=%ds)", server.server_id, ttl)
         return tools
+
+    async def _tools_cache_key(self, server: MCPServerSpec) -> str:
+        """
+        Cache tool catalogs by server connection plus auth fingerprint.
+
+        Some MCP servers expose principal-scoped catalogs, so a server id alone
+        is not enough. The raw token must not be stored in Redis keys or logs.
+        """
+        auth_headers = await _resolved_auth_headers_for_cache(server)
+        auth = server.auth_profile if isinstance(server.auth_profile, dict) else {}
+        key_payload = {
+            "server_id": server.server_id,
+            "transport": server.transport,
+            "endpoint": server.endpoint,
+            "command": server.command,
+            "args": server.args,
+            "auth_type": auth.get("type"),
+            "auth_header_names": sorted(auth_headers.keys()),
+            "auth_fingerprint": _json_hash(auth_headers) if auth_headers else "no-auth",
+        }
+        return f"{server.server_id}:tools:{_json_hash(key_payload)}"
 
 
 def _ttl_for_server(cfg: Dict[str, Any]) -> int:
-    ttl = cfg.get("ttl_seconds") or cfg.get("ttl") or 3600
+    ttl = cfg.get("ttl_seconds")
+    if ttl is None:
+        ttl = cfg.get("ttl")
+    if ttl is None:
+        ttl = 3600
     try:
         return int(ttl)
     except Exception:
         return 3600
+
+
+def _json_hash(payload: Any, *, length: int = 24) -> str:
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:length]
+
+
+async def _resolved_auth_headers_for_cache(server: MCPServerSpec) -> Dict[str, str]:
+    auth = server.auth_profile or {}
+    if not isinstance(auth, dict):
+        return {}
+    auth_type = (auth.get("type") or "").strip().lower()
+    if auth_type in {"oauth_gui", "oauth-gui", "interactive"}:
+        return {}
+    env_key = auth.get("env")
+    secret_key = auth.get("secret")
+    header = auth.get("header")
+    token = None
+    if secret_key:
+        try:
+            token = await get_secret(secret_key)
+        except Exception:
+            pass
+    if not token and env_key:
+        try:
+            token = await get_secret(env_key)
+        except Exception:
+            token = os.environ.get(env_key)
+    if not token:
+        return {}
+    if auth_type in {"bearer", "oauth"}:
+        return {"Authorization": f"Bearer {token}"}
+    if auth_type in {"api_key", "apikey", "key"}:
+        return {str(header or "X-API-Key"): str(token)}
+    if auth_type == "header" and header:
+        return {str(header): str(token)}
+    return {}
 
 
 def _params_from_schema(schema: Dict[str, Any]) -> List[Dict[str, Any]]:
