@@ -55,7 +55,7 @@ function newEventId(): string {
   return crypto.randomUUID ? crypto.randomUUID() : `evt_${Date.now()}_${Math.random().toString(16).slice(2)}`
 }
 
-function buildEventSubmission(params: SubmitChatMessageParams, tenant: string, project: string): Record<string, unknown> {
+export function buildEventSubmission(params: SubmitChatMessageParams, tenant: string, project: string): Record<string, unknown> {
   const reactiveEventType = params.reactiveEventType || 'event.user.prompt'
   const events: Record<string, unknown>[] = []
   const text = String(params.text || '').trim()

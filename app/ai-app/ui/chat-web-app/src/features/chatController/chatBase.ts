@@ -141,6 +141,29 @@ export interface ChatMessageSendResponse {
     message: string;
 }
 
+export interface DataBusMessageInput {
+    message_id?: string;
+    subject: string;
+    object_ref?: string;
+    idempotency_key?: string;
+    payload: Record<string, unknown>;
+    client?: Record<string, unknown>;
+    trace?: Record<string, unknown>;
+    created_at?: string;
+}
+
+export interface DataBusPublishRequest {
+    bundle_id: string;
+    messages: DataBusMessageInput[];
+}
+
+export interface DataBusPublishAck {
+    schema?: string;
+    status: "accepted" | "partial" | "rejected" | string;
+    accepted?: Array<Record<string, unknown>>;
+    rejected?: Array<Record<string, unknown>>;
+}
+
 export interface ChatMessage {
     role: "user" | "assistant";
     content: string;
@@ -343,6 +366,12 @@ export abstract class ChatBase {
     // @ts-expect-error because it's an abstract class
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     public async requestConvStatus(conversationId: string) {
+        throw new Error("Method not implemented.");
+    }
+
+    // @ts-expect-error because it's an abstract class
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    public async publishDataBus(request: DataBusPublishRequest): Promise<DataBusPublishAck> {
         throw new Error("Method not implemented.");
     }
 

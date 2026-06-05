@@ -7,6 +7,7 @@
  *                             downloadBlobAsFile, requireScope,
  *                             fetchProfileSessionId
  *   - ./api/sseTransport.ts — openChatStream
+ *   - ./api/socketTransport.ts — optional Socket.IO chat + data-bus transport
  *   - ./api/client.ts       — listBundleConversations, fetchConversationById,
  *                             requestConversationStatus, submitChatMessage,
  *                             downloadResourceByRN, downloadHostedFile
@@ -46,6 +47,15 @@ export type {
 export { downloadBlobAsFile } from './api/transport.ts'
 export { openChatStream } from './api/sseTransport.ts'
 export {
+  openSocketTransport,
+  type DataBusMessageInput,
+  type DataBusPublishAck,
+  type DataBusPublishParams,
+  type OpenSocketTransportOptions,
+  type OpenSocketTransportResult,
+} from './api/socketTransport.ts'
+export {
+  buildEventSubmission,
   deleteConversationById,
   downloadHostedFile,
   downloadResourceByRN,

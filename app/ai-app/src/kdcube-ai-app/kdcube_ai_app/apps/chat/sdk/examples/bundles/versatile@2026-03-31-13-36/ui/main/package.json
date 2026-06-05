@@ -14,7 +14,8 @@
     "react-markdown": "^10.1.0",
     "react-redux": "^9.3.0",
     "remark-breaks": "^4.0.0",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "socket.io-client": "^4.8.1"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.0",

@@ -4,7 +4,7 @@ import {
     ChatCompleteEnvelope,
     ChatDeltaEnvelope,
     ChatErrorEnvelope, ChatMessageSendResponse,
-    ChatOptions,
+    ChatOptions, DataBusPublishAck, DataBusPublishRequest,
     ChatRequest, ChatStartEnvelope,
     ChatStepEnvelope
 } from "./chatBase.ts";
@@ -235,6 +235,14 @@ class SocketIOChat extends ChatBase {
     public override async requestConvStatus(conversationId: string) {
         if (!this._socket.connected) throw new Error("Socket not connected. Call connect() first.");
         this._socket.emit("conv_status.get", {conversation_id: conversationId});
+    }
+
+    public override async publishDataBus(request: DataBusPublishRequest): Promise<DataBusPublishAck> {
+        if (!this._socket.connected) throw new Error("Socket not connected. Call connect() first.");
+        return this._socket.emitWithAck("data_bus.publish", {
+            schema: "kdcube.data_bus.ingress.v1",
+            ...request,
+        });
     }
 
 }
