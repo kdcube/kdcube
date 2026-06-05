@@ -21,6 +21,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
   - ks:docs/sdk/bundle/bundle-transports-README.md
   - ks:docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
+  - ks:docs/service/comm/data-bus-README.md
 ---
 # Bundle Docs Index
 
@@ -88,9 +89,10 @@ Older `docs/sdk/example-bundle` sample docs are no longer part of the bundle pat
 | Choose the SDK entrypoint base class | [bundle-entrypoint-classes-README.md](bundle-entrypoint-classes-README.md) |
 | Runtime surfaces | [bundle-runtime-README.md](bundle-runtime-README.md) |
 | Record and sink selected comm events | [bundle-event-recording-and-sinks-README.md](bundle-event-recording-and-sinks-README.md) |
+| Durable bundle-scoped inbound Data Bus messages | [../../service/comm/data-bus-README.md](../../service/comm/data-bus-README.md), [bundle-client-communication-README.md#data-bus-contract](bundle-client-communication-README.md#data-bus-contract) |
 | Bundle-authored events, event sources, ReAct policies, snapshots, and custom namespace rehosters | [bundle-events-README.md](bundle-events-README.md) |
 | React, tools/skills, MCP, Claude Code, and file-producing tool integration | [bundle-agent-integration-README.md](bundle-agent-integration-README.md) |
-| Decorators, widget/API/public integration, `@on_job` | [bundle-platform-integration-README.md](bundle-platform-integration-README.md) |
+| Decorators, widget/API/public integration, Data Bus handlers, `@on_job` | [bundle-platform-integration-README.md](bundle-platform-integration-README.md) |
 | Inbound/outbound transports and protocols | [bundle-transports-README.md](bundle-transports-README.md) |
 | Bundle props/secrets lifecycle and merge rules | [bundle-properties-and-secrets-lifecycle-README.md](bundle-properties-and-secrets-lifecycle-README.md) |
 | Full props, secrets, raw descriptor reads across all scopes | [../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../configuration/bundle-runtime-configuration-and-secrets-README.md) |

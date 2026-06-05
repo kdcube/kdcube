@@ -1,9 +1,9 @@
 ---
 id: ks:docs/sdk/bundle/bundle-client-communication-README.md
 title: "Bundle Client Communication"
-summary: "Browser-to-bundle communication contract across widget iframes, integrations, REST, SSE, and Socket.IO: auth propagation, headers, cookies, stream and session identifiers, and peer targeting."
-tags: ["sdk", "bundle", "transport", "auth", "headers", "cookies", "sse", "socketio", "rest", "integrations"]
-keywords: ["browser to bundle transport", "widget iframe communication", "integration request headers", "auth token forwarding", "session and stream identifiers", "peer targeting", "sse and socket communication", "bundle client request contract"]
+summary: "Browser-to-bundle communication contract across widget iframes, integrations, REST, SSE, Socket.IO, and Data Bus: auth propagation, headers, cookies, stream and session identifiers, and peer targeting."
+tags: ["sdk", "bundle", "transport", "auth", "headers", "cookies", "sse", "socketio", "rest", "integrations", "data-bus"]
+keywords: ["browser to bundle transport", "widget iframe communication", "integration request headers", "data bus publish", "auth token forwarding", "session and stream identifiers", "peer targeting", "sse and socket communication", "bundle client request contract"]
 see_also:
   - ks:docs/sdk/bundle/bundle-transports-README.md
   - ks:docs/sdk/bundle/bundle-client-ui-README.md
@@ -14,6 +14,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/service/auth/auth-README.md
   - ks:docs/service/comm/README-comm.md
+  - ks:docs/service/comm/data-bus-README.md
 ---
 # Bundle Client Communication
 
@@ -153,12 +154,68 @@ The Socket.IO connection `sid` is the peer stream identifier for direct delivery
 Socket.IO clients send chat requests through the `chat_message` event.
 
 The logical request contract is the same as `POST /sse/chat`.
+The first Socket.IO argument is the event submission object itself, with
+top-level `external_events[]`. Do not send a nested `{ "message": ... }`
+wrapper.
 
 Socket.IO clients should bind all shared server event routes, including `chat_compaction`. Compaction events are progress/status events; they do not complete the turn and should be appended to the same activity timeline or progress card as other in-progress updates.
 
 ---
 
-## 7. Shared Chat Send Contract
+## 7. Data Bus Contract
+
+Use Socket.IO `data_bus.publish` for durable bundle-domain messages that are
+not chat turns, such as canvas patches or issue updates.
+
+Request shape:
+
+```json
+{
+  "schema": "kdcube.data_bus.ingress.v1",
+  "bundle_id": "task-tracker@1-0",
+  "messages": [
+    {
+      "message_id": "dbmsg_01HX",
+      "subject": "task_tracker.canvas.patch",
+      "object_ref": "canvas:main",
+      "idempotency_key": "client-op-01HX",
+      "payload": {
+        "base_revision": 17,
+        "operations": []
+      }
+    }
+  ]
+}
+```
+
+The Socket.IO ack confirms that accepted messages were written to the Data Bus
+Redis Stream. Handler completion is separate and may arrive later as a
+`chat_service` event when the bundle handler uses `ctx.reply.*`.
+
+Bundle handler registration:
+
+```python
+from kdcube_ai_app.apps.chat.sdk.data_bus import data_bus_handler
+
+@data_bus_handler(
+    subject="task_tracker.canvas.patch",
+    partition_by="object_ref",
+    ordering="serial_per_partition",
+    idempotency="required",
+)
+async def handle_canvas_patch(self, ctx, message):
+    ...
+```
+
+Data Bus is separate from `chat_message`, `/sse/chat`, `external_events[]`, and
+ReAct timelines. A bundle that wants a handled domain message to become visible
+to an agent must explicitly bridge it into conversation ingress.
+
+See [Data Bus](../../service/comm/data-bus-README.md).
+
+---
+
+## 8. Shared Chat Send Contract
 
 This is the missing common contract between:
 
@@ -217,6 +274,7 @@ For Socket.IO `chat_message`, the first argument is the event submission:
 
 ```json
 {
+  "conversation_id": "optional-existing-conversation-id",
   "external_events": [
     {
       "type": "event.user.attachment.file",
@@ -229,6 +287,9 @@ For Socket.IO `chat_message`, the first argument is the event submission:
   ]
 }
 ```
+
+This object is passed directly to `chat_message`; it is not wrapped under
+`message`.
 
 Binary attachment buffers are sent as additional event arguments in event order.
 
@@ -283,7 +344,7 @@ Important stream routes after acceptance:
 | `chat_service` | Gateway, queue, and rate-limit events. |
 | `conv_status` | Conversation state snapshot. |
 
-## 8. Integrations and Bundle REST Calls
+## 9. Integrations and Bundle REST Calls
 
 This is the relevant contract for:
 
@@ -514,7 +575,7 @@ Rules:
   result lists through this path
 - debounce project broadcasts when the source changes frequently
 
-## 9. Response Headers Clients Should Use
+## 10. Response Headers Clients Should Use
 
 | Header | Meaning |
 | --- | --- |
@@ -527,7 +588,7 @@ Clients should:
 - keep `X-Session-ID` stable when they intend to reuse the same session
 - honor `Retry-After` when rate-limited or backpressured
 
-## 10. Supported Streaming Payload Patterns
+## 11. Supported Streaming Payload Patterns
 
 The transport is generic, but there are a few payload styles the platform
 already understands and renders consistently.
@@ -660,7 +721,7 @@ See:
 - [bundle-chat-stream-events-README.md](bundle-chat-stream-events-README.md)
 - [README-comm.md](../../service/comm/README-comm.md)
 
-## 11. Typical Browser Patterns
+## 12. Typical Browser Patterns
 
 ### Standard app
 
@@ -690,7 +751,7 @@ See:
 2. requests omit explicit auth headers
 3. server falls back to configured auth cookies
 
-## 12. What To Read Next
+## 13. What To Read Next
 
 - shared chat stream event catalog:
   [bundle-chat-stream-events-README.md](bundle-chat-stream-events-README.md)

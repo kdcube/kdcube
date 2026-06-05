@@ -2,8 +2,8 @@
 id: ks:docs/sdk/bundle/bundle-developer-guide-README.md
 title: "Bundle Developer Guide"
 summary: "High-level entrypoint for bundle authors: what a bundle is, how tenant/project environments work, which runtime surfaces exist, and which docs to follow for authoring, config, testing, and delivery."
-tags: ["sdk", "bundle", "development", "entrypoint", "workflow", "tools", "skills", "configuration", "background-jobs"]
-keywords: ["bundle authoring entrypoint", "what a bundle is", "tenant project environment", "runtime surfaces overview", "configuration model overview", "reference bundle path", "shared sdk widget components", "local authoring loop", "bundle documentation map", "on_job background jobs"]
+tags: ["sdk", "bundle", "development", "entrypoint", "workflow", "tools", "skills", "configuration", "background-jobs", "data-bus"]
+keywords: ["bundle authoring entrypoint", "what a bundle is", "tenant project environment", "runtime surfaces overview", "configuration model overview", "reference bundle path", "shared sdk widget components", "local authoring loop", "bundle documentation map", "data bus handlers", "on_job background jobs"]
 updated_at: 2026-05-22
 see_also:
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
@@ -18,6 +18,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-runtime-README.md
   - ks:docs/sdk/bundle/bundle-delivery-and-update-README.md
   - ks:docs/service/streams/background-jobs-README.md
+  - ks:docs/service/comm/data-bus-README.md
   - ks:docs/service/synch-mechanisms/critical-section-README.md
 ---
 # Bundle Developer Guide
@@ -77,6 +78,14 @@ That helper is available in normal tool execution and in isolated
 supervisor/runtime tool execution after the SDK has prepared the tool context
 with hosting service, tenant/project/user/conversation/turn scope, conversation
 storage, and output directory.
+
+If a widget or service sends durable non-chat domain messages into the bundle,
+read [Data Bus](../../service/comm/data-bus-README.md),
+[bundle-platform-integration-README.md#110-data_bus_handler](bundle-platform-integration-README.md#110-data_bus_handler),
+and [bundle-client-communication-README.md#data-bus-contract](bundle-client-communication-README.md#data-bus-contract).
+Use Data Bus for bundle-owned state mutations that need retry, idempotency, or
+per-object serialization; use chat ingress only for conversation turns and
+authored `external_events[]`.
 
 ## Common Recipe: Choose A Model For One Agent Call
 

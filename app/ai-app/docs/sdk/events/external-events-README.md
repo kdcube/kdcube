@@ -232,6 +232,7 @@ conversation and routes active-turn delivery by turn ownership.
 ```text
 Client/UI
   sends /sse/chat or Socket.IO chat_message
+  with a top-level external_events[] event submission
         |
         v
 Ingress
@@ -265,6 +266,10 @@ ReAct ContextBrowser
   stamps event_source_id/event_id when event-source pipeline is enabled
   contributes blocks to the active turn timeline
 ```
+
+For Socket.IO, the first `chat_message` argument is this event submission
+object directly. Nested `{ "message": ... }` wrappers are not part of the
+protocol.
 
 ## Persistence Boundary
 

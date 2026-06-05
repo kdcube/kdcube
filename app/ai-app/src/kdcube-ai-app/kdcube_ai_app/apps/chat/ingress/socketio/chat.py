@@ -41,6 +41,7 @@ from kdcube_ai_app.apps.chat.ingress.ingress_core import (
     get_conversation_status, build_ws_connect_request_context, upgrade_session_from_tokens,
     build_ws_chat_request_context,
 )
+from kdcube_ai_app.apps.chat.ingress.socketio.data_bus import attach_data_bus_socketio_handlers
 from kdcube_ai_app.apps.chat.sdk.protocol import external_event_attachment_payloads, external_events_text
 from kdcube_ai_app.infra.service_hub.multimodality import MESSAGE_MAX_BYTES
 from kdcube_ai_app.apps.middleware.token_extract import resolve_socket_auth_tokens
@@ -166,6 +167,8 @@ class SocketIOChatHandler:
         @self.sio.on("conv_status.get")
         async def _on_conv_status_subscribe(sid, data):
             return await self._handle_conv_status_subscribe(data, sid)
+
+        attach_data_bus_socketio_handlers(self)
 
     # ---------- Relay (pub/sub -> socket) ----------
 
@@ -378,7 +381,21 @@ class SocketIOChatHandler:
             return {"ok": False, "error": "No data provided"}
 
         data = args[0]
-        message_data = data if isinstance(data, dict) else {}
+        if not isinstance(data, dict):
+            return {
+                "ok": False,
+                "status": 400,
+                "error_type": "invalid_chat_message_payload",
+                "error": 'chat_message payload must be an object with top-level "external_events"',
+            }
+        if "message" in data:
+            return {
+                "ok": False,
+                "status": 400,
+                "error_type": "invalid_chat_message_payload",
+                "error": 'chat_message no longer accepts nested "message"; send top-level external_events[]',
+            }
+        message_data = data
         logger.info(
             "chat_message sid=%s events=%s...",
             sid,

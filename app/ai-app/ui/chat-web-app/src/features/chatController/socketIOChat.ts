@@ -200,7 +200,7 @@ class SocketIOChat extends ChatBase {
                 };
                 if (this._authToken) {
                     authPayload.bearer_token = this._authToken;
-                    authPayload.id_token = this._authToken;
+                    authPayload.id_token = this._idToken;
                 }
                 this._socket.auth = authPayload;
                 this._socket.io.opts.query = {

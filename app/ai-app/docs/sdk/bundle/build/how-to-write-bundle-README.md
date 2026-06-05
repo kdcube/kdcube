@@ -154,6 +154,23 @@ Critical bundle-to-browser event rule:
 - read the concrete client and bundle recipe before implementing this:
   [bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream](../bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream)
 
+Critical Data Bus rule:
+
+- use Socket.IO `data_bus.publish` for durable non-chat domain messages that
+  mutate bundle-owned state
+- register entrypoint handlers with `@data_bus_handler(...)`
+- accepted messages go to bundle-scoped Redis Streams and processor-owned
+  workers; bundles do not start their own Redis consumers
+- use `idempotency="required"` for mutations
+- use `partition_by="object_ref"` and `ordering="serial_per_partition"` for
+  shared objects such as canvases, boards, issues, and documents
+- Data Bus does not write conversation `external_events[]` or timeline entries
+  unless the bundle explicitly bridges a handled message into conversation
+  ingress
+- read [Data Bus](../../../service/comm/data-bus-README.md) and
+  [bundle-client-communication-README.md#data-bus-contract](../bundle-client-communication-README.md#data-bus-contract)
+  before implementing widget-driven domain mutations
+
 Critical bundle event-source rule:
 
 - use authored external events for product moments that should become agent
@@ -264,6 +281,7 @@ Keep in Python:
 - `@api(...)`
 - `@mcp(...)`
 - `@ui_widget(...)`
+- `@data_bus_handler(...)`
 - `@cron(...)`
 - `@on_job`
 - auth and roles
@@ -301,6 +319,7 @@ When a bundle exists in a real environment, its lifecycle is:
    - operations/public API
    - widget-driven operation calls
    - MCP endpoint dispatch
+   - Data Bus handler dispatch
    - cron/scheduled job
    - background job stream / `@on_job`
 6. During execution, the bundle reads:
@@ -339,7 +358,8 @@ Practical hook rule:
 Async rule:
 
 - lifecycle hooks should be `async def`
-- prefer `async def` for `@api`, `@mcp`, `@ui_widget`, and `@cron` methods
+- prefer `async def` for `@api`, `@mcp`, `@ui_widget`, `@data_bus_handler`,
+  and `@cron` methods
 - `@on_job` must be `async def`
 - in bundle code, use awaited secret helpers:
   `get_secret(...)`, `get_secret("u:...")`,
@@ -616,6 +636,7 @@ Before writing code, classify the product surface and state model.
 | --- | --- | --- | --- | --- |
 | Copilot/chat experience | `@bundle_entrypoint` / `@on_message` | request-bound chat path | conversation stores, retrieval systems, bundle props | start here for assistant-style products |
 | Admin console | `@ui_widget` + `@api(route="operations")` | widget -> operations | descriptor-backed config, bundle local storage, DB/Redis | keep admin separate from public/user surface |
+| Durable widget/domain mutation | Socket.IO `data_bus.publish` + `@data_bus_handler(...)` | Data Bus Redis Stream -> proc worker -> handler | bundle-owned DB/Redis/storage with idempotency | use for non-chat state changes that need retry or per-object serialization |
 | External webhook/integration | `@api(route="public")` | public HTTP path | bundle props + secrets, external systems | auth boundary must be explicit |
 | Tool-serving integration | `@mcp(...)` | MCP dispatch path | bundle props + secrets, external systems | bundle owns MCP auth |
 | Background automation | `@cron(...)` plus `@on_job` for ready work | cron scan -> Redis job stream -> proc `@on_job` | bundle local storage, DB/Redis, external APIs | cron detects due work; `@on_job` executes it fairly |
@@ -1517,6 +1538,62 @@ So the practical rule is:
   [bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream](../bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream)
 
 If a widget or host-embedded UI calls a bundle operation, do not treat it as a detached background job.
+
+### Data Bus handler path
+
+Data Bus is the durable non-chat inbound path for bundle-owned domain messages.
+It is separate from REST operations and separate from chat turns.
+
+Use this path when:
+
+- a widget sends canvas/document/issue/object patches
+- the message should survive browser disconnects
+- the bundle needs retry, DLQ, idempotency, or per-object serialization
+- the message should update bundle storage without becoming conversation
+  history
+
+In this path, entrypoint code has:
+
+- `ctx: DataBusContext`
+- `message: DataBusMessage`
+- `self.bundle_props`
+- DB/Redis handles when available
+- storage helpers
+- `await get_secret(...)`
+- optional `ctx.reply.*` delivery through comm when reply metadata exists
+
+Rules:
+
+- define one handler per subject with `@data_bus_handler(...)`
+- keep handlers `async def`
+- do not start Redis consumers in the bundle
+- persist durable state before sending success replies
+- enforce idempotency and stale revision checks in bundle storage
+- use `ctx.reply.*` only for connected-client status; state recovery should
+  come from normal reads/fetches
+
+Minimal pattern:
+
+```python
+from kdcube_ai_app.apps.chat.sdk.data_bus import data_bus_handler
+
+class MyBundle(BaseEntrypoint):
+    @data_bus_handler(
+        subject="my_bundle.object.patch",
+        partition_by="object_ref",
+        ordering="serial_per_partition",
+        idempotency="required",
+    )
+    async def handle_object_patch(self, ctx, message):
+        result = await self.objects.apply_patch(
+            object_ref=message.object_ref,
+            idempotency_key=message.idempotency_key,
+            payload=message.payload,
+            actor=message.actor,
+        )
+        await ctx.reply.ok({"revision": result.revision})
+        return {"status": "ok", "data": {"revision": result.revision}}
+```
 
 ### Cron / scheduled-job path
 

@@ -1,9 +1,9 @@
 ---
 id: ks:docs/sdk/bundle/bundle-runtime-README.md
 title: "Bundle Runtime"
-summary: "Runtime objects and capabilities available inside bundle entrypoints and tools: communicator, integrations, props and secrets, caches, artifacts, and isolated-execution surfaces."
-tags: ["sdk", "bundle", "runtime", "tools", "integrations", "communicator", "isolation"]
-keywords: ["bundle runtime objects", "communicator access", "integrations access", "props and secrets access", "cache access", "artifact handling", "isolated execution surface", "entrypoint runtime context"]
+summary: "Runtime objects and capabilities available inside bundle entrypoints and tools: communicator, Data Bus context, integrations, props and secrets, caches, artifacts, and isolated-execution surfaces."
+tags: ["sdk", "bundle", "runtime", "tools", "integrations", "communicator", "isolation", "data-bus"]
+keywords: ["bundle runtime objects", "communicator access", "data bus context", "integrations access", "props and secrets access", "cache access", "artifact handling", "isolated execution surface", "entrypoint runtime context"]
 updated_at: 2026-05-22
 see_also:
   - ks:docs/sdk/bundle/bundle-developer-guide-README.md
@@ -19,6 +19,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-client-communication-README.md
   - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
   - ks:docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
+  - ks:docs/service/comm/data-bus-README.md
   - ks:docs/service/synch-mechanisms/critical-section-README.md
 ---
 # Bundle Runtime
@@ -43,6 +44,7 @@ There are two different runtime surfaces:
 1. bundle entrypoint/runtime surface
    - `self.comm`
    - `self.comm_context`
+   - `DataBusContext` for `@data_bus_handler(...)`
    - `self.bundle_props`
    - `await get_secret(...)`
    - bundle storage helpers
@@ -769,23 +771,65 @@ Important:
   `agent_io_tools.tool_call(...)` when it needs trusted capabilities such as
   mailbox access, file materialization, or `host_files(...)`
 
+## Data Bus handler runtime
+
+`@data_bus_handler(...)` methods run in a processor-owned worker, not in a
+bundle-started consumer task. The runtime claims accepted messages from the
+bundle-scoped Data Bus Redis Stream, builds the bundle entrypoint instance,
+binds request context, and calls:
+
+```python
+async def handle_subject(self, ctx, message):
+    ...
+```
+
+Handler code receives:
+
+- normal entrypoint runtime handles such as bundle props, storage helpers,
+  Redis/Postgres handles when configured, and `await get_secret(...)`
+- `message: DataBusMessage` with tenant/project/bundle, subject, actor,
+  payload, `object_ref`, `idempotency_key`, reply metadata, and trace metadata
+- `ctx: DataBusContext` with tenant/project/bundle, actor, the entrypoint
+  instance, handler metadata, stream id, optional communicator, and `ctx.reply`
+- `ctx.reply.ok(...)`, `ctx.reply.conflict(...)`, `ctx.reply.error(...)`, and
+  `ctx.reply.event(...)` for optional client delivery through the existing comm
+  relay
+
+Runtime-owned behavior:
+
+- handler registry is discovered from the bundle manifest
+- group creation, `XREADGROUP`, retry, result stream, DLQ, and shutdown are
+  owned by proc
+- `ordering="serial_per_partition"` uses a Redis token lock per partition
+- bundles enforce durable idempotency and optimistic concurrency in their own
+  storage
+- Data Bus handling does not write conversation `external_events[]`, ReAct
+  timeline entries, or `ev:` artifacts unless bundle code explicitly bridges
+  into conversation ingress
+
+See:
+
+- [Data Bus](../../service/comm/data-bus-README.md)
+- [bundle-platform-integration-README.md#110-data_bus_handler](bundle-platform-integration-README.md#110-data_bus_handler)
+
 ## Runtime surface matrix
 
-| Surface | Bundle entrypoint: chat turn | Bundle entrypoint: REST op | Tool module: in proc | Tool module: isolated |
-| --- | --- | --- | --- | --- |
-| `self.comm` | yes | yes | no | no |
-| `self.comm_context` | yes | yes | no | no |
-| `bundle_props` / `self.bundle_prop(...)` | yes | yes | indirectly through bundle code only | indirectly through bundle code only |
-| `await get_secret(...)` | yes | yes | yes, if imported directly | yes, if imported directly |
-| bundle storage helpers | yes | yes | yes if the tool receives/constructs the needed bundle context | yes if the tool receives/constructs the needed bundle context |
-| `_SERVICE` / `SERVICE` | no | no | yes | yes |
-| `_INTEGRATIONS` / `INTEGRATIONS` | no | no | yes | yes |
-| `_COMMUNICATOR` / `COMMUNICATOR` | no | no | yes | yes |
-| `get_comm()` | yes, indirectly | yes, indirectly | yes | yes |
-| `_KV_CACHE` / `KV_CACHE` | no | no | yes when configured | yes when configured |
-| `_CTX_CLIENT` / `CTX_CLIENT` | no | no | yes when available | yes when available |
-| `OUT_DIR` / `WORKDIR` | only inside isolated exec code paths | only inside isolated exec code paths | only when the tool is running inside an execution context | yes |
-| `bundle_tool_context.host_files(...)` | no | no | yes in trusted catalog tools | yes in trusted supervisor/runtime catalog tools |
+| Surface | Bundle entrypoint: chat turn | Bundle entrypoint: REST op | Bundle entrypoint: Data Bus handler | Tool module: in proc | Tool module: isolated |
+| --- | --- | --- | --- | --- | --- |
+| `self.comm` | yes | yes | reply-scoped when reply metadata exists | no | no |
+| `self.comm_context` | yes | yes | yes | no | no |
+| `DataBusContext` / `ctx.reply` | no | no | yes | no | no |
+| `bundle_props` / `self.bundle_prop(...)` | yes | yes | yes | indirectly through bundle code only | indirectly through bundle code only |
+| `await get_secret(...)` | yes | yes | yes | yes, if imported directly | yes, if imported directly |
+| bundle storage helpers | yes | yes | yes | yes if the tool receives/constructs the needed bundle context | yes if the tool receives/constructs the needed bundle context |
+| `_SERVICE` / `SERVICE` | no | no | no | yes | yes |
+| `_INTEGRATIONS` / `INTEGRATIONS` | no | no | no | yes | yes |
+| `_COMMUNICATOR` / `COMMUNICATOR` | no | no | no | yes | yes |
+| `get_comm()` | yes, indirectly | yes, indirectly | yes, when reply metadata exists | yes | yes |
+| `_KV_CACHE` / `KV_CACHE` | no | no | no | yes when configured | yes when configured |
+| `_CTX_CLIENT` / `CTX_CLIENT` | no | no | no | yes when available | yes when available |
+| `OUT_DIR` / `WORKDIR` | only inside isolated exec code paths | only inside isolated exec code paths | only inside isolated exec code paths | only when the tool is running inside an execution context | yes |
+| `bundle_tool_context.host_files(...)` | no | no | no | yes in trusted catalog tools | yes in trusted supervisor/runtime catalog tools |
 
 ## Communicator rules
 
@@ -868,6 +912,8 @@ This is the same browser service used by rendering-oriented SDK tools.
   to reconstruct runtime state themselves.
 - Use `get_comm()` or `_COMMUNICATOR` when a tool needs chat-side event
   emission.
+- Use `@data_bus_handler(...)` for durable non-chat domain messages; handler
+  code receives `ctx` and `message`, while proc owns stream consumption.
 - If you want a REST-triggered bundle/tool event to reach the initiating peer
   only, make sure the request carries the `KDC-Stream-ID` header for that
   connected peer.

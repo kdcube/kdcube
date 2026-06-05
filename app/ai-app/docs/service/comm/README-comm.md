@@ -3,10 +3,12 @@ id: ks:docs/service/comm/README-comm.md
 title: "Comm"
 summary: "Entry point for communication transports and integrations."
 tags: ["service", "comm", "transports", "sse", "socketio"]
-keywords: ["SSE", "Socket.IO", "REST", "relay", "transports"]
+keywords: ["SSE", "Socket.IO", "REST", "relay", "transports", "data bus"]
 see_also:
   - ks:docs/service/comm/CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md
   - ks:docs/service/comm/comm-system.md
+  - ks:docs/service/comm/data-bus-README.md
+  - ks:docs/service/comm/design/databus-runtime.md
   - ks:docs/service/comm/comm-recording-event-sinks-README.md
   - ks:docs/service/streams/telemetry-README.md
   - ks:docs/service/auth/auth-README.md
@@ -24,6 +26,9 @@ This README is the entry point for **communication integrations**:
 - **Internal relay**: Redis Pub/Sub fan-out (`ServiceCommunicator` + `ChatRelayCommunicator`)
 - **Tenant/project SSE events**: opt-in project-scoped service updates for
   compact cross-session UI refreshes
+- **Data Bus**: durable, bundle-scoped inbound message path for
+  non-conversation domain state changes, such as canvas patches or issue
+  updates, routed through separate Redis Streams instead of the chat turn queue
 - **Comm recording and event sinks**: optional recording of selected comm
   envelopes and bounded batch dispatch to telemetry or other configured sinks
 
@@ -76,7 +81,9 @@ If you are implementing a UI, API client, or a new transport, start here.
 
 **Send**
 - Event: `chat_message`
-- Payload: JSON (message + metadata) + optional binary frames for attachments
+- Payload: one JSON event submission object with top-level `external_events[]`
+  and optional metadata, followed by optional binary frames for attachments.
+  Do not wrap this object under a nested `message` key.
 
 **Code reference**
 - Socket.IO transport: [socketio/chat.py](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/socketio/chat.py)
@@ -125,7 +132,7 @@ The gateway/auth adapters accept tokens from multiple sources, so clients can ch
   - `registered` or `privileged` depending on roles.
 
 **Upgrade implementation**
-- [ingress/chat_core.py](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/chat_core.py)
+- [ingress/ingress_core.py](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/ingress_core.py)
 
 ---
 
@@ -140,6 +147,8 @@ The gateway/auth adapters accept tokens from multiple sources, so clients can ch
 ### Socket.IO (binary frames)
 - `chat_message` payload:
   - first argument is the event submission with `external_events[]`
+  - the event submission is the top-level Socket.IO argument; nested
+    `{ "message": ... }` wrappers are not accepted
   - binary frames follow the JSON payload, one per `event.user.attachment.*`
     event
 
@@ -173,6 +182,41 @@ opt into a separate tenant/project channel for compact project-level updates.
 **Docs**
 - System overview: [comm-system.md](comm-system.md)
 - SSE relay deep dive: [CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md](CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md)
+
+### Data Bus boundary
+
+The relay above is for client-visible comm envelopes: chat output, direct
+operation replies, session broadcast, and compact project updates.
+
+The **Data Bus** is a different path. It accepts durable bundle-domain
+messages from clients or services, writes them to bundle-scoped Redis Streams,
+and lets the bundle handle them with registered handlers. Use it when the
+message changes bundle state and must be processed even if no browser is
+currently listening. Do not model those messages as chat turns or
+`external_events[]` unless the bundle explicitly bridges the result into a
+conversation later.
+
+Runtime entry points:
+
+- SDK contract and decorator re-export:
+  [sdk/data_bus.py](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/data_bus.py)
+- Runtime types/streams/worker:
+  [sdk/runtime/data_bus/](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/data_bus)
+- Socket.IO package handler:
+  [socketio/data_bus/publish.py](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/socketio/data_bus/publish.py)
+
+Socket.IO `data_bus.publish` accepts a package with `bundle_id` and
+`messages[]`; accepted messages are written to:
+
+```text
+kdcube:data-bus:{tenant}:{project}:{bundle_id}:messages
+```
+
+It does not call `/sse/chat`, `chat_message`, `process_chat_message`, or the
+conversation external-event machinery.
+
+See [data-bus-README.md](data-bus-README.md) and
+[design/databus-runtime.md](design/databus-runtime.md).
 
 ---
 
@@ -290,7 +334,7 @@ await self.comm.event(
 
 ---
 
-## 7) Quick client integration checklist
+## 8) Quick client integration checklist
 
 1) Choose **SSE** or **Socket.IO** for streaming.
 2) Provide tokens via header or cookie; for SSE you may also use query params.
@@ -300,7 +344,7 @@ await self.comm.event(
 
 ---
 
-## 8) Producer API (bundles)
+## 9) Producer API (bundles)
 
 If you are a bundle author, see:
 - [comm-system.md](comm-system.md) (producer API + filters)

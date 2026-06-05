@@ -1283,8 +1283,20 @@ const MonitoringDashboard: React.FC = () => {
         const perUser = Math.max(1, parseInt(burstMessagesPerUser, 10) || 1);
         const concurrency = Math.max(1, parseInt(burstConcurrency, 10) || 10);
         const baseUrl = settings.getBaseUrl().replace(/\/$/, '');
-        const payloadBase: any = { message: { text: burstMessage || 'ping' } };
-        if (burstBundleId) payloadBase.message.bundle_id = burstBundleId;
+        const payloadBase: any = {
+            external_events: [
+                {
+                    type: 'event.user.prompt',
+                    event_source_id: 'event.user.prompt',
+                    reactive: true,
+                    payload: {
+                        mime: 'text/plain',
+                        event: { text: burstMessage || 'ping' },
+                    },
+                },
+            ],
+        };
+        if (burstBundleId) payloadBase.bundle_id = burstBundleId;
 
         const tasks: Array<() => Promise<void>> = [];
         sessions.forEach((s) => {
@@ -1293,10 +1305,7 @@ const MonitoringDashboard: React.FC = () => {
                     const convId = `burst-${s.streamId}-${i}`;
                     const payload = {
                         ...payloadBase,
-                        message: {
-                            ...(payloadBase.message || {}),
-                            conversation_id: convId,
-                        },
+                        conversation_id: convId,
                     };
                     const res = await fetch(`${baseUrl}/sse/chat?stream_id=${encodeURIComponent(s.streamId)}`, {
                         method: 'POST',

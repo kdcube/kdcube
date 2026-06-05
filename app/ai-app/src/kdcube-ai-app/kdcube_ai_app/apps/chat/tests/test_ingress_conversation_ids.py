@@ -48,6 +48,18 @@ class _ConversationBrowserStateOnly:
         return False
 
 
+def _prompt_event(text: str = "hello") -> dict:
+    return {
+        "type": "event.user.prompt",
+        "event_source_id": "event.user.prompt",
+        "reactive": True,
+        "payload": {
+            "mime": "text/plain",
+            "event": {"text": text},
+        },
+    }
+
+
 def test_resolve_ingress_conversation_id_generates_uuid_when_missing():
     app = SimpleNamespace(state=SimpleNamespace())
     session = SimpleNamespace(user_id="user-1", fingerprint="fp-1")
@@ -154,7 +166,7 @@ def test_sse_chat_ack_includes_server_generated_conversation_id(monkeypatch):
     response = client.post(
         "/sse/chat",
         params={"stream_id": "stream-1"},
-        json={"message": {"message": "hello"}},
+        json={"external_events": [_prompt_event()]},
     )
 
     assert response.status_code == 200
@@ -203,7 +215,7 @@ def test_socket_chat_ack_includes_server_generated_conversation_id(monkeypatch):
     ack = asyncio.run(
         handler._handle_chat_message(
             "sid-1",
-            {"message": {"message": "hello"}},
+            {"external_events": [_prompt_event()]},
         )
     )
 
@@ -247,7 +259,10 @@ def test_socket_chat_rejects_unknown_supplied_conversation_id(monkeypatch):
     ack = asyncio.run(
         handler._handle_chat_message(
             "sid-1",
-            {"message": {"message": "hello", "conversation_id": "conv-missing"}},
+            {
+                "conversation_id": "conv-missing",
+                "external_events": [_prompt_event()],
+            },
         )
     )
 
@@ -255,6 +270,41 @@ def test_socket_chat_rejects_unknown_supplied_conversation_id(monkeypatch):
     assert ack["status"] == 404
     assert ack["error"] == "Conversation not found"
     assert emitted_errors == ["Conversation not found"]
+
+
+def test_socket_chat_rejects_legacy_nested_message_payload(monkeypatch):
+    session = {
+        "user_session": {
+            "session_id": "sess-1",
+            "user_type": "registered",
+            "fingerprint": "fp-1",
+            "user_id": "user-1",
+            "username": "user",
+            "roles": [],
+            "permissions": [],
+            "timezone": "UTC",
+        }
+    }
+
+    handler = socket_chat.SocketIOChatHandler.__new__(socket_chat.SocketIOChatHandler)
+    handler.app = SimpleNamespace(state=SimpleNamespace())
+    handler.gateway_adapter = SimpleNamespace()
+    handler.chat_queue_manager = SimpleNamespace()
+    handler.instance_id = "ingress-1"
+    handler._comm = SimpleNamespace(emit_error=_async_noop())
+    handler.sio = SimpleNamespace(get_session=_async_return(session))
+
+    ack = asyncio.run(
+        handler._handle_chat_message(
+            "sid-1",
+            {"message": {"message": "hello", "conversation_id": "conv-missing"}},
+        )
+    )
+
+    assert ack["ok"] is False
+    assert ack["status"] == 400
+    assert ack["error_type"] == "invalid_chat_message_payload"
+    assert "top-level external_events[]" in ack["error"]
 
 
 def _async_return(value):

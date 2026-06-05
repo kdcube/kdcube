@@ -1,9 +1,9 @@
 ---
 id: ks:docs/sdk/bundle/bundle-transports-README.md
 title: "Bundle Transports"
-summary: "Complete transport map for bundle capabilities: chat, background jobs, REST operations, widgets, static UI, communicator streams, public routes, and MCP endpoints."
-tags: ["sdk", "bundle", "transport", "protocol", "mcp", "rest", "sse", "socketio", "widgets", "auth", "background-jobs"]
-keywords: ["bundle transport map", "chat transport", "background job transport", "on_job transport", "operations rest transport", "widget transport", "static ui transport", "communicator streaming", "public route transport", "mcp endpoint transport"]
+summary: "Complete transport map for bundle capabilities: chat, Data Bus, background jobs, REST operations, widgets, static UI, communicator streams, public routes, and MCP endpoints."
+tags: ["sdk", "bundle", "transport", "protocol", "mcp", "rest", "sse", "socketio", "widgets", "auth", "background-jobs", "data-bus"]
+keywords: ["bundle transport map", "chat transport", "data bus transport", "background job transport", "on_job transport", "operations rest transport", "widget transport", "static ui transport", "communicator streaming", "public route transport", "mcp endpoint transport"]
 see_also:
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
@@ -14,6 +14,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
   - ks:docs/service/streams/background-jobs-README.md
+  - ks:docs/service/comm/data-bus-README.md
 ---
 # Bundle Transports
 
@@ -42,6 +43,8 @@ There are two different auth ownership models:
 
 - `@api(route="operations")`, widgets, and static UI are
   **KDCube-authenticated** surfaces
+- Data Bus `data_bus.publish` uses the existing authenticated Socket.IO
+  connection and then applies bundle/subject visibility checks
 - `@api(route="public")` can be either:
   - **KDCube-authenticated** via built-in `public_auth`
   - **bundle-authenticated** via `public_auth="bundle"`
@@ -65,6 +68,7 @@ So:
 | Surface | Decorator / entry | Transport | Routes | Who authenticates | Typical caller |
 | --- | --- | --- | --- | --- | --- |
 | chat turn | `run()` / `@on_message` | platform chat ingress + proc | chat endpoints such as `/sse/chat` or Socket.IO | KDCube | platform chat client |
+| Data Bus message | `@data_bus_handler(...)` | Socket.IO `data_bus.publish` + Redis Stream + proc worker | no HTTP route; stream key `kdcube:data-bus:{tenant}:{project}:{bundle_id}:messages` | KDCube connection auth + bundle/subject visibility | widget, custom frontend, internal service |
 | background job | `@on_job` | Redis Stream + proc | no HTTP route; processor operation `__kdcube_on_job__` | producer/platform context | `@cron`, widget/API run-now, internal service |
 | authenticated bundle operation | `@api(route="operations")` | HTTP REST | `/api/integrations/bundles/{tenant}/{project}/{bundle_id}/operations/{alias}` | KDCube | widget, custom frontend, internal platform UI |
 | public bundle operation | `@api(route="public")` | HTTP REST | `/api/integrations/bundles/{tenant}/{project}/{bundle_id}/public/{alias}` | KDCube or bundle | webhook, external caller |
@@ -91,6 +95,14 @@ for the queue/envelope contract.
 A bundle still has only one decorated `@on_job` method. If the entrypoint derives
 from SDK mixins, call `await super().handle_job(**kwargs)` first and only handle
 bundle-owned `work_kind` values when that returns `handled=false`.
+
+Data Bus messages are also durable Redis Stream messages, but they are inbound
+bundle-domain messages rather than background jobs. A client publishes a
+Socket.IO `data_bus.publish` package with `bundle_id` and `messages[]`; ingress
+validates the target bundle and subject, writes accepted messages to the
+bundle's Data Bus stream, and processor-owned workers invoke the registered
+`@data_bus_handler(...)` methods. This path is separate from `chat_message`,
+conversation `external_events[]`, and communicator Pub/Sub.
 
 ## 3. REST Operations
 
@@ -602,6 +614,8 @@ bundle interface surface described here.
 Choose by caller and auth ownership:
 
 - platform chat client talking to the assistant → chat turn path
+- widget or service sending a durable bundle-owned domain mutation → Socket.IO
+  `data_bus.publish` plus `@data_bus_handler(...)`
 - widget/browser/frontend calling bundle logic through KDCube auth → `@api(route="operations")`
 - webhook or public HTTP caller using KDCube public-auth contract → `@api(route="public")`
 - programmatic MCP client with bundle-defined auth → `@mcp(route="operations")`
@@ -619,5 +633,7 @@ Choose by caller and auth ownership:
   [bundle-client-communication-README.md](bundle-client-communication-README.md)
 - streaming payload catalog:
   [bundle-chat-stream-events-README.md](bundle-chat-stream-events-README.md)
+- durable Data Bus messages:
+  [../../service/comm/data-bus-README.md](../../service/comm/data-bus-README.md)
 - runtime objects available to bundle code:
   [bundle-runtime-README.md](bundle-runtime-README.md)

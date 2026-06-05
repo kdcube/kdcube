@@ -7,6 +7,8 @@ keywords: ["redis relay", "channels", "fanout", "transport layer"]
 see_also:
   - ks:docs/service/comm/CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md
   - ks:docs/service/comm/README-comm.md
+  - ks:docs/service/comm/data-bus-README.md
+  - ks:docs/service/comm/design/databus-runtime.md
   - ks:docs/service/comm/comm-recording-event-sinks-README.md
   - ks:docs/service/streams/telemetry-README.md
   - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
@@ -177,6 +179,38 @@ already-aggregated payloads.
 
 Socket.IO project subscriptions are not part of the current contract. Use SSE
 for tenant/project broadcast receivers.
+
+## Data Bus Boundary
+
+The comm relay is a **client delivery** subsystem. It publishes envelopes to
+already-connected peers, user sessions, or opt-in tenant/project SSE listeners.
+It is intentionally transient.
+
+The **Data Bus** is a separate **durable inbound** subsystem for bundle-owned
+domain messages. It reuses auth/session resolution and the Socket.IO connection
+as a transport, but ingress routes Data Bus packages to Data Bus Redis Streams,
+not to the chat turn queue and not to the comm Pub/Sub relay.
+
+Use the Data Bus when:
+
+- the message changes bundle state;
+- the bundle must process it even if the browser disconnects;
+- handlers need idempotency, retry, dead-letter handling, and optional
+  per-object serialization;
+- the message is not automatically part of a conversation or ReAct timeline.
+
+Use comm relay when:
+
+- bundle code already handled a request and needs to notify connected clients;
+- delivery can be transient;
+- the payload is compact and already safe for the selected delivery scope.
+
+This does not change the current note above: Socket.IO project subscriptions
+are not part of the comm broadcast contract. The Data Bus Socket.IO event is an
+inbound durable message package, not a project-broadcast subscription.
+
+See [Data Bus](data-bus-README.md) and the runtime handoff in
+[design/databus-runtime.md](design/databus-runtime.md).
 
 ---
 

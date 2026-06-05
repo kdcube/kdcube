@@ -1312,6 +1312,18 @@ def _manifest_to_descriptor(
         "on_message": manifest.on_message.method_name if manifest.on_message else None,
         "on_job": manifest.on_job.method_name if manifest.on_job else None,
         "scheduled_jobs": [_cron_spec_descriptor(s, props=props) for s in manifest.scheduled_jobs],
+        "data_bus_handlers": [
+            {
+                "method_name": spec.method_name,
+                "subject": spec.subject,
+                "partition_by": spec.partition_by,
+                "ordering": spec.ordering,
+                "idempotency": spec.idempotency,
+                "user_types": list(spec.user_types),
+                "roles": list(spec.roles),
+            }
+            for spec in manifest.data_bus_handlers
+        ],
     }
 
 
@@ -1357,6 +1369,19 @@ def _manifest_to_descriptor_filtered(
         "on_message": manifest.on_message.method_name if manifest.on_message else None,
         "on_job": manifest.on_job.method_name if manifest.on_job else None,
         "scheduled_jobs": [_cron_spec_descriptor(s, props=props) for s in manifest.scheduled_jobs],
+        "data_bus_handlers": [
+            {
+                "method_name": spec.method_name,
+                "subject": spec.subject,
+                "partition_by": spec.partition_by,
+                "ordering": spec.ordering,
+                "idempotency": spec.idempotency,
+                "user_types": list(spec.user_types),
+                "roles": list(spec.roles),
+            }
+            for spec in manifest.data_bus_handlers
+            if _endpoint_visible(spec.user_types, spec.roles, session)
+        ],
     }
 
 
@@ -2712,6 +2737,10 @@ async def get_bundle_interface(
     visible_widgets = _visible_widget_specs(manifest, session, props=workflow_props)
     visible_apis = _visible_api_specs(manifest, session, props=workflow_props)
     visible_mcp_endpoints = _visible_mcp_specs(manifest, session, props=workflow_props)
+    visible_data_bus_handlers = [
+        spec for spec in manifest.data_bus_handlers
+        if _endpoint_visible(spec.user_types, spec.roles, session)
+    ]
     return {
         "status": "ok",
         "tenant": tenant_id,
@@ -2761,6 +2790,17 @@ async def get_bundle_interface(
             else None
         ),
         "scheduled_jobs": [_cron_spec_descriptor(s, props=workflow_props) for s in manifest.scheduled_jobs],
+        "data_bus_handlers": [
+            {
+                "subject": spec.subject,
+                "partition_by": spec.partition_by,
+                "ordering": spec.ordering,
+                "idempotency": spec.idempotency,
+                "user_types": list(spec.user_types),
+                "roles": list(spec.roles),
+            }
+            for spec in visible_data_bus_handlers
+        ],
     }
 
 

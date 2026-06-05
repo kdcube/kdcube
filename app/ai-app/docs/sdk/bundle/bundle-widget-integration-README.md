@@ -1,9 +1,9 @@
 ---
 id: ks:docs/sdk/bundle/bundle-widget-integration-README.md
 title: "Bundle Widget Integration"
-summary: "Bundle widget UI contract: source-folder widget apps, runtime config handshake, operation URL construction, auth propagation, and the recommended pattern when a capability is both widget and operation."
-tags: ["sdk", "bundle", "widget", "iframe", "frontend", "integrations", "telegram", "memory"]
-keywords: ["bundle widget contract", "iframe widget contract", "widget source folder", "static widget build", "runtime config handshake", "operation url construction", "auth propagation to widget", "widget and operation dual pattern", "shared sdk widget source", "telegram widget components", "memory widget component", "bundle widget integration"]
+summary: "Bundle widget UI contract: source-folder widget apps, runtime config handshake, operation URL construction, Data Bus publishing, auth propagation, and the recommended pattern when a capability is both widget and operation."
+tags: ["sdk", "bundle", "widget", "iframe", "frontend", "integrations", "telegram", "memory", "data-bus"]
+keywords: ["bundle widget contract", "iframe widget contract", "widget source folder", "static widget build", "runtime config handshake", "operation url construction", "data bus publishing", "auth propagation to widget", "widget and operation dual pattern", "shared sdk widget source", "telegram widget components", "memory widget component", "bundle widget integration"]
 updated_at: 2026-05-22
 see_also:
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
@@ -12,6 +12,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
   - ks:docs/sdk/bundle/bundle-client-ui-README.md
   - ks:docs/sdk/bundle/bundle-client-communication-README.md
+  - ks:docs/service/comm/data-bus-README.md
   - ks:docs/service/cicd/embedding-control-plane-frontend-README.md
 ---
 # Bundle Widget Integration
@@ -29,6 +30,8 @@ Core contract:
   it in an iframe, but that is a display choice
 - the widget must request runtime config from the display environment
 - the widget must build bundle operation URLs from that runtime config
+- the widget should use Socket.IO `data_bus.publish` for durable non-chat
+  bundle-owned state changes
 - tenant, project, bundle id, and auth material come from runtime config
 
 For the full lifecycle of discovery, preload, build, request-time fallback,
@@ -44,6 +47,59 @@ bundle routes. See
 For the integrator picture — embedding topologies (same-origin / same-site
 subdomain / cross-site) and how login/cookies work in each — see
 [Embedding KDCube In A Host App](../../service/cicd/embedding-kdcube-in-a-host-app-README.md).
+
+## Widget Data Bus Publishing
+
+Use Socket.IO `data_bus.publish` when a widget sends a durable bundle-owned
+domain message, for example a canvas patch, issue edit, or object annotation.
+This is a different contract from calling `/operations/...` and a different
+contract from sending a chat `external_events[]` submission.
+
+Client package shape:
+
+```ts
+socket.emit("data_bus.publish", {
+  schema: "kdcube.data_bus.ingress.v1",
+  bundle_id: runtime.defaultAppBundleId,
+  messages: [
+    {
+      subject: "task_tracker.canvas.patch",
+      object_ref: "canvas:main",
+      idempotency_key: clientOperationId,
+      payload: {
+        base_revision: currentRevision,
+        operations,
+      },
+    },
+  ],
+}, (ack) => {
+  // ack.status confirms stream acceptance, not handler completion
+})
+```
+
+Widget rules:
+
+- keep using the runtime config handshake for `baseUrl`, tenant, project,
+  bundle id, and auth material
+- connect Socket.IO with the same authenticated runtime identity used by the
+  rest of the widget
+- include `messages[]`; it is plural even for one message
+- include `idempotency_key` for mutations
+- include `object_ref` when the handler declares `partition_by="object_ref"`
+- treat the Socket.IO ack as durable acceptance into the Data Bus stream
+- listen for handler replies through the existing `chat_service` event when the
+  handler uses `ctx.reply.*`
+- fetch the durable object state from normal bundle APIs after reconnect or
+  refresh
+
+Use `/operations/...` for direct request/response commands. Use Data Bus for
+state mutations that need durable processing, retry, and optional per-object
+serialization.
+
+See:
+
+- [bundle-client-communication-README.md#data-bus-contract](bundle-client-communication-README.md#data-bus-contract)
+- [Data Bus](../../service/comm/data-bus-README.md)
 
 ## Two Contracts: Surface And Build Config
 

@@ -426,6 +426,7 @@ class EnhancedChatRequestProcessor:
         self._reaper_task: Optional[asyncio.Task] = None
         self._scheduler_reconcile_task: Optional[asyncio.Task] = None
         self._scheduler: Optional[Any] = None
+        self._data_bus_manager: Optional[Any] = None
         self._active_tasks: set[asyncio.Task] = set()
         self._active_task_details: dict[asyncio.Task, Dict[str, Any]] = {}
         self._current_load = 0
@@ -530,6 +531,21 @@ class EnhancedChatRequestProcessor:
                 await self._reconcile_bundle_scheduler_from_authority("startup")
             except Exception:
                 logger.warning("Initial bundle scheduler reconcile failed; will retry from listener or periodic reconcile", exc_info=True)
+        if self._data_bus_manager is None:
+            from kdcube_ai_app.apps.chat.sdk.config import get_settings
+            from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.worker import DataBusRuntimeManager
+            _settings = get_settings()
+            self._data_bus_manager = DataBusRuntimeManager(
+                redis=self.redis,
+                redis_url=getattr(_settings, "REDIS_URL", None),
+                tenant=_settings.TENANT,
+                project=_settings.PROJECT,
+                instance_id=_settings.INSTANCE_ID,
+            )
+            try:
+                await self._reconcile_bundle_scheduler_from_authority("data-bus-startup")
+            except Exception:
+                logger.warning("Initial Data Bus reconcile failed; will retry from listener or periodic reconcile", exc_info=True)
         if (
             self._bundle_scheduler_reconcile_interval_sec > 0
             and (not self._scheduler_reconcile_task or self._scheduler_reconcile_task.done())
@@ -621,6 +637,9 @@ class EnhancedChatRequestProcessor:
         if self._scheduler is not None:
             await self._scheduler.shutdown()
             self._scheduler = None
+        if self._data_bus_manager is not None:
+            await self._data_bus_manager.shutdown()
+            self._data_bus_manager = None
         await self.wait_for_active_tasks()
 
     def get_current_load(self) -> int:
@@ -886,18 +905,23 @@ class EnhancedChatRequestProcessor:
                 await asyncio.sleep(self._host_drain_poll_interval_sec)
 
     async def _reconcile_bundle_scheduler_from_authority(self, reason: str) -> None:
-        if self._scheduler is None:
+        if self._scheduler is None and self._data_bus_manager is None:
             return
         from kdcube_ai_app.infra.plugin.bundle_store import load_registry
 
         settings = get_settings()
         reg = await load_registry(self.redis, settings.TENANT, settings.PROJECT)
-        await self._scheduler.reconcile(reg)
+        if self._scheduler is not None:
+            await self._scheduler.reconcile(reg)
+        if self._data_bus_manager is not None:
+            await self._data_bus_manager.reconcile(reg)
         logger.info(
-            "Bundle scheduler reconcile complete: reason=%s bundles=%s default=%s",
+            "Bundle runtime reconcile complete: reason=%s bundles=%s default=%s scheduler=%s data_bus=%s",
             reason,
             len(getattr(reg, "bundles", {}) or {}),
             getattr(reg, "default_bundle_id", None),
+            self._scheduler is not None,
+            self._data_bus_manager is not None,
         )
 
     async def _bundle_scheduler_reconcile_loop(self) -> None:
@@ -1970,6 +1994,8 @@ class EnhancedChatRequestProcessor:
                 logger.warning("Failed to stop inactive local sidecars after bundle runtime catch-up", exc_info=True)
             if self._scheduler is not None:
                 await self._scheduler.reconcile(current)
+            if self._data_bus_manager is not None:
+                await self._data_bus_manager.reconcile(current)
             logger.info(
                 "Bundle runtime catch-up complete: reason=%s tenant=%s project=%s pid=%s bundles=%s default=%s changed_bundles=%s evicted_bundles=%s",
                 reason,
@@ -2005,15 +2031,19 @@ class EnhancedChatRequestProcessor:
 
                 # Catch-up reconcile: pubsub does not buffer, so any
                 # bundles.update / bundles.props.update event published while
-                # this listener was disconnected was lost. Sync scheduler state
-                # to current Redis registry/props on every (re)subscribe.
-                if self._scheduler is not None:
+                # this listener was disconnected was lost. Sync managed bundle
+                # runtime state to current Redis registry/props on every
+                # (re)subscribe.
+                if self._scheduler is not None or self._data_bus_manager is not None:
                     try:
                         current_reg = await store_load(self.redis)
-                        await self._scheduler.reconcile(current_reg)
+                        if self._scheduler is not None:
+                            await self._scheduler.reconcile(current_reg)
+                        if self._data_bus_manager is not None:
+                            await self._data_bus_manager.reconcile(current_reg)
                     except Exception:
                         logger.warning(
-                            "Catch-up bundle scheduler reconcile after (re)subscribe failed",
+                            "Catch-up bundle runtime reconcile after (re)subscribe failed",
                             exc_info=True,
                         )
 
@@ -2219,12 +2249,15 @@ class EnhancedChatRequestProcessor:
                             evt = json.loads((message.get("data") or b"{}").decode("utf-8"))
                         except Exception:
                             evt = {}
-                        if self._scheduler is not None:
+                        if self._scheduler is not None or self._data_bus_manager is not None:
                             try:
                                 current = await store_load(self.redis)
-                                await self._scheduler.reconcile(current)
+                                if self._scheduler is not None:
+                                    await self._scheduler.reconcile(current)
+                                if self._data_bus_manager is not None:
+                                    await self._data_bus_manager.reconcile(current)
                             except Exception:
-                                logger.warning("Bundle scheduler reconcile failed after props update", exc_info=True)
+                                logger.warning("Bundle runtime reconcile failed after props update", exc_info=True)
                         bundle_id = str(evt.get("bundle_id") or "").strip()
                         if bundle_id:
                             try:

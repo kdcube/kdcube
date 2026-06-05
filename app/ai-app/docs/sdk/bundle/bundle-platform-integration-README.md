@@ -1,9 +1,9 @@
 ---
 id: ks:docs/sdk/bundle/bundle-platform-integration-README.md
 title: "Bundle Platform Integration"
-summary: "Declarative platform contract for exposing bundle capabilities through decorators, manifest metadata, REST operations, widgets, MCP routes, static UI, public routes, scheduled jobs, and background job handlers."
-tags: ["sdk", "bundle", "integration", "decorators", "widgets", "operations", "mcp", "ui", "manifest", "cron", "scheduled-jobs", "background-jobs"]
-keywords: ["decorator based integration", "bundle manifest contract", "rest operations exposure", "widget exposure", "mcp route exposure", "static ui exposure", "public route exposure", "scheduled job exposure", "on_job background job handler"]
+summary: "Declarative platform contract for exposing bundle capabilities through decorators, manifest metadata, REST operations, widgets, MCP routes, static UI, public routes, Data Bus handlers, scheduled jobs, and background job handlers."
+tags: ["sdk", "bundle", "integration", "decorators", "widgets", "operations", "mcp", "ui", "manifest", "cron", "scheduled-jobs", "background-jobs", "data-bus"]
+keywords: ["decorator based integration", "bundle manifest contract", "rest operations exposure", "widget exposure", "mcp route exposure", "static ui exposure", "public route exposure", "data bus handler", "scheduled job exposure", "on_job background job handler"]
 updated_at: 2026-05-24
 see_also:
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
@@ -18,6 +18,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-developer-guide-README.md
   - ks:docs/sdk/bundle/bundle-venv-README.md
   - ks:docs/service/streams/background-jobs-README.md
+  - ks:docs/service/comm/data-bus-README.md
   - ks:docs/sdk/bundle/bundle-index-README.md
   - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
 ---
@@ -31,6 +32,7 @@ It covers:
 - REST routing for bundle operations, public operations, and bundle MCP endpoints
 - widget discovery and widget fetch
 - bundle main UI entrypoints and static asset serving
+- Data Bus handler discovery for durable non-conversation domain messages
 - background job stream dispatch through `@on_job`
 
 For how these decorators fit into React agents, tools/skills descriptors, MCP
@@ -106,6 +108,7 @@ Bundles currently support these decorators:
 | `@ui_widget(...)` | entrypoint method | Declares a widget in the bundle interface manifest. |
 | `@ui_main` | entrypoint method | Declares the bundle main UI entrypoint. |
 | `@on_message` | entrypoint method | Declares the bundle message handler metadata. |
+| `@data_bus_handler(...)` | entrypoint method | Declares a durable Data Bus subject handler managed by proc. |
 | `@cron(...)` | entrypoint method | Declares a scheduled background job managed by proc. |
 | `@on_job` | entrypoint method | Declares the bundle handler for ready background jobs claimed by proc. |
 | `@venv(...)` | helper function or method | Declares that a callable executes in a cached per-bundle subprocess venv. |
@@ -113,7 +116,8 @@ Bundles currently support these decorators:
 Important distinction:
 
 - `@bundle_entrypoint(...)`, `@bundle_entrypoint_factory(...)`, `@bundle_id(...)`,
-  `@api(...)`, `@mcp(...)`, `@ui_widget(...)`, `@ui_main`, `@on_message`, `@cron(...)`, and `@on_job`
+  `@api(...)`, `@mcp(...)`, `@ui_widget(...)`, `@ui_main`, `@on_message`,
+  `@data_bus_handler(...)`, `@cron(...)`, and `@on_job`
   participate in bundle manifest and runtime interface discovery
 - `@venv(...)` is an execution decorator, not an HTTP/UI manifest decorator
 - most bundles should use `@bundle_entrypoint(...)`; `@bundle_entrypoint_factory(...)`
@@ -815,7 +819,76 @@ See:
 
 - [docs/service/streams/background-jobs-README.md](../../service/streams/background-jobs-README.md)
 
-### 1.10 `@cron(...)`
+### 1.10 `@data_bus_handler(...)`
+
+Marks a method as a durable Data Bus subject handler. Data Bus handlers process
+non-conversation domain messages that were accepted through Socket.IO
+`data_bus.publish` and written to the bundle-scoped Data Bus Redis Stream.
+
+```python
+from kdcube_ai_app.apps.chat.sdk.data_bus import data_bus_handler
+
+@data_bus_handler(
+    subject="task_tracker.canvas.patch",
+    partition_by="object_ref",
+    ordering="serial_per_partition",
+    idempotency="required",
+)
+async def handle_canvas_patch(self, ctx, message):
+    result = await self.canvas.apply_patch(
+        object_ref=message.object_ref,
+        idempotency_key=message.idempotency_key,
+        payload=message.payload,
+        actor=message.actor,
+    )
+    await ctx.reply.ok({"revision": result.revision})
+    return {"status": "ok", "data": {"revision": result.revision}}
+```
+
+Current fields:
+
+- `subject`
+  - stable domain subject handled by this bundle
+  - must be unique within one bundle
+- `partition_by`
+  - `"none"` for independent messages
+  - `"object_ref"` when messages operate on a shared object such as a canvas,
+    board, issue, or document
+- `ordering`
+  - `"parallel"` for normal concurrent handling
+  - `"serial_per_partition"` for one active handler at a time per partition
+- `idempotency`
+  - `"optional"` or `"required"`
+  - use `"required"` for mutations
+- `user_types` / `roles`
+  - same visibility selectors used by other manifest-exposed bundle methods
+
+Current behavior:
+
+- proc discovers all `@data_bus_handler(...)` methods through the manifest path
+- the Socket.IO `data_bus.publish` ingress validates bundle visibility, subject
+  visibility, required `object_ref`, and required `idempotency_key`
+- accepted messages are written to
+  `kdcube:data-bus:{tenant}:{project}:{bundle_id}:messages`
+- the processor-owned Data Bus runtime reconciles the active registry and
+  starts managed workers for bundles with registered handlers
+- bundles do not create their own Redis consumers
+- `serial_per_partition` uses a Redis token lock so two workers do not execute
+  the same subject/object partition concurrently
+- handler replies use `ctx.reply.*` through the existing communicator relay
+  when reply metadata is present
+- durable truth is the bundle-owned storage mutation, not the reply event
+
+Data Bus handlers do not create chat turns, `external_events[]`, timeline
+entries, or `ev:` artifacts unless the bundle explicitly bridges a handled
+domain message into conversation ingress.
+
+See:
+
+- [docs/service/comm/data-bus-README.md](../../service/comm/data-bus-README.md)
+- [bundle-client-communication-README.md#data-bus-contract](bundle-client-communication-README.md#data-bus-contract)
+
+### 1.11 `@cron(...)`
 
 Marks a method as a recurring scheduled job managed by proc.
 
@@ -878,7 +951,7 @@ For full details on span semantics, cron resolution, and local debug:
 
 - [docs/sdk/bundle/bundle-scheduled-jobs-README.md](bundle-scheduled-jobs-README.md)
 
-### 1.11 `@venv(...)`
+### 1.12 `@venv(...)`
 
 Marks a callable to execute in a cached per-bundle subprocess venv.
 
@@ -1012,7 +1085,21 @@ class CronJobSpec:
     span: str = "system"
 ```
 
-### 2.8 `BundleInterfaceManifest`
+### 2.8 `DataBusHandlerSpec`
+
+```python
+@dataclass(frozen=True)
+class DataBusHandlerSpec:
+    method_name: str
+    subject: str
+    partition_by: str = "none"
+    ordering: str = "parallel"
+    idempotency: str = "optional"
+    user_types: tuple[str, ...] = ()
+    roles: tuple[str, ...] = ()
+```
+
+### 2.9 `BundleInterfaceManifest`
 
 ```python
 @dataclass(frozen=True)
@@ -1027,6 +1114,7 @@ class BundleInterfaceManifest:
     on_message: OnMessageSpec | None = None
     on_job: OnJobSpec | None = None
     scheduled_jobs: tuple[CronJobSpec, ...] = ()
+    data_bus_handlers: tuple[DataBusHandlerSpec, ...] = ()
 ```
 
 `allowed_roles` is populated from the `allowed_roles` argument of
@@ -1041,6 +1129,9 @@ the path against bundle props and returns a new manifest with the effective
 
 `scheduled_jobs` is populated from all `@cron`-decorated methods on the
 entrypoint class, sorted by `alias`.
+
+`data_bus_handlers` is populated from all `@data_bus_handler(...)` methods on
+the entrypoint class, sorted by `subject`.
 
 Discovery helpers currently exposed by the loader:
 
@@ -1084,6 +1175,13 @@ Current response shape includes:
   - includes `cron_expression` (declared value, not runtime-resolved)
   - includes `expr_config`
   - includes `span`
+- `data_bus_handlers`
+  - includes `subject`
+  - includes `partition_by`
+  - includes `ordering`
+  - includes `idempotency`
+  - includes `user_types`
+  - includes `roles`
 
 Example:
 
@@ -1318,15 +1416,19 @@ Use these rules for new bundles:
 5. Decorate every widget method with `@ui_widget(...)`.
 6. If a widget method is also called through `/operations/...`, add
    `@api(route="operations", alias="<operation-alias>")` to the same method.
-6. Use `@ui_main` when the bundle has a main static UI application.
-7. Use `@on_message` on the bundle message handler. The base entrypoints already
+7. Use `@ui_main` when the bundle has a main static UI application.
+8. Use `@on_message` on the bundle message handler. The base entrypoints already
    do this on `run()`.
-8. Use `@on_job` when the bundle receives ready background jobs from the
+9. Use `@data_bus_handler(...)` when the bundle accepts durable non-chat domain
+   messages from widgets or services. Keep it async, make mutation subjects
+   idempotent, and use `partition_by="object_ref"` plus
+   `ordering="serial_per_partition"` for shared objects.
+10. Use `@on_job` when the bundle receives ready background jobs from the
    processor job stream. Keep the method async and define at most one per bundle.
    If the entrypoint derives from mixins with background work, call
    `await super().handle_job(**kwargs)` first and only handle the job locally
    when it returns `handled=false`.
-9. Use `@cron(...)` for recurring background work. Prefer `span="system"` (the
+11. Use `@cron(...)` for recurring background work. Prefer `span="system"` (the
    default) unless process-local or instance-local semantics are required.
    See [docs/sdk/bundle/bundle-scheduled-jobs-README.md](bundle-scheduled-jobs-README.md)
    for details on span semantics, `expr_config` resolution, and local debug.

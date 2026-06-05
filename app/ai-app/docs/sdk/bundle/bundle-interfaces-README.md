@@ -1,9 +1,9 @@
 ---
 id: ks:docs/sdk/bundle/bundle-interfaces-README.md
 title: "Bundle Interfaces"
-summary: "Bundle-facing interface surface: communicator streams, background jobs, operations, widgets, panels, artifacts, and other bundle-visible interfaces exposed by the platform runtime."
-tags: ["sdk", "bundle", "interfaces", "streaming", "sse", "widgets", "operations", "communicator", "knowledge", "background-jobs"]
-keywords: ["communicator interface", "background job interface", "on_job interface", "operations interface", "widget and panel interface", "artifact surface", "bundle visible runtime interfaces", "streaming and interaction surfaces", "knowledge and attachment surfaces"]
+summary: "Bundle-facing interface surface: communicator streams, Data Bus handlers, background jobs, operations, widgets, panels, artifacts, and other bundle-visible interfaces exposed by the platform runtime."
+tags: ["sdk", "bundle", "interfaces", "streaming", "sse", "widgets", "operations", "communicator", "knowledge", "background-jobs", "data-bus"]
+keywords: ["communicator interface", "data bus handler interface", "background job interface", "on_job interface", "operations interface", "widget and panel interface", "artifact surface", "bundle visible runtime interfaces", "streaming and interaction surfaces", "knowledge and attachment surfaces"]
 updated_at: 2026-05-22
 see_also:
   - ks:docs/sdk/bundle/bundle-developer-guide-README.md
@@ -16,19 +16,21 @@ see_also:
   - ks:docs/sdk/bundle/bundle-client-communication-README.md
   - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
   - ks:docs/service/streams/background-jobs-README.md
+  - ks:docs/service/comm/data-bus-README.md
 ---
 # Bundle Interfaces (Streaming + Widgets + Operations)
 
 This doc describes how a bundle connects to clients:
 - **Streaming** via SSE/Socket.IO through the async communicator
+- **Data Bus** handlers for durable, bundle-owned non-conversation messages
 - **Widgets + React panels** returned by bundles
 - **Operations API** to invoke bundle methods over REST
 - **Background jobs** claimed by proc from Redis Streams and handled by `@on_job`
 - **Artifacts & attachments** surfaced in the timeline and chat stream events
 - **Execution boundaries** when selected helper functions run through `@venv(...)`
 
-For the higher-level transport map, including how `@mcp(...)` fits beside
-REST/widget/browser routes, use
+For the higher-level transport map, including how `@mcp(...)` and Data Bus fit
+beside REST/widget/browser routes, use
 [bundle-transports-README.md](bundle-transports-README.md).
 
 ```mermaid
@@ -42,6 +44,8 @@ graph LR
   UI -->|"iframe widget"| WIDGET["Bundle Widget (TSX/HTML)"]
   WIDGET -->|"POST /api/integrations/bundles/.../{bundle_id}/operations/{op}"| OPS["Integrations API"]
   OPS -->|invoke workflow op| BUNDLE
+  WIDGET -->|"Socket.IO data_bus.publish"| DBUS["Data Bus Redis Stream"]
+  DBUS -->|"managed worker"| BUNDLE
 
   CRON["@cron due scan"] -->|enqueue ready job| JOBS["Redis background job stream"]
   JOBS -->|claim fairly| PROC
@@ -159,6 +163,66 @@ Important for bundle REST/public API methods:
   - `kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx.get_current_comm()`
   - `kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx.get_current_request_context()`
   - `kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx.get_current_user_identity()`
+
+---
+
+## Durable Data Bus interface (`@data_bus_handler`)
+
+Data Bus handlers are the bundle-facing interface for durable non-chat domain
+messages. Use them when a widget or service needs to mutate bundle-owned state
+without creating a conversation turn.
+
+Typical flow:
+
+```mermaid
+flowchart LR
+    UI["Widget / service"] --> SIO["Socket.IO data_bus.publish"]
+    SIO --> V["validate bundle + subject visibility"]
+    V --> X["XADD bundle Data Bus stream"]
+    X --> W["processor-owned Data Bus worker"]
+    W --> H["@data_bus_handler(ctx, message)"]
+    H --> STORE["bundle-owned durable storage"]
+    H --> REPLY["optional ctx.reply.* via comm"]
+```
+
+Minimal handler:
+
+```python
+from kdcube_ai_app.apps.chat.sdk.data_bus import data_bus_handler
+
+@data_bus_handler(
+    subject="task_tracker.canvas.patch",
+    partition_by="object_ref",
+    ordering="serial_per_partition",
+    idempotency="required",
+)
+async def handle_canvas_patch(self, ctx, message):
+    result = await self.canvas.apply_patch(message.payload)
+    await ctx.reply.ok({"revision": result.revision})
+    return {"status": "ok", "data": {"revision": result.revision}}
+```
+
+Rules:
+
+- `messages[]` are accepted through Socket.IO `data_bus.publish`
+- accepted messages are written to a bundle-scoped Redis Stream
+- proc owns worker lifecycle, retry, result stream, DLQ, and clean shutdown
+- bundles register handlers by subject; they do not start Redis consumers
+- use `idempotency="required"` for mutations
+- use `partition_by="object_ref"` and `ordering="serial_per_partition"` for
+  shared objects that must not be processed concurrently
+- handler replies are optional client delivery through comm; durable truth is
+  the bundle's storage mutation
+
+Data Bus messages stay outside `chat_message`, `/sse/chat`,
+`external_events[]`, and ReAct timelines unless bundle code explicitly bridges
+a handled message into conversation ingress.
+
+See:
+
+- [Data Bus](../../service/comm/data-bus-README.md)
+- [bundle-client-communication-README.md#data-bus-contract](bundle-client-communication-README.md#data-bus-contract)
+- [bundle-platform-integration-README.md#110-data_bus_handler](bundle-platform-integration-README.md#110-data_bus_handler)
 
 ---
 

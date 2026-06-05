@@ -34,6 +34,10 @@ from kdcube_ai_app.apps.chat.sdk.protocol import (
     ExternalEventRouting,
     ExternalEventUser,
 )
+from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.types import (
+    DataBusHandlerSpec,
+    validate_handler_spec_values,
+)
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
 _log = logging.getLogger("kdcube.plugin.loader")
 
@@ -59,6 +63,7 @@ ON_JOB_ATTR = "__bundle_on_job__"
 PROCESS_OFFLINE_EVENTS_ATTR = "__bundle_process_offline_events__"
 UI_MAIN_ATTR = "__bundle_ui_main__"
 CRON_JOB_ATTR = "__bundle_cron_job__"
+DATA_BUS_HANDLER_ATTR = "__bundle_data_bus_handler__"
 BUNDLE_VENV_ATTR = "__bundle_venv__"
 _BUNDLE_VENV_EXEC_ENV = "KDCUBE_BUNDLE_VENV_EXEC"
 _BUNDLE_VENV_STAMP_FILE = ".kdcube_venv_stamp.json"
@@ -163,6 +168,7 @@ class BundleInterfaceManifest:
     on_job: OnJobSpec | None = None
     process_offline_events: ProcessOfflineEventsSpec | None = None
     scheduled_jobs: tuple[CronJobSpec, ...] = ()
+    data_bus_handlers: tuple[DataBusHandlerSpec, ...] = ()
 
 
 _VALID_ENABLED_KINDS: frozenset = frozenset({"bundle", "api", "mcp", "widget", "cron"})
@@ -911,6 +917,55 @@ def cron(
                 timezone=str(timezone).strip() if timezone is not None else None,
                 tz_config=str(tz_config).strip() if tz_config is not None else None,
                 span=span_norm,
+            ),
+        )
+        return fn
+
+    return _wrap
+
+
+def data_bus_handler(
+        *,
+        subject: str,
+        partition_by: str = "none",
+        ordering: str = "parallel",
+        idempotency: str = "optional",
+        user_types: List[str] | Tuple[str, ...] | None = None,
+        roles: List[str] | Tuple[str, ...] | None = None,
+):
+    """
+    Mark a bundle method as a Data Bus subject handler.
+
+    Data Bus handlers process durable, bundle-scoped inbound messages from the
+    runtime-managed Redis Streams path. They are separate from chat turns and
+    comm relay output.
+    """
+    resolved_subject, resolved_partition_by, resolved_ordering, resolved_idempotency = (
+        validate_handler_spec_values(
+            subject=subject,
+            partition_by=partition_by,
+            ordering=ordering,
+            idempotency=idempotency,
+        )
+    )
+    resolved_user_types, resolved_roles = _normalize_visibility_selectors(
+        user_types=user_types,
+        roles=roles,
+    )
+
+    def _wrap(fn):
+        method_name = getattr(fn, "__name__", "data_bus_handler")
+        setattr(
+            fn,
+            DATA_BUS_HANDLER_ATTR,
+            DataBusHandlerSpec(
+                method_name=method_name,
+                subject=resolved_subject,
+                partition_by=resolved_partition_by,
+                ordering=resolved_ordering,
+                idempotency=resolved_idempotency,
+                user_types=resolved_user_types,
+                roles=resolved_roles,
             ),
         )
         return fn
@@ -2240,9 +2295,11 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
     on_job_spec: OnJobSpec | None = None
     process_offline_events_spec: ProcessOfflineEventsSpec | None = None
     scheduled_jobs: list[CronJobSpec] = []
+    data_bus_handlers: list[DataBusHandlerSpec] = []
     seen_api: set[tuple[str, str]] = set()
     seen_mcp: set[tuple[str, str]] = set()
     seen_widgets: set[str] = set()
+    seen_data_bus_subjects: set[str] = set()
 
     for member_name, fn in _iter_bundle_callable_members(target):
         api_spec = getattr(fn, API_METHOD_ATTR, None)
@@ -2360,6 +2417,31 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
                 span=str(getattr(cron_spec, "span", "system") or "system"),
             ))
 
+        data_bus_spec = getattr(fn, DATA_BUS_HANDLER_ATTR, None)
+        if _is_equivalent_decorator_spec(
+            data_bus_spec,
+            DataBusHandlerSpec,
+            ("method_name", "subject", "partition_by", "ordering", "idempotency"),
+        ):
+            subject, partition_by, ordering, idempotency = validate_handler_spec_values(
+                subject=str(getattr(data_bus_spec, "subject", "") or ""),
+                partition_by=str(getattr(data_bus_spec, "partition_by", "none") or "none"),
+                ordering=str(getattr(data_bus_spec, "ordering", "parallel") or "parallel"),
+                idempotency=str(getattr(data_bus_spec, "idempotency", "optional") or "optional"),
+            )
+            if subject in seen_data_bus_subjects:
+                raise ValueError(f"Duplicate Data Bus handler subject detected: {subject}")
+            seen_data_bus_subjects.add(subject)
+            data_bus_handlers.append(DataBusHandlerSpec(
+                method_name=member_name,
+                subject=subject,
+                partition_by=partition_by,
+                ordering=ordering,
+                idempotency=idempotency,
+                user_types=tuple(getattr(data_bus_spec, "user_types", ()) or ()),
+                roles=tuple(getattr(data_bus_spec, "roles", ()) or ()),
+            ))
+
     meta = _get_bundle_entrypoint_meta(cls)
     allowed_roles: tuple[str, ...] = _tuple_str(meta.get("allowed_roles"))
     allowed_roles_config: str | None = meta.get("allowed_roles_config") or None
@@ -2368,6 +2450,7 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
     mcp_endpoints.sort(key=lambda item: (item.alias, item.route, item.transport, item.method_name))
     ui_widgets.sort(key=lambda item: (item.alias, item.method_name))
     scheduled_jobs.sort(key=lambda item: (item.alias, item.method_name))
+    data_bus_handlers.sort(key=lambda item: (item.subject, item.method_name))
     return BundleInterfaceManifest(
         bundle_id=resolved_bundle_id,
         allowed_roles=allowed_roles,
@@ -2380,6 +2463,7 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
         on_job=on_job_spec,
         process_offline_events=process_offline_events_spec,
         scheduled_jobs=tuple(scheduled_jobs),
+        data_bus_handlers=tuple(data_bus_handlers),
     )
 
 
