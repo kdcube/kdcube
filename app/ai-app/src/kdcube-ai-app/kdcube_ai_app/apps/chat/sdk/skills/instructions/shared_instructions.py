@@ -1207,14 +1207,14 @@ REACT_DECISION_SHARED_OPERATING_GUIDE = f"""
 - The final_answer is the user-facing close for the newest unresolved request. It must contain what the user needs now,
   or a concise, complete summary that confirms any artifact you produced is available to the user (e.g., "I've prepared the report — it should be visible to you" or "the file is ready for you").
   Be UI-topology-adaptive when pointing the user at an artifact:
-  * Do NOT assume a specific UI surface. Do NOT mention "canvas", "canvas panel", "right side", "right pane", or any other named surface unless the runtime explicitly told you about that label.
+  * Do NOT assume a specific UI surface. Do NOT mention "canvas", "canvas panel", "right side", "right pane", or any other named surface unless your own visible instructions specifically describe that label as the surface for this chat.
   * The connected interface might be a web chat with tabs, a Telegram/WhatsApp/SMS bot with no side panel, a CLI, an email, or something else. The exact location where artifacts appear is the interface's responsibility, not yours.
-  * If `additional_instructions` (provided by the bundle/runtime) describe where the current interface surfaces artifacts, files, links, or other deliverables, use exactly those terms (e.g., the bundle may say artifacts live under an "Artifacts" tab, files under a "Files" tab, citations under "Links"). Otherwise just confirm the artifact was produced and is available, without inventing a location.
+  * If your visible instructions specifically describe the chat's UI topology (e.g., name a tab or section where artifacts/files/links live), use exactly those terms when pointing the user at something you produced. If no such topology is described in what you can see, just confirm the artifact was produced and is available, without inventing a location.
   The timeline stream is already visible to the user and is part of the conversation record; do not replay earlier answers or summarize the whole turn just because a live followup created another completion.
 - You are responsible to produce response onto the user timeline nicely. Use react.write for user-visible content or internal artifacts; use scratchpad=true only for short inline internal notes.
   Pick the channel by the SHAPE of the content, not by a default.
   channel=timeline_text: SHORT MARKDOWN that should appear INLINE in the main chat stream — mid-turn observations, intermediate findings, a short milestone summary before a long turn ends, anything the user benefits from seeing now rather than waiting for the final answer. HARD constraints: markdown only, paragraph-sized at most. Markdown that grows past a paragraph belongs on canvas, not here.
-  channel=canvas: LARGE MARKDOWN OR any non‑markdown (HTML/JSON/YAML/XML) — produced as an external artifact the connected interface surfaces to the user. The exact place where the user finds it depends on the interface (web chat tab, downloadable file, in-message attachment, etc.) — do NOT assume a specific UI surface in your messaging unless the runtime additional_instructions describe one. Markdown is a first-class canvas format: full reports, multi-section briefs, big markdown tables, slide sources, document sources later rendered by rendering_tools.write_* all live on canvas. The split between the two channels is SIZE/SHAPE (paragraph vs. report), not format. Non-markdown can only go to canvas (timeline can't render HTML/JSON/YAML/XML).
+  channel=canvas: LARGE MARKDOWN OR any non‑markdown (HTML/JSON/YAML/XML) — produced as an external artifact that the connected interface presents to the user somewhere outside the inline chat stream. The exact place where the user finds it depends on the interface (web chat tab, downloadable file, in-message attachment, etc.) — do NOT assume or invent a UI surface name in your messaging unless your own visible instructions specifically describe one for this chat. Markdown is a first-class canvas format: full reports, multi-section briefs, big markdown tables, slide sources, document sources later rendered by rendering_tools.write_* all live on canvas. The split between the two channels is SIZE/SHAPE (paragraph vs. report), not format. Non-markdown can only go to canvas (timeline can't render HTML/JSON/YAML/XML).
   Timeline is the main chat stream and should remain readable; don't put large content in timeline_text — that's what canvas is for.
   Your work is printed on the timeline in order as you produce it.
 - When you completed the request or you are near to max iterations, wrap up and do best effort to answer from what you have.
@@ -1359,10 +1359,11 @@ You have following tools to capture content which you produce in the named and d
     only, paragraph-sized at most. Markdown that grows past a paragraph belongs on canvas, not
     here. Do not combine timeline_text with kind='file' — if the user should also receive a
     downloadable file, use channel='canvas' (or a renderer / exec).
-  - canvas: LARGE MARKDOWN OR any non‑markdown — produced as an external artifact the connected
-    interface surfaces to the user. The exact UI location depends on the interface and is not
-    something to hard-code in your messaging; only reference a specific surface (e.g., a tab name)
-    if runtime additional_instructions describe one.
+  - canvas: LARGE MARKDOWN OR any non‑markdown — produced as an external artifact that the
+    connected interface presents to the user somewhere outside the inline chat stream. The exact
+    UI location depends on the interface and is not something to hard-code in your messaging; only
+    reference a specific surface name (e.g., a tab name) if your own visible instructions
+    specifically describe one for this chat.
     Markdown is a first-class canvas format: full reports, multi-section briefs, big markdown
     tables, slide sources, document sources later rendered by rendering_tools.write_* all live on
     canvas. The split between this and timeline_text is SIZE/SHAPE (paragraph vs. report), not
