@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import time
 import uuid
 from contextlib import nullcontext
@@ -28,6 +29,8 @@ from kdcube_ai_app.apps.chat.sdk.integrations.telegram import (
     send_telegram_messages,
 )
 
+
+logger = logging.getLogger(__name__)
 
 BUNDLE_ID = ""
 WORK_KIND_TASK_RUN_NOW = "task.execution.manual"
@@ -100,8 +103,132 @@ def _execution_scope(entrypoint: Any, *, user_id: str) -> Dict[str, Any]:
         "tenant": tenant,
         "project": project,
         "user_id": user_id,
+        # NOTE: user_type here scopes ARTIFACT storage paths (execution_artifacts),
+        # not economics. It is intentionally left constant so artifact read/write
+        # paths stay consistent across executions regardless of the funding role.
+        # Economics uses an independently resolved role via _task_econ_subject.
         "user_type": "registered",
         "storage_root": _storage_root(entrypoint),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Economics enforcement (Option A: estimate + post-run settle, funding_flow parity)
+# ---------------------------------------------------------------------------
+def _task_economics_enabled(entrypoint: Any) -> bool:
+    return bool(
+        getattr(entrypoint, "cp_manager", None)
+        and getattr(entrypoint, "rl", None)
+        and getattr(entrypoint, "budget_limiter", None)
+    )
+
+
+def _task_reservation_usd(entrypoint: Any) -> float:
+    """Feasibility estimate for a task pipeline (bundle-configurable).
+
+    Tasks verify economic feasibility at the start (economic_preflight); this
+    only sizes the estimate the preflight admits against. The task's actual cost
+    is metered by the inner ReAct turn (self.run()), not reserved/settled here.
+    """
+    try:
+        return float(_bundle_prop(entrypoint, "economics.task.reservation_amount_dollars", 0.50) or 0.50)
+    except Exception:
+        return 0.50
+
+
+async def _task_econ_subject(entrypoint: Any, *, target_user: str, source: Dict[str, Any]):
+    """Build an EconomicsSubject for a task execution.
+
+    privileged/admin is preserved from the carried (enqueue-time) role; the
+    carried role rides in the job source (enqueue_task_job persists user_type),
+    falling back to the worker comm_context. paid/registered is re-resolved at
+    run time from economics state via RoleResolver.
+    """
+    from kdcube_ai_app.apps.chat.sdk.infra.economics.enforcement import (
+        EconomicsSubject,
+        RoleResolver,
+    )
+
+    tenant, project, _bundle_id = _bundle_route_parts(entrypoint)
+    comm_context = getattr(entrypoint, "comm_context", None)
+    comm_user = getattr(comm_context, "user", None)
+    carried_role = str(
+        (source or {}).get("user_type")
+        or getattr(comm_user, "user_type", "")
+        or "registered"
+    ).strip() or "registered"
+    role = carried_role
+    try:
+        pg_pool = getattr(entrypoint, "pg_pool", None)
+        if pg_pool is not None and tenant and project and target_user:
+            resolver = RoleResolver(pg_pool=pg_pool, tenant=tenant, project=project)
+            role = await resolver.resolve(user_id=target_user, carried_role=carried_role)
+    except Exception as exc:
+        logger.warning(
+            "[tasks.economics] role resolve failed; using carried role: user=%s carried=%s err=%s",
+            target_user, carried_role, exc,
+        )
+        role = carried_role
+    timezone = str((source or {}).get("timezone") or getattr(comm_user, "timezone", "") or "") or None
+    return EconomicsSubject(
+        tenant=tenant, project=project, user_id=target_user,
+        user_type=role, timezone=timezone,
+    )
+
+
+async def _task_verify_economics(
+    entrypoint: Any,
+    *,
+    target_user: str,
+    source: Dict[str, Any],
+):
+    """Verify the task pipeline is economically feasible for the carried user.
+
+    Returns (subject, decision) on success; raises EconomicsLimitException when
+    the user's quota/funding cannot support the pipeline. Returns (None, None)
+    when economics is not configured (task runs unmetered, as before).
+
+    Verify-only (economic_preflight): NO reservation, NO settlement. The task's
+    ReAct work routes through self.run(), which already reserves+settles the real
+    cost under the task's user identity; an outer guard would only duplicate it.
+    This gates the START of the flow and surfaces the economic limits for logging.
+    """
+    if not _task_economics_enabled(entrypoint):
+        return None, None
+    from kdcube_ai_app.apps.chat.sdk.infra.economics.enforcement import (
+        economic_preflight,
+        EconomicsEstimate,
+        FlowPolicy,
+    )
+
+    subject = await _task_econ_subject(entrypoint, target_user=target_user, source=source)
+    if not (subject.tenant and subject.project and subject.user_id):
+        return None, None
+    decision = await economic_preflight(
+        entrypoint,
+        subject=subject,
+        estimate=EconomicsEstimate(reservation_usd=_task_reservation_usd(entrypoint)),
+        flow="tasks",
+        policy=FlowPolicy(enforce_concurrency=False, emit_user_events=False),
+    )
+    return subject, decision
+
+
+def _task_economics_metadata(decision) -> Dict[str, Any]:
+    """Compact economic decision + limits for the execution journal/metadata."""
+    if decision is None:
+        return {}
+    admit = getattr(decision, "admit", None)
+    limits = (getattr(admit, "snapshot", None) or {}) if admit is not None else {}
+    return {
+        "economics": {
+            "verified": True,
+            "lane": getattr(decision, "lane", None),
+            "plan_id": getattr(decision, "plan_id", None),
+            "funding_source": getattr(decision, "funding_source", None),
+            "est_turn_usd": getattr(decision, "est_turn_usd", None),
+            "limits": limits,
+        }
     }
 
 
@@ -633,6 +760,7 @@ def _build_task_scoped_context(
     run_conversation_id: str,
     turn_id: str,
     bundle_call_context: Dict[str, Any],
+    resolved_user_type: Optional[str] = None,
 ):
     comm_context = getattr(entrypoint, "comm_context", None)
     if comm_context is None or not hasattr(comm_context, "model_copy"):
@@ -643,6 +771,11 @@ def _build_task_scoped_context(
     scoped_ctx.routing.conversation_id = run_conversation_id
     scoped_ctx.routing.turn_id = turn_id
     scoped_ctx.user.user_id = target_user
+    # Carry the economics-resolved role so the inner run() applies the correct
+    # plan/limits + funding for this user (the worker comm_context may carry a
+    # stale/default role for scheduled tasks).
+    if resolved_user_type:
+        scoped_ctx.user.user_type = resolved_user_type
     scoped_ctx.bundle_call_context = bundle_call_context
     return scoped_ctx
 
@@ -673,6 +806,7 @@ async def _run_default_react_task_job(
     run_conversation_id: str,
     turn_id: str,
     bundle_call_context: Dict[str, Any],
+    resolved_user_type: Optional[str] = None,
 ) -> Dict[str, Any]:
     scoped_ctx = _build_task_scoped_context(
         entrypoint,
@@ -680,6 +814,7 @@ async def _run_default_react_task_job(
         run_conversation_id=run_conversation_id,
         turn_id=turn_id,
         bundle_call_context=bundle_call_context,
+        resolved_user_type=resolved_user_type,
     )
 
     async def _run_scoped() -> Dict[str, Any]:
@@ -730,6 +865,7 @@ async def _execute_task_job(
     run_conversation_id: str,
     turn_id: str,
     bundle_call_context: Dict[str, Any],
+    resolved_user_type: Optional[str] = None,
 ) -> Dict[str, Any]:
     executor = getattr(entrypoint, "execute_task_job", None)
     if callable(executor):
@@ -754,6 +890,7 @@ async def _execute_task_job(
                 run_conversation_id=run_conversation_id,
                 turn_id=turn_id,
                 bundle_call_context=bundle_call_context,
+                resolved_user_type=resolved_user_type,
             )
         except RuntimeError:
             return await _run_custom()
@@ -769,6 +906,7 @@ async def _execute_task_job(
         run_conversation_id=run_conversation_id,
         turn_id=turn_id,
         bundle_call_context=bundle_call_context,
+        resolved_user_type=resolved_user_type,
     )
 
 
@@ -993,6 +1131,56 @@ async def run_task_execution(
         "task_definition": json.dumps(task_definition, sort_keys=True, ensure_ascii=True),
     }
 
+    from kdcube_ai_app.apps.chat.sdk.infra.economics.policy import EconomicsLimitException
+    econ_subject = None
+    econ_decision = None
+    try:
+        # Carry the user identity and verify the task pipeline is economically
+        # feasible BEFORE running it (verify-only). The ReAct work routes through
+        # self.run(), which reserves+settles the real cost under the same user, so
+        # we do NOT reserve/settle here. Denial -> execution cancelled, no run.
+        econ_subject, econ_decision = await _task_verify_economics(
+            entrypoint, target_user=target_user, source=source or {},
+        )
+    except EconomicsLimitException as exc:
+        code = getattr(exc, "code", "rate_limited")
+        execution = await storage.update_execution(
+            execution_id=execution["id"],
+            task_id=task_id,
+            status="cancelled",
+            conversation_id=run_conversation_id,
+            turn_id=turn_id,
+            summary=f"Task execution denied by economics ({code}).",
+            error=str(exc),
+            log_excerpt=str(exc)[:1000],
+            metadata_patch={"economics": {
+                "denied": True, "code": code, "message": str(exc),
+                "data": getattr(exc, "data", {}) or {},
+            }},
+        )
+        logger.warning(
+            "[tasks.economics] execution denied: execution_id=%s user=%s code=%s",
+            execution.get("id"), target_user, code,
+        )
+        return {
+            "ok": False,
+            "denied": True,
+            "user_id": target_user,
+            "task": await storage.get_task(task_id),
+            "execution": execution,
+            "error": {"code": "economics_denied", "message": str(exc)},
+        }
+    if econ_decision is not None:
+        logger.info(
+            "[tasks.economics] preflight ok: execution_id=%s user=%s role=%s lane=%s funding=%s plan=%s",
+            execution["id"], target_user, getattr(econ_subject, "user_type", None),
+            econ_decision.lane, econ_decision.funding_source, econ_decision.plan_id,
+        )
+    # Point (2): propagate the resolved role so the inner ReAct run() applies the
+    # correct plan/limits for this user (esp. scheduled tasks enqueued in a system
+    # context where the carried role may default to "registered").
+    resolved_user_type = getattr(econ_subject, "user_type", None)
+
     try:
         try:
             from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_bundle_call_context
@@ -1015,6 +1203,7 @@ async def run_task_execution(
                 run_conversation_id=run_conversation_id,
                 turn_id=turn_id,
                 bundle_call_context=bundle_call_context,
+                resolved_user_type=resolved_user_type,
             )
         answer = _result_answer(result)
         current_execution = await storage.get_execution(execution_id=execution["id"], task_id=task_id) or execution
@@ -1023,6 +1212,8 @@ async def run_task_execution(
         final_status = current_status if current_status in {"success", "failed", "cancelled"} else (requested_status or "success")
         artifacts = result.get("artifacts") if isinstance(result.get("artifacts"), list) else None
         metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else None
+        if econ_decision is not None:
+            metadata = {**(metadata or {}), **_task_economics_metadata(econ_decision)}
         execution = await storage.update_execution(
             execution_id=execution["id"],
             task_id=task_id,

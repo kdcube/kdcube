@@ -8,6 +8,7 @@ see_also:
   - ks:docs/economics/eco-test-README.md
   - ks:docs/economics/eco-admin-README.md
   - ks:docs/economics/eco-kickoff-README.md
+  - ks:docs/economics/economic-enforcement-engine-README.md
 ---
 # Economics Model (Control Plane)
 
