@@ -103,7 +103,7 @@ export async function openSocketTransport(
   const streamId = createLocalId('stream')
   const bundleId = options.bundleId || settings.getBundleId()
   const socket = managerFor(settings.getBaseUrl(), options.path || '/socket.io')
-    .socket(options.namespace || '', { auth: authPayload(sessionId, streamId, bundleId) })
+    .socket(options.namespace || '/', { auth: authPayload(sessionId, streamId, bundleId) })
 
   bindJson<ChatStartEnvelope>(socket, 'chat_start', options.onChatStart)
   bindJson<ChatStepEnvelope>(socket, 'chat_step', options.onChatStep)

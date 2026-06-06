@@ -62,6 +62,8 @@ async function buildSocketAuth(): Promise<Record<string, unknown>> {
     const claim = await callOperation<FederatedClaimPayload>('federated_data_bus_claim', {});
     const token = String(claim.federated_token || '').trim();
     if (!token) throw new Error('Federated Data Bus token was not issued.');
+    const sessionId = String(claim.session_id || '').trim();
+    if (!sessionId) throw new Error('Federated Data Bus claim did not return a session_id.');
     return {
       ...baseAuth,
       federated_token: token,

@@ -130,6 +130,8 @@ def _manifest():
 
 
 def _patch_data_bus_contract(monkeypatch, manifest):
+    del manifest
+
     async def fake_load_registry(_redis, tenant, project):
         return SimpleNamespace(
             bundles={
@@ -146,7 +148,6 @@ def _patch_data_bus_contract(monkeypatch, manifest):
 
     monkeypatch.setattr(pub, "load_registry", fake_load_registry)
     monkeypatch.setattr(pub, "get_bundle_props", fake_get_bundle_props)
-    monkeypatch.setattr(pub, "load_bundle_manifest", lambda spec, bundle_id: manifest)
     monkeypatch.setattr(pub, "get_settings", lambda: SimpleNamespace(TENANT="tenant-a", PROJECT="project-a"))
 
 
@@ -249,35 +250,10 @@ async def test_data_bus_publish_anonymous_threshold_handler_accepts_platform_reg
 
 
 @pytest.mark.asyncio
-async def test_data_bus_publish_rejects_unregistered_subject(monkeypatch):
+async def test_data_bus_publish_queues_unknown_subject_for_proc_side_rejection(monkeypatch):
     redis = FakeRedis()
     app = SimpleNamespace(state=SimpleNamespace(redis_async=redis))
-    manifest = SimpleNamespace(
-        allowed_roles=(),
-        allowed_roles_config=None,
-        data_bus_handlers=(
-            DataBusHandlerSpec(method_name="handle_patch", subject="known.subject"),
-        ),
-    )
-
-    async def fake_load_registry(_redis, tenant, project):
-        return SimpleNamespace(
-            bundles={
-                "task-tracker@1-0": SimpleNamespace(
-                    path="/bundles/task-tracker@1-0",
-                    module="entrypoint",
-                    singleton=True,
-                )
-            }
-        )
-
-    async def fake_get_bundle_props(_redis, tenant, project, bundle_id):
-        return {}
-
-    monkeypatch.setattr(pub, "load_registry", fake_load_registry)
-    monkeypatch.setattr(pub, "get_bundle_props", fake_get_bundle_props)
-    monkeypatch.setattr(pub, "load_bundle_manifest", lambda spec, bundle_id: manifest)
-    monkeypatch.setattr(pub, "get_settings", lambda: SimpleNamespace(TENANT="tenant-a", PROJECT="project-a"))
+    _patch_data_bus_contract(monkeypatch, _manifest())
 
     ingress = DataBusSocketIOIngress(app=app)
     ack = await ingress.handle_publish(
@@ -295,11 +271,12 @@ async def test_data_bus_publish_rejects_unregistered_subject(monkeypatch):
         },
     )
 
-    assert ack["status"] == "rejected"
-    assert ack["accepted"] == []
-    assert ack["rejected"][0]["message_id"] == "m1"
-    assert "subject is not handled" in ack["rejected"][0]["error"]
-    assert redis.streams == {}
+    assert ack["status"] == "accepted"
+    assert ack["accepted"] == [{"message_id": "m1", "stream_id": "1-1"}]
+    assert ack["rejected"] == []
+    stream_key = "kdcube:data-bus:tenant-a:project-a:task-tracker@1-0:messages"
+    record = json.loads(redis.streams[stream_key][0][1]["json"])
+    assert record["subject"] == "unknown.subject"
 
 
 @pytest.mark.asyncio

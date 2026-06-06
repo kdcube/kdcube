@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import inspect
+import logging
 import traceback
 from typing import Any, Dict, Optional
 
@@ -47,6 +48,7 @@ TELEGRAM_WEBAPP_PUBLIC_AUTH = "none"
 TELEMETRY_SINK_TOKEN_SECRET = "b:telemetry_sink.auth.token"
 EVENT_RECORD_MAX = 200
 DATA_BUS_ECHO_SUBJECT = "versatile.echo"
+_log = logging.getLogger("kdcube.bundle.versatile")
 
 
 def _api_visibility(
@@ -216,6 +218,13 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
             "stream_id": ctx.stream_id,
             "handled_at": datetime.now(timezone.utc).isoformat(),
         }
+        _log.info(
+            "[data_bus.echo] handled bundle=%s subject=%s message_id=%s stream_id=%s",
+            BUNDLE_ID,
+            message.subject,
+            message.message_id,
+            ctx.stream_id,
+        )
         await ctx.reply.ok(payload)
         return {"status": "ok", "data": payload}
 

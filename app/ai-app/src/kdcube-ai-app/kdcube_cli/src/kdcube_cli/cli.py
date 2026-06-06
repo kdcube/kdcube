@@ -778,6 +778,49 @@ def _canonical_descriptor_dir_from_initialized_workdir(workdir: Path) -> Path | 
     return config_dir
 
 
+def _refresh_runtime_proxy_config(console: Console, *, repo_root: Path, workdir: Path) -> None:
+    """Refresh generated nginx proxy config from the staged platform source."""
+    config_dir = workdir / "config"
+    env_path = config_dir / ".env"
+    assembly_path = config_dir / "assembly.yaml"
+    if not env_path.exists():
+        return
+
+    env_main = installer_mod.load_env_file(env_path)
+    runtime_proxy_raw = (env_main.entries.get("NGINX_PROXY_RUNTIME_CONFIG_PATH", (None, None))[1] or "").strip()
+    if not runtime_proxy_raw:
+        return
+
+    runtime_proxy = Path(runtime_proxy_raw).expanduser()
+    ai_app_root = repo_root / "app" / "ai-app"
+    if not ai_app_root.exists():
+        return
+
+    compose_mode = (env_main.entries.get("KDCUBE_COMPOSE_MODE", (None, None))[1] or "").strip()
+    docker_dir_name = "custom-ui-managed-infra" if compose_mode == "custom-ui-managed-infra" else "all_in_one_kdcube"
+    template_rel = f"app/ai-app/deployment/docker/{docker_dir_name}/nginx/conf/{runtime_proxy.name}"
+    template_path = repo_root / template_rel
+    if not template_path.exists():
+        return
+
+    assembly = installer_mod.load_release_descriptor_soft(assembly_path)
+    before = runtime_proxy.read_text() if runtime_proxy.exists() else ""
+    installer_mod.sync_nginx_proxy_config(runtime_proxy, ai_app_root, template_rel, assembly=assembly)
+
+    route_prefix_raw = installer_mod._get_nested(assembly, "proxy", "route_prefix")
+    route_prefix = installer_mod.normalize_routes_prefix(route_prefix_raw) if route_prefix_raw else ""
+    if route_prefix:
+        installer_mod.update_nginx_routes_prefix(runtime_proxy, route_prefix)
+    installer_mod.apply_nginx_frame_embedding_config(runtime_proxy, assembly)
+
+    try:
+        after = runtime_proxy.read_text()
+    except Exception:
+        after = before
+    if after != before:
+        console.print(f"[dim]Refresh: updated proxy config:[/dim] {runtime_proxy}")
+
+
 def _resolve_cli_repo_path(
     repo_path: Path,
     *,
@@ -4543,6 +4586,7 @@ def main() -> None:
                     source_repo=_repo,
                     workdir=_resolved,
                 )
+            _refresh_runtime_proxy_config(console, repo_root=_repo, workdir=_resolved)
             _t, _p = _parse_workdir_namespace(_resolved)
             # Stop if running (no-op if already stopped).
             try:

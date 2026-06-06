@@ -39,7 +39,12 @@ from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.types import (
     coerce_data_bus_result,
     now_ms,
 )
-from kdcube_ai_app.infra.plugin.bundle_loader import BundleSpec, get_workflow_instance_async, load_bundle_manifest
+from kdcube_ai_app.infra.plugin.bundle_loader import (
+    BundleSpec,
+    apply_bundle_overrides,
+    get_workflow_instance_async,
+    load_bundle_manifest,
+)
 
 _log = logging.getLogger("kdcube.data_bus.worker")
 
@@ -56,6 +61,12 @@ DATA_BUS_LOCK_RETRY_SLEEP_SECONDS = max(
     0.0,
     float(os.getenv("DATA_BUS_LOCK_RETRY_SLEEP_SECONDS", "0.05") or "0.05"),
 )
+_USER_TYPE_VISIBILITY_ORDER = {
+    "anonymous": 0,
+    "registered": 1,
+    "paid": 2,
+    "privileged": 3,
+}
 
 
 @dataclass(frozen=True)
@@ -66,6 +77,52 @@ class _DataBusWorkerKey:
 def _actor_user_id(actor: Mapping[str, Any] | None) -> str | None:
     actor = actor or {}
     return actor.get("user_id") or actor.get("fingerprint")
+
+
+def _actor_user_type(actor: Mapping[str, Any] | None) -> str:
+    return str((actor or {}).get("user_type") or "").strip().lower()
+
+
+def _actor_raw_roles(actor: Mapping[str, Any] | None) -> set[str]:
+    return {
+        role for role in ((actor or {}).get("roles") or [])
+        if isinstance(role, str) and role.startswith("kdcube:role:")
+    }
+
+
+def _user_types_visible(required_user_types: tuple[str, ...] | list[str] | None, actor: Mapping[str, Any] | None) -> bool:
+    user_types = tuple(
+        str(user_type or "").strip().lower()
+        for user_type in (required_user_types or ())
+        if str(user_type or "").strip()
+    )
+    if not user_types:
+        return True
+    current = _actor_user_type(actor)
+    if not current:
+        return False
+    current_rank = _USER_TYPE_VISIBILITY_ORDER.get(current)
+    if current_rank is None:
+        return current in set(user_types)
+    thresholds = [
+        _USER_TYPE_VISIBILITY_ORDER[user_type]
+        for user_type in user_types
+        if user_type in _USER_TYPE_VISIBILITY_ORDER
+    ]
+    if not thresholds:
+        return current in set(user_types)
+    return current_rank >= min(thresholds)
+
+
+def _raw_roles_visible(required_roles: tuple[str, ...] | list[str] | None, actor: Mapping[str, Any] | None) -> bool:
+    roles = tuple(str(role or "").strip() for role in (required_roles or ()) if str(role or "").strip())
+    if not roles:
+        return True
+    return bool(_actor_raw_roles(actor) & set(roles))
+
+
+def _handler_visible(handler_spec: DataBusHandlerSpec, actor: Mapping[str, Any] | None) -> bool:
+    return _user_types_visible(handler_spec.user_types, actor) and _raw_roles_visible(handler_spec.roles, actor)
 
 
 def _make_comm_context(message: DataBusMessage) -> ExternalEventPayload:
@@ -192,6 +249,7 @@ class DataBusBundleWorker:
         bundle_spec: BundleSpec,
         bundle_config: Any,
         handler_specs: Mapping[str, DataBusHandlerSpec],
+        bundle_allowed_roles: tuple[str, ...] = (),
         instance_id: str,
     ) -> None:
         self.redis = redis
@@ -202,6 +260,7 @@ class DataBusBundleWorker:
         self.bundle_spec = bundle_spec
         self.bundle_config = bundle_config
         self.handler_specs = dict(handler_specs or {})
+        self.bundle_allowed_roles = tuple(bundle_allowed_roles or ())
         self.instance_id = instance_id
         self.consumer_name = f"{instance_id or os.getpid()}:{os.getpid()}:{bundle_id}"
         self.stream = RedisDataBusStream(
@@ -257,6 +316,26 @@ class DataBusBundleWorker:
             )
             await self.stream.write_result(result, stream_id=claim.stream_id)
             await self.stream.write_dlq(message, reason="handler_not_found", details={"stream_id": claim.stream_id})
+            await self.stream.ack(claim)
+            return
+        if self.bundle_allowed_roles and not bool(_actor_raw_roles(message.actor) & set(self.bundle_allowed_roles)):
+            result = DataBusResult.error_result(
+                message,
+                code="bundle_not_visible",
+                message_text="Data Bus bundle is not visible to this actor",
+                status="rejected",
+            )
+            await self.stream.write_result(result, stream_id=claim.stream_id)
+            await self.stream.ack(claim)
+            return
+        if not _handler_visible(handler_spec, message.actor):
+            result = DataBusResult.error_result(
+                message,
+                code="handler_not_visible",
+                message_text=f"Data Bus subject is not visible to this actor: {message.subject}",
+                status="rejected",
+            )
+            await self.stream.write_result(result, stream_id=claim.stream_id)
             await self.stream.ack(claim)
             return
         if handler_spec.idempotency == DATA_BUS_IDEMPOTENCY_REQUIRED and not message.idempotency_key:
@@ -485,7 +564,7 @@ class DataBusRuntimeManager:
         from kdcube_ai_app.apps.chat.sdk.runtime.bundle_scheduler import _make_headless_config, is_bundle_enabled
         from kdcube_ai_app.infra.plugin.bundle_store import get_bundle_props
 
-        desired: Dict[_DataBusWorkerKey, Tuple[str, BundleSpec, Any, Dict[str, DataBusHandlerSpec]]] = {}
+        desired: Dict[_DataBusWorkerKey, Tuple[str, BundleSpec, Any, Dict[str, DataBusHandlerSpec], Tuple[str, ...]]] = {}
         for bundle_id, entry in (getattr(registry, "bundles", None) or {}).items():
             path = entry.path if hasattr(entry, "path") else entry.get("path", "")
             module = entry.module if hasattr(entry, "module") else entry.get("module")
@@ -513,11 +592,15 @@ class DataBusRuntimeManager:
             if not is_bundle_enabled(props):
                 _log.info("[data_bus] Bundle disabled via enabled.bundle: bundle=%s", bundle_id)
                 continue
-            handler_specs = {handler.subject: handler for handler in manifest.data_bus_handlers}
+            effective_manifest = apply_bundle_overrides(manifest, dict(props or {}))
+            handler_specs = {handler.subject: handler for handler in effective_manifest.data_bus_handlers}
+            bundle_allowed_roles = tuple(effective_manifest.allowed_roles or ())
             signature = "|".join(
-                f"{item.subject}:{item.method_name}:{item.partition_by}:{item.ordering}:{item.idempotency}"
+                f"{item.subject}:{item.method_name}:{item.partition_by}:{item.ordering}:{item.idempotency}:{','.join(item.user_types)}:{','.join(item.roles)}"
                 for item in sorted(handler_specs.values(), key=lambda spec_item: spec_item.subject)
             )
+            if bundle_allowed_roles:
+                signature = f"{signature}|bundle_roles={','.join(bundle_allowed_roles)}"
             bundle_config = _make_headless_config(
                 tenant=self._tenant,
                 project=self._project,
@@ -531,6 +614,7 @@ class DataBusRuntimeManager:
                 spec,
                 bundle_config,
                 handler_specs,
+                bundle_allowed_roles,
             )
 
         for key in list(self._workers.keys()):
@@ -546,7 +630,7 @@ class DataBusRuntimeManager:
                 task.cancel()
                 del self._workers[key]
 
-        for key, (signature, spec, bundle_config, handler_specs) in desired.items():
+        for key, (signature, spec, bundle_config, handler_specs, bundle_allowed_roles) in desired.items():
             if key in self._workers:
                 continue
             worker = DataBusBundleWorker(
@@ -558,6 +642,7 @@ class DataBusRuntimeManager:
                 bundle_spec=spec,
                 bundle_config=bundle_config,
                 handler_specs=handler_specs,
+                bundle_allowed_roles=bundle_allowed_roles,
                 instance_id=self._instance_id,
             )
             task = asyncio.create_task(worker.run(), name=f"data-bus:{key.bundle_id}")
