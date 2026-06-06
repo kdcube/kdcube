@@ -1,53 +1,66 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.6.5.342"
+  ref: "2026.6.6.342"
   description: |
-    This platform release improves conversation event handling, cross-turn
-    artifact recovery, memory retrieval, authenticated profile reporting, and
-    economics settlement behavior.
+    This platform release improves bundle-to-client communication, Data Bus
+    transport handling, federated browser-client access, Socket.IO routing,
+    and ReAct timeline preview behavior.
 
     Highlights
 
-    - Adds the event-source pipeline for ReAct turns, including configurable
-      per-bundle event recording policies and clearer event payload flow.
-    - Persists turn cost and timing summaries as chat artifacts.
-    - Improves external event handling so follow-up and wake-up events are
-      rendered consistently in the timeline.
-    - Supports cross-conversation source-pool reads and execution artifact
-      recovery paths.
-    - Adds lexical retrieval and reciprocal-rank fusion to memory search, with
-      more compact search envelopes for model context.
-    - Surfaces authenticated profile state more accurately in the web client.
-    - Corrects plan, project, and wallet settlement so reservation splits are
-      preserved through final charging.
-    - Clarifies bundle UI asset paths and runtime storage contracts in the
-      developer documentation.
+    - Adds scoped bundle communication support so bundle operations can target
+      connected peers and sessions more consistently.
+    - Adds a concrete Data Bus runtime path for durable bundle-owned messages,
+      including Redis stream admission, proc-owned workers, handler dispatch,
+      partition locking, result records, and focused regression coverage.
+    - Adds short-lived federated Data Bus tokens for browser clients that are
+      authenticated by a bundle-specific public entrypoint before connecting to
+      the platform Socket.IO transport.
+    - Keeps Data Bus Socket.IO ingress at the transport boundary: ingress now
+      authenticates and enqueues, while proc loads bundle manifests and
+      enforces bundle/handler visibility before invoking handlers.
+    - Aligns bundle Socket.IO clients and nginx proxy templates on the root
+      Socket.IO namespace and standard `/socket.io` path.
+    - Refreshes generated local proxy config during `kdcube refresh`, so proxy
+      template fixes are applied to existing local workdirs.
+    - Improves ReAct dry-run timeline previews by expanding rendered text while
+      keeping preview output bounded.
+    - Fixes asynchronous integration callback handling.
+    - Updates bundle communication and Data Bus documentation with the current
+      platform-authenticated and bundle-issued federated client handshakes.
 
     Runtime and deployment notes:
 
-    - Deployments must point the platform ref at 2026.6.5.342 to receive this
+    - Deployments must point the platform ref at 2026.6.6.342 to receive this
       update.
-    - Existing bundle UI builds remain compatible; rebuild when the configured
-      platform ref changes.
-    - ReAct memory and event-source behavior depends on bundle policy
-      configuration and available tools.
+    - Local deployments that use `kdcube refresh` will refresh the generated
+      nginx proxy config from the platform templates.
+    - Browser Socket.IO clients should connect on namespace `/` and path
+      `/socket.io`.
+    - Data Bus publish acknowledgements confirm stream admission only. Handler
+      success, visibility failures, and domain conflicts are proc-side results.
+    - Bundle-issued federated clients should obtain their token from a bundle
+      endpoint that validates the upstream identity before opening Socket.IO.
 
     Validation and regression coverage:
 
-    - Focused economics settlement tests passed.
-    - Focused hook tests for the economics entrypoint passed.
-    - TypeScript checks for updated dashboard components passed.
+    - Focused Socket.IO Data Bus ingress tests passed.
+    - Focused Data Bus stream/lock tests passed.
+    - Python compile checks for updated Data Bus runtime modules passed.
+    - TypeScript checks for updated referent bundle UI clients passed.
     - Staged release diff private-name scan must pass before the release
       commit.
 
     Changelog
 
-    - Added ReAct event-source pipeline and event recording policy support.
-    - Added persisted turn cost and timing artifacts.
-    - Added cross-conversation source-pool and artifact recovery support.
-    - Added lexical memory search and reciprocal-rank fusion.
-    - Fixed duplicate prompt indexing and git workspace bad-ref recovery.
-    - Fixed authenticated profile state reporting.
-    - Fixed plan/wallet settlement allocation.
+    - Added scoped bundle communication support.
+    - Added bundle-issued federated Data Bus token support.
+    - Added Data Bus runtime worker and stream coverage.
+    - Moved Data Bus handler visibility enforcement to proc.
+    - Fixed standard Socket.IO route handling in nginx templates and local
+      refresh.
+    - Fixed bundle Socket.IO namespace defaults.
+    - Fixed asynchronous integration callback handling.
+    - Improved ReAct dry-run timeline previews.
 config:
-    version: "2026.6.5.342"
+    version: "2026.6.6.342"
