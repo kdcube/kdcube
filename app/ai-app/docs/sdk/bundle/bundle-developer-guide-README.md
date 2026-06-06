@@ -15,6 +15,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-agent-integration-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
   - ks:docs/sdk/bundle/bundle-transports-README.md
+  - ks:docs/sdk/bundle/auth-bundle-federated-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
   - ks:docs/sdk/bundle/bundle-delivery-and-update-README.md
   - ks:docs/service/streams/background-jobs-README.md
@@ -81,11 +82,15 @@ storage, and output directory.
 
 If a widget or service sends durable non-chat domain messages into the bundle,
 read [Data Bus](../../service/comm/data-bus-README.md),
+[Bundle Federated Auth For Data Bus](auth-bundle-federated-README.md),
 [bundle-platform-integration-README.md#110-data_bus_handler](bundle-platform-integration-README.md#110-data_bus_handler),
 and [bundle-client-communication-README.md#data-bus-contract](bundle-client-communication-README.md#data-bus-contract).
 Use Data Bus for bundle-owned state mutations that need retry, idempotency, or
 per-object serialization; use chat ingress only for conversation turns and
 authored `external_events[]`.
+When the client has bundle-owned upstream identity instead of a platform
+browser session, expose a bundle public `federated_token_claim` operation and
+use a scoped federated Data Bus token.
 
 ## Common Recipe: Choose A Model For One Agent Call
 

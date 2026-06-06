@@ -24,6 +24,10 @@ from fastapi import HTTPException
 
 from kdcube_ai_app.auth.AuthManager import AuthenticationError
 from kdcube_ai_app.auth.sessions import UserSession, UserType, RequestContext
+from kdcube_ai_app.auth.federated import (
+    FederatedTokenError,
+    verify_federated_data_bus_token,
+)
 
 from kdcube_ai_app.apps.chat.sdk.protocol import (
     ServiceCtx, ConversationCtx,
@@ -225,42 +229,84 @@ class SocketIOChatHandler:
 
         auth = auth or {}
         user_session_id = auth.get("user_session_id")
-        if not user_session_id:
-            logger.warning("WS connect rejected: missing user_session_id")
-            return False
+        federated_claims = None
+        federated_token = (
+            auth.get("federated_token")
+            or auth.get("federated_data_bus_token")
+            or auth.get("data_bus_token")
+        )
 
-        # 1) load base session
-        try:
-            session = await self.gateway_adapter.gateway.session_manager.get_session_by_id(user_session_id)
-            if not session:
-                logger.warning("WS connect rejected: unknown session_id=%s", user_session_id)
-                return False
-        except Exception as e:
-            logger.error("WS connect failed to load session %s: %s", user_session_id, e)
-            return False
-
-        # 2) extract tokens from Socket.IO auth payload (fallback to cookies)
-        bearer_token, id_token = resolve_socket_auth_tokens(auth, environ)
-
-        # 3) build connect RequestContext from transport
+        # Build connect RequestContext from transport. This is used both by
+        # ordinary platform sessions and by scoped federated Data Bus sessions.
         ctx = build_ws_connect_request_context(environ, auth)
-        # 4) upgrade session if tokens present (mirrors SSE)
-        try:
-            session = await upgrade_session_from_tokens(
-                session=session,
-                ctx=ctx,
-                bearer_token=bearer_token,
-                id_token=id_token,
-                gateway_adapter=self.gateway_adapter,
-                chat_comm=self._comm,
-                stream_id=sid,
-            )
-        except AuthenticationError:
-            # upgrade_session_from_tokens already emitted an error
-            return False
-        except Exception as e:
-            logger.error("WS session upgrade failed: %s", e)
-            return False
+
+        if federated_token:
+            tenant = str(auth.get("tenant") or "").strip()
+            project = str(auth.get("project") or "").strip()
+            bundle_id = str(auth.get("bundle_id") or "").strip()
+            if not tenant or not project or not bundle_id:
+                logger.warning("WS connect rejected: federated token requires tenant/project/bundle_id")
+                return False
+            redis = getattr(getattr(self.app, "state", None), "redis_async", None)
+            if redis is None:
+                logger.warning("WS connect rejected: redis unavailable for federated token verification")
+                return False
+            try:
+                verified = await verify_federated_data_bus_token(
+                    token=str(federated_token),
+                    tenant=tenant,
+                    project=project,
+                    bundle_id=bundle_id,
+                    redis=redis,
+                    session_manager=self.gateway_adapter.gateway.session_manager,
+                )
+                session = verified.session
+                federated_claims = verified.claims
+            except FederatedTokenError as e:
+                logger.warning("WS connect rejected: federated token invalid: %s", e)
+                return False
+            except Exception as e:
+                logger.error("WS connect failed during federated token verification: %s", e)
+                return False
+
+            if user_session_id and user_session_id != session.session_id:
+                logger.warning("WS connect rejected: federated token session mismatch")
+                return False
+        else:
+            if not user_session_id:
+                logger.warning("WS connect rejected: missing user_session_id")
+                return False
+
+            # 1) load base session
+            try:
+                session = await self.gateway_adapter.gateway.session_manager.get_session_by_id(user_session_id)
+                if not session:
+                    logger.warning("WS connect rejected: unknown session_id=%s", user_session_id)
+                    return False
+            except Exception as e:
+                logger.error("WS connect failed to load session %s: %s", user_session_id, e)
+                return False
+
+            # 2) extract tokens from Socket.IO auth payload (fallback to cookies)
+            bearer_token, id_token = resolve_socket_auth_tokens(auth, environ)
+
+            # 3) upgrade session if tokens present (mirrors SSE)
+            try:
+                session = await upgrade_session_from_tokens(
+                    session=session,
+                    ctx=ctx,
+                    bearer_token=bearer_token,
+                    id_token=id_token,
+                    gateway_adapter=self.gateway_adapter,
+                    chat_comm=self._comm,
+                    stream_id=sid,
+                )
+            except AuthenticationError:
+                # upgrade_session_from_tokens already emitted an error
+                return False
+            except Exception as e:
+                logger.error("WS session upgrade failed: %s", e)
+                return False
 
         # 5) optional policy gate for anonymous
         if os.environ.get("CHAT_WS_REJECT_ANONYMOUS", "0") == "1":
@@ -301,6 +347,7 @@ class SocketIOChatHandler:
                 "conversation_id": auth.get("conversation_id"),
                 "turn_id": auth.get("turn_id"),
                 "bundle_id": auth.get("bundle_id"),
+                "federated_claims": federated_claims,
             }
 
             await self.sio.save_session(sid, socket_meta)

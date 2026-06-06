@@ -19,7 +19,6 @@ keywords:
 see_also:
   - ks:docs/service/comm/comm-system.md
   - ks:docs/service/comm/data-bus-README.md
-  - ks:docs/service/comm/design/databus-runtime.md
   - ks:docs/sdk/bundle/bundle-client-communication-README.md
   - ks:docs/sdk/bundle/bundle-widget-integration-README.md
   - ks:docs/sdk/bundle/bundle-transports-README.md

@@ -9,7 +9,6 @@ see_also:
   - ks:docs/service/comm/README-comm.md
   - ks:docs/service/comm/conversation-event-bus-and-data-bus-README.md
   - ks:docs/service/comm/data-bus-README.md
-  - ks:docs/service/comm/design/databus-runtime.md
   - ks:docs/service/comm/comm-recording-event-sinks-README.md
   - ks:docs/service/streams/telemetry-README.md
   - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
@@ -210,9 +209,8 @@ This does not change the current note above: Socket.IO project subscriptions
 are not part of the comm broadcast contract. The Data Bus Socket.IO event is an
 inbound durable message package, not a project-broadcast subscription.
 
-See [Conversation Event Bus And Data Bus](conversation-event-bus-and-data-bus-README.md),
-[Data Bus](data-bus-README.md), and the runtime handoff in
-[design/databus-runtime.md](design/databus-runtime.md).
+See [Conversation Event Bus And Data Bus](conversation-event-bus-and-data-bus-README.md)
+and [Data Bus](data-bus-README.md).
 
 ---
 

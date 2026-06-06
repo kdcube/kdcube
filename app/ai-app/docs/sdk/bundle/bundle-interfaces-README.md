@@ -13,6 +13,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-venv-README.md
   - ks:docs/sdk/bundle/bundle-index-README.md
   - ks:docs/sdk/bundle/bundle-transports-README.md
+  - ks:docs/sdk/bundle/auth-bundle-federated-README.md
   - ks:docs/sdk/bundle/bundle-client-communication-README.md
   - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
   - ks:docs/service/streams/background-jobs-README.md
@@ -205,6 +206,8 @@ async def handle_canvas_patch(self, ctx, message):
 Rules:
 
 - `messages[]` are accepted through Socket.IO `data_bus.publish`
+- clients without a platform browser session can connect with a scoped
+  federated token claimed through a bundle public API
 - accepted messages are written to a bundle-scoped Redis Stream
 - proc owns worker lifecycle, retry, result stream, DLQ, and clean shutdown
 - bundles register handlers by subject; they do not start Redis consumers
@@ -221,6 +224,7 @@ a handled message into conversation ingress.
 See:
 
 - [Data Bus](../../service/comm/data-bus-README.md)
+- [Bundle Federated Auth For Data Bus](auth-bundle-federated-README.md)
 - [bundle-client-communication-README.md#data-bus-contract](bundle-client-communication-README.md#data-bus-contract)
 - [bundle-platform-integration-README.md#110-data_bus_handler](bundle-platform-integration-README.md#110-data_bus_handler)
 
@@ -411,6 +415,9 @@ Current rule:
   - `public_auth="bundle"` means proc forwards the request and the bundle
     method authenticates it itself
 - undecorated same-name methods are not invokable through HTTP
+
+Use `public_auth="bundle"` for a `federated_token_claim` operation when a
+bundle-validated client needs a short-lived token for Socket.IO Data Bus.
 
 Bundle operations may call helpers marked with `@venv(...)`, but the HTTP contract still belongs to proc:
 - request parsing, auth, and route dispatch stay in proc

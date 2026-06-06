@@ -18,8 +18,8 @@ see_also:
   - ks:docs/service/comm/README-comm.md
   - ks:docs/service/comm/comm-system.md
   - ks:docs/service/comm/conversation-event-bus-and-data-bus-README.md
-  - ks:docs/service/comm/design/databus-runtime.md
   - ks:docs/sdk/bundle/bundle-client-communication-README.md
+  - ks:docs/sdk/bundle/auth-bundle-federated-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
@@ -115,6 +115,30 @@ Example client package:
 
 `messages[]` is plural from the start. A client can send a batch of related
 messages when it needs the server to observe their order as submitted.
+
+### Federated Clients
+
+Clients that do not have a platform browser session can publish to Data Bus
+through a bundle-issued federated token. The bundle exposes a public
+`federated_token_claim` operation, validates the upstream identity itself, and
+calls `issue_federated_data_bus_token(...)`. The client then connects to
+Socket.IO with:
+
+```json
+{
+  "tenant": "tenant-a",
+  "project": "project-a",
+  "bundle_id": "example-collab@1-0",
+  "federated_token": "<short-lived-token>"
+}
+```
+
+Socket.IO verifies the token, scope, Redis registration, and backing session
+before accepting the connection. After that, `data_bus.publish` uses the same
+normalized actor/reply metadata as ordinary platform-authenticated sockets.
+
+Use the full bundle recipe in
+[Bundle Federated Auth For Data Bus](../../sdk/bundle/auth-bundle-federated-README.md).
 
 ## Core Envelope
 
@@ -281,6 +305,75 @@ The ack is not the durable object result. It only confirms stream admission.
 The handler result should be compact. If the client needs full state after a
 successful mutation, it should call the bundle's normal read API.
 
+## Runtime Processing
+
+The runtime consumes the bundle stream with a Redis consumer group:
+
+```text
+kdcube:data-bus:{tenant}:{project}:{bundle_id}:handlers
+```
+
+The group is created lazily by the processor-owned Data Bus runtime when a
+bundle with `@data_bus_handler(...)` methods is active.
+
+Processing flow:
+
+1. `XREADGROUP` reads a message from the bundle stream.
+2. The runtime decodes and validates the normalized record.
+3. The runtime finds the registered handler by `subject`.
+4. If no handler exists, the runtime writes a failure result or DLQ record and
+   acknowledges the stream item.
+5. If the handler uses `serial_per_partition`, the runtime acquires the
+   partition token lock before invoking bundle code.
+6. The handler mutates bundle-owned durable storage.
+7. The runtime writes a result record and emits an optional reply when reply
+   metadata exists.
+8. The runtime acknowledges the stream item after the durable mutation and
+   result handling path completes.
+9. Retryable failures remain pending or are requeued according to the runtime
+   retry policy.
+10. Non-retryable failures or exhausted retries go to the DLQ.
+
+Suggested result record shape:
+
+```json
+{
+  "schema": "kdcube.data_bus.result.v1",
+  "message_id": "dbmsg_01HX...",
+  "status": "ok",
+  "subject": "example.board.patch",
+  "object_ref": "board:main",
+  "data": {
+    "revision": 18
+  },
+  "processed_at": "2026-06-05T00:00:02Z"
+}
+```
+
+Retention is operational policy:
+
+- message stream: trim after acknowledgement plus a bounded operational window;
+- result stream: short retention for debugging and near-term reconnects;
+- DLQ stream: longer retention and alertable.
+
+Exact retention values should be configurable by deployment.
+
+## Security
+
+Ingress must:
+
+- resolve tenant/project from the authenticated platform context;
+- verify that the target bundle exists and is visible to the caller;
+- verify that the target subject is registered and visible to the caller;
+- reject client-supplied tenant/project/actor overrides;
+- attach actor and reply metadata from the authenticated connection;
+- cap JSON payload size;
+- reject unexpected binary data in the JSON package;
+- avoid logging user-authored payload bodies.
+
+Handlers must still perform domain authorization. For example, a board handler
+must verify that the actor can read or mutate the selected board.
+
 ## Observability
 
 Data Bus ingress logs package and message receipt, plus accepted stream ids, as
@@ -315,7 +408,29 @@ In a bundle with a collaborative board:
 - board-hosted user text and user attachments remain bundle `ext:` refs even
   when focused into chat.
 
-## Implementation Plan
+## Tests And Regression Expectations
 
-The detailed runtime handoff is in
-[design/databus-runtime.md](design/databus-runtime.md).
+Core tests should cover:
+
+- envelope validation;
+- handler decorator registration and subject lookup;
+- idempotency policy validation;
+- lock acquire/release token safety;
+- retry and DLQ transitions;
+- Socket.IO `data_bus.publish` writing accepted messages to the bundle stream;
+- worker consumption and handler invocation;
+- handler replies reaching the connected peer/session through comm;
+- disconnected clients still relying on durable state reads;
+- two messages for the same `object_ref` not running concurrently when the
+  handler requests `serial_per_partition`;
+- stale `base_revision` returning conflict;
+- unauthorized subject rejection.
+
+Regression tests should prove:
+
+- Socket.IO `chat_message` still routes only to conversation ingress;
+- `/sse/chat` still expects conversation `external_events[]`;
+- `comm.service_event(...)`, `comm.project_event(...)`, SSE, and Socket.IO
+  fanout remain unchanged;
+- ReAct timeline behavior changes only when a bundle explicitly bridges a Data
+  Bus result into conversation events.

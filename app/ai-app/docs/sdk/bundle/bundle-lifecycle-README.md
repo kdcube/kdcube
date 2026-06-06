@@ -13,6 +13,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-knowledge-space-README.md
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/sdk/bundle/bundle-venv-README.md
+  - ks:docs/sdk/bundle/auth-bundle-federated-README.md
   - ks:docs/sdk/bundle/bundle-client-communication-README.md
   - ks:docs/service/streams/background-jobs-README.md
   - ks:docs/sdk/bundle/build/design/@longrun-README.md
@@ -179,6 +180,12 @@ proc builds a fresh `ExternalEventPayload` from the current request/session:
 - stream/socket id when the client propagated it
 
 That `comm_context` is passed into `get_workflow_instance(...)`.
+
+A bundle public `federated_token_claim` operation is also request-bound. The
+bundle validates the upstream identity during that call and receives a scoped
+Data Bus token from `issue_federated_data_bus_token(...)`. Later
+`data_bus.publish` messages are handled by the processor-owned Data Bus worker
+path, not by keeping state in the claim request.
 
 What happens next depends on instance lifetime:
 

@@ -151,6 +151,17 @@ def _actor_from_session(session: UserSession) -> dict[str, Any]:
     }
 
 
+def _allowed_subjects_from_socket_meta(socket_session: Mapping[str, Any] | None) -> set[str]:
+    claims = (socket_session or {}).get("federated_claims")
+    if not isinstance(claims, Mapping):
+        return set()
+    return {
+        str(subject).strip()
+        for subject in (claims.get("allowed_subjects") or ())
+        if str(subject).strip()
+    }
+
+
 class DataBusSocketIOIngress:
     def __init__(self, *, app: Any, redis: Any | None = None) -> None:
         self.app = app
@@ -175,6 +186,14 @@ class DataBusSocketIOIngress:
         bundle_id = str(data.get("bundle_id") or "").strip()
         if not bundle_id:
             return self._ack(status="rejected", rejected=[{"index": None, "error": "bundle_id is required"}])
+        federated_claims = (socket_session or {}).get("federated_claims")
+        if isinstance(federated_claims, Mapping):
+            scoped_bundle_id = str(federated_claims.get("bundle_id") or "").strip()
+            if scoped_bundle_id and scoped_bundle_id != bundle_id:
+                return self._ack(status="rejected", rejected=[{
+                    "index": None,
+                    "error": "bundle_id is not allowed by federated token",
+                }])
         messages = data.get("messages")
         if not isinstance(messages, list) or not messages:
             return self._ack(status="rejected", rejected=[{"index": None, "error": "messages[] is required"}])
@@ -210,6 +229,7 @@ class DataBusSocketIOIngress:
             return self._ack(status="rejected", rejected=[{"index": None, "error": "bundle is disabled"}])
         if not _bundle_allowed_for_session(manifest, session, props):
             return self._ack(status="rejected", rejected=[{"index": None, "error": "bundle is not visible to this user"}])
+        allowed_subjects = _allowed_subjects_from_socket_meta(socket_session)
 
         logger.info(
             "[data_bus.publish] received package tenant=%s project=%s bundle=%s sid=%s messages=%s bytes=%s",
@@ -239,6 +259,7 @@ class DataBusSocketIOIngress:
                     session=session,
                     sid=sid,
                     handler_by_subject=handler_by_subject,
+                    allowed_subjects=allowed_subjects,
                 )
                 logger.info(
                     "[data_bus.publish] received message tenant=%s project=%s bundle=%s subject=%s object_ref=%s message_id=%s sid=%s index=%s",
@@ -312,10 +333,13 @@ class DataBusSocketIOIngress:
         session: UserSession,
         sid: str,
         handler_by_subject: Mapping[str, DataBusHandlerSpec],
+        allowed_subjects: set[str],
     ) -> DataBusMessage:
         if not isinstance(item, Mapping):
             raise ValueError("message must be an object")
         subject = normalize_subject(item.get("subject"))
+        if allowed_subjects and subject not in allowed_subjects:
+            raise ValueError(f"subject is not allowed by federated token: {subject}")
         handler = handler_by_subject.get(subject)
         if handler is None:
             raise ValueError(f"subject is not handled by bundle: {subject}")

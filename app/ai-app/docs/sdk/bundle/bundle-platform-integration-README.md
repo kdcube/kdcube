@@ -11,6 +11,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
   - ks:docs/sdk/bundle/bundle-transports-README.md
+  - ks:docs/sdk/bundle/auth-bundle-federated-README.md
   - ks:docs/sdk/bundle/bundle-client-communication-README.md
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/sdk/bundle/bundle-scheduled-jobs-README.md
@@ -531,6 +532,9 @@ Important current rule:
   proc, verifies the inbound request
 - for `public_auth="bundle"`, keep `user_types` / `roles` empty and implement
   the auth check inside the bundle method
+- bundle-owned federated Data Bus token claims use `route="public"` with
+  `public_auth="bundle"`; see
+  [Bundle Federated Auth For Data Bus](auth-bundle-federated-README.md)
 - bundle API methods do not receive a separate communicator argument from proc
   by default
 - if bundle code needs request-bound execution context, use runtime helpers:
@@ -868,6 +872,8 @@ Current behavior:
 - proc discovers all `@data_bus_handler(...)` methods through the manifest path
 - the Socket.IO `data_bus.publish` ingress validates bundle visibility, subject
   visibility, required `object_ref`, and required `idempotency_key`
+- Socket.IO accepts scoped federated Data Bus tokens issued by bundle public
+  claim endpoints for clients without a platform browser session
 - accepted messages are written to
   `kdcube:data-bus:{tenant}:{project}:{bundle_id}:messages`
 - the processor-owned Data Bus runtime reconciles the active registry and

@@ -9,7 +9,6 @@ see_also:
   - ks:docs/service/comm/comm-system.md
   - ks:docs/service/comm/conversation-event-bus-and-data-bus-README.md
   - ks:docs/service/comm/data-bus-README.md
-  - ks:docs/service/comm/design/databus-runtime.md
   - ks:docs/service/comm/comm-recording-event-sinks-README.md
   - ks:docs/service/streams/telemetry-README.md
   - ks:docs/service/auth/auth-README.md
@@ -221,8 +220,7 @@ kdcube:data-bus:{tenant}:{project}:{bundle_id}:messages
 It does not call `/sse/chat`, `chat_message`, `process_chat_message`, or the
 conversation external-event machinery.
 
-See [data-bus-README.md](data-bus-README.md) and
-[design/databus-runtime.md](design/databus-runtime.md).
+See [data-bus-README.md](data-bus-README.md).
 
 ---
 

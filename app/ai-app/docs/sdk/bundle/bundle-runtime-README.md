@@ -17,6 +17,7 @@ see_also:
   - ks:docs/sdk/tools/custom-tools-README.md
   - ks:docs/sdk/tools/tool-subsystem-README.md
   - ks:docs/sdk/bundle/bundle-client-communication-README.md
+  - ks:docs/sdk/bundle/auth-bundle-federated-README.md
   - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
   - ks:docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
   - ks:docs/service/comm/data-bus-README.md
@@ -45,6 +46,8 @@ There are two different runtime surfaces:
    - `self.comm`
    - `self.comm_context`
    - `DataBusContext` for `@data_bus_handler(...)`
+   - `issue_federated_data_bus_token(...)` for bundle-validated clients that
+     need scoped Data Bus access
    - `self.bundle_props`
    - `await get_secret(...)`
    - bundle storage helpers
@@ -803,6 +806,8 @@ Runtime-owned behavior:
 - `ordering="serial_per_partition"` uses a Redis token lock per partition
 - bundles enforce durable idempotency and optimistic concurrency in their own
   storage
+- federated Data Bus clients arrive as ordinary `UserSession` actors after the
+  bundle validates upstream identity and claims a scoped token
 - Data Bus handling does not write conversation `external_events[]`, ReAct
   timeline entries, or `ev:` artifacts unless bundle code explicitly bridges
   into conversation ingress
@@ -810,6 +815,7 @@ Runtime-owned behavior:
 See:
 
 - [Data Bus](../../service/comm/data-bus-README.md)
+- [Bundle Federated Auth For Data Bus](auth-bundle-federated-README.md)
 - [bundle-platform-integration-README.md#110-data_bus_handler](bundle-platform-integration-README.md#110-data_bus_handler)
 
 ## Runtime surface matrix
