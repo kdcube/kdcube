@@ -22,6 +22,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
   - ks:docs/service/comm/data-bus-README.md
   - ks:docs/service/synch-mechanisms/critical-section-README.md
+  - ks:docs/service/cicd/cli-README.md
 ---
 # Bundle Runtime
 
@@ -37,6 +38,7 @@ Use this together with:
 - [Bundle Agent Integration](bundle-agent-integration-README.md) for React, tools/skills, MCP, and Claude Code wiring
 - [Bundle Platform Integration](bundle-platform-integration-README.md) for public entrypoint design
 - [Tool Subsystem](../tools/tool-subsystem-README.md) for descriptor and execution internals
+- [KDCube CLI / Bundle Reload Flow](../../service/cicd/cli-README.md#bundle-reload-flow) for mounted source reload, proc cache eviction, and worker broadcast behavior
 
 ## Mental model
 

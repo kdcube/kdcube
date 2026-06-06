@@ -403,6 +403,13 @@ hitting `index.html` causes the next request to rebuild — no manual
 remains the supported escape hatch for invalidating other process-local
 state (manifests, decorator caches, singleton workflows).
 
+For Python source edits, descriptor-backed config changes, or a stale widget
+entrypoint load, use the target bundle reload path. It evicts the bundle in
+proc, invalidates static widget entrypoint load state, and broadcasts the
+changed bundle id to other proc workers:
+
+- [../../service/cicd/cli-README.md#bundle-reload-flow](../../service/cicd/cli-README.md#bundle-reload-flow)
+
 ```mermaid
 sequenceDiagram
   participant B as Browser

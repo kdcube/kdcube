@@ -427,6 +427,9 @@ Bundle operations may call helpers marked with `@venv(...)`, but the HTTP contra
 - proc-only bundle/runtime bindings such as `get_current_comm()`, `get_current_request_context()`, `TOOL_SUBSYSTEM`, `COMMUNICATOR`, `KV_CACHE`, and `CTX_CLIENT` are not provided inside the venv child
 - normal bundle code reload is still a separate step; changing Python source does not by itself rebuild the cached venv
 
+For the proc-side reload sequence and the Bundle Admin equivalent, see
+[KDCube CLI / Bundle Reload Flow](../../service/cicd/cli-README.md#bundle-reload-flow).
+
 Preferred rule:
 - bundle-specific clients and widgets should use the explicit `/{bundle_id}/operations/{op}` route
 - generic platform callers may still use the legacy route without `bundle_id`

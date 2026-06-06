@@ -283,6 +283,9 @@ Three classes of changes matter during bundle development:
    - require proc cache eviction before the next request should load the updated module
    - for local development, the intended path is:
      - `kdcube bundle reload <bundle_id> --workdir <runtime-workdir>`
+   - reload evicts the target bundle from bundle-loader caches, drops matching
+     dynamic bundle modules, invalidates static widget entrypoint load state,
+     and broadcasts the changed bundle id to other proc workers
 
 4. **`@venv` requirements changes**
    - if only `requirements.txt` changed, the next call to the decorated function will rebuild the cached venv automatically
@@ -296,6 +299,11 @@ Practical rule:
   - Redis prop edits immediately
   - descriptor/code changes after proc cache clear + descriptor replay
   - `requirements.txt` changes for `@venv` callables when that callable is next invoked
+
+For the CLI reload sequence, Bundle Admin endpoint, worker broadcast, and
+diagnostic signals, see:
+
+- [../../service/cicd/cli-README.md#bundle-reload-flow](../../service/cicd/cli-README.md#bundle-reload-flow)
 
 ## `on_props_changed(...)` contract
 

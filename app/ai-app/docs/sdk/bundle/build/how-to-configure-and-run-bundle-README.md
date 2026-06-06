@@ -431,7 +431,7 @@ It is the boundary of one local deployment snapshot.
 Practical interpretation:
 
 - use a separate `tenant/project` when you need full storage isolation between
-  different applications or customer environments
+  different applications or account environments
 - use a separate `tenant/project` when you want different lifecycle stages such
   as `dev`, `staging`, and `prod`
 
@@ -450,7 +450,7 @@ Inside one `tenant/project`, bundles share the same environment boundary:
 
 So `tenant/project` is the right boundary for:
 
-- multiple customers
+- multiple accounts
 - multiple isolated product environments
 - multiple lifecycle stages of the same system
 
@@ -1346,7 +1346,10 @@ kdcube bundle reload <bundle_id> --workdir ~/.kdcube/kdcube-runtime/<tenant_id>_
 - validates that the bundle id exists in the active runtime descriptor
 - requires `chat-proc` to be running
 - reapplies the runtime descriptor
-- clears the target bundle from proc caches
+- evicts the target bundle from proc bundle-loader caches
+- drops matching dynamic bundle modules from `sys.modules`
+- invalidates static widget entrypoint load state for that bundle
+- broadcasts `changed_bundle_ids` so other proc workers evict the same bundle
 
 Use this for:
 
@@ -1354,12 +1357,19 @@ Use this for:
 - bundle secrets changes
 - enable/disable flag changes
 - switching a bundle entry between local path and git, if the runtime topology itself did not change
+- mounted local bundle source changes
 
 It does not reload:
 
 - user props
 - user secrets
 - platform/global descriptor files such as `assembly.yaml`, `gateway.yaml`, or `secrets.yaml`
+
+The CLI posts to the localhost-only proc reload authority endpoint. Bundle
+Admin calls the admin reload authority endpoint for the same operation. See the
+endpoint-level schema and diagnostic log signals in:
+
+- [../../../service/cicd/cli-README.md#bundle-reload-flow](../../../service/cicd/cli-README.md#bundle-reload-flow)
 
 ### If you changed platform/runtime topology
 

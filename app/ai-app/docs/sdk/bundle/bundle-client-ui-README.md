@@ -16,6 +16,7 @@ see_also:
   - ks:docs/service/comm/README-comm.md
   - ks:docs/service/comm/conversation-event-bus-and-data-bus-README.md
   - ks:docs/service/comm/data-bus-README.md
+  - ks:docs/service/cicd/cli-README.md
   - ks:docs/service/cicd/embedding-control-plane-frontend-README.md
 ---
 # Bundle Client UI
@@ -39,6 +40,10 @@ Use it when your bundle ships:
    The shared SSE + Socket.IO chat stream event catalog and envelope shape.
 4. [bundle-frontend-awareness-README.md](bundle-frontend-awareness-README.md)
    Retry, draining, rate-limit, reconnect, and multi-tab behavior.
+
+For mounted bundle source or widget config edits in a running local runtime,
+the targeted bundle reload path is documented in
+[KDCube CLI / Bundle Reload Flow](../../service/cicd/cli-README.md#bundle-reload-flow).
 
 ## Source Layout
 

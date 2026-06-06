@@ -5,6 +5,7 @@ summary: "Two‑repo CI/CD plan covering build outputs, image mapping, assembly.
 tags: ["service", "cicd", "deployment", "ecs", "ec2", "docker-compose", "images", "bundles", "release", "frontend"]
 keywords: ["two-repo", "platform repo", "custom app repo", "assembly.yaml", "bundles.yaml", "bundle packaging", "image mapping", "ecs task definitions", "compose envs", "BUNDLES_YAML_DESCRIPTOR_PATH"]
 see_also:
+  - ks:docs/service/cicd/cli-README.md
   - ks:docs/service/cicd/release-bundle-README.md
   - ks:docs/service/cicd/descriptors-README.md
   - ks:docs/configuration/assembly-descriptor-README.md
@@ -70,6 +71,12 @@ Before GitHub Actions can build and publish releases, ensure these are set:
    - `kdcube-metrics`
    - `kdcube-web-ui`
    - `proxylogin` / `web-proxy` (if used)
+
+For local descriptor-backed runtimes, bundle source/config changes are applied
+through targeted bundle reload, not through a platform image rebuild. The CLI
+and Bundle Admin reload authority flow is documented here:
+
+- [cli-README.md#bundle-reload-flow](cli-README.md#bundle-reload-flow)
 
 **CD (deploy phase):**
 - **ECS:** update task definitions with new image tags + envs.
@@ -179,10 +186,10 @@ Use Dockerfiles from `deployment/docker/custom-ui-managed-infra`.
 - `:branch` (moving tag for dev/staging)
 - `:vX.Y.Z` (optional releases)
 
-**Customer repo:**
+**Content repo:**
 
-- `:customer-sha`
-- `:customer-branch`
+- `:content-sha`
+- `:content-branch`
 
 ---
 
@@ -352,7 +359,7 @@ If using private git repos:
   - `proxylogin`
 - Publish release artifacts (optional)
 
-### Customer repo pipeline
+### Content repo pipeline
 
 - Build + push:
   - `kdcube-web-ui`
@@ -394,7 +401,7 @@ Options:
 1. **Bake into the UI image** during build (Dockerfile copies it).
 2. **Mount at runtime** (volume/config/sidecar) in ECS.
 
-See the customer Dockerfile and config example:
+See the content repo Dockerfile and config example:
 - `.../ops/.../Dockerfile_UI`
 - `.../ops/.../prod/config.json`
 

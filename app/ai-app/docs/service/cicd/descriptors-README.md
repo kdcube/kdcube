@@ -5,6 +5,7 @@ summary: "Overview of the deployment descriptor set, what each file owns, and ho
 tags: ["service", "cicd", "descriptors", "configuration"]
 keywords: ["deployment descriptors", "platform descriptor ownership", "local versus aws authority", "assembly bundles gateway secrets files", "descriptor-driven deployment contract", "runtime configuration entry files"]
 see_also:
+  - ks:docs/service/cicd/cli-README.md
   - ks:docs/configuration/runtime-read-write-contract-README.md
   - ks:docs/configuration/runtime-configuration-and-secrets-store-README.md
   - ks:docs/configuration/assembly-descriptor-README.md
@@ -79,6 +80,12 @@ Typical use:
 - local path bundles under a host root mounted as `/bundles`
 - managed bundles resolved locally into `/managed-bundles`
 - local file-backed bundle storage and exec workspace
+
+When only `bundles.yaml`, `bundles.secrets.yaml`, or mounted bundle source
+changes, apply the bundle reload path instead of refreshing the platform
+runtime:
+
+- [cli-README.md#bundle-reload-flow](cli-README.md#bundle-reload-flow)
 
 ### 2. Direct local service run
 

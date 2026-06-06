@@ -1015,6 +1015,11 @@ Important current rule:
   context.
 - changing bundle Python source still requires the normal proc-side bundle reload path; `@venv(...)` only controls the helper execution environment
 
+The proc-side reload path evicts the target bundle from loader caches and
+broadcasts the changed bundle id to other workers. See:
+
+- [../../service/cicd/cli-README.md#bundle-reload-flow](../../service/cicd/cli-README.md#bundle-reload-flow)
+
 ## 2) Metadata model
 
 The loader stores interface metadata as typed dataclasses.

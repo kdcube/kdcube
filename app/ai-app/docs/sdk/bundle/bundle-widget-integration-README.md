@@ -14,6 +14,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-client-communication-README.md
   - ks:docs/service/comm/conversation-event-bus-and-data-bus-README.md
   - ks:docs/service/comm/data-bus-README.md
+  - ks:docs/service/cicd/cli-README.md
   - ks:docs/service/cicd/embedding-control-plane-frontend-README.md
 ---
 # Bundle Widget Integration
@@ -38,6 +39,10 @@ Core contract:
 For the full lifecycle of discovery, preload, build, request-time fallback,
 shared-storage locks, signatures, and concurrent workers, see
 [UI Components Lifecycle](./ui-components-lifecycle-README.md).
+
+For mounted bundle source edits and descriptor-backed widget config changes,
+use the targeted bundle reload path described in
+[KDCube CLI / Bundle Reload Flow](../../service/cicd/cli-README.md#bundle-reload-flow).
 
 If the same widget or static bundle UI is embedded by an external website, the
 frame permission is controlled by operator deployment settings.

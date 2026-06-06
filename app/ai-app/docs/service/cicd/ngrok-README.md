@@ -340,6 +340,12 @@ when images must be rebuilt.
 kdcube bundle reload <bundle_id> --tenant <t> --project <p>
 ```
 
+This is the targeted bundle reload path: proc replays the bundle authority,
+evicts that bundle from loader caches, invalidates static widget entrypoint
+state, and broadcasts the changed bundle id to other workers. Details:
+
+- [cli-README.md#bundle-reload-flow](cli-README.md#bundle-reload-flow)
+
 8. Check local proxy first:
 
 ```bash

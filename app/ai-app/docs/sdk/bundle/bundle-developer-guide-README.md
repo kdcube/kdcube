@@ -611,13 +611,22 @@ What `kdcube bundle reload` does:
 
 - reapplies the bundle registry from descriptor/env state
 - rebuilds descriptor-backed bundle props from `bundles.yaml`
-- clears in-process proc bundle caches so new requests use the updated code/config
+- evicts the target bundle from proc bundle-loader caches
+- drops matching dynamic bundle modules from `sys.modules`
+- invalidates static widget entrypoint load state for that bundle
+- broadcasts `changed_bundle_ids` so other proc workers evict the same bundle
+- lets new requests import updated code/config without a full platform rebuild
 
 Use this when you changed:
 
 - bundle code
 - `bundles.yaml`
 - `bundles.secrets.yaml`
+
+The CLI and Bundle Admin call the same reload authority. For the exact local
+flow, endpoints, and expected diagnostics, see:
+
+- [../../service/cicd/cli-README.md#bundle-reload-flow](../../service/cicd/cli-README.md#bundle-reload-flow)
 
 If your bundle uses local bundle storage, `kdcube bundle reload` does not wipe that storage automatically.
 Design your subsystem roots intentionally:

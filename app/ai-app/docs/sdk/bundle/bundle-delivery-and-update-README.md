@@ -8,6 +8,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-developer-guide-README.md
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - ks:docs/configuration/bundles-descriptor-README.md
+  - ks:docs/service/cicd/cli-README.md
 ---
 # Bundle Delivery And Update
 
@@ -56,13 +57,22 @@ kdcube bundle reload versatile@2026-03-31-13-36 --workdir ~/.kdcube/kdcube-runti
 
 - reapplies the bundle registry from descriptor/env state
 - rebuilds descriptor-backed bundle props from `bundles.yaml`
-- clears in-process bundle caches in proc
+- evicts the target bundle from proc bundle-loader caches
+- drops matching dynamic bundle modules from `sys.modules`
+- invalidates static widget entrypoint load state for that bundle
+- broadcasts `changed_bundle_ids` so other proc workers evict the same bundle
 
 Use it after changing:
 
 - bundle code
 - `bundles.yaml`
 - `bundles.secrets.yaml`
+
+The local reload path does not rebuild platform images and does not restart the
+Docker stack. Its implementation schema and the Bundle Admin equivalent are
+documented in:
+
+- [../../service/cicd/cli-README.md#bundle-reload-flow](../../service/cicd/cli-README.md#bundle-reload-flow)
 
 ## Config Update Rules
 

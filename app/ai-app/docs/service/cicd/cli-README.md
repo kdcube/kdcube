@@ -3,7 +3,7 @@ id: ks:docs/service/cicd/cli-README.md
 title: "Current KDCube CLI"
 summary: "Current implemented CLI surface for local environment bootstrapping, workdir preparation, Docker Compose startup, descriptor validation, bundle config and secret patching, and the practical rule that multiple namespaced runtime snapshots may exist on one machine while local compose-backed execution remains one active deployment at a time."
 tags: ["service", "cicd", "cli", "env", "deployment", "bundle"]
-keywords: ["kdcube cli", "local environment bootstrap", "workdir setup", "docker compose control", "descriptor validation", "current cli contract", "local deployment tooling", "multiple local runtime snapshots", "single active local deployment", "tenant project workdir namespace", "bundle config patch", "bundle secret patch", "kdcube bundle command"]
+keywords: ["kdcube cli", "local environment bootstrap", "workdir setup", "docker compose control", "descriptor validation", "current cli contract", "local deployment tooling", "multiple local runtime snapshots", "single active local deployment", "tenant project workdir namespace", "bundle config patch", "bundle secret patch", "kdcube bundle command", "bundle reload internals", "reload-authority"]
 see_also:
   - ks:docs/service/cicd/release-README.md
   - ks:docs/service/cicd/descriptors-README.md
@@ -1138,6 +1138,82 @@ Normal reload output is concise and hides the inner Docker Compose call. Use
 kdcube bundle reload <bundle_id> --tenant acme --project prod --verbose
 kdcube bundle reload <bundle_id> --tenant acme --project prod --json
 ```
+
+The compatibility alias `kdcube reload <bundle_id>` calls the same operation.
+
+### Bundle Reload Flow
+
+Use bundle reload for filesystem-connected bundle code changes and
+bundle-descriptor changes. Use `kdcube refresh --build` for platform source or
+runtime topology changes.
+
+```text
+edit mounted bundle source or active bundle descriptors
+        |
+        v
+kdcube bundle reload <bundle_id>
+        |
+        v
+CLI resolves the active workdir and running chat-proc service
+        |
+        v
+CLI execs into chat-proc and posts:
+  POST http://127.0.0.1:8020/internal/bundles/reload-authority
+  {"bundle_id": "<bundle_id>"}
+        |
+        v
+proc reloads the bundle authority/registry from runtime descriptors
+        |
+        v
+proc evicts that bundle from loader caches and matching sys.modules entries
+        |
+        v
+proc invalidates static widget entrypoint loads for that bundle
+        |
+        v
+proc publishes bundles.update with changed_bundle_ids=["<bundle_id>"]
+        |
+        v
+other proc workers receive the config event and evict the same bundle
+        |
+        v
+the next request imports fresh Python source and rebuilds widget output when
+the UI source signature changed
+```
+
+Bundle Admin uses the same reload authority path through the admin API:
+
+```http
+POST /admin/integrations/bundles/reload-authority
+```
+
+Target one bundle:
+
+```json
+{
+  "tenant": "acme",
+  "project": "prod",
+  "bundle_id": "my.bundle@1-0"
+}
+```
+
+Omit `bundle_id` only when the operator intentionally wants to reload all
+bundles from authority.
+
+Implementation entry points:
+
+- CLI command: `src/kdcube-ai-app/kdcube_cli/src/kdcube_cli/cli.py`
+- Bundle Admin UI: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/rest/integrations/AIBundleDashboard.tsx`
+- proc reload endpoints: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/rest/integrations/integrations.py`
+- worker config listener: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/processor.py`
+- loader cache eviction: `src/kdcube-ai-app/kdcube_ai_app/infra/plugin/bundle_loader.py`
+
+Expected diagnostic signal:
+
+- targeted reload responses include `changed_bundle_ids`
+- proc logs should show the target bundle id in the reload/update path
+- a listener message saying `no changed bundle ids; preserving local loader
+  caches` means the targeted reload event was not applied to that process
 
 Use `--quiet` to suppress the banner and routine success chatter. The banner is
 also suppressed automatically when stdout is not a TTY and when a command uses

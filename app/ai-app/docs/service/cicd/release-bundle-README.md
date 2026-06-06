@@ -3,7 +3,7 @@ id: ks:docs/service/cicd/release-bundle-README.md
 title: "Release A Bundle"
 summary: "Human and agent guide for releasing KDCube bundles: prepare bundle-local README/config/release files, commit/tag the content repository, then update deployment descriptors separately."
 tags: ["service", "cicd", "release", "bundle", "content-release", "descriptors", "configuration"]
-keywords: ["bundle release", "content release", "release.yaml", "bundle config shape", "bundles.yaml", "bundles.secrets.yaml", "bundle tag", "descriptor update", "customer bundle release"]
+keywords: ["bundle release", "content release", "release.yaml", "bundle config shape", "bundles.yaml", "bundles.secrets.yaml", "bundle tag", "descriptor update", "bundle repository release"]
 see_also:
   - ks:deployment/cicd/kdcube/procedures/content-release.md
   - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
@@ -19,8 +19,8 @@ see_also:
 
 This page explains the bundle release workflow in simple terms.
 
-Use it when you want to release bundle code/content, for example a customer
-bundle repo that contains one or more KDCube bundles.
+Use it when you want to release bundle code/content, for example a content
+repository that contains one or more KDCube bundles.
 
 For the executable agent procedure, use:
 
@@ -91,7 +91,7 @@ Example:
 
 ```text
 Use deployment/cicd/kdcube/procedures/content-release.md.
-Make content release 2026.4.29.1545 for the customer bundle repo.
+Make content release 2026.4.29.1545 for the content bundle repo.
 Release bundles sample-marketing@2-0 and user-mgmt@1-0.
 Prepare descriptor and plan first.
 ```
@@ -101,7 +101,7 @@ If you already know you want to finish the release:
 ```text
 Use deployment/cicd/kdcube/procedures/content-release.md.
 Release version is 2026.4.29.1545.
-Repository is customer.
+Repository is content.
 Bundles are sample-marketing@2-0 and user-mgmt@1-0.
 Commit, tag, and push after I approve the plan.
 ```
@@ -173,7 +173,7 @@ Rule:
 
 ## Delivery Modes
 
-Most customer/content releases use git-defined bundles:
+Most content releases use git-defined bundles:
 
 - bundle source is in a separate repo
 - release creates a git tag
@@ -201,4 +201,8 @@ Minimum checks:
 If the bundle has tests, run the relevant bundle tests before tagging.
 
 Runtime validation happens after descriptors are updated and the environment is
-started/reloaded.
+started/reloaded. For local descriptor-backed runtimes, the targeted bundle
+reload path applies the updated descriptor and evicts that bundle from proc
+caches without rebuilding platform images:
+
+- [cli-README.md#bundle-reload-flow](cli-README.md#bundle-reload-flow)
