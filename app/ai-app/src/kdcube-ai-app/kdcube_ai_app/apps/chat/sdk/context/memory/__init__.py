@@ -27,6 +27,14 @@ from .scoring import (
 )
 from .store import UserMemoryStore
 from .tools import UserMemoryTools, UserMemoryToolConfig, make_user_memory_tools
+from .resolvers import (
+    MEMORY_OBJECT_NAMESPACE,
+    MEMORY_RESOLVER_NAME,
+    memory_id_from_ref,
+    memory_record_to_object_payload,
+    memory_ref_capabilities,
+    resolve_memory_ref_action,
+)
 from .reconciler_agent import (
     MemoryReconciliationAction,
     MemoryReconciliationActionType,
@@ -67,6 +75,12 @@ __all__ = [
     "compute_memory_scores",
     "compute_tier",
     "make_user_memory_tools",
+    "MEMORY_OBJECT_NAMESPACE",
+    "MEMORY_RESOLVER_NAME",
+    "memory_id_from_ref",
+    "memory_record_to_object_payload",
+    "memory_ref_capabilities",
+    "resolve_memory_ref_action",
     "memory_reconciler_stream",
     "parse_reconciliation_output",
     "validate_reconciliation_output",
