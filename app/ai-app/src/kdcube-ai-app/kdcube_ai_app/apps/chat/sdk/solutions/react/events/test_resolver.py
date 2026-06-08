@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import build_logical_artifact_path
-from kdcube_ai_app.apps.chat.sdk.solutions.react.events.resolvers import (
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events.resolver import (
     canonicalize_event_ref_for_context,
     resolve_event_ref_action,
 )

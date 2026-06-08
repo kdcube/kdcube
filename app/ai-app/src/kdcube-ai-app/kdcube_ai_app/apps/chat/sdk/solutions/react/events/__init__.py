@@ -64,7 +64,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.events.policies import (
     tool_call_validation_policy,
     unknown_policy_paths,
 )
-from kdcube_ai_app.apps.chat.sdk.solutions.react.events.resolvers import (
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events.resolver import (
     canonicalize_event_ref_for_context,
     read_event_ref_bytes,
     resolve_event_ref_action,
