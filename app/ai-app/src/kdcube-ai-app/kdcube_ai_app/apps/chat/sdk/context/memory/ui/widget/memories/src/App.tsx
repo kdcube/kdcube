@@ -28,7 +28,8 @@ export default function App() {
     saving,
     selectedId,
   } = useAppSelector((state) => state.memories);
-  const compact = useMemo(() => compactModeFromLocation(), []);
+  const initialCompact = useMemo(() => compactModeFromLocation(), []);
+  const [compact, setCompact] = useState(initialCompact);
   const [editorMode, setEditorMode] = useState<'create' | 'edit' | ''>('');
   const selectedMemory = memories.find((memory) => memory.id === selectedId);
 
@@ -36,6 +37,26 @@ export default function App() {
     dispatch(setViewMode(compact ? 'compact' : 'full'));
     void settings.setupParentListener().then(() => dispatch(loadMemories()));
   }, [compact, dispatch]);
+
+  useEffect(() => {
+    function onHostMessage(event: MessageEvent) {
+      const data = event.data;
+      if (!data || typeof data !== 'object') return;
+      if (data.type !== 'kdcube-set-view') return;
+      if (data.view === 'expanded') setCompact(false);
+      if (data.view === 'compact') setCompact(true);
+    }
+    window.addEventListener('message', onHostMessage);
+    return () => window.removeEventListener('message', onHostMessage);
+  }, []);
+
+  const requestExpand = () => {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({ type: 'kdcube-widget-view', widget: 'memories', view: 'expanded' }, '*');
+      return;
+    }
+    setCompact(false);
+  };
 
   return (
     <AppShell
@@ -45,6 +66,7 @@ export default function App() {
       saving={saving}
       compact={compact}
       onCreate={() => setEditorMode('create')}
+      onExpand={compact ? requestExpand : undefined}
       onToggleMemoryUse={() => {
         void dispatch(updateMemoryPreferences({ memoryEnabled: !memoryUseEnabled })).then(() => dispatch(loadMemories()));
       }}

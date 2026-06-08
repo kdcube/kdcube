@@ -31,10 +31,31 @@ function memoryContextPayload(memory: MemoryEntry) {
 
 function setMemoryDragData(dataTransfer: DataTransfer, memory: MemoryEntry): void {
   const payload = memoryContextPayload(memory);
+  const message = {
+    type: 'task-tracker-context-focus',
+    source: 'memories-widget',
+    contexts: [payload],
+  };
   dataTransfer.effectAllowed = 'copy';
-  dataTransfer.setData('application/json', JSON.stringify(payload));
+  dataTransfer.setData('application/json', JSON.stringify(message));
   dataTransfer.setData('text/plain', memory.memory);
   dataTransfer.setData('text/uri-list', payload.ref);
+  if (window.parent && window.parent !== window) {
+    window.parent.postMessage({
+      type: 'task-tracker-context-drag-start',
+      source: 'memories-widget',
+      context: payload,
+    }, '*');
+  }
+}
+
+function clearMemoryDragData(): void {
+  if (window.parent && window.parent !== window) {
+    window.parent.postMessage({
+      type: 'task-tracker-context-drag-end',
+      source: 'memories-widget',
+    }, '*');
+  }
 }
 
 export function MemoryList() {
@@ -54,6 +75,7 @@ export function MemoryList() {
             className={`memory-row compact-memory-row tone-${memory.status || 'active'} ${memory.id === selectedId ? 'selected' : ''}`}
             draggable
             onDragStart={(event) => setMemoryDragData(event.dataTransfer, memory)}
+            onDragEnd={clearMemoryDragData}
             onClick={() => {
               dispatch(selectMemory(memory.id));
               void dispatch(loadMemoryEvents(memory.id));
@@ -100,6 +122,7 @@ export function MemoryList() {
               className={`memory-row tone-${memory.status || 'active'} ${memory.id === selectedId ? 'selected' : ''}`}
               draggable
               onDragStart={(event) => setMemoryDragData(event.dataTransfer, memory)}
+              onDragEnd={clearMemoryDragData}
               onClick={() => {
                 dispatch(selectMemory(memory.id));
                 void dispatch(loadMemoryEvents(memory.id));

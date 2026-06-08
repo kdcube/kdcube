@@ -1375,6 +1375,15 @@ class ApplicationHostingService:
                     physical_path = name
             except Exception:
                 physical_path = name
+            logical_path = ""
+            physical_conversation_id, physical_turn_id, physical_namespace, physical_rel = split_physical_artifact_ref(physical_path)
+            if physical_turn_id and physical_namespace and physical_rel:
+                logical_path = build_logical_artifact_path(
+                    turn_id=physical_turn_id,
+                    namespace=physical_namespace,
+                    relpath=physical_rel,
+                    conversation_id=physical_conversation_id or conversation_id,
+                )
             uri, key, rn_f = await self.store.put_artifact_file(
                 tenant=tenant,
                 project=project,
@@ -1398,6 +1407,7 @@ class ApplicationHostingService:
                 "rn": rn_f,
                 "hosted_uri": uri,
                 "physical_path": physical_path,
+                "logical_path": logical_path,
             })
         return files_rehosted
 
@@ -1455,6 +1465,8 @@ class ApplicationHostingService:
         if not self.comm:
             return
         from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import normalize_file_payload
+        service = getattr(self.comm, "service", None) or {}
+        conversation_id = str(service.get("conversation_id") or "").strip()
         event_dt = datetime.now(timezone.utc)
         event_ts_ms = int(event_dt.timestamp() * 1000)
         event_ts_iso = event_dt.isoformat().replace("+00:00", "Z")
@@ -1462,7 +1474,24 @@ class ApplicationHostingService:
         for item in files or []:
             if not isinstance(item, dict):
                 continue
-            payload = dict(item)
+            payload = normalize_file_payload(dict(item))
+            logical_path = str(payload.get("logical_path") or "").strip()
+            if not logical_path:
+                physical_path = str(payload.get("physical_path") or payload.get("path") or "").strip()
+                physical_conversation_id, physical_turn_id, physical_namespace, physical_rel = split_physical_artifact_ref(physical_path)
+                if physical_turn_id and physical_namespace and physical_rel:
+                    logical_path = build_logical_artifact_path(
+                        turn_id=physical_turn_id,
+                        namespace=physical_namespace,
+                        relpath=physical_rel,
+                        conversation_id=physical_conversation_id or conversation_id,
+                    )
+            if logical_path:
+                payload["logical_path"] = logical_path
+                payload["object_ref"] = logical_path
+                payload["ref"] = logical_path
+            for transport_key in ("hosted_uri", "rn", "key"):
+                payload.pop(transport_key, None)
             payload.setdefault("timestamp", event_ts_ms)
             payload.setdefault("timestamp_iso", event_ts_iso)
             payload.setdefault("ts", event_ts_ms)
