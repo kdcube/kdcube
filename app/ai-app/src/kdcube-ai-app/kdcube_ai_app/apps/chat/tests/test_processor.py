@@ -49,6 +49,36 @@ class _HangingRedis:
         await asyncio.sleep(60)
 
 
+class _TimeoutPubSub:
+    def __init__(self, stop_event: asyncio.Event):
+        self.stop_event = stop_event
+        self.subscribe_calls = []
+        self.unsubscribe_calls = []
+        self.closed = False
+
+    async def subscribe(self, *channels):
+        self.subscribe_calls.append(channels)
+
+    async def get_message(self, **_kwargs):
+        self.stop_event.set()
+        raise asyncio.TimeoutError
+
+    async def unsubscribe(self, *channels):
+        self.unsubscribe_calls.append(channels)
+
+    async def close(self):
+        self.closed = True
+
+
+class _RedisWithTimeoutPubSub:
+    def __init__(self, stop_event: asyncio.Event):
+        self.connection_pool = _FakePool()
+        self.pubsub_instance = _TimeoutPubSub(stop_event)
+
+    def pubsub(self):
+        return self.pubsub_instance
+
+
 async def _noop_handler(_payload):
     return {}
 
@@ -464,15 +494,47 @@ def _patch_processor_dependencies(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_queue_claim_timeout_disconnects_shared_pool():
+async def test_queue_claim_timeout_leaves_shared_pool_connected():
     hanging = _HangingRedis()
     processor = _build_processor(hanging)
 
     result = await processor._queue_claim("queue:anonymous", "queue:inflight:anonymous")
 
     assert result is None
-    assert hanging.connection_pool.disconnect_calls == [True]
+    assert hanging.connection_pool.disconnect_calls == []
     assert "Queue claim exceeded" in (processor.get_runtime_metadata()["last_queue_error"] or "")
+
+
+@pytest.mark.asyncio
+async def test_config_listener_timeout_leaves_shared_pool_connected(monkeypatch):
+    settings = SimpleNamespace(TENANT="tenant-a", PROJECT="project-a")
+    import kdcube_ai_app.apps.chat.sdk.config as sdk_config_mod
+    import kdcube_ai_app.infra.plugin.bundle_registry as bundle_registry_mod
+    import kdcube_ai_app.infra.plugin.bundle_store as bundle_store_mod
+
+    async def _fake_load_registry(*_args, **_kwargs):
+        return SimpleNamespace(bundles={}, default_bundle_id=None)
+
+    async def _fake_set_registry_async(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(sdk_config_mod, "get_settings", lambda: settings)
+    monkeypatch.setattr(bundle_store_mod, "load_registry", _fake_load_registry)
+    monkeypatch.setattr(bundle_registry_mod, "set_registry_async", _fake_set_registry_async)
+
+    redis = _RedisWithTimeoutPubSub(asyncio.Event())
+    processor = _build_processor(redis)
+    redis.pubsub_instance.stop_event = processor._stop_event
+    processor.config_call_timeout_sec = 0.01
+    processor.config_get_message_timeout_sec = 0.01
+
+    await processor._config_listener_loop()
+
+    assert redis.connection_pool.disconnect_calls == []
+    assert redis.pubsub_instance.closed is True
+    assert "Config listener get_message exceeded" in (
+        processor.get_runtime_metadata()["last_config_error"] or ""
+    )
 
 
 def test_processor_defaults_to_legacy_lists_scheduler_backend():

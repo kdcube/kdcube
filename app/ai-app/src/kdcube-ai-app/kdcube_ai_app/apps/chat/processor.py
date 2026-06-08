@@ -1322,13 +1322,12 @@ class EnhancedChatRequestProcessor:
                 "Queue claim exceeded "
                 f"{self.queue_call_timeout_sec:.2f}s on {ready_queue_key}->{inflight_queue_key}"
             )
-            logger.error(
-                "Queue claim timed out after %.2fs on %s->%s; disconnecting shared pool",
+            logger.warning(
+                "Queue claim timed out after %.2fs on %s->%s; leaving shared pool intact",
                 self.queue_call_timeout_sec,
                 ready_queue_key,
                 inflight_queue_key,
             )
-            await self._reset_shared_async_pool("queue claim timeout")
             return None
         except Exception as e:
             self._last_queue_poll_completed_at = time.monotonic()
@@ -2062,10 +2061,14 @@ class EnhancedChatRequestProcessor:
                             ),
                             timeout=self.config_call_timeout_sec,
                         )
-                    except asyncio.TimeoutError as e:
-                        raise RuntimeError(
+                    except asyncio.TimeoutError:
+                        self._last_config_poll_completed_at = time.monotonic()
+                        self._last_config_error = (
                             f"Config listener get_message exceeded {self.config_call_timeout_sec:.2f}s"
-                        ) from e
+                        )
+                        logger.warning("%s; leaving shared pool intact", self._last_config_error)
+                        await asyncio.sleep(0.1)
+                        continue
                     self._last_config_poll_completed_at = time.monotonic()
                     self._last_config_error = None
                     if self._stop_event.is_set():
