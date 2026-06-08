@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from .models import MemoryRecord, MemoryScope, normalize_scope_filter
-from .store import UserMemoryStore
+from ..models import MemoryRecord, MemoryScope, normalize_scope_filter
+from ..store import UserMemoryStore
 
 
 MEMORY_RESOLVER_NAME = "sdk.memory"

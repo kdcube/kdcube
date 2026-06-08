@@ -27,7 +27,7 @@ from .scoring import (
 )
 from .store import UserMemoryStore
 from .tools import UserMemoryTools, UserMemoryToolConfig, make_user_memory_tools
-from .resolvers import (
+from .events.resolver import (
     MEMORY_OBJECT_NAMESPACE,
     MEMORY_RESOLVER_NAME,
     memory_id_from_ref,

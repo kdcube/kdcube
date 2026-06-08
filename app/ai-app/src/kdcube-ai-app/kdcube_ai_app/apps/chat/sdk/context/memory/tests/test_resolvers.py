@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime, timezone
 
 from kdcube_ai_app.apps.chat.sdk.context.memory.models import MemoryRecord, MemoryScope
-from kdcube_ai_app.apps.chat.sdk.context.memory.resolvers import (
+from kdcube_ai_app.apps.chat.sdk.context.memory.events.resolver import (
     memory_id_from_ref,
     memory_ref_capabilities,
     resolve_memory_ref_action,
