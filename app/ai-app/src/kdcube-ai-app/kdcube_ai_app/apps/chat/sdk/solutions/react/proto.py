@@ -99,6 +99,7 @@ class RuntimeCtx:
     turn_id: Optional[str] = None
     bundle_id: Optional[str] = None
     agent_id: str = DEFAULT_REACT_AGENT_ID
+    agent_role_models: Dict[str, Any] = field(default_factory=dict)
     timezone: Optional[str] = None
     max_tokens: Optional[int] = None
     max_iterations: Optional[int] = None

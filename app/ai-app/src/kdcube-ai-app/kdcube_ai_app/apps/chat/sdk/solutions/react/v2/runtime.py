@@ -13,6 +13,7 @@ import traceback
 
 import time
 import uuid
+from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Callable, Awaitable, Type
 
 from langgraph.graph import StateGraph, END
@@ -23,6 +24,10 @@ from kdcube_ai_app.apps.chat.sdk.protocol import ExternalEventPayload
 from kdcube_ai_app.apps.chat.sdk.solutions.react.browser import ContextBrowser
 from kdcube_ai_app.apps.chat.sdk.solutions.infra import emit_event
 from kdcube_ai_app.apps.chat.sdk.runtime.execution import execute_tool, _safe_label
+from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import (
+    bind_current_bundle_call_context_patch,
+    get_current_bundle_call_context,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.agents.decision import react_decision_stream_v2
 from kdcube_ai_app.apps.chat.sdk.solutions.react.live_events import (
     compute_reactive_iteration_credit_cap,
@@ -1547,7 +1552,27 @@ class ReactSolverV2:
             max_decision_retries=2,
         )
 
+    @contextmanager
+    def _bind_runtime_role_models(self):
+        runtime_ctx = getattr(self.ctx_browser, "runtime_ctx", None) if self.ctx_browser else None
+        agent_role_models = getattr(runtime_ctx, "agent_role_models", None)
+        if not isinstance(agent_role_models, dict) or not agent_role_models:
+            yield
+            return
+        existing = get_current_bundle_call_context().get("role_models") or {}
+        merged: Dict[str, Any] = {**agent_role_models, **existing}
+        with bind_current_bundle_call_context_patch({"role_models": merged}):
+            yield
+
     async def run(
+        self,
+        *,
+        allowed_plugins: List[str],
+    ):
+        with self._bind_runtime_role_models():
+            return await self._run_impl(allowed_plugins=allowed_plugins)
+
+    async def _run_impl(
         self,
         *,
         allowed_plugins: List[str],

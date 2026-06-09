@@ -1079,3 +1079,90 @@ async def test_event_lane_prompt_is_not_indexed_twice_by_legacy_persist_call():
     assert [m["role"] for m in saved_messages] == ["user"]
     assert saved_messages[0]["text"] == "Original prompt"
     assert "ar:turn-1.user.prompt.evt_1" in scratchpad.persisted_turn_entry_paths
+
+
+# ---------------------------------------------------------------------------
+# Per-agent role_models overlay (config.react.<agent>.role_models)
+# ---------------------------------------------------------------------------
+
+def test_react_role_models_resolves_per_agent_with_fallback():
+    bundle_props = {
+        "config": {
+            "react": {
+                "default_agent": {
+                    "role_models": {
+                        "solver.react.v2.decision.v2.strong": {
+                            "provider": "anthropic",
+                            "model": "claude-sonnet-4-6",
+                        }
+                    }
+                },
+                "research_agent": {
+                    "role_models": {
+                        "solver.react.v2.decision.v2.strong": {
+                            "provider": "anthropic",
+                            "model": "claude-opus-4-8",
+                        }
+                    }
+                },
+            }
+        }
+    }
+
+    # Exact agent id wins.
+    research = workflow_mod._react_role_models(bundle_props, agent_id="research_agent")
+    assert research["solver.react.v2.decision.v2.strong"]["model"] == "claude-opus-4-8"
+
+    # Unknown agent id falls back to default_agent.
+    fallback = workflow_mod._react_role_models(bundle_props, agent_id="unknown_agent")
+    assert fallback["solver.react.v2.decision.v2.strong"]["model"] == "claude-sonnet-4-6"
+
+    # No react config at all -> empty (static Config.role_models base applies).
+    assert workflow_mod._react_role_models({}, agent_id="research_agent") == {}
+
+
+def test_bind_runtime_role_models_overlays_and_existing_wins():
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.runtime import ReactSolverV2
+    from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import (
+        bind_current_bundle_call_context_patch,
+        get_current_bundle_call_context,
+    )
+
+    solver = ReactSolverV2.__new__(ReactSolverV2)
+    solver.ctx_browser = SimpleNamespace(
+        runtime_ctx=RuntimeCtx(
+            agent_id="research_agent",
+            agent_role_models={
+                "solver.react.v2.decision.v2.strong": {"provider": "anthropic", "model": "agent-model"},
+                "context.compaction.summary": {"provider": "anthropic", "model": "agent-summary"},
+            },
+        )
+    )
+
+    # No pre-existing overlay: agent map is applied verbatim.
+    with solver._bind_runtime_role_models():
+        rm = get_current_bundle_call_context().get("role_models")
+        assert rm["solver.react.v2.decision.v2.strong"]["model"] == "agent-model"
+        assert rm["context.compaction.summary"]["model"] == "agent-summary"
+    # Restored after the block.
+    assert "role_models" not in get_current_bundle_call_context()
+
+    # Explicit per-request overlay already bound wins per role; agent fills the rest.
+    with bind_current_bundle_call_context_patch(
+        {"role_models": {"solver.react.v2.decision.v2.strong": {"provider": "anthropic", "model": "request-model"}}}
+    ):
+        with solver._bind_runtime_role_models():
+            rm = get_current_bundle_call_context().get("role_models")
+            assert rm["solver.react.v2.decision.v2.strong"]["model"] == "request-model"  # explicit wins
+            assert rm["context.compaction.summary"]["model"] == "agent-summary"           # agent fills gap
+
+
+def test_bind_runtime_role_models_noop_without_agent_overlay():
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.runtime import ReactSolverV2
+    from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import get_current_bundle_call_context
+
+    solver = ReactSolverV2.__new__(ReactSolverV2)
+    solver.ctx_browser = SimpleNamespace(runtime_ctx=RuntimeCtx(agent_id="a", agent_role_models={}))
+
+    with solver._bind_runtime_role_models():
+        assert "role_models" not in get_current_bundle_call_context()

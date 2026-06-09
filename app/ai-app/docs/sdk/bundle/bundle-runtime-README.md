@@ -4,7 +4,7 @@ title: "Bundle Runtime"
 summary: "Runtime objects and capabilities available inside bundle entrypoints and tools: communicator, Data Bus context, integrations, props and secrets, caches, artifacts, and isolated-execution surfaces."
 tags: ["sdk", "bundle", "runtime", "tools", "integrations", "communicator", "isolation", "data-bus"]
 keywords: ["bundle runtime objects", "communicator access", "data bus context", "integrations access", "props and secrets access", "cache access", "artifact handling", "isolated execution surface", "entrypoint runtime context"]
-updated_at: 2026-05-22
+updated_at: 2026-06-09
 see_also:
   - ks:docs/sdk/bundle/bundle-developer-guide-README.md
   - ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
@@ -160,6 +160,11 @@ What the bundle has in this path:
   - `await get_secret("b:...")` for current bundle deployment secrets
 - `await get_secret("...")` / `await get_secret("a:...")` for platform/global secrets
 - `await get_secret("u:...")` for current-user secrets
+
+Communicator behavior in this path:
+- if request routing carries an exact socket/stream target, direct peer delivery
+  is possible
+- otherwise events fan out to all clients connected to the same session room
 
 ## Portable bundle call context
 
@@ -431,10 +436,69 @@ Docker/Fargate runtimes while the context is bound. It affects SDK model calls
 through `ModelServiceBase` / `ModelRouter`, not direct provider clients that
 bypass the SDK router.
 
-Communicator behavior in this path:
-- if request routing carries an exact socket/stream target, direct peer delivery
-  is possible
-- otherwise events fan out to all clients connected to the same session room
+### Per-ReAct-agent role models (`config.react.<agent>.role_models`)
+
+A bundle can host more than one ReAct agent, and the keys in `role_models` are
+LLM call scopes (`solver.react.v2.decision.v2.strong`,
+`context.compaction.summary`, ...) shared across those agents. A flat bundle-wide
+`role_models` cannot give two agents different models for the same scope. Scope
+the override per agent instead:
+
+```yaml
+items:
+  - id: my.bundle@1-0
+    config:
+      # bundle-wide baseline (feeds Config.role_models)
+      role_models:
+        solver.react.v2.decision.v2.strong:
+          provider: anthropic
+          model: claude-sonnet-4-6
+      react:
+        default_agent:
+          role_models:
+            solver.react.v2.decision.v2.strong:
+              provider: anthropic
+              model: claude-haiku-4-5-20251001
+            context.compaction.summary:
+              provider: anthropic
+              model: claude-haiku-4-5-20251001
+        research_agent:
+          role_models:
+            solver.react.v2.decision.v2.strong:
+              provider: anthropic
+              model: claude-opus-4-8
+```
+
+The platform resolves this automatically; bundle code does not bind anything:
+
+1. the active agent id comes from the turn event (`event.agent_id`, normalized;
+   the default is `default.react.agent`)
+2. `config.react.<agent_id>.role_models` is looked up with fallback
+   `<agent_id>` -> `default_agent` -> `default`, the same resolution used by other
+   per-agent react settings
+3. the resolved map is stored on `RuntimeCtx.agent_role_models`
+4. for the lifetime of the ReAct run, the runtime overlays it onto
+   `bundle_call_context.role_models`, so `ModelRouter` picks it up per role
+
+Effective precedence for a ReAct model call becomes:
+
+1. explicit per-request `bundle_call_context.role_models` (a bundle/runtime overlay
+   bound around the call)
+2. `config.react.<agent>.role_models` for the active agent
+3. bundle-wide `role_models` (`Config.role_models`)
+4. platform defaults
+
+Notes:
+
+- this overlay does not mutate `Config.role_models`; it follows the same
+  request-scoped, non-durable rules as any other `bundle_call_context` value
+- it is bound for the duration of `react.run()`, so it covers in-run scopes such
+  as decision, compaction, and run summary; model calls made outside the ReAct
+  run fall back to the bundle-wide baseline
+- put per-agent role maps in bundle props (config), not in singleton instance
+  fields; the runtime re-resolves them on bundle props reload
+- an explicit per-request overlay still wins per role, so a bundle can force a
+  one-call model for the current turn even when the agent defines that scope
 
 ### 2) REST bundle operation path
 

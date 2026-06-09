@@ -330,6 +330,11 @@ def _react_story_snapshots_enabled(bundle_props: Dict[str, Any], *, agent_id: An
     return bool(configured) if configured is not None else False
 
 
+def _react_role_models(bundle_props: Dict[str, Any], *, agent_id: Any = None) -> Dict[str, Any]:
+    raw, _ = _react_config_lookup(bundle_props, "role_models", agent_id=agent_id)
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
 def _react_event_source_pipeline_enabled(bundle_props: Dict[str, Any], settings: Any, *, agent_id: Any = None) -> bool:
     raw, _ = _react_config_lookup(
         bundle_props,
@@ -445,6 +450,7 @@ def _effective_runtime_ctx_log_payload(runtime_ctx: Any, bundle_props: Dict[str,
         "render_thinking": bool(getattr(runtime_ctx, "render_thinking", True)),
         "line_numbers_mode": getattr(runtime_ctx, "line_numbers_mode", None),
         "story_snapshots_enabled": bool(getattr(runtime_ctx, "story_snapshots_enabled", False)),
+        "agent_role_models": dict(getattr(runtime_ctx, "agent_role_models", None) or {}),
         "event_source_pipeline_enabled": bool(getattr(runtime_ctx, "event_source_pipeline_enabled", False)),
         "event_source_pipeline_config": _react_event_source_pipeline_config_report(
             bundle_props,
@@ -788,6 +794,7 @@ class BaseWorkflow():
             )
             runtime_ctx.debug_timeline_root = _react_debug_timeline_root(settings)
             runtime_ctx.debug_timeline_keep_files = _react_debug_timeline_keep_files(settings)
+            runtime_ctx.agent_role_models = _react_role_models(self.bundle_props, agent_id=agent_id)
         except Exception:
             pass
         memory_cfg = self.get_prop_path(self.bundle_props or {}, "memory", default={}) or {}
