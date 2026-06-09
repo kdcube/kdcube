@@ -386,6 +386,17 @@ button {
   box-shadow: 0 0 0 4px rgba(221, 234, 254, 0.62);
 }
 
+.scene-rail-button.usage-shortcut {
+  box-shadow: 0 0 0 3px rgba(255, 248, 220, 0.62);
+}
+
+.scene-rail-button.usage-shortcut:hover,
+.scene-rail-button.usage-shortcut[aria-pressed="true"] {
+  border-color: var(--gold);
+  color: var(--gold-dark);
+  box-shadow: 0 0 0 4px rgba(240, 188, 46, 0.32);
+}
+
 .scene-side.collapsed {
   display: none;
 }
@@ -511,6 +522,76 @@ button {
 }
 
 body.scene-moving-memory .memory-frame {
+  pointer-events: none;
+}
+
+.usage-pane {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 58;
+  display: grid;
+  grid-template-rows: 32px minmax(0, 1fr);
+  width: min(360px, calc(100vw - 64px));
+  height: min(520px, calc(100vh - 110px));
+  min-height: 240px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  overflow: hidden;
+  resize: both;
+  box-shadow: 0 20px 42px rgba(13, 30, 44, 0.16);
+}
+
+.usage-pane header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 32px;
+  border-bottom: 1px solid var(--line-soft);
+  background: rgba(247, 250, 251, 0.96);
+  padding: 5px 8px;
+  color: var(--ink);
+  font-size: 13px;
+  cursor: move;
+  user-select: none;
+}
+
+.usage-pane header div {
+  display: inline-flex;
+  gap: 5px;
+}
+
+.usage-pane-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.usage-pane-title strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-pane header button {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+}
+
+.usage-frame {
+  grid-row: 2;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  background: var(--surface);
+}
+
+body.scene-moving-usage .usage-frame {
   pointer-events: none;
 }
 

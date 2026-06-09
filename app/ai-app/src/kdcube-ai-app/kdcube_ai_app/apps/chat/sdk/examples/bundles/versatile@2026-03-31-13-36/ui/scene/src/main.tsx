@@ -27,7 +27,7 @@ import {
   type CanvasReadResponse,
   type CanvasUploadResponse,
 } from '@kdcube/canvas-component'
-import { Archive, Bot, Maximize2, Minimize2, Plus, X } from 'lucide-react'
+import { Archive, Bot, Gauge, Maximize2, Minimize2, Plus, X } from 'lucide-react'
 import React, { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { createRoot } from 'react-dom/client'
 import { io, type Socket } from 'socket.io-client'
@@ -38,6 +38,12 @@ const CONFIG_IDENTITY = 'BUNDLE_VERSATILE_MAIN_VIEW'
 const CHAT_CONFIG_IDENTITY = 'BUNDLE_VERSATILE_CHAT_VIEW'
 const CHAT_WIDGET_ALIAS = 'versatile_chat'
 const MEMORY_WIDGET_ALIAS = 'memories'
+const USAGE_CARD_WIDGET_ALIAS = 'usage_card'
+// Debounce burst-y accounting.usage broadcasts so a chatty turn does not
+// hammer /api/economics/me/budget-breakdown. 800 ms catches the typical
+// trailing accounting event after the final delta without feeling stale.
+const USAGE_REFRESH_DEBOUNCE_MS = 800
+const USAGE_REFRESH_MESSAGE_TYPE = 'kdcube-usage-card-refresh'
 const CANVAS_STORY_ID = 'versatile:main'
 const CANVAS_SUBJECT = 'canvas.patch'
 const DEFAULT_CHAT_WIDTH = 460
@@ -196,6 +202,10 @@ function memoryWidgetUrl(ctx: RouteContext, expanded: boolean): string {
     host_controls: '1',
     limit: expanded ? '12' : '2',
   })
+}
+
+function usageCardWidgetUrl(ctx: RouteContext): string {
+  return widgetUrl(ctx, USAGE_CARD_WIDGET_ALIAS)
 }
 
 function operationsUrl(ctx: RouteContext, alias: string): string {
@@ -390,6 +400,45 @@ function defaultMemoryFrame(chatWidth: number, chatOpen: boolean, expanded: bool
   return {
     x: clamp(rightEdge - panel.width - 12, 8, Math.max(8, window.innerWidth - panel.width - 8)),
     y: 92,
+  }
+}
+
+// Usage card is intentionally fixed-compact — there is no expanded view.
+// Tweaking it to fit a wider data set is the widget's job, not the host's.
+function usagePanelSize() {
+  return {
+    width: Math.min(360, window.innerWidth - 64),
+    height: Math.min(520, window.innerHeight - 110),
+  }
+}
+
+function defaultUsageFrame(chatWidth: number, chatOpen: boolean) {
+  const panel = usagePanelSize()
+  const rightEdge = chatOpen ? Math.max(64, window.innerWidth - chatWidth - 18) : window.innerWidth - 62
+  return {
+    x: clamp(rightEdge - panel.width - 12, 8, Math.max(8, window.innerWidth - panel.width - 8)),
+    y: 104,
+  }
+}
+
+async function fetchProfileUserType(ctx: RouteContext): Promise<string | null> {
+  // Lenient profile fetch for UI gating. Tolerates 401/network errors
+  // by returning null — the caller then leaves the usage button hidden,
+  // which is the safe fallback for anything other than a confirmed
+  // non-anonymous response.
+  try {
+    const response = await fetch(`${ctx.baseUrl}/profile`, {
+      method: 'GET',
+      credentials: 'include',
+      cache: 'no-store',
+      headers: { Accept: 'application/json' },
+    })
+    if (!response.ok) return null
+    const payload = (await response.json()) as { user_type?: string | null }
+    const userType = String(payload.user_type || '').trim().toLowerCase()
+    return userType || null
+  } catch {
+    return null
   }
 }
 
@@ -662,9 +711,13 @@ function App() {
   const [memoryCount, setMemoryCount] = useState<number | null>(null)
   const [memoryContentHeight, setMemoryContentHeight] = useState<number | null>(null)
   const [memoryFrame, setMemoryFrame] = useState(() => defaultMemoryFrame(chatSizing.width, true, false))
-  const [panelZ, setPanelZ] = useState<Record<'chat' | 'memory', number>>({
+  const [usageOpen, setUsageOpen] = useState(false)
+  const [usageFrame, setUsageFrame] = useState(() => defaultUsageFrame(chatSizing.width, true))
+  const [userType, setUserType] = useState<string | null>(null)
+  const [panelZ, setPanelZ] = useState<Record<'chat' | 'memory' | 'usage', number>>({
     chat: FLOATING_PANEL_BASE_Z,
     memory: FLOATING_PANEL_BASE_Z + 1,
+    usage: FLOATING_PANEL_BASE_Z + 2,
   })
   const [activeCanvasName, setActiveCanvasName] = useState('main')
   const [canvases, setCanvases] = useState<CanvasDefinition[]>([emptyCanvasDefinition('main')])
@@ -672,8 +725,11 @@ function App() {
   const [notice, setNotice] = useState('')
   const chatFrameRef = useRef<HTMLIFrameElement | null>(null)
   const memoryFrameRef = useRef<HTMLIFrameElement | null>(null)
+  const usageFrameRef = useRef<HTMLIFrameElement | null>(null)
+  const usageRefreshTimerRef = useRef<number | null>(null)
   const pendingMemoryCommandRef = useRef<Record<string, unknown> | null>(null)
-  const panelZCursorRef = useRef(FLOATING_PANEL_BASE_Z + 2)
+  const panelZCursorRef = useRef(FLOATING_PANEL_BASE_Z + 3)
+  const isRegistered = userType != null && userType !== 'anonymous'
 
   const activeCanvas = useMemo(
     () => canvases.find((canvas) => canvas.name === activeCanvasName) ?? emptyCanvasDefinition(activeCanvasName),
@@ -684,7 +740,7 @@ function App() {
     chatFrameRef.current?.contentWindow?.postMessage(message, '*')
   }, [])
 
-  const bringPanelToFront = useCallback((panel: 'chat' | 'memory') => {
+  const bringPanelToFront = useCallback((panel: 'chat' | 'memory' | 'usage') => {
     panelZCursorRef.current += 1
     setPanelZ((current) => ({ ...current, [panel]: panelZCursorRef.current }))
   }, [])
@@ -782,6 +838,108 @@ function App() {
     window.addEventListener('pointercancel', finish, { once: true })
     window.addEventListener('blur', finish, { once: true })
   }, [bringPanelToFront, memoryExpanded, memoryFrame])
+
+  const startUsageDrag = useCallback((event: React.PointerEvent<HTMLElement>) => {
+    if ((event.target as HTMLElement).closest('button')) return
+    bringPanelToFront('usage')
+    event.preventDefault()
+    const dragTarget = event.currentTarget
+    try {
+      dragTarget.setPointerCapture?.(event.pointerId)
+    } catch {
+      // Some embedded browsers do not expose pointer capture consistently.
+    }
+    document.body.classList.add('scene-moving-usage')
+    const startX = event.clientX
+    const startY = event.clientY
+    const startFrame = usageFrame
+    const panel = usagePanelSize()
+    const onMove = (move: PointerEvent) => {
+      setUsageFrame({
+        x: clamp(startFrame.x + move.clientX - startX, 8, Math.max(8, window.innerWidth - panel.width - 8)),
+        y: clamp(startFrame.y + move.clientY - startY, 62, Math.max(62, window.innerHeight - panel.height - 8)),
+      })
+    }
+    const finish = () => {
+      try {
+        dragTarget.releasePointerCapture?.(event.pointerId)
+      } catch {
+        // The pointer may already have been released by the browser.
+      }
+      document.body.classList.remove('scene-moving-usage')
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', finish)
+      window.removeEventListener('pointercancel', finish)
+      window.removeEventListener('blur', finish)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', finish, { once: true })
+    window.addEventListener('pointercancel', finish, { once: true })
+    window.addEventListener('blur', finish, { once: true })
+  }, [bringPanelToFront, usageFrame])
+
+  // Debounced usage-card refresh nudge. Burst-y accounting.usage broadcasts
+  // collapse to a single postMessage so the widget makes one round trip
+  // for the trailing event of a turn rather than one per delta.
+  const scheduleUsageRefresh = useCallback(() => {
+    if (usageRefreshTimerRef.current != null) {
+      window.clearTimeout(usageRefreshTimerRef.current)
+    }
+    usageRefreshTimerRef.current = window.setTimeout(() => {
+      usageRefreshTimerRef.current = null
+      usageFrameRef.current?.contentWindow?.postMessage({ type: USAGE_REFRESH_MESSAGE_TYPE }, '*')
+    }, USAGE_REFRESH_DEBOUNCE_MS)
+  }, [])
+
+  // Resolve the viewer's user_type so the toggle button only renders
+  // when the call is non-anonymous. Anonymous viewers do not get the
+  // usage card affordance even though the widget URL itself is reachable.
+  useEffect(() => {
+    let cancelled = false
+    void fetchProfileUserType(ctx).then((next) => {
+      if (cancelled) return
+      setUserType(next)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [ctx])
+
+  // Subscribe to broadcast accounting.usage envelopes on the chat_service
+  // socket. The data-bus socket is the same singleton used for canvas
+  // publishes, so adding a side listener here costs at most one
+  // connection on first use. We do not need to subscribe at all for
+  // anonymous viewers — the widget is hidden.
+  useEffect(() => {
+    if (!isRegistered) return undefined
+    let cancelled = false
+    let detach: (() => void) | undefined
+    void (async () => {
+      try {
+        const socket = await dataBusSocketFor(ctx)
+        await ensureSocketConnected(socket)
+        if (cancelled) return
+        const onService = (payload: unknown) => {
+          const env = (payload ?? {}) as { type?: string }
+          if (env.type === 'accounting.usage') {
+            scheduleUsageRefresh()
+          }
+        }
+        socket.on('chat_service', onService)
+        detach = () => socket.off('chat_service', onService)
+      } catch {
+        // Socket unavailable; widget still has its own manual refresh.
+      }
+    })()
+    return () => {
+      cancelled = true
+      if (detach) detach()
+      if (usageRefreshTimerRef.current != null) {
+        window.clearTimeout(usageRefreshTimerRef.current)
+        usageRefreshTimerRef.current = null
+      }
+    }
+  }, [ctx, isRegistered, scheduleUsageRefresh])
 
   const startChatDrag = useCallback((event: React.PointerEvent<HTMLElement>) => {
     if (chatExpanded || (event.target as HTMLElement).closest('button')) return
@@ -1035,6 +1193,7 @@ function App() {
       const childWindows = [
         chatFrameRef.current?.contentWindow,
         memoryFrameRef.current?.contentWindow,
+        usageFrameRef.current?.contentWindow,
       ].filter(Boolean)
 
       if (childWindows.includes(event.source as Window)) {
@@ -1219,6 +1378,25 @@ function App() {
           >
             <Archive size={21} strokeWidth={2.1} />
           </button>
+          {isRegistered ? (
+            <button
+              type="button"
+              className="scene-rail-button usage-shortcut"
+              title={usageOpen ? 'Hide usage' : 'Open usage'}
+              aria-label={usageOpen ? 'Hide usage' : 'Open usage'}
+              aria-pressed={usageOpen}
+              onClick={() => {
+                bringPanelToFront('usage')
+                setUsageOpen((open) => {
+                  const next = !open
+                  if (next) setUsageFrame(defaultUsageFrame(chatWidth, chatOpen))
+                  return next
+                })
+              }}
+            >
+              <Gauge size={21} strokeWidth={2.1} />
+            </button>
+          ) : null}
         </div>
       </section>
       <aside
@@ -1348,6 +1526,40 @@ function App() {
               syncMemoryWidgetView(memoryExpanded ? 'expanded' : 'compact')
               flushPendingMemoryCommand()
             }}
+          />
+        </section>
+      ) : null}
+      {usageOpen && isRegistered ? (
+        <section
+          className="usage-pane"
+          style={{
+            left: usageFrame.x,
+            top: usageFrame.y,
+            zIndex: panelZ.usage,
+          } as CSSProperties}
+          aria-label="Usage"
+          onPointerDownCapture={() => bringPanelToFront('usage')}
+        >
+          <header onPointerDown={startUsageDrag}>
+            <span className="usage-pane-title">
+              <strong>Usage</strong>
+            </span>
+            <div>
+              <button
+                type="button"
+                onClick={() => setUsageOpen(false)}
+                title="Close usage"
+                aria-label="Close usage"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          </header>
+          <iframe
+            ref={usageFrameRef}
+            className="usage-frame"
+            title="Usage card"
+            src={usageCardWidgetUrl(ctx)}
           />
         </section>
       ) : null}
