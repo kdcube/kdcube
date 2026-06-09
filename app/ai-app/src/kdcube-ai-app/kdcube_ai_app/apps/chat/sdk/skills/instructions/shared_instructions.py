@@ -242,7 +242,7 @@ physical path, for example exec code, `react.patch`, and rendering writes:
 use logical refs such as `fi:turn_<id>.files/<workspace_scope>/app.py`.
 
 The diagram below shows the local `OUTPUT_DIR` surface, versioned artifact refs,
-externally tracked refs, and knowledge refs. When code, rendering, local search,
+external owner refs, and knowledge refs. When code, rendering, local search,
 or file inspection needs artifact bytes, materialize the visible ref with
 `react.pull` and continue from the returned paths.
 
@@ -267,8 +267,8 @@ or file inspection needs artifact bytes, materialize the visible ref with
    fi:turn_<id>.external.<event_kind>.attachments/<event_id>/<name>
    fi:conv_<conversation_id>.turn_<id>...   # other conversation
 
-3) EXTERNALLY TRACKED ARTIFACT REFS (resolved by react.pull)
-   ext:<key> or <namespace>:<key>           # resolved by a registered rehoster
+3) EXTERNAL OWNER REFS (resolved by react.pull)
+   <namespace>:<key>                        # resolved by a registered rehoster
 
 4) TIMELINE EVENT REFS (event identity, not artifact bytes)
    ev:turn_<id>.events/<event_path>
@@ -285,12 +285,12 @@ or file inspection needs artifact bytes, materialize the visible ref with
 - Code, rendering, local search, and file inspection operate on artifacts currently materialized under `OUTPUT_DIR`. Use `react.pull(paths=[...])` to materialize historical artifacts before local use.
 - `react.read` loads visible context by logical path. Exec/code require local bytes from `react.pull`.
 - `react.pull` creates local reference material. `react.checkout` is the step that copies versioned `files/...` refs into the current editable workspace.
-- `react.pull` accepts normal `fi:` refs and externally tracked artifact refs shown by the runtime, such as `ext:...`.
-- Externally tracked artifact refs are resolved through registered rehosters. Pass the visible ref to `react.pull`; then continue from the returned `logical_path` / `physical_path` rows. A missing rehoster is reported in the pull result.
-- `ev:` identifies an event object on the timeline. It is readable with `react.read` like `tc:`, but it is not artifact storage and is not a `react.pull` or `react.checkout` path. If the event points to bytes or a snapshot body, use its `hosted_uri`, `payload.event_ref`, or refs inside `payload.event`; pull only those artifact refs.
+- `react.pull` accepts normal `fi:` refs and external owner refs shown by the runtime.
+- External owner refs are resolved through registered rehosters. Pass the visible `object_ref` or exact owner ref to `react.pull`; then continue from the returned `logical_path` / `physical_path` rows. A missing rehoster is reported in the pull result.
+- `ev:` identifies an event object on the timeline. It is readable with `react.read` like `tc:`, but it is not artifact storage and is not a `react.pull` or `react.checkout` path. If the event shows `object_ref`, pull that ref. If it instead points to bytes or a snapshot body through another field, pull that artifact ref.
 - Bring files in for a reason:
   - use `react.read(paths=[...])` when visible text/context is enough
-  - use `react.pull(paths=[...])` when a specific historical or externally tracked artifact must become local reference material for code, rendering, local search, or inspection
+  - use `react.pull(paths=[...])` when a specific historical or external owner ref must become local reference material for code, rendering, local search, or inspection
   - use `react.checkout(mode="replace", paths=[...])` after pull when the active current-turn workspace should be built from selected versioned `files/...`
   - use `react.checkout(mode="overlay", paths=[...])` after pull when selected historical files should be imported into existing current work
 - Folder/slice pulls are supported for `fi:turn_<id>.files/<workspace_scope-or-subtree>`.
@@ -341,7 +341,7 @@ physical path, for example exec code, `react.patch`, and rendering writes:
 use logical refs such as `fi:turn_<id>.files/<workspace_scope>/app.py`.
 
 The diagram below shows the local `OUTPUT_DIR` surface, versioned artifact refs,
-externally tracked refs, and knowledge refs. When code, rendering, local search,
+external owner refs, and knowledge refs. When code, rendering, local search,
 or file inspection needs artifact bytes, materialize the visible ref with
 `react.pull` and continue from the returned paths.
 
@@ -367,8 +367,8 @@ or file inspection needs artifact bytes, materialize the visible ref with
    fi:turn_<id>.external.<event_kind>.attachments/<event_id>/<name>
    fi:conv_<conversation_id>.turn_<id>...   # other conversation
 
-3) EXTERNALLY TRACKED ARTIFACT REFS (resolved by react.pull)
-   ext:<key> or <namespace>:<key>           # resolved by a registered rehoster
+3) EXTERNAL OWNER REFS (resolved by react.pull)
+   <namespace>:<key>                        # resolved by a registered rehoster
 
 4) TIMELINE EVENT REFS (event identity, not artifact bytes)
    ev:turn_<id>.events/<event_path>
@@ -391,12 +391,12 @@ or file inspection needs artifact bytes, materialize the visible ref with
 - Code, rendering, local search, and file inspection operate on artifacts currently materialized under `OUTPUT_DIR`. Use `react.pull(paths=[...])` to materialize historical artifacts before local use.
 - `react.read` loads visible context by logical path. Exec/code require local bytes from `react.pull`.
 - `react.pull` creates local reference material. `react.checkout` is the step that copies versioned `files/...` refs into the current editable workspace.
-- `react.pull` accepts normal `fi:` refs and externally tracked artifact refs shown by the runtime, such as `ext:...`.
-- Externally tracked artifact refs are resolved through registered rehosters. Pass the visible ref to `react.pull`; then continue from the returned `logical_path` / `physical_path` rows. A missing rehoster is reported in the pull result.
-- `ev:` identifies an event object on the timeline. It is readable with `react.read` like `tc:`, but it is not artifact storage and is not a `react.pull` or `react.checkout` path. If the event points to bytes or a snapshot body, use its `hosted_uri`, `payload.event_ref`, or refs inside `payload.event`; pull only those artifact refs.
+- `react.pull` accepts normal `fi:` refs and external owner refs shown by the runtime.
+- External owner refs are resolved through registered rehosters. Pass the visible `object_ref` or exact owner ref to `react.pull`; then continue from the returned `logical_path` / `physical_path` rows. A missing rehoster is reported in the pull result.
+- `ev:` identifies an event object on the timeline. It is readable with `react.read` like `tc:`, but it is not artifact storage and is not a `react.pull` or `react.checkout` path. If the event shows `object_ref`, pull that ref. If it instead points to bytes or a snapshot body through another field, pull that artifact ref.
 - Bring files in for a reason:
   - use `react.read(paths=[...])` when visible text/context is enough
-  - use `react.pull(paths=[...])` when a specific historical or externally tracked artifact must become local reference material for code, rendering, local search, or inspection
+  - use `react.pull(paths=[...])` when a specific historical or external owner ref must become local reference material for code, rendering, local search, or inspection
   - use `react.checkout(mode="replace", paths=[...])` after pull when the active current-turn workspace should be built from selected versioned `files/...`
   - use `react.checkout(mode="overlay", paths=[...])` after pull when selected historical files should be imported into existing current work
 - Folder/slice pulls are supported for `fi:turn_<id>.files/<workspace_scope-or-subtree>`.
@@ -526,10 +526,10 @@ Physical → Logical mapping:
   physical: (not a normal tool path)
   logical : ks:<relpath> (reads from system-prepared knowledge space; not supported by fetch_ctx)
   meaning : read-only bundle knowledge content
-- Externally tracked artifact URI (react.pull only):
+- External owner ref (react.pull only):
   physical: (none until pulled)
-  logical : <namespace>:<external-key>, for example ext:<key>
-  meaning : opaque external artifact URI. Pull it with react.pull; then use the returned fi: logical_path or physical_path. The rehoster chooses where it lands.
+  logical : <namespace>:<external-key>
+  meaning : owner-managed object/artifact outside the ReAct workspace. Pull it with react.pull; then use the returned fi: logical_path or physical_path.
 
 Skills (react.read only):
   physical: (none)
@@ -548,11 +548,11 @@ HARD:
   Web source rows use `text` for preview/snippet and `content` for full fetched page text when available; use `content` first when you need source evidence.
 - Tools that take paths (`react.patch`, `rendering_tools.write_*`) expect PHYSICAL paths.
 - Exec code reads and writes PHYSICAL OUTPUT_DIR-relative paths.
-- Bundle namespace resolvers used inside exec return exec-local physical paths plus access mode. Those physical paths are not valid inputs to react.read or other normal react tools.
+- Runtime namespace resolvers used inside exec return exec-local physical paths plus access mode. Those physical paths are not valid inputs to react.read or other normal react tools.
 - If exec code browses a resolved namespace root and finds useful descendants, this is discovery only. Emit logical refs by combining the original resolver input logical_ref with the discovered relative path; then use react.read on those logical refs to bring content into visible context.
 - Example: resolve `ks:<bundle-defined-root>`, inspect the returned directory in exec, find `foo/bar.py`, then emit `ks:<bundle-defined-root>/foo/bar.py` in an OUTPUT_DIR file or short user.log note so the agent can later call `react.read(paths=["ks:<bundle-defined-root>/foo/bar.py"])`.
 - If you have a physical path, derive logical as above before calling react.read.
-- If you have an externally tracked artifact ref such as `ext:...`, call `react.pull(paths=[...])` first. The pull result tells you the resolved/rehosted `fi:` logical path and physical path; use those returned paths for reading, local search, or exec code. Unsupported namespaces are reported by the pull result.
+- If you have an external owner ref and exact content is needed, call `react.pull(paths=[...])` first. The pull result tells you the resolved/rehosted `fi:` logical path and physical path; use those returned paths for reading, local search, or exec code. Unsupported namespaces are reported by the pull result.
 - react.rg returns `root` plus hits with `path`, `size_bytes`, optional `text_symbols`/`line_count`/`logical_path`, and content `matches` with `read_item` ranges.
 - `path` is relative to the searched root and does not include that root prefix.
 - Hits include `logical_path` when readable and are readable with react.read.
@@ -611,8 +611,8 @@ Using physical relative paths with react.read will result in protocol violation 
 Using physical relative paths with fetch_ctx tool in exec snippets does not work.
 Using unsupported logical namespaces with fetch_ctx returns an error rather than guessing.
 
-#### Externally tracked namespace browsing in exec
-- Some bundles may expose exec-only namespace resolver tools for externally tracked namespaces.
+#### External owner namespace browsing in exec
+- Some runtimes may expose exec-only namespace resolver tools for external owner namespaces.
 - This is separate from `react.pull` rehosting. `react.pull` returns ordinary `fi:` refs; exec-only resolvers return exec-local physical paths.
 - Call those tools only from generated code running inside `execute_code_python(...)`.
 - Resolver result shape is `{ok, error, ret}` where `ret` is `{physical_path, access, browseable}`.
@@ -1038,6 +1038,8 @@ Timeline and recovery entries show logical paths as the primary artifact identit
 | `fi:turn_<id>.external.<event_kind>.attachments/<event_id>/<rel>` | `turn_<id>/external/<event_kind>/attachments/<event_id>/<rel>` |
 
 - `ar:`, `tc:`, `so:`, `su:`, `ks:`, and `sk:` are logical context refs, not filesystem paths.
+- The current runtime may also show namespace refs whose resolvers are connected by the runtime. Runtime instructions or ANNOUNCE may name those namespaces and explain what their refs mean.
+- When a rendered event/object shows `object_ref: <namespace>:...`, that object ref is the owner object identity. If exact content is needed, pass the `object_ref` to `react.pull`; do not pull the event's `ev:` path.
 - If an `fi:` path starts `fi:conv_<conversation_id>.turn_<id>...`, the `conv_` segment is the conversation scope and the file/artifact is from another conversation. When materialized, its physical path starts with `conv_<conversation_id>/turn_<id>/...`. Current-conversation `fi:` paths do not have this segment. Use scoped paths exactly as supplied with `react.read`, `react.pull`, `react.checkout`, or `react.rg`.
 - If an artifact line says `physical_path: exists (derive)`, derive the physical path from its logical `fi:` path with the table above.
 - If no `physical_path` line is shown, do not assume there is a filesystem file.
@@ -1050,7 +1052,7 @@ All physical file paths in tool params and exec code are OUTPUT_DIR-relative and
 | --- | --- | --- |
 | Read visible context/artifact content | logical | `ar:turn_<id>...`, `fi:turn_<id>...`, `tc:turn_<id>...`, `so:...`, `su:...`, `ks:...`, `sk:...` |
 | Pull historical files into local execution workspace | logical | `react.pull(paths=["fi:turn_<id>.files/<workspace_scope>/<path>"])` |
-| Resolve and rehost an externally tracked artifact URI | logical | `react.pull(paths=["ext:<key>"])`, then use returned `logical_path` / `physical_path` |
+| Resolve and rehost an external owner ref | logical | `react.pull(paths=["<namespace>:<key>"])`, then use returned `logical_path` / `physical_path` |
 | Write or patch current durable workspace state | physical | `turn_<current>/files/<workspace_scope>/<path>` |
 | Write current reports/exports/render sources | physical | `turn_<current>/outputs/<artifact_scope>/<path>` |
 | Read input attachments in exec code | physical or logical | `turn_<id>/attachments/<name>` or `fi:turn_<id>.user.attachments/<name>` |
@@ -1064,7 +1066,7 @@ Examples:
 - Exec code: `Path(OUTPUT_DIR) / "turn_<current>/outputs/report/data.json"`
 - Exec code reading an attachment: `Path(OUTPUT_DIR) / "turn_<id>/attachments/input.xlsx"`
 
-Use logical paths for `react.read`, `react.pull`, and `ctx_tools.fetch_ctx` (which supports only ar:/tc:/so: in exec code). Use physical paths for `react.write`, `react.patch`, rendering tools, browser tools, and exec code/contracts.
+Use logical paths for `react.read`, `react.pull`, and `ctx_tools.fetch_ctx` (which supports only ar:/tc:/so: in exec code). External owner refs use `react.pull` first when exact content must become workspace material; if a rendered block shows `object_ref`, pull that ref and continue from the returned `fi:` logical path or physical path. Use physical paths for `react.write`, `react.patch`, rendering tools, browser tools, and exec code/contracts.
 - `react.patch` can patch existing current-turn text files under canonical `turn_<current>/files/...` or `turn_<current>/outputs/...`, including current-turn files produced by exec. It is not limited to files previously written by `react.write`.
 - Keep workspace organization tidy: when you are continuing the same project, reuse its existing top-level scope instead of inventing a sibling scope.
 - If ANNOUNCE or the visible local workspace already shows existing `files/<workspace_scope>/...` scopes, continue inside the matching scope under `turn_<current>/files/<workspace_scope>/...`.
@@ -1488,6 +1490,7 @@ still valid when needed; do not mix inline content and `ref:` in the same
 [react.read (CRITICAL)]
 - Use react.read(paths=[...]) to control what artifacts/skills are visible in your context so you can refer to them.
   If the artifacts are already visible in the timeline, you do not need to read them again. This is for artifacts which content is not visible.
+- External owner refs are imported with `react.pull` when exact content is needed. If a rendered event/object shows `object_ref`, pull that ref. After pull, use the returned `fi:` logical path or physical path with `react.read`, `react.rg`, or exec/code.
 - Skills are never read-capped. `ks:` articles are read in full only when no explicit `knowledge_read_visible_*` caps are configured; capped `ks:` behaves like capped text.
 - For large/capped data, follow the Large/capped data operating procedure in the shared path guide. In short: `react.read` is visible-context retrieval, `react.rg` locates searchable text ranges, `so:sources_pool[...]` returns source rows, and capped text files/articles are recovered into context by bounded `react.read` ranges. Exec can compute or create smaller artifacts, but it is not an uncapped way to show full content to the model.
 - For large text artifacts, do not edit from a capped preview. Use `stats_only:true` to get line metadata, use `react.rg` to find anchors when searchable, pass returned or manual `read_item` ranges to `react.read(items=[...])`, repeat until every affected region is visible, then edit/process.

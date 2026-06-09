@@ -85,9 +85,8 @@ cnv:.../ua_2026-06-07-13-20-10_a1b2  user attachment
 cnv:.../at_2026-06-07-13-20-10_a1b2  assistant text
 ```
 
-Task-tracker still uses `ext:` for current canvas-owned storage. When the
-canvas module moves into SDK, those refs should become canvas-module refs such
-as `cnv:` so the canvas subsystem owns its namespace.
+Canvas-owned storage uses `cnv:` refs, so the canvas subsystem owns the board
+and canvas-object namespace.
 
 ## Board Operations
 

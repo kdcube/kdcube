@@ -104,13 +104,13 @@ async def test_pull_materializes_turn_file_subtree_from_fi_paths(tmp_path):
 async def test_pull_materializes_registered_namespace_ref(tmp_path):
     outdir = tmp_path / "out"
 
-    @artifact_namespace_rehoster(namespace="ext")
-    async def rehost_external_ref(*, ref, key, ctx_browser, outdir, **_):
+    @artifact_namespace_rehoster(namespace="nmsp")
+    async def rehost_nmsp_ref(*, ref, key, ctx_browser, outdir, **_):
         turn_id = ctx_browser.runtime_ctx.turn_id
         physical_path = build_physical_artifact_path(
             turn_id=turn_id,
             namespace="snapshots",
-            relpath=f"ext/{key}",
+            relpath=f"nmsp/{key}",
         )
         target = resolve_artifact_path(outdir, physical_path, prefer_existing=False)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -124,8 +124,8 @@ async def test_pull_materializes_registered_namespace_ref(tmp_path):
             }]
         }
 
-    mod = ModuleType("external_rehosters")
-    mod.rehost_external_ref = rehost_external_ref
+    mod = ModuleType("nmsp_rehosters")
+    mod.rehost_nmsp_ref = rehost_nmsp_ref
     runtime = RuntimeCtx(turn_id="turn_pull", outdir=str(outdir), workdir=str(tmp_path / "work"))
     runtime.event_sources = EventSourceSubsystem(modules=[{"mod": mod}])
     ctx = FakeBrowser(runtime)
@@ -133,27 +133,103 @@ async def test_pull_materializes_registered_namespace_ref(tmp_path):
         "last_decision": {
             "tool_call": {
                 "params": {
-                    "paths": ["ext:task-tracker/draft_1/issue-draft.yaml"],
+                    "paths": ["nmsp:draft_1/issue-draft.yaml"],
                 }
             }
         },
         "outdir": str(outdir),
     }
 
-    await handle_react_pull(ctx_browser=ctx, state=state, tool_call_id="pull_ext")
+    await handle_react_pull(ctx_browser=ctx, state=state, tool_call_id="pull_case")
 
     payload = _latest_payload(ctx)
     assert payload["pulled"] == [{
-        "source_ref": "ext:task-tracker/draft_1/issue-draft.yaml",
-        "logical_path": "fi:turn_pull.snapshots/ext/task-tracker/draft_1/issue-draft.yaml",
-        "physical_path": "turn_pull/snapshots/ext/task-tracker/draft_1/issue-draft.yaml",
+        "source_ref": "nmsp:draft_1/issue-draft.yaml",
+        "logical_path": "fi:turn_pull.snapshots/nmsp/draft_1/issue-draft.yaml",
+        "physical_path": "turn_pull/snapshots/nmsp/draft_1/issue-draft.yaml",
         "namespace": "snapshots",
         "file_count": 1,
     }]
     assert "invalid" not in payload
     assert "missing" not in payload
     assert "errors" not in payload
-    assert (outdir / "workdir" / "turn_pull" / "snapshots" / "ext" / "task-tracker" / "draft_1" / "issue-draft.yaml").read_text(encoding="utf-8") == "status: draft\n"
+    assert (outdir / "workdir" / "turn_pull" / "snapshots" / "nmsp" / "draft_1" / "issue-draft.yaml").read_text(encoding="utf-8") == "status: draft\n"
+
+
+@pytest.mark.asyncio
+async def test_pull_materializes_canvas_owned_attachment_ref(tmp_path, monkeypatch):
+    outdir = tmp_path / "out"
+    source_ref = (
+        "cnv:canvas/users/user-1/canvases/cnv_user-1_main/"
+        "objects/user-attachments/ua_2026-06-09-18-38-30_xkib/v000001.docx"
+    )
+    storage_key = source_ref.split(":", 1)[1]
+
+    from kdcube_ai_app.apps.chat.sdk.solutions.canvas.events import resolver as canvas_resolver
+
+    class _Artifacts:
+        def read(self, key):
+            assert key == storage_key
+            return b"DOCXDATA"
+
+    class _Store:
+        artifacts = _Artifacts()
+
+    monkeypatch.setattr(canvas_resolver, "_store_from_runtime", lambda runtime: _Store())
+
+    runtime = RuntimeCtx(turn_id="turn_pull", outdir=str(outdir), workdir=str(tmp_path / "work"))
+    runtime.event_sources = EventSourceSubsystem(
+        modules=[
+            {
+                "mod": canvas_resolver,
+                "alias": "canvas",
+            }
+        ]
+    )
+    ctx = FakeBrowser(runtime)
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "params": {
+                    "paths": [source_ref],
+                }
+            }
+        },
+        "outdir": str(outdir),
+    }
+
+    await handle_react_pull(ctx_browser=ctx, state=state, tool_call_id="pull_canvas_docx")
+
+    payload = _latest_payload(ctx)
+    assert payload["pulled"] == [{
+        "source_ref": source_ref,
+        "logical_path": "fi:turn_pull.user.attachments/cnv/canvas/users/user-1/canvases/cnv_user-1_main/objects/user-attachments/ua_2026-06-09-18-38-30_xkib/v000001.docx",
+        "physical_path": "turn_pull/attachments/cnv/canvas/users/user-1/canvases/cnv_user-1_main/objects/user-attachments/ua_2026-06-09-18-38-30_xkib/v000001.docx",
+        "namespace": "attachments",
+        "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "size_bytes": 8,
+        "file_count": 1,
+    }]
+    assert "invalid" not in payload
+    assert "missing" not in payload
+    assert "errors" not in payload
+    target = (
+        outdir
+        / "workdir"
+        / "turn_pull"
+        / "attachments"
+        / "cnv"
+        / "canvas"
+        / "users"
+        / "user-1"
+        / "canvases"
+        / "cnv_user-1_main"
+        / "objects"
+        / "user-attachments"
+        / "ua_2026-06-09-18-38-30_xkib"
+        / "v000001.docx"
+    )
+    assert target.read_bytes() == b"DOCXDATA"
 
 
 @pytest.mark.asyncio

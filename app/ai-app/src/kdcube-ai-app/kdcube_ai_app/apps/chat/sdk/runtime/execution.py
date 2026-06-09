@@ -254,8 +254,12 @@ def _normalize_error_dict(err: Any, *, default_where: str) -> Optional[Dict[str,
 
 def _unwrap_tool_envelope(output: Any) -> Tuple[Any, Optional[Dict[str, Any]], bool]:
     """
-    Tools may return {ok, error, ret}. Unwrap to ret and return (ret, error, ok).
-    If no envelope detected, returns (output, None, True).
+    Tools may return {ok, error, ret}. Unwrap only explicit ret wrappers.
+
+    Plain structured tool results often contain an `ok` field as part of their
+    own schema, for example {ok, object_ref, memory}. Those must remain intact;
+    otherwise block-production policies see an empty result and lose the data
+    the tool actually returned.
     """
     if not isinstance(output, dict):
         return output, None, True
@@ -263,7 +267,7 @@ def _unwrap_tool_envelope(output: Any) -> Tuple[Any, Optional[Dict[str, Any]], b
         return output, None, True
     tool_ok = bool(output.get("ok", True))
     tool_error = output.get("error")
-    tool_ret = output.get("ret")
+    tool_ret = output.get("ret") if "ret" in output else output
     return tool_ret, (tool_error if tool_error is not None else None), tool_ok
 
 

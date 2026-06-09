@@ -74,11 +74,11 @@ ordinary tool-result blocks and do not inject files, source rows, snapshots, or
 announce entries unless a later memory-specific policy explicitly adds that
 surface.
 
-`read_memory` is also registered as the owner-domain event source reader for
-the `mem:` namespace. When the memory module is loaded into a ReAct bundle,
-`react.read(paths=["mem:mem_..."])` resolves through memory's reader and then
-renders through memory's block-production policy. ReAct does not implement a
-separate hard-coded memory renderer.
+Memory also registers a `mem:` namespace rehoster. When exact saved memory
+content is needed, ReAct imports the owner ref with
+`react.pull(paths=["mem:mem_..."])`; the pull result returns a normal `fi:`
+artifact mirror that can be inspected with `react.read`, `react.rg`, or
+exec/code. ReAct does not implement a separate hard-coded memory renderer.
 
 ## Full Bundle Config
 
@@ -358,25 +358,25 @@ events=2 confirmations=1 contradictions=0
 history is bounded and should be requested explicitly when needed:
 
 ```text
-memory.read_memory(memory_ref="mem:mem_abc123", include_events=true)
+memory.read_memory(object_ref="mem:mem_abc123", include_events=true)
 ```
 
-Discovery should not use `react.read`. If the memory is not already visible in
+Discovery should not use direct reads. If the memory is not already visible in
 announce, the agent should use memory search first. Once it has concrete memory
-ids, it can read specific ids in full.
+ids, it can pull specific ids in full when exact content is needed.
 
-The read path is generic:
+The exact-content path is generic:
 
 ```text
-react.read(paths=["mem:mem_abc123"])
-  -> EventSourceSubsystem reader for mem:
-  -> memory.read_memory
-  -> memory.block_production.read_result
-  -> rendered memory block
+react.pull(paths=["mem:mem_abc123"])
+  -> EventSourceSubsystem namespace rehoster for mem:
+  -> memory owner reads the authenticated memory record
+  -> memory snapshot is mirrored into a ReAct fi: artifact
+  -> agent reads/searches the returned fi: path
 ```
 
-The reader enforces authenticated user visibility and the configured memory
-scope. The block policy renders compact current state by default.
+The memory owner enforces authenticated user visibility and the configured
+memory scope. Visible memory previews can be used directly when sufficient.
 
 ## Agent Policy
 

@@ -35,16 +35,24 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
+import pathlib
+import re
 import sys
 from dataclasses import dataclass
 from typing import Annotated, Any, Awaitable, Callable, Dict, Optional, Sequence
 
-from kdcube_ai_app.apps.chat.sdk.events import event_source_declaration, event_source_reader
+from kdcube_ai_app.apps.chat.sdk.events import artifact_namespace_rehoster, event_source_declaration, event_source_reader
 from kdcube_ai_app.apps.chat.sdk.solutions.react.events import structured_result_source_policies
 
 from .events.resolver import memory_id_from_ref
 from .events.policies import (  # noqa: F401 - discovered by event-source subsystem
+    MEMORY_CONTEXT_BLOCK_POLICY_ID,
+    MEMORY_CONTEXT_COMPACTION_POLICY_ID,
+    MEMORY_CONTEXT_RENDER_POLICY_ID,
     MEMORY_READ_BLOCK_POLICY_ID,
+    memory_context_block_policy,
+    memory_context_render_policy,
     memory_read_block_policy,
 )
 from .models import MemoryScope, MemorySearchRequest, MemorySignal, normalize_scope_filter, normalize_terms
@@ -70,6 +78,7 @@ Embedder = Callable[[Sequence[str]], Awaitable[Sequence[Sequence[float]]]]
 REGISTRY: Dict[str, Any] = {}
 _SERVICE: Any = None
 SERVICE: Any = None
+LOGGER = logging.getLogger("kdcube.memory.tools")
 
 _MEMORY_TOOL_EVENT_SOURCE_DESCRIPTIONS: Dict[str, str] = {
     "search_memory": (
@@ -105,7 +114,27 @@ def list_event_sources() -> list[Any]:
     result needs a different projection than ordinary structured tool output.
     """
 
-    declarations: list[Any] = []
+    declarations: list[Any] = [
+        event_source_declaration(
+            event_source_id="{alias}.context",
+            policies=[
+                {
+                    "react_phase": "block_production",
+                    "event_policy_id": MEMORY_CONTEXT_BLOCK_POLICY_ID,
+                },
+                {
+                    "react_phase": "timeline_projection",
+                    "event_policy_id": MEMORY_CONTEXT_RENDER_POLICY_ID,
+                },
+                {
+                    "react_phase": "compaction_projection",
+                    "event_policy_id": MEMORY_CONTEXT_COMPACTION_POLICY_ID,
+                },
+            ],
+            description="Attached durable user-memory context refs such as mem:<id>.",
+            kind="event.context",
+        )
+    ]
     for name, description in _MEMORY_TOOL_EVENT_SOURCE_DESCRIPTIONS.items():
         policies = structured_result_source_policies()
         if name == "read_memory":
@@ -445,26 +474,51 @@ class UserMemoryTools:
     @kernel_function(name="read_memory", description="Read one durable user memory by mem: URI or bare memory id.")
     async def read_memory(
         self,
-        memory_ref: Annotated[str, "Memory ref such as mem:<id>, or a bare durable memory id."],
+        object_ref: Annotated[str, "Memory object ref such as mem:<id>, or a bare durable memory id."],
         visible_to_user: Annotated[str, "Optional boolean string filter: true|false|yes|no|1|0. Empty means user-visible only."] = "true",
         scope_filter: Annotated[str, "Scope filter: current_bundle|all_user_memories|global_only|current_bundle_or_global. Empty uses bundle config default."] = "",
         include_events: Annotated[str, "Optional boolean string. true includes recent memory evidence/update events."] = "false",
         event_limit: Annotated[int, "Maximum event rows when include_events=true. Keep small; default 5."] = 5,
-    ) -> Annotated[Dict[str, Any], "Envelope. Success returns {ok:true,memory_ref:'mem:<id>',memory:{...}}. Failure returns {ok:false,error,message}."]:
+    ) -> Annotated[Dict[str, Any], "Envelope. Success returns {ok:true,object_ref:'mem:<id>',memory:{...}}. Failure returns {ok:false,error,message}."]:
         try:
             store, scope, _raw = await self._store_and_scope()
+            LOGGER.info(
+                "[memory.read_memory] request object_ref=%s user_id=%s bundle_id=%s scope_filter=%s visible_to_user=%s include_events=%s event_limit=%s",
+                object_ref,
+                scope.user_id,
+                scope.bundle_id,
+                scope_filter or "",
+                visible_to_user,
+                include_events,
+                event_limit,
+            )
             disabled = await self._disabled_by_user(store, scope)
             if disabled:
+                LOGGER.info(
+                    "[memory.read_memory] disabled_by_user object_ref=%s user_id=%s bundle_id=%s",
+                    object_ref,
+                    scope.user_id,
+                    scope.bundle_id,
+                )
                 return disabled
-            memory_id = memory_id_from_ref(memory_ref) or str(memory_ref or "").strip()
+            memory_id = memory_id_from_ref(object_ref) or str(object_ref or "").strip()
             if not memory_id:
-                return _error("memory_ref_required", "Provide a mem:<id> ref or a memory id.")
+                LOGGER.info("[memory.read_memory] missing_object_ref object_ref=%s user_id=%s", object_ref, scope.user_id)
+                return _error("object_ref_required", "Provide a mem:<id> object_ref or a memory id.")
             # A mem:<id> URI is already a fully-qualified user-memory object
             # reference. Resolve explicit refs across the user's visible memory
             # scope unless the caller deliberately narrows the scope.
-            explicit_ref = str(memory_ref or "").strip().startswith("mem:")
+            explicit_ref = str(object_ref or "").strip().startswith("mem:")
             default_scope_filter = "all_user_memories" if explicit_ref else self._config.default_scope_filter
             resolved_scope_filter = normalize_scope_filter(scope_filter or default_scope_filter)
+            LOGGER.info(
+                "[memory.read_memory] resolved object_ref=%s memory_id=%s user_id=%s bundle_id=%s scope_filter=%s",
+                object_ref,
+                memory_id,
+                scope.user_id,
+                scope.bundle_id,
+                resolved_scope_filter,
+            )
             record = await store.get_memory(
                 scope=scope,
                 memory_id=memory_id,
@@ -472,10 +526,18 @@ class UserMemoryTools:
                 scope_filter=resolved_scope_filter,
             )
             if record is None:
+                LOGGER.info(
+                    "[memory.read_memory] not_found object_ref=%s memory_id=%s user_id=%s bundle_id=%s scope_filter=%s",
+                    object_ref,
+                    memory_id,
+                    scope.user_id,
+                    scope.bundle_id,
+                    resolved_scope_filter,
+                )
                 return _error("memory_not_found", f"Memory {memory_id!r} was not found")
             payload = _record_payload(record)
             result = _ok({
-                "memory_ref": f"mem:{payload['id']}",
+                "object_ref": f"mem:{payload['id']}",
                 "memory": payload,
                 "count": 1,
             })
@@ -489,8 +551,17 @@ class UserMemoryTools:
                 )
                 result["events"] = [_event_payload(event) for event in events]
                 result["events_count"] = len(events)
+            LOGGER.info(
+                "[memory.read_memory] success object_ref=%s memory_id=%s user_id=%s bundle_id=%s events_count=%s",
+                result.get("object_ref"),
+                memory_id,
+                scope.user_id,
+                scope.bundle_id,
+                result.get("events_count", 0),
+            )
             return result
         except Exception as exc:
+            LOGGER.exception("[memory.read_memory] failed object_ref=%s", object_ref)
             return _error("read_memory_failed", str(exc))
 
     @kernel_function(
@@ -794,28 +865,88 @@ async def read_memory_event_ref(
     ctx_browser: Any = None,
     **_context: Any,
 ) -> Dict[str, Any]:
-    memory_ref = ref or (f"{namespace}:{key}" if key else "")
-    return await read_memory(memory_ref=memory_ref, scope_filter="all_user_memories", include_events="true")
+    object_ref = ref or (f"{namespace}:{key}" if key else "")
+    return await read_memory(object_ref=object_ref, scope_filter="all_user_memories", include_events="true")
 
 
 async def read_memory(
-    memory_ref: Annotated[str, "Memory ref such as mem:<id>, or a bare durable memory id."],
+    object_ref: Annotated[str, "Memory object ref such as mem:<id>, or a bare durable memory id."],
     visible_to_user: Annotated[str, "Optional boolean string filter: true|false|yes|no|1|0. Empty means user-visible only."] = "true",
     scope_filter: Annotated[str, "Scope filter: current_bundle|all_user_memories|global_only|current_bundle_or_global. Empty uses bundle config default."] = "",
     include_events: Annotated[str, "Optional boolean string. true includes recent memory evidence/update events."] = "false",
     event_limit: Annotated[int, "Maximum event rows when include_events=true. Keep small; default 5."] = 5,
-) -> Annotated[Dict[str, Any], "Envelope. Success returns {ok:true,memory_ref:'mem:<id>',memory:{...}}. Failure returns {ok:false,error,message}."]:
+) -> Annotated[Dict[str, Any], "Envelope. Success returns {ok:true,object_ref:'mem:<id>',memory:{...}}. Failure returns {ok:false,error,message}."]:
     """Read one durable user memory for the current runtime user scope."""
     tools = _configured_tools()
     if tools is None:
         return _disabled_error()
     return await tools.read_memory(
-        memory_ref=memory_ref,
+        object_ref=object_ref,
         visible_to_user=visible_to_user,
         scope_filter=scope_filter,
         include_events=include_events,
         event_limit=event_limit,
     )
+
+
+def _safe_rehost_segment(value: str, *, default: str = "memory") -> str:
+    raw = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value or "").strip()).strip("._-")
+    return raw[:96] or default
+
+
+@artifact_namespace_rehoster(
+    namespace="mem",
+    description="Materialize a mem:<id> ref as a JSON snapshot in the current ReAct artifact workspace.",
+)
+async def rehost_memory_ref(
+    *,
+    ref: str,
+    namespace: str = "mem",
+    key: str = "",
+    ctx_browser: Any = None,
+    outdir: pathlib.Path | None = None,
+    **_context: Any,
+) -> Dict[str, Any]:
+    object_ref = str(ref or (f"{namespace}:{key}" if key else "")).strip()
+    runtime = getattr(ctx_browser, "runtime_ctx", None)
+    turn_id = str(getattr(runtime, "turn_id", "") or "").strip()
+    if not object_ref or not turn_id or outdir is None:
+        return {"missing": [{"source_ref": object_ref, "reason": "missing_ref_or_runtime"}]}
+
+    result = await read_memory(object_ref=object_ref, scope_filter="all_user_memories", include_events="true")
+    if not isinstance(result, dict) or not result.get("ok"):
+        return {"missing": [{"source_ref": object_ref, "reason": str((result or {}).get("error") or "memory_not_found")}]}
+
+    from kdcube_ai_app.apps.chat.sdk.runtime.workspace import resolve_artifact_path
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
+        ARTIFACT_NAMESPACE_SNAPSHOTS,
+        build_physical_artifact_path,
+        physical_path_to_logical_path,
+    )
+
+    memory_id = memory_id_from_ref(object_ref) or hashlib.sha1(object_ref.encode("utf-8")).hexdigest()[:16]
+    relpath = f"mem/{_safe_rehost_segment(memory_id)}.json"
+    physical_path = build_physical_artifact_path(
+        turn_id=turn_id,
+        namespace=ARTIFACT_NAMESPACE_SNAPSHOTS,
+        relpath=relpath,
+    )
+    logical_path = physical_path_to_logical_path(physical_path)
+    payload = json.dumps(result, ensure_ascii=False, indent=2).encode("utf-8")
+    target = resolve_artifact_path(pathlib.Path(outdir), physical_path, prefer_existing=False)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(payload)
+    return {
+        "materialized": [{
+            "source_ref": object_ref,
+            "logical_path": logical_path,
+            "physical_path": physical_path,
+            "namespace": ARTIFACT_NAMESPACE_SNAPSHOTS,
+            "mime": "application/json",
+            "size_bytes": len(payload),
+            "file_count": 1,
+        }],
+    }
 
 
 async def record_memory(

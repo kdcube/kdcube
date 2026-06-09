@@ -179,6 +179,8 @@ export interface AttachedContext {
   cardId?: string
   cardType?: string
   selected?: boolean
+  eventSourceId?: string
+  surface?: string
   data?: Record<string, unknown>
 }
 

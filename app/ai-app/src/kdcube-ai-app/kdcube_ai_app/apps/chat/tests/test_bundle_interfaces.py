@@ -321,6 +321,33 @@ def test_discover_bundle_interface_manifest_returns_declarative_specs():
     assert manifest.on_job and manifest.on_job.method_name == "handle_job"
 
 
+def test_discover_bundle_interface_manifest_includes_inherited_decorated_api():
+    class _BaseWorkflow:
+        @api(method="POST", alias="shared_preview", route="operations")
+        async def shared_preview(self, **kwargs):
+            return kwargs
+
+    class _DerivedWorkflow(_BaseWorkflow):
+        pass
+
+    manifest = discover_bundle_interface_manifest(_DerivedWorkflow(), bundle_id="bundle.demo")
+
+    inherited = next(item for item in manifest.api_endpoints if item.alias == "shared_preview")
+    assert inherited.method_name == "shared_preview"
+    assert inherited.http_method == "POST"
+    assert inherited.route == "operations"
+
+    resolved, allowed = resolve_bundle_api_endpoint(
+        _DerivedWorkflow(),
+        alias="shared_preview",
+        http_method="POST",
+        route="operations",
+        bundle_id="bundle.demo",
+    )
+    assert resolved and resolved.method_name == "shared_preview"
+    assert allowed == ("POST",)
+
+
 def test_discover_bundle_interface_manifest_normalizes_legacy_roles_to_user_types_and_raw_roles():
     class _LegacyWorkflow:
         @api(method="GET", alias="legacy_user_type", roles=("registered",))

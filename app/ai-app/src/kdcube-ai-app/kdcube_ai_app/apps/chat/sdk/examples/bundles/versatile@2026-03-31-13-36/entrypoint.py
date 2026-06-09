@@ -384,6 +384,32 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
             return str(comm_user_id).strip()
         return "anonymous"
 
+    def _react_event_sources(self):
+        from . import events_descriptor
+        from kdcube_ai_app.apps.chat.sdk.context.memory import tools as memory_tools
+        from kdcube_ai_app.apps.chat.sdk.events import EventSourceSubsystem
+        from kdcube_ai_app.apps.chat.sdk.solutions.react.events import core as react_core_events
+
+        return EventSourceSubsystem(
+            modules=[
+                {
+                    "name": react_core_events.__name__,
+                    "mod": react_core_events,
+                    "alias": "react",
+                    "file": getattr(react_core_events, "__file__", None),
+                },
+                {
+                    "name": memory_tools.__name__,
+                    "mod": memory_tools,
+                    "alias": "memory",
+                    "file": getattr(memory_tools, "__file__", None),
+                },
+            ],
+            event_specs=getattr(events_descriptor, "EVENT_SOURCE_SPECS", None) or [],
+            bundle_root=Path(__file__).resolve().parent,
+            logger=_log,
+        )
+
     def _canvas_store(self, payload: Mapping[str, Any], *, user_id: str | None = None) -> CanvasStore:
         ident = self.runtime_identity()
         tenant = _protocol_string(payload, "tenant", _protocol_string(ident, "tenant", "default"))

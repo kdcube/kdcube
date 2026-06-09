@@ -12,6 +12,8 @@ export interface CanvasContextItem {
   card_id?: string
   card_type?: string
   selected?: boolean
+  event_source_id?: string
+  surface?: string
   data?: Record<string, unknown>
 }
 
@@ -63,6 +65,8 @@ export function normalizeContext(value: unknown): CanvasContextItem | null {
     card_id: stringValue(raw.card_id ?? raw.cardId),
     card_type: stringValue(raw.card_type ?? raw.cardType),
     selected: Boolean(raw.selected),
+    event_source_id: stringValue(raw.event_source_id ?? raw.eventSourceId),
+    surface: stringValue(raw.surface),
     data: asRecord(raw.data) ?? undefined,
   }
 }

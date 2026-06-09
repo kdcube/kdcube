@@ -33,6 +33,7 @@ def test_memory_tools_declare_react_event_sources_for_alias() -> None:
     subsystem = EventSourceSubsystem(modules=[{"mod": module, "alias": "memory"}])
 
     expected = {
+        "memory.context",
         "memory.search_memory",
         "memory.recent_memories",
         "memory.read_memory",
@@ -43,7 +44,20 @@ def test_memory_tools_declare_react_event_sources_for_alias() -> None:
     declared = {item["event_source_id"] for item in subsystem.list_sources()}
     assert expected <= declared
 
-    for event_source_id in expected - {"memory.read_memory"}:
+    context_source = subsystem.by_event_source_id("memory.context")
+    assert context_source is not None
+    assert context_source.kind == "event.context"
+    assert [binding.event_policy_id for binding in context_source.react.block_production] == [
+        "memory.block_production.context_event",
+    ]
+    assert [binding.event_policy_id for binding in context_source.react.timeline_projection] == [
+        "memory.timeline_projection.context_event",
+    ]
+    assert [binding.event_policy_id for binding in context_source.react.compaction_projection] == [
+        "memory.compaction_projection.context_event",
+    ]
+
+    for event_source_id in expected - {"memory.read_memory", "memory.context"}:
         source = subsystem.by_event_source_id(event_source_id)
         assert source is not None
         assert source.kind == "react.tool"
@@ -93,7 +107,7 @@ async def test_memory_event_reader_resolves_explicit_refs_across_user_memory_sco
 
     async def fake_read_memory(**kwargs):
         calls.append(dict(kwargs))
-        return {"ok": True, "memory_ref": kwargs["memory_ref"], "memory": {"id": "mem_1", "memory": "hello"}}
+        return {"ok": True, "object_ref": kwargs["object_ref"], "memory": {"id": "mem_1", "memory": "hello"}}
 
     monkeypatch.setattr(module, "read_memory", fake_read_memory)
 
@@ -101,7 +115,7 @@ async def test_memory_event_reader_resolves_explicit_refs_across_user_memory_sco
 
     assert result["ok"] is True
     assert calls == [{
-        "memory_ref": "mem:mem_1",
+        "object_ref": "mem:mem_1",
         "scope_filter": "all_user_memories",
         "include_events": "true",
     }]

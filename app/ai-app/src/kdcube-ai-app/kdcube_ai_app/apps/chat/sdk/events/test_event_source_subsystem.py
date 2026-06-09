@@ -76,38 +76,38 @@ def test_decorator_discovers_metadata_only_source():
 
 @pytest.mark.asyncio
 async def test_artifact_namespace_rehoster_is_discovered_and_invoked(tmp_path):
-    @artifact_namespace_rehoster(namespace="ext")
-    async def external_rehoster(*, ref, key, outdir, **_):
+    @artifact_namespace_rehoster(namespace="cnv")
+    async def canvas_rehoster(*, ref, key, outdir, **_):
         target = tmp_path / "out" / f"{key}.txt"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("ok", encoding="utf-8")
         return {
             "materialized": [{
                 "source_ref": ref,
-                "logical_path": "fi:turn_1.files/ext/demo.txt",
-                "physical_path": "turn_1/files/ext/demo.txt",
+                "logical_path": "fi:turn_1.files/cnv/demo.txt",
+                "physical_path": "turn_1/files/cnv/demo.txt",
             }]
         }
 
     subsystem = EventSourceSubsystem(modules=[{
-        "mod": _module("namespace_rehosters", external_rehoster=external_rehoster),
+        "mod": _module("namespace_rehosters", canvas_rehoster=canvas_rehoster),
     }])
 
-    assert subsystem.namespace_rehoster("ext") is not None
+    assert subsystem.namespace_rehoster("cnv") is not None
     result = await subsystem.rehost_namespace_ref(
-        "ext:demo",
+        "cnv:demo",
         ctx_browser=SimpleNamespace(),
         outdir=tmp_path / "out",
     )
 
     assert result["errors"] == []
     assert result["materialized"] == [{
-        "source_ref": "ext:demo",
-        "logical_path": "fi:turn_1.files/ext/demo.txt",
-        "physical_path": "turn_1/files/ext/demo.txt",
+        "source_ref": "cnv:demo",
+        "logical_path": "fi:turn_1.files/cnv/demo.txt",
+        "physical_path": "turn_1/files/cnv/demo.txt",
         "file_count": 1,
     }]
-    assert result["rehosted"] == ["turn_1/files/ext/demo.txt"]
+    assert result["rehosted"] == ["turn_1/files/cnv/demo.txt"]
 
 
 def test_module_can_declare_multiple_event_sources():

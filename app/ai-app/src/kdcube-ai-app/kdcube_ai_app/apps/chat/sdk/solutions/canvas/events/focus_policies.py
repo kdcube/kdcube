@@ -16,7 +16,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.events.policies.rendering_commo
 
 DEFAULT_CANVAS_FOCUS_SOURCE_ID = "canvas.focus"
 DEFAULT_CANVAS_FOCUS_ANNOUNCE_PATH_PREFIX = "announce:canvas-focus"
-RESOLVER_REF_PREFIXES = ("ext:", "fi:", "mem:", "so:", "task:", "ar:", "ev:", "tc:")
+RESOLVER_REF_PREFIXES = ("cnv:", "fi:", "mem:", "so:", "task:", "ar:", "ev:", "tc:")
 
 
 def _block_meta(block: Mapping[str, Any]) -> Mapping[str, Any]:

@@ -82,11 +82,12 @@ Notes:
 - Runtime metadata such as `timeline.json`, `tool_calls_index.json`, tool-call JSON, and logs lives in the sibling runtime root `out/`; it is platform state, not the normal agent artifact namespace.
 - **Conversation Workspace** will be the long‑lived, writable project state for copilot‑style flows.
 
-Other owner-domain namespaces can also become readable context when their
-owning module registers an event-source reader. Examples are `mem:` for memory
-items and `cnv:` for canvas boards. In that case the decision agent still uses
-`react.read(paths=[...])`; the namespace owner resolves the ref and its
-event-source policies render the blocks.
+Other owner-domain namespaces can also become usable context when their owning
+module registers runtime hooks. Examples are `mem:` for memory items and `cnv:`
+for canvas boards or canvas-owned files. When exact content is needed, the
+decision agent imports the ref with `react.pull(paths=[...])`; the namespace
+rehoster materializes an `fi:` workspace mirror, and the agent reads, searches,
+or executes against that returned path.
 
 ---
 

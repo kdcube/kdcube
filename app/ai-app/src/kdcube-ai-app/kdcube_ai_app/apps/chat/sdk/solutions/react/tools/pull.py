@@ -33,12 +33,13 @@ TOOL_SPEC = {
     "purpose": (
         "Materialize artifact refs locally under OUT_DIR and return the paths that other tools should use next. "
         "fi: refs already belong to the ReAct artifact model and have the normal logical/physical path rules. "
-        "Externally tracked artifact URIs such as ext:... may appear in timeline events, snapshots, or tool results. "
-        "They are opaque external artifact handles resolved by registered namespace rehosters. "
+        "Externally owned refs such as cnv:, mem:, or task: may appear in timeline events, snapshots, or tool results. "
+        "They are opaque owner handles resolved only when a registered namespace rehoster is available. "
         "ev: refs identify event objects on the timeline; they are not artifact refs and are not accepted by react.pull. "
-        "When an event points to bytes or a snapshot body, pass the event's hosted_uri, payload.event_ref, or an artifact ref carried inside payload.event. "
+        "When an event/object shows object_ref, pass that object_ref. "
+        "When an event points to bytes or a snapshot body through another field, pass that referenced artifact ref. "
         "Unsupported namespaces are reported by the pull result. "
-        "For an externally tracked URI, react.pull calls the registered namespace resolver/rehoster, copies the artifact into a ReAct artifact surface, "
+        "For an externally owned ref, react.pull calls the registered namespace rehoster, copies the artifact into a ReAct artifact surface, "
         "and returns the materialized fi: logical_path plus physical_path. "
         "The rehoster chooses whether the artifact lands as files, snapshots, external attachments, or another supported ReAct artifact surface. "
         "Use those returned paths with react.read, react.rg, exec/code, or later artifact operations. "
@@ -52,14 +53,14 @@ TOOL_SPEC = {
     ),
     "args": {
         "paths": (
-            "list[str] of artifact refs to materialize locally. Each item is either a normal fi: ref or an externally tracked artifact URI shown by the runtime. "
+            "list[str] of artifact refs to materialize locally. Each item is either a normal fi: ref or an externally owned ref shown by the runtime. "
             "Allowed fi: refs include fi:turn_<id>.files/<path> (exact file or subtree), "
             "fi:turn_<id>.snapshots/<path> (exact text snapshot or subtree when git-backed), "
             "fi:turn_<id>.outputs/<file> (exact file only), "
             "fi:turn_<id>.user.attachments/<file> (exact file only), "
             "fi:turn_<id>.external.<event_kind>.attachments/<event_id>/<file> (exact file only), "
             "and cross-conversation fi:conv_<conversation_id>.turn_<id>... refs. "
-            "Externally tracked URIs such as ext:... are accepted only when a namespace resolver/rehoster is registered. "
+            "External namespaces such as cnv:, mem:, or task: are accepted only when a namespace rehoster is registered. "
             "ev: timeline event refs are not artifact refs."
         ),
     },
@@ -67,7 +68,7 @@ TOOL_SPEC = {
         "JSON object with requested refs and compact pulled summaries. "
         "Folder pulls are grouped by logical_root/physical_root with file_count, bounded tree, and path_rule. "
         "Exact file pulls return one logical_path/physical_path item. "
-        "Externally tracked refs return source_ref plus the resolved/rehosted fi: logical_path and physical_path. "
+        "Externally owned refs return source_ref plus the resolved/rehosted fi: logical_path, physical_path, mime, size_bytes, and file_count when available. "
         "Diagnostics such as missing, invalid, and errors are included only when non-empty."
     ),
 }
@@ -315,6 +316,21 @@ async def handle_react_pull(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             requested_roots=namespace_rehosted,
         )
     pulled = namespace_materialized + namespace_fallback_pulled + hydrated_pulled
+    pulled_source_refs = state.setdefault("pulled_source_refs", {})
+    if not isinstance(pulled_source_refs, dict):
+        pulled_source_refs = {}
+        state["pulled_source_refs"] = pulled_source_refs
+    for row in pulled:
+        if not isinstance(row, Mapping):
+            continue
+        source_ref = str(row.get("source_ref") or "").strip()
+        logical_path = str(row.get("logical_path") or "").strip()
+        if source_ref and logical_path:
+            pulled_source_refs[source_ref] = {
+                "logical_path": logical_path,
+                **({"physical_path": str(row.get("physical_path") or "").strip()} if row.get("physical_path") else {}),
+                **({"mime": str(row.get("mime") or "").strip()} if row.get("mime") else {}),
+            }
     hydrated_missing = _compact_path_rows(
         [str(p or "") for p in (rehost_result.get("missing") or [])],
         requested_roots=accepted_physical,

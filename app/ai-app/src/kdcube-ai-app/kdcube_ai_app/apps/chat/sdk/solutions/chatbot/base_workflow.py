@@ -768,6 +768,7 @@ class BaseWorkflow():
         raw = self.get_prop_path(self.bundle_props or {}, "execution.runtime", default=None)
         if raw is None:
             raw = self.get_prop_path(self.bundle_props or {}, "exec_runtime")
+        runtime_ctx.bundle_props = copy.deepcopy(self.bundle_props or {})
         runtime_ctx.exec_runtime = copy.deepcopy(normalize_exec_runtime_config(raw))
         try:
             settings = get_settings()

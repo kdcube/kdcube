@@ -20,7 +20,8 @@ DEFAULT_CANVAS_TOOL_EVENT_SOURCE_DESCRIPTIONS: Dict[str, str] = {
     ),
     "read": (
         "Read a canvas board by cnv: URI and return agent_view plus exact state. "
-        "This is an event-source reader for react.read, not an agent-visible canvas tool."
+        "This is an internal runtime/policy reader, not an agent-visible canvas tool; "
+        "agents import exact cnv: content with react.pull."
     ),
 }
 

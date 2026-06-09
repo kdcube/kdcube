@@ -68,7 +68,7 @@ For each subsystem, answer these questions:
 | Agent tools | Which tool modules must be included in `tools_descriptor.py`? | Agent sees context but cannot act on it. |
 | Instructions/skills | Which stable instructions and skills describe the subsystem object model? | Agent guesses wrong operations or edits the wrong owner. |
 | Event policies | Which event source modules render timeline/ANNOUNCE/compaction blocks? | Context is lost or appears as generic JSON. |
-| Event-source readers | Which namespace readers are registered for `react.read` on owner refs such as `mem:` or `cnv:`? | Agent sees refs but `react.read` reports missing namespace/path. |
+| Namespace rehosters | Which namespace rehosters are registered for `react.pull` on owner refs such as `mem:` or `cnv:`? | Agent sees refs but cannot import exact content into its workspace. |
 | Resolvers | Which namespace/object resolvers are registered, and who owns each namespace? | Pins/refs are visible but cannot preview/open/download/rehost. |
 | Storage | Which store/schema/user-scope hooks does the subsystem need? | State is lost, cross-user data leaks, or first request fails schema checks. |
 | Runtime identity | Which shared helper supplies tenant/project/user/fingerprint for REST, Data Bus, tools, and jobs? | One transport works while another writes to `default/default`, fails store creation, or loses user scope. |
@@ -346,6 +346,31 @@ tools and task instructions.
 If the subsystem creates external events or tool results that ReAct should
 understand, mount the policy module that renders them.
 
+Do not conflate tools and events.
+
+| Surface | Descriptor | Meaning |
+| --- | --- | --- |
+| Tool visibility | `tools_descriptor.py` / `TOOLS_SPECS` | Callable functions the model may invoke. |
+| Event visibility | `events_descriptor.py` / `EVENT_SOURCE_SPECS` | Event sources, policies, event-source readers, and namespace rehosters the runtime may use. |
+
+These surfaces are cumulative. Tool modules are also scanned for their own
+event declarations because tool calls produce events. Event-only modules are
+added through `EVENT_SOURCE_SPECS`; they do not replace tool module events and
+they do not expose new model-callable tools.
+
+If one Python module contains both callable tools and event decorators, choose
+the descriptor based on the intended surface:
+
+- list it in `TOOLS_SPECS` only when the model should be able to call its
+  tools;
+- list it in `EVENT_SOURCE_SPECS` when the runtime only needs its event
+  declarations, policies, readers, or rehosters.
+
+Reusable SDK subsystems should prefer a clean split: callable tools in a tool
+module, and owner-domain event readers/rehosters/policies in an event module.
+For example, a bundle can mount the canvas `cnv:` namespace rehoster through
+`events_descriptor.py` without exposing `canvas.patch` as an agent tool.
+
 For each event-producing subsystem, define:
 
 | Policy | Purpose |
@@ -353,36 +378,62 @@ For each event-producing subsystem, define:
 | timeline/block projection | Compact, durable fact on the timeline. |
 | ANNOUNCE projection | Current live context for the active turn. |
 | compaction projection | What survives pruning. |
-| resolver/rehoster | How refs from that subsystem are read or materialized. |
+| resolver/rehoster | How refs from that subsystem are previewed, acted on, or materialized into the ReAct workspace. |
 
 Do not dump raw subsystem JSON by default. The policy should render the object
 model that the agent needs to act: ids, refs, status, revision, selected/focused
 state, and a bounded preview.
 
-If the subsystem owns a logical namespace that should be readable by the agent,
-also register an event-source reader:
+If the subsystem owns a logical namespace whose exact payload can be imported
+into the ReAct workspace, register a namespace rehoster:
 
 ```python
-from kdcube_ai_app.apps.chat.sdk.events import event_source_reader
+from kdcube_ai_app.apps.chat.sdk.events import artifact_namespace_rehoster
 
-@event_source_reader(
+@artifact_namespace_rehoster(
     namespace="mem",
-    event_source_id="{alias}.read_memory",
-    description="Read a durable memory by mem: ref.",
+    resolver_name="{alias}.memory_rehoster",
 )
-async def read_memory_event_ref(*, ref, ctx_browser=None, **context):
+async def rehost_memory_ref(*, uri, **context):
     ...
 ```
 
-The reader resolves the object. The event source declaration for
-`{alias}.read_memory` binds the block-production policies that render the
-resolved payload. The model still calls `react.read(paths=["mem:..."])`; it
-does not call `memory.read_memory(...)` unless that function is also explicitly
+The rehoster resolves the owner-domain object and returns a materialized
+workspace artifact row. The model calls `react.pull(paths=["mem:..."])`; after
+that it reads or searches the returned `fi:`/physical workspace path. It does
+not call `memory.read_memory(...)` unless that function is also explicitly
 exposed as a normal tool.
 
-Use `kind="react.event_source_reader"` for read-only owner readers that are not
-direct model tools. Use `kind="react.tool"` only for actual tool-call sources,
-such as `canvas.patch`.
+Use `kind="react.event_source_reader"` for runtime/policy read sources that are
+not direct model tools. Use `kind="react.tool"` only for actual tool-call
+sources, such as `canvas.patch`.
+
+Example:
+
+```python
+# events_descriptor.py
+EVENT_SOURCE_SPECS = [
+    {
+        "module": "kdcube_ai_app.apps.chat.sdk.solutions.canvas.events.resolver",
+        "alias": "canvas",
+    },
+]
+```
+
+```python
+# orchestrator/workflow.py
+from .. import events_descriptor, tools_descriptor
+
+react = self.build_react(
+    scratchpad=scratchpad,
+    mod_tools_spec=tools_descriptor.TOOLS_SPECS,
+    event_source_specs=events_descriptor.EVENT_SOURCE_SPECS,
+)
+```
+
+This makes `cnv:` refs importable through `react.pull` when the canvas resolver
+is registered. It does not make `canvas.patch` callable unless the canvas tool
+module is also listed in `TOOLS_SPECS`.
 
 ### 8. Object Resolvers
 
@@ -393,7 +444,7 @@ Resolvers belong to the subsystem that owns the object namespace.
 | `mem:` | memory module | `sdk/context/memory/events/resolver.py` |
 | `fi:` | ReAct artifact/event layer | `sdk/solutions/react/events/resolver.py` |
 | `task:` | task/issue subsystem | the task subsystem package |
-| `cnv:` or canvas-owned `ext:` | canvas module | `sdk/solutions/canvas/events/resolver.py` |
+| `cnv:` | canvas module | `sdk/solutions/canvas/events/resolver.py` |
 | `ks:` | knowledge subsystem | knowledge bundle/module |
 
 Canvas cards store only the canonical object ref. They do not store download
@@ -510,13 +561,14 @@ Validation:
 - canvas board loads and stores revisions
 - card pins keep canonical refs (`fi:`, `mem:`, `task:`, canvas-owned refs)
 - board refs use the canvas namespace, for example `cnv:main@27`; exact board
-  reads are `react.read(paths=["cnv:main@27"])`
+  content is imported with `react.pull(paths=["cnv:main@27"])`, then inspected
+  through the returned workspace path
 - object action calls route through resolver registry
 - unknown refs stay pinned but expose no owner-specific actions
 - ReAct timeline contains compact canvas facts and ANNOUNCE contains current
   board/focused context
-- `canvas.patch` is the only model-visible canvas write tool; `canvas.read` is
-  an event-source reader behind `react.read(paths=["cnv:<name>@<revision>"])`
+- `canvas.patch` is the only model-visible canvas write tool; exact board reads
+  are materialized by the `cnv:` namespace rehoster behind `react.pull`
 - `canvas.patch` uses base revision and returns a new revision fact
 
 ## Common Failure Modes

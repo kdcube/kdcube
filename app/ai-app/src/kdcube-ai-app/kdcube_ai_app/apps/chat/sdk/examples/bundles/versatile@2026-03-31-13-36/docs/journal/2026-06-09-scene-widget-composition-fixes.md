@@ -31,8 +31,11 @@ to resize the scene implicitly through iframe resize messages.
 
 Changes:
 
-- replaced the old two-row right column with a stable chat side panel;
+- replaced the old two-row right column with host-owned floating widget
+  panels;
 - moved memory into a floating overlay panel;
+- moved chat into a floating iframe panel with host-owned drag and resize
+  controls;
 - made memory panel position host-controlled;
 - kept iframe dimensions at `width: 100%` and `height: 100%` inside the host
   panel.
@@ -54,20 +57,65 @@ The scene now follows the task-tracker interaction model:
 - canvas button on the right rail;
 - memory button on the right rail.
 
+The rail is a real scene grid column, not a fixed overlay. This matters because
+the chat iframe can be moved or resized near the right edge without the rail
+covering chat content.
+
 The scene-level "Reconnect chat" button was removed. Connection recovery is a
 chat-widget responsibility and already belongs inside the chat widget.
 
-### Chat Resize
+### Chat Window
 
-The chat side panel now has a left resize handle like task-tracker:
+The chat widget is mounted as an iframe. The host scene owns a small window
+chrome around it so the chat can be moved without reaching into the iframe DOM.
+
+The chat panel has:
+
+- a host drag header;
+- compact/enlarge and close controls;
+- a left resize handle in compact mode;
+- fullscreen behavior delegated by scene state and synchronized to the chat
+  iframe through `kdcube-set-view`.
+
+Resize follows the task-tracker direction:
 
 ```text
 drag chat left edge left  -> wider chat
 drag chat left edge right -> narrower chat
 ```
 
-The scene stores the width in `--versatile-chat-width` and clamps it to a
-usable range.
+The scene stores the width and frame position in host state and clamps both to
+the viewport. The chat iframe remains mounted while hidden so conversation state
+is not lost when the right rail toggles chat visibility.
+
+The scene passes `chat_embed_mode=host` to the chat widget URL. This is the
+explicit iframe sizing protocol for same-origin composed scenes:
+
+```text
+chat_embed_mode=host
+  -> host owns iframe rectangle
+  -> widget fills width/height 100%
+  -> widget does not render its same-origin dev preview tile
+  -> widget does not apply its own centered max-width box
+```
+
+Without this flag the chat widget sees the same-origin parent and enters its
+local preview mode, boxing the chat into a fixed-size demo tile. That makes the
+outer scene resize only the panel chrome while the actual chat remains fixed
+inside it.
+
+The site landing-page scene should use this same iframe composition model:
+
+```text
+page
+  -> scene iframe
+       -> chat iframe
+       -> memories iframe
+       -> canvas component/iframe surface
+```
+
+That keeps each reusable widget behind its own small host protocol instead of
+requiring one page build to import every SDK component directly.
 
 ### Memory Overlay Behavior
 
@@ -109,11 +157,13 @@ memory is selected or an editor is active. Without that guard, the shared memory
 widget reserved an empty right-side panel and made both the task-tracker and
 Versatile expanded memory views look like they had a large dead area.
 
-The memory widget emits memory-owned drag events (`kdcube.memory.drag.start`,
-`kdcube.memory.drag.end`) and a memory context payload (`kdcube.memory.context`).
-It must not emit task-tracker-specific messages. Consumers that need memory
-objects listen for the memory event or read the generic `contexts[]` shape from
-the drag payload.
+The memory widget emits memory-owned drag lifecycle events
+(`kdcube.memory.drag.start`, `kdcube.memory.drag.end`) for scene coordination.
+For chat/context attachment it emits the generic context protocol
+(`kdcube.context.attach` with `application/vnd.kdcube.context+json`) where the
+payload contains `contexts[]` and the memory object remains `mem:<id>`.
+Consumers must not depend on memory-specific context message names; they read
+the generic context shape and preserve `event_source_id: memory.context`.
 
 Compact memory controls use this split:
 
@@ -168,6 +218,28 @@ lost pointer-up when the cursor crosses an iframe.
 The canvas component is still mounted as a shared source into the scene. The
 host scene keeps the canvas in a dedicated workspace panel and the panel keeps
 stable height so the canvas grid, cards, and bottom actions remain usable.
+
+### Event Visibility Split
+
+Versatile now has an explicit `events_descriptor.py`.
+
+The rule is:
+
+```text
+tools_descriptor.py  -> model-callable tools
+events_descriptor.py -> event sources, policies, readers, namespace rehosters
+```
+
+This was needed because Versatile should understand canvas-owned `cnv:` refs
+for `react.pull`, but it should not expose `canvas.patch` as an agent tool. The
+canvas namespace rehoster now comes from
+`kdcube_ai_app.apps.chat.sdk.solutions.canvas.events.resolver` through
+`EVENT_SOURCE_SPECS`.
+
+The workflow passes those specs into `BaseWorkflow.build_react(...)`, and the
+entrypoint preview path uses the same specs when building an
+`EventSourceSubsystem`. The two paths must stay aligned; otherwise dry-run or
+preview can understand refs that live ReAct cannot pull.
 
 The scene keeps the canvas workspace shell mounted even when the user hides the
 canvas. Hiding the canvas swaps its content for an empty-state panel instead of
@@ -264,7 +336,7 @@ A scene that composes widgets should provide:
 | Requirement | Reason |
 | --- | --- |
 | owned geometry for every panel | Prevent iframe resize feedback loops. |
-| right rail for primary surfaces | Consistent with task-tracker UI. |
+| right rail as a real layout column | Consistent with task-tracker UI; prevents overlap with movable panels. |
 | draggable overlays for transient tools | Memory/canvas helpers should not permanently consume layout. |
 | explicit fullscreen/expanded handling | Widget requests state; host applies state. |
 | stable message broker | Context, view, and auth messages move between iframes and platform. |

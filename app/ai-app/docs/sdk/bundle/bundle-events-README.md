@@ -60,14 +60,14 @@ assistance requests, canvas review requests, or saved story snapshots.
 
 | Term | Meaning |
 |---|---|
-| `event_source_id` | Stable semantic source key. For a tool-backed event this is the `tool_id`. For a bundle UI event it is a bundle-owned id such as `case_workspace.wizard.assistance.requested`. |
+| `event_source_id` | Stable semantic source key. For a tool-backed event this is the `tool_id`. For a bundle UI event it is a bundle-owned id such as `demo_workspace.wizard.assistance.requested`. |
 | `event_id` | One occurrence of that source. For a tool-backed event this is the `tool_call_id`. For an authored UI event it is assigned by ingress/transport. |
 | `react_phase` | ReAct lifecycle spot where a policy runs, such as `block_production`, `timeline_projection`, `announce_production`, or `compaction_projection`. |
 | `event_policy_id` | Registered handler for a phase. Built-in ReAct policies use `react.*`; bundle policies should use a bundle namespace. |
-| `kind` | Event-source occurrence family. `react.tool` means a ReAct tool-call/result source; `react.event_source_reader` means a reader backing `react.read`; `react.external` means an authored external event. |
+| `kind` | Event-source occurrence family. `react.tool` means a ReAct tool-call/result source; `react.event_source_reader` means an owner-domain reader for runtime/policy code; `react.external` means an authored external event. |
 | `story_id` | Bundle-owned product-flow instance id, for example one open wizard/canvas/case. It helps policies and tools interpret the event. |
-| `event source reader` | Namespace-owner callable registered with `@event_source_reader`; resolves refs such as `mem:...` or `cnv:main@7` for `react.read`. |
-| `artifact namespace rehoster` | A bundle/SDK handler that turns an external URI such as `ext:...` into a ReAct `fi:` artifact path. |
+| `event source reader` | Namespace-owner callable registered with `@event_source_reader`; resolves owner refs for runtime/policy code. |
+| `artifact namespace rehoster` | A bundle/SDK handler that turns an external owner ref such as `cnv:...` or `mem:...` into a ReAct `fi:` artifact path for `react.pull`. |
 
 For tool-backed events:
 
@@ -78,10 +78,9 @@ tool_call_id == event_id
 
 Do not treat every event source as a tool. Agent-visible tools require normal
 tool exposure, such as a Semantic Kernel `@kernel_function` loaded through the
-tool subsystem. Event-source declarations only attach policy identity. A source
-like `canvas.read` can exist with `kind="react.event_source_reader"` so
-`react.read(paths=["cnv:main@7"])` has canvas policies, while `canvas.read(...)`
-is not a callable model tool.
+tool subsystem. Event-source declarations only attach policy identity. Exact
+external owner content is imported with `react.pull` through a namespace
+rehoster; source ids such as `canvas.read` are not callable model tools.
 
 ## Where Events Fit In A Bundle
 
@@ -136,14 +135,14 @@ Case Workspace main UI
   |
   +-- Side chat iframe
   |     target.agent_id = "default.react.agent"
-  |     target.story_id = optional current case/story
+  |     target.story_id = optional current domain story
   |
   +-- Case wizard iframe
-  |     story_id = "case:<case_id or draft_id>"
+  |     story_id = "nmsp:<object_id or draft_id>"
   |     emits saved/assistance/snapshot events
   |
   +-- Canvas iframe
-        story_id = "case:<case_id or draft_id>"
+        story_id = "nmsp:<object_id or draft_id>"
         emits review-requested and snapshot events
 ```
 
@@ -183,18 +182,18 @@ the payload:
     "target": {
       "agent_id": "default.react.agent",
       "story_kind": "case_wizard",
-      "story_id": "case:draft-123"
+      "story_id": "nmsp:draft-123"
     },
     "external_event": {
-      "event_source_id": "case_workspace.wizard.assistance.requested",
-      "story_id": "case:draft-123",
+      "event_source_id": "demo_workspace.wizard.assistance.requested",
+      "story_id": "nmsp:draft-123",
       "routing": {
         "reactive": true,
         "iteration_credit": 1
       },
       "data": {
         "section_id": "observed_behavior",
-        "snapshot_ref": "ext:case-workspace/draft-123/snapshots/current.yaml"
+        "snapshot_ref": "nmsp:workspace/draft-123/snapshots/current.yaml"
       }
     }
   }
@@ -281,47 +280,47 @@ from kdcube_ai_app.apps.chat.sdk.events import event_source_declaration
 def list_event_sources():
     return [
         event_source_declaration(
-            event_source_id="case_workspace.wizard.assistance.requested",
+            event_source_id="demo_workspace.wizard.assistance.requested",
             kind="react.external",
             reactive=True,
             iteration_credit=1,
             policies=[
                 {
                     "react_phase": "timeline_projection",
-                    "event_policy_id": "case_workspace.timeline_projection.wizard_event",
+                    "event_policy_id": "demo_workspace.timeline_projection.wizard_event",
                 },
                 {
                     "react_phase": "announce_production",
-                    "event_policy_id": "case_workspace.announce.current_snapshot",
+                    "event_policy_id": "demo_workspace.announce.current_snapshot",
                 },
             ],
             description="User asked the assistant to review a wizard section.",
         ),
         event_source_declaration(
-            event_source_id="case_workspace.canvas.review.requested",
+            event_source_id="demo_workspace.canvas.review.requested",
             kind="react.external",
             reactive=True,
             iteration_credit=2,
             policies=[
                 {
                     "react_phase": "timeline_projection",
-                    "event_policy_id": "case_workspace.timeline_projection.canvas_event",
+                    "event_policy_id": "demo_workspace.timeline_projection.canvas_event",
                 },
             ],
             description="User asked the assistant to review the canvas.",
         ),
         event_source_declaration(
-            event_source_id="case_workspace.snapshot.available",
+            event_source_id="demo_workspace.snapshot.available",
             kind="react.external",
             reactive=False,
             policies=[
                 {
                     "react_phase": "timeline_projection",
-                    "event_policy_id": "case_workspace.timeline_projection.snapshot_ref",
+                    "event_policy_id": "demo_workspace.timeline_projection.snapshot_ref",
                 },
                 {
                     "react_phase": "announce_production",
-                    "event_policy_id": "case_workspace.announce.current_snapshot",
+                    "event_policy_id": "demo_workspace.announce.current_snapshot",
                 },
             ],
             description="A current story snapshot is available for the agent.",
@@ -347,11 +346,11 @@ from kdcube_ai_app.apps.chat.sdk.events import event_source
     policies=[
         {
             "react_phase": "block_production",
-            "event_policy_id": "case_workspace.block_production.related_cases",
+            "event_policy_id": "demo_workspace.block_production.related_cases",
         },
         {
             "react_phase": "timeline_projection",
-            "event_policy_id": "case_workspace.timeline_projection.related_cases",
+            "event_policy_id": "demo_workspace.timeline_projection.related_cases",
         },
     ],
     description="Find related cases and produce bounded source rows.",
@@ -383,11 +382,11 @@ object storage, or an external system. Events can carry a snapshot ref:
 
 ```json
 {
-  "event_source_id": "case_workspace.snapshot.available",
-  "story_id": "case:draft-123",
+  "event_source_id": "demo_workspace.snapshot.available",
+  "story_id": "nmsp:draft-123",
   "routing": { "reactive": false },
   "data": {
-    "snapshot_ref": "ext:case-workspace/draft-123/snapshots/current.yaml",
+    "snapshot_ref": "nmsp:workspace/draft-123/snapshots/current.yaml",
     "summary": "Draft has title, observed behavior, two evidence files, and missing expected result."
   }
 }
@@ -398,7 +397,7 @@ the agent needs the actual bytes, it calls:
 
 ```json
 {
-  "paths": ["ext:case-workspace/draft-123/snapshots/current.yaml"]
+  "paths": ["nmsp:workspace/draft-123/snapshots/current.yaml"]
 }
 ```
 
@@ -407,9 +406,9 @@ ReAct paths, for example:
 
 ```json
 {
-  "source_ref": "ext:case-workspace/draft-123/snapshots/current.yaml",
-  "logical_path": "fi:turn_123.snapshots/ext/case-workspace/draft-123/current.yaml",
-  "physical_path": "turn_123/snapshots/ext/case-workspace/draft-123/current.yaml"
+  "source_ref": "nmsp:workspace/draft-123/snapshots/current.yaml",
+  "logical_path": "fi:turn_123.snapshots/nmsp/workspace/draft-123/current.yaml",
+  "physical_path": "turn_123/snapshots/nmsp/workspace/draft-123/current.yaml"
 }
 ```
 
@@ -448,14 +447,14 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
 )
 
 @artifact_namespace_rehoster(
-    namespace="ext",
+    namespace="nmsp",
     description="Materialize case workspace refs for ReAct tools.",
 )
-async def rehost_case_workspace_ref(*, ref, key, ctx_browser, outdir, **_):
+async def rehost_nmsp_workspace_ref(*, ref, key, ctx_browser, outdir, **_):
     turn_id = ctx_browser.runtime_ctx.turn_id
 
     if key.endswith("/snapshots/current.yaml"):
-        relpath = f"ext/{key}"
+        relpath = f"nmsp/{key}"
         logical_path = build_logical_artifact_path(
             turn_id=turn_id,
             namespace="snapshots",
@@ -467,9 +466,9 @@ async def rehost_case_workspace_ref(*, ref, key, ctx_browser, outdir, **_):
             relpath=relpath,
         )
     else:
-        event_id = "ext_case_workspace"
+        event_id = "nmsp_workspace"
         event_kind = "external_ref"
-        relpath = f"ext/{key}"
+        relpath = f"nmsp/{key}"
         logical_path = build_external_attachment_logical_path(
             turn_id=turn_id,
             kind=event_kind,
@@ -497,8 +496,9 @@ async def rehost_case_workspace_ref(*, ref, key, ctx_browser, outdir, **_):
     }
 ```
 
-`ext` is an example namespace. A bundle can register another compact URI-style
-namespace if that namespace is discoverable by the ReAct `EventSourceSubsystem`.
+`nmsp` is an example owner-domain namespace. A bundle can register another
+compact URI-style namespace if that namespace has a loaded rehoster in the
+ReAct `EventSourceSubsystem`.
 
 ## End-To-End Wizard / Canvas Flow
 
@@ -520,7 +520,7 @@ namespace if that namespace is discoverable by the ReAct `EventSourceSubsystem`.
    policy renders concise context and preserves refs
 
 5. Agent needs snapshot bytes
-   agent calls react.pull(paths=["ext:..."])
+   agent calls react.pull(paths=["<namespace>:..."])
    namespace rehoster materializes snapshot as fi:turn_<id>.snapshots/...
 
 6. Agent responds in side chat or produces artifacts
@@ -554,8 +554,8 @@ selection metadata.
 3. Declare bundle UI event sources with `event_source_declaration(...)`.
 4. Add tool `@event_source(...)` declarations when tools need custom policy
    behavior.
-5. Register `@artifact_namespace_rehoster(...)` for custom artifact refs such as
-   `ext:...`.
+5. Register `@artifact_namespace_rehoster(...)` for custom owner refs such as
+   `nmsp:...`, `mem:...`, or `cnv:...`.
 6. Make UI events carry `payload.target.agent_id`, `story_kind`, `story_id`,
    and `external_events[].event_source_id`.
 7. Use `external_events[].reactive=true` only for events intended

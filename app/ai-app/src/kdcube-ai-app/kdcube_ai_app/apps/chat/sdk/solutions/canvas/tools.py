@@ -8,8 +8,8 @@ canvas.patch
 ```
 
 Canvas board reads are not exposed as an agent tool. They are exposed as an
-event source reader for the `cnv:` namespace, so agents use
-`react.read(paths=["cnv:<name>@<revision>"])`.
+external `cnv:` refs that can be imported into the ReAct workspace with
+`react.pull(paths=["cnv:<name>@<revision>"])` when exact JSON is needed.
 
 The tools bind to the current bundle runtime at call time. Bundle-specific
 transport and storage names are supplied through `bundle_props.canvas`; the
@@ -18,17 +18,21 @@ tool implementation itself remains part of the SDK canvas solution.
 
 from __future__ import annotations
 
+import json
 from typing import Annotated, Any, Dict, Mapping
 
 import semantic_kernel as sk
 
-from kdcube_ai_app.apps.chat.sdk.events import event_source, event_source_declaration, event_source_reader
+from kdcube_ai_app.apps.chat.sdk.events import (
+    event_source,
+    event_source_declaration,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.canvas.config import canvas_config_from_props, mapping_or_empty
 from kdcube_ai_app.apps.chat.sdk.solutions.canvas.storage import DEFAULT_CANVAS_NAME, CanvasStore
 from kdcube_ai_app.apps.chat.sdk.solutions.canvas.tools_core import (
     DEFAULT_CANVAS_TOOL_EVENT_SOURCE_DESCRIPTIONS,
     canonicalize_canvas_operations_for_context as _canonicalize_canvas_operations_for_context,
     patch_canvas_for_agent,
-    read_canvas_for_agent,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.events import default_tool_event_policies
 from kdcube_ai_app.apps.chat.sdk.tools.bundle_tool_context import error, ok, scope
@@ -36,7 +40,6 @@ from kdcube_ai_app.apps.chat.sdk.tools.bundle_tool_context import error, ok, sco
 from .events.policies import (  # noqa: F401 - imported so the event subsystem discovers default policies
     canvas_announce_policy,
     canvas_patch_block_policy,
-    canvas_read_block_policy,
     canvas_state_projection_policy,
     canvas_tool_projection_policy,
 )
@@ -47,39 +50,8 @@ except Exception:  # pragma: no cover - semantic-kernel compatibility fallback
     from semantic_kernel.utils.function_decorator import kernel_function
 
 
-DEFAULT_CANVAS_TOOL_CONFIG: Dict[str, Any] = {
-    "artifact_prefix": "canvas",
-    "origin_prefix": "canvas",
-    "state_event_source_id": "canvas.state",
-    "ui_event_type": "canvas.patch.applied",
-    "artifact_resolver_name": "canvas.bundle_artifact_storage",
-    "handoff_resolver_names": {},
-    "revision_retention": 80,
-    "data_bus_subject": "canvas.patch",
-    "event_agent_id": "canvas",
-    "event_surface": "canvas",
-}
-
-
-def _mapping(value: Any) -> Dict[str, Any]:
-    return dict(value) if isinstance(value, Mapping) else {}
-
-
 def _canvas_config(tool_scope: Mapping[str, Any]) -> Dict[str, Any]:
-    bundle_props = _mapping(tool_scope.get("bundle_props"))
-    configured = _mapping(bundle_props.get("canvas"))
-    if not configured:
-        sdk_props = _mapping(bundle_props.get("sdk"))
-        configured = _mapping(sdk_props.get("canvas"))
-    cfg = dict(DEFAULT_CANVAS_TOOL_CONFIG)
-    cfg.update(configured)
-    handoff = cfg.get("handoff_resolver_names")
-    cfg["handoff_resolver_names"] = dict(handoff) if isinstance(handoff, Mapping) else {}
-    try:
-        cfg["revision_retention"] = int(cfg.get("revision_retention") or 80)
-    except Exception:
-        cfg["revision_retention"] = 80
-    return cfg
+    return canvas_config_from_props(mapping_or_empty(tool_scope.get("bundle_props")))
 
 
 def _store_from_scope(tool_scope: Mapping[str, Any]) -> CanvasStore:
@@ -91,7 +63,7 @@ def _store_from_scope(tool_scope: Mapping[str, Any]) -> CanvasStore:
         origin_prefix=str(cfg.get("origin_prefix") or "canvas"),
         state_event_source_id=str(cfg.get("state_event_source_id") or "canvas.state"),
         ui_event_type=str(cfg.get("ui_event_type") or "canvas.patch.applied"),
-        artifact_resolver_name=str(cfg.get("artifact_resolver_name") or "canvas.bundle_artifact_storage"),
+        artifact_resolver_name=str(cfg.get("artifact_resolver_name") or "sdk.canvas.artifact_storage"),
         handoff_resolver_names=dict(cfg.get("handoff_resolver_names") or {}),
         revision_retention=int(cfg.get("revision_retention") or 80),
     )
@@ -129,9 +101,10 @@ def list_event_sources() -> list[Any]:
             event_source_id=f"{{alias}}.{name}",
             policies=_canvas_tool_policies(name),
             description=description,
-            kind="react.event_source_reader" if name == "read" else "react.tool",
+            kind="react.tool",
         )
         for name, description in DEFAULT_CANVAS_TOOL_EVENT_SOURCE_DESCRIPTIONS.items()
+        if name == "patch"
     ]
 
 
@@ -182,7 +155,7 @@ class CanvasTools:
                 "replace_card, suggest_deletion, delete_card, comment_card. "
                 "For artifact delivery use new_card with the semantic kind of the object "
                 "(file, memory, source, search.result, agent.text for text only), title/summary, "
-                "mime, and logical_path set to the produced/resolved fi:/ext:/mem:/so:/task: ref. "
+                "mime, and logical_path set to the produced/resolved fi:/cnv:/mem:/so:/task: ref. "
                 "Use placement=suggested for pending bot suggestions. For replacement suggestions, use "
                 "replace_card with the target card_id; omit mode or use mode=suggested to create "
                 "a floating replacement, and use mode=in_place only for explicit overwrite requests."
@@ -238,38 +211,10 @@ kernel = sk.Kernel()
 tools = CanvasTools()
 kernel.add_plugin(tools, "canvas")
 
-
-@event_source_reader(
-    namespace="cnv",
-    event_source_id="{alias}.read",
-    description="Resolve a cnv:<name>@<revision> board ref into the canvas.read event-source payload.",
-)
-async def read_canvas_event_ref(
-    *,
-    ref: str,
-    namespace: str = "cnv",
-    key: str = "",
-    ctx_browser: Any = None,
-    **_context: Any,
-) -> Dict[str, Any]:
-    uri = ref or (f"{namespace}:{key}" if key else "")
-    try:
-        result = read_canvas_for_agent(
-            store=_store_from_scope(scope()),
-            uri=uri,
-        )
-        if not result.get("ok"):
-            result = {"ok": False, "error": result.get("error") or "canvas_read_failed", **result}
-        return result
-    except Exception as exc:
-        return {"ok": False, "ref": uri, "object_ref": uri, "error": "canvas_read_failed", "message": str(exc)}
-
-
 __all__ = [
     "CanvasTools",
     "kernel",
     "list_event_sources",
-    "read_canvas_event_ref",
     "tools",
     "_canonicalize_canvas_operations_for_context",
 ]

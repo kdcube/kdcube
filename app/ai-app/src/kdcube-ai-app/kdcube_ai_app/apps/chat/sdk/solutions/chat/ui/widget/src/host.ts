@@ -13,6 +13,13 @@
  *                     view: 'compact' | 'expanded' }
  *   host -> widget: { type: 'kdcube-set-view', view: 'compact' | 'expanded' }
  *
+ * Iframe sizing protocol:
+ *   ?chat_embed_mode=host
+ *
+ * A host-composed scene sets this query parameter when it owns the iframe
+ * rectangle. In that mode the widget fills the iframe and must not enter the
+ * same-origin dev preview tile, even when the parent frame is readable.
+ *
  * Auth handoff (public embedding): the chat renders for anonymous
  * visitors but sending requires a signed-in user. When an anonymous
  * visitor tries to send, the widget asks the host to show its own login
@@ -30,8 +37,24 @@ import {
   CHAT_CONTEXT_REMOVE_MESSAGE,
   CHAT_WIDGET_ID,
 } from './settings.ts'
+import {
+  recognizeContextMessageWithTypes,
+  recognizeContextRemovalWithTypes,
+  type RecognizedContext,
+} from './features/context/contextMessages.ts'
 
 export type TaskTrackerHostView = 'compact' | 'expanded'
+export type { RecognizedContext }
+
+export function isHostEmbedMode(): boolean {
+  try {
+    if (typeof window === 'undefined') return false
+    const params = new URLSearchParams(window.location.search || '')
+    return params.get('chat_embed_mode') === 'host'
+  } catch {
+    return false
+  }
+}
 
 export function requestHostView(view: TaskTrackerHostView): void {
   try {
@@ -80,6 +103,7 @@ export function requestAuthRequired(): void {
 export function isKdcubePreviewContext(): boolean {
   try {
     if (typeof window === 'undefined') return false
+    if (isHostEmbedMode()) return false
     /* Served via a public embed route (the landing page) — never a dev
      * preview, even when the landing is same-origin (Caddy/ngrok single
      * origin). Without this, the same-origin landing would read as a "preview"
@@ -99,99 +123,33 @@ export function isKdcubePreviewContext(): boolean {
 /**
  * Host-dropped context handoff (parent-owned drag + postMessage).
  * Native HTML5 drop events do not cross iframe boundaries reliably, so the host
- * catches drops over the chat iframe and hands recognized canvas/wizard context
+ * catches drops over the chat iframe and hands recognized context objects
  * over by postMessage instead:
  *
  *   host -> widget: {
  *     type: '<context-attach-message>',
  *     context: {
- *       id, kind: 'canvas' | 'wizard' | 'canvas.card',
- *       label, summary, ref, canvas_id, card_id
+ *       id, kind, label, summary, ref, logical_path, event_source_id
  *     }
  *   }
  *
- * Canvas is an attachable context provider. Wizard is an attachable snapshot.
- * Canvas cards attach as the proxied objects they represent. Canvas selection
+ * Chat does not special-case memory, task, canvas, file, or other subsystem
+ * event names. Context producers must emit the generic context envelope, and
+ * canvas cards attach as the proxied objects they represent. Canvas selection
  * focus, when present, comes from the attached canvas context itself.
  */
-export interface RecognizedContext {
-  id: string
-  kind: string
-  label: string
-  summary?: string
-  ref?: string
-  logicalPath?: string
-  hostedUri?: string
-  mime?: string
-  canvasId?: string
-  canvasName?: string
-  revision?: number
-  cardId?: string
-  cardType?: string
-  selected?: boolean
-  data?: Record<string, unknown>
-}
-
-function compactId(value: unknown, fallback: string): string {
-  const raw = String(value || '').trim()
-  return raw || fallback
-}
-
-function normalizeContext(ctx: Record<string, unknown>, index = 0): RecognizedContext | null {
-  const kind = String(ctx.kind || ctx.type || '').trim()
-  if (!kind) return null
-  const label = String(ctx.label || ctx.title || ctx.name || kind).trim()
-  const id = compactId(ctx.id || ctx.context_id || ctx.ref || ctx.logical_path, `${kind}:${index}`)
-  const data = ctx.data && typeof ctx.data === 'object' ? ctx.data as Record<string, unknown> : undefined
-  const revisionRaw = ctx.revision
-  const revision = typeof revisionRaw === 'number'
-    ? revisionRaw
-    : typeof revisionRaw === 'string' && revisionRaw.trim()
-      ? Number(revisionRaw)
-      : undefined
-  return {
-    id,
-    kind,
-    label: label || id,
-    summary: ctx.summary != null ? String(ctx.summary) : undefined,
-    ref: ctx.ref != null ? String(ctx.ref) : undefined,
-    logicalPath: ctx.logical_path != null ? String(ctx.logical_path) : undefined,
-    hostedUri: ctx.hosted_uri != null ? String(ctx.hosted_uri) : undefined,
-    mime: ctx.mime != null ? String(ctx.mime) : undefined,
-    canvasId: ctx.canvas_id != null ? String(ctx.canvas_id) : undefined,
-    canvasName: ctx.canvas_name != null ? String(ctx.canvas_name) : undefined,
-    revision: Number.isFinite(revision) ? revision : undefined,
-    cardId: ctx.card_id != null ? String(ctx.card_id) : undefined,
-    cardType: ctx.card_type != null ? String(ctx.card_type) : undefined,
-    selected: typeof ctx.selected === 'boolean' ? ctx.selected : undefined,
-    data,
-  }
-}
-
 export function recognizeContextMessage(data: unknown): RecognizedContext[] {
-  if (!data || typeof data !== 'object') return []
-  const message = data as Record<string, unknown>
-  if (
-    message.type !== CHAT_CONTEXT_ATTACH_MESSAGE &&
-    message.type !== CHAT_CONTEXT_FOCUS_MESSAGE
-  ) return []
-  const rawContexts = Array.isArray(message.contexts)
-    ? message.contexts
-    : Array.isArray(message.items)
-      ? message.items
-      : [message.context]
-  return rawContexts
-    .filter((ctx): ctx is Record<string, unknown> => Boolean(ctx) && typeof ctx === 'object')
-    .map((ctx, index) => normalizeContext(ctx, index))
-    .filter((ctx): ctx is RecognizedContext => Boolean(ctx))
+  return recognizeContextMessageWithTypes(data, {
+    attach: CHAT_CONTEXT_ATTACH_MESSAGE,
+    focus: CHAT_CONTEXT_FOCUS_MESSAGE,
+    remove: CHAT_CONTEXT_REMOVE_MESSAGE,
+  })
 }
 
 export function recognizeContextRemoval(data: unknown): string[] {
-  if (!data || typeof data !== 'object') return []
-  const message = data as Record<string, unknown>
-  if (message.type !== CHAT_CONTEXT_REMOVE_MESSAGE) return []
-  const rawIds = Array.isArray(message.ids) ? message.ids : [message.id]
-  return rawIds
-    .map((id) => String(id || '').trim())
-    .filter(Boolean)
+  return recognizeContextRemovalWithTypes(data, {
+    attach: CHAT_CONTEXT_ATTACH_MESSAGE,
+    focus: CHAT_CONTEXT_FOCUS_MESSAGE,
+    remove: CHAT_CONTEXT_REMOVE_MESSAGE,
+  })
 }

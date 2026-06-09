@@ -46,7 +46,7 @@ REACT_LITE_TIMELINE_CONTEXT = """
 - The rendered timeline is both working context and a recovery map. It may show compact summaries, metadata, logical paths, source ids, tool ids, and turn indexes for content that is no longer fully visible.
 - It is ordered oldest to newest. The newest same-turn `followup` or `steer` is the latest user control input.
 - A turn can contain multiple visible assistant completions if a live followup extends the same turn after an earlier completion. Those completions are already visible to the user; later completions should be incremental, not a replay of the whole turn.
-- Stable logical paths identify recoverable content: `ar:`, `fi:`, `tc:`, `so:`, `su:`, `ws:`, `ks:`, and `sk:` when present.
+- Stable logical paths identify recoverable content. Built-in examples are `ar:`, `fi:`, `tc:`, `ev:`, `so:`, `su:`, `ws:`, `ks:`, and `sk:` when present. The current runtime may also show namespace refs whose resolvers are connected by the runtime; runtime instructions or ANNOUNCE may name those namespaces.
 - Use visible evidence first. When exact content is missing, hidden, pruned, compacted, or too large, use the timeline's recovery handles to read/search/pull the needed material.
 - Line numbers shown in previews are model-facing viewing prefixes. Use them for ranged reads and patch locations; never copy them into patch/full-file content.
 """
@@ -144,7 +144,7 @@ REACT_LITE_SOURCES_CITATIONS = """
 
 REACT_LITE_PATHS_AND_NAMESPACES = """
 [PATHS AND NAMESPACES]
-- Timeline and recovery entries show logical paths as the primary identity. Use them directly with `react.read`, `react.hide`, and `react.pull` where supported.
+- Timeline and recovery entries show logical paths as primary identities. Built-in readable paths are used with `react.read`. External object refs shown as `object_ref` are pulled first with `react.pull`, then inspected through the returned paths.
 - `ar:` addresses authored timeline artifacts:
   - `ar:turn_<id>.user.prompt`
   - `ar:turn_<id>.assistant.completion` for the latest assistant completion in that turn
@@ -164,9 +164,10 @@ REACT_LITE_PATHS_AND_NAMESPACES = """
 - `ws:turn_<id>.conv.working.summary` addresses the latest working summary for a turn.
 - `su:turn_<id>.conv.range.summary` addresses a compacted range summary.
 - `ks:<path>` addresses read-only bundle knowledge space. `sk:<skill_id>` addresses skill text.
-- Externally tracked artifact refs such as `ext:...` may appear in event data or snapshots. They are opaque external artifact URIs. Resolve and rehost them with `react.pull`; after pull, continue from the returned `fi:` logical path or physical path. Unsupported namespaces are reported by the pull result.
+- The current runtime may expose additional logical refs whose namespaces are owned outside the ReAct workspace. Use runtime instruction hints, ANNOUNCE, or visible labels to understand what those refs mean.
+- External owner refs may appear in event data or snapshots, usually as `object_ref: <namespace>:...`. They are owner-managed objects/artifacts outside the ReAct workspace. Resolve and rehost exact content with `react.pull(paths=[object_ref])`; after pull, continue from the returned `fi:` logical path or physical path. Unsupported namespaces are reported by the pull result.
 - Canonical physical OUT_DIR-relative paths are qualified with a turn root: `turn_<id>/files/...`, `turn_<id>/outputs/...`, `turn_<id>/snapshots/...`, `turn_<id>/attachments/...`, `turn_<id>/external/...`, plus runtime `logs/...`.
-- Derived physical OUT_DIR paths exist for `fi:` file/output/snapshot/attachment refs. `ar:`, `tc:`, `so:`, `su:`, `ks:`, and `sk:` stay logical context refs.
+- Derived physical OUT_DIR paths exist for `fi:` file/output/snapshot/attachment refs. Other logical refs such as `ar:`, `tc:`, `so:`, `su:`, `ks:`, `sk:`, and resolver-backed namespace refs stay logical context refs unless the runtime explicitly gives a physical path.
 - Logical <-> physical conversion is mechanical:
   - `fi:turn_<id>.files/<rel>` <-> `turn_<id>/files/<rel>`
   - `fi:turn_<id>.outputs/<rel>` <-> `turn_<id>/outputs/<rel>`
@@ -186,7 +187,8 @@ REACT_LITE_PATHS_AND_NAMESPACES = """
 REACT_LITE_REACT_READ_RECOVERY = """
 [RECOVERY WITH react.read]
 - Visible summaries and metadata are not always the exact content. Treat them as maps to exact logical paths.
-- Use `react.read` when you already know the logical path.
+- Use `react.read` when you already know a readable logical path such as `fi:`, `ar:`, `tc:`, `so:`, `su:`, `ws:`, `ks:`, or `sk:`.
+- External owner refs are imported with `react.pull` when exact content is needed; after pull, use the returned `fi:` logical path or physical path with `react.read`, `react.rg`, or exec/code.
 - Use `react.read(paths=[...],stats_only=true)` to inspect size/mime/line metadata without adding content blocks.
 - Use `react.read(items=[{"path":"...","line_start":N,"line_count":M}])` for bounded text ranges.
 - For large or capped text, recover only the ranges needed for the task; do not use exec stdout as an uncapped read channel.
@@ -237,7 +239,7 @@ REACT_LITE_WORKSPACE_BASE = """
 - Reason about four spaces:
   - current-turn OUT_DIR: `turn_<current>/files/`, `turn_<current>/outputs/`, `turn_<current>/snapshots/`, `turn_<current>/attachments/`, `turn_<current>/external/`, `logs/`
   - versioned conversation artifact refs: logical `fi:turn_<id>.files/...`, `fi:turn_<id>.outputs/...`, `fi:turn_<id>.snapshots/...`, attachments, and cross-conversation `fi:conv_<conversation_id>.turn_<id>...`
-  - externally tracked artifact refs: opaque `ext:...` or `<namespace>:...` refs that `react.pull` may rehost into ordinary `fi:` refs
+- external owner refs: opaque `<namespace>:...` refs that `react.pull` may rehost into ordinary `fi:` refs
   - timeline event refs: `ev:turn_<id>.events/<event_path>` identify event objects, not artifact bytes
   - read-only bundle knowledge space: logical `ks:<path>`
 - When files are materialized, the filesystem visible to exec/code is rooted at `OUTPUT_DIR` and is shaped like:
@@ -301,11 +303,11 @@ REACT_LITE_STORY_SNAPSHOTS = """
 # Include this block only when `react.pull`/`react.checkout` are available.
 REACT_LITE_WORKSPACE_PULL_CHECKOUT = """
 [WORKSPACE MATERIALIZATION - PULL/CHECKOUT]
-- `react.pull(paths=[...])` accepts normal `fi:` refs and externally tracked artifact refs shown by the runtime, such as `ext:...`. Use it to materialize historical files or external artifacts locally for reference or execution.
-- Externally tracked refs are opaque external artifact URIs. `react.pull` resolves and rehosts them through registered namespace rehosters.
-- `ev:` refs identify event objects on the timeline. Read them with `react.read` like `tc:` refs. Do not pass `ev:` to `react.pull` or `react.checkout`; if the event references bytes or a snapshot body, pull the event's `hosted_uri`, `payload.event_ref`, or artifact refs inside `payload.event`.
+- `react.pull(paths=[...])` accepts normal `fi:` refs and external owner refs shown by the runtime. Use it to materialize historical files or external content locally for reference or execution.
+- External owner refs are owner-managed objects/artifacts outside the ReAct workspace. `react.pull` resolves and rehosts them through registered namespace rehosters.
+- `ev:` refs identify event objects on the timeline. Read them with `react.read` like `tc:` refs when you need the event record itself. Do not pass `ev:` to `react.pull` or `react.checkout`; if the event shows `object_ref`, pull that object ref. If the event references bytes or a snapshot body through another field, pull that referenced artifact ref instead.
 - Unsupported namespaces are reported by `react.pull`; continue only from returned materialized paths.
-- After pulling an externally tracked ref, continue from the `logical_path` / `physical_path` rows returned by `react.pull`.
+- After pulling an external owner ref, continue from the `logical_path` / `physical_path` rows returned by `react.pull`.
 - The returned `fi:` path tells where the artifact landed: snapshots use `fi:turn_<id>.snapshots/...`; external files/evidence can use `fi:turn_<id>.external.<event_kind>.attachments/...`; workspace project state uses `fi:turn_<id>.files/...`.
 - Folder/slice pulls are supported for `fi:turn_<id>.files/<scope-or-subtree>`.
 - `fi:turn_<id>.outputs/...` requires an exact file ref.

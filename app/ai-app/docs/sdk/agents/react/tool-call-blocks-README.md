@@ -143,20 +143,19 @@ Path handling
   - file/attachment rows resolve as `fi:`
   - non-file rows render as sources_pool text
 - `sk:` emits ACTIVE skill blocks
-- owner-domain namespaces registered with `@event_source_reader`, such as
-  `mem:` or `cnv:`, dispatch to the namespace owner. The visible action is
-  still the `react.read` tool call. The owner source id, for example
-  `memory.read_memory` or `canvas.read`, selects block-production policies for
-  the resolved payload. These source ids are not direct model tools unless they
-  are separately exposed as tools.
+- external owner namespaces such as `mem:` or `cnv:` are not direct
+  `react.read` inputs by default. When exact content is needed, the visible
+  action is `react.pull`; the namespace rehoster mirrors owner content into a
+  returned `fi:` artifact, which can then be read or searched.
 
 Example:
 
 ```text
-react.read(paths=["cnv:main@27"])
-  -> reader namespace cnv
-  -> event_source_id canvas.read
-  -> canvas block-production policies emit canvas state/read blocks
+react.pull(paths=["cnv:main@27"])
+  -> namespace rehoster cnv
+  -> canvas owner reads board revision
+  -> pull returns fi:turn_<id>.snapshots/...
+  -> react.read(paths=[returned fi:])
 ```
 
 ---

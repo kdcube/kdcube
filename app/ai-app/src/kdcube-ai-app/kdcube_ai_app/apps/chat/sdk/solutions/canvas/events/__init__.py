@@ -1,12 +1,15 @@
 from .resolver import (
-    BundleExtArtifactResolver,
     CallableCanvasObjectResolver,
+    CanvasArtifactResolver,
     CanvasObjectResolver,
     CanvasObjectResolverRegistry,
     CanvasPinResolver,
     default_handoff_resolvers,
+    list_event_sources,
     namespace_for_ref,
     object_ref_from_payload,
+    read_canvas_event_ref,
+    rehost_canvas_ref,
     search_canvas_cards,
     build_default_canvas_resolver_registry,
 )
@@ -30,8 +33,8 @@ from .policies import (
 
 __all__ = [
     "append_canvas_tool_fact_block",
-    "BundleExtArtifactResolver",
     "CallableCanvasObjectResolver",
+    "CanvasArtifactResolver",
     "canvas_announce_policy",
     "canvas_focus_announce_policy",
     "canvas_focus_projection_policy",
@@ -44,6 +47,7 @@ __all__ = [
     "CanvasPinResolver",
     "build_default_canvas_resolver_registry",
     "default_handoff_resolvers",
+    "list_event_sources",
     "namespace_for_ref",
     "object_ref_from_payload",
     "produce_canvas_announce_blocks",
@@ -51,5 +55,7 @@ __all__ = [
     "project_canvas_focus_blocks",
     "project_canvas_state_blocks",
     "project_canvas_tool_result_blocks",
+    "read_canvas_event_ref",
+    "rehost_canvas_ref",
     "search_canvas_cards",
 ]

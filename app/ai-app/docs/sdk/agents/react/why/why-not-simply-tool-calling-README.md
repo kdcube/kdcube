@@ -60,7 +60,7 @@ React lives inside a broader event landscape:
 - subsystem/widget delivery
 - distributed isolated execution
 - explicit logical-path-based workspace activation
-- registered namespace rehosters for externally tracked artifacts
+- registered namespace rehosters for external owner refs
 
 That landscape is the main reason the React protocol is custom.
 
@@ -419,9 +419,9 @@ For example:
   `su:`, `tc:`, `ev:`, `ks:`, and `sk:`
 - `tc:` addresses tool call/result memory
 - `ev:` addresses generic accepted event occurrences
-- registered external namespaces such as `ext:` can be resolved by a bundle
-  namespace rehoster and materialized by `react.pull(...)` into normal `fi:`
-  refs
+- registered external namespaces such as `nmsp:`, `cnv:`, or `mem:` can be
+  resolved by a namespace rehoster and materialized by `react.pull(...)` into
+  normal `fi:` refs
 - historical files and rehosted external artifacts are activated explicitly
   with `react.pull(...)`
 - code execution happens in isolated runtime
@@ -654,7 +654,7 @@ The current React implementation that reflects this design includes:
 - explicit workspace activation and logical-path-oriented artifacts:
   - `react.pull(...)`
   - `fi:`, `ar:`, `so:`, `su:`, `tc:`, `ev:`, `ks:`, `sk:`
-  - registered externally tracked namespaces such as `ext:` through namespace
+  - registered external owner namespaces such as `nmsp:`, `cnv:`, or `mem:` through namespace
     rehosters
 
 Current output protocol:

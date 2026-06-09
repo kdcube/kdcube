@@ -186,9 +186,9 @@ Logical paths do two jobs:
 | `ev:` | Event occurrence memory | accepted external events and their durable event refs |
 | `ks:` | Knowledge-space memory | bundle-owned read-only reference space |
 | `sk:` | Skill memory | loaded skill instructions and sources |
-| registered external namespaces such as `ext:` | Externally tracked artifact memory | bundle/domain artifacts resolved and rehosted through `react.pull` |
+| registered external namespaces such as `nmsp:`, `cnv:`, or `mem:` | External owner refs | domain-owned content resolved and rehosted through `react.pull` |
 
-Some of these are strictly conversation memory (`ar:`, `so:`, `su:`, `tc:`, `ev:`), while others connect adjacent reusable memory realms (`ks:`, `sk:`) or bundle/domain artifact stores (`ext:` and other registered namespaces). React treats them as one readable system because the retrieval contract is unified at the path level.
+Some of these are strictly conversation memory (`ar:`, `so:`, `su:`, `tc:`, `ev:`), while others connect adjacent reusable memory realms (`ks:`, `sk:`) or bundle/domain artifact stores (`nmsp:`, `cnv:`, `mem:`, and other registered namespaces). React treats them as one readable system because the retrieval contract is unified at the path level.
 
 Examples:
 
@@ -204,7 +204,7 @@ Examples:
 - `tc:<turn_id>.<tool_call_id>.result`
 - `ev:turn_<id>.events/<event_id>`
 - `ev:conv_<conversation_id>.turn_<id>.events/<event_id>`
-- `ext:task-tracker/users/<user_id>/canvases/<canvas_id>/latest.json`
+- `cnv:users/<user_id>/canvases/<canvas_id>/latest.json`
 
 This is one of the main reasons the memory system stays coherent:
 
@@ -212,10 +212,11 @@ This is one of the main reasons the memory system stays coherent:
 - it remembers a path family and the tool that can reopen it
 
 Registered external refs do not have a deterministic `fi:` mapping until the
-namespace rehoster runs. React calls `react.pull(paths=["ext:..."])` or the
-equivalent registered namespace ref. The namespace rehoster resolves the
-external object, places the bytes into a React-readable artifact location, and
-returns the resulting `fi:` logical path and physical path. After that,
+namespace rehoster runs. React calls `react.pull(paths=["cnv:..."])`,
+`react.pull(paths=["mem:..."])`, or an equivalent registered namespace ref. The
+namespace rehoster resolves the external object, places the bytes into a
+React-readable artifact location, and returns the resulting `fi:` logical path
+and physical path. After that,
 ordinary file-oriented tools use the returned `fi:` path.
 
 ## 5. Attention Area: Always-On-Top Memory
@@ -377,8 +378,9 @@ Workspace memory therefore spans:
 - hosted artifact references
 - logical paths that reconnect all of the above
 
-Registered external artifact refs extend this model. A bundle may expose a
-domain ref such as `ext:...` for a user attachment, canvas object, or snapshot.
+Registered external artifact refs extend this model. A domain may expose an
+owner ref such as `nmsp:...`, `cnv:...`, or `mem:...` for a user attachment,
+canvas object, memory item, or snapshot.
 `react.pull` invokes the registered namespace rehoster, which decides whether
 the resolved object belongs under `files/`, `outputs/`, `snapshots/`, or another
 React-readable artifact shape, and returns the resulting `fi:` handle. The
@@ -589,7 +591,7 @@ This is the materialization tool for:
 
 - subtree pulls for `.files/...`
 - exact file pulls for `.outputs/...` and attachments
-- registered external namespace refs such as `ext:...`, resolved through a
+- registered external namespace refs such as `nmsp:...`, `cnv:...`, or `mem:...`, resolved through a
   namespace rehoster into returned `fi:` refs
 
 ### `react.checkout`

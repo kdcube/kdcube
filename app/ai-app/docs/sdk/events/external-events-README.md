@@ -69,13 +69,13 @@ Clients send client-authored events through the normal chat ingress request:
           "type": "event.snapshot",
           "event_source_id": "task_tracker.canvas.snapshot",
           "logical_path": "ev:turn_123.events/task-tracker/snapshots/draft-123/canvas/latest",
-          "hosted_uri": "ext:task-tracker/snapshots/draft-123/canvas/latest",
+          "hosted_uri": "cnv:snapshots/draft-123/canvas/latest",
           "reactive": false,
           "agent_id": "default.react.agent",
           "story_id": "task:draft-123",
           "payload": {
             "mime": "application/json",
-            "event_ref": "ext:task-tracker/snapshots/draft-123/canvas/latest"
+            "event_ref": "cnv:snapshots/draft-123/canvas/latest"
           }
         },
         {
@@ -121,8 +121,8 @@ Field roles:
 The canonical envelope and examples for snapshot, file upload, and text
 selection events are in
 [External Event Envelope](external-event-envelope-README.md).
-The logical reference namespace model for `ev:`, `ar:`, `fi:`, `ext:`,
-`task:`, and related refs is in [Logical Reference Namespaces](namespaces-README.md).
+The logical reference namespace model for `ev:`, `ar:`, `fi:`, `cnv:`,
+`task:`, `mem:`, and related refs is in [Logical Reference Namespaces](namespaces-README.md).
 
 `ev:` is event identity, not artifact storage. ReAct can read the event object
 with `react.read(paths=["ev:..."])`, similar to `tc:` tool-call/result refs.
@@ -192,7 +192,7 @@ kinds exist for different occurrence families:
 | --- | --- |
 | `react.external` | Authored external event in `external_events[]`. |
 | `react.tool` | ReAct tool-call/result source. |
-| `react.event_source_reader` | Namespace-owner reader behind `react.read(paths=[...])`. |
+| `react.event_source_reader` | Namespace-owner reader for runtime/policy resolution. Exact model-facing content should enter through `react.pull` when the namespace has a registered rehoster. |
 
 The transported `external_events[]` payload does not carry this declaration
 `kind`; it carries `event_source_id`, `event_id`, `type`, and occurrence facts
@@ -218,15 +218,15 @@ send `external_events[].reactive=true`.
 ## Payload Refs
 
 `payload.event_ref` or fields inside `payload.event` may contain custom
-namespace artifact URIs, for example `ext:...` refs produced by bundle-owned
+namespace artifact URIs, for example `nmsp:...` refs produced by bundle-owned
 storage. ReAct does not treat those refs as local files. A bundle or SDK module
 must register an artifact namespace rehoster, such as
-`@artifact_namespace_rehoster(namespace="ext")`, and the agent materializes the
-ref explicitly with `react.pull(paths=["ext:..."])`. The rehoster resolves the
+`@artifact_namespace_rehoster(namespace="nmsp")`, and the agent materializes the
+ref explicitly with `react.pull(paths=["nmsp:..."])`. The rehoster resolves the
 custom URI and copies the bytes into the current ReAct artifact surface. The
 pull result then contains the materialized `fi:` logical path and current-turn
 physical path that `react.read` or generated code can use. Agents should follow
-the returned rows instead of deriving a target path from the `ext:` ref.
+the returned rows instead of deriving a target path from the owner-domain ref.
 
 ## Semantic Axes
 

@@ -11,7 +11,7 @@
  *     The card pins the existing `fi:` (incl. cross-conversation
  *     `fi:conv_<id>...`) ref verbatim; no rehosting.
  *   - `chat.assistant.text`: the user dragged assistant response text from
- *     chat. The bundle rehosts the text as a versioned `ext:` `agent.text`
+ *     chat. The bundle rehosts the text as a versioned `cnv:` `agent.text`
  *     object.
  *
  * The other three ingress paths (local file, selected text, search-result
@@ -32,7 +32,7 @@ export type CanvasIngressKind = 'chat.artifact' | 'chat.assistant.text'
  *  it. */
 export interface CanvasIngressArtifactPayload {
   kind: 'chat.artifact'
-  /** Versioned `fi:` (or `ext:`) ref to the artifact. Cross-conversation
+  /** Versioned `fi:` ref to the artifact. Cross-conversation
    *  refs (`fi:conv_<id>.turn_<id>...`) flow through verbatim. */
   ref: string
   mime: string

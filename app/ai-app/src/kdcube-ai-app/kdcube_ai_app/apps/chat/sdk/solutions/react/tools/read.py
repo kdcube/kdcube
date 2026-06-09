@@ -37,11 +37,6 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.common import (
     add_block,
     tc_result_path,
 )
-from kdcube_ai_app.apps.chat.sdk.solutions.react.events import (
-    ReactEventPolicies,
-    emit_policy_artifact_blocks,
-    structured_result_source_policies,
-)
 from kdcube_ai_app.apps.chat.sdk.solutions.react.sources import (
     SOURCE_TEXT_FIELDS,
     build_sources_pool_items_stats,
@@ -53,15 +48,19 @@ DEFAULT_VISIBLE_READ_MAX_BYTES = 10 * 1024 * 1024
 DEFAULT_VISIBLE_READ_CONTEXT_FRACTION = 0.15
 DEFAULT_SYMBOLS_PER_TOKEN_BUDGET = 4
 MIN_VISIBLE_READ_MAX_TOKENS = 4_000
-READ_DEDUP_PREFIXES = ("fi:", "so:", "sk:", "tc:", "ev:", "ar:", "ks:", "su:", "ws:", "mem:")
+READ_DEDUP_PREFIXES = ("fi:", "so:", "sk:", "tc:", "ev:", "ar:", "ks:", "su:", "ws:")
 
 TOOL_SPEC = {
     "id": "react.read",
     "purpose": (
-        "Read artifacts or skills into the visible context so you can use them. "
-        "Paths must be context paths (fi:/tc:/ev:/ar:/so:/sk:/ks:), not physical paths. "
-        "ev: refs identify event objects on the timeline and are readable like tc: refs. "
-        "For event payload bytes or snapshot bodies, read a visible fi: path or first use react.pull on the event's hosted_uri/payload.event_ref when it is an externally tracked artifact URI. "
+        "Read ReAct-local logical refs into visible context so you can use them. "
+        "Paths must be logical paths (look like <namespace>:), not physical paths. "
+        "Built-in examples include ar:, fi:, tc:, ev:, so:, su:, ws:, ks:, and sk:. "
+        "External namespace refs such as mem:, cnv:, or task: are not read directly. "
+        "When exact content from an external ref is needed, first use react.pull on that ref; "
+        "then use the returned fi: logical_path or physical_path with react.read, react.rg, or exec/code. "
+        "For an event/object that shows object_ref, use react.pull on that object_ref when exact external content is needed; then read the returned path. "
+        "For event payload bytes or snapshot bodies carried through another field, read a visible fi: path or first use react.pull on that referenced artifact ref. "
         "For old-turn recovery, ar:turn_<id>.react.turn.index reconstructs a compact semantic inventory; "
         "use it with react.memsearch hits when the summary does not name enough refs. "
         "Batch multiple known paths in one read call. "
@@ -88,13 +87,14 @@ TOOL_SPEC = {
     ),
     "args": {
         "paths": (
-            "list[str] context paths to read: "
+            "list[str] logical refs to read. Built-in examples: "
             "turn indexes via ar:turn_<id>.react.turn.index, "
             "files via fi:turn_<id>.files/<filepath>, "
             "event blocks via ev:turn_<id>.events/<event_path>, "
             "sources via so:sources_pool[...] or so:conv_<conversation_id>.sources_pool[...], "
             "skills via sk:<skill_id or num>, "
             "knowledge space via ks:<relpath> (read-only reference files). "
+            "External namespace refs such as mem:, cnv:, or task: must be pulled first; after pull, read the returned fi: logical_path. "
             "fi: normally yields full text for text files and multimodal/base64 payloads for PDF/images only. "
             "An fi:conv_<conversation_id>.turn_<id>... path belongs to another conversation and is resolved in that conversation. "
             "An ev:conv_<conversation_id>.turn_<id>... path identifies an event object from another conversation when that event block is present in visible or recovered timeline state."
@@ -525,6 +525,26 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
         if path:
             paths.append(path)
     read_item_requests = _read_item_requests(params)
+    pulled_source_refs_raw = state.get("pulled_source_refs")
+    pulled_source_refs = pulled_source_refs_raw if isinstance(pulled_source_refs_raw, dict) else {}
+
+    def _pulled_logical_mirror(path: str) -> str:
+        row = pulled_source_refs.get(str(path or "").strip())
+        if isinstance(row, dict):
+            return str(row.get("logical_path") or "").strip()
+        if isinstance(row, str):
+            return row.strip()
+        return ""
+
+    def _map_pulled_path(path: str) -> str:
+        logical = _pulled_logical_mirror(path)
+        return logical or path
+
+    paths = [_map_pulled_path(path) for path in paths]
+    read_item_requests = [
+        {**req, "path": _map_pulled_path(str(req.get("path") or ""))}
+        for req in read_item_requests
+    ]
     stats_only = _bool_param(params.get("stats_only"))
     configured_line_numbers = normalize_line_numbers_mode(
         getattr(getattr(ctx_browser, "runtime_ctx", None), "line_numbers_mode", LINE_NUMBERS_LINES),
@@ -1649,170 +1669,6 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             entry["tokens"] = tokens
         per_path.append(entry)
 
-    def _event_sources_for_read() -> Any:
-        runtime_ctx = getattr(ctx_browser, "runtime_ctx", None)
-        event_sources = getattr(runtime_ctx, "event_sources", None) if runtime_ctx is not None else None
-        if event_sources is not None:
-            return event_sources
-        return getattr(getattr(react, "tools_subsystem", None), "event_sources", None) if react is not None else None
-
-    def _policy_target_for_owner_read(
-        *,
-        event_source_id: str,
-        ctx_path: str,
-        output: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        summary = ""
-        for key in ("summary", "title", "label", "text"):
-            value = output.get(key)
-            if value:
-                summary = str(value).strip()
-                break
-        return {
-            "tool_id": event_source_id,
-            "event_source_id": event_source_id,
-            "tool_call_id": tool_call_id,
-            "event_id": tool_call_id,
-            "final_params": {"path": ctx_path, "ref": ctx_path, "object_ref": ctx_path},
-            "turn_id": turn_id,
-            "summary": summary,
-            "error": output.get("error") if output.get("ok") is False else None,
-            "call_error": None,
-            "ret": output,
-            "raw": {"output": output, "summary": summary},
-            "blocks": [],
-            "result_items": [],
-            "source_rows": [],
-            "artifact_rows": [],
-            "declared_file_items": [],
-            "snapshot_refs": [],
-            "announce_candidates": [],
-            "notice_rows": [],
-            "source_rows_merge": False,
-            "result_items_produced": False,
-            "declared_file_items_produced": False,
-            "notice_rows_produced": False,
-        }
-
-    async def _emit_owner_read_ref(ctx_path: str, item_req: Optional[Dict[str, Any]] = None) -> bool:
-        nonlocal total_tokens
-        event_sources = _event_sources_for_read()
-        if event_sources is None:
-            return False
-        reader_for_ref = getattr(event_sources, "event_source_reader_for_ref", None)
-        reader = reader_for_ref(ctx_path) if callable(reader_for_ref) else None
-        if reader is None:
-            return False
-        read_fn = getattr(event_sources, "read_event_source_ref", None)
-        if not callable(read_fn):
-            return False
-        result = await read_fn(
-            ctx_path,
-            ctx_browser=ctx_browser,
-            stats_only=stats_only,
-            item_request=dict(item_req or {}),
-        )
-        if not isinstance(result, dict):
-            result = {"ok": True, "value": result}
-        event_source_id = str(result.get("event_source_id") or getattr(reader, "event_source_id", "") or "").strip()
-        if not event_source_id:
-            per_path.append({"path": ctx_path, "missing": True, "status": "event_source_reader_missing_source"})
-            missing_artifacts.append(ctx_path)
-            return True
-        if result.get("ok") is False:
-            per_path.append({
-                "path": ctx_path,
-                "missing": bool(result.get("missing", True)),
-                "status": str(result.get("error") or "event_source_reader_failed"),
-                "event_source_id": event_source_id,
-                **({"message": str(result.get("message"))} if result.get("message") else {}),
-            })
-            missing_artifacts.append(ctx_path)
-            return True
-        if stats_only:
-            per_path.append({
-                "path": ctx_path,
-                "status": "stats_only",
-                "kind": "event_source_ref",
-                "event_source_id": event_source_id,
-                "content_materialized": False,
-            })
-            return True
-
-        target = _policy_target_for_owner_read(
-            event_source_id=event_source_id,
-            ctx_path=ctx_path,
-            output=result,
-        )
-        by_event_source_id = getattr(event_sources, "by_event_source_id", None)
-        source = by_event_source_id(event_source_id) if callable(by_event_source_id) else None
-        if source is not None:
-            event_sources.apply_react_phase_policies(
-                "block_production",
-                event_source_id,
-                target,
-                tool_id=event_source_id,
-                tool_call_id=tool_call_id,
-            )
-        else:
-            ReactEventPolicies.from_specs(structured_result_source_policies()).apply_react_phase(
-                "block_production",
-                target,
-                tool_id=event_source_id,
-                tool_call_id=tool_call_id,
-            )
-
-        blocks = [dict(block) for block in (target.get("blocks") or []) if isinstance(block, dict)]
-        for block in blocks:
-            if not block.get("path"):
-                block["path"] = ctx_path
-            add_block(ctx_browser, block)
-            text = block.get("text")
-            if isinstance(text, str) and text:
-                total_tokens += _count_tokens(text)
-
-        for row in target.get("notice_rows") or []:
-            if not isinstance(row, dict):
-                continue
-            notice_block(
-                ctx_browser=ctx_browser,
-                tool_call_id=tool_call_id,
-                code=str(row.get("code") or "event_source_reader_notice"),
-                message=str(row.get("message") or "Event source reader notice."),
-                extra=dict(row.get("extra") or {}),
-                rel="result",
-            )
-
-        items = [dict(row) for row in (target.get("result_items") or []) if isinstance(row, dict)]
-        items.extend(dict(row) for row in (target.get("artifact_rows") or []) if isinstance(row, dict))
-        declared_file_items = (
-            [dict(row) for row in (target.get("declared_file_items") or []) if isinstance(row, dict)]
-            if target.get("declared_file_items_produced")
-            else []
-        )
-        if items or declared_file_items:
-            await emit_policy_artifact_blocks(
-                react=react,
-                ctx_browser=ctx_browser,
-                state=state,
-                tool_id=event_source_id,
-                tool_call_id=tool_call_id,
-                final_params={"path": ctx_path, "ref": ctx_path, "object_ref": ctx_path},
-                tool_response={"output": result, "summary": target.get("summary") or ""},
-                content_lineage=None,
-                items=items,
-                declared_file_items=declared_file_items,
-                notice_rows_produced=bool(target.get("notice_rows_produced")),
-            )
-
-        per_path.append({
-            "path": ctx_path,
-            "status": "read_via_event_source_reader",
-            "event_source_id": event_source_id,
-            "blocks": len(blocks),
-        })
-        return True
-
     for item_req in read_item_requests:
         item_path = str(item_req.get("path") or "").strip()
         if not item_path:
@@ -1825,8 +1681,6 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             continue
         if parse_turn_index_path(item_path):
             await _emit_turn_index_path(item_path, item_req)
-            continue
-        if await _emit_owner_read_ref(item_path, item_req):
             continue
 
     if turn_index_paths:
@@ -1950,9 +1804,6 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                     **({"conversation_id": source_conversation_id} if source_conversation_id else {}),
                 })
                 continue
-
-        if isinstance(raw_path, str) and await _emit_owner_read_ref(raw_path):
-            continue
 
         path = raw_path
         display_path = raw_path

@@ -16,7 +16,7 @@ see_also:
 
 This document defines how artifacts are discovered from timeline blocks and how logical/physical paths
 are resolved for tools (`react.read`, `fetch_ctx`, `react.patch`, exec code).
-For the broader namespace model across `ar:`, `ev:`, `tc:`, `fi:`, `ext:`,
+For the broader namespace model across `ar:`, `ev:`, `tc:`, `fi:`, `cnv:`,
 `task:`, `mem:`, and `so:`, read
 [Logical Reference Namespaces](../../events/namespaces-README.md).
 
@@ -183,7 +183,7 @@ The rewrite is recorded as a **protocol notice** in the timeline so the agent ca
 - This is the bridge from filesystem discovery to content loading.
 
 **react.pull**
-- Accepts `fi:` refs and registered custom namespace refs such as `ext:...`.
+- Accepts `fi:` refs and registered owner-domain namespace refs such as `nmsp:...`, `mem:...`, or `cnv:...`.
 - Custom namespace refs are rehosted by the registered namespace owner; use the
   returned `fi:` rows for later `react.read`, generated code, or checkout
   decisions.

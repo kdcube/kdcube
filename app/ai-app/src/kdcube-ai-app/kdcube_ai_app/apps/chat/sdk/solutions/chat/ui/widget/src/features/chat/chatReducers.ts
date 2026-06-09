@@ -67,6 +67,7 @@ import type {
 } from './chatTypes.ts'
 import { initialState } from './chatTypes.ts'
 import { canonicalObjectRef } from './fileDrag.ts'
+import { durableHistoricalObjectRef } from './historicalRefs.ts'
 
 export function addBanner(
   state: ChatState,
@@ -83,30 +84,34 @@ export function addBanner(
   return { ...state, banners }
 }
 
-function canonicalPayloadRef(payload: Record<string, unknown>, meta: Record<string, unknown> = {}): string | null {
+function canonicalPayloadRef(
+  payload: Record<string, unknown>,
+  meta: Record<string, unknown> = {},
+  conversationId?: string,
+): string | null {
   const ref = canonicalObjectRef(
-    typeof payload.logical_path === 'string' ? payload.logical_path : null,
-    typeof payload.logicalPath === 'string' ? payload.logicalPath : null,
-    typeof payload.artifact_path === 'string' ? payload.artifact_path : null,
-    typeof payload.artifactPath === 'string' ? payload.artifactPath : null,
-    typeof payload.file_ref === 'string' ? payload.file_ref : null,
-    typeof payload.fileRef === 'string' ? payload.fileRef : null,
-    typeof payload.event_ref === 'string' ? payload.event_ref : null,
-    typeof payload.eventRef === 'string' ? payload.eventRef : null,
-    typeof payload.ref === 'string' ? payload.ref : null,
-    typeof payload.path === 'string' ? payload.path : null,
-    typeof payload.source_path === 'string' ? payload.source_path : null,
-    typeof meta.logical_path === 'string' ? meta.logical_path : null,
-    typeof meta.logicalPath === 'string' ? meta.logicalPath : null,
-    typeof meta.artifact_path === 'string' ? meta.artifact_path : null,
-    typeof meta.artifactPath === 'string' ? meta.artifactPath : null,
-    typeof meta.file_ref === 'string' ? meta.file_ref : null,
-    typeof meta.fileRef === 'string' ? meta.fileRef : null,
-    typeof meta.event_ref === 'string' ? meta.event_ref : null,
-    typeof meta.eventRef === 'string' ? meta.eventRef : null,
-    typeof meta.ref === 'string' ? meta.ref : null,
-    typeof meta.path === 'string' ? meta.path : null,
-    typeof meta.source_path === 'string' ? meta.source_path : null,
+    durableHistoricalObjectRef(payload.logical_path, conversationId),
+    durableHistoricalObjectRef(payload.logicalPath, conversationId),
+    durableHistoricalObjectRef(payload.artifact_path, conversationId),
+    durableHistoricalObjectRef(payload.artifactPath, conversationId),
+    durableHistoricalObjectRef(payload.file_ref, conversationId),
+    durableHistoricalObjectRef(payload.fileRef, conversationId),
+    durableHistoricalObjectRef(payload.event_ref, conversationId),
+    durableHistoricalObjectRef(payload.eventRef, conversationId),
+    durableHistoricalObjectRef(payload.ref, conversationId),
+    durableHistoricalObjectRef(payload.path, conversationId),
+    durableHistoricalObjectRef(payload.source_path, conversationId),
+    durableHistoricalObjectRef(meta.logical_path, conversationId),
+    durableHistoricalObjectRef(meta.logicalPath, conversationId),
+    durableHistoricalObjectRef(meta.artifact_path, conversationId),
+    durableHistoricalObjectRef(meta.artifactPath, conversationId),
+    durableHistoricalObjectRef(meta.file_ref, conversationId),
+    durableHistoricalObjectRef(meta.fileRef, conversationId),
+    durableHistoricalObjectRef(meta.event_ref, conversationId),
+    durableHistoricalObjectRef(meta.eventRef, conversationId),
+    durableHistoricalObjectRef(meta.ref, conversationId),
+    durableHistoricalObjectRef(meta.path, conversationId),
+    durableHistoricalObjectRef(meta.source_path, conversationId),
   )
   return ref || null
 }
@@ -328,9 +333,10 @@ function normalizedFileArtifact(
   row: Record<string, unknown>,
   timestamp: number,
   fallbackId: string,
+  conversationId?: string,
 ): FileArtifact | null {
   const payload = extractPayload(row as ConversationArtifactDTO['data'])
-  const normalized = normalizeTurnAttachment(payload, fallbackId)
+  const normalized = normalizeTurnAttachment(payload, fallbackId, undefined, conversationId)
   const objectRef = normalized.logicalPath || ''
   if (!objectRef) return null
   const filename =
@@ -355,10 +361,11 @@ function appendHistoricalFileArtifacts(
   rows: Array<Record<string, unknown>>,
   timestamp: number,
   fallbackPrefix: string,
+  conversationId?: string,
 ): Artifact[] {
   let next = artifacts
   rows.forEach((row, index) => {
-    const fileArtifact = normalizedFileArtifact(row, timestamp, `${fallbackPrefix}:${index}`)
+    const fileArtifact = normalizedFileArtifact(row, timestamp, `${fallbackPrefix}:${index}`, conversationId)
     if (!fileArtifact) return
     next = upsertArtifact(
       next,
@@ -369,7 +376,11 @@ function appendHistoricalFileArtifacts(
   return next
 }
 
-function collectHistoricalFileRows(payload: Record<string, unknown>, artifactText?: string): Array<Record<string, unknown>> {
+function collectHistoricalFileRows(
+  payload: Record<string, unknown>,
+  artifactText?: string,
+  conversationId?: string,
+): Array<Record<string, unknown>> {
   const rows: Array<Record<string, unknown>> = []
 
   function addFileRow(candidate: unknown) {
@@ -400,7 +411,7 @@ function collectHistoricalFileRows(payload: Record<string, unknown>, artifactTex
     }
 
     const kind = typeof row.kind === 'string' ? row.kind : ''
-    const logicalPath = canonicalPayloadRef(row)
+    const logicalPath = canonicalPayloadRef(row, {}, conversationId)
     if (!logicalPath) return
     if (
       kind === 'file' ||
@@ -446,6 +457,7 @@ export function normalizeTurnAttachment(
   payload: Record<string, unknown>,
   fallbackId: string,
   file?: File,
+  conversationId?: string,
 ): TurnAttachment {
   const meta = payload.meta && typeof payload.meta === 'object' ? (payload.meta as Record<string, unknown>) : {}
   const name =
@@ -475,7 +487,7 @@ export function normalizeTurnAttachment(
       (typeof meta.mime === 'string' && meta.mime) ||
       file?.type ||
       null,
-    logicalPath: canonicalPayloadRef(payload, meta),
+    logicalPath: canonicalPayloadRef(payload, meta, conversationId),
     description:
       (typeof payload.summary === 'string' && payload.summary) ||
       (typeof payload.description === 'string' && payload.description) ||
@@ -521,7 +533,7 @@ export function hydrateHistoricalConversation(conversation: ConversationDTO): Ch
       if (turnLogElapsedMs != null && turn.elapsedMs == null) {
         turn = { ...turn, elapsedMs: turnLogElapsedMs }
       }
-      const historicalFileRows = collectHistoricalFileRows(payload, artifact.data?.text)
+      const historicalFileRows = collectHistoricalFileRows(payload, artifact.data?.text, conversation.conversation_id)
       if (historicalFileRows.length) {
         turn = {
           ...turn,
@@ -530,6 +542,7 @@ export function hydrateHistoricalConversation(conversation: ConversationDTO): Ch
             historicalFileRows,
             ts,
             `history-file:${turnDto.turn_id}:${turn.artifacts.length}`,
+            conversation.conversation_id,
           ),
         }
       }
@@ -626,7 +639,12 @@ export function hydrateHistoricalConversation(conversation: ConversationDTO): Ch
           break
         }
         case 'artifact:assistant.file': {
-          const normalized = normalizeTurnAttachment(payload, `assistant-file:${turnDto.turn_id}:${turn.artifacts.length}`)
+          const normalized = normalizeTurnAttachment(
+            payload,
+            `assistant-file:${turnDto.turn_id}:${turn.artifacts.length}`,
+            undefined,
+            conversation.conversation_id,
+          )
           const objectRef = normalized.logicalPath || ''
           if (!objectRef) break
           const fileArtifact: FileArtifact = {

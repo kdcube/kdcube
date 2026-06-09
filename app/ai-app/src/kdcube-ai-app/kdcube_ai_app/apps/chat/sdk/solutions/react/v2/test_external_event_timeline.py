@@ -328,7 +328,7 @@ async def test_default_event_block_preserves_standard_tool_result_surfaces(tmp_p
                 "type": "event.snapshot",
                 "event_source_id": "task_tracker.canvas.snapshot",
                 "logical_path": logical_path,
-                "hosted_uri": "ext:task-tracker/snapshots/draft-123/canvas/latest",
+                "hosted_uri": "cnv:snapshots/draft-123/canvas/latest",
                 "reactive": False,
                 "story_id": "draft:123",
                 "payload": {
@@ -348,7 +348,7 @@ async def test_default_event_block_preserves_standard_tool_result_surfaces(tmp_p
                                 "artifact_id": "diagram",
                                 "filename": "diagram.png",
                                 "mime": "image/png",
-                                "hosted_uri": "ext:task-tracker/files/draft-123/diagram.png",
+                                "hosted_uri": "nmsp:files/draft-123/diagram.png",
                             }
                         ],
                         "artifact_type": "files",
@@ -356,12 +356,12 @@ async def test_default_event_block_preserves_standard_tool_result_surfaces(tmp_p
                             {
                                 "filename": "brief.md",
                                 "mime": "text/markdown",
-                                "hosted_uri": "ext:task-tracker/files/draft-123/brief.md",
+                                "hosted_uri": "nmsp:files/draft-123/brief.md",
                                 "description": "Canvas brief",
                                 "visibility": "external",
                             }
                         ],
-                        "snapshot_ref": "ext:task-tracker/snapshots/draft-123/canvas/latest",
+                        "snapshot_ref": "cnv:snapshots/draft-123/canvas/latest",
                         "announce_entry": {
                             "title": "Canvas snapshot",
                             "text": "Canvas has a selected note and one attachment.",
@@ -400,10 +400,10 @@ async def test_default_event_block_preserves_standard_tool_result_surfaces(tmp_p
         surfaces = payload.get("surfaces") or {}
         assert surfaces["source_rows_merge"] is True
         assert surfaces["source_rows"][0]["url"] == "https://example.test/task-context"
-        assert surfaces["artifact_rows"][0]["hosted_uri"] == "ext:task-tracker/files/draft-123/diagram.png"
+        assert surfaces["artifact_rows"][0]["hosted_uri"] == "nmsp:files/draft-123/diagram.png"
         assert surfaces["declared_file_items_produced"] is True
         assert surfaces["declared_file_items"][0]["output"]["filename"] == "brief.md"
-        assert surfaces["snapshot_refs"] == ["ext:task-tracker/snapshots/draft-123/canvas/latest"]
+        assert surfaces["snapshot_refs"] == ["cnv:snapshots/draft-123/canvas/latest"]
         assert surfaces["announce_candidates"][0]["title"] == "Canvas snapshot"
     finally:
         await browser.stop_external_event_listener()

@@ -7,6 +7,12 @@ import { formatBytes } from '../../components/utils.ts'
 import type { AttachedContext } from '../chat/chatTypes.ts'
 import { recognizeContextMessage } from '../../host.ts'
 import { CHAT_CONTEXT_ATTACH_MESSAGE } from '../../settings.ts'
+import { recognizeContextPayload } from '../context/contextMessages.ts'
+
+const CONTEXT_DROP_MIME_TYPES = [
+  'application/vnd.kdcube.context+json',
+  'application/json',
+]
 
 function contextTypeLabel(ctx: AttachedContext): string {
   return ctx.cardType || ctx.kind
@@ -18,19 +24,28 @@ function contextChipClass(ctx: AttachedContext): string {
 }
 
 function parseDroppedContexts(dataTransfer: DataTransfer): AttachedContext[] {
-  const raw = dataTransfer.getData('application/json')
-  if (!raw) return []
-  try {
-    const payload = JSON.parse(raw)
-    const fromMessage = recognizeContextMessage(payload)
-    if (fromMessage.length > 0) return fromMessage
-    return recognizeContextMessage({
-      type: CHAT_CONTEXT_ATTACH_MESSAGE,
-      context: payload,
-    })
-  } catch {
-    return []
+  for (const mimeType of CONTEXT_DROP_MIME_TYPES) {
+    const raw = dataTransfer.getData(mimeType)
+    if (!raw) continue
+    try {
+      const payload = JSON.parse(raw)
+      if (mimeType === 'application/vnd.kdcube.context+json') {
+        const fromContextPayload = recognizeContextPayload(payload)
+        if (fromContextPayload.length > 0) return fromContextPayload
+      }
+      const fromMessage = recognizeContextMessage(payload)
+      if (fromMessage.length > 0) return fromMessage
+      const wrapped = recognizeContextMessage({
+        type: CHAT_CONTEXT_ATTACH_MESSAGE,
+        context: payload,
+      })
+      if (wrapped.length > 0) return wrapped
+    } catch {
+      // Try the next MIME flavor. Drag payloads often expose both a precise
+      // application/vnd.kdcube.* payload and a generic application/json copy.
+    }
   }
+  return []
 }
 
 function ComposerImpl({

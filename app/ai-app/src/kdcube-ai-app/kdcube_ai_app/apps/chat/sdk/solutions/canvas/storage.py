@@ -51,12 +51,6 @@ def parse_canvas_uri(uri: Any) -> Dict[str, Any]:
             "canvas_name": safe_storage_segment(name or DEFAULT_CANVAS_NAME, default=DEFAULT_CANVAS_NAME),
             "revision": revision,
         }
-    if raw.startswith("ext:"):
-        return {
-            "scheme": "ext",
-            "uri": raw,
-            "key": raw.split(":", 1)[1].strip().lstrip("/"),
-        }
     return {"scheme": "", "uri": raw}
 
 
@@ -195,7 +189,7 @@ def _card_identity_ref(card: Mapping[str, Any]) -> str:
     """Stable identity for proxy/ref cards.
 
     For proxy cards the target object ref is also the durable card id:
-    `task:issues/<id>`, `fi:...`, `ext:...`, `mem:...`, `so:...`, etc. Inline
+    `task:issues/<id>`, `fi:...`, `cnv:...`, `mem:...`, `so:...`, etc. Inline
     `content` cards intentionally return empty here because they create new
     canvas-hosted objects on write.
     """
@@ -287,7 +281,7 @@ class CanvasStore:
 
     Canvas revisions are documents of pins/cards only. Any supplied text or
     object bytes are stored as separate versioned canvas objects and referenced
-    from cards through `ext:` logical paths.
+    from cards through `cnv:` logical paths.
     """
 
     def __init__(
@@ -303,7 +297,7 @@ class CanvasStore:
         origin_prefix: str = "sdk.canvas",
         state_event_source_id: str = "canvas.state",
         ui_event_type: str = "canvas.patch.applied",
-        artifact_resolver_name: str = "sdk.canvas.bundle_artifact_storage",
+        artifact_resolver_name: str = "sdk.canvas.artifact_storage",
         handoff_resolver_names: Mapping[str, str] | None = None,
     ) -> None:
         tenant = str(tenant or "").strip()
@@ -322,8 +316,8 @@ class CanvasStore:
         self.state_event_source_id = str(state_event_source_id or "canvas.state").strip() or "canvas.state"
         self.ui_event_type = str(ui_event_type or "canvas.patch.applied").strip() or "canvas.patch.applied"
         self.artifact_resolver_name = (
-            str(artifact_resolver_name or "sdk.canvas.bundle_artifact_storage").strip()
-            or "sdk.canvas.bundle_artifact_storage"
+            str(artifact_resolver_name or "sdk.canvas.artifact_storage").strip()
+            or "sdk.canvas.artifact_storage"
         )
         self.handoff_resolver_names = {
             str(namespace or "").strip(): str(resolver or "").strip()
@@ -342,7 +336,7 @@ class CanvasStore:
         origin_prefix: str = "sdk.canvas",
         state_event_source_id: str = "canvas.state",
         ui_event_type: str = "canvas.patch.applied",
-        artifact_resolver_name: str = "sdk.canvas.bundle_artifact_storage",
+        artifact_resolver_name: str = "sdk.canvas.artifact_storage",
         handoff_resolver_names: Mapping[str, str] | None = None,
         revision_retention: int | None = None,
     ) -> "CanvasStore":
@@ -644,8 +638,8 @@ class CanvasStore:
         card["id"] = card_id
         card["version"] = next_version
         card["mime"] = mime
-        card["logical_path"] = f"ext:{relpath}"
-        card["storage_ref"] = f"ext:{relpath}"
+        card["logical_path"] = f"cnv:{relpath}"
+        card["storage_ref"] = f"cnv:{relpath}"
         card["storage_uri"] = uri
         card["content_preview"] = preview
         card["content_size"] = len(data)
@@ -695,8 +689,8 @@ class CanvasStore:
             "kind": "user.attachment",
             "title": safe_name,
             "mime": mime or "application/octet-stream",
-            "logical_path": f"ext:{relpath}",
-            "storage_ref": f"ext:{relpath}",
+            "logical_path": f"cnv:{relpath}",
+            "storage_ref": f"cnv:{relpath}",
             "storage_uri": uri,
             "version": version,
             "size": len(content),
@@ -718,7 +712,7 @@ class CanvasStore:
         default_id = _new_card_id(card.get("kind"))
         if identity_ref and not canvas_owned:
             # Proxy pins are identified by the original resolver URI. This keeps
-            # ownership with the source subsystem: task:, fi:, mem:, so:, ext:.
+            # ownership with the source subsystem: task:, fi:, mem:, so:, etc.
             card["id"] = identity_ref
             if not str(card.get("logical_path") or "").strip():
                 card["logical_path"] = identity_ref
@@ -824,7 +818,7 @@ class CanvasStore:
             "- Use canvas.patch with canvas_id and base_revision equal to revision.",
             "- Treat this JSON as exact state for planning only; do not edit or save it directly.",
             "- Use map labels for spatial reasoning; use card_id values from the legend when patching existing cards.",
-            "- Use card refs only when content_preview is missing or insufficient; ext:/fi: refs are pull/readable, while mem:/so:/task: refs use subsystem tools/resolvers.",
+            "- Use card refs only when content_preview is missing or insufficient; pull external owner refs into the ReAct workspace before exact content inspection.",
             "- user.text card content can be updated with update_card content={text}. Proxy cards keep their ref content unchanged; use description/comment_card for user notes on them.",
             "- Card kind describes content. Suggestion is placement/state: use placement=suggested for pending bot output.",
             "- Use kind=agent.text only for assistant-authored text; files, memories, sources, search results, and links keep their own kinds.",
@@ -908,7 +902,9 @@ class CanvasStore:
         }
         revision_uri = self.artifacts.write(rel_revision, body, mime=CANVAS_MIME, meta=meta)
         latest_uri = self.artifacts.write(rel_latest, body, mime=CANVAS_MIME, meta={**meta, "latest": True})
-        canvas_ref = f"ext:{rel_revision}"
+        revision = int(doc.get("revision") or 0)
+        canvas_ref = self.canvas_uri(canvas_name=canvas_name, revision=revision)
+        latest_ref = self.canvas_uri(canvas_name=canvas_name, revision=None)
         self._manifest_update(
             canvas_id=canvas_id,
             story_id=story_id,
@@ -925,12 +921,12 @@ class CanvasStore:
             self.canvas_name(canvas_name),
             int(doc.get("revision") or 0),
             canvas_ref,
-            f"ext:{rel_latest}",
+            latest_ref,
         )
         return {
             "canvas": doc,
             "canvas_ref": canvas_ref,
-            "latest_ref": f"ext:{rel_latest}",
+            "latest_ref": latest_ref,
             "storage_uri": revision_uri,
             "latest_storage_uri": latest_uri,
             "key": rel_revision,
@@ -942,7 +938,7 @@ class CanvasStore:
 
         Only canvas JSON revision files are pruned. Card object bytes are never
         pruned here because current or historical cards may still point at
-        their versioned `ext:` object refs.
+        their versioned `cnv:` object refs.
         """
 
         keep_count = max(1, int(keep if keep is not None else self.revision_retention))
@@ -1003,12 +999,8 @@ class CanvasStore:
             canvas_name=canvas_name,
             revision=revision,
         )
-        canvas_ref = (
-            f"ext:{self.revision_relpath(canvas_id=canvas_id, revision=int(canvas.get('revision') or 0))}"
-            if found
-            else ""
-        )
-        latest_ref = f"ext:{self.latest_relpath(canvas_id=canvas_id)}"
+        canvas_ref = self.canvas_uri(canvas_name=canvas_name, revision=int(canvas.get("revision") or 0)) if found else ""
+        latest_ref = self.canvas_uri(canvas_name=canvas_name, revision=None)
         projection = self.projection(canvas)
         return {
             "ok": True,
@@ -1045,36 +1037,6 @@ class CanvasStore:
                 canvas_id=cid,
                 revision=parsed.get("revision"),
             )
-        if scheme == "ext":
-            key = str(parsed.get("key") or "").strip()
-            found, data = self._read_json(key)
-            if not found:
-                return {
-                    "ok": True,
-                    "found": False,
-                    "uri": str(uri or "").strip(),
-                    "error": "canvas_ref_not_found",
-                }
-            name = self.canvas_name(data.get("canvas_name") or canvas_name)
-            cid = str(data.get("canvas_id") or self.canvas_id(canvas_name=name, canvas_id=canvas_id))
-            canvas = self.normalize_document(data, canvas_id=cid, story_id=story_id, canvas_name=name)
-            projection = self.projection(canvas)
-            return {
-                "ok": True,
-                "found": True,
-                "uri": str(uri or "").strip(),
-                "user_id": self.user_id,
-                "story_id": story_id or str(canvas.get("story_id") or ""),
-                "canvas_name": name,
-                "canvas_id": canvas.get("canvas_id"),
-                "revision": int(canvas.get("revision") or 0),
-                "canvas_ref": str(uri or "").strip(),
-                "latest_ref": f"ext:{self.latest_relpath(canvas_id=cid)}",
-                "canvas": canvas,
-                "projection": projection,
-                "agent_view": projection.get("text") or "",
-                "canvas_uri": projection.get("canvas_uri") or self.canvas_uri(canvas_name=name, revision=int(canvas.get("revision") or 0)),
-            }
         return {
             "ok": False,
             "found": False,
@@ -1441,8 +1403,8 @@ class CanvasStore:
                 rel_revision = self.revision_relpath(canvas_id=canvas_id, revision=int(current.get("revision") or 0))
                 result = {
                     "canvas": next_canvas,
-                    "canvas_ref": f"ext:{rel_revision}",
-                    "latest_ref": f"ext:{rel_latest}",
+                    "canvas_ref": self.canvas_uri(canvas_name=canvas_name, revision=int(current.get("revision") or 0)),
+                    "latest_ref": self.canvas_uri(canvas_name=canvas_name, revision=None),
                     "storage_uri": "",
                     "latest_storage_uri": "",
                     "key": rel_revision,

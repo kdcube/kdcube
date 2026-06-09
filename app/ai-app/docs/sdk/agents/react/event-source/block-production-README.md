@@ -97,7 +97,7 @@ not become durable ReAct history.
 | `source_rows` | Exploration rows for `sources_pool`, such as web search/fetch results. |
 | `artifact_rows` | File/artifact rows, usually from exec `raw.items` or composite hosted artifact results. |
 | `declared_file_items` | Explicit file rows derived from `{artifact_type:"files", files:[...]}`. |
-| `snapshot_refs` | Read-only snapshot payload refs, such as `fi:<turn_id>.snapshots/current.yaml` or `ext:<bundle>/snapshots/current`, for later projection/ANNOUNCE/compaction. They are not editable canvas state. |
+| `snapshot_refs` | Read-only snapshot payload refs, such as `fi:<turn_id>.snapshots/current.yaml` or `cnv:snapshots/current`, for later projection/ANNOUNCE/compaction. They are not editable canvas state. |
 | `announce_candidates` | Data for a later ANNOUNCE phase. ANNOUNCE itself is not persisted on the timeline. |
 | `notice_rows` | Notices/errors/warnings to emit through the existing ReAct notice transport. |
 
@@ -223,9 +223,9 @@ ANNOUNCE candidate together:
     "event": {
       "summary": "Canvas has one selected note and one attachment.",
       "hosted_artifacts": [
-        {"hosted_uri": "ext:task-tracker/files/draft-123/diagram.png", "mime": "image/png"}
+        {"hosted_uri": "nmsp:files/draft-123/diagram.png", "mime": "image/png"}
       ],
-      "snapshot_ref": "ext:task-tracker/snapshots/draft-123/canvas/latest",
+      "snapshot_ref": "cnv:snapshots/draft-123/canvas/latest",
       "announce_entry": {"title": "Canvas snapshot", "text": "One selected note."}
     }
   }

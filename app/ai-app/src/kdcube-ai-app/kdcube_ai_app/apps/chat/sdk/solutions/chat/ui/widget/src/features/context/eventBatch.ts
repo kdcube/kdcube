@@ -17,6 +17,8 @@ export interface AttachedContext {
   cardId?: string
   cardType?: string
   selected?: boolean
+  eventSourceId?: string
+  surface?: string
   data?: Record<string, unknown>
 }
 
@@ -106,6 +108,18 @@ function snapshotSourceId(ctx: AttachedContext, defaults: Required<ChatEventSour
   const explicit = ctx.data?.event_source_id
   if (typeof explicit === 'string' && explicit.trim()) return explicit.trim()
   return defaults.snapshotEventSourceId
+}
+
+function attachedContextEventSourceId(ctx: AttachedContext, defaults: Required<ChatEventSourceDefaults>): string {
+  const explicit = ctx.eventSourceId || ctx.data?.event_source_id || ctx.data?.eventSourceId
+  if (typeof explicit === 'string' && explicit.trim()) return explicit.trim()
+  return defaults.contextEventSourceId
+}
+
+function attachedContextSurface(ctx: AttachedContext, defaults: Required<ChatEventSourceDefaults>): string {
+  const explicit = ctx.surface || ctx.data?.surface
+  if (typeof explicit === 'string' && explicit.trim()) return explicit.trim()
+  return defaults.chatSurface
 }
 
 function contextBase(ctx: AttachedContext, options: { agentId: string; eventId: EventIdFactory }): Partial<ExternalEvent> {
@@ -276,8 +290,8 @@ export function buildContextEvents(contexts: AttachedContext[], options: BuildCo
       events.push({
         ...contextBase(ctx, { agentId, eventId }),
         type: 'event.external',
-        event_source_id: defaults.contextEventSourceId,
-        surface: defaults.chatSurface,
+        event_source_id: attachedContextEventSourceId(ctx, defaults),
+        surface: attachedContextSurface(ctx, defaults),
         ...(ref ? { hosted_uri: ref } : {}),
         payload: {
           mime: ctx.mime || 'application/json',

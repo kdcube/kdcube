@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
 from kdcube_ai_app.apps.chat.emitters import (
     ChatCommunicator,
@@ -257,6 +257,89 @@ class BaseEntrypoint:
             "fingerprint": str(fingerprint or identity.get("fingerprint") or "").strip(),
             "user_type": str(user_type or identity.get("user_type") or "anonymous").strip() or "anonymous",
         }
+
+    def _react_event_sources(self) -> Any:
+        """Return connected event-source policies/readers for ReAct helpers.
+
+        Bundle assemblies that mount SDK components such as memory or canvas
+        should override this and return an EventSourceSubsystem composed from
+        those component modules. The base fallback intentionally stays empty so
+        the shared preview operation still works for plain chat bundles.
+        """
+
+        return None
+
+    def _react_debug_dir(self) -> Optional[Path]:
+        storage_path = str(getattr(self.settings, "STORAGE_PATH", "") or "").strip()
+        if not storage_path:
+            return None
+        return Path(storage_path) / "react-debug"
+
+    def _react_preview_user_id(self, payload: Mapping[str, Any]) -> str:
+        resolver = getattr(self, "_resolve_user_id", None)
+        if callable(resolver):
+            try:
+                resolved = resolver(payload)
+                if resolved:
+                    return str(resolved)
+            except Exception:
+                pass
+        ident = self.runtime_identity()
+        return str(
+            payload.get("user_id")
+            or ident.get("user")
+            or ident.get("fingerprint")
+            or "anonymous"
+        ).strip() or "anonymous"
+
+    @api(method="POST", alias="react_context_preview", route="operations", user_types=())
+    async def react_context_preview(self, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
+        """Render proposed `external_events[]` through ReAct event policies only.
+
+        This powers the reusable chat widget dry-run context preview. It does
+        not write conversation state and does not call the model.
+        """
+
+        payload: Dict[str, Any] = {}
+        if isinstance(data, Mapping):
+            nested = data.get("data")
+            if isinstance(nested, Mapping):
+                payload.update({str(k): v for k, v in nested.items()})
+            else:
+                payload.update({str(k): v for k, v in data.items()})
+        for key, value in kwargs.items():
+            if key not in {"request", "alias", "route", "endpoint_alias"} and value is not None:
+                payload[key] = value
+        try:
+            from kdcube_ai_app.apps.chat.sdk.solutions.react.events import (
+                render_external_events_preview_payload,
+            )
+
+            result = await render_external_events_preview_payload(
+                payload,
+                event_sources=self._react_event_sources(),
+                runtime_identity=self.runtime_identity(),
+                user_id=self._react_preview_user_id(payload),
+                bundle_id=getattr(getattr(self, "config", None), "ai_bundle_spec", None).id
+                if getattr(getattr(self, "config", None), "ai_bundle_spec", None) is not None
+                else "",
+                debug_dir=self._react_debug_dir(),
+            )
+            if not result.get("ok"):
+                try:
+                    self.logger.log(
+                        f"[react_context_preview] failed: {result.get('error') or result.get('message')}",
+                        "WARNING",
+                    )
+                except Exception:
+                    pass
+            return result
+        except Exception as exc:
+            try:
+                self.logger.log(f"[react_context_preview] failed: {traceback.format_exc()}", "ERROR")
+            except Exception:
+                pass
+            return {"ok": False, "error": str(exc), "status": 500}
 
     async def on_bundle_load(self, **kwargs) -> None:
         """
@@ -1142,6 +1225,7 @@ class BaseEntrypoint:
         raw = self.get_prop_path(self.bundle_props or {}, "execution.runtime", default=None)
         if raw is None:
             raw = self.get_prop_path(self.bundle_props or {}, "exec_runtime")
+        runtime_ctx.bundle_props = copy.deepcopy(self.bundle_props or {})
         runtime_ctx.exec_runtime = copy.deepcopy(normalize_exec_runtime_config(raw))
 
     async def refresh_bundle_props(

@@ -1,7 +1,7 @@
 ---
 id: ks:docs/sdk/events/namespaces-README.md
 title: "Logical Reference Namespaces"
-summary: "Foundational model for model-facing logical refs such as ar:, ev:, tc:, fi:, ext:, task:, mem:, and so:, and how they relate to events, react.read, react.pull, and react.checkout."
+summary: "Foundational model for model-facing logical refs such as ar:, ev:, tc:, fi:, task:, mem:, cnv:, and so:, and how they relate to events, react.read, react.pull, and react.checkout."
 status: draft
 tags: ["sdk", "events", "react", "logical-references", "namespaces", "artifacts"]
 updated_at: 2026-06-09
@@ -15,7 +15,6 @@ keywords:
     "ar:",
     "tc:",
     "fi:",
-    "ext:",
     "task:",
     "mem:",
     "so:",
@@ -58,8 +57,9 @@ For example:
 - `ar:` is a conversation replica or control record.
 - `ev:` is an event occurrence/object on a turn timeline.
 - `fi:` is a ReAct artifact/file ref.
-- `ext:` is an externally hosted artifact ref that needs a registered rehoster.
 - `task:` is a task subsystem object ref.
+- `mem:` is a memory subsystem object ref.
+- `cnv:` is a canvas subsystem object or board ref.
 
 When one subsystem pins or mentions another subsystem's object, it should
 preserve the original ref. A canvas pin of a task remains `task:...`; a canvas
@@ -77,10 +77,9 @@ namespace.
 | `ev:` | External event objects on a turn timeline | yes, for the event object/metadata | no; pull refs carried by the event payload instead | no |
 | `tc:` | ReAct tool call/result records | yes, for call/result records | no; pull artifact refs carried by the tool result instead | no |
 | `fi:` | ReAct artifact/file storage | yes | yes, to materialize bytes locally | only for supported `fi:...files/...` workspace refs |
-| `ext:` | Bundle or external hosted artifact refs | not directly by default | yes when a registered namespace rehoster exists; returns `fi:` rows | no; pull first, then checkout only if the returned `fi:` is a supported files ref |
-| `task:` | Task subsystem object refs | through task tools/policies, not generic artifact read by default | only if the task subsystem registers an artifact projection/rehoster | no |
-| `mem:` | Memory subsystem refs | yes when the memory module is loaded; dispatches through the memory event-source reader and memory block-production policy | subsystem-defined | no |
-| `cnv:` | Canvas subsystem refs, including boards such as `cnv:main@7` and canvas-owned objects | yes when the canvas module is loaded; dispatches through the canvas event-source reader and canvas block-production policy | subsystem-defined | no |
+| `task:` | Task subsystem object refs | not directly by default; use visible context or owner tools | yes only when a task namespace rehoster is registered; returns `fi:` rows | no; pull first, then checkout only if the returned `fi:` is a supported files ref |
+| `mem:` | Memory subsystem refs | not directly by default; use visible context | yes when the memory namespace rehoster is registered; returns a `fi:` mirror | no |
+| `cnv:` | Canvas subsystem refs, including boards such as `cnv:main@7` and canvas-owned objects | not directly by default; use visible canvas ANNOUNCE/context | yes when the canvas namespace rehoster is registered; returns a `fi:` mirror | no |
 | `so:` / `su:` | Source/search subsystems | through source/search tooling or visible source pools | subsystem-defined | no |
 | `ks:` | Knowledge/docs namespace | subsystem-defined; often read/browse tooling | subsystem-defined | no |
 
@@ -88,13 +87,12 @@ This table describes the default architectural contract. A bundle can add a
 registered rehoster or tool for a namespace, but that registration belongs to
 the namespace owner and must be documented by that subsystem.
 
-`react.read` support for owner-domain refs is policy-based. For example,
-`react.read(paths=["mem:mem_..."])` first resolves the ref through the
-memory-owned `@event_source_reader(namespace="mem", ...)`, then renders the
-resolved payload through the memory event source's `block_production` policies.
-`react.read(paths=["cnv:main@7"])` does the same through the canvas-owned
-reader and canvas policies. ReAct does not contain hard-coded memory or canvas
-renderers.
+External owner refs are not workspace files. If exact owner content is needed,
+use `react.pull(paths=["<namespace>:..."])`. The runtime-connected namespace
+rehoster mirrors the owner content into the ReAct workspace and returns ordinary
+`fi:` logical paths plus physical paths. ReAct then reads, searches, or executes
+against those returned paths. ReAct does not hard-code memory, canvas, task, or
+knowledge object rendering.
 
 ## Events And Namespaces
 
@@ -113,10 +111,10 @@ Event payloads may also carry refs owned by other namespaces:
 ```json
 {
   "logical_path": "ev:turn_123.events/task-tracker/snapshot/latest",
-  "hosted_uri": "ext:task-tracker/snapshots/draft/latest.json",
+  "hosted_uri": "cnv:main@7",
   "payload": {
     "mime": "application/json",
-    "event_ref": "ext:task-tracker/snapshots/draft/latest.json",
+    "event_ref": "cnv:main@7",
     "event": {
       "context_refs": [
         "task:issues/ticket_2026-06-07-10-20-30",
@@ -130,7 +128,7 @@ Event payloads may also carry refs owned by other namespaces:
 In that example:
 
 - `ev:` names the event object.
-- `ext:` names the hosted snapshot payload.
+- `cnv:` names the canvas-owned board/snapshot payload.
 - `task:` names a task subsystem object.
 - `fi:` names a ReAct artifact.
 
@@ -156,11 +154,13 @@ carry refs in other namespaces.
 ## Pull Versus Read
 
 Use `react.read` when the target ref already names readable model/context
-content.
+content in the ReAct-visible logical space, such as `ar:`, `tc:`, `ev:`, `fi:`,
+`so:`, `su:`, `ks:`, or `sk:` refs supported by the runtime.
 
-Use `react.pull` when bytes must be materialized into the current ReAct
-artifact space. Pull returns one or more `fi:` rows. The agent should use those
-returned refs for later `react.read`, generated code, or checkout decisions.
+Use `react.pull` when exact bytes/content from historical artifacts or external
+owner refs must be materialized into the current ReAct artifact space. Pull
+returns one or more `fi:` rows. The agent should use those returned refs for
+later `react.read`, generated code, local search, or checkout decisions.
 
 Use `react.checkout` only when the agent needs an editable current-turn
 workspace copy. Checkout is not a generic resolver. It accepts only supported

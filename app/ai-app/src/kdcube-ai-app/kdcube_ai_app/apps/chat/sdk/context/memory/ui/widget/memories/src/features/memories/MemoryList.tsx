@@ -29,6 +29,8 @@ function memoryContextPayload(memory: MemoryEntry) {
     ref,
     logical_path: ref,
     mime: 'application/json',
+    event_source_id: 'memory.context',
+    surface: 'memory.widget',
     data: {
       memory_id: memory.id,
       bundle_id: memory.bundle_id,
@@ -45,18 +47,12 @@ function memoryContextPayload(memory: MemoryEntry) {
 function setMemoryDragData(dataTransfer: DataTransfer, memory: MemoryEntry): void {
   const payload = memoryContextPayload(memory);
   const message = {
-    type: 'kdcube.memory.context',
+    type: 'kdcube.context.attach',
     source: 'memories-widget',
     contexts: [payload],
   };
   dataTransfer.effectAllowed = 'copy';
   dataTransfer.setData('application/json', JSON.stringify(message));
-  dataTransfer.setData('application/vnd.kdcube.memory+json', JSON.stringify({
-    type: 'kdcube.memory.drag.payload',
-    source: 'memories-widget',
-    memory_id: memory.id,
-    context: payload,
-  }));
   dataTransfer.setData('application/vnd.kdcube.context+json', JSON.stringify(message));
   dataTransfer.setData('text/plain', memory.memory);
   dataTransfer.setData('text/uri-list', payload.ref);

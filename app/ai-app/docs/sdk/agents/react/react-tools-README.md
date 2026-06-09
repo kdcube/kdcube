@@ -89,12 +89,10 @@ Reads existing logical artifacts back into the visible timeline.
   attached only when it is under the byte cap; otherwise `react.read` returns a
   recovery marker.
 - accepted paths: `ar:`, `tc:`, `fi:`, `so:`, `su:`, `ws:`, `ks:`, `sk:`
-- owner-domain paths: a bundle may register namespace readers with
-  `@event_source_reader`; then `react.read` can dispatch refs such as `mem:...`
-  or `cnv:main@7` to the namespace owner. The owner reader resolves the ref and
-  the owner event-source `block_production` policies decide the model-visible
-  block shape. ReAct does not hard-code memory, canvas, task, or knowledge
-  object rendering.
+- external owner refs: refs such as `mem:...`, `cnv:main@7`, or `task:...`
+  are not direct `react.read` inputs by default. If exact owner content is
+  needed, use `react.pull` first; then read/search/execute against the returned
+  `fi:` logical path or physical path.
 - `ev:` refs identify event objects on the timeline. Read them like `tc:` refs
   when the event block itself is needed. If an event points to payload bytes,
   use the event's `hosted_uri`, `payload.event_ref`, or artifact refs carried
@@ -130,17 +128,15 @@ Reads existing logical artifacts back into the visible timeline.
 
 Use it when the path already exists and React needs to inspect the content again.
 
-Do not call owner reader event-source ids as tools. For example, a canvas board
-read is not `canvas.read(...)`; it is:
+Do not call owner reader event-source ids as tools. For example, exact canvas
+board content is not `canvas.read(...)`; import it with `react.pull` first:
 
 ```json
 {"paths":["cnv:main@27"]}
 ```
 
-The `canvas.read` event source id is still important because it selects the
-canvas read policies, but it is `kind="react.event_source_reader"`, not an
-agent-visible `react.tool`. The model-visible write path remains
-`canvas.patch(...)`.
+Then inspect the `fi:`/physical path returned by `react.pull`. The model-visible
+write path remains `canvas.patch(...)`.
 
 Skills are not read-capped. `ks:` knowledge-space articles are uncapped only
 when no `ai.react.knowledge_read_visible_*` cap is configured. If a `ks:` cap is
@@ -191,17 +187,18 @@ Example metadata-only read:
 
 ### `react.pull`
 
-Materializes historical `fi:` refs and registered externally tracked artifact
-refs locally so code or later tools can use them by local path.
+Materializes historical `fi:` refs and registered external owner refs locally so
+code or later tools can use them by local path.
 
 - input: `paths: list[str]`
-- accepted paths: `fi:` refs and registered external artifact namespaces such
-  as `ext:...`
+- accepted paths: `fi:` refs and registered external owner namespaces such as
+  `cnv:` or `mem:`
 - cross-conversation refs: `fi:conv_<conversation_id>.turn_<id>...` belongs to
   another conversation and is resolved with that scope
-- external artifact refs: `react.pull(paths=["ext:..."])` calls the registered
-  namespace rehoster and returns the materialized `logical_path` /
-  `physical_path`; use those returned paths next
+- external owner refs: `react.pull(paths=["cnv:..."])` or
+  `react.pull(paths=["mem:..."])` calls the registered namespace rehoster and
+  returns the materialized `logical_path` / `physical_path`; use those returned
+  paths next
 - event refs: `ev:` identifies a readable timeline event object and is not
   accepted by `react.pull`; pull the event's `hosted_uri`,
   `payload.event_ref`, or refs inside `payload.event`
@@ -219,7 +216,7 @@ Copies materialized historical `fi:<turn>.files/...` refs into the active curren
 
 - input: `paths: list[str]`, `mode: replace|overlay`
 - accepted paths: workspace `fi:<turn>.files/...` refs
-- rejected paths: `ext:...`, other external artifact namespaces, and `ev:...`
+- rejected paths: external owner namespaces and `ev:...`
   are not checkout refs. Pull/rehost first, then checkout only if the returned
   `fi:` ref is a `files/...` workspace ref.
 - cross-conversation refs: `fi:conv_<conversation_id>.turn_<id>.files/...`

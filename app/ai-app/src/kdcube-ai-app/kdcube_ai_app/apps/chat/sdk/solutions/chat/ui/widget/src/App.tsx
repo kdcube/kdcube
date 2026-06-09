@@ -69,6 +69,7 @@ import { WebappPane, WebappModal } from './components/WebappPane.tsx'
 import { fetchProfile } from './api/transport.ts'
 import {
   isKdcubePreviewContext,
+  isHostEmbedMode,
   recognizeContextMessage,
   recognizeContextRemoval,
   requestAuthRequired,
@@ -1155,6 +1156,7 @@ export default function App() {
   /* Compact (landing tile) view: no sidebar, trimmed appbar. The composer
    * keeps full functionality (attach + stop) in both views. */
   const compact = hostView === 'compact'
+  const hostEmbedMode = isHostEmbedMode()
   const leftPaneVisible = !compact && leftPaneMode !== 'collapsed'
   /* Dev preview: inside the KDCube frame the iframe is full-window, so the
    * compact view would fill the screen and you can't judge the landing tile.
@@ -1182,12 +1184,12 @@ export default function App() {
   return (
     <div className={`shell-grid ${previewTile ? 'k-preview-stage' : ''}`}>
       <div
-        className={`relative mx-auto flex w-full flex-col ${
+        className={`relative flex w-full flex-col ${hostEmbedMode ? 'mx-0' : 'mx-auto'} ${
           previewTile
             ? 'my-6 h-[560px] max-w-[600px] overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--surface)] shadow-lg'
             : compact
-              ? 'k-chat-compact h-screen max-w-[1320px] overflow-hidden'
-              : 'min-h-screen lg:h-screen max-w-[1320px] lg:overflow-hidden'
+              ? `k-chat-compact h-screen ${hostEmbedMode ? 'max-w-none' : 'max-w-[1320px]'} overflow-hidden`
+              : `min-h-screen lg:h-screen ${hostEmbedMode ? 'max-w-none' : 'max-w-[1320px]'} lg:overflow-hidden`
         }`}
       >
         {/* Turn navigation cluster (vertical stack, fixed to the viewport;

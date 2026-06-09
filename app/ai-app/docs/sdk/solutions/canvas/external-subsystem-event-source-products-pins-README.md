@@ -136,8 +136,8 @@ is separate because it represents current wizard/task state, not board layout.
 
 Current implementation:
 
-- `ext:` canvas-owned user text, user attachments, and agent text are hosted
-  by task-tracker bundle storage.
+- `cnv:` canvas-owned user text, user attachments, and agent text are hosted
+  by canvas storage.
 - `fi:` ReAct artifacts are platform-owned and may be cross-conversation.
 - `mem:` is memory-subsystem owned.
 - `task:` is preserved on issue pins and documented as the task subsystem

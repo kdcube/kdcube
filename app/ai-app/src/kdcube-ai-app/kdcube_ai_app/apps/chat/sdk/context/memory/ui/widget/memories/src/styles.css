@@ -66,7 +66,7 @@ html[data-memory-view="compact"],
 html[data-memory-view="compact"] body,
 html[data-memory-view="compact"] #root {
   min-height: 0;
-  height: auto;
+  height: 100%;
 }
 
 body {
@@ -78,7 +78,7 @@ body {
 }
 
 html[data-memory-view="compact"] body {
-  overflow: visible;
+  overflow: hidden;
 }
 
 button, input, select, textarea { font: inherit; color: inherit; }
@@ -103,14 +103,14 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 }
 
 .compact-shell {
-  display: block;
+  display: flex;
+  flex-direction: column;
   width: 100%;
-  height: auto;
+  height: 100vh;
   min-height: 0;
-  max-height: 100vh;
   margin: 0;
   padding: 6px;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .sr-only {
@@ -147,6 +147,10 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 
 .host-controlled-shell {
   padding-top: 0;
+}
+
+.host-controlled-shell.compact-shell {
+  height: 100vh;
 }
 
 .host-controlled-shell .warning-box {
@@ -227,6 +231,7 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  flex: 0 0 auto;
   gap: 7px;
   margin: 0 0 6px;
   color: var(--text-2);
@@ -270,6 +275,7 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 }
 
 .compact-shell .warning-box {
+  flex: 0 0 auto;
   margin-bottom: 6px;
   padding: 6px 7px;
   font-size: 12px;
@@ -311,6 +317,7 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 }
 
 .compact-filters {
+  flex: 0 0 auto;
   padding: 5px;
   gap: 5px;
 }
@@ -504,8 +511,12 @@ textarea:focus {
 }
 
 .compact-workspace {
-  display: block;
-  margin-top: 8px;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  margin-top: 6px;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* ─── Reconciliation panel — compact & quiet ─── */
@@ -773,14 +784,20 @@ textarea:focus {
 }
 
 .compact-memory-list {
+  flex: 1 1 auto;
   min-height: 0;
   border-radius: var(--r-md);
+  overflow: auto;
 }
 
 .memory-list {
   display: grid;
   align-content: start;
   overflow: hidden;
+}
+
+.compact-memory-list {
+  overflow: auto;
 }
 
 .tier-group {

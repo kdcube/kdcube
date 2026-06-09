@@ -1448,7 +1448,7 @@ Validate these runtime facts after reload:
 - event modules are included in `event_source_specs` passed to
   `BaseWorkflow.build_react(...)`
 - authored UI events target the intended `agent_id`
-- `react.pull(paths=["ext:..."])` returns a materialized `fi:` path when the
+- `react.pull(paths=["nmsp:..."])` returns a materialized `fi:` path when the
   namespace is registered
 - the returned physical path lands in the ReAct workspace namespace selected by
   the rehoster: `snapshots/`, `files/`, `outputs/`, or

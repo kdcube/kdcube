@@ -1,5 +1,6 @@
 import { buildExternalEventBatch } from './eventBatch'
 import type { AttachedContext } from './eventBatch'
+import { recognizeContextMessageWithTypes, recognizeContextPayload } from './contextMessages'
 
 function assertDeepEqual(actual: unknown, expected: unknown, label: string): void {
   const actualJson = JSON.stringify(actual, null, 2)
@@ -13,6 +14,95 @@ function idFactory(): (prefix: string) => string {
   let index = 0
   return (prefix: string) => `${prefix}_${++index}`
 }
+
+const testContextMessageTypes = {
+  attach: 'task-tracker-context-attach',
+  focus: 'task-tracker-context-focus',
+  remove: 'task-tracker-context-remove',
+}
+
+const directMemoryDragPayload = {
+  contexts: [
+    {
+      id: 'mem:mem_803986c10e324a16b05a3ba109237c7c',
+      kind: 'memory',
+      label: 'Family facts about Elena and Timur',
+      summary: 'Family facts about Elena and her son Timur',
+      ref: 'mem:mem_803986c10e324a16b05a3ba109237c7c',
+      logical_path: 'mem:mem_803986c10e324a16b05a3ba109237c7c',
+      mime: 'application/json',
+      event_source_id: 'memory.context',
+      surface: 'memory.widget',
+      data: { memory_id: 'mem_803986c10e324a16b05a3ba109237c7c' },
+    },
+  ],
+}
+
+const directMemoryDragContexts = recognizeContextPayload(directMemoryDragPayload)
+
+assertDeepEqual(
+  directMemoryDragContexts,
+  [
+    {
+      id: 'mem:mem_803986c10e324a16b05a3ba109237c7c',
+      kind: 'memory',
+      label: 'Family facts about Elena and Timur',
+      summary: 'Family facts about Elena and her son Timur',
+      ref: 'mem:mem_803986c10e324a16b05a3ba109237c7c',
+      logicalPath: 'mem:mem_803986c10e324a16b05a3ba109237c7c',
+      mime: 'application/json',
+      eventSourceId: 'memory.context',
+      surface: 'memory.widget',
+      data: { memory_id: 'mem_803986c10e324a16b05a3ba109237c7c' },
+    },
+  ],
+  'generic context payload unwraps to the underlying mem: ref',
+)
+
+assertDeepEqual(
+  recognizeContextMessageWithTypes({
+    type: 'kdcube.context.attach',
+    source: 'memories-widget',
+    contexts: directMemoryDragContexts,
+  }, testContextMessageTypes),
+  directMemoryDragContexts,
+  'generic context attach messages preserve normalized memory refs',
+)
+
+const directMemoryBatch = buildExternalEventBatch(directMemoryDragContexts, {
+  agentId: 'main',
+  eventId: idFactory(),
+  text: 'What is this memory?',
+})
+
+assertDeepEqual(
+  directMemoryBatch.slice(0, 1),
+  [
+    {
+      event_id: 'evt_1',
+      reactive: false,
+      agent_id: 'main',
+      type: 'event.external',
+      event_source_id: 'memory.context',
+      surface: 'memory.widget',
+      hosted_uri: 'mem:mem_803986c10e324a16b05a3ba109237c7c',
+      payload: {
+        mime: 'application/json',
+        event_ref: 'mem:mem_803986c10e324a16b05a3ba109237c7c',
+        event: {
+          context_role: 'context',
+          id: 'mem:mem_803986c10e324a16b05a3ba109237c7c',
+          kind: 'memory',
+          label: 'Family facts about Elena and Timur',
+          summary: 'Family facts about Elena and her son Timur',
+          ref: 'mem:mem_803986c10e324a16b05a3ba109237c7c',
+          data: { memory_id: 'mem_803986c10e324a16b05a3ba109237c7c' },
+        },
+      },
+    },
+  ],
+  'memory context preserves the producer event source id',
+)
 
 const contexts: AttachedContext[] = [
   {

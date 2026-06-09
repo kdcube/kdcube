@@ -51,19 +51,19 @@ fi:turn_<id>.external.<event_kind>.attachments/<event_id>/<rel>  -> turn_<id>/ex
 fi:conv_<conversation_id>.turn_<id>.files/<rel>       -> conv_<conversation_id>/turn_<id>/files/<rel>
 ```
 
-Custom namespace refs, such as `ext:task-tracker/...`, are not `fi:` refs until
+Custom namespace refs, such as `nmsp:draft/...`, are not `fi:` refs until
 pulled. A registered namespace rehoster chooses the destination:
 
 ```text
-ext:task-tracker/draft_1/issue-draft.yaml
-  -> fi:turn_<current>.snapshots/ext/task-tracker/draft_1/issue-draft.yaml
+nmsp:draft_1/issue-draft.yaml
+  -> fi:turn_<current>.snapshots/nmsp/draft_1/issue-draft.yaml
 
-ext:task-tracker/draft_1/evidence/screenshot.png
-  -> fi:turn_<current>.external.ext.attachments/ext_<id>/ext/task-tracker/draft_1/evidence/screenshot.png
+nmsp:draft_1/evidence/screenshot.png
+  -> fi:turn_<current>.external.nmsp.attachments/nmsp_<id>/nmsp/draft_1/evidence/screenshot.png
 ```
 
-`ext` is only an example namespace. It is valid only when a bundle/module
-registers `@artifact_namespace_rehoster(namespace="ext")`.
+`nmsp` is only an example owner-domain namespace. It is valid only when a
+bundle/module registers `@artifact_namespace_rehoster(namespace="nmsp")`.
 
 ## Visibility Is Separate
 

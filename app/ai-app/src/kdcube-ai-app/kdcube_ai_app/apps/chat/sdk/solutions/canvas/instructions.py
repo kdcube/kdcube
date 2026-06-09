@@ -2,10 +2,10 @@ from __future__ import annotations
 
 
 CANVAS_REACT_ADDITIONAL_INSTRUCTIONS = """
-[CANVAS MODULE CONTEXT]
-When a bundle attaches this canvas module, live canvas state can be rendered
-for ReAct in ANNOUNCE. Treat that ANNOUNCE content as non-cached, current
-working context for the turn.
+[CANVAS CONTEXT]
+When this runtime exposes canvas context, live canvas state can be rendered in
+ANNOUNCE. Treat that ANNOUNCE content as non-cached, current working context
+for the turn.
 
 The canvas renderer contributes one model-facing board section when the canvas
 object itself is attached, and can add one optional selection/focus section
@@ -31,16 +31,17 @@ when selected cards are part of the request:
 Cards dragged from canvas into chat are not rendered as a special canvas-focus
 section. They are rendered as the objects they proxy: `mem:` as memory context,
 `task:` as task/issue context, `fi:` as a platform artifact, canvas-owned
-`ext:` refs as canvas-owned user/assistant content, and so on. Canvas
-provenance may appear as metadata such as `canvas_context`, but the canonical
-object ref remains the identity.
+`cnv:` refs as canvas-owned user/assistant content, and so on. Canvas
+provenance may appear as metadata such as `canvas_context`, but the rendered
+`object_ref` remains the identity to pull or act on.
 
 Canvas read/write behavior:
-- Use the map/legend for awareness. Use `react.read(paths=["cnv:<name>@<revision>"])`
-  only when exact hidden board state, full JSON, full card metadata,
-  coordinates, or refs are needed.
-- `react.read(paths=["cnv:<name>@<revision>"])` returns exact JSON plus an
-  `agent_view`; it is not an edit. A read can refresh canvas ANNOUNCE.
+- Use the map/legend for awareness. When exact hidden board state, full JSON,
+  full card metadata, coordinates, or refs are needed, import the board with
+  `react.pull(paths=["cnv:<name>@<revision>"])`, then inspect the returned
+  `fi:` logical path or physical path.
+- `cnv:` refs identify canvas-owned board/object state. They are external owner
+  refs until pulled into the ReAct workspace.
 - Collaborate only through `canvas.patch` with `base_revision` set to the
   visible canvas revision. Do not edit/re-save canvas JSON directly.
 - Each successful `canvas.patch` creates a new canvas revision and a
@@ -51,31 +52,32 @@ Canvas read/write behavior:
 
 Card placement and ref behavior:
 - Map labels are for spatial reasoning. For patching existing cards, use
-  `card_id` values from the legend or from `react.read(paths=["cnv:<name>@<revision>"])`.
+  `card_id` values from the legend or from the pulled canvas JSON.
 - `placement=placed` means the card is visible on the board map with a rect.
   `placement=floating` means the card exists in the canvas revision but is not
   part of the placed spatial map yet. `placement=suggested` is a pending
   assistant/user suggestion waiting for user acceptance or arrangement.
   `placement=trashed` means it is in the persisted bin.
-- `ext:` and `fi:` refs are pull/readable when the visible preview is missing
-  or insufficient. `mem:`, `so:`, and `task:` refs use their subsystem tools or
-  resolvers.
-- Canvas-owned cards are hosted by the bundle, not by the platform
-  conversation artifact store:
+- Use visible card previews when sufficient. When exact content for a proxied
+  object is needed, pull the rendered `object_ref` with `react.pull`; then
+  inspect the returned `fi:` logical path or physical path. Unsupported refs are
+  reported by the pull result.
+- Canvas-owned cards are hosted by the runtime's canvas storage, not by the
+  platform conversation artifact store:
   - `user.text` is user-authored text created on the canvas and remains an
-    `ext:` ref when attached into chat.
+    `cnv:` ref when attached into chat.
   - `user.attachment` is a user upload created on the canvas and remains an
-    `ext:` ref when attached into chat.
+    `cnv:` ref when attached into chat.
   - `agent.text` is assistant-authored text created on the canvas through
-    `canvas.patch` or dragged from an assistant response; it is also an `ext:`
+    `canvas.patch` or dragged from an assistant response; it is also a `cnv:`
     ref.
 - Chat-authored data is different: user chat text and assistant chat replies
   are conversation replicas, and chat-uploaded files are platform conversation
-  attachments/artifacts. Do not rename canvas-owned `ext:` objects as chat
+  attachments/artifacts. Do not rename canvas-owned `cnv:` objects as chat
   prompt or chat attachment data.
-- Host applications may define additional card kinds and resolver namespaces.
-  Canvas can annotate proxy cards with descriptions/comments, but editing the
-  underlying object belongs to the owning subsystem's tools/APIs.
+- The runtime may define additional card kinds and resolver namespaces. Canvas
+  can annotate proxy cards with descriptions/comments, but editing the
+  underlying object belongs to the owning namespace's tools/APIs.
 - `user.text` card content may be updated with `update_card content={text}`.
 - Proxy card refs such as `mem:`, `fi:`, `task:`, search/source refs, and
   hosted attachments stay immutable. You may update the canvas-owned
@@ -84,7 +86,7 @@ Card placement and ref behavior:
   placed card, so the user can arrange, accept, or discard it.
 - Producing a file/report/output does not pin it. First produce the artifact,
   then call `canvas.patch` with a `new_card` whose `logical_path` points at the
-  produced `fi:` or `ext:` ref.
+  produced `fi:` or `cnv:` ref.
 
 Semantics:
 - Canvas is an editable collaborative board. Stories, tickets, memories, files,

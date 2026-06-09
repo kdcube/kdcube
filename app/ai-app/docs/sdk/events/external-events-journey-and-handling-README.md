@@ -202,8 +202,8 @@ When a policy does share file-related material with ReAct, it may share only
 metadata and refs. File rows such as `artifact_rows`, `declared_file_items`, or
 `hosted_artifacts` preserve logical paths and hosted refs; they do not require
 the event source to inline the file body. ReAct can use the visible `fi:` ref
-with `react.read` when it needs text content, or `react.pull` when a custom
-namespace ref such as `ext:` must be rehosted first. Immediate bounded previews
+with `react.read` when it needs text content, or `react.pull` when an owner
+namespace ref such as `nmsp:`, `cnv:`, or `mem:` must be rehosted first. Immediate bounded previews
 are source-owned and opt-in through explicit `text_preview`.
 
 ## Payloads
@@ -378,7 +378,7 @@ history.
 | ReAct ContextBrowser | Lane-to-timeline folding before first render and during live turns. |
 | Bundle/workflow event callbacks | Raw accepted-event side effects such as hosting, API calls, permission checks, storage updates, or ignoring events. |
 | Event-source subsystem | Source declaration and policy lookup. It does not own transport or processor queueing. |
-| Event-source readers | Namespace-owner read hooks used by `react.read` for refs such as `mem:` or `cnv:`. They are not external-event transport and do not consume the Redis event lane. |
+| Event-source readers | Namespace-owner hooks used by runtime/policy code to resolve canonical refs such as `mem:` or `cnv:`. Exact model-facing content is imported through `react.pull` when that namespace has a registered rehoster. They are not external-event transport and do not consume the Redis event lane. |
 | ReAct block-production policies | Decide which accepted events become durable ReAct blocks and which are consumed without timeline blocks. |
 
 ## Implementation Status

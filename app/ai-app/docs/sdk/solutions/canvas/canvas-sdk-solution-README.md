@@ -90,7 +90,7 @@ A canvas document is a versioned board state:
       "id": "U_2026-06-08-09-10-11_ab12",
       "kind": "user.text",
       "title": "Observation",
-      "logical_path": "ext:<bundle-owned-canvas-object>",
+      "logical_path": "cnv:<canvas-owned-object>",
       "rect": {"x": 40, "y": 40, "w": 238, "h": 112}
     },
     {
@@ -113,7 +113,7 @@ namespace when pinned:
 | ReAct/chat artifact | `fi:conv_<conversation>/turn_.../outputs/file.md` | ReAct artifact layer |
 | Memory | `mem:<memory-id>` | Memory module |
 | Task issue | `task:issues/<issue-id>` | Task subsystem |
-| Canvas user text/upload | `ext:<bundle-canvas-object>` or future `cnv:<object>` | Canvas storage owner |
+| Canvas user text/upload | `cnv:<canvas-object>` | Canvas storage owner |
 | Knowledge/source row | `ks:<article>` or `so:<source>` | Knowledge/source subsystem |
 
 Canvas does not rehost external objects just because they are pinned. Rehosting
@@ -135,7 +135,7 @@ store = CanvasStore.from_scope(
     origin_prefix="my_bundle.canvas",
     state_event_source_id="my_bundle.canvas.state",
     ui_event_type="my_bundle.canvas.patch.applied",
-    artifact_resolver_name="my_bundle.canvas_artifacts",
+    artifact_resolver_name="sdk.canvas.artifact_storage",
     handoff_resolver_names={
         "task": "my_bundle.issue_story",
     },
@@ -179,7 +179,7 @@ Built-in SDK resolver support:
 
 | Resolver | Namespace | Meaning |
 | --- | --- | --- |
-| `BundleExtArtifactResolver` | `ext:` | Reads canvas-owned/bundle-owned artifact refs from bundle artifact storage. |
+| `CanvasArtifactResolver` | `cnv:` | Reads canvas-owned artifact refs from canvas artifact storage. |
 | `NamespaceHandoffResolver` | any | Declares that another subsystem owns the namespace. |
 | `CanvasObjectResolverRegistry` | all | Dispatches actions to registered resolvers by namespace. |
 
@@ -202,8 +202,9 @@ The instructions explain:
 - `[CANVAS FOCUSED CONTEXT]` is turn-local selected/multi-selected card
   context for batch operations on the attached board.
 - Individual pins dragged from canvas into chat render as their proxied objects
-  (`task:`, `mem:`, `fi:`, `ext:`, etc.), not as canvas-focus events.
-- `react.read(paths=["cnv:<name>@<revision>"])` is for exact hidden board state.
+  (`task:`, `mem:`, `fi:`, `cnv:`, etc.), not as canvas-focus events.
+- `react.pull(paths=["cnv:<name>@<revision>"])` imports exact hidden board
+  state into the ReAct workspace; inspect the returned `fi:` or physical path.
 - `canvas.patch` is the only agent write path.
 - Agents do not move or resize existing cards.
 - Proxy card underlying objects stay owned by their source subsystem.
@@ -217,12 +218,12 @@ from kdcube_ai_app.apps.chat.sdk.solutions.canvas.tools_core import (
 )
 ```
 
-The SDK tool module exposes one direct model tool and one reader-backed source:
+The SDK tool module exposes one direct model tool and one namespace rehoster:
 
 | Source id | `kind` | How the model uses it |
 | --- | --- | --- |
 | `canvas.patch` | `react.tool` | Calls `canvas.patch(...)` to create a new content revision. |
-| `canvas.read` | `react.event_source_reader` | Calls `react.read(paths=["cnv:<name>@<revision>"])`; the `cnv:` reader resolves the board and the `canvas.read` policies render it. |
+| `cnv` rehoster | `artifact_namespace_rehoster` | Calls `react.pull(paths=["cnv:<name>@<revision>"])`; the rehoster materializes exact canvas state/content as returned `fi:` artifacts. |
 
 A bundle still defines its own SK plugin class and event-source policy ids when
 it wraps the SDK core directly:

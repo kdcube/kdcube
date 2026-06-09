@@ -72,7 +72,7 @@ async def test_event_timeline_projection_renders_json_without_mutating_storage()
         "status": "success",
         "ret": {
             "title": "Issue draft snapshot",
-            "snapshot_ref": "ext:task-tracker/snapshots/BUG-1/latest",
+            "snapshot_ref": "nmsp:snapshots/BUG-1/latest",
             "fields": {"title": "Browser crash"},
         },
     }
@@ -99,7 +99,7 @@ async def test_event_timeline_projection_renders_json_without_mutating_storage()
     assert "[SNAPSHOT EVENT]" in text
     assert "event_source_id: bundle.snapshot" in text
     assert "story_id: issue:BUG-1" in text
-    assert "snapshot_ref: ext:task-tracker/snapshots/BUG-1/latest" in text
+    assert "snapshot_ref: nmsp:snapshots/BUG-1/latest" in text
     assert '"fields"' not in text
     assert tl.blocks[0]["mime"] == "application/json"
     assert json.loads(tl.blocks[0]["text"]) == raw_event

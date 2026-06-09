@@ -100,7 +100,7 @@ async def resolve_memory_ref_action(
 
     memory_id = memory_id_from_ref(ref)
     if not memory_id:
-        return {**base, "ok": False, "error": "memory_ref_required", "status": 400}
+        return {**base, "ok": False, "error": "object_ref_required", "status": 400}
 
     record = await store.get_memory(
         scope=scope,
@@ -138,7 +138,7 @@ async def resolve_memory_ref_action(
                 "title": record.memory[:120],
             },
         }
-    return {**base, "ok": False, "error": "unsupported_memory_object_action", "status": 400}
+    return {**base, "ok": False, "error": "unsupported_object_action", "status": 400}
 
 
 __all__ = [

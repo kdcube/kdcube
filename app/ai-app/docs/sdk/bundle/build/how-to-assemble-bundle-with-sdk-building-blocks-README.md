@@ -91,9 +91,11 @@ agent surface explicitly:
    stable; do not put per-turn state or selected objects into cached
    instructions.
 3. Pass the composed text as `additional_instructions` when constructing ReAct.
-4. Register the subsystem tools and event policies separately through
-   `tools_descriptor.py` and `events_descriptor.py`. Instructions alone do not
-   expose tools, render timeline/ANNOUNCE blocks, or make refs resolvable.
+4. Register the subsystem tools and event visibility separately:
+   `tools_descriptor.py` exposes model-callable tools, while
+   `events_descriptor.py` adds event sources, policies, event-source readers,
+   and namespace rehosters. Instructions alone do not expose tools, render
+   timeline/ANNOUNCE blocks, or make refs resolvable.
 
 After selecting the block, keep
 [How To Avoid Common Bundle Integration Failures](how-to-avoid-common-bundle-integration-failures-README.md)
@@ -116,7 +118,7 @@ ownership.
 | Web search and web fetch with source-pool provenance | `web_tools` | [SDK Tools](../../tools/sdk-tools-README.md) |
 | Policy-driven tool result rendering | tool `@event_source(...)` declarations plus `react_phase=block_production` policies | [Bundle Events](../bundle-events-README.md), [React Event Sources](../../agents/react/event-source/event-source-README.md) |
 | Story-aware wizard/canvas/chat events and snapshots | authored external events with `payload.target.agent_id`, `story_kind`, `story_id`, and `external_events[].event_source_id` | [Bundle Events](../bundle-events-README.md), [External Events](../../events/external-events-README.md) |
-| Bundle/domain artifact refs visible to ReAct | `@artifact_namespace_rehoster(...)` for compact namespaces such as `ext:...`; `react.pull` returns the materialized `fi:` path | [Bundle Events](../bundle-events-README.md), [React Event Source](../../agents/react/event-source/event-source-README.md), [React Turn Workspace](../../agents/react/react-turn-workspace-README.md) |
+| Bundle/domain artifact refs visible to ReAct | `@artifact_namespace_rehoster(...)` for compact owner namespaces such as `nmsp:...`, `mem:...`, or `cnv:...`; `react.pull` returns the materialized `fi:` path | [Bundle Events](../bundle-events-README.md), [React Event Source](../../agents/react/event-source/event-source-README.md), [React Turn Workspace](../../agents/react/react-turn-workspace-README.md) |
 | Real browser verification for generated HTML, widgets, and local browser flows | `browser_tools`, shared Playwright backend, per-turn BrowserContext | [Browser Tools](../../integrations/browser/browser-tools-README.md), [Playwright Backend](../../integrations/browser/playwright-README.md) |
 | ReAct-side artifact recovery, search, and precise text editing | `react.pull`, `react.checkout`, `react.rg`, `react.read`, `react.patch` | [React Turn Workspace](../../agents/react/react-turn-workspace-README.md), [React Runtime Configuration](../../agents/react/runtime-configuration-README.md) |
 | PDF, DOCX, PPTX, PNG, HTML generation | `rendering_tools` plus public rendering skills | [SDK Tools](../../tools/sdk-tools-README.md) |
@@ -142,7 +144,7 @@ ownership.
 | --- | --- |
 | `entrypoint.py` | Decorators, route aliases, SDK module configuration, storage-root and user-scope hooks, product role policy. |
 | `tools_descriptor.py` | Tool aliases for SDK tool modules and bundle-local tool modules used by the agent. Bundle-local tools should use `ref: "tools/name.py"` and package-relative imports; `module` is for installed modules. |
-| `events_descriptor.py` | Event-source modules loaded into ReAct, including authored UI event declarations and custom artifact namespace rehosters. |
+| `events_descriptor.py` | Event-source modules loaded into ReAct, including authored UI event declarations, policies, event-source readers, and custom artifact namespace rehosters. These are runtime/event surfaces, not callable tools. |
 | `events/*.py` | Bundle-owned event-source declarations, phase policy bindings, and rehosters for domain artifact namespaces. |
 | `skills_descriptor.py` | Bundle-local skill root plus `AGENTS_CONFIG` filters for core SDK skills, SDK solution skills such as `task.*`, and bundle-local product skills. |
 | skill `tools.yaml` | Tool metadata for a skill; add `required: true` for tool ids that must exist before that skill is shown or loaded. |
@@ -220,7 +222,7 @@ main UI
   -> bundle APIs save product state and host domain files
   -> authored external events carry story_id, agent_id, and snapshot/artifact refs
   -> ReAct event-source policies produce timeline blocks
-  -> rehosters materialize ext: refs into fi: refs when react.pull is called
+  -> rehosters materialize owner refs such as cnv:/mem:/task:/nmsp: into fi: refs when react.pull is called
 ```
 
 Bundle code owns the story identity model, event-source ids, snapshot storage,

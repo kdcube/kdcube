@@ -78,6 +78,12 @@ def __getattr__(name: str):
         )
 
         return render_external_events_dry_run
+    if name == "render_external_events_preview_payload":
+        from kdcube_ai_app.apps.chat.sdk.solutions.react.events.simulator import (
+            render_external_events_preview_payload,
+        )
+
+        return render_external_events_preview_payload
     raise AttributeError(name)
 
 
@@ -125,6 +131,7 @@ __all__ = [
     "render_external_events_dry_run",
     "read_event_ref_bytes",
     "resolve_event_ref_action",
+    "render_external_events_preview_payload",
     "run_live_external_event_listener_loop",
     "stamp_event_identity",
     "stamp_event_identity_many",

@@ -1,12 +1,31 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import inspect
 import json
+import mimetypes
+import pathlib
+import re
 from pathlib import PurePosixPath
 from typing import Any, Awaitable, Callable, Dict, Mapping, Sequence
 
+from kdcube_ai_app.apps.chat.sdk.events import (
+    artifact_namespace_rehoster,
+    event_source_declaration,
+    event_source_reader,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.canvas.config import canvas_config_from_props
+from kdcube_ai_app.apps.chat.sdk.solutions.canvas.tools_core import DEFAULT_CANVAS_TOOL_EVENT_SOURCE_DESCRIPTIONS
+from kdcube_ai_app.apps.chat.sdk.solutions.canvas.tools_core import read_canvas_for_agent
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events import default_tool_event_policies
+
 from ..storage import CanvasStore
+from .policies import (  # noqa: F401 - imported so event discovery sees canvas read policies
+    canvas_announce_policy,
+    canvas_read_block_policy,
+    canvas_tool_projection_policy,
+)
 
 
 TEXT_MIME_PREFIXES = ("text/",)
@@ -21,6 +40,175 @@ CanvasResolverHandler = Callable[
     [Mapping[str, Any], str, str, str],
     Mapping[str, Any] | Awaitable[Mapping[str, Any]],
 ]
+
+
+def _runtime_value(runtime: Any, name: str, default: Any = "") -> Any:
+    return getattr(runtime, name, default) if runtime is not None else default
+
+
+def _store_from_runtime(runtime: Any) -> CanvasStore:
+    cfg = canvas_config_from_props(getattr(runtime, "bundle_props", None))
+    return CanvasStore(
+        tenant=str(_runtime_value(runtime, "tenant", "") or ""),
+        project=str(_runtime_value(runtime, "project", "") or ""),
+        bundle_id=str(cfg.get("bundle_id") or _runtime_value(runtime, "bundle_id", "") or ""),
+        user_id=str(_runtime_value(runtime, "user_id", "") or "anonymous"),
+        storage_root=str(_runtime_value(runtime, "bundle_storage", "") or "."),
+        artifact_prefix=str(cfg.get("artifact_prefix") or "canvas"),
+        origin_prefix=str(cfg.get("origin_prefix") or "canvas"),
+        state_event_source_id=str(cfg.get("state_event_source_id") or "canvas.state"),
+        ui_event_type=str(cfg.get("ui_event_type") or "canvas.patch.applied"),
+        artifact_resolver_name=str(cfg.get("artifact_resolver_name") or "sdk.canvas.artifact_storage"),
+        handoff_resolver_names=dict(cfg.get("handoff_resolver_names") or {}),
+        revision_retention=int(cfg.get("revision_retention") or 80),
+    )
+
+
+def _safe_rehost_segment(value: str, *, default: str = "canvas") -> str:
+    raw = re.sub(r"[^A-Za-z0-9_.@-]+", "_", str(value or "").strip()).strip("._-")
+    return raw[:120] or default
+
+
+def _looks_like_canvas_storage_key(key: str) -> bool:
+    raw = str(key or "").strip().lstrip("/")
+    return "/" in raw and ("objects/" in raw or "canvases/" in raw or raw.endswith((".md", ".txt", ".json", ".pdf", ".png", ".jpg", ".jpeg", ".docx", ".xlsx", ".pptx")))
+
+
+def _canvas_read_policies() -> list[dict[str, Any]]:
+    policies = list(default_tool_event_policies())
+    policies.append({
+        "react_phase": "block_production",
+        "event_policy_id": "canvas.block_production.read_result",
+    })
+    policies.append({
+        "react_phase": "timeline_projection",
+        "event_policy_id": "canvas.timeline_projection.tool_result",
+    })
+    policies.append({
+        "react_phase": "compaction_projection",
+        "event_policy_id": "canvas.compaction_projection.tool_result",
+    })
+    policies.append({
+        "react_phase": "announce_production",
+        "event_policy_id": "canvas.announce.board_map",
+    })
+    return policies
+
+
+def list_event_sources() -> list[Any]:
+    return [
+        event_source_declaration(
+            event_source_id="{alias}.read",
+            policies=_canvas_read_policies(),
+            description=DEFAULT_CANVAS_TOOL_EVENT_SOURCE_DESCRIPTIONS["read"],
+            kind="react.event_source_reader",
+        )
+    ]
+
+
+@artifact_namespace_rehoster(
+    namespace="cnv",
+    description="Materialize a cnv: canvas board or canvas-owned object ref into the current ReAct artifact workspace.",
+)
+async def rehost_canvas_ref(
+    *,
+    ref: str,
+    namespace: str = "cnv",
+    key: str = "",
+    ctx_browser: Any = None,
+    outdir: pathlib.Path | None = None,
+    **_context: Any,
+) -> Dict[str, Any]:
+    uri = str(ref or (f"{namespace}:{key}" if key else "")).strip()
+    runtime = getattr(ctx_browser, "runtime_ctx", None)
+    turn_id = str(_runtime_value(runtime, "turn_id", "") or "").strip()
+    if not uri or not turn_id or outdir is None:
+        return {"missing": [{"source_ref": uri, "reason": "missing_ref_or_runtime"}]}
+
+    from kdcube_ai_app.apps.chat.sdk.runtime.workspace import resolve_artifact_path
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
+        ARTIFACT_NAMESPACE_ATTACHMENTS,
+        ARTIFACT_NAMESPACE_SNAPSHOTS,
+        build_physical_artifact_path,
+        physical_path_to_logical_path,
+    )
+
+    try:
+        store = _store_from_runtime(runtime)
+    except Exception as exc:
+        return {"missing": [{"source_ref": uri, "reason": f"canvas_runtime_scope_unavailable:{exc}"}]}
+
+    storage_key = str(key or "").strip().lstrip("/")
+    if _looks_like_canvas_storage_key(storage_key):
+        try:
+            raw = store.artifacts.read(storage_key)
+        except Exception as exc:
+            return {"missing": [{"source_ref": uri, "reason": f"canvas_object_not_found:{exc}"}]}
+        payload = raw if isinstance(raw, bytes) else str(raw).encode("utf-8")
+        mime, _ = mimetypes.guess_type(pathlib.PurePosixPath(storage_key).name)
+        mime = mime or "application/octet-stream"
+        relpath = f"cnv/{storage_key}"
+        namespace_name = ARTIFACT_NAMESPACE_ATTACHMENTS
+    else:
+        try:
+            result = read_canvas_for_agent(store=store, uri=uri)
+        except Exception as exc:
+            return {"missing": [{"source_ref": uri, "reason": f"canvas_read_failed:{exc}"}]}
+        if not result.get("ok"):
+            return {"missing": [{"source_ref": uri, "reason": str(result.get("error") or "canvas_read_failed")}]}
+        payload = json.dumps(result, ensure_ascii=False, indent=2).encode("utf-8")
+        mime = "application/json"
+        digest = hashlib.sha1(uri.encode("utf-8")).hexdigest()[:12]
+        relpath = f"cnv/{_safe_rehost_segment(storage_key or uri.split(':', 1)[-1])}-{digest}.json"
+        namespace_name = ARTIFACT_NAMESPACE_SNAPSHOTS
+
+    physical_path = build_physical_artifact_path(
+        turn_id=turn_id,
+        namespace=namespace_name,
+        relpath=relpath,
+    )
+    logical_path = physical_path_to_logical_path(physical_path)
+    target = resolve_artifact_path(pathlib.Path(outdir), physical_path, prefer_existing=False)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(payload)
+    return {
+        "materialized": [{
+            "source_ref": uri,
+            "logical_path": logical_path,
+            "physical_path": physical_path,
+            "namespace": namespace_name,
+            "mime": mime,
+            "size_bytes": len(payload),
+            "file_count": 1,
+        }],
+    }
+
+
+@event_source_reader(
+    namespace="cnv",
+    event_source_id="{alias}.read",
+    description="Resolve a cnv:<name>@<revision> board ref into the canvas.read event-source payload.",
+)
+async def read_canvas_event_ref(
+    *,
+    ref: str,
+    namespace: str = "cnv",
+    key: str = "",
+    ctx_browser: Any = None,
+    **_context: Any,
+) -> Dict[str, Any]:
+    uri = ref or (f"{namespace}:{key}" if key else "")
+    runtime = getattr(ctx_browser, "runtime_ctx", None)
+    try:
+        result = read_canvas_for_agent(
+            store=_store_from_runtime(runtime),
+            uri=uri,
+        )
+        if not result.get("ok"):
+            result = {"ok": False, "error": result.get("error") or "canvas_read_failed", **result}
+        return result
+    except Exception as exc:
+        return {"ok": False, "ref": uri, "object_ref": uri, "error": "canvas_read_failed", "message": str(exc)}
 
 
 def namespace_for_ref(ref: str) -> str:
@@ -133,11 +321,11 @@ class CallableCanvasObjectResolver(CanvasObjectResolver):
         return merged
 
 
-class BundleExtArtifactResolver(CanvasObjectResolver):
-    """Resolver for canvas/bundle-owned `ext:` artifact refs."""
+class CanvasArtifactResolver(CanvasObjectResolver):
+    """Resolver for canvas-owned `cnv:` artifact refs."""
 
-    namespace = "ext"
-    resolver = "sdk.canvas.bundle_artifact_storage"
+    namespace = "cnv"
+    resolver = "sdk.canvas.artifact_storage"
     resolver_status = "implemented"
 
     def __init__(self, store: CanvasStore) -> None:
@@ -166,14 +354,14 @@ class BundleExtArtifactResolver(CanvasObjectResolver):
         return {
             **self.base_response(ref=ref, action=action),
             "ok": False,
-            "error": "unsupported_ext_object_action",
+            "error": "unsupported_canvas_object_action",
             "status": 400,
         }
 
     def read_ref(self, ref: str, *, mime: str = "", max_text_chars: int = 20000) -> Dict[str, Any]:
         key = ref.split(":", 1)[1].strip()
         if not key:
-            return {"ok": False, "error": "empty_ext_ref", "ref": ref, "namespace": "ext"}
+            return {"ok": False, "error": "empty_cnv_ref", "ref": ref, "namespace": "cnv"}
         try:
             raw = self.store.artifacts.read(key)
         except Exception as exc:
@@ -182,9 +370,9 @@ class BundleExtArtifactResolver(CanvasObjectResolver):
                 "resolved": False,
                 "ref": ref,
                 "object_ref": ref,
-                "namespace": "ext",
+                "namespace": "cnv",
                 "key": key,
-                "error": "ext_ref_not_found",
+                "error": "cnv_ref_not_found",
                 "message": str(exc),
             }
         data = raw if isinstance(raw, bytes) else str(raw).encode("utf-8")
@@ -192,7 +380,7 @@ class BundleExtArtifactResolver(CanvasObjectResolver):
         out: Dict[str, Any] = {
             **self.base_response(ref=ref, action="preview"),
             "resolved": True,
-            "read_behavior": "bundle reads ext: bytes directly; ReAct can also react.pull ext: through the registered rehoster.",
+            "read_behavior": "Canvas-owned refs are previewed here and can be imported into ReAct with react.pull.",
             "key": key,
             "size": len(data),
             "mime": mime or "",
@@ -214,7 +402,7 @@ class BundleExtArtifactResolver(CanvasObjectResolver):
     def download_ref(self, ref: str, *, mime: str = "") -> Dict[str, Any]:
         key = ref.split(":", 1)[1].strip()
         if not key:
-            return {"ok": False, "error": "empty_ext_ref", "ref": ref, "namespace": "ext"}
+            return {"ok": False, "error": "empty_cnv_ref", "ref": ref, "namespace": "cnv"}
         try:
             raw = self.store.artifacts.read(key)
         except Exception as exc:
@@ -223,9 +411,9 @@ class BundleExtArtifactResolver(CanvasObjectResolver):
                 "resolved": False,
                 "ref": ref,
                 "object_ref": ref,
-                "namespace": "ext",
+                "namespace": "cnv",
                 "key": key,
-                "error": "ext_ref_not_found",
+                "error": "cnv_ref_not_found",
                 "message": str(exc),
             }
         data = raw if isinstance(raw, bytes) else str(raw).encode("utf-8")
@@ -400,12 +588,6 @@ def default_handoff_resolvers(*, resolver_names: Mapping[str, str] | None = None
             resolver_status="provenance_handoff",
             read_behavior="Use only for provenance/event inspection, not as normal card content.",
         ),
-        NamespaceHandoffResolver(
-            namespace="cnv",
-            resolver="sdk.canvas_owned",
-            resolver_status="reserved",
-            read_behavior="Reserved for SDK canvas-owned objects. Current canvas-owned objects may also use ext: refs for compatibility.",
-        ),
     ]
     task_resolver = str(resolver_names.get("task") or "").strip()
     if task_resolver:
@@ -421,13 +603,13 @@ def default_handoff_resolvers(*, resolver_names: Mapping[str, str] | None = None
 
 def build_default_canvas_resolver_registry(store: CanvasStore) -> CanvasObjectResolverRegistry:
     return CanvasObjectResolverRegistry([
-        BundleExtArtifactResolver(store),
+        CanvasArtifactResolver(store),
         *default_handoff_resolvers(resolver_names=getattr(store, "handoff_resolver_names", None)),
     ])
 
 
 class CanvasPinResolver:
-    """Compatibility wrapper for existing pin read/capability callers."""
+    """Facade for card action callers that need registry-backed resolution."""
 
     def __init__(self, store: CanvasStore) -> None:
         self.store = store
@@ -442,7 +624,7 @@ class CanvasPinResolver:
         if not raw_ref:
             return {"ok": False, "error": "ref_required"}
         resolver = self.registry.resolver_for_ref(raw_ref)
-        if isinstance(resolver, BundleExtArtifactResolver):
+        if isinstance(resolver, CanvasArtifactResolver):
             return resolver.read_ref(raw_ref, mime=mime, max_text_chars=max_text_chars)
         if isinstance(resolver, NamespaceHandoffResolver):
             return resolver.read_ref(raw_ref)
@@ -460,7 +642,7 @@ class CanvasPinResolver:
         if not raw_ref:
             return {"ok": False, "error": "ref_required"}
         resolver = self.registry.resolver_for_ref(raw_ref)
-        if isinstance(resolver, BundleExtArtifactResolver):
+        if isinstance(resolver, CanvasArtifactResolver):
             return resolver.download_ref(raw_ref, mime=mime)
         return {
             **self.registry.capabilities_for_ref(raw_ref),
@@ -515,14 +697,17 @@ def search_canvas_cards(
 
 
 __all__ = [
-    "BundleExtArtifactResolver",
     "CallableCanvasObjectResolver",
+    "CanvasArtifactResolver",
     "CanvasObjectResolver",
     "CanvasObjectResolverRegistry",
     "CanvasPinResolver",
     "NamespaceHandoffResolver",
     "build_default_canvas_resolver_registry",
+    "list_event_sources",
     "namespace_for_ref",
     "object_ref_from_payload",
+    "read_canvas_event_ref",
+    "rehost_canvas_ref",
     "search_canvas_cards",
 ]

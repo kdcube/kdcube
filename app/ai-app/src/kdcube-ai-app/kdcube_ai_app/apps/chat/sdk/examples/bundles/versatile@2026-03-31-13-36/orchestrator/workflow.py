@@ -4,8 +4,10 @@ from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
 from kdcube_ai_app.apps.chat.sdk.context.vector.conv_index import ConvIndex
 from kdcube_ai_app.apps.chat.sdk.context.vector.conv_ticket_store import ConvTicketStore
 from kdcube_ai_app.apps.chat.sdk.protocol import ExternalEventPayload
+from kdcube_ai_app.apps.chat.sdk.context.memory.instructions import MEMORY_REACT_ADDITIONAL_INSTRUCTIONS
 from kdcube_ai_app.apps.chat.sdk.retrieval.kb_client import KBClient
 from kdcube_ai_app.apps.chat.sdk.runtime.scratchpad import CTurnScratchpad
+from kdcube_ai_app.apps.chat.sdk.solutions.canvas.instructions import CANVAS_REACT_ADDITIONAL_INSTRUCTIONS
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.base_workflow import BaseWorkflow
 from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore
 from kdcube_ai_app.apps.chat.sdk.util import _tend, _tstart
@@ -14,7 +16,7 @@ from kdcube_ai_app.infra.accounting import with_accounting
 from kdcube_ai_app.infra.service_hub.inventory import Config, ModelServiceBase
 from langgraph.graph import END, START, StateGraph
 
-from .. import skills_descriptor, tools_descriptor
+from .. import events_descriptor, skills_descriptor, tools_descriptor
 from ..agents.gate import GateOut as MinimalGateOut, gate_stream
 from ..resources.service_messages.resources import get_friendly_error_message
 
@@ -59,6 +61,15 @@ def _resolve_react_ui_instructions(comm_context: ExternalEventPayload) -> str:
     if source.endswith(".telegram") or source == "ingress.telegram":
         return _TELEGRAM_REACT_INSTRUCTIONS
     return _WEB_CHAT_REACT_INSTRUCTIONS
+
+
+def _resolve_react_additional_instructions(comm_context: ExternalEventPayload) -> str:
+    blocks = [
+        _resolve_react_ui_instructions(comm_context),
+        MEMORY_REACT_ADDITIONAL_INSTRUCTIONS,
+        CANVAS_REACT_ADDITIONAL_INSTRUCTIONS,
+    ]
+    return "\n\n".join(block.strip() for block in blocks if str(block or "").strip())
 
 
 class VersatileWorkflow(BaseWorkflow):
@@ -189,10 +200,11 @@ class VersatileWorkflow(BaseWorkflow):
                     tools_runtime=getattr(tools_descriptor, "TOOL_RUNTIME", None),
                     mod_tools_spec=tools_descriptor.TOOLS_SPECS,
                     mcp_tools_spec=getattr(tools_descriptor, "MCP_TOOL_SPECS", None) or [],
+                    event_source_specs=getattr(events_descriptor, "EVENT_SOURCE_SPECS", None) or [],
                     custom_skills_root=skills_descriptor.CUSTOM_SKILLS_ROOT,
                     skills_visibility_agents_config=skills_descriptor.AGENTS_CONFIG or {},
                     scratchpad=scratchpad,
-                    additional_instructions=_resolve_react_ui_instructions(self.comm_context),
+                    additional_instructions=_resolve_react_additional_instructions(self.comm_context),
                 )
                 allowed_plugins = [
                     spec.get("alias")

@@ -43,7 +43,7 @@ class EventSourceDeclaration:
 class ArtifactNamespaceRehosterDeclaration:
     """Callable metadata for a non-`fi:` artifact namespace.
 
-    A rehoster accepts a domain ref such as `ext:...` and copies the source
+    A rehoster accepts an owner ref such as `cnv:...` or `mem:...` and copies the source
     bytes into the ReAct artifact surface, returning normal `fi:`/physical path
     rows that `react.read`, `react.pull`, and `react.checkout` already know how
     to use. The rehoster chooses the destination by artifact meaning: workspace
@@ -107,7 +107,7 @@ def artifact_namespace_rehoster_declaration(
     if not namespace:
         raise ValueError("namespace must be non-empty")
     if any(ch.isspace() for ch in namespace) or "/" in namespace or "\\" in namespace:
-        raise ValueError("namespace must be a compact URI-style prefix such as 'ext'")
+        raise ValueError("namespace must be a compact URI-style prefix such as 'cnv'")
     return ArtifactNamespaceRehosterDeclaration(
         namespace=namespace,
         description=str(description or "").strip(),
@@ -176,10 +176,9 @@ def event_source_reader(
     """Mark a callable as the owner reader for a canonical ref namespace.
 
     The callable is discovered from the same modules as event sources. It is
-    invoked by generic readers such as `react.read` before the normal missing
-    path handling when a requested ref starts with the registered namespace
-    prefix. The returned mapping is treated as the payload for `event_source_id`
-    and rendered through that source's ReAct policies.
+    invoked by the event-source subsystem when runtime code needs to resolve an
+    owner ref into the payload for `event_source_id`. Model-facing exact content
+    access should still use namespace rehosters through `react.pull`.
     """
 
     declaration = event_source_reader_declaration(

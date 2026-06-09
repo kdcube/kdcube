@@ -11,6 +11,8 @@ see_also:
   - ks:docs/sdk/bundle/bundle-transports-README.md
   - ks:docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
   - ks:docs/sdk/bundle/bundle-events-README.md
+  - ks:docs/sdk/events/event-subsystem-README.md
+  - ks:docs/sdk/agents/react/runtime-configuration-README.md
   - ks:docs/service/comm/bus-routing-and-partitioning-README.md
   - ks:docs/sdk/bundle/bundle-reserved-platform-properties-README.md
   - ks:docs/sdk/tools/mcp-README.md
@@ -373,11 +375,61 @@ the override.
 
 A React bundle agent is configured through `BaseWorkflow.build_react(...)`.
 
+```text
+bundle workflow
+  |
+  | build_react(...)
+  v
++-------------------------+      +------------------------+
+| ToolSubsystem           |      | EventSourceSubsystem   |
+|                         |      |                        |
+| TOOLS_SPECS             |      | EVENT_SOURCE_SPECS     |
+| MCP_TOOL_SPECS          |      | + tool module events   |
+| TOOL_RUNTIME            |      |                        |
+|                         |      | event declarations     |
+| model-callable catalog  |      | block policies         |
+| allowed_plugins filter  |      | projection policies    |
++-----------+-------------+      | announce policies      |
+            |                    | namespace rehosters    |
+            |                    | event-source readers   |
+            |                    +-----------+------------+
+            |                                |
+            v                                v
+        React runtime / ContextBrowser / Timeline
+            |
+            +-- system + additional instructions
+            +-- skills catalog filtered by active tools
+            +-- runtime hooks from RuntimeCtx
+            +-- scratchpad user prompt, attachments, context events
+            |
+            v
+        model decision loop
+            |
+            +-- call tool -> ToolSubsystem -> react.tool.* blocks
+            +-- fold event -> EventSourceSubsystem policies -> timeline/ANNOUNCE
+            +-- pull ref  -> namespace rehoster -> fi: workspace mirror
+            +-- compact   -> compaction hooks + compaction projections
+```
+
+The split is intentional:
+
+| Surface | Makes visible to the model? | Used for |
+| --- | --- | --- |
+| `TOOLS_SPECS` | yes | callable Python tool aliases |
+| `MCP_TOOL_SPECS` | yes | callable MCP tool aliases |
+| `EVENT_SOURCE_SPECS` | no | event declarations, policies, readers, namespace rehosters |
+| `additional_instructions` | text only | how the model should interpret the connected surfaces |
+| runtime hooks | no | workflow callbacks such as compaction lifecycle |
+
+Do not put a module into `TOOLS_SPECS` only to register event policies or
+namespace rehosters. If the model should not call it, put it in
+`EVENT_SOURCE_SPECS`.
+
 | Input | SDK surface | Notes |
 | --- | --- | --- |
 | local Python tools | `tools_descriptor.py` / `TOOLS_SPECS` | exposes bundle tool modules by alias |
 | MCP tools | `tools_descriptor.py` / `MCP_TOOL_SPECS` | selects which configured MCP server tools enter the catalog |
-| event source readers | loaded tool/event modules with `@event_source_reader` | lets `react.read` resolve owner-domain refs such as `mem:` or `cnv:` |
+| namespace rehosters | loaded tool/event modules with `@artifact_namespace_rehoster` | lets `react.pull` import owner-domain refs such as `mem:` or `cnv:` into the ReAct workspace |
 | event policies | loaded tool/event modules with policy decorators plus event source declarations | renders external events, tool results, and reader results into timeline/ANNOUNCE/compaction |
 | MCP server connection config | bundle props `config.mcp.services` | controls server URLs, transports, and auth |
 | skills | `skills_descriptor.py`, `CUSTOM_SKILLS_ROOT`, `AGENTS_CONFIG` | exposes bundle skill prompts and visibility rules |
@@ -767,6 +819,9 @@ React configuration sources:
 - loaded modules can also contribute event-source declarations, event-source
   readers, rehosters, and policies; these are not automatically model-visible
   tools
+- event-only modules enter through `event_source_specs`; this is cumulative
+  with tool-module event declarations and does not expose additional callable
+  tools
 - `MCP_TOOL_SPECS` controls which MCP server tools enter the React catalog
 - `skills_descriptor.py` controls skill roots and visibility
 - bundle props such as `mcp.services` control MCP connection details
@@ -780,13 +835,16 @@ Event-source `kind` is part of this contract:
 - `kind="react.tool"` means the occurrence is an actual tool call/result, such
   as `canvas.patch`;
 - `kind="react.event_source_reader"` means the source backs
-  `react.read(paths=[...])`, such as `canvas.read` for `cnv:` or memory read
-  for `mem:`;
+  runtime/policy resolution for canonical refs, such as `canvas.read` for
+  `cnv:` or memory read for `mem:`. Exact model-facing content should be
+  imported through `react.pull(...)` when the namespace has a registered
+  rehoster;
 - `kind="react.external"` means a UI/integration-authored event transported as
   `external_events[]`.
 
 Do not expose read-only owner readers as direct tools just because they have an
-event source id. The model should call `react.read` on the canonical ref.
+event source id. The model should call `react.pull` on the canonical ref when
+it needs exact content in the workspace.
 
 Runtime context rule:
 

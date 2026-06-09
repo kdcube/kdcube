@@ -1,7 +1,7 @@
 ---
 id: ks:docs/sdk/events/external-event-envelope-README.md
 title: "External Event Envelope"
-summary: "Canonical plural external-event payload shape, accepted event fields, event logical paths (`ev:`), hosted event payload URIs (`ext:`), inline payloads, snapshot events, file upload events, and text-selection context events."
+summary: "Canonical plural external-event payload shape, accepted event fields, event logical paths (`ev:`), hosted event payload URIs, inline payloads, snapshot events, file upload events, and text-selection context events."
 status: draft
 tags: ["sdk", "events", "external-events", "event-envelope", "snapshots", "react"]
 keywords:
@@ -15,7 +15,8 @@ keywords:
     "event_source_id",
     "event_id",
     "ev:",
-    "ext:",
+    "cnv:",
+    "nmsp:",
     "snapshot event",
     "canvas event",
   ]
@@ -51,13 +52,13 @@ After ingress accepts an event, the event occurrence has this shape:
   "type": "event.snapshot",
   "event_source_id": "task_tracker.canvas.snapshot",
   "logical_path": "ev:turn_123.events/task-tracker/snapshots/draft-123/canvas/latest",
-  "hosted_uri": "ext:task-tracker/snapshots/draft-123/canvas/latest",
+  "hosted_uri": "cnv:snapshots/draft-123/canvas/latest",
   "reactive": false,
   "agent_id": "default.react.agent",
   "story_id": "task:draft-123",
   "payload": {
     "mime": "application/json",
-    "event_ref": "ext:task-tracker/snapshots/draft-123/canvas/latest"
+    "event_ref": "cnv:snapshots/draft-123/canvas/latest"
   }
 }
 ```
@@ -76,7 +77,7 @@ Field roles:
 | `story_id` | Optional product/story correlation id. |
 | `payload.mime` | MIME type of `payload.event` or of the target of `payload.event_ref`. |
 | `payload.event` | Inline event object/string/bytes metadata. |
-| `payload.event_ref` | Pullable URI for the event payload/body, for example `fi:` or `ext:`. |
+| `payload.event_ref` | Pullable URI for the event payload/body, for example `fi:`, `cnv:`, or an owner-domain namespace such as `nmsp:`. |
 
 The transported envelope carries `event_source_id`, not the source
 declaration's `kind`. `kind` lives in the server-side
@@ -200,7 +201,7 @@ Small or already-bounded event bodies can be inline:
 ```
 
 References inside `payload.event` are ordinary event data. If a field contains
-a pullable URI such as `fi:` or `ext:`, ReAct can decide to call
+a pullable URI such as `fi:`, `cnv:`, or `nmsp:`, ReAct can decide to call
 `react.pull(paths=[...])` and then use the returned `fi:` path.
 
 ## Snapshot Events
@@ -210,7 +211,7 @@ one-way from ReAct's perspective: external or bundle state is projected into a
 readable snapshot, and ReAct may pull/read it, but it should not patch or
 checkout that snapshot as the authoritative editable object. The timeline must
 store the snapshot event occurrence even when the full snapshot body lives
-behind `ext:`.
+behind an owner-domain namespace.
 
 ```json
 {
@@ -218,13 +219,13 @@ behind `ext:`.
   "type": "event.snapshot",
   "event_source_id": "task_tracker.canvas.snapshot",
   "logical_path": "ev:turn_123.events/task-tracker/snapshots/draft-123/canvas/latest",
-  "hosted_uri": "ext:task-tracker/snapshots/draft-123/canvas/latest",
+  "hosted_uri": "cnv:snapshots/draft-123/canvas/latest",
   "reactive": false,
   "agent_id": "default.react.agent",
   "story_id": "task:draft-123",
   "payload": {
     "mime": "application/json",
-    "event_ref": "ext:task-tracker/snapshots/draft-123/canvas/latest"
+    "event_ref": "cnv:snapshots/draft-123/canvas/latest"
   }
 }
 ```
@@ -247,11 +248,11 @@ block:
     "ok": true,
     "status": "success",
     "ret": {
-      "event_ref": "ext:task-tracker/snapshots/draft-123/canvas/latest"
+      "event_ref": "cnv:snapshots/draft-123/canvas/latest"
     },
     "surfaces": {
       "snapshot_refs": [
-        "ext:task-tracker/snapshots/draft-123/canvas/latest"
+        "cnv:snapshots/draft-123/canvas/latest"
       ],
       "announce_candidates": [
         {
@@ -335,7 +336,7 @@ storage and be referenced by a pullable URI inside the event body:
     "event": {
       "file_id": "file-7",
       "name": "browser-crash-log.txt",
-      "file_uri": "ext:task-tracker/files/draft-123/file-7/browser-crash-log.txt",
+      "file_uri": "nmsp:files/draft-123/file-7/browser-crash-log.txt",
       "file_mime": "text/plain",
       "size_bytes": 18412
     }

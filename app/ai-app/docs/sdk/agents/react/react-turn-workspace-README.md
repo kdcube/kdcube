@@ -62,8 +62,8 @@ Current behavior:
   - versioned turn artifacts and attachments
   - any readable artifact file already present under `out/workdir/`
   - exact logical `ks:` paths via `react.read`
-- `ext:` and other custom namespace refs have no physical path until
-  `react.pull` invokes a registered namespace rehoster and returns the
+- External owner refs such as `nmsp:`, `cnv:`, or `mem:` have no physical path
+  until `react.pull` invokes a registered namespace rehoster and returns the
   materialized `fi:` / physical rows.
 
 Workspace implementation (`RuntimeCtx.workspace_implementation`):
@@ -240,7 +240,7 @@ Workspace/read-write summary:
   or custom-namespace refs into `OUTPUT_DIR`.
 - `react.checkout` copies pulled historical `files/...` refs into the active
   current-turn `files/` workspace for editing.
-- Custom refs such as `ext:...` have no derived local path. `react.pull` calls a
+- Custom refs such as `nmsp:...`, `cnv:...`, or `mem:...` have no derived local path. `react.pull` calls a
   registered namespace rehoster and its result tells the agent the materialized
   `fi:` path.
 - `react.rg` searches readable files already materialized in `OUTPUT_DIR`; it is

@@ -41,7 +41,8 @@ one working assistant scene.
 | Namespace | The prefix before `:` in a logical ref. Examples: `fi:`, `mem:`, `task:`, `cnv:`. |
 | Namespace owner | The domain that mints refs in a namespace and defines their semantics. |
 | Resolver | Backend callable owned by the namespace owner. It maps `object_ref + action` to a bounded result. |
-| Event source reader | Backend callable owned by the namespace owner. It resolves a canonical ref for model reads such as `react.read(paths=["mem:..."])`. |
+| Event source reader | Backend callable owned by the namespace owner. Runtime/policy code can use it to resolve a canonical ref into an event-source payload. It is not automatically a direct model tool. |
+| Namespace rehoster | Backend callable owned by the namespace owner. It materializes an external owner ref such as `mem:` or `cnv:` into the ReAct workspace for `react.pull`. |
 | Policy | ReAct rendering callable owned by the event domain. It maps events/tool results into blocks, timeline text, compaction text, or ANNOUNCE text. |
 | Composition bundle | A bundle that imports available domains, registers their resolvers/policies/tools/widgets, and mounts the UI scene. |
 
@@ -52,11 +53,15 @@ one working assistant scene.
 3. Canvas stores canonical refs and board metadata; it does not rehost or
    reinterpret non-canvas objects.
 4. ReAct rendering uses event policies; it must not depend on UI card code.
-5. `react.read` for owner-domain refs resolves through event source readers,
-   then renders through the owner's event policies.
+5. Exact owner-domain content is imported with `react.pull`, which invokes the
+   namespace owner's rehoster and returns a workspace path.
 6. A ref keeps its original namespace when it moves between surfaces.
 7. Current resolver registration is local Python import plus explicit
    registration. Remote resolver discovery is not implemented.
+8. Tool visibility and event visibility are separate even when implemented in
+   the same subsystem package. A bundle exposes callable tools through
+   `TOOLS_SPECS`; it exposes owner-domain event policies, readers, and
+   namespace rehosters through `EVENT_SOURCE_SPECS`.
 
 ## Domain Ownership Table
 
@@ -143,38 +148,37 @@ source. A domain can ship default policy ids for its own events. A composition
 bundle can override or add policy ids only when it intentionally changes the
 agent-facing representation for that scene.
 
-## Model Read Contract
+## Model Workspace Import Contract
 
 Object resolvers are for UI or service actions: preview, open, download, and
-rehost. Model reads use the event-source reader path.
+rehost. Model-facing exact content uses the sparse workspace import path.
 
 ```text
-react.read(paths=["mem:mem_123"])
-  -> namespace owner reader for mem:
-  -> source id memory.read_memory
-  -> memory block-production policy
-  -> rendered block on the current timeline/read result
+react.pull(paths=["mem:mem_123"])
+  -> namespace owner rehoster for mem:
+  -> materialized workspace artifact
+  -> returned fi:/physical path
+  -> react.read or react.rg against the returned path
 ```
 
 Owner module example:
 
 ```python
-from kdcube_ai_app.apps.chat.sdk.events import event_source_reader
+from kdcube_ai_app.apps.chat.sdk.events import artifact_namespace_rehoster
 
-@event_source_reader(
+@artifact_namespace_rehoster(
     namespace="mem",
-    event_source_id="{alias}.read_memory",
-    description="Read a durable memory by mem: ref.",
+    resolver_name="{alias}.memory_rehoster",
 )
-async def read_memory_event_ref(*, ref, ctx_browser=None, **context):
+async def rehost_memory_ref(*, uri, ctx_browser=None, **context):
     ...
 ```
 
-The reader returns the owner-domain payload. It should not pre-render timeline
-text unless that text is part of the domain object. The source's
-`block_production` policy renders the payload into model-visible blocks.
+The rehoster returns materialized artifact rows. It should not pre-render
+timeline text unless that text is part of the artifact itself.
 
-This is the same ownership rule as external event ingestion:
+Event source readers still exist for runtime/policy reads and custom projection
+paths. They follow the same ownership rule as external event ingestion:
 
 ```text
 external event occurrence
@@ -182,7 +186,7 @@ external event occurrence
   -> block-production policy
   -> timeline block
 
-react.read(owner-ref)
+runtime/policy owner read
   -> event source reader
   -> event source declaration
   -> block-production policy
@@ -194,15 +198,18 @@ The event source declaration's `kind` must match the occurrence family:
 | `kind` | Use |
 | --- | --- |
 | `react.tool` | Actual model-callable tool source, for example `canvas.patch`. |
-| `react.event_source_reader` | Read source behind `react.read` owner refs, for example `memory.read_memory` for `mem:` or `canvas.read` for `cnv:`. |
+| `react.event_source_reader` | Runtime/policy read source for owner refs, for example memory or canvas internal projections. |
 | `react.external` | Authored UI/integration event transported through `external_events[]`. |
 
 `kind` is not tool visibility. Tool visibility still comes from the tool
 subsystem. Reader sources are intentionally not called directly by the model.
 
-Do not add namespace-specific branches to ReAct for every subsystem. Add an
-owner reader and owner policies, then load that module into the composition
-bundle's event source subsystem.
+Do not add namespace-specific branches to ReAct for every subsystem. Add owner
+policies for rendering and a namespace rehoster for `react.pull`, then load
+that module into the composition bundle's event source subsystem.
+
+Loading that module does not make any callable visible to the model. Tool
+visibility is a separate decision made through the tool descriptor.
 
 ## Resolver And Policy Are Different
 
@@ -210,7 +217,7 @@ bundle's event source subsystem.
 | --- | --- | --- |
 | User clicked "open" on a `task:` card. | Which task object to open, and which UI event to emit. | Not involved. |
 | Agent sees `[CANVAS BOARD]` in ANNOUNCE. | Not involved. | Canvas announce policy rendered the board. |
-| Agent calls `react.read(paths=["mem:..."])`. | Not involved unless the owner reader itself delegates to an object resolver. | Memory block-production policy renders the resolved memory. |
+| Agent calls `react.pull(paths=["mem:..."])`. | Not involved unless the rehoster delegates to an object resolver. | Not involved; the result is a workspace artifact that can then be read/searched. |
 | User drags a `fi:` file to canvas. | `fi:` resolver can later preview/download it. | ReAct artifact policies can render it in timeline/ANNOUNCE if included as event context. |
 | Agent calls `task.patch`. | Task tool and task resolver own the task mutation result. | Task tool result policy renders compact timeline and refreshed ANNOUNCE. |
 | Old turn is compacted. | Not involved. | Compaction policy renders durable summary. |

@@ -50,7 +50,7 @@ The agent does **not** work against one mutable flat directory. It reasons acros
    fi:conv_<conversation_id>.turn_<older>.files|outputs|snapshots/...
 
 3) CUSTOM ARTIFACT NAMESPACE REFS (logical, opaque until pulled)
-   ext:<bundle-or-domain-defined-key>
+   nmsp:<domain-defined-key>
    <other_namespace>:<domain-defined-key>
 
 4) BUNDLE KNOWLEDGE SPACE (logical, read-only)
@@ -68,13 +68,13 @@ The logical workspace view is:
 - for `attachments/<subpath>`: the attached artifact under its original turn namespace
 - runtime folders like `logs/`: platform diagnostics, not normal agent artifact paths
 - for `ks:`: a read-only logical namespace owned by the bundle, not a directory under the artifact root
-- for custom namespace refs such as `ext:...`: a domain artifact handle that
+- for custom namespace refs such as `nmsp:...`: a domain artifact handle that
   has no derived filesystem path until `react.pull` invokes a registered
   rehoster
 
 The agent should only use visible `turn_...` relative paths or logical paths
-(`fi:`, `ar:`, `tc:`, `so:`, `su:`, `ks:`, and registered custom namespace
-refs such as `ext:`). It should not use absolute host paths, execution sandbox
+(`fi:`, `ar:`, `tc:`, `so:`, `su:`, `ks:`, and registered owner namespace
+refs such as `nmsp:`). It should not use absolute host paths, execution sandbox
 paths, hosted `file://` paths, or the runtime metadata root.
 
 ## Namespace semantics
@@ -131,9 +131,9 @@ Other conversation:
   pull ->   conv_conversation-42/turn_222/snapshots/wizard/current.yaml
 
 Custom namespace artifact:
-  source:   ext:task-tracker/draft_browser-crash/issue-draft.yaml
-  pull ->   fi:turn_<current>.snapshots/ext/task-tracker/draft_browser-crash/issue-draft.yaml
-            turn_<current>/snapshots/ext/task-tracker/draft_browser-crash/issue-draft.yaml
+  source:   nmsp:draft_browser-crash/issue-draft.yaml
+  pull ->   fi:turn_<current>.snapshots/nmsp/draft_browser-crash/issue-draft.yaml
+            turn_<current>/snapshots/nmsp/draft_browser-crash/issue-draft.yaml
 ```
 
 After pulling a mixed set of refs, the local `OUTPUT_DIR` artifact root can look
@@ -186,9 +186,9 @@ Rules:
 - `fi:turn_...` belongs to the current conversation.
 - `fi:conv_<conversation_id>.turn_...` belongs to another conversation; the
   matching local physical root is `conv_<conversation_id>/turn_...`.
-- `ext:` is only an example custom namespace. It is not a universal built-in
-  artifact store. A bundle or SDK module must register a rehoster for the
-  namespace before `react.pull(paths=["ext:..."])` can materialize it.
+- `nmsp:` is only an example owner-domain namespace. It is not a universal
+  built-in artifact store. A bundle or SDK module must register a rehoster for
+  the namespace before `react.pull(paths=["nmsp:..."])` can materialize it.
 - The agent must not derive `fi:` paths from custom namespace refs. It calls
   `react.pull` and uses the returned `logical_path` / `physical_path` rows.
 
@@ -205,7 +205,7 @@ fi:turn_111.files/app/src/main.py
 fi:conv_conversation-42.turn_222.snapshots/wizard/current.yaml
   -> conv_conversation-42/turn_222/snapshots/wizard/current.yaml
 
-ext:task-tracker/draft_1/issue-draft.yaml
+nmsp:draft_1/issue-draft.yaml
   -> returns source_ref + materialized logical_path/physical_path chosen by the rehoster
 ```
 
@@ -231,7 +231,7 @@ turn_<current>/files/app/...
 Checkout rules:
 
 - accepts `fi:...files...` refs only;
-- does not accept `ext:` or other custom namespace refs directly;
+- does not accept owner-domain namespace refs such as `nmsp:` directly;
 - `mode="replace"` clears `turn_<current>/files/` and applies the requested
   refs in order;
 - `mode="overlay"` keeps the existing current `files/` tree and applies the
@@ -268,20 +268,20 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
     build_physical_artifact_path,
 )
 
-@artifact_namespace_rehoster(namespace="ext")
-async def rehost_ext_ref(*, ref, key, ctx_browser, outdir, **_):
+@artifact_namespace_rehoster(namespace="nmsp")
+async def rehost_nmsp_ref(*, ref, key, ctx_browser, outdir, **_):
     turn_id = ctx_browser.runtime_ctx.turn_id
 
     # Choose the destination by artifact meaning, not by filename alone.
     physical_path = build_physical_artifact_path(
         turn_id=turn_id,
         namespace="snapshots",
-        relpath=f"ext/{key}",
+        relpath=f"nmsp/{key}",
     )
     logical_path = build_logical_artifact_path(
         turn_id=turn_id,
         namespace="snapshots",
-        relpath=f"ext/{key}",
+        relpath=f"nmsp/{key}",
     )
 
     target = resolve_artifact_path(outdir, physical_path, prefer_existing=False)
@@ -310,8 +310,8 @@ tools_descriptor.py
   ]
 
 tools/my_tools.py
-  @artifact_namespace_rehoster(namespace="ext")
-  async def rehost_ext_ref(...): ...
+  @artifact_namespace_rehoster(namespace="nmsp")
+  async def rehost_nmsp_ref(...): ...
 
 ToolSubsystem loads tools/my_tools.py, then EventSourceSubsystem scans that
 loaded tool module for event sources and namespace rehosters.
@@ -335,8 +335,8 @@ orchestrator/workflow.py
   )
 
 events/my_artifacts.py
-  @artifact_namespace_rehoster(namespace="ext")
-  async def rehost_ext_ref(...): ...
+  @artifact_namespace_rehoster(namespace="nmsp")
+  async def rehost_nmsp_ref(...): ...
 ```
 
 `events_descriptor.py` is a descriptor, not an auto-scan root. If the workflow
@@ -371,18 +371,18 @@ For external evidence files, use the external attachment helpers instead of
 pretending the file is a snapshot:
 
 ```python
-artifact_id = "ext_<stable_hash>"
+artifact_id = "nmsp_<stable_hash>"
 logical_path = build_external_attachment_logical_path(
     turn_id=turn_id,
-    kind="ext",
+    kind="case",
     message_id=artifact_id,
-    relpath=f"ext/{key}",
+    relpath=f"nmsp/{key}",
 )
 physical_path = build_external_attachment_physical_path(
     turn_id=turn_id,
-    kind="ext",
+    kind="case",
     message_id=artifact_id,
-    relpath=f"ext/{key}",
+    relpath=f"nmsp/{key}",
 )
 ```
 
@@ -403,8 +403,8 @@ physical_path = build_external_attachment_physical_path(
 - also supports exact `ks:` paths:
   - `ks:<relpath>`
   - example: `ks:<bundle-defined-path>`
-- does not read `ext:` directly. Pull `ext:` first and read the returned `fi:`
-  logical path.
+- does not read owner-domain refs such as `nmsp:` directly. Pull the owner ref
+  first and read the returned `fi:` logical path.
 
 `react.rg`
 - searches filenames and/or text for files already materialized in the local artifact workspace

@@ -226,7 +226,7 @@ If a release changes authored external events, event-source policies, or
 artifact namespace rehosters, validate the event contract from
 [how-to-test-bundle-README.md](how-to-test-bundle-README.md): event modules load,
 policy bindings are discoverable, accepted UI payloads include the intended
-`agent_id` and `event_source_id`, and `react.pull(paths=["ext:..."])` returns
+`agent_id` and `event_source_id`, and `react.pull(paths=["nmsp:..."])` returns
 the expected `fi:` logical path when the namespace is registered.
 
 If user identity or external auth changed, validate both:

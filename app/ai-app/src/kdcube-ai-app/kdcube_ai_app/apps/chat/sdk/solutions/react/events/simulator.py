@@ -402,4 +402,64 @@ async def render_external_events_dry_run(
     }
 
 
-__all__ = ["render_external_events_dry_run"]
+async def render_external_events_preview_payload(
+    payload: Mapping[str, Any],
+    *,
+    event_sources: Any = None,
+    runtime_identity: Mapping[str, Any] | None = None,
+    user_id: str | None = None,
+    bundle_id: str | None = None,
+    debug_dir: str | pathlib.Path | None = None,
+) -> dict[str, Any]:
+    """Render the shared chat-widget `react_context_preview` payload.
+
+    This is the reusable backend for the chat widget dry-run preview operation.
+    Bundles provide only their connected event-source subsystem; ReAct owns the
+    dry-run rendering semantics.
+    """
+
+    external_events = payload.get("external_events") if isinstance(payload, Mapping) else None
+    if not isinstance(external_events, list):
+        return {"ok": False, "error": "external_events must be a list", "status": 400}
+
+    ident = dict(runtime_identity or {})
+    target = payload.get("target") if isinstance(payload.get("target"), Mapping) else {}
+    tenant = str(ident.get("tenant") or payload.get("tenant") or "default").strip() or "default"
+    project = str(ident.get("project") or payload.get("project") or "default").strip() or "default"
+    resolved_user_id = str(
+        user_id
+        or payload.get("user_id")
+        or ident.get("user")
+        or ident.get("user_id")
+        or ident.get("fingerprint")
+        or "anonymous"
+    ).strip() or "anonymous"
+    resolved_bundle_id = str(bundle_id or ident.get("bundle_id") or payload.get("bundle_id") or "").strip()
+
+    return await render_external_events_dry_run(
+        external_events=[
+            dict(event)
+            for event in external_events
+            if isinstance(event, Mapping)
+        ],
+        event_sources=event_sources,
+        runtime=RuntimeCtx(
+            tenant=tenant,
+            project=project,
+            user_id=resolved_user_id,
+            user_type=str(ident.get("user_type") or "anonymous").strip() or "anonymous",
+            conversation_id=str(
+                payload.get("conversation_id")
+                or payload.get("conversationId")
+                or "dry_run_conversation"
+            ),
+            turn_id=str(payload.get("turn_id") or payload.get("turnId") or "turn_dry_run"),
+            bundle_id=resolved_bundle_id,
+            agent_id=str(target.get("agent_id") or target.get("agent") or "main"),
+            event_source_pipeline_enabled=True,
+        ),
+        debug_dir=debug_dir,
+    )
+
+
+__all__ = ["render_external_events_dry_run", "render_external_events_preview_payload"]

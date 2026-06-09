@@ -206,7 +206,7 @@ export function emptyCanvasDefinition(name = 'main', canvasId = ''): CanvasDefin
     id,
     name: canvasName,
     revision: 0,
-    ref: `canvas:${canvasName}@latest`,
+    ref: `cnv:${canvasName}`,
     summary: 'Empty canvas. Add text, attachments, issues, memories, files, or assistant suggestions.',
     cards: [],
   }
@@ -220,7 +220,7 @@ export function canvasFromListItem(item: CanvasListItemLike): CanvasDefinition {
     id,
     name,
     revision,
-    ref: stringValue(item.latest_ref ?? item.canvas_ref) ?? `canvas:${name}@latest`,
+    ref: stringValue(item.latest_ref ?? item.canvas_ref) ?? `cnv:${name}`,
     summary: stringValue(item.summary) ?? `${name} canvas, revision ${revision}`,
     cards: [],
   }
@@ -434,6 +434,24 @@ function taskIssueIdFromCardRef(ref: string): string {
   return ''
 }
 
+function proxiedCardKind(card: CanvasCard): string {
+  const ref = String(card.ref || '').trim()
+  if (ref.startsWith('mem:')) return 'memory'
+  if (ref.startsWith('fi:')) return 'file'
+  if (ref.startsWith('task:')) return 'task.ref'
+  if (ref.startsWith('cnv:')) return card.kind || 'canvas.owned'
+  return card.kind || 'object.ref'
+}
+
+function proxiedCardEventSourceId(card: CanvasCard): string | undefined {
+  const ref = String(card.ref || '').trim()
+  if (ref.startsWith('mem:')) return 'memory.context'
+  if (ref.startsWith('fi:')) return 'react.artifact.context'
+  if (ref.startsWith('task:')) return 'task.context'
+  if (ref.startsWith('cnv:')) return 'canvas.context'
+  return undefined
+}
+
 export function cardContext(canvas: CanvasDefinition, card: CanvasCard): CanvasContextItem {
   const issueId = taskIssueIdFromCardRef(card.ref)
   if ((card.kind === 'issue.ref' || card.kind === 'story.ref' || card.kind === 'task.ref') && issueId) {
@@ -447,6 +465,7 @@ export function cardContext(canvas: CanvasDefinition, card: CanvasCard): CanvasC
       ref: taskRef,
       logical_path: taskRef,
       mime: 'application/json',
+      event_source_id: 'task.context',
       canvas_id: canvas.id,
       canvas_name: canvas.name,
       revision: canvas.revision,
@@ -470,14 +489,18 @@ export function cardContext(canvas: CanvasDefinition, card: CanvasCard): CanvasC
       },
     }
   }
+  const ref = String(card.ref || '').trim()
+  const cardKind = proxiedCardKind(card)
+  const eventSourceId = proxiedCardEventSourceId(card)
   return {
-    id: `${canvas.id}:${card.id}:r${canvas.revision}`,
-    kind: 'canvas.card',
+    id: ref || `${canvas.id}:${card.id}:r${canvas.revision}`,
+    kind: cardKind,
     label: `${card.id} ${card.title}`,
     summary: card.summary,
-    ref: card.ref,
-    logical_path: card.ref,
+    ref,
+    logical_path: ref,
     mime: card.mime,
+    ...(eventSourceId ? { event_source_id: eventSourceId } : {}),
     canvas_id: canvas.id,
     canvas_name: canvas.name,
     revision: canvas.revision,
@@ -485,8 +508,15 @@ export function cardContext(canvas: CanvasDefinition, card: CanvasCard): CanvasC
     card_type: card.kind,
     selected: card.selected,
     data: {
-      rect: card.rect,
-      kind: card.kind,
+      canvas_context: {
+        canvas_id: canvas.id,
+        canvas_name: canvas.name,
+        revision: canvas.revision,
+        card_id: card.id,
+        card_kind: card.kind,
+        rect: card.rect,
+        selected: Boolean(card.selected),
+      },
     },
   }
 }

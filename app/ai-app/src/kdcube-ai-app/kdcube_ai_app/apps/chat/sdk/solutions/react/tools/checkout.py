@@ -30,7 +30,7 @@ TOOL_SPEC = {
         "Use this when the current workspace itself must contain a runnable/searchable project snapshot, "
         "rather than only materializing historical side views with react.pull. "
         "For older refs that may not be local on this worker, call react.pull(paths=[...]) first. "
-        "react.checkout accepts only fi:...files... workspace refs; ext:, other external artifact namespaces, and ev: timeline event refs are not checkout paths."
+        "react.checkout accepts only fi:...files... workspace refs; external owner namespaces and ev: timeline event refs are not checkout paths."
     ),
     "args": {
         "mode": (

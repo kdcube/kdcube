@@ -162,6 +162,7 @@ function widgetUrl(ctx: RouteContext, alias: string, params?: Record<string, str
 
 function chatWidgetUrl(ctx: RouteContext): string {
   return widgetUrl(ctx, CHAT_WIDGET_ALIAS, {
+    chat_embed_mode: 'host',
     chat_widget_id: CHAT_WIDGET_ALIAS,
     chat_config_identity: CHAT_CONFIG_IDENTITY,
     chat_brand_label: 'Versatile',
@@ -336,10 +337,25 @@ function memoryPanelSize(expanded: boolean) {
   }
 }
 
+function chatPanelSize(expanded: boolean, width: number) {
+  return {
+    width: expanded ? window.innerWidth : Math.min(width, window.innerWidth - 72),
+    height: expanded ? window.innerHeight : Math.min(720, window.innerHeight - 92),
+  }
+}
+
 function compactMemoryPaneHeight(contentHeight: number | null): number {
   const max = Math.max(260, Math.min(520, window.innerHeight - 118))
   const measured = contentHeight && Number.isFinite(contentHeight) ? contentHeight + 32 : 0
   return clamp(measured || 360, 220, max)
+}
+
+function defaultChatFrame(width: number, expanded: boolean) {
+  const panel = chatPanelSize(expanded, width)
+  return {
+    x: clamp(window.innerWidth - panel.width - 70, 8, Math.max(8, window.innerWidth - panel.width - 60)),
+    y: 84,
+  }
 }
 
 function defaultMemoryFrame(chatWidth: number, chatOpen: boolean, expanded: boolean) {
@@ -612,6 +628,7 @@ function App() {
   const [chatOpen, setChatOpen] = useState(true)
   const [chatExpanded, setChatExpanded] = useState(false)
   const [chatWidth, setChatWidth] = useState(460)
+  const [chatFrame, setChatFrame] = useState(() => defaultChatFrame(460, false))
   const [canvasOpen, setCanvasOpen] = useState(true)
   const [memoryOpen, setMemoryOpen] = useState(true)
   const [memoryExpanded, setMemoryExpanded] = useState(false)
@@ -727,12 +744,58 @@ function App() {
     window.addEventListener('blur', finish, { once: true })
   }, [memoryExpanded, memoryFrame])
 
+  const startChatDrag = useCallback((event: React.PointerEvent<HTMLElement>) => {
+    if (chatExpanded || (event.target as HTMLElement).closest('button')) return
+    event.preventDefault()
+    const dragTarget = event.currentTarget
+    try {
+      dragTarget.setPointerCapture?.(event.pointerId)
+    } catch {
+      // Pointer capture is not guaranteed in every embedded browser.
+    }
+    document.body.classList.add('scene-moving-chat')
+    const startX = event.clientX
+    const startY = event.clientY
+    const startFrame = chatFrame
+    const panel = chatPanelSize(false, chatWidth)
+    const onMove = (move: PointerEvent) => {
+      setChatFrame({
+        x: clamp(startFrame.x + move.clientX - startX, 8, Math.max(8, window.innerWidth - panel.width - 60)),
+        y: clamp(startFrame.y + move.clientY - startY, 62, Math.max(62, window.innerHeight - panel.height - 8)),
+      })
+    }
+    const finish = () => {
+      try {
+        dragTarget.releasePointerCapture?.(event.pointerId)
+      } catch {
+        // The pointer may already have been released by the browser.
+      }
+      document.body.classList.remove('scene-moving-chat')
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', finish)
+      window.removeEventListener('pointercancel', finish)
+      window.removeEventListener('blur', finish)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', finish, { once: true })
+    window.addEventListener('pointercancel', finish, { once: true })
+    window.addEventListener('blur', finish, { once: true })
+  }, [chatExpanded, chatFrame, chatWidth])
+
   const startChatResize = useCallback((event: React.PointerEvent<HTMLElement>) => {
+    if (chatExpanded) return
     event.preventDefault()
     const startX = event.clientX
     const startWidth = chatWidth
+    const startFrame = chatFrame
+    const rightEdge = startFrame.x + startWidth
     const onMove = (move: PointerEvent) => {
-      setChatWidth(clamp(startWidth + startX - move.clientX, 360, Math.min(860, window.innerWidth - 220)))
+      const nextWidth = clamp(startWidth + startX - move.clientX, 360, Math.min(860, window.innerWidth - 108))
+      setChatWidth(nextWidth)
+      setChatFrame((frame) => ({
+        ...frame,
+        x: clamp(rightEdge - nextWidth, 8, Math.max(8, window.innerWidth - nextWidth - 60)),
+      }))
     }
     const onUp = () => {
       window.removeEventListener('pointermove', onMove)
@@ -740,7 +803,7 @@ function App() {
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp, { once: true })
-  }, [chatWidth])
+  }, [chatExpanded, chatFrame, chatWidth])
 
   const attachContexts = useCallback((messageType: string, contexts: CanvasContextItem[]) => {
     if (!contexts.length) return
@@ -1058,78 +1121,112 @@ function App() {
           )}
         </section>
 
-        <aside className={`scene-side ${chatOpen ? '' : 'collapsed'} ${chatExpanded ? 'expanded' : ''}`}>
-          {chatOpen && !chatExpanded ? (
+        <div className="scene-rail" aria-label="Scene widgets">
+          <button
+            type="button"
+            className="scene-rail-button chat-shortcut"
+            title={chatOpen ? 'Collapse chat' : 'Open chat'}
+            aria-label={chatOpen ? 'Collapse chat' : 'Open chat'}
+            aria-pressed={chatOpen}
+            onClick={() => {
+              setChatOpen((open) => {
+                const next = !open
+                if (!next) setChatExpanded(false)
+                if (next) setChatFrame(defaultChatFrame(chatWidth, chatExpanded))
+                return next
+              })
+            }}
+          >
+            <KubeRobotIcon size={24} />
+          </button>
+          <button
+            type="button"
+            className="scene-rail-button canvas-shortcut"
+            title={canvasOpen ? 'Hide canvas' : 'Open canvas'}
+            aria-label={canvasOpen ? 'Hide canvas' : 'Open canvas'}
+            aria-pressed={canvasOpen}
+            onClick={() => setCanvasOpen((value) => !value)}
+          >
+            <GlowPinnedCanvasIcon size={24} />
+          </button>
+          <button
+            type="button"
+            className="scene-rail-button memory-shortcut"
+            title={memoryOpen ? 'Hide memories' : 'Open memories'}
+            aria-label={memoryOpen ? 'Hide memories' : 'Open memories'}
+            aria-pressed={memoryOpen}
+            onClick={() => {
+              setMemoryOpen((open) => {
+                const next = !open
+                if (!next) {
+                  setMemoryExpanded(false)
+                } else {
+                  setMemoryFrame(defaultMemoryFrame(chatWidth, chatOpen, memoryExpanded))
+                }
+                return next
+              })
+            }}
+          >
+            <Archive size={21} strokeWidth={2.1} />
+          </button>
+        </div>
+      </section>
+      <aside
+        className={`scene-side ${chatOpen ? '' : 'collapsed'} ${chatExpanded ? 'expanded' : ''}`}
+        style={chatExpanded ? undefined : ({
+          left: chatFrame.x,
+          top: chatFrame.y,
+          width: chatWidth,
+          '--versatile-chat-pane-height': `${chatPanelSize(false, chatWidth).height}px`,
+        } as CSSProperties)}
+        aria-hidden={!chatOpen}
+      >
+        <header className="chat-pane-header" onPointerDown={startChatDrag}>
+          <span>Chat</span>
+          <div>
             <button
               type="button"
-              className="chat-width-handle"
-              title="Resize chat"
-              aria-label="Resize chat"
-              onPointerDown={(event) => {
-                event.currentTarget.setPointerCapture?.(event.pointerId)
-                startChatResize(event)
+              onClick={() => setChatExpanded((value) => !value)}
+              title={chatExpanded ? 'Compact chat' : 'Enlarge chat'}
+              aria-label={chatExpanded ? 'Compact chat' : 'Enlarge chat'}
+            >
+              {chatExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setChatOpen(false)
+                setChatExpanded(false)
               }}
-            />
-          ) : null}
-          <div className="chat-frame-shell" aria-hidden={!chatOpen}>
-            <iframe
-              ref={chatFrameRef}
-              className="chat-frame"
-              title="Versatile chat widget"
-              src={chatWidgetUrl(ctx)}
-              onLoad={() => syncChatWidgetView(chatExpanded ? 'expanded' : 'compact')}
-            />
+              title="Close chat"
+              aria-label="Close chat"
+            >
+              <X size={14} />
+            </button>
           </div>
-        </aside>
-      </section>
-      <div className="scene-rail" aria-label="Scene widgets">
-        <button
-          type="button"
-          className="scene-rail-button chat-shortcut"
-          title={chatOpen ? 'Collapse chat' : 'Open chat'}
-          aria-label={chatOpen ? 'Collapse chat' : 'Open chat'}
-          aria-pressed={chatOpen}
-          onClick={() => {
-            setChatOpen((open) => {
-              const next = !open
-              if (!next) setChatExpanded(false)
-              return next
-            })
-          }}
-        >
-          <KubeRobotIcon size={24} />
-        </button>
-        <button
-          type="button"
-          className="scene-rail-button canvas-shortcut"
-          title={canvasOpen ? 'Hide canvas' : 'Open canvas'}
-          aria-label={canvasOpen ? 'Hide canvas' : 'Open canvas'}
-          aria-pressed={canvasOpen}
-          onClick={() => setCanvasOpen((value) => !value)}
-        >
-          <GlowPinnedCanvasIcon size={24} />
-        </button>
-        <button
-          type="button"
-          className="scene-rail-button memory-shortcut"
-          title={memoryOpen ? 'Hide memories' : 'Open memories'}
-          aria-label={memoryOpen ? 'Hide memories' : 'Open memories'}
-          aria-pressed={memoryOpen}
-          onClick={() => {
-            setMemoryOpen((open) => {
-              const next = !open
-              if (!next) {
-                setMemoryExpanded(false)
-              } else {
-                setMemoryFrame(defaultMemoryFrame(chatWidth, chatOpen, memoryExpanded))
-              }
-              return next
-            })
-          }}
-        >
-          <Archive size={21} strokeWidth={2.1} />
-        </button>
-      </div>
+        </header>
+        {chatOpen && !chatExpanded ? (
+          <button
+            type="button"
+            className="chat-width-handle"
+            title="Resize chat"
+            aria-label="Resize chat"
+            onPointerDown={(event) => {
+              event.currentTarget.setPointerCapture?.(event.pointerId)
+              startChatResize(event)
+            }}
+          />
+        ) : null}
+        <div className="chat-frame-shell">
+          <iframe
+            ref={chatFrameRef}
+            className="chat-frame"
+            title="Versatile chat widget"
+            src={chatWidgetUrl(ctx)}
+            onLoad={() => syncChatWidgetView(chatExpanded ? 'expanded' : 'compact')}
+          />
+        </div>
+      </aside>
       {memoryOpen ? (
         <section
           className={`memory-pane${memoryExpanded ? ' expanded' : ''}`}

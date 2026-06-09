@@ -237,7 +237,8 @@ result or authored event becomes timeline blocks and artifact rows. ANNOUNCE
 policies should preserve current context facts that the agent needs for the
 turn.
 
-If event data carries a compact external artifact URI such as `ext:...`,
+If event data carries a compact owner-domain artifact URI such as `nmsp:...`,
+`mem:...`, or `cnv:...`,
 register an artifact namespace rehoster in a loaded tool or event module so
 `react.pull` can materialize it as a normal `fi:` ref.
 

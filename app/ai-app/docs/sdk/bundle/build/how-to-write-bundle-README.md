@@ -419,7 +419,8 @@ Use this file split:
   `event_source_id`, and compact artifact refs
 
 Use `@artifact_namespace_rehoster(...)` when a snapshot, attachment, or domain
-artifact is represented by an external namespace such as `ext:...`. The
+artifact is represented by an owner namespace such as `nmsp:...`, `mem:...`, or
+`cnv:...`. The
 rehoster chooses the ReAct destination by artifact meaning: snapshots under
 `snapshots/`, editable workspace files under `files/`, produced artifacts under
 `outputs/`, and domain attachments under

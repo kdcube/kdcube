@@ -56,8 +56,8 @@ canvas_name      user-visible board name, for example main or evidence
 canvas_id        stable board id, usually cnv:<user_id>:<canvas_name>
 revision         monotonically increasing integer per canvas_id
 canvas_uri       short agent-facing handle, for example cnv:main@27
-canvas_ref       immutable ext: ref to a stored revision JSON
-latest_ref       ext: ref to the latest stored JSON for the board
+canvas_ref       immutable cnv: ref to a stored revision JSON
+latest_ref       cnv: ref to the latest stored JSON for the board
 card             one pin on the board
 logical_path     ref to the object behind a card
 placement        placed, floating, suggested, or trashed
@@ -92,10 +92,10 @@ The canvas module owns these card/object kinds:
 
 | Kind | Prefix | Hosted by | Meaning |
 |---|---|---|---|
-| `user.text` | `U` | task-tracker bundle `ext:` storage | User-authored note/text placed directly on canvas |
-| `user.attachment` | `A` | task-tracker bundle `ext:` storage | User file uploaded to canvas |
-| `agent.text` | `R` | task-tracker bundle `ext:` storage | Assistant-authored text card created through `canvas.patch` or dragged from assistant output |
-| `file` | `F` | platform `fi:` or bundle `ext:` | Produced or found file/report artifact |
+| `user.text` | `U` | canvas `cnv:` storage | User-authored note/text placed directly on canvas |
+| `user.attachment` | `A` | canvas `cnv:` storage | User file uploaded to canvas |
+| `agent.text` | `R` | canvas `cnv:` storage | Assistant-authored text card created through `canvas.patch` or dragged from assistant output |
+| `file` | `F` | platform `fi:` or canvas/domain owner namespace | Produced or found file/report artifact |
 | `memory` | `M` | memory subsystem `mem:` | Memory/search object pin |
 | `source` / `search.result` | `S` | source/search resolver `so:` or subsystem | Source row or search result pin |
 
@@ -103,14 +103,14 @@ These are not platform-managed chat replicas:
 
 - Text typed in chat is `ar:` conversation replica data.
 - Files attached in chat are platform conversation attachments, usually `fi:`.
-- Text written on canvas is a canvas-owned `user.text` object with an `ext:` ref.
+- Text written on canvas is a canvas-owned `user.text` object with a `cnv:` ref.
 - Files dropped/uploaded on canvas are canvas-owned `user.attachment` objects
-  with `ext:` refs.
+  with `cnv:` refs.
 - Assistant final answers in chat are `ar:` assistant replica data.
 - Assistant text put on canvas by `canvas.patch` is a canvas-owned `agent.text`
-  object with an `ext:` ref.
+  object with a `cnv:` ref.
 
-If a canvas-owned card is attached into chat, it remains an `ext:` ref. Attaching
+If a canvas-owned card is attached into chat, it remains a `cnv:` ref. Attaching
 does not convert it into a chat prompt, chat attachment, or `fi:` artifact.
 
 Cards are proxies to objects. For resolver-backed pins, the card id is the
@@ -118,7 +118,7 @@ original resolver URI itself: `task:...`, `fi:...`, `mem:...`, `so:...`, etc.
 One object has one proxy on a canvas:
 
 - dragging the same `task:issues/<id>` again does not create another card;
-- dragging the same `fi:`, `ext:`, `mem:`, `so:`, or other resolver-backed ref
+- dragging the same `fi:`, `cnv:`, `mem:`, `so:`, or other resolver-backed ref
   again does not create another card;
 - if that proxy is already in the bin, dragging the same object back onto the
   board restores the existing proxy instead of creating a copy;
@@ -148,9 +148,9 @@ in the legend.
 
 ## Storage
 
-Canvas documents and canvas-owned card objects live in bundle artifact storage
-under the task-tracker `ext:` namespace. The physical storage backend is hidden
-behind `BundleArtifactStorage`.
+Canvas documents and canvas-owned card objects live behind the canvas storage
+layer and are exposed as `cnv:` refs. The physical storage backend is hidden
+behind the configured artifact storage adapter.
 
 Board revision paths:
 
@@ -177,8 +177,8 @@ Persisted cards should store metadata and refs, not large inline content:
   "kind": "user.text",
   "title": "Observed behavior",
   "mime": "text/markdown",
-  "logical_path": "ext:task-tracker/users/user-1/canvases/canvas_user-1_main/objects/user-text/ut_2026-06-07-10-20-30_k3f9/v000001.md",
-  "storage_ref": "ext:task-tracker/users/user-1/canvases/canvas_user-1_main/objects/user-text/ut_2026-06-07-10-20-30_k3f9/v000001.md",
+  "logical_path": "cnv:users/user-1/canvases/canvas_user-1_main/objects/user-text/ut_2026-06-07-10-20-30_k3f9/v000001.md",
+  "storage_ref": "cnv:users/user-1/canvases/canvas_user-1_main/objects/user-text/ut_2026-06-07-10-20-30_k3f9/v000001.md",
   "content_preview": "Short visible preview only",
   "rect": {"x": 40, "y": 40, "w": 238, "h": 112}
 }
@@ -232,10 +232,10 @@ should show compact facts and causality, not dump full board JSON.
 
 ### 3. Agent Tool Events
 
-Canvas exposes two different model-facing operations:
+Canvas exposes one model-facing write operation and one workspace import path:
 
 ```text
-react.read(paths=["cnv:<name>@<revision>"])   read exact board state
+react.pull(paths=["cnv:<name>@<revision>"])   import exact board state
 canvas.patch(...)                             write content changes
 ```
 
@@ -243,9 +243,10 @@ canvas.patch(...)                             write content changes
 projection for the announce policy to refresh `[CANVAS BOARD]` during the
 current turn.
 
-`canvas.read` is not an agent-visible tool. It is the event source id behind
-the `cnv:` namespace reader. `react.read(paths=["cnv:main@27"])` dispatches to
-the canvas reader, and the `canvas.read` source policies render the result.
+`canvas.read` is not an agent-visible tool. Exact board content is materialized
+through the `cnv:` namespace rehoster used by `react.pull`. The pull result
+returns an ordinary ReAct workspace artifact path; the agent can then inspect
+that returned `fi:` or physical path with `react.read`, `react.rg`, or exec.
 
 Agent-originated patches do not require the client to rebroadcast a canvas
 event to the backend. The tool result is already the authoritative event source
@@ -270,10 +271,10 @@ Canvas-owned card creation is represented by the new board revision and history
 entry. The semantic object kind lives on the card:
 
 ```text
-new user note          -> card kind user.text, hosted ext: object
-new canvas upload      -> card kind user.attachment, hosted ext: object
-new assistant text     -> card kind agent.text, hosted ext: object
-new assistant file     -> card kind file, usually fi: or ext:
+new user note          -> card kind user.text, hosted cnv: object
+new canvas upload      -> card kind user.attachment, hosted cnv: object
+new assistant text     -> card kind agent.text, hosted cnv: object
+new assistant file     -> card kind file, usually fi: or cnv:
 new task pin           -> host-app card kind issue.ref, task: ref
 ```
 
@@ -287,21 +288,19 @@ The canvas module contributes additional instructions through
 `canvas/instructions.py`. Any bundle using this module must append those
 instructions to the ReAct prompt, not hide them as an optional skill.
 
-The module exposes one ReAct-visible write tool and one model-facing read
-source:
+The module exposes one ReAct-visible write tool and one workspace import path:
 
 ```text
-react.read(paths=["cnv:<name>@<revision>"])
+react.pull(paths=["cnv:<name>@<revision>"])
 canvas.patch(canvas_name="main", base_revision=<visible revision>, operations=<json>)
 ```
 
-`react.read(paths=["cnv:<name>@<revision>"])`:
+`react.pull(paths=["cnv:<name>@<revision>"])`:
 
-- reads exact board JSON plus an `agent_view`;
-- is implemented by `@event_source_reader(namespace="cnv", event_source_id="canvas.read")`;
+- imports exact board JSON plus an `agent_view` into the ReAct workspace;
+- is implemented by `@artifact_namespace_rehoster(namespace="cnv")`;
 - should be used only when the ANNOUNCE map/legend is insufficient;
-- refreshes canvas ANNOUNCE;
-- should leave only compact facts on timeline.
+- returns `fi:` and physical paths that can be read or searched locally.
 
 `canvas.patch`:
 
@@ -340,13 +339,13 @@ U1 U1 A1 A1 T1 ..
 .. .. R1 R1 T1 ..
 
 legend:
-- U1 user.text card_id=ut_2026-06-07-10-20-30_k3f9 title=Observed behavior mime=text/markdown ref=ext:...
+- U1 user.text card_id=ut_2026-06-07-10-20-30_k3f9 title=Observed behavior mime=text/markdown ref=cnv:...
   visible: Attachment disappears before submit...
-- A1 user.attachment card_id=ua_2026-06-07-10-21-00_q8m2 title=trace.pdf mime=application/pdf ref=ext:...
+- A1 user.attachment card_id=ua_2026-06-07-10-21-00_q8m2 title=trace.pdf mime=application/pdf ref=cnv:...
 - T1 issue.ref card_id=task:issues/ticket_2026-06-07-10-19-00-123456789 title=Upload fails after selecting screenshot ref=task:issues/ticket_2026-06-07-10-19-00-123456789
-- R1 agent.text card_id=at_2026-06-07-10-23-00_h7pn suggested title=Suggested repro steps ref=ext:...
+- R1 agent.text card_id=at_2026-06-07-10-23-00_h7pn suggested title=Suggested repro steps ref=cnv:...
 
-canvas_read: react.read(paths=["cnv:main@27"]) returns exact JSON plus agent_view.
+canvas_read: react.pull(paths=["cnv:main@27"]) returns a workspace artifact with exact JSON plus agent_view.
 canvas_write: collaborate only through canvas.patch with base_revision=revision.
 ```
 
@@ -363,14 +362,14 @@ same board:
 ```text
 [CANVAS FOCUSED CONTEXT]
 focused_cards:
-- A1 user.attachment title=trace.pdf ref=ext:... mime=application/pdf
+- A1 user.attachment title=trace.pdf ref=cnv:... mime=application/pdf
 
 focus_semantics: these cards were explicitly selected on the canvas for this request.
 priority: inspect selected cards before broader canvas context unless the user asks otherwise.
 ```
 
 Dragging an individual pin to chat is different. The chat context for that pin
-uses the proxied object ref (`task:`, `mem:`, `fi:`, `ext:`, etc.) and may carry
+uses the proxied object ref (`task:`, `mem:`, `fi:`, `cnv:`, etc.) and may carry
 canvas provenance in metadata, but it is not a canvas-focus event by itself.
 
 ## Collaboration, Versioning, And Conflicts

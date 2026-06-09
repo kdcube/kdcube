@@ -136,6 +136,7 @@ button {
   white-space: nowrap;
 }
 
+.chat-pane-header button,
 .memory-pane header button,
 .notice button {
   display: inline-flex;
@@ -174,7 +175,7 @@ button {
 
 .scene-body {
   display: grid;
-  grid-template-columns: minmax(420px, 1fr) minmax(360px, var(--versatile-chat-width, 460px));
+  grid-template-columns: minmax(420px, 1fr) 52px;
   gap: 0;
   min-width: 0;
   min-height: 0;
@@ -188,7 +189,7 @@ button {
 }
 
 .scene-body.chat-expanded {
-  display: block;
+  grid-template-columns: minmax(0, 1fr) 52px;
 }
 
 .scene-panel {
@@ -245,16 +246,21 @@ button {
 }
 
 .scene-side {
-  position: relative;
-  display: flex;
-  flex-direction: column;
+  position: fixed;
+  z-index: 62;
+  display: grid;
+  grid-template-rows: 32px minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
-  height: 100%;
+  height: var(--versatile-chat-pane-height, min(720px, calc(100vh - 92px)));
+  max-width: calc(100vw - 68px);
+  max-height: calc(100vh - 72px);
   overflow: hidden;
-  border-left: 1px solid var(--line);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
   background: var(--surface);
   padding: 0;
+  box-shadow: 0 20px 42px rgba(13, 30, 44, 0.16);
 }
 
 .chat-width-handle {
@@ -306,14 +312,44 @@ button {
   display: block;
 }
 
-.scene-rail {
-  position: fixed;
-  top: 88px;
-  right: 7px;
-  z-index: 90;
-  display: grid;
+.chat-pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
-  pointer-events: none;
+  min-height: 32px;
+  border-bottom: 1px solid var(--line-soft);
+  background: rgba(247, 250, 251, 0.96);
+  padding: 5px 8px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 800;
+  cursor: move;
+  user-select: none;
+}
+
+.chat-pane-header div {
+  display: inline-flex;
+  gap: 5px;
+}
+
+.chat-pane-header button {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+}
+
+.scene-rail {
+  z-index: 20;
+  display: grid;
+  align-content: start;
+  justify-items: center;
+  gap: 8px;
+  min-width: 52px;
+  border-left: 1px solid var(--line);
+  background: rgba(247, 250, 251, 0.96);
+  padding: 12px 8px;
+  pointer-events: auto;
 }
 
 .scene-rail-button {
@@ -351,22 +387,26 @@ button {
 }
 
 .scene-side.collapsed {
-  align-items: center;
-  padding: 0;
-}
-
-.scene-side.collapsed .chat-frame-shell,
-.scene-side.collapsed .chat-width-handle {
   display: none;
 }
 
 .scene-side.expanded {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  z-index: 92;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  width: auto;
   height: 100vh;
-  border-left: 0;
+  max-width: none;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
   box-shadow: 0 0 0 1px var(--line);
+}
+
+.scene-side.expanded .chat-pane-header {
+  display: none;
 }
 
 .scene-side.expanded .chat-frame-shell {
@@ -471,6 +511,10 @@ button {
 }
 
 body.scene-moving-memory .memory-frame {
+  pointer-events: none;
+}
+
+body.scene-moving-chat .chat-frame {
   pointer-events: none;
 }
 
@@ -1280,24 +1324,15 @@ body.scene-moving-memory .memory-frame {
 
   .scene-body,
   .scene-body.chat-collapsed {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) 52px;
   }
 
   .scene-side {
-    position: fixed;
-    inset: auto 0 0 0;
-    z-index: 45;
-    height: min(60vh, 520px);
-    border-left: 0;
-    border-top: 1px solid var(--line);
+    max-width: calc(100vw - 68px);
   }
 
   .scene-side.collapsed {
-    left: auto;
-    width: 52px;
-    height: auto;
-    border-top: 0;
-    background: transparent;
+    display: none;
   }
 
   .memory-pane {

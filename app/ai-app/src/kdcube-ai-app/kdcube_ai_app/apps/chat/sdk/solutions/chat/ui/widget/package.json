@@ -6,7 +6,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test:context-batch": "tsc -p tsconfig.test.json && node /private/tmp/kdcube-chat-widget-tests/features/context/eventBatch.test.js"
+    "test:context-batch": "tsc -p tsconfig.test.json && node /private/tmp/kdcube-chat-widget-tests/features/context/eventBatch.test.js && node /private/tmp/kdcube-chat-widget-tests/features/chat/historicalRefs.test.js"
   },
   "dependencies": {
     "@reduxjs/toolkit": "^2.12.0",

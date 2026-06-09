@@ -6,9 +6,9 @@
  * card field set changes there, update both.
  *
  * Card kind reference (per `doc/design/canvas.md`):
- *   - `user.text`          bundle-hosted user-authored text (ext: ref)
- *   - `user.attachment`    bundle-hosted user upload (ext: ref)
- *   - `agent.text`         bundle-hosted assistant-authored text (ext: ref); not the same as suggestion state
+ *   - `user.text`          canvas-hosted user-authored text (cnv: ref)
+ *   - `user.attachment`    canvas-hosted user upload (cnv: ref)
+ *   - `agent.text`         canvas-hosted assistant-authored text (cnv: ref); not the same as suggestion state
  *   - `file`               file artifact, including cross-conversation fi: refs
  *   - `memory`             memory store result (mem: ref)
  *   - `source`             source-pool row (so: ref)
@@ -45,7 +45,7 @@ export interface CanvasRect {
 }
 
 /** Input shape for a new card. Either `content` (UI sends bytes/text to be
- *  rehosted as an `ext:` object by the storage layer) or `logical_path`
+ *  rehosted as a `cnv:` object by the storage layer) or `logical_path`
  *  (UI pins an existing ref) — never both. The card may carry both keys when
  *  the storage layer's rehoster expects to ignore one based on `kind`. */
 export interface CanvasNewCardInput {
@@ -56,7 +56,7 @@ export interface CanvasNewCardInput {
   /** Versioned ref to existing content. Mutually exclusive with `content`
    *  for cards the bundle rehosts. */
   logical_path?: string
-  /** Inline content for cards the bundle is supposed to host as `ext:`.
+  /** Inline content for cards the bundle is supposed to host as `cnv:`.
    *  The storage layer replaces this with a `logical_path` on write. */
   content?: { text?: string; data?: unknown }
   placement?: CanvasCardPlacement

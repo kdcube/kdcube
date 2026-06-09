@@ -97,4 +97,4 @@ def test_memory_resolver_missing_ref_is_bounded_error():
     ))
 
     assert result["ok"] is False
-    assert result["error"] == "memory_ref_required"
+    assert result["error"] == "object_ref_required"

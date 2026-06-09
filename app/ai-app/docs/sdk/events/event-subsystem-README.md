@@ -65,15 +65,16 @@ make a callable visible to the model by itself.
 | `kind` | Meaning | Agent-visible tool? |
 |---|---|---:|
 | `react.tool` | ReAct tool-call lifecycle source. The occurrence is a tool call/result; `event_source_id` normally equals the tool id. | Yes, only when the callable is also loaded as a tool, for example through `@kernel_function`. |
-| `react.event_source_reader` | Owner-domain reader backing `react.read` for a logical namespace such as `mem:` or `cnv:`. The model calls `react.read`, not this source id directly. | No |
+| `react.event_source_reader` | Owner-domain reader that resolves a canonical namespace ref for runtime/policy code. Model-facing exact content access should use `react.pull` through a namespace rehoster. | No |
 | `react.external` | Authored external event from UI, integration, Data Bus, or another bundle surface. Reactivity is an occurrence property on transported `external_events[]`. | No |
 | `react.native_tool.write` / `react.native_tool.source` | Built-in ReAct-native source families such as write/source-pool handling. | Runtime-owned |
 
 Keep this distinction strict. A source can have policy bindings without being a
-tool. For example, the canvas board read source is `canvas.read` with
-`kind="react.event_source_reader"`; the agent reads it through
-`react.read(paths=["cnv:main@7"])`. The write source `canvas.patch` remains
-`kind="react.tool"` because the agent calls `canvas.patch(...)` directly.
+tool. For example, canvas board resolution may have a `canvas.read` source with
+`kind="react.event_source_reader"` for runtime/policy use, while exact
+model-facing board content is imported through `react.pull(paths=["cnv:main@7"])`.
+The write source `canvas.patch` remains `kind="react.tool"` because the agent
+calls `canvas.patch(...)` directly.
 
 Event-source policy bindings are the integration contract. For ReAct, a source
 can declare policies that find result surfaces, convert them to timeline
@@ -163,11 +164,24 @@ The subsystem validates duplicate `event_source_id` values and lets consumers
 look up declarations by source id or, when a durable block carries
 `event_source_id`, by block.
 
+Tool visibility and event visibility are intentionally separate:
+
+| Visibility | How it is loaded | What it grants |
+|---|---|---|
+| Tool visibility | `TOOLS_SPECS` / loaded tool modules | The model can call the tool. Tool modules are also scanned for their event declarations because tool calls produce events. |
+| Event visibility | `EVENT_SOURCE_SPECS` / explicit event modules | The runtime can discover event sources, policies, event-source readers, and namespace rehosters. It does not make any callable visible to the model. |
+
+The two inputs are cumulative. Passing `event_source_specs` to
+`BaseWorkflow.build_react(...)` adds event-only modules to the event subsystem;
+it does not replace declarations discovered from loaded tool modules. Use this
+when a bundle needs a namespace rehoster such as `cnv:` or `mem:` without
+exposing the namespace owner's tools.
+
 ## Event Source Readers
 
-An event source reader is the owner-domain read hook for canonical refs. It is
-used when a model-facing ref names an object whose current representation is
-owned by an event domain, for example `mem:mem_...`.
+An event source reader is the owner-domain hook for resolving canonical refs. It
+is used by runtime/policy code when a ref names an object whose current
+representation is owned by an event domain, for example `mem:mem_...`.
 
 The reader resolves the ref. It does not decide how the resolved object should
 look on the timeline. The event source's block-production policies render the
@@ -188,16 +202,18 @@ async def read_memory_event_ref(*, ref, ctx_browser=None, **context):
 Runtime flow:
 
 ```text
-react.read(paths=["mem:mem_123"])
+runtime code asks EventSourceSubsystem to resolve "mem:mem_123"
   -> EventSourceSubsystem.event_source_reader_for_ref("mem:mem_123")
   -> owner reader resolves the ref
   -> event_source_id selects source policies
   -> block_production policies emit model-visible blocks
 ```
 
-This keeps `react.read` generic. ReAct does not implement memory, task, canvas,
-or knowledge-source semantics itself; it dispatches to the namespace owner's
-reader and then uses that source's policies.
+This keeps owner-domain policy rendering generic. ReAct does not implement
+memory, task, canvas, or knowledge-source semantics itself; it relies on the
+namespace owner's reader/policies when runtime code needs owner payloads.
+Model-facing exact content access is different: use `react.pull` with a
+namespace rehoster, then inspect the returned `fi:` artifact.
 
 Readers are discovered from the same loaded tool/event modules as event
 sources:
@@ -212,10 +228,10 @@ Duplicate namespace registrations are rejected during discovery.
 ## Artifact Namespace Rehosters
 
 The same module discovery path can register artifact namespace rehosters. A
-rehoster is different from an event source: it turns a custom namespace
-artifact URI such as `ext:...` into a normal ReAct `fi:` artifact ref by
-copying bytes into the current turn artifact surface. The rehoster owns the
-mapping from the custom URI to the ReAct artifact namespace.
+rehoster is different from an event source: it turns an external owner ref such
+as `cnv:...` or `mem:...` into a normal ReAct `fi:` artifact ref by copying
+bytes into the current turn artifact surface. The rehoster owns the mapping from
+the owner ref to the ReAct artifact namespace.
 
 A rehoster must be aware of the ReAct workspace and artifact surfaces. It does
 not merely download bytes; it chooses where the artifact belongs in the ReAct
@@ -238,6 +254,10 @@ Tool modules are scanned automatically because `ToolSubsystem` builds
 `EventSourceSubsystem` from its loaded tool modules. Event-only modules are
 loaded from `event_source_specs`; a descriptor file by itself is not scanned
 unless the workflow passes those specs into `build_react`.
+
+Do not add a module to `TOOLS_SPECS` only to make `react.pull` understand one
+of its namespaces. Put the namespace rehoster in an event module and load that
+module through `EVENT_SOURCE_SPECS`.
 
 Bundle shape:
 
@@ -289,24 +309,25 @@ The destination is semantic:
 | Editable project/workspace file | `fi:turn_<id>.files/<workspace_scope>/<path>` / `turn_<id>/files/<workspace_scope>/<path>` |
 | Produced report/export/rendered artifact | `fi:turn_<id>.outputs/<artifact_scope>/<path>` / `turn_<id>/outputs/<artifact_scope>/<path>` |
 
-The returned paths are the agent contract. After `react.pull(paths=["ext:..."])`,
-the agent should use the returned `logical_path` or `physical_path`; it should
-not derive a replacement path from the external URI.
+The returned paths are the agent contract. After
+`react.pull(paths=["cnv:main@7"])`, the agent should use the returned
+`logical_path` or `physical_path`; it should not derive a replacement path from
+the owner ref.
 
 ```python
 from kdcube_ai_app.apps.chat.sdk.events import artifact_namespace_rehoster
 
 @artifact_namespace_rehoster(
-    namespace="ext",
-    description="Materialize external artifact refs for ReAct tools.",
+    namespace="cnv",
+    description="Materialize canvas refs for ReAct tools.",
 )
-async def rehost_external_ref(*, ref, key, ctx_browser, outdir, **context):
+async def rehost_canvas_ref(*, ref, key, ctx_browser, outdir, **context):
     ...
     return {
         "materialized": [{
             "source_ref": ref,
-            "logical_path": "fi:turn_<id>.snapshots/ext/path.yaml",
-            "physical_path": "turn_<id>/snapshots/ext/path.yaml",
+            "logical_path": "fi:turn_<id>.snapshots/cnv/main.json",
+            "physical_path": "turn_<id>/snapshots/cnv/main.json",
         }]
     }
 ```
@@ -316,15 +337,16 @@ subsystem to scan all top-level objects:
 
 ```python
 def list_artifact_namespace_rehosters():
-    return [rehost_external_ref]
+    return [rehost_canvas_ref]
 ```
 
 `react.pull` calls registered rehosters before the normal `fi:` hydration path.
-A registered rehoster is required for each external namespace. This keeps custom
-namespace artifact URIs such as `ext:...` explicit on the timeline while giving
-agents a standard way to materialize them when they need the actual file. The
-pull result is the contract consumed by the agent: it includes the source ref
-and the resolved/rehosted `logical_path` / `physical_path` rows to use next.
+A registered rehoster is required for each external owner namespace that should
+be importable into ReAct. This keeps owner refs such as `cnv:...` and `mem:...`
+explicit on the timeline while giving agents a standard way to materialize exact
+content when needed. The pull result is the contract consumed by the agent: it
+includes the source ref and the resolved/rehosted `logical_path` /
+`physical_path` rows to use next.
 
 ## File Rows And Preview Text
 

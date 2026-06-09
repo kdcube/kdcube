@@ -61,7 +61,7 @@ Current implementation status:
 - git publish failure is treated as turn failure
 - exact non-text `.files/...` refs are treated as hosted/custom artifacts, not as git blobs
 - folder pulls remain text-only
-- registered custom namespace refs such as `ext:...` can be materialized by
+- registered custom namespace refs such as `nmsp:...` can be materialized by
   `react.pull`, but the registered rehoster chooses whether the result is a
   snapshot, hosted output, attachment, or workspace file
 - ANNOUNCE exposes a compact `[WORKSPACE]` operational summary
@@ -125,7 +125,7 @@ The model is:
 - `fi:<version>.files/<scope>/<path>` stays the visible reference syntax
 - cross-conversation refs keep the same syntax with a conversation prefix:
   `fi:conv_<conversation_id>.turn_<id>.files|outputs|snapshots/...`
-- custom namespace refs such as `ext:...` are not `fi:` refs; `react.pull`
+- custom namespace refs such as `nmsp:...` are not `fi:` refs; `react.pull`
   resolves them only when a matching namespace rehoster is registered
 - `REACT_WORKSPACE_GIT_REPO` identifies the remote repo engineering uses for that lineage
 - engineering resolves that version id to the correct git ref in the current lineage
@@ -150,10 +150,10 @@ But the agent is instructed differently:
 - in `git`, it is explicitly taught that the activated workspace can be explored with local git commands except pull/push
 
 Custom namespace refs are separate from the git lineage. For example,
-`ext:task-tracker/...` is an opaque domain artifact until a registered
-`@artifact_namespace_rehoster(namespace="ext")` materializes it. If the rehoster
+`nmsp:draft/...` is an opaque domain artifact until a registered
+`@artifact_namespace_rehoster(namespace="nmsp")` materializes it. If the rehoster
 returns `fi:turn_<id>.snapshots/...`, the result is a snapshot artifact; if it
-returns `fi:turn_<id>.external.ext.attachments/...`, the result is an attachment
+returns `fi:turn_<id>.external.nmsp.attachments/...`, the result is an attachment
 artifact. It becomes git workspace content only if the rehoster deliberately
 places it under `files/...` or the agent explicitly writes a current-turn
 `turn_<current>/files/...` copy.

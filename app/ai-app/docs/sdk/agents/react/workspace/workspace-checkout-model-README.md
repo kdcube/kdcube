@@ -61,7 +61,7 @@ fi:turn_111.outputs/report.html
 fi:conv_conversation-42.turn_222.snapshots/wizard/current.yaml
   -> conv_conversation-42/turn_222/snapshots/wizard/current.yaml
 
-ext:task-tracker/draft_1/issue-draft.yaml
+nmsp:draft_1/issue-draft.yaml
   -> returns source_ref + materialized logical_path/physical_path chosen by the registered rehoster
 
 ev:turn_111.events/task-tracker/snapshots/draft_1/latest
@@ -71,7 +71,7 @@ ev:turn_111.events/task-tracker/snapshots/draft_1/latest
 Pull rules:
 
 - accepts `fi:` refs;
-- accepts registered custom namespace refs such as `ext:...`;
+- accepts registered custom namespace refs such as `nmsp:...`;
 - `fi:turn_<id>.files/<scope-or-subtree>` may be pulled as a subtree;
 - `fi:turn_<id>.outputs/<file>` is an exact-file artifact pull;
 - attachments and external attachments are exact-file pulls;
@@ -105,7 +105,7 @@ turn_<current>/files/app/...
 Checkout rules:
 
 - accepts `fi:...files...` refs only;
-- does not accept `ext:` or other custom namespace refs directly;
+- does not accept external owner refs such as `nmsp:`, `cnv:`, or `mem:` directly;
 - does not accept `ev:` timeline event refs;
 - `mode="replace"` clears `turn_<current>/files/` and applies the requested
   refs in order;

@@ -27,6 +27,7 @@ from .scoring import (
 )
 from .store import UserMemoryStore
 from .tools import UserMemoryTools, UserMemoryToolConfig, make_user_memory_tools
+from .instructions import MEMORY_REACT_ADDITIONAL_INSTRUCTIONS
 from .events.resolver import (
     MEMORY_OBJECT_NAMESPACE,
     MEMORY_RESOLVER_NAME,
@@ -57,6 +58,7 @@ __all__ = [
     "MemorySearchResult",
     "MemoryScopeFilter",
     "MemorySignal",
+    "MEMORY_REACT_ADDITIONAL_INSTRUCTIONS",
     "normalize_scope_filter",
     "normalize_terms",
     "MemoryReconciliationActionType",

@@ -64,7 +64,7 @@ canvas = CanvasModule(
         TaskIssueResolver(),          # task:
         MemoryObjectResolver(),       # mem:
         KnowledgeArticleResolver(),   # ks:
-        CanvasOwnedResolver(),        # cnv: or current ext:
+        CanvasOwnedResolver(),        # cnv:
     ],
 )
 ```
@@ -104,7 +104,7 @@ The task-tracker bundle now uses the same shape locally, ahead of moving canvas
 into SDK:
 
 ```text
-canvas/events/resolver.py        CanvasObjectResolverRegistry and canvas-owned ext: resolver
+canvas/events/resolver.py        CanvasObjectResolverRegistry and canvas-owned cnv: resolver
 issues/events/resolver.py        task: issue resolver owned by the task subsystem
 React events/resolver.py         fi: resolver owned by the ReAct SDK event/artifact layer
 memory/events/resolver.py        mem: resolver owned by the SDK memory module
@@ -311,7 +311,7 @@ ANNOUNCE contains the volatile rich views:
 
 `[CANVAS FOCUSED CONTEXT]` is for selected/multi-selected cards on the attached
 canvas. A pin dragged by itself is rendered as the object it proxies (`task:`,
-`mem:`, `fi:`, `ext:`, etc.) and may carry canvas provenance metadata, but it
+`mem:`, `fi:`, `cnv:`, etc.) and may carry canvas provenance metadata, but it
 is not a canvas-focus event by itself.
 
 If dry-run rendering shows context but live rendering only shows
@@ -359,7 +359,7 @@ currently implemented in task-tracker is:
 
 | Namespace | Preview | Open | Download | Notes |
 |---|---:|---:|---:|---|
-| `ext:` | yes | no | yes | Canvas-owned bundle artifact storage. Current namespace should move to `cnv:` when canvas becomes SDK module. |
+| `cnv:` | yes | no | yes | Canvas-owned board/object artifact storage. |
 | `task:` | yes | yes | no | Reads issue story through the task subsystem and returns an issue-editor open request. |
 | `mem:` | yes | yes | no | Memory event resolver is owned by the SDK memory module; task-tracker only registers it with local store/scope context. |
 | `fi:` | no | no | no | Canonical file refs are preserved. Download/preview waits for a platform artifact resolver. |
@@ -394,6 +394,4 @@ tree.
 Remaining work items:
 
 - add real platform artifact resolver support for `fi:` preview/download;
-- rename canvas-owned `ext:` refs to canvas-module refs once the canvas module
-  is extracted;
 - ensure live chat send includes the same context events that dry-run renders.

@@ -672,7 +672,7 @@ def _legend_lines(legend: list[dict[str, Any]], *, total_count: int) -> list[str
         if description:
             lines.append(f"  description: {description[:500]}")
     if total_count > len(legend):
-        lines.append(f"- ... {total_count - len(legend)} older cards omitted from ANNOUNCE; use react.read on the cnv: board ref for exact full board state.")
+        lines.append(f"- ... {total_count - len(legend)} older cards omitted from ANNOUNCE; use react.pull on the cnv: board ref, then read the returned fi: path for exact full board state.")
     return lines
 
 

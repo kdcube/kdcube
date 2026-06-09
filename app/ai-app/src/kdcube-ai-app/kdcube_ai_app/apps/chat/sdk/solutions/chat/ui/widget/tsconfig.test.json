@@ -12,6 +12,8 @@
   },
   "include": [
     "src/features/context/eventBatch.ts",
-    "src/features/context/eventBatch.test.ts"
+    "src/features/context/eventBatch.test.ts",
+    "src/features/chat/historicalRefs.ts",
+    "src/features/chat/historicalRefs.test.ts"
   ]
 }

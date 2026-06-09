@@ -8,7 +8,7 @@
  *
  * Two write modes per the canvas design:
  *   - `content`: the UI sends bytes/text the bundle should rehost as a
- *     versioned `ext:` object (user text, user upload, dragged assistant
+ *     versioned `cnv:` object (user text, user upload, dragged assistant
  *     text). The storage layer replaces `content` with a `logical_path` on
  *     write.
  *   - `logical_path`: the UI pins an existing resolver-backed ref
@@ -130,7 +130,7 @@ function assertCanvasLogicalPath(ref: string, source: string): void {
 // --- Normalizers ----------------------------------------------------------
 
 /** User dragged selected text from anywhere (page, chat input, document)
- *  onto the canvas. The bundle should rehost it as a versioned `ext:`
+ *  onto the canvas. The bundle should rehost it as a versioned `cnv:`
  *  text/markdown object so subsequent reads carry a stable ref. */
 export function cardFromSelectedText(
   text: string,
@@ -179,7 +179,7 @@ export function cardFromIssueRef(
 /** Generic search result drag (memory, source pool, future subsystem
  *  search). The caller supplies the already-resolver-backed `ref` — this
  *  normalizer does NOT rewrite the namespace, so `mem:`, `so:`, `fi:`,
- *  `task:` and `ext:` all flow through verbatim. */
+ *  `task:` and `cnv:` all flow through verbatim. */
 export function cardFromSearchResult(
   hit: {
     ref: string
@@ -229,7 +229,7 @@ export function cardFromChatArtifact(
 }
 
 /** User dragged assistant response text from chat onto canvas. The bundle
- *  rehosts it as a versioned `ext:` `agent.text` object so the canvas
+ *  rehosts it as a versioned `cnv:` `agent.text` object so the canvas
  *  carries a stable ref — the chat history alone is not a durable home. */
 export function cardFromChatAssistantText(
   text: string,

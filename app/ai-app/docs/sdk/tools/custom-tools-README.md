@@ -120,16 +120,86 @@ resp = await agent_io_tools.tool_call(
 )
 ```
 
-## 4.1) Declaring Files For React Hosting
+## 4.1) Tool Result Shape
 
-Custom tools must return the standard tool envelope:
+Custom tools can return either a plain structured result or the managed
+`ret` wrapper. Do not force every domain result into `ret`.
+
+Plain structured result:
 
 ```json
-{"ok": true, "error": null, "ret": {...}}
+{
+  "ok": true,
+  "object_ref": "mem:mem_123",
+  "memory": {"id": "mem_123", "memory": "Use matplotlib PNGs inside xlsx charts."}
+}
 ```
 
+Managed wrapper:
+
+```json
+{
+  "ok": true,
+  "error": null,
+  "ret": {
+    "results": [
+      {"object_ref": "doc:123", "title": "Document 123"}
+    ]
+  }
+}
+```
+
+ReAct unwraps only explicit wrappers that contain `ret`.
+
+Protocol rule:
+
+```text
+plain result body   = the top-level returned dict
+wrapped result body = the dict stored under ret
+```
+
+A plain structured result that contains `ok` remains the result body seen by
+event-source policies. This matters for domain tools such as memory, task,
+canvas, and search tools where fields like `object_ref`, `memory`, `rows`,
+`results`, or `attachments` are part of the tool's own schema.
+
+Use a plain structured result when the tool owns a domain schema:
+
+```json
+{"ok": true, "object_ref": "task:issues/issue_2026...", "issue": {...}}
+```
+
+Use the managed wrapper when a runtime helper already returns it, or when the
+tool intentionally needs a generic `ret` container separate from the domain
+schema.
+
+Failure results should be explicit. Either shape is valid:
+
+```json
+{"ok": false, "error": "memory_not_found", "message": "Memory was not found"}
+```
+
+```json
+{"ok": false, "error": {"code": "upstream_timeout", "message": "Timed out"}, "ret": null}
+```
+
+The important rule is that the event-source policies for the tool must know
+which result schema they consume.
+
+## 4.2) Declaring Files For React Hosting
+
 If a custom tool intentionally produces files that should be delivered to the
-user, mark the payload inside `ret` as a file result:
+user, use the declared-file result protocol.
+
+Protocol rule:
+
+```text
+artifact_type is not a multi-value artifact taxonomy.
+artifact_type has one supported declared-file value: "files".
+artifact_type: "files" means: this result body declares files[] for React hosting.
+```
+
+With the managed wrapper this means `ret.artifact_type == "files"`:
 
 ```json
 {
@@ -152,17 +222,121 @@ user, mark the payload inside `ret` as a file result:
 }
 ```
 
-React unwraps `{ok, error, ret}` first, then recognizes
-`ret.artifact_type == "files"`. Each declared file is copied into the
-conversation store and receives hosted artifact metadata such as `hosted_uri`,
-`key`, `rn`, and `physical_path`.
+With a plain structured result, put the same marker on the top-level result
+body:
+
+```json
+{
+  "ok": true,
+  "artifact_type": "files",
+  "files": [
+    {
+      "type": "file",
+      "path": "turn_123/outputs/invoices/invoice.pdf",
+      "physical_path": "turn_123/outputs/invoices/invoice.pdf",
+      "filename": "invoice.pdf",
+      "mime_type": "application/pdf",
+      "size_bytes": 12345,
+      "visibility": "external"
+    }
+  ]
+}
+```
+
+The `react.block_production.declared_file_items` policy recognizes this exact
+shape on the result body. Each declared file is copied into the conversation
+store and receives hosted artifact metadata for transport. User-facing object
+identity should remain the logical artifact ref (`fi:...`), not transport
+handles such as renderer names or download URLs.
 
 This contract works for one file or many files. The marker and container are
-strict: use `ret.artifact_type: "files"` and `ret.files[]`.
+strict: use `artifact_type: "files"` and `files[]` on the result body.
 
 Use this only for deliberate file-producing tools. For example, a tool that
 materializes a requested email attachment can declare that attachment for
 hosting. A tool that merely returns message metadata should not do so.
+
+Do not use this shape for a tool that has several independent result surfaces
+such as files plus search rows plus snapshot refs. For that case, use a
+composite result and declare the event-source policies that consume each field.
+
+## 4.3) Multi-Surface Tool Results
+
+There is no protocol where `artifact_type` contains multiple values such as
+`["files", "snapshot"]`. Multi-surface tools return a structured result body
+with named fields, and event-source policies decide which fields are consumed.
+
+Current standard block-production policies consume these fields:
+
+| Policy | Result body fields consumed |
+| --- | --- |
+| `react.block_production.declared_file_items` | `artifact_type: "files"` plus `files[]` |
+| `react.block_production.hosted_artifacts` | `hosted_artifacts[]`, `artifact_rows[]`, `files[]`; also accepts `artifact_type: "files"` plus `files[]` |
+| `react.block_production.snapshot_refs` | `snapshot_ref`, `snapshot_refs[]`, `snapshots[]` |
+| `react.block_production.announce_candidates` | `announce_candidate`, `announce_entry`, `announce_candidates[]`, `announce_entries[]` |
+| `react.block_production.exploration_results` | `exploration_results[]`, `source_rows[]`, `items[]`, `results[]` when rows are source-like |
+
+Policy pack behavior is fixed:
+
+| Policy pack | Included standard policies |
+| --- | --- |
+| `structured_result_source_policies()` | default tool block, generic result item, declared file items |
+| `exploration_source_policies()` | default tool block, exploration result rows, generic result item |
+| `write_tool_source_policies()` | rendering-tool input validation, write-tool result, declared file items |
+| `composite_artifact_source_policies()` | default tool block, hosted artifacts, snapshot refs, announce candidates |
+
+If a tool needs a combination that is not in one policy pack, declare the exact
+policy list for that event source. For example, a tool that returns search rows
+and also snapshot refs must include both:
+
+```python
+@event_source(
+    event_source_id="{alias}.inspect",
+    policies=[
+        {"react_phase": "block_production", "event_policy_id": "react.block_production.tool_default"},
+        {"react_phase": "block_production", "event_policy_id": "react.block_production.exploration_results"},
+        {"react_phase": "block_production", "event_policy_id": "react.block_production.snapshot_refs"},
+        {"react_phase": "block_production", "event_policy_id": "react.block_production.generic_result_item"},
+        {"react_phase": "timeline_projection", "event_policy_id": "react.timeline_projection.identity"},
+        {"react_phase": "compaction_projection", "event_policy_id": "react.compaction_projection.identity"},
+    ],
+    kind="react.tool",
+)
+```
+
+Example plain multi-surface result body:
+
+```json
+{
+  "ok": true,
+  "results": [
+    {"url": "https://example.test/a", "title": "A", "content": "Excerpt"}
+  ],
+  "snapshot_refs": [
+    "fi:turn_2026-06-09-12-00-00-000.snapshots/report/current.json"
+  ],
+  "announce_candidates": [
+    {"title": "Report state", "summary": "Snapshot was refreshed."}
+  ]
+}
+```
+
+Example wrapped multi-surface result body:
+
+```json
+{
+  "ok": true,
+  "error": null,
+  "ret": {
+    "hosted_artifacts": [
+      {"filename": "report.pdf", "mime": "application/pdf", "hosted_uri": "..."}
+    ],
+    "snapshot_refs": [
+      "fi:turn_2026-06-09-12-00-00-000.snapshots/report/current.json"
+    ]
+  }
+}
+```
 
 Example bundle-local tool:
 
@@ -214,8 +388,7 @@ Path rules:
 
 Trusted bundle tools can host current-turn files themselves through
 `bundle_tool_context.host_files`. The helper uses the active conversation scope
-and returns the same declared-file payload shape, with hosted fields already
-filled in:
+and returns a declared-file result body with hosted fields already filled in:
 
 ```python
 from kdcube_ai_app.apps.chat.sdk.tools.bundle_tool_context import host_files, ok
@@ -303,10 +476,11 @@ Missing tenant, project, user id, conversation id, or turn id should be treated
 as a runtime-preparation bug. Do not ask the LLM to invent those values.
 
 Direct returned declarations and tool-side hosting are equivalent from React's
-point of view. A tool may either return `ret.artifact_type: "files"` with local
-paths, or call `host_files(...)` and return the already-hosted rows.
+point of view. A tool may either return `artifact_type: "files"` and `files[]`
+on the result body with local paths, or call `host_files(...)` and return a
+result body with already-hosted file rows.
 
-## 4.2) ReAct Event-Source Policies
+## 4.4) ReAct Event-Source Policies
 
 ReAct can run an event-source policy pipeline for tool results. The pipeline is
 controlled by `RuntimeCtx.event_source_pipeline_enabled` and can be enabled per
@@ -320,9 +494,22 @@ config:
 ```
 
 A custom tool is a tool-backed event source when it runs inside ReAct. It is
-still implemented and called as a normal tool; the event-source declaration only
+still implemented and called as a normal tool; the event-source declaration
 adds policy metadata for validation, block production, timeline projection,
 ANNOUNCE production, and compaction projection.
+
+The event-source policy owns how the result becomes ReAct context:
+
+```text
+tool call
+  -> result body: top-level dict, or ret dict when the return is a ret wrapper
+  -> block production policy
+  -> timeline / ANNOUNCE / compaction policies
+```
+
+This is how tools produce search rows, canvas-aware payloads, task/story
+context, memory facts, file artifacts, and other structured surfaces without
+hard-coding those shapes into the generic runtime.
 
 When the flag is enabled, custom tools continue to work even when they do not
 declare event-source metadata. The default fallback is the structured-result
@@ -340,7 +527,8 @@ That fallback mirrors the old `external.py` behavior for ordinary custom tools:
 - JSON/text results are rendered as ordinary `tc:<turn>.<call>.result`
   `react.tool.result` blocks.
 - Errors become ordinary tool-result/error notices.
-- `ret.artifact_type == "files"` still produces declared file artifacts.
+- `artifact_type: "files"` plus `files[]` on the result body still produces
+  declared file artifacts.
 - Generic JSON results are not treated as files just because the artifact id is
   the tool id.
 - No source-pool rows, snapshots, or ANNOUNCE entries are produced unless the
@@ -439,6 +627,14 @@ def list_event_sources():
 
 The source id must still match the runtime tool id if the policy is meant to
 handle that tool's result.
+
+Do not use tool visibility for event-only needs. `TOOLS_SPECS` grants the model
+permission to call functions. `EVENT_SOURCE_SPECS` grants the runtime event
+visibility: policies, event-source readers, and namespace rehosters. For
+example, if a bundle only needs `react.pull(paths=["cnv:..."])` to materialize
+canvas-owned refs, load the canvas event resolver through `EVENT_SOURCE_SPECS`;
+do not add the canvas tool module to `TOOLS_SPECS` unless the model should be
+able to call `canvas.patch`.
 
 ## 5) What a tool module receives at runtime
 
