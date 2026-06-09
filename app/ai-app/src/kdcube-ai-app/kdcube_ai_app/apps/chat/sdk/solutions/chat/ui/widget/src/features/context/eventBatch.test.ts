@@ -95,6 +95,7 @@ assertDeepEqual(
           kind: 'memory',
           label: 'Family facts about Elena and Timur',
           summary: 'Family facts about Elena and her son Timur',
+          object_ref: 'mem:mem_803986c10e324a16b05a3ba109237c7c',
           ref: 'mem:mem_803986c10e324a16b05a3ba109237c7c',
           data: { memory_id: 'mem_803986c10e324a16b05a3ba109237c7c' },
         },
@@ -102,6 +103,66 @@ assertDeepEqual(
     },
   ],
   'memory context preserves the producer event source id',
+)
+
+const landingIntentBatch = buildExternalEventBatch([
+  {
+    id: 'intent:landing/why-kdcube',
+    kind: 'intent',
+    label: 'Why KDCube',
+    summary: 'Explain why KDCube exists.',
+    ref: 'intent:landing/why-kdcube',
+    logicalPath: 'intent:landing/why-kdcube',
+    mime: 'application/vnd.kdcube.intent+json;version=1',
+    eventSourceId: 'intent.context',
+    surface: 'website.landing',
+    data: {
+      object_ref: 'intent:landing/why-kdcube',
+      label: 'Why',
+      task: 'Explain why KDCube exists, what problem it solves, and when it is the right choice.',
+      preferred_refs: ['ks:wiki/product/landing/why-kdcube.md'],
+      fallback_search: 'why KDCube exists product rationale AI applications bundles ReAct agents widgets tools',
+    },
+  },
+], {
+  agentId: 'main',
+  eventId: idFactory(),
+})
+
+assertDeepEqual(
+  landingIntentBatch.slice(0, 1),
+  [
+    {
+      event_id: 'evt_1',
+      reactive: false,
+      agent_id: 'main',
+      type: 'event.external',
+      event_source_id: 'intent.context',
+      surface: 'website.landing',
+      hosted_uri: 'intent:landing/why-kdcube',
+      payload: {
+        mime: 'application/vnd.kdcube.intent+json;version=1',
+        event_ref: 'intent:landing/why-kdcube',
+        event: {
+          context_role: 'context',
+          id: 'intent:landing/why-kdcube',
+          kind: 'intent',
+          label: 'Why',
+          summary: 'Explain why KDCube exists.',
+          object_ref: 'intent:landing/why-kdcube',
+          ref: 'intent:landing/why-kdcube',
+          data: {
+            object_ref: 'intent:landing/why-kdcube',
+            label: 'Why',
+            task: 'Explain why KDCube exists, what problem it solves, and when it is the right choice.',
+            preferred_refs: ['ks:wiki/product/landing/why-kdcube.md'],
+            fallback_search: 'why KDCube exists product rationale AI applications bundles ReAct agents widgets tools',
+          },
+        },
+      },
+    },
+  ],
+  'landing intent keeps the chip label separate from the self-contained ReAct payload',
 )
 
 const contexts: AttachedContext[] = [
@@ -339,6 +400,7 @@ assertDeepEqual(
           kind: 'user.attachment',
           label: 'upload-error-dialog.png',
           summary: 'Screenshot showing the disappearing upload row.',
+          object_ref: 'ext:task-tracker/users/user-1/attachments/upload-error-dialog.png',
           ref: 'ext:task-tracker/users/user-1/attachments/upload-error-dialog.png',
           data: { story_id: 'issue:BUG-123' },
         },
@@ -362,6 +424,7 @@ assertDeepEqual(
           kind: 'memory',
           label: 'Similar upload lifecycle issue',
           summary: 'Prior memory about attachment lifecycle failures.',
+          object_ref: 'mem:issues/similar-upload-lifecycle',
           ref: 'mem:issues/similar-upload-lifecycle',
           data: { story_id: 'issue:BUG-123' },
         },
@@ -446,6 +509,7 @@ assertDeepEqual(
           kind: 'memory',
           label: 'Family facts about Elena and Timur',
           summary: 'Family facts about Elena and her son Timur',
+          object_ref: 'mem:mem_803986c10e324a16b05a3ba109237c7c',
           ref: 'mem:mem_803986c10e324a16b05a3ba109237c7c',
           data: {
             memory_id: 'mem_803986c10e324a16b05a3ba109237c7c',

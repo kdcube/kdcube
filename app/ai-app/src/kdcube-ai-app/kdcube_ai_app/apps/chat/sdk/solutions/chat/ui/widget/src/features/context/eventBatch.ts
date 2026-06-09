@@ -287,6 +287,11 @@ export function buildContextEvents(contexts: AttachedContext[], options: BuildCo
     .filter((ctx) => !isCanvasContext(ctx) && !isWizardContext(ctx))
     .forEach((ctx) => {
       const ref = contextRef(ctx)
+      const contextData = ctx.data && typeof ctx.data === 'object' ? ctx.data : {}
+      const payloadLabel =
+        ctx.kind === 'intent' && typeof contextData.label === 'string' && contextData.label.trim()
+          ? contextData.label.trim()
+          : ctx.label
       events.push({
         ...contextBase(ctx, { agentId, eventId }),
         type: 'event.external',
@@ -300,10 +305,11 @@ export function buildContextEvents(contexts: AttachedContext[], options: BuildCo
             context_role: 'context',
             id: ctx.id,
             kind: ctx.kind,
-            label: ctx.label,
+            label: payloadLabel,
             summary: ctx.summary,
+            ...(ref ? { object_ref: ref } : {}),
             ref,
-            data: ctx.data,
+            data: contextData,
           },
         },
       })
