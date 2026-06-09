@@ -1,0 +1,248 @@
+:root {
+  --bg: #fcfdfd;
+  --surface: #ffffff;
+  --surface-2: #f6f8f8;
+  --surface-3: #fafbfb;
+  --ink: #0d1e2c;
+  --text-2: #3a5672;
+  --muted: #7a99b0;
+  --line: #e2e8e8;
+  --line-soft: #ecf1f1;
+  --teal: #01beb2;
+  --teal-pale: #c6f3f1;
+  --blue: #4372c3;
+  --blue-pale: #ddeafe;
+  --gold: #f0bc2e;
+  --gold-pale: #fff8dc;
+  --pink: #f7609a;
+  --red: #e04935;
+  --red-pale: #fde3dd;
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 8px;
+  color: var(--ink);
+  background: var(--bg);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  background: transparent;
+}
+
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+.usage-card-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px 12px;
+  background: var(--surface);
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+}
+
+.usage-card-shell.is-loading {
+  opacity: 0.85;
+}
+
+.usage-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.eyebrow {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.usage-card-header h2 {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+  text-transform: capitalize;
+  margin-top: 2px;
+}
+
+.usage-refresh {
+  appearance: none;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--text-2);
+  width: 24px;
+  height: 24px;
+  font-size: 13px;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.usage-refresh:hover:not(:disabled) {
+  border-color: var(--teal);
+  color: var(--ink);
+}
+
+.usage-refresh:disabled {
+  cursor: progress;
+  opacity: 0.5;
+}
+
+.usage-error {
+  background: var(--red-pale);
+  color: #6d2018;
+  border-radius: var(--r-md);
+  padding: 6px 8px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.usage-empty {
+  padding: 14px 0;
+  color: var(--muted);
+  text-align: center;
+  font-size: 11px;
+}
+
+.usage-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+
+.usage-window {
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.usage-window-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.usage-window-head h3 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.usage-window-reset {
+  font-size: 10px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.usage-window-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.usage-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.usage-row-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.usage-row-label {
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.usage-row-value {
+  color: var(--ink);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-row-bar {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--line-soft);
+  overflow: hidden;
+}
+
+.usage-row-bar-fill {
+  height: 100%;
+  background: var(--teal);
+  transition: width 0.18s ease;
+}
+
+.usage-row[data-pct='high'] .usage-row-bar-fill {
+  background: var(--gold);
+}
+
+.usage-row[data-pct='full'] .usage-row-bar-fill {
+  background: var(--red);
+}
+
+.usage-row-meta {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.usage-reserved {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px dashed var(--gold);
+  background: var(--gold-pale);
+  border-radius: var(--r-md);
+  padding: 6px 10px;
+  font-size: 11px;
+}
+
+.usage-reserved-label {
+  color: var(--gold);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+}
+
+.usage-reserved-value {
+  color: var(--ink);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
