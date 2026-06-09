@@ -13,6 +13,15 @@ interface AppShellProps {
   saving?: boolean;
 }
 
+function notifyHostWidgetFocus(): void {
+  try {
+    if (typeof window === 'undefined' || window.parent === window) return;
+    window.parent.postMessage({ type: 'kdcube-widget-focus', widget: 'memories' }, '*');
+  } catch {
+    // Focus promotion is a host-scene affordance only.
+  }
+}
+
 export function AppShell({
   allowWrite,
   children,
@@ -26,7 +35,10 @@ export function AppShell({
   saving = false,
 }: AppShellProps) {
   return (
-    <main className={`app-shell ${compact ? 'compact-shell' : 'expanded-shell'} ${compact && hostControls ? 'host-controlled-shell' : ''}`}>
+    <main
+      className={`app-shell ${compact ? 'compact-shell' : 'expanded-shell'} ${compact && hostControls ? 'host-controlled-shell' : ''}`}
+      onPointerDownCapture={notifyHostWidgetFocus}
+    >
       {compact && hostControls ? null : <header className="app-header">
         <div className="app-title-block">
           {compact ? null : <h1>Memory notes</h1>}

@@ -65,6 +65,15 @@ export function requestHostView(view: TaskTrackerHostView): void {
   }
 }
 
+export function notifyHostWidgetFocus(): void {
+  try {
+    if (typeof window === 'undefined' || window.parent === window) return
+    window.parent.postMessage({ type: 'kdcube-widget-focus', widget: CHAT_WIDGET_ID }, '*')
+  } catch {
+    // Non-fatal: focus promotion is only a host-scene affordance.
+  }
+}
+
 export function requestAuthRequired(): void {
   try {
     if (typeof window === 'undefined' || window.parent === window) return

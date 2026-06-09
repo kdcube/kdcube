@@ -70,6 +70,7 @@ import { fetchProfile } from './api/transport.ts'
 import {
   isKdcubePreviewContext,
   isHostEmbedMode,
+  notifyHostWidgetFocus,
   recognizeContextMessage,
   recognizeContextRemoval,
   requestAuthRequired,
@@ -1182,7 +1183,7 @@ export default function App() {
   }
 
   return (
-    <div className={`shell-grid ${previewTile ? 'k-preview-stage' : ''}`}>
+    <div className={`shell-grid ${previewTile ? 'k-preview-stage' : ''}`} onPointerDownCapture={notifyHostWidgetFocus}>
       <div
         className={`relative flex w-full flex-col ${hostEmbedMode ? 'mx-0' : 'mx-auto'} ${
           previewTile

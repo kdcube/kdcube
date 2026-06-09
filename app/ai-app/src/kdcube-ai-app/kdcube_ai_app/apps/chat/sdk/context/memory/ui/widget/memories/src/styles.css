@@ -98,8 +98,8 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   gap: 8px;
   height: 100vh;
   min-height: 0;
-  overflow: auto;
-  padding-bottom: 10px;
+  overflow: hidden;
+  padding-bottom: 12px;
 }
 
 .compact-shell {
@@ -313,6 +313,13 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 .expanded-shell .warning-box,
 .expanded-shell .maintenance-toggle-row,
 .expanded-shell .error-box {
+  flex: 0 0 auto;
+}
+
+.expanded-shell > .warning-box,
+.expanded-shell > .filters,
+.expanded-shell > .maintenance-toggle-row,
+.expanded-shell > .error-box {
   flex: 0 0 auto;
 }
 
@@ -756,9 +763,16 @@ textarea:focus {
 
 /* ─── Memory list ─── */
 .side-panel {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
+}
+
+.side-panel > .memory-detail,
+.side-panel > .memory-editor {
+  flex: 1 1 auto;
 }
 
 .memory-list,
@@ -772,13 +786,14 @@ textarea:focus {
   z-index: 1;
   flex: 1 1 auto;
   margin-top: 0;
-  min-height: 180px;
-  overflow: auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .expanded-shell .memory-list,
 .expanded-shell .memory-detail,
 .expanded-shell .memory-editor {
+  height: 100%;
   min-height: 0;
   overflow: auto;
 }
@@ -793,7 +808,7 @@ textarea:focus {
 .memory-list {
   display: grid;
   align-content: start;
-  overflow: hidden;
+  overflow: auto;
 }
 
 .compact-memory-list {

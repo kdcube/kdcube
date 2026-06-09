@@ -40,6 +40,11 @@ const CHAT_WIDGET_ALIAS = 'versatile_chat'
 const MEMORY_WIDGET_ALIAS = 'memories'
 const CANVAS_STORY_ID = 'versatile:main'
 const CANVAS_SUBJECT = 'canvas.patch'
+const DEFAULT_CHAT_WIDTH = 460
+const DEFAULT_CHAT_HEIGHT = 720
+const DEFAULT_CHAT_MIN_WIDTH = 340
+const DEFAULT_CHAT_MAX_WIDTH = 860
+const FLOATING_PANEL_BASE_Z = 72
 
 interface RouteContext {
   tenant: string
@@ -247,6 +252,27 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
 }
 
+function numberParam(names: string[], fallback: number): number {
+  const params = new URLSearchParams(window.location.search || '')
+  for (const name of names) {
+    const value = Number(params.get(name))
+    if (Number.isFinite(value) && value > 0) return value
+  }
+  return fallback
+}
+
+function sceneChatSizing() {
+  const viewportMax = Math.max(300, window.innerWidth - 108)
+  const minWidth = clamp(numberParam(['chat_min_width', 'chatMinWidth'], DEFAULT_CHAT_MIN_WIDTH), 300, viewportMax)
+  const maxWidth = clamp(numberParam(['chat_max_width', 'chatMaxWidth'], DEFAULT_CHAT_MAX_WIDTH), minWidth, viewportMax)
+  return {
+    minWidth,
+    maxWidth,
+    width: clamp(numberParam(['chat_width', 'chatWidth'], DEFAULT_CHAT_WIDTH), minWidth, maxWidth),
+    height: clamp(numberParam(['chat_height', 'chatHeight'], DEFAULT_CHAT_HEIGHT), 420, Math.max(420, window.innerHeight - 92)),
+  }
+}
+
 function downloadBase64File(contentBase64: string, filename: string, mime = 'application/octet-stream') {
   const binary = window.atob(contentBase64)
   const bytes = new Uint8Array(binary.length)
@@ -337,10 +363,10 @@ function memoryPanelSize(expanded: boolean) {
   }
 }
 
-function chatPanelSize(expanded: boolean, width: number) {
+function chatPanelSize(expanded: boolean, width: number, height = DEFAULT_CHAT_HEIGHT) {
   return {
     width: expanded ? window.innerWidth : Math.min(width, window.innerWidth - 72),
-    height: expanded ? window.innerHeight : Math.min(720, window.innerHeight - 92),
+    height: expanded ? window.innerHeight : Math.min(height, window.innerHeight - 92),
   }
 }
 
@@ -350,8 +376,8 @@ function compactMemoryPaneHeight(contentHeight: number | null): number {
   return clamp(measured || 360, 220, max)
 }
 
-function defaultChatFrame(width: number, expanded: boolean) {
-  const panel = chatPanelSize(expanded, width)
+function defaultChatFrame(width: number, expanded: boolean, height = DEFAULT_CHAT_HEIGHT) {
+  const panel = chatPanelSize(expanded, width, height)
   return {
     x: clamp(window.innerWidth - panel.width - 70, 8, Math.max(8, window.innerWidth - panel.width - 60)),
     y: 84,
@@ -623,18 +649,23 @@ function requestRuntimeConfig(): Promise<RuntimeConfig | null> {
 
 function App() {
   const fallback = useMemo(() => routeContext(), [])
+  const chatSizing = useMemo(() => sceneChatSizing(), [])
   const [ctx, setCtx] = useState<RouteContext>(fallback)
   const [ready, setReady] = useState(false)
   const [chatOpen, setChatOpen] = useState(true)
   const [chatExpanded, setChatExpanded] = useState(false)
-  const [chatWidth, setChatWidth] = useState(460)
-  const [chatFrame, setChatFrame] = useState(() => defaultChatFrame(460, false))
+  const [chatWidth, setChatWidth] = useState(chatSizing.width)
+  const [chatFrame, setChatFrame] = useState(() => defaultChatFrame(chatSizing.width, false, chatSizing.height))
   const [canvasOpen, setCanvasOpen] = useState(true)
   const [memoryOpen, setMemoryOpen] = useState(true)
   const [memoryExpanded, setMemoryExpanded] = useState(false)
   const [memoryCount, setMemoryCount] = useState<number | null>(null)
   const [memoryContentHeight, setMemoryContentHeight] = useState<number | null>(null)
-  const [memoryFrame, setMemoryFrame] = useState(() => defaultMemoryFrame(460, true, false))
+  const [memoryFrame, setMemoryFrame] = useState(() => defaultMemoryFrame(chatSizing.width, true, false))
+  const [panelZ, setPanelZ] = useState<Record<'chat' | 'memory', number>>({
+    chat: FLOATING_PANEL_BASE_Z,
+    memory: FLOATING_PANEL_BASE_Z + 1,
+  })
   const [activeCanvasName, setActiveCanvasName] = useState('main')
   const [canvases, setCanvases] = useState<CanvasDefinition[]>([emptyCanvasDefinition('main')])
   const [canvasPatchEvent, setCanvasPatchEvent] = useState<CanvasPatchUiEvent | null>(null)
@@ -642,6 +673,7 @@ function App() {
   const chatFrameRef = useRef<HTMLIFrameElement | null>(null)
   const memoryFrameRef = useRef<HTMLIFrameElement | null>(null)
   const pendingMemoryCommandRef = useRef<Record<string, unknown> | null>(null)
+  const panelZCursorRef = useRef(FLOATING_PANEL_BASE_Z + 2)
 
   const activeCanvas = useMemo(
     () => canvases.find((canvas) => canvas.name === activeCanvasName) ?? emptyCanvasDefinition(activeCanvasName),
@@ -650,6 +682,11 @@ function App() {
 
   const sendToChat = useCallback((message: Record<string, unknown>) => {
     chatFrameRef.current?.contentWindow?.postMessage(message, '*')
+  }, [])
+
+  const bringPanelToFront = useCallback((panel: 'chat' | 'memory') => {
+    panelZCursorRef.current += 1
+    setPanelZ((current) => ({ ...current, [panel]: panelZCursorRef.current }))
   }, [])
 
   const syncChatWidgetView = useCallback((view: 'compact' | 'expanded') => {
@@ -682,6 +719,7 @@ function App() {
   }, [sendMemoryWidgetCommand])
 
   const openMemoryWidget = useCallback((expanded = true) => {
+    bringPanelToFront('memory')
     setMemoryOpen(true)
     setMemoryExpanded(expanded)
     const panel = memoryPanelSize(expanded)
@@ -690,7 +728,7 @@ function App() {
       y: clamp(frame.y, 62, Math.max(62, window.innerHeight - panel.height - 8)),
     }))
     window.setTimeout(() => syncMemoryWidgetView(expanded ? 'expanded' : 'compact'), 0)
-  }, [syncMemoryWidgetView])
+  }, [bringPanelToFront, syncMemoryWidgetView])
 
   const createMemoryFromHost = useCallback(() => {
     pendingMemoryCommandRef.current = { action: 'create' }
@@ -708,6 +746,7 @@ function App() {
 
   const startMemoryDrag = useCallback((event: React.PointerEvent<HTMLElement>) => {
     if ((event.target as HTMLElement).closest('button')) return
+    bringPanelToFront('memory')
     event.preventDefault()
     const dragTarget = event.currentTarget
     try {
@@ -742,10 +781,11 @@ function App() {
     window.addEventListener('pointerup', finish, { once: true })
     window.addEventListener('pointercancel', finish, { once: true })
     window.addEventListener('blur', finish, { once: true })
-  }, [memoryExpanded, memoryFrame])
+  }, [bringPanelToFront, memoryExpanded, memoryFrame])
 
   const startChatDrag = useCallback((event: React.PointerEvent<HTMLElement>) => {
     if (chatExpanded || (event.target as HTMLElement).closest('button')) return
+    bringPanelToFront('chat')
     event.preventDefault()
     const dragTarget = event.currentTarget
     try {
@@ -757,7 +797,7 @@ function App() {
     const startX = event.clientX
     const startY = event.clientY
     const startFrame = chatFrame
-    const panel = chatPanelSize(false, chatWidth)
+    const panel = chatPanelSize(false, chatWidth, chatSizing.height)
     const onMove = (move: PointerEvent) => {
       setChatFrame({
         x: clamp(startFrame.x + move.clientX - startX, 8, Math.max(8, window.innerWidth - panel.width - 60)),
@@ -780,17 +820,18 @@ function App() {
     window.addEventListener('pointerup', finish, { once: true })
     window.addEventListener('pointercancel', finish, { once: true })
     window.addEventListener('blur', finish, { once: true })
-  }, [chatExpanded, chatFrame, chatWidth])
+  }, [bringPanelToFront, chatExpanded, chatFrame, chatSizing.height, chatWidth])
 
   const startChatResize = useCallback((event: React.PointerEvent<HTMLElement>) => {
     if (chatExpanded) return
+    bringPanelToFront('chat')
     event.preventDefault()
     const startX = event.clientX
     const startWidth = chatWidth
     const startFrame = chatFrame
     const rightEdge = startFrame.x + startWidth
     const onMove = (move: PointerEvent) => {
-      const nextWidth = clamp(startWidth + startX - move.clientX, 360, Math.min(860, window.innerWidth - 108))
+      const nextWidth = clamp(startWidth + startX - move.clientX, chatSizing.minWidth, Math.min(chatSizing.maxWidth, window.innerWidth - 108))
       setChatWidth(nextWidth)
       setChatFrame((frame) => ({
         ...frame,
@@ -803,7 +844,7 @@ function App() {
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp, { once: true })
-  }, [chatExpanded, chatFrame, chatWidth])
+  }, [bringPanelToFront, chatExpanded, chatFrame, chatSizing.maxWidth, chatSizing.minWidth, chatWidth])
 
   const attachContexts = useCallback((messageType: string, contexts: CanvasContextItem[]) => {
     if (!contexts.length) return
@@ -1007,15 +1048,22 @@ function App() {
         }
         if (data.type === 'kdcube-widget-view') {
           if (data.widget === CHAT_WIDGET_ALIAS) {
+            bringPanelToFront('chat')
             setChatOpen(true)
             setChatExpanded(data.view === 'expanded')
             return
           }
           if (data.widget === MEMORY_WIDGET_ALIAS) {
+            bringPanelToFront('memory')
             setMemoryOpen(true)
             setMemoryExpanded(data.view === 'expanded')
             return
           }
+          return
+        }
+        if (data.type === 'kdcube-widget-focus') {
+          if (data.widget === CHAT_WIDGET_ALIAS) bringPanelToFront('chat')
+          if (data.widget === MEMORY_WIDGET_ALIAS) bringPanelToFront('memory')
           return
         }
         if (data.type === 'kdcube-memory-widget-status' && data.widget === MEMORY_WIDGET_ALIAS) {
@@ -1051,7 +1099,7 @@ function App() {
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [pinIngressPayloadToCanvas, sendToChat])
+  }, [bringPanelToFront, pinIngressPayloadToCanvas, sendToChat])
 
   useEffect(() => {
     syncChatWidgetView(chatExpanded ? 'expanded' : 'compact')
@@ -1129,10 +1177,11 @@ function App() {
             aria-label={chatOpen ? 'Collapse chat' : 'Open chat'}
             aria-pressed={chatOpen}
             onClick={() => {
+              bringPanelToFront('chat')
               setChatOpen((open) => {
                 const next = !open
                 if (!next) setChatExpanded(false)
-                if (next) setChatFrame(defaultChatFrame(chatWidth, chatExpanded))
+                if (next) setChatFrame(defaultChatFrame(chatWidth, chatExpanded, chatSizing.height))
                 return next
               })
             }}
@@ -1156,6 +1205,7 @@ function App() {
             aria-label={memoryOpen ? 'Hide memories' : 'Open memories'}
             aria-pressed={memoryOpen}
             onClick={() => {
+              bringPanelToFront('memory')
               setMemoryOpen((open) => {
                 const next = !open
                 if (!next) {
@@ -1173,13 +1223,17 @@ function App() {
       </section>
       <aside
         className={`scene-side ${chatOpen ? '' : 'collapsed'} ${chatExpanded ? 'expanded' : ''}`}
-        style={chatExpanded ? undefined : ({
+        style={chatExpanded ? ({
+          zIndex: panelZ.chat,
+        } as CSSProperties) : ({
           left: chatFrame.x,
           top: chatFrame.y,
           width: chatWidth,
-          '--versatile-chat-pane-height': `${chatPanelSize(false, chatWidth).height}px`,
+          zIndex: panelZ.chat,
+          '--versatile-chat-pane-height': `${chatPanelSize(false, chatWidth, chatSizing.height).height}px`,
         } as CSSProperties)}
         aria-hidden={!chatOpen}
+        onPointerDownCapture={() => bringPanelToFront('chat')}
       >
         <header className="chat-pane-header" onPointerDown={startChatDrag}>
           <span>Chat</span>
@@ -1233,9 +1287,11 @@ function App() {
           style={{
             left: memoryFrame.x,
             top: memoryFrame.y,
+            zIndex: panelZ.memory,
             '--memory-pane-height': `${compactMemoryPaneHeight(memoryContentHeight)}px`,
           } as CSSProperties}
           aria-label="Memories"
+          onPointerDownCapture={() => bringPanelToFront('memory')}
         >
           <header onPointerDown={startMemoryDrag}>
             <span className="memory-pane-title">

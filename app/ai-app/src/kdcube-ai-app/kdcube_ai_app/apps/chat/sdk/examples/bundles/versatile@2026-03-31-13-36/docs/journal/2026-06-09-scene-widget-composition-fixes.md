@@ -351,3 +351,103 @@ OUTDIR=/private/tmp/memory-widget-build npm run build
 ```
 
 Both builds passed.
+
+## Follow-up: Floating Panel Focus and Resizable Memory Layout
+
+User testing exposed two remaining scene-composition problems:
+
+1. Clicking or working inside an iframe did not bring that panel to the front.
+2. The expanded memory widget clipped list/detail content and left a large
+   unusable blank region when the host window was resized.
+
+### Focus Promotion
+
+The host scene can receive pointer events from panel chrome, but it cannot see
+pointer events inside a child iframe. The fix uses a small generic widget focus
+message:
+
+```json
+{
+  "type": "kdcube-widget-focus",
+  "widget": "versatile_chat"
+}
+```
+
+```json
+{
+  "type": "kdcube-widget-focus",
+  "widget": "memories"
+}
+```
+
+The scene owns z-order. Every focus message, host-header drag, rail open, and
+resize action increments a scene-local z counter and applies it to the selected
+panel. The widgets only report focus; they do not know scene geometry.
+
+### Configurable Chat Geometry
+
+The scene now reads chat sizing from query parameters:
+
+| Parameter | Meaning |
+| --- | --- |
+| `chat_width` / `chatWidth` | Initial compact chat panel width. |
+| `chat_height` / `chatHeight` | Initial compact chat panel height. |
+| `chat_min_width` / `chatMinWidth` | Minimum width for the scene resize handle. |
+| `chat_max_width` / `chatMaxWidth` | Maximum width for the scene resize handle. |
+
+The host clamps these values to the current viewport. This keeps the SDK chat
+widget reusable on a landing-page scene where the desired default is narrower
+than the control-plane task-tracker layout.
+
+### Memory Widget Layout
+
+The memory widget now treats the iframe as a bounded viewport:
+
+```text
+expanded-shell
+  fixed header / preferences / filters
+  workspace: flexes to remaining height
+    memory-list: scrolls internally
+    side-panel
+      memory-detail or editor: scrolls internally
+```
+
+The widget no longer scrolls the entire expanded page for normal list/detail
+use. This prevents the list rows from being clipped at the top while a large
+white area remains below. The host still owns the outer panel resize; the memory
+iframe fills that rectangle.
+
+### Landing Page Switch
+
+`website/index.html` now points the live versatile tile at the reusable chat
+widget route:
+
+```text
+public/widgets/versatile_chat?chat_embed_mode=host&...
+```
+
+The landing host keeps its existing iframe/drop overlay mechanics and sends
+generic context messages:
+
+```json
+{
+  "type": "kdcube.context.attach",
+  "context": { "...": "..." }
+}
+```
+
+The route change means the landing page is no longer embedding the old
+versatile main UI for chat.
+
+### Verification
+
+Build checks after this follow-up:
+
+```bash
+npm run build  # ui/scene
+npm run build  # sdk/context/memory/ui/widget/memories
+npm run build  # sdk/solutions/chat/ui/widget
+```
+
+All three builds passed. The scene and chat builds still emit Vite chunk-size
+warnings; those are unchanged from the current bundle shape.
