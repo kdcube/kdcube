@@ -100,6 +100,15 @@ def _socket_session():
     }
 
 
+def _app(redis, gateway_adapter=None):
+    return SimpleNamespace(
+        state=SimpleNamespace(
+            redis_async=redis,
+            gateway_adapter=gateway_adapter or SimpleNamespace(gateway=SimpleNamespace()),
+        )
+    )
+
+
 def _prompt_event(text: str = "hello") -> dict:
     return {
         "type": "event.user.prompt",
@@ -150,6 +159,12 @@ def _patch_data_bus_contract(monkeypatch, manifest):
     monkeypatch.setattr(pub, "get_bundle_props", fake_get_bundle_props)
     monkeypatch.setattr(pub, "get_settings", lambda: SimpleNamespace(TENANT="tenant-a", PROJECT="project-a"))
 
+    async def fake_run_gateway_checks(**kwargs):
+        del kwargs
+        return GatewayCheckResult(kind="ok")
+
+    monkeypatch.setattr(pub, "run_gateway_checks", fake_run_gateway_checks)
+
 
 def _async_return(value):
     async def _inner(*args, **kwargs):
@@ -170,7 +185,7 @@ def _async_noop():
 @pytest.mark.asyncio
 async def test_data_bus_publish_accepts_messages_into_bundle_stream(monkeypatch):
     redis = FakeRedis()
-    app = SimpleNamespace(state=SimpleNamespace(redis_async=redis))
+    app = _app(redis)
     _patch_data_bus_contract(monkeypatch, _manifest())
 
     ingress = DataBusSocketIOIngress(app=app)
@@ -209,9 +224,55 @@ async def test_data_bus_publish_accepts_messages_into_bundle_stream(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_data_bus_publish_gateway_rejection_does_not_write_stream(monkeypatch):
+    redis = FakeRedis()
+    app = _app(redis)
+    _patch_data_bus_contract(monkeypatch, _manifest())
+
+    async def reject_gateway(**kwargs):
+        assert kwargs["endpoint"] == "/socket.io/data_bus.publish"
+        return GatewayCheckResult(
+            kind="backpressure",
+            exc=SimpleNamespace(message="capacity exhausted", retry_after=30),
+        )
+
+    monkeypatch.setattr(pub, "run_gateway_checks", reject_gateway)
+
+    ingress = DataBusSocketIOIngress(app=app)
+    ack = await ingress.handle_publish(
+        sid="socket-1",
+        socket_session=_socket_session(),
+        data={
+            "schema": "kdcube.data_bus.ingress.v1",
+            "bundle_id": "task-tracker@1-0",
+            "messages": [
+                {
+                    "message_id": "m1",
+                    "subject": "task_tracker.canvas.patch",
+                    "object_ref": "canvas:main",
+                    "idempotency_key": "op-1",
+                    "payload": {"base_revision": 1, "operations": []},
+                }
+            ],
+        },
+    )
+
+    assert ack["status"] == "rejected"
+    assert ack["accepted"] == []
+    assert ack["rejected"] == [{
+        "index": None,
+        "error": "System under pressure: capacity exhausted",
+        "error_type": "backpressure",
+        "status": 503,
+        "retry_after": 30,
+    }]
+    assert redis.streams == {}
+
+
+@pytest.mark.asyncio
 async def test_data_bus_publish_defaults_to_timestamp_message_id(monkeypatch):
     redis = FakeRedis()
-    app = SimpleNamespace(state=SimpleNamespace(redis_async=redis))
+    app = _app(redis)
     _patch_data_bus_contract(monkeypatch, _manifest())
 
     ingress = DataBusSocketIOIngress(app=app)
@@ -242,7 +303,7 @@ async def test_data_bus_publish_defaults_to_timestamp_message_id(monkeypatch):
 @pytest.mark.asyncio
 async def test_data_bus_publish_can_target_sse_reply_stream(monkeypatch):
     redis = FakeRedis()
-    app = SimpleNamespace(state=SimpleNamespace(redis_async=redis))
+    app = _app(redis)
     _patch_data_bus_contract(monkeypatch, _manifest())
 
     ingress = DataBusSocketIOIngress(app=app)
@@ -278,7 +339,7 @@ async def test_data_bus_publish_can_target_sse_reply_stream(monkeypatch):
 @pytest.mark.asyncio
 async def test_data_bus_publish_anonymous_threshold_handler_accepts_platform_registered_session(monkeypatch):
     redis = FakeRedis()
-    app = SimpleNamespace(state=SimpleNamespace(redis_async=redis))
+    app = _app(redis)
     manifest = SimpleNamespace(
         allowed_roles=(),
         allowed_roles_config=None,
@@ -319,7 +380,7 @@ async def test_data_bus_publish_anonymous_threshold_handler_accepts_platform_reg
 @pytest.mark.asyncio
 async def test_data_bus_publish_queues_unknown_subject_for_proc_side_rejection(monkeypatch):
     redis = FakeRedis()
-    app = SimpleNamespace(state=SimpleNamespace(redis_async=redis))
+    app = _app(redis)
     _patch_data_bus_contract(monkeypatch, _manifest())
 
     ingress = DataBusSocketIOIngress(app=app)
@@ -349,7 +410,7 @@ async def test_data_bus_publish_queues_unknown_subject_for_proc_side_rejection(m
 @pytest.mark.asyncio
 async def test_data_bus_publish_rejects_subject_outside_federated_token_scope(monkeypatch):
     redis = FakeRedis()
-    app = SimpleNamespace(state=SimpleNamespace(redis_async=redis))
+    app = _app(redis)
     manifest = SimpleNamespace(
         allowed_roles=(),
         allowed_roles_config=None,
@@ -388,7 +449,7 @@ async def test_data_bus_publish_rejects_subject_outside_federated_token_scope(mo
 @pytest.mark.asyncio
 async def test_data_bus_publish_rejects_bundle_outside_federated_token_scope(monkeypatch):
     redis = FakeRedis()
-    app = SimpleNamespace(state=SimpleNamespace(redis_async=redis))
+    app = _app(redis)
     manifest = SimpleNamespace(
         allowed_roles=(),
         allowed_roles_config=None,
@@ -429,7 +490,7 @@ async def test_data_bus_publish_rejects_bundle_outside_federated_token_scope(mon
 @pytest.mark.asyncio
 async def test_socketio_chat_message_and_data_bus_publish_coexist_without_cross_routing(monkeypatch):
     redis = FakeRedis()
-    app = SimpleNamespace(state=SimpleNamespace(redis_async=redis))
+    app = _app(redis)
     _patch_data_bus_contract(monkeypatch, _manifest())
 
     captured_chat: dict[str, dict] = {}

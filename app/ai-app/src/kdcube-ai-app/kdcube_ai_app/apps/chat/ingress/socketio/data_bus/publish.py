@@ -10,6 +10,11 @@ import uuid
 from typing import Any, Mapping
 
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
+from kdcube_ai_app.apps.chat.ingress.ingress_core import (
+    build_ws_chat_request_context,
+    map_gateway_error,
+    run_gateway_checks,
+)
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.stream import RedisDataBusStream
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.types import (
     DATA_BUS_INGRESS_SCHEMA,
@@ -21,7 +26,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.types import (
     timestamp_message_id,
     utc_now_iso,
 )
-from kdcube_ai_app.auth.sessions import UserSession, UserType
+from kdcube_ai_app.auth.sessions import RequestContext, UserSession, UserType
 from kdcube_ai_app.infra.plugin.bundle_store import get_bundle_props, load_registry
 
 logger = logging.getLogger("kdcube.data_bus.socketio")
@@ -93,6 +98,16 @@ def _allowed_subjects_from_socket_meta(socket_session: Mapping[str, Any] | None)
         for subject in (claims.get("allowed_subjects") or ())
         if str(subject).strip()
     }
+
+
+def _request_context_from_socket_meta(socket_session: Mapping[str, Any] | None) -> RequestContext:
+    ctx_data = (socket_session or {}).get("request_context")
+    if isinstance(ctx_data, Mapping):
+        try:
+            return RequestContext(**dict(ctx_data))
+        except Exception:
+            logger.debug("[data_bus.publish] invalid stored socket request_context", exc_info=True)
+    return build_ws_chat_request_context()
 
 
 class DataBusSocketIOIngress:
@@ -168,6 +183,42 @@ class DataBusSocketIOIngress:
         if not _bundle_enabled(props):
             return self._ack(status="rejected", rejected=[{"index": None, "error": "bundle is disabled"}])
         allowed_subjects = _allowed_subjects_from_socket_meta(socket_session)
+        gateway_adapter = getattr(getattr(self.app, "state", None), "gateway_adapter", None)
+        if gateway_adapter is None:
+            logger.warning(
+                "[data_bus.publish] rejected package because gateway_adapter is unavailable tenant=%s project=%s bundle=%s sid=%s",
+                tenant,
+                project,
+                bundle_id,
+                sid,
+            )
+            return self._ack(
+                status="rejected",
+                rejected=[{
+                    "index": None,
+                    "error": "gateway unavailable",
+                    "error_type": "gateway_unavailable",
+                    "status": 503,
+                }],
+            )
+        gateway_result = await run_gateway_checks(
+            gateway_adapter=gateway_adapter,
+            session=session,
+            context=_request_context_from_socket_meta(socket_session),
+            endpoint="/socket.io/data_bus.publish",
+        )
+        if gateway_result.kind != "ok":
+            mapped = map_gateway_error(gateway_result)
+            return self._ack(
+                status="rejected",
+                rejected=[{
+                    "index": None,
+                    "error": mapped["message"],
+                    "error_type": mapped["error_type"],
+                    "status": mapped["status"],
+                    "retry_after": mapped.get("retry_after"),
+                }],
+            )
 
         logger.info(
             "[data_bus.publish] received package tenant=%s project=%s bundle=%s sid=%s messages=%s bytes=%s",
