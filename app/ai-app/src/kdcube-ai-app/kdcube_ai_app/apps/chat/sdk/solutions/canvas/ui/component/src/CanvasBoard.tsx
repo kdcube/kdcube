@@ -1,9 +1,10 @@
 import {
   ClipboardPenLine,
   Download,
-  Eye,
+  ExternalLink,
   FileText,
   Grip,
+  Info,
   Maximize2,
   MessageSquarePlus,
   Minimize2,
@@ -91,6 +92,32 @@ function iconForKind(kind: string) {
   if (kind === 'file') return FileText
   if (kind === 'issue.ref') return ClipboardPenLine
   return Pin
+}
+
+const NAMESPACE_BY_KIND: Record<string, string> = {
+  'user.text': 'ut',
+  'user.attachment': 'ua',
+  'agent.text': 'at',
+  'file': 'fi',
+  'memory': 'mem',
+  'source': 'src',
+  'search.result': 'sr',
+  'issue.ref': 'iss',
+  'story.ref': 'sty',
+  'note': 'note',
+  'object.ref': 'obj',
+}
+
+function namespaceForKind(kind: string): string {
+  return NAMESPACE_BY_KIND[kind] || kind.replace(/\./g, '-').slice(0, 4)
+}
+
+function formatCardAdded(value?: string | null): string {
+  if (!value) return ''
+  const t = new Date(value)
+  if (Number.isNaN(t.getTime())) return ''
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())} ${pad(t.getHours())}:${pad(t.getMinutes())}`
 }
 
 function cloneCards(cards: CanvasCard[]): CanvasCard[] {
@@ -263,6 +290,8 @@ export function CanvasBoard({
   const [trashOpen, setTrashOpen] = useState(false)
   const [externalDropReady, setExternalDropReady] = useState(false)
   const [expandedCardId, setExpandedCardId] = useState<string>('')
+  const [descDraftByCard, setDescDraftByCard] = useState<Record<string, string>>({})
+  const [commentDraftByCard, setCommentDraftByCard] = useState<Record<string, string>>({})
   const [resolverStateByCard, setResolverStateByCard] = useState<Record<string, CanvasObjectActionResponse>>({})
   const [resolverLoadingByCard, setResolverLoadingByCard] = useState<Record<string, boolean>>({})
   const [resolverNoticeByCard, setResolverNoticeByCard] = useState<Record<string, string>>({})
@@ -580,6 +609,22 @@ export function CanvasBoard({
     ref: canvasRef,
     cards,
   }), [activeCanvas, canvasId, canvasRef, canvasRevision, cards])
+  const enumByCardId = useMemo(() => {
+    const out: Record<string, string> = {}
+    const sorted = [...cards].sort((a, b) => {
+      const ta = a.createdAt || ''
+      const tb = b.createdAt || ''
+      if (ta !== tb) return ta < tb ? -1 : 1
+      return a.id < b.id ? -1 : 1
+    })
+    const counts: Record<string, number> = {}
+    for (const card of sorted) {
+      const ns = namespaceForKind(card.kind)
+      counts[ns] = (counts[ns] || 0) + 1
+      out[card.id] = `${ns}:${String(counts[ns]).padStart(2, '0')}`
+    }
+    return out
+  }, [cards])
   const canvasStats = useMemo(() => {
     const created = cards
       .map((card) => parseCardTime(card.createdAt || card.updatedAt))
@@ -1090,43 +1135,55 @@ export function CanvasBoard({
     void applyCardOperations(conflict.operations, conflict.label)
   }
 
-  function editUserTextCard(card: CanvasCard) {
-    if (card.kind !== 'user.text') return
-    const nextText = window.prompt('Edit user text card', card.summary)
-    if (nextText == null) return
-    const text = nextText.trim()
-    if (!text) return
-    void applyCardOperations([
-      {
-        op: 'update_card',
-        card_id: card.id,
-        content: { text },
-      },
-    ], 'Edit text')
+  function startDescriptionEdit(card: CanvasCard) {
+    setExpandedCardId(card.id)
+    setDescDraftByCard((current) => ({ ...current, [card.id]: card.description || '' }))
   }
 
-  function editCardDescription(card: CanvasCard) {
-    const nextDescription = window.prompt('Card description', card.description || '')
-    if (nextDescription == null) return
+  function updateDescriptionDraft(cardId: string, value: string) {
+    setDescDraftByCard((current) => ({ ...current, [cardId]: value }))
+  }
+
+  function cancelDescriptionEdit(cardId: string) {
+    setDescDraftByCard((current) => {
+      const next = { ...current }
+      delete next[cardId]
+      return next
+    })
+  }
+
+  function commitDescriptionEdit(card: CanvasCard) {
+    const draft = descDraftByCard[card.id]
+    if (draft === undefined) return
     void applyCardOperations([
       {
         op: 'update_card',
         card_id: card.id,
-        set: { description: nextDescription.trim() },
+        set: { description: draft.trim() },
       },
     ], 'Edit description')
+    cancelDescriptionEdit(card.id)
   }
 
-  function addCardComment(card: CanvasCard) {
-    const text = window.prompt('Comment on this card')
-    if (!text || !text.trim()) return
+  function updateCommentDraft(cardId: string, value: string) {
+    setCommentDraftByCard((current) => ({ ...current, [cardId]: value }))
+  }
+
+  function commitComment(card: CanvasCard) {
+    const draft = (commentDraftByCard[card.id] || '').trim()
+    if (!draft) return
     void applyCardOperations([
       {
         op: 'comment_card',
         card_id: card.id,
-        text: text.trim(),
+        text: draft,
       },
     ], 'Add comment')
+    setCommentDraftByCard((current) => {
+      const next = { ...current }
+      delete next[card.id]
+      return next
+    })
   }
 
   async function runObjectAction(card: CanvasCard, action: CanvasObjectActionName) {
@@ -1186,7 +1243,7 @@ export function CanvasBoard({
       descriptionHoldTimerRef.current = null
       descriptionHoldStartRef.current = null
       suppressCardClickRef.current = true
-      editCardDescription(card)
+      startDescriptionEdit(card)
     }, 560)
   }
 
@@ -1403,14 +1460,33 @@ export function CanvasBoard({
           {visibleCards.map((card) => {
             const Icon = iconForKind(card.kind)
             const context = cardContext(liveCanvas, card)
-            const expanded = expandedCardId === card.id
+            const pinned = expandedCardId === card.id
             const pendingSuggestion = card.suggested && card.placement !== 'placed'
             const locallySelected = selectedCardIds.has(card.id)
             const dragged = dragState?.cardIds.includes(card.id)
+            const enumTag = enumByCardId[card.id] || ''
+            const addedAt = formatCardAdded(card.createdAt)
+            const resolverState = resolverStateByCard[card.id]
+            const resolverNotice = resolverNoticeByCard[card.id] || ''
+            const resolverLoading = Boolean(resolverLoadingByCard[card.id])
+            const descDraft = descDraftByCard[card.id]
+            const isEditingDesc = descDraft !== undefined
+            const commentDraft = commentDraftByCard[card.id] || ''
+            const infoTooltip = [
+              `id: ${card.id}`,
+              `ref: ${card.ref || 'inline/local'}`,
+              `mime: ${card.mime || 'application/octet-stream'}`,
+              '',
+              pinned ? 'Click to release the drawer.' : 'Click to pin the drawer open.',
+            ].join('\n')
+            const kind = card.kind
+            const wantsDownload = kind === 'file' || kind === 'user.attachment'
+            const wantsOpen = kind === 'memory' || kind === 'source' || kind === 'search.result' || kind === 'issue.ref' || kind === 'story.ref' || kind === 'object.ref'
+            const capabilities = resolverState?.capabilities
             return (
               <article
                 key={card.id}
-                className={`canvas-card ${expanded ? 'expanded' : ''} ${dragged ? 'moving' : ''} ${card.selected || locallySelected ? 'selected' : ''} ${locallySelected ? 'multi-selected' : ''} ${pendingSuggestion ? 'suggested' : ''} ${card.kind.replace('.', '-')}`}
+                className={`canvas-card ${pinned ? 'expanded' : ''} ${dragged ? 'moving' : ''} ${card.selected || locallySelected ? 'selected' : ''} ${locallySelected ? 'multi-selected' : ''} ${pendingSuggestion ? 'suggested' : ''} ${card.kind.replace('.', '-')}`}
                 draggable
                 onClick={(event) => selectCard(card, event)}
                 onDragStart={(event) => {
@@ -1426,33 +1502,81 @@ export function CanvasBoard({
                 style={{
                   left: card.rect.x,
                   top: card.rect.y,
-                  width: expanded ? Math.max(card.rect.w, 292) : card.rect.w,
-                  height: expanded ? Math.max(card.rect.h, 202) : card.rect.h,
+                  width: card.rect.w,
+                  height: card.rect.h,
                 }}
               >
                 <div className="canvas-card-top">
-                  <span className="canvas-card-id">{card.id}</span>
                   <span className="canvas-card-origin" title={card.kind}>
-                    <Icon size={15} />
-                    {card.kind}
+                    <Icon size={13} />
+                    <span className="canvas-card-origin-label">{card.kind}</span>
                   </span>
+                  {enumTag ? <span className="canvas-card-enum" title={`${enumTag} — pin position in this kind on the board`}>{enumTag}</span> : null}
                   <span className="canvas-card-buttons">
                     <button
                       type="button"
-                      title={expanded ? 'Collapse card' : 'Expand card'}
-                      aria-expanded={expanded}
-                      onClick={() => setExpandedCardId(expanded ? '' : card.id)}
+                      title={infoTooltip}
+                      aria-label="Pin info"
+                      aria-pressed={pinned}
+                      className={pinned ? 'is-pinned' : ''}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        setExpandedCardId(pinned ? '' : card.id)
+                      }}
                       onMouseDown={(event) => event.stopPropagation()}
                     >
-                      {expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                      <Info size={13} />
                     </button>
+                    {wantsDownload ? (
+                      <button
+                        type="button"
+                        className="primary"
+                        title="Download"
+                        disabled={capabilities && capabilities.download === false}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          void runObjectAction(card, 'download')
+                        }}
+                        onMouseDown={(event) => event.stopPropagation()}
+                      >
+                        <Download size={13} />
+                      </button>
+                    ) : wantsOpen ? (
+                      <button
+                        type="button"
+                        className="primary"
+                        title="Open in owning surface"
+                        disabled={capabilities && capabilities.open === false}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          void runObjectAction(card, 'open')
+                        }}
+                        onMouseDown={(event) => event.stopPropagation()}
+                      >
+                        <ExternalLink size={13} />
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="primary"
+                        title={pinned ? 'Collapse drawer' : 'Expand drawer'}
+                        aria-pressed={pinned}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          setExpandedCardId(pinned ? '' : card.id)
+                        }}
+                        onMouseDown={(event) => event.stopPropagation()}
+                      >
+                        {pinned ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+                      </button>
+                    )}
                     <button
                       type="button"
                       title="Attach to chat"
                       onClick={() => onAttachCard(context)}
                       onMouseDown={(event) => event.stopPropagation()}
                     >
-                      <MessageSquarePlus size={14} />
+                      <MessageSquarePlus size={13} />
                     </button>
                   </span>
                 </div>
@@ -1464,113 +1588,12 @@ export function CanvasBoard({
                   onPointerUp={clearDescriptionHold}
                   onPointerCancel={clearDescriptionHold}
                 >
+                  {addedAt ? (
+                    <p className="canvas-card-added">added <time>{addedAt}</time></p>
+                  ) : null}
                   <h3>{card.title}</h3>
                   <p>{card.summary}</p>
-                  {card.description ? (
-                    <p className="canvas-card-description">{card.description}</p>
-                  ) : null}
                 </div>
-                {expanded ? (
-                  <>
-                    <div className="canvas-card-edit-actions">
-                      {(() => {
-                        const resolverState = resolverStateByCard[card.id]
-                        const capabilities = resolverState?.capabilities || {}
-                        const loading = Boolean(resolverLoadingByCard[card.id])
-                        return (
-                          <>
-                            {loading ? <span className="canvas-card-resolver-state">resolving</span> : null}
-                            {capabilities.preview ? (
-                              <button
-                                type="button"
-                                title="Preview the object through its resolver"
-                                onClick={() => void runObjectAction(card, 'preview')}
-                                onMouseDown={(event) => event.stopPropagation()}
-                              >
-                                <Eye size={12} />
-                                Preview
-                              </button>
-                            ) : null}
-                            {capabilities.open ? (
-                              <button
-                                type="button"
-                                title="Open the object in its owning surface"
-                                onClick={() => void runObjectAction(card, 'open')}
-                                onMouseDown={(event) => event.stopPropagation()}
-                              >
-                                <Maximize2 size={12} />
-                                Open
-                              </button>
-                            ) : null}
-                            {capabilities.download ? (
-                              <button
-                                type="button"
-                                title="Download the object through its resolver"
-                                onClick={() => void runObjectAction(card, 'download')}
-                                onMouseDown={(event) => event.stopPropagation()}
-                              >
-                                <Download size={12} />
-                                Download
-                              </button>
-                            ) : null}
-                          </>
-                        )
-                      })()}
-                      {card.kind === 'user.text' ? (
-                        <button
-                          type="button"
-                          title="Edit the hosted user-authored text behind this card"
-                          onClick={() => editUserTextCard(card)}
-                          onMouseDown={(event) => event.stopPropagation()}
-                        >
-                          <PenLine size={12} />
-                          Edit text
-                        </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        title="Edit this card's custom canvas description"
-                        onClick={() => editCardDescription(card)}
-                        onMouseDown={(event) => event.stopPropagation()}
-                      >
-                        <ClipboardPenLine size={12} />
-                        Description
-                      </button>
-                      <button
-                        type="button"
-                        title="Add a canvas comment to this card"
-                        onClick={() => addCardComment(card)}
-                        onMouseDown={(event) => event.stopPropagation()}
-                      >
-                        <MessageSquarePlus size={12} />
-                        Comment
-                      </button>
-                    </div>
-                    <dl className="canvas-card-detail">
-                      <div>
-                        <dt>ref</dt>
-                        <dd>{card.ref || 'inline/local'}</dd>
-                      </div>
-                      <div>
-                        <dt>mime</dt>
-                        <dd>{card.mime || 'application/octet-stream'}</dd>
-                      </div>
-                      <div>
-                        <dt>rect</dt>
-                        <dd>x:{card.rect.x} y:{card.rect.y} w:{card.rect.w} h:{card.rect.h}</dd>
-                      </div>
-                      <div>
-                        <dt>notes</dt>
-                        <dd>{card.commentsCount ? `${card.commentsCount} comment${card.commentsCount === 1 ? '' : 's'}` : 'none'}</dd>
-                      </div>
-                    </dl>
-                    {resolverNoticeByCard[card.id] ? (
-                      <div className="canvas-card-resolver-preview">
-                        {resolverNoticeByCard[card.id]}
-                      </div>
-                    ) : null}
-                  </>
-                ) : null}
                 <span className="canvas-card-kind">
                   <Grip size={12} />
                   {pendingSuggestion ? 'pending suggestion · ' : ''}{card.kind}
@@ -1583,6 +1606,78 @@ export function CanvasBoard({
                   onPointerDown={(event) => startCardResize(card, event)}
                   onMouseDown={(event) => event.stopPropagation()}
                 />
+                <div
+                  className="canvas-card-flyout"
+                  onClick={(event) => event.stopPropagation()}
+                  onPointerDown={(event) => event.stopPropagation()}
+                >
+                  {resolverLoading ? <p className="canvas-card-flyout-state">Resolving…</p> : null}
+                  {!resolverLoading && resolverNotice ? (
+                    <pre className="canvas-card-flyout-preview-text">{resolverNotice}</pre>
+                  ) : null}
+                  {!resolverLoading && !resolverNotice ? (
+                    wantsDownload || kind === 'object.ref' ? (
+                      <dl className="canvas-card-flyout-kv">
+                        <div><dt>file</dt><dd>{card.ref || card.title}</dd></div>
+                        <div><dt>type</dt><dd>{card.mime || '—'}</dd></div>
+                      </dl>
+                    ) : wantsOpen && (kind === 'source' || kind === 'search.result') ? (
+                      <dl className="canvas-card-flyout-kv">
+                        <div><dt>url</dt><dd>{card.ref || '—'}</dd></div>
+                      </dl>
+                    ) : card.summary ? (
+                      <pre className="canvas-card-flyout-preview-text">{card.summary}</pre>
+                    ) : null
+                  ) : null}
+                  <section className="canvas-card-flyout-desc">
+                    <h4>Description</h4>
+                    {isEditingDesc ? (
+                      <div className="canvas-card-flyout-edit">
+                        <textarea
+                          value={descDraft}
+                          onChange={(event) => updateDescriptionDraft(card.id, event.target.value)}
+                          placeholder="Describe this pin in your own words…"
+                          autoFocus
+                        />
+                        <div className="canvas-card-flyout-edit-actions">
+                          <button type="button" className="cancel" onClick={() => cancelDescriptionEdit(card.id)}>Cancel</button>
+                          <button type="button" className="save" onClick={() => commitDescriptionEdit(card)}>Save</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="canvas-card-flyout-view">
+                        {card.description ? (
+                          <p>{card.description}</p>
+                        ) : (
+                          <p className="empty">No description yet.</p>
+                        )}
+                        <button type="button" onClick={() => startDescriptionEdit(card)}>
+                          {card.description ? 'Edit' : '+ Add'}
+                        </button>
+                      </div>
+                    )}
+                  </section>
+                  <section className="canvas-card-flyout-comments">
+                    <h4>Comments <span className="count">({card.commentsCount || 0})</span></h4>
+                    <div className="canvas-card-flyout-edit">
+                      <textarea
+                        value={commentDraft}
+                        onChange={(event) => updateCommentDraft(card.id, event.target.value)}
+                        placeholder="Add a comment…"
+                      />
+                      <div className="canvas-card-flyout-edit-actions">
+                        <button
+                          type="button"
+                          className="save"
+                          disabled={!commentDraft.trim()}
+                          onClick={() => commitComment(card)}
+                        >
+                          Post
+                        </button>
+                      </div>
+                    </div>
+                  </section>
+                </div>
               </article>
             )
           })}

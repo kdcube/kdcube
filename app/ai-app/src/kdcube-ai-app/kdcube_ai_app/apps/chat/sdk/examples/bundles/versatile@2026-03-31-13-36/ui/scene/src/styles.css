@@ -923,10 +923,12 @@ body.scene-moving-chat .chat-frame {
 }
 
 .canvas-card.expanded {
-  z-index: 5;
-  overflow: hidden;
+  z-index: 9;
   border-color: var(--line-strong);
   box-shadow: 0 18px 34px rgba(13, 30, 44, 0.14);
+}
+.canvas-card:hover {
+  z-index: 8;
 }
 
 .canvas-card:hover {
@@ -1050,7 +1052,10 @@ body.scene-moving-chat .chat-frame {
 }
 
 .canvas-card-top {
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  min-height: 24px;
 }
 
 .canvas-card-origin {
@@ -1228,6 +1233,257 @@ body.scene-moving-chat .chat-frame {
   line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.canvas-card-origin-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.canvas-card-enum {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--text-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.canvas-card-added {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.canvas-card-added time {
+  color: var(--text-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10.5px;
+  text-transform: none;
+}
+
+.canvas-card-top button.primary {
+  background: var(--pin-ink, var(--text-2));
+  border-color: var(--pin-border, var(--line));
+  color: #fff;
+}
+.canvas-card-top button.primary:hover { filter: brightness(1.05); }
+.canvas-card-top button.primary:disabled {
+  background: var(--surface-2);
+  color: var(--muted);
+  border-color: var(--line);
+  cursor: not-allowed;
+}
+.canvas-card-top button.is-pinned {
+  background: var(--pin-ink, var(--text-2));
+  color: #fff;
+  border-color: var(--pin-border, var(--line));
+}
+
+.canvas-card-flyout {
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  top: 100%;
+  margin-top: -1px;
+  border: 1px solid var(--pin-border, var(--line));
+  border-top: 1px dashed rgba(13, 30, 44, 0.08);
+  border-radius: 0 0 var(--r-lg) var(--r-lg);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(255, 255, 255, 0.98));
+  box-shadow: 0 18px 28px rgba(13, 30, 44, 0.12);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.45;
+  opacity: 0;
+  max-height: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 3;
+  padding: 0 12px;
+  transition:
+    opacity 180ms ease 280ms,
+    max-height 180ms ease 280ms,
+    padding 180ms ease 280ms;
+}
+.canvas-card:hover .canvas-card-flyout,
+.canvas-card.expanded .canvas-card-flyout {
+  opacity: 1;
+  max-height: 380px;
+  pointer-events: auto;
+  overflow: auto;
+  padding: 10px 12px 12px;
+  transition:
+    opacity 180ms ease 350ms,
+    max-height 180ms ease 350ms,
+    padding 180ms ease 350ms;
+}
+.canvas-card.expanded .canvas-card-flyout {
+  transition: none;
+}
+
+.canvas-card-flyout-state {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-style: italic;
+  font-size: 11.5px;
+}
+.canvas-card-flyout-preview-text {
+  margin: 0 0 8px;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  font-family: inherit;
+  max-height: 160px;
+  overflow: auto;
+}
+.canvas-card-flyout-kv {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  gap: 3px 10px;
+  margin: 0 0 8px;
+  font-size: 11.5px;
+}
+.canvas-card-flyout-kv div { display: contents; }
+.canvas-card-flyout-kv dt {
+  color: var(--muted);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.canvas-card-flyout-kv dd {
+  margin: 0;
+  color: var(--ink);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.canvas-card-flyout-desc,
+.canvas-card-flyout-comments {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line-soft);
+}
+.canvas-card-flyout-desc h4,
+.canvas-card-flyout-comments h4 {
+  margin: 0 0 6px;
+  font-size: 10.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.canvas-card-flyout-comments .count {
+  font-weight: 700;
+  color: var(--text-2);
+  margin-left: 4px;
+}
+
+.canvas-card-flyout-view {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.canvas-card-flyout-view p {
+  margin: 0;
+  flex: 1 1 auto;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  font-size: 12px;
+}
+.canvas-card-flyout-view p.empty {
+  color: var(--muted);
+  font-style: italic;
+}
+.canvas-card-flyout-view button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.canvas-card-flyout-view button:hover {
+  border-color: var(--teal);
+  color: var(--teal-dark);
+}
+
+.canvas-card-flyout-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.canvas-card-flyout-edit textarea {
+  width: 100%;
+  min-height: 56px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  padding: 6px 8px;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  resize: vertical;
+}
+.canvas-card-flyout-edit textarea:focus {
+  outline: none;
+  border-color: var(--teal);
+  box-shadow: 0 0 0 3px rgba(8, 189, 178, 0.15);
+}
+.canvas-card-flyout-edit-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.canvas-card-flyout-edit-actions button {
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.canvas-card-flyout-edit-actions .save {
+  border-color: var(--teal);
+  background: var(--teal);
+  color: #fff;
+}
+.canvas-card-flyout-edit-actions .save:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+.canvas-card-flyout-edit-actions .save:disabled {
+  background: var(--surface-2);
+  border-color: var(--line);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+.canvas-card-flyout-edit-actions .cancel:hover {
+  border-color: var(--red);
+  color: var(--red);
 }
 
 .canvas-create-controls {
