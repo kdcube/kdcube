@@ -90,6 +90,7 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
   width: min(100%, 1180px);
   margin: 0 auto;
   padding: 12px 14px 24px;
+  min-height: 0;
 }
 
 .expanded-shell {
@@ -284,8 +285,63 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 
 .filters {
   display: grid;
+  flex: 0 0 auto;
   gap: 8px;
   padding: 10px;
+}
+
+.focused-memory-filter {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--blue-pale);
+  border-radius: var(--r-md);
+  background: #f4f8ff;
+  padding: 7px 8px;
+}
+
+.focused-memory-filter div {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.focused-memory-filter span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.focused-memory-filter strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compact-filters .focused-memory-filter {
+  padding: 5px 6px;
+}
+
+.memory-drop-active {
+  outline: 2px solid var(--teal);
+  outline-offset: -3px;
+}
+
+.id-filter-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.id-filter-row .secondary-button {
+  height: 30px;
+  white-space: nowrap;
 }
 
 .expanded-shell .filters {
@@ -505,6 +561,7 @@ textarea:focus {
   gap: 10px;
   margin-top: 10px;
   min-height: 0;
+  min-width: 0;
 }
 
 .workspace.with-side-panel {
@@ -784,9 +841,11 @@ textarea:focus {
 .expanded-shell .workspace {
   position: relative;
   z-index: 1;
+  display: grid;
   flex: 1 1 auto;
   margin-top: 0;
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
 }
 
@@ -808,6 +867,7 @@ textarea:focus {
 .memory-list {
   display: grid;
   align-content: start;
+  min-width: 0;
   overflow: auto;
 }
 
@@ -1045,6 +1105,7 @@ textarea:focus {
 /* ─── Detail / editor ─── */
 .memory-detail,
 .memory-editor {
+  min-width: 0;
   padding: 12px 14px;
 }
 

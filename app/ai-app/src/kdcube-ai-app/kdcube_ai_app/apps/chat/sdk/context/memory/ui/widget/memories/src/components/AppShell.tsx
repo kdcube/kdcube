@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { DragEventHandler, ReactNode } from 'react';
 
 interface AppShellProps {
   children: ReactNode;
@@ -8,7 +8,11 @@ interface AppShellProps {
   onCreate: () => void;
   onExpand?: () => void;
   onToggleMemoryUse: () => void;
+  onDragLeave?: DragEventHandler<HTMLElement>;
+  onDragOver?: DragEventHandler<HTMLElement>;
+  onDrop?: DragEventHandler<HTMLElement>;
   compact?: boolean;
+  dropActive?: boolean;
   hostControls?: boolean;
   saving?: boolean;
 }
@@ -28,15 +32,22 @@ export function AppShell({
   count,
   memoryUseEnabled,
   onCreate,
+  onDragLeave,
+  onDragOver,
+  onDrop,
   onExpand,
   onToggleMemoryUse,
   compact = false,
+  dropActive = false,
   hostControls = false,
   saving = false,
 }: AppShellProps) {
   return (
     <main
-      className={`app-shell ${compact ? 'compact-shell' : 'expanded-shell'} ${compact && hostControls ? 'host-controlled-shell' : ''}`}
+      className={`app-shell ${compact ? 'compact-shell' : 'expanded-shell'} ${compact && hostControls ? 'host-controlled-shell' : ''} ${dropActive ? 'memory-drop-active' : ''}`}
+      onDragLeave={onDragLeave}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
       onPointerDownCapture={notifyHostWidgetFocus}
     >
       {compact && hostControls ? null : <header className="app-header">

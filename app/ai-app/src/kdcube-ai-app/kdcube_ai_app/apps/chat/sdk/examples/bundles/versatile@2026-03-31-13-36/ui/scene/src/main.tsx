@@ -96,6 +96,27 @@ interface DataBusServiceEnvelope {
   }
 }
 
+type ScenePanelId = 'chat' | 'memory' | 'usage'
+
+interface SceneSurfaceOpenRequest {
+  targetSurface: string
+  uiEvent: NonNullable<CanvasObjectActionResponse['ui_event']>
+  response: CanvasObjectActionResponse
+  sourceCard: CanvasCard
+}
+
+interface SceneSurfaceRegistration {
+  label: string
+  ensureOpen: () => void
+  postCommand: (command: Record<string, unknown>) => boolean
+  commandFromOpen: (request: SceneSurfaceOpenRequest) => Record<string, unknown> | null
+}
+
+interface SceneSurfaceDispatchResult {
+  ok: boolean
+  message: string
+}
+
 let dataBusSocket: Socket | null = null
 let dataBusSocketKey = ''
 let dataBusConnectPromise: Promise<void> | null = null
@@ -354,15 +375,15 @@ function GlowPinnedCanvasIcon({ size = 20 }: { size?: number }) {
   )
 }
 
-function memoryIdFromCanvasActionResponse(response: CanvasObjectActionResponse): string {
-  const eventMemoryId = response.ui_event?.memory_id
+function memoryIdFromSurfaceOpenRequest(request: SceneSurfaceOpenRequest): string {
+  const eventMemoryId = request.uiEvent.memory_id
   if (typeof eventMemoryId === 'string' && eventMemoryId.trim()) return eventMemoryId.trim()
-  const memory = response.memory
+  const memory = request.response.memory
   if (memory && typeof memory === 'object') {
     const id = (memory as { id?: unknown }).id
     if (typeof id === 'string' && id.trim()) return id.trim()
   }
-  const ref = String(response.object_ref || response.ref || '').trim()
+  const ref = String(request.uiEvent.object_ref || request.response.object_ref || request.response.ref || '').trim()
   return ref.startsWith('mem:') ? ref.slice(4).split(/[?#]/, 1)[0].replace(/^\/+/, '') : ''
 }
 
@@ -714,7 +735,7 @@ function App() {
   const [usageOpen, setUsageOpen] = useState(false)
   const [usageFrame, setUsageFrame] = useState(() => defaultUsageFrame(chatSizing.width, true))
   const [userType, setUserType] = useState<string | null>(null)
-  const [panelZ, setPanelZ] = useState<Record<'chat' | 'memory' | 'usage', number>>({
+  const [panelZ, setPanelZ] = useState<Record<ScenePanelId, number>>({
     chat: FLOATING_PANEL_BASE_Z,
     memory: FLOATING_PANEL_BASE_Z + 1,
     usage: FLOATING_PANEL_BASE_Z + 2,
@@ -727,7 +748,7 @@ function App() {
   const memoryFrameRef = useRef<HTMLIFrameElement | null>(null)
   const usageFrameRef = useRef<HTMLIFrameElement | null>(null)
   const usageRefreshTimerRef = useRef<number | null>(null)
-  const pendingMemoryCommandRef = useRef<Record<string, unknown> | null>(null)
+  const pendingSurfaceCommandsRef = useRef<Record<string, Record<string, unknown>>>({})
   const panelZCursorRef = useRef(FLOATING_PANEL_BASE_Z + 3)
   const isRegistered = userType != null && userType !== 'anonymous'
 
@@ -740,7 +761,7 @@ function App() {
     chatFrameRef.current?.contentWindow?.postMessage(message, '*')
   }, [])
 
-  const bringPanelToFront = useCallback((panel: 'chat' | 'memory' | 'usage') => {
+  const bringPanelToFront = useCallback((panel: ScenePanelId) => {
     panelZCursorRef.current += 1
     setPanelZ((current) => ({ ...current, [panel]: panelZCursorRef.current }))
   }, [])
@@ -768,12 +789,6 @@ function App() {
     return true
   }, [])
 
-  const flushPendingMemoryCommand = useCallback(() => {
-    const command = pendingMemoryCommandRef.current
-    if (!command) return
-    if (sendMemoryWidgetCommand(command)) pendingMemoryCommandRef.current = null
-  }, [sendMemoryWidgetCommand])
-
   const openMemoryWidget = useCallback((expanded = true) => {
     bringPanelToFront('memory')
     setMemoryOpen(true)
@@ -786,19 +801,80 @@ function App() {
     window.setTimeout(() => syncMemoryWidgetView(expanded ? 'expanded' : 'compact'), 0)
   }, [bringPanelToFront, syncMemoryWidgetView])
 
-  const createMemoryFromHost = useCallback(() => {
-    pendingMemoryCommandRef.current = { action: 'create' }
-    openMemoryWidget(true)
-    window.setTimeout(flushPendingMemoryCommand, 80)
-  }, [flushPendingMemoryCommand, openMemoryWidget])
+  const surfaceRegistry = useMemo<Record<string, SceneSurfaceRegistration>>(() => ({
+    'sdk.memory.viewer': {
+      label: 'memory viewer',
+      ensureOpen: () => openMemoryWidget(true),
+      postCommand: sendMemoryWidgetCommand,
+      commandFromOpen: (request) => {
+        const memoryId = memoryIdFromSurfaceOpenRequest(request)
+        if (!memoryId) return null
+        return {
+          action: 'open',
+          object_ref: request.uiEvent.object_ref || request.response.object_ref || request.response.ref || `mem:${memoryId}`,
+          memory_id: memoryId,
+        }
+      },
+    },
+  }), [openMemoryWidget, sendMemoryWidgetCommand])
 
-  const openMemoryFromResolver = useCallback((memoryId: string) => {
-    if (!memoryId) return false
-    pendingMemoryCommandRef.current = { action: 'open', memory_id: memoryId }
-    openMemoryWidget(true)
-    window.setTimeout(flushPendingMemoryCommand, 80)
+  const flushSurfaceCommand = useCallback((targetSurface: string) => {
+    const command = pendingSurfaceCommandsRef.current[targetSurface]
+    if (!command) return false
+    const registration = surfaceRegistry[targetSurface]
+    if (!registration) return false
+    if (!registration.postCommand(command)) return false
+    delete pendingSurfaceCommandsRef.current[targetSurface]
     return true
-  }, [flushPendingMemoryCommand, openMemoryWidget])
+  }, [surfaceRegistry])
+
+  const dispatchSurfaceOpen = useCallback((
+    response: CanvasObjectActionResponse,
+    sourceCard: CanvasCard,
+  ): SceneSurfaceDispatchResult => {
+    const uiEvent = response.ui_event
+    const targetSurface = String(uiEvent?.target_surface || '').trim()
+    if (!uiEvent || !targetSurface) {
+      return {
+        ok: false,
+        message: response.error || response.message || `No open target returned for ${sourceCard.title || sourceCard.id}.`,
+      }
+    }
+    const registration = surfaceRegistry[targetSurface]
+    if (!registration) {
+      return {
+        ok: false,
+        message: `No widget surface is registered for ${targetSurface}.`,
+      }
+    }
+    const command = registration.commandFromOpen({ targetSurface, uiEvent, response, sourceCard })
+    if (!command) {
+      return {
+        ok: false,
+        message: `Resolver did not return enough data to open ${sourceCard.title || sourceCard.id}.`,
+      }
+    }
+    pendingSurfaceCommandsRef.current[targetSurface] = command
+    registration.ensureOpen()
+    window.setTimeout(() => flushSurfaceCommand(targetSurface), 80)
+    console.info('[versatile:scene] dispatched object open to surface', {
+      targetSurface,
+      cardId: sourceCard.id,
+      objectRef: uiEvent.object_ref || response.object_ref || response.ref,
+    })
+    return {
+      ok: true,
+      message: `Opened ${registration.label}.`,
+    }
+  }, [flushSurfaceCommand, surfaceRegistry])
+
+  const createMemoryFromHost = useCallback(() => {
+    const targetSurface = 'sdk.memory.viewer'
+    const registration = surfaceRegistry[targetSurface]
+    pendingSurfaceCommandsRef.current[targetSurface] = { action: 'create' }
+    registration?.ensureOpen()
+    window.setTimeout(() => flushSurfaceCommand(targetSurface), 80)
+  }, [flushSurfaceCommand, surfaceRegistry])
 
   const startMemoryDrag = useCallback((event: React.PointerEvent<HTMLElement>) => {
     if ((event.target as HTMLElement).closest('button')) return
@@ -1159,19 +1235,14 @@ function App() {
       }
     }
     if (action === 'open') {
-      if (response.ui_event?.target_surface === 'sdk.memory.viewer') {
-        const memoryId = memoryIdFromCanvasActionResponse(response)
-        const opened = openMemoryFromResolver(memoryId)
-        setNotice(opened ? `Opened memory ${memoryId}.` : `Memory resolver did not return a memory id for ${card.title || card.id}.`)
-      } else {
-        setNotice(response.error || response.message || `No open target returned for ${card.title || card.id}.`)
-      }
+      const result = dispatchSurfaceOpen(response, card)
+      setNotice(result.message)
     }
     if (action === 'preview') {
       setNotice(`Resolved preview for ${response.title || card.title}.`)
     }
     return response
-  }, [activeCanvas.id, activeCanvas.name, ctx, openMemoryFromResolver])
+  }, [activeCanvas.id, activeCanvas.name, ctx, dispatchSurfaceOpen])
 
   useEffect(() => {
     requestRuntimeConfig()
@@ -1228,7 +1299,7 @@ function App() {
         if (data.type === 'kdcube-memory-widget-status' && data.widget === MEMORY_WIDGET_ALIAS) {
           const count = Number(data.count)
           setMemoryCount(Number.isFinite(count) ? count : null)
-          flushPendingMemoryCommand()
+          flushSurfaceCommand('sdk.memory.viewer')
           return
         }
         if (data.type === 'kdcube-set-view') {
@@ -1258,7 +1329,7 @@ function App() {
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [bringPanelToFront, pinIngressPayloadToCanvas, sendToChat])
+  }, [bringPanelToFront, flushSurfaceCommand, pinIngressPayloadToCanvas, sendToChat])
 
   useEffect(() => {
     syncChatWidgetView(chatExpanded ? 'expanded' : 'compact')
@@ -1524,7 +1595,7 @@ function App() {
             src={memoryWidgetUrl(ctx, false)}
             onLoad={() => {
               syncMemoryWidgetView(memoryExpanded ? 'expanded' : 'compact')
-              flushPendingMemoryCommand()
+              flushSurfaceCommand('sdk.memory.viewer')
             }}
           />
         </section>

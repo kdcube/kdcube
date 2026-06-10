@@ -2023,6 +2023,7 @@ class MemoryEntrypointMixin:
         mode: str = "",
         labels: Sequence[str] | str = (),
         keywords: Sequence[str] | str = (),
+        memory_ids: Sequence[str] | str = (),
         limit: int = 30,
         offset: int = 0,
         **kwargs,
@@ -2041,6 +2042,15 @@ class MemoryEntrypointMixin:
             page_offset = 0
         labels_list = normalize_terms(labels)
         keywords_list = normalize_terms(keywords)
+        memory_ids_list = []
+        raw_memory_ids = memory_ids if isinstance(memory_ids, (list, tuple, set)) else str(memory_ids or "").replace(";", ",").split(",")
+        seen_memory_ids: set[str] = set()
+        for item in raw_memory_ids:
+            memory_id = _memory_id_from_ref(item)
+            if not memory_id or memory_id in seen_memory_ids:
+                continue
+            seen_memory_ids.add(memory_id)
+            memory_ids_list.append(memory_id)
         normalized_query = str(query or "").strip()
         query_embedding = await self._memory_search_embed_or_downgrade(normalized_query)
         requested_mode = str(mode or "").strip().lower()
@@ -2057,22 +2067,23 @@ class MemoryEntrypointMixin:
         if _truthy(self._memory_widget_config().get("ensure_schema"), True):
             await store.ensure_schema()
         preferences = await store.get_user_preferences(scope=scope)
-        total_count = await store.count_memories(
-            scope=scope,
-            query=normalized_query,
-            labels=labels_list,
-            keywords=keywords_list,
-            status=status or "active",
-            kind=kind,
-            visible_to_user=True,
-            include_private=False,
-            scope_filter=normalized_scope_filter,
-        )
-        rows = await store.search(
-            MemorySearchRequest(
+        if memory_ids_list:
+            fetched_rows = []
+            for memory_id in memory_ids_list:
+                record = await store.get_memory(
+                    scope=scope,
+                    memory_id=memory_id,
+                    visible_to_user=True,
+                    scope_filter=normalized_scope_filter,
+                )
+                if record is not None:
+                    fetched_rows.append(record)
+            total_count = len(fetched_rows)
+            rows = fetched_rows[page_offset:page_offset + search_limit]
+        else:
+            total_count = await store.count_memories(
                 scope=scope,
                 query=normalized_query,
-                mode=search_mode,
                 labels=labels_list,
                 keywords=keywords_list,
                 status=status or "active",
@@ -2080,13 +2091,26 @@ class MemoryEntrypointMixin:
                 visible_to_user=True,
                 include_private=False,
                 scope_filter=normalized_scope_filter,
-                limit=search_limit,
-                offset=page_offset,
-                candidate_limit=page_offset + search_limit,
-                query_embedding=query_embedding,
-                min_relevance_score=min_relevance_score if normalized_query else 0.0,
             )
-        )
+            rows = await store.search(
+                MemorySearchRequest(
+                    scope=scope,
+                    query=normalized_query,
+                    mode=search_mode,
+                    labels=labels_list,
+                    keywords=keywords_list,
+                    status=status or "active",
+                    kind=kind,
+                    visible_to_user=True,
+                    include_private=False,
+                    scope_filter=normalized_scope_filter,
+                    limit=search_limit,
+                    offset=page_offset,
+                    candidate_limit=page_offset + search_limit,
+                    query_embedding=query_embedding,
+                    min_relevance_score=min_relevance_score if normalized_query else 0.0,
+                )
+            )
         page_rows = rows[:page_limit]
         if normalized_query:
             # Semantic ranking is applied after candidate fetch; SQL count can
@@ -2110,6 +2134,7 @@ class MemoryEntrypointMixin:
                 "mode": search_mode,
                 "labels": labels_list,
                 "keywords": keywords_list,
+                "memory_ids": memory_ids_list,
                 "min_relevance_score": min_relevance_score if normalized_query else 0.0,
             },
             "capabilities": self._memory_capabilities_payload(),

@@ -451,3 +451,93 @@ npm run build  # sdk/solutions/chat/ui/widget
 
 All three builds passed. The scene and chat builds still emit Vite chunk-size
 warnings; those are unchanged from the current bundle shape.
+
+## Follow-up: Surface Registry For Resolver Open Actions
+
+Canvas object actions now route through a scene surface registry instead of a
+memory-specific branch in the canvas action handler.
+
+The scene-level rule is:
+
+```text
+resolver response ui_event.target_surface
+  -> scene surface registry
+  -> ensure matching iframe is mounted/open
+  -> queue command until iframe is ready
+  -> post command to widget iframe
+```
+
+The first registered surface is:
+
+```text
+sdk.memory.viewer -> memories iframe
+```
+
+This keeps ownership boundaries clean:
+
+| Layer | Responsibility |
+| --- | --- |
+| memory resolver | Defines what opening `mem:` means and returns `target_surface`. |
+| canvas | Calls `canvas_object_action` and receives the resolver response. |
+| scene | Routes `target_surface` to the mounted widget. |
+| memory widget | Loads and focuses the requested memory. |
+
+The same model should be used by the landing-page scene in
+`website/index.html` when it hosts chat, memories, canvas, and later other SDK
+widgets.
+
+## Follow-up: Focused Memory Open
+
+Opening a memory from a canvas card now opens the memories widget in focused
+mode for that specific object instead of only revealing the widget.
+
+The memory widget accepts:
+
+```json
+{
+  "type": "kdcube-memory-widget-command",
+  "widget": "memories",
+  "action": "open",
+  "object_ref": "mem:mem_...",
+  "memory_id": "mem_..."
+}
+```
+
+The widget then:
+
+```text
+focus memory id
+  -> load that memory
+  -> filter the visible list to that memory
+  -> select it and load its events
+  -> show Back to list to clear focused mode
+```
+
+This behaves like an object focus, not a normal user search filter. Normal
+filter changes clear the focused object and return to list browsing.
+
+## Follow-up: Memory Drop Target And Multiple Id Focus
+
+The memories widget is now also a drop target for memory objects. Dropping a
+`mem:` canvas pin onto the widget opens that memory. Dropping multiple selected
+`mem:` canvas pins opens the focused set.
+
+The drop parser reads only canonical object refs from generic context payloads:
+
+```text
+application/vnd.kdcube.context+json
+application/json
+text/uri-list
+```
+
+It does not depend on canvas-specific internals. If a dropped context contains
+`ref`, `logical_path`, `object_ref`, or memory-owned `data.memory_id`, the widget
+normalizes those values into `mem:<id>` refs and loads the matching memories.
+
+Expanded mode also has a small `Show ids` control for pasting a list such as:
+
+```text
+mem:mem_a, mem:mem_b
+```
+
+That control uses the same focused-id path as drag/drop and resolver open.

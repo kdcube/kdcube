@@ -1001,7 +1001,6 @@ export default function App() {
     dispatch(chatActions.dismissBanner(id))
   })
   const handleConversationSelect = useStableCallback((conversationId: string) => {
-    if (window.parent !== window || window.innerWidth < 1100) setLeftPaneMode('collapsed')
     void loadConversation(conversationId)
   })
   const handleConversationDelete = useStableCallback((conversation: ConversationSummary) => {
@@ -1011,7 +1010,6 @@ export default function App() {
     void refreshConversationList()
   })
   const handleStartNewChat = useStableCallback(() => {
-    if (window.parent !== window || window.innerWidth < 1100) setLeftPaneMode('collapsed')
     startNewChat()
   })
   const handleCompactConvSelect = useStableCallback((conversationId: string) => {

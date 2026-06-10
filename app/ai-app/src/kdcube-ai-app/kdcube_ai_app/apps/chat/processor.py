@@ -1301,6 +1301,33 @@ class EnhancedChatRequestProcessor:
                 "ready_queue_key": ready_queue_key,
             }
 
+    async def _mark_promoted_external_event_in_progress(self, promoted_external_event: Dict[str, Any]) -> None:
+        next_payload = promoted_external_event["payload"]
+        next_request_id, next_svc, next_conv, _ = self._build_runtime_context(next_payload)
+        res = await self.conversation_ctx.set_conversation_state(
+            tenant=next_payload.actor.tenant_id,
+            project=next_payload.actor.project_id,
+            user_id=next_payload.user.user_id,
+            conversation_id=next_payload.routing.conversation_id,
+            new_state="in_progress",
+            by_instance=f"{self.middleware.instance_id}:{self.process_id}",
+            request_id=next_request_id,
+            last_turn_id=next_payload.routing.turn_id,
+            require_not_in_progress=False,
+            user_type=next_payload.user.user_type,
+            bundle_id=next_payload.routing.bundle_id,
+        )
+        await self._relay.emit_conv_status(
+            next_svc,
+            next_conv,
+            routing=next_payload.routing,
+            state="in_progress",
+            updated_at=res["updated_at"],
+            current_turn_id=res.get("current_turn_id"),
+            completion="queued_next",
+            target_sid=None,
+        )
+
     async def _queue_claim(self, ready_queue_key: str, inflight_queue_key: str):
         try:
             result = await asyncio.wait_for(
@@ -2663,34 +2690,13 @@ class EnhancedChatRequestProcessor:
                     logger.debug("Failed to record task latency metrics", exc_info=True)
                 try:
                     if promoted_external_event is not None:
-                        next_payload = promoted_external_event["payload"]
-                        next_request_id, next_svc, next_conv, _ = self._build_runtime_context(next_payload)
-                        res = await self.conversation_ctx.set_conversation_state(
-                            tenant=next_payload.actor.tenant_id,
-                            project=next_payload.actor.project_id,
-                            user_id=next_payload.user.user_id,
-                            conversation_id=next_payload.routing.conversation_id,
-                            new_state="in_progress",
-                            by_instance=f"{self.middleware.instance_id}:{self.process_id}",
-                            request_id=next_request_id,
-                            last_turn_id=next_payload.routing.turn_id,
-                            require_not_in_progress=False,
-                            user_type=next_payload.user.user_type,
-                            bundle_id=next_payload.routing.bundle_id,
-                        )
-                        await self._relay.emit_conv_status(
-                            next_svc,
-                            next_conv,
-                            routing=next_payload.routing,
-                            state="in_progress",
-                            updated_at=res["updated_at"],
-                            current_turn_id=res.get("current_turn_id"),
-                            completion="queued_next",
-                            target_sid=None,
-                        )
+                        await self._mark_promoted_external_event_in_progress(promoted_external_event)
                     else:
                         res = await self.conversation_ctx.set_conversation_state(
-                            tenant=payload.actor.tenant_id, project=payload.actor.project_id, user_id=payload.user.user_id, conversation_id=payload.routing.conversation_id,
+                            tenant=payload.actor.tenant_id,
+                            project=payload.actor.project_id,
+                            user_id=payload.user.user_id,
+                            conversation_id=payload.routing.conversation_id,
                             new_state=("idle" if success else "error"),
                             by_instance=f"{self.middleware.instance_id}:{self.process_id}",
                             request_id=request_id,
@@ -2699,14 +2705,29 @@ class EnhancedChatRequestProcessor:
                             user_type=payload.user.user_type,
                             bundle_id=payload.routing.bundle_id,
                         )
-                        # broadcast to session
-                        await self._relay.emit_conv_status(svc, conv,
-                                                         routing=payload.routing,
-                                                         state=("idle" if success else "error"),
-                                                         updated_at=res["updated_at"],
-                                                         current_turn_id=res.get("current_turn_id"),
-                                                         completion="success" if success else "error",
-                                                         target_sid=None)
+                        late_promoted_external_event = None
+                        if success:
+                            try:
+                                late_promoted_external_event = await self._promote_next_external_event(payload)
+                            except Exception:
+                                logger.exception(
+                                    "Failed late external event promotion after idle transition for conversation=%s",
+                                    payload.routing.conversation_id,
+                                )
+                        if late_promoted_external_event is not None:
+                            await self._mark_promoted_external_event_in_progress(late_promoted_external_event)
+                        else:
+                            # broadcast to session
+                            await self._relay.emit_conv_status(
+                                svc,
+                                conv,
+                                routing=payload.routing,
+                                state=("idle" if success else "error"),
+                                updated_at=res["updated_at"],
+                                current_turn_id=res.get("current_turn_id"),
+                                completion="success" if success else "error",
+                                target_sid=None,
+                            )
                 except Exception as ex:
                     logger.error(traceback.format_exc())
             if ephemeral_task_details and current_processor_task is not None:

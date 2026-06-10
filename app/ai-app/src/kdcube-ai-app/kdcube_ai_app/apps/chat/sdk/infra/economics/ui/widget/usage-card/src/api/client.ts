@@ -7,10 +7,14 @@
  */
 
 import { settings } from './settings';
-import type { BudgetBreakdownResponse } from './types';
+import type { BudgetBreakdownResponse, ProfileResponse } from './types';
 
 function meUrl(path: string): string {
   return `${settings.getBaseUrl()}/api/economics/me${path}`;
+}
+
+function platformUrl(path: string): string {
+  return `${settings.getBaseUrl()}${path}`;
 }
 
 export class UsageCardApiError extends Error {
@@ -45,4 +49,8 @@ async function fetchJson<T>(url: string): Promise<T> {
 
 export function getBudgetBreakdown(): Promise<BudgetBreakdownResponse> {
   return fetchJson<BudgetBreakdownResponse>(meUrl('/budget-breakdown'));
+}
+
+export function getProfile(): Promise<ProfileResponse> {
+  return fetchJson<ProfileResponse>(platformUrl('/profile'));
 }

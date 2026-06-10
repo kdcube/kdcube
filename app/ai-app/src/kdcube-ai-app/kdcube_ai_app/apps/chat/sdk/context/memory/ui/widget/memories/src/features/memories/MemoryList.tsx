@@ -90,7 +90,7 @@ function termChips(memory: MemoryEntry, limit: number) {
 
 export function MemoryList() {
   const dispatch = useAppDispatch();
-  const { count, hasMore, loading, memories, page, pageSize, selectedId, viewMode } = useAppSelector((state) => state.memories);
+  const { count, focusedMemoryIds, hasMore, loading, memories, page, pageSize, selectedId, viewMode } = useAppSelector((state) => state.memories);
   const compact = viewMode === 'compact';
 
   if (loading) return <div className="empty-state">Opening notes...</div>;
@@ -174,7 +174,7 @@ export function MemoryList() {
           ))}
         </div>
       ))}
-      <div className="pager">
+      {focusedMemoryIds.length ? null : <div className="pager">
         <button
           type="button"
           className="secondary-button"
@@ -198,7 +198,7 @@ export function MemoryList() {
         >
           Next
         </button>
-      </div>
+      </div>}
     </section>
   );
 }

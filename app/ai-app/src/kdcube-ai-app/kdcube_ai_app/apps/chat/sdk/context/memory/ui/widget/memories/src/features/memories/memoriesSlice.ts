@@ -40,6 +40,7 @@ interface MemoriesState {
   hasMore: boolean;
   memories: MemoryEntry[];
   selectedId: string;
+  focusedMemoryIds: string[];
   selectedEvents: MemoryEvent[];
   currentBundleId: string;
   allowAllUserMemories: boolean;
@@ -89,6 +90,7 @@ const initialState: MemoriesState = {
   hasMore: false,
   memories: [],
   selectedId: '',
+  focusedMemoryIds: [],
   selectedEvents: [],
   currentBundleId: '',
   allowAllUserMemories: true,
@@ -138,6 +140,34 @@ export function normalizeMemoryRef(value: string): string {
   return trimmed.startsWith('mem:') ? trimmed.slice(4).trim() : trimmed;
 }
 
+export function normalizeMemoryRefs(value: unknown): string[] {
+  const rawItems = Array.isArray(value)
+    ? value
+    : String(value || '').split(/[\s,;]+/);
+  const seen = new Set<string>();
+  const result: string[] = [];
+  rawItems.forEach((item) => {
+    const text = String(item || '').trim().replace(/^[`"']+|[`"']+$/g, '');
+    const normalized = normalizeMemoryRef(text);
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    result.push(normalized);
+  });
+  return result;
+}
+
+function orderFocusedMemories(state: MemoriesState) {
+  if (!state.focusedMemoryIds.length) return;
+  const byId = new Map(state.memories.map((memory) => [memory.id, memory]));
+  state.memories = state.focusedMemoryIds
+    .map((id) => byId.get(id))
+    .filter((memory): memory is MemoryEntry => Boolean(memory));
+  state.count = state.memories.length;
+  if (!state.selectedId || !state.memories.some((memory) => memory.id === state.selectedId)) {
+    state.selectedId = state.memories[0]?.id || state.focusedMemoryIds[0] || '';
+  }
+}
+
 function upsertMemory(state: MemoriesState, memory?: MemoryEntry, incrementIfNew = false) {
   if (!memory) return;
   const index = state.memories.findIndex((item) => item.id === memory.id);
@@ -154,12 +184,13 @@ export const loadMemories = createAsyncThunk<MemoriesPayload, void, { state: { m
   async (_arg, thunkApi) => {
     const state = thunkApi.getState().memories;
     return callOperation<MemoriesPayload>('memories_widget_data', {
-      scope_filter: state.scopeFilter,
+      scope_filter: state.focusedMemoryIds.length ? 'all_user_memories' : state.scopeFilter,
       query: state.query,
       mode: state.viewMode === 'compact' && !state.query.trim() ? 'recent' : undefined,
       labels: terms(state.labelsFilter),
       keywords: terms(state.keywordsFilter),
       status: state.status,
+      memory_ids: state.focusedMemoryIds,
       limit: state.pageSize,
       offset: state.page * state.pageSize,
     });
@@ -436,10 +467,12 @@ const memoriesSlice = createSlice({
       state.page = 0;
       state.selectedId = '';
       state.selectedEvents = [];
+      state.focusedMemoryIds = [];
     },
     setQuery(state, action: PayloadAction<string>) {
       state.query = action.payload;
       state.page = 0;
+      state.focusedMemoryIds = [];
     },
     setViewMode(state, action: PayloadAction<'full' | 'compact'>) {
       state.viewMode = action.payload;
@@ -454,30 +487,50 @@ const memoriesSlice = createSlice({
     setLabelsFilter(state, action: PayloadAction<string>) {
       state.labelsFilter = action.payload;
       state.page = 0;
+      state.focusedMemoryIds = [];
     },
     setKeywordsFilter(state, action: PayloadAction<string>) {
       state.keywordsFilter = action.payload;
       state.page = 0;
+      state.focusedMemoryIds = [];
     },
     setStatus(state, action: PayloadAction<string>) {
       state.status = action.payload;
       state.page = 0;
+      state.focusedMemoryIds = [];
     },
     nextPage(state) {
       if (state.hasMore) {
         state.page += 1;
         state.selectedId = '';
         state.selectedEvents = [];
+        state.focusedMemoryIds = [];
       }
     },
     previousPage(state) {
       state.page = Math.max(0, state.page - 1);
       state.selectedId = '';
       state.selectedEvents = [];
+      state.focusedMemoryIds = [];
     },
     selectMemory(state, action: PayloadAction<string>) {
       state.selectedId = normalizeMemoryRef(action.payload);
       state.selectedEvents = [];
+    },
+    focusMemories(state, action: PayloadAction<string[] | string>) {
+      const memoryIds = normalizeMemoryRefs(action.payload);
+      state.focusedMemoryIds = memoryIds;
+      state.selectedId = memoryIds[0] || '';
+      state.selectedEvents = [];
+      state.query = '';
+      state.labelsFilter = '';
+      state.keywordsFilter = '';
+      state.status = 'any';
+      if (state.allowAllUserMemories) state.scopeFilter = 'all_user_memories';
+      state.page = 0;
+    },
+    clearMemoryFocus(state) {
+      state.focusedMemoryIds = [];
     },
     selectReconciliationJob(state, action: PayloadAction<string>) {
       state.selectedReconciliationJobId = action.payload;
@@ -512,8 +565,19 @@ const memoriesSlice = createSlice({
         }
         state.error = '';
         state.mutationError = '';
-        state.memories = action.payload.memories || [];
-        state.count = Number(action.payload.count || 0);
+        const focusedMemoryIds = state.focusedMemoryIds;
+        const currentFocusedMemories = focusedMemoryIds
+          .map((id) => state.memories.find((memory) => memory.id === id))
+          .filter((memory): memory is MemoryEntry => Boolean(memory));
+        const nextMemories = action.payload.memories || [];
+        state.memories = focusedMemoryIds.length
+          ? nextMemories.filter((memory) => focusedMemoryIds.includes(memory.id))
+          : nextMemories;
+        currentFocusedMemories.forEach((memory) => {
+          if (!state.memories.some((item) => item.id === memory.id)) state.memories.unshift(memory);
+        });
+        if (focusedMemoryIds.length) orderFocusedMemories(state);
+        else state.count = Number(action.payload.count || 0);
         state.currentBundleId = action.payload.scope?.bundle_id || state.currentBundleId;
         state.allowAllUserMemories = action.payload.capabilities?.allow_all_user_memories !== false;
         state.allowWrite = action.payload.capabilities?.allow_write === true;
@@ -525,8 +589,13 @@ const memoriesSlice = createSlice({
         if (!state.allowAllUserMemories && state.scopeFilter === 'all_user_memories') {
           state.scopeFilter = 'current_bundle';
         }
-        if (!state.selectedId && state.memories.length > 0) state.selectedId = state.memories[0].id;
-        if (state.selectedId && !state.memories.some((memory) => memory.id === state.selectedId)) {
+        if (focusedMemoryIds.length) {
+          if (!state.selectedId || !state.memories.some((memory) => memory.id === state.selectedId)) {
+            state.selectedId = state.memories[0]?.id || focusedMemoryIds[0] || '';
+          }
+        } else if (!state.selectedId && state.memories.length > 0) {
+          state.selectedId = state.memories[0].id;
+        } else if (state.selectedId && !state.memories.some((memory) => memory.id === state.selectedId)) {
           state.selectedId = state.memories[0]?.id || '';
         }
       })
@@ -547,6 +616,7 @@ const memoriesSlice = createSlice({
         state.error = '';
         state.mutationError = '';
         upsertMemory(state, action.payload.memory);
+        orderFocusedMemories(state);
       })
       .addCase(loadMemory.rejected, (state, action) => {
         state.loading = false;
@@ -834,7 +904,9 @@ const memoriesSlice = createSlice({
 });
 
 export const {
+  clearMemoryFocus,
   clearTransientErrors,
+  focusMemories,
   nextPage,
   previousPage,
   selectMemory,

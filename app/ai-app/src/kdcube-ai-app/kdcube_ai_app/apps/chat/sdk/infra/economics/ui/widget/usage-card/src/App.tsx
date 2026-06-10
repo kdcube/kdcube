@@ -16,9 +16,9 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { getBudgetBreakdown, UsageCardApiError } from './api/client';
+import { getBudgetBreakdown, getProfile, UsageCardApiError } from './api/client';
 import { settings } from './api/settings';
-import type { QuotaBreakdown } from './api/types';
+import type { ProfileResponse, QuotaBreakdown } from './api/types';
 
 const REFRESH_DEBOUNCE_MS = 600;
 const REFRESH_MESSAGE_TYPE = 'kdcube-usage-card-refresh';
@@ -119,8 +119,17 @@ const UsageWindow: React.FC<UsageWindowProps> = ({ title, resetAt, children }) =
   );
 };
 
+function accountIdentity(profile: ProfileResponse | null): string | null {
+  if (!profile) return null;
+  const candidate = profile.email || profile.username || profile.user_id;
+  if (!candidate) return null;
+  const trimmed = String(candidate).trim();
+  return trimmed.length ? trimmed : null;
+}
+
 export const App: React.FC = () => {
   const [breakdown, setBreakdown] = useState<QuotaBreakdown | null>(null);
+  const [profile, setProfile] = useState<ProfileResponse | null>(null);
   const [status, setStatus] = useState<CardStatus>({ loading: false, error: null, ready: false });
   const inFlightRef = useRef<Promise<void> | null>(null);
   const debounceRef = useRef<number | null>(null);
@@ -130,12 +139,21 @@ export const App: React.FC = () => {
     const task = (async () => {
       setStatus((prev) => ({ ...prev, loading: true, error: null }));
       try {
-        const result = await getBudgetBreakdown();
-        setBreakdown(result);
-        setStatus({ loading: false, error: null, ready: true });
-      } catch (err) {
-        const message = err instanceof UsageCardApiError ? err.message : (err as Error)?.message ?? 'load failed';
-        setStatus({ loading: false, error: message, ready: true });
+        const [breakdownResult, profileResult] = await Promise.allSettled([
+          getBudgetBreakdown(),
+          getProfile(),
+        ]);
+        if (breakdownResult.status === 'fulfilled') {
+          setBreakdown(breakdownResult.value);
+          setStatus({ loading: false, error: null, ready: true });
+        } else {
+          const err = breakdownResult.reason;
+          const message = err instanceof UsageCardApiError ? err.message : (err as Error)?.message ?? 'load failed';
+          setStatus({ loading: false, error: message, ready: true });
+        }
+        if (profileResult.status === 'fulfilled') {
+          setProfile(profileResult.value);
+        }
       } finally {
         inFlightRef.current = null;
       }
@@ -177,9 +195,16 @@ export const App: React.FC = () => {
   return (
     <div className={`usage-card-shell${status.loading ? ' is-loading' : ''}`}>
       <header className="usage-card-header">
-        <div>
-          <p className="eyebrow">Usage</p>
-          <h2>{breakdown?.plan_id ? breakdown.plan_id : 'Plan'}</h2>
+        <div className="usage-card-identity">
+          <p className="eyebrow">Plan</p>
+          <h2 title={breakdown?.plan_id || undefined}>
+            {breakdown?.plan_id ? breakdown.plan_id : 'Plan'}
+          </h2>
+          {accountIdentity(profile) ? (
+            <p className="usage-card-account" title={accountIdentity(profile) || undefined}>
+              {accountIdentity(profile)}
+            </p>
+          ) : null}
         </div>
         <button
           type="button"

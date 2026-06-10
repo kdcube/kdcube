@@ -1,9 +1,13 @@
-import { FormEvent } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { useAppDispatch, useAppSelector } from '../../app/hooks';
 import {
+  clearMemoryFocus,
   deleteMemoriesBySearch,
   exportMemories,
+  focusMemories,
   loadMemories,
+  loadMemoryEvents,
+  normalizeMemoryRefs,
   setKeywordsFilter,
   setLabelsFilter,
   setQuery,
@@ -16,8 +20,10 @@ export function MemoryFilters() {
   const dispatch = useAppDispatch();
   const {
     allowAllUserMemories,
+    focusedMemoryIds,
     keywordsFilter,
     labelsFilter,
+    memories,
     query,
     scopeFilter,
     status,
@@ -26,6 +32,12 @@ export function MemoryFilters() {
   } = useAppSelector((state) => state.memories);
   const compact = viewMode === 'compact';
   const hasFilters = Boolean(query.trim() || labelsFilter.trim() || keywordsFilter.trim() || status !== 'active');
+  const focusedMemory = focusedMemoryIds.length === 1 ? memories.find((memory) => memory.id === focusedMemoryIds[0]) : undefined;
+  const [idsText, setIdsText] = useState('');
+
+  useEffect(() => {
+    setIdsText(focusedMemoryIds.map((id) => `mem:${id}`).join(', '));
+  }, [focusedMemoryIds.join('|')]);
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -57,8 +69,35 @@ export function MemoryFilters() {
     void dispatch(loadMemories());
   }
 
+  function showMemoryIds() {
+    const memoryIds = normalizeMemoryRefs(idsText);
+    if (!memoryIds.length) return;
+    dispatch(focusMemories(memoryIds));
+    void dispatch(loadMemories()).then(() => {
+      void dispatch(loadMemoryEvents(memoryIds[0]));
+    });
+  }
+
   return (
     <form className={`filters ${compact ? 'compact-filters' : ''}`} onSubmit={submit}>
+      {focusedMemoryIds.length ? (
+        <div className="focused-memory-filter">
+          <div>
+            <span>{focusedMemoryIds.length === 1 ? 'Filtered by memory id' : 'Filtered by memory ids'}</span>
+            <strong>{focusedMemoryIds.length === 1 ? focusedMemory?.memory || focusedMemoryIds[0] : `${focusedMemoryIds.length} memories by id`}</strong>
+          </div>
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => {
+              dispatch(clearMemoryFocus());
+              void dispatch(loadMemories());
+            }}
+          >
+            Back to list
+          </button>
+        </div>
+      ) : null}
       {compact ? null : <div className="filter-row">
         <label>
           <span>Scope</span>
@@ -83,6 +122,16 @@ export function MemoryFilters() {
             <option value="any">Any</option>
           </select>
         </label>
+      </div>}
+      {compact ? null : <div className="id-filter-row">
+        <input
+          value={idsText}
+          onChange={(event) => setIdsText(event.target.value)}
+          placeholder="Memory ids, for example mem:mem_a, mem:mem_b"
+        />
+        <button type="button" className="secondary-button" disabled={loading} onClick={showMemoryIds}>
+          Show ids
+        </button>
       </div>}
       <div className="search-row">
         <input

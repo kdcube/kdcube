@@ -138,6 +138,7 @@ button {
 
 .chat-pane-header button,
 .memory-pane header button,
+.usage-pane header button,
 .notice button {
   display: inline-flex;
   align-items: center;

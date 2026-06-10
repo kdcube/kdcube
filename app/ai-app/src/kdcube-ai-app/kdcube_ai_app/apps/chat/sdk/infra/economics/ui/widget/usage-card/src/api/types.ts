@@ -73,3 +73,15 @@ export interface QuotaBreakdown {
 export interface BudgetBreakdownResponse extends QuotaBreakdown {
   status?: string;
 }
+
+/** Wire shape for GET /profile. Email is reported via `email` when the IdP
+ *  provided one; for federated identities the `username` is typically the
+ *  email itself, so the widget falls back to it. */
+export interface ProfileResponse {
+  user_type: string;
+  username?: string | null;
+  email?: string | null;
+  user_id?: string | null;
+  roles?: string[] | null;
+  session_id?: string | null;
+}

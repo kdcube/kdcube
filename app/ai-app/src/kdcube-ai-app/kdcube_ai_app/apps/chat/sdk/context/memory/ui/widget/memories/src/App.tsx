@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type DragEvent } from 'react';
 import { AppShell } from './components/AppShell';
 import { useAppDispatch, useAppSelector } from './app/hooks';
 import { settings } from './api/settings';
@@ -9,11 +9,10 @@ import { MemoryList } from './features/memories/MemoryList';
 import { ReconciliationPanel } from './features/memories/ReconciliationPanel';
 import {
   clearTransientErrors,
+  focusMemories,
   loadMemories,
-  loadMemory,
   loadMemoryEvents,
-  normalizeMemoryRef,
-  selectMemory,
+  normalizeMemoryRefs,
   setViewMode,
   updateMemoryPreferences,
 } from './features/memories/memoriesSlice';
@@ -31,12 +30,65 @@ function hostControlsFromLocation(): boolean {
   return value === '1' || value === 'true' || value === 'yes';
 }
 
+function memRefsFromValue(value: unknown): string[] {
+  if (!value || typeof value !== 'object') {
+    if (typeof value === 'string' && value.trim().startsWith('mem:')) return [value.trim()];
+    return [];
+  }
+  const raw = value as Record<string, unknown>;
+  const data = raw.data && typeof raw.data === 'object' ? raw.data as Record<string, unknown> : {};
+  const direct = [
+    raw.object_ref,
+    raw.ref,
+    raw.logical_path,
+    raw.logicalPath,
+    raw.id,
+    data.object_ref,
+    data.memory_id,
+  ].filter((item): item is string => typeof item === 'string' && item.trim());
+  const refs = direct.flatMap((item) => item.trim().startsWith('mem:') ? [item.trim()] : []);
+  const kind = String(raw.kind || raw.type || '').trim();
+  const rawMemoryId = typeof data.memory_id === 'string' ? data.memory_id.trim() : '';
+  if (kind.includes('memory') && rawMemoryId) refs.push(`mem:${normalizeMemoryRefs(rawMemoryId)[0] || rawMemoryId}`);
+  return refs;
+}
+
+function memoryIdsFromPayload(value: unknown): string[] {
+  if (!value || typeof value !== 'object') return [];
+  const raw = value as Record<string, unknown>;
+  const rawItems = Array.isArray(raw.contexts)
+    ? raw.contexts
+    : Array.isArray(raw.items)
+      ? raw.items
+      : Array.isArray(raw.cards)
+        ? raw.cards
+        : [raw.context, raw];
+  return normalizeMemoryRefs(rawItems.flatMap(memRefsFromValue));
+}
+
+function memoryIdsFromDataTransfer(dataTransfer: DataTransfer): string[] {
+  const candidates: string[] = [];
+  const jsonTypes = ['application/vnd.kdcube.context+json', 'application/json'];
+  jsonTypes.forEach((mimeType) => {
+    const raw = dataTransfer.getData(mimeType);
+    if (!raw) return;
+    try {
+      candidates.push(...memoryIdsFromPayload(JSON.parse(raw)));
+    } catch {
+      // Ignore non-JSON drag payloads for this MIME type.
+    }
+  });
+  candidates.push(...normalizeMemoryRefs(dataTransfer.getData('text/uri-list')));
+  return normalizeMemoryRefs(candidates);
+}
+
 export default function App() {
   const dispatch = useAppDispatch();
   const {
     allowWrite,
     count,
     error,
+    focusedMemoryIds,
     memories,
     memoryUseEnabled,
     mutationError,
@@ -48,8 +100,21 @@ export default function App() {
   const [compact, setCompact] = useState(initialCompact);
   const [editorMode, setEditorMode] = useState<'create' | 'edit' | ''>('');
   const [maintenanceOpen, setMaintenanceOpen] = useState(false);
+  const [dropActive, setDropActive] = useState(false);
   const selectedMemory = memories.find((memory) => memory.id === selectedId);
   const showSidePanel = !compact && (editorMode === 'create' || editorMode === 'edit' || Boolean(selectedMemory));
+
+  function focusMemoryIds(memoryIds: string[]) {
+    const ids = normalizeMemoryRefs(memoryIds);
+    if (!ids.length) return;
+    setCompact(false);
+    setEditorMode('');
+    dispatch(setViewMode('full'));
+    dispatch(focusMemories(ids));
+    void dispatch(loadMemories()).then(() => {
+      void dispatch(loadMemoryEvents(ids[0]));
+    });
+  }
 
   useEffect(() => {
     dispatch(setViewMode(compact ? 'compact' : 'full'));
@@ -78,17 +143,14 @@ export default function App() {
         setEditorMode('create');
         return;
       }
-      if (data.action === 'open' && typeof data.memory_id === 'string' && data.memory_id.trim()) {
-        const memoryId = normalizeMemoryRef(data.memory_id);
-        setCompact(false);
-        setEditorMode('');
-        void dispatch(loadMemory(memoryId)).then((result) => {
-          if (loadMemory.rejected.match(result) || (loadMemory.fulfilled.match(result) && !result.payload.ok)) {
-            void dispatch(loadMemories());
-          }
-          dispatch(selectMemory(memoryId));
-          void dispatch(loadMemoryEvents(memoryId));
-        });
+      if (data.action === 'open') {
+        const memoryIds = normalizeMemoryRefs([
+          data.memory_id,
+          data.object_ref,
+          ...(Array.isArray(data.memory_ids) ? data.memory_ids : []),
+          ...(Array.isArray(data.object_refs) ? data.object_refs : []),
+        ]);
+        focusMemoryIds(memoryIds);
       }
     }
     window.addEventListener('message', onHostMessage);
@@ -118,17 +180,40 @@ export default function App() {
     void dispatch(updateMemoryPreferences({ memoryEnabled: !memoryUseEnabled })).then(() => dispatch(loadMemories()));
   };
 
+  function handleDragOver(event: DragEvent<HTMLElement>) {
+    if (!Array.from(event.dataTransfer.types || []).some((type) => (
+      type === 'application/vnd.kdcube.context+json' ||
+      type === 'application/json' ||
+      type === 'text/uri-list'
+    ))) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    setDropActive(true);
+  }
+
+  function handleDrop(event: DragEvent<HTMLElement>) {
+    const memoryIds = memoryIdsFromDataTransfer(event.dataTransfer);
+    setDropActive(false);
+    if (!memoryIds.length) return;
+    event.preventDefault();
+    focusMemoryIds(memoryIds);
+  }
+
   return (
     <AppShell
       allowWrite={allowWrite}
       count={count}
       memoryUseEnabled={memoryUseEnabled}
       saving={saving}
+      dropActive={dropActive}
       compact={compact}
       hostControls={hostControls}
       onCreate={() => setEditorMode('create')}
       onExpand={compact && !hostControls ? requestExpand : undefined}
       onToggleMemoryUse={toggleMemoryUse}
+      onDragLeave={() => setDropActive(false)}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
     >
       {compact ? (
         <label className="compact-memory-toggle">
