@@ -1,4 +1,4 @@
-import {Fragment, ReactNode, useCallback, useEffect, useMemo, useRef, useState} from "react";
+import {Fragment, ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from "react";
 import {connectChat, sendChatMessage} from "../../../features/chat/chatServiceMiddleware.ts";
 import {ChevronsDown, Loader} from "lucide-react";
 import {UserMessageComponent} from "./UserMessageComponent.tsx";
@@ -93,14 +93,52 @@ const ChatLog = () => {
     }, [turnOrder, turns])
 
     const logContainerRef = useRef<HTMLDivElement | null>(null);
+    const logContentRef = useRef<HTMLDivElement | null>(null);
 
     const autoScroll = useRef(true);
+    const [inputClearance, setInputClearance] = useState(88);
+
+    const scrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
+        const container = logContainerRef.current;
+        if (!container) return;
+
+        container.scrollTo({
+            top: Math.max(0, container.scrollHeight - container.clientHeight),
+            behavior,
+        });
+    }, []);
+
+    useLayoutEffect(() => {
+        if (autoScroll.current) {
+            scrollToBottom();
+        }
+    }, [turns, inProgress, inputClearance, scrollToBottom]);
 
     useEffect(() => {
-        if (autoScroll.current && logContainerRef.current) {
-            logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
-        }
-    }, [turns, inProgress]);
+        const input = document.getElementById("UserInput");
+        if (!input || typeof ResizeObserver === "undefined") return;
+
+        const updateClearance = () => {
+            setInputClearance(Math.ceil(input.getBoundingClientRect().height));
+        };
+        updateClearance();
+        const observer = new ResizeObserver(updateClearance);
+        observer.observe(input);
+        return () => observer.disconnect();
+    }, []);
+
+    useEffect(() => {
+        const content = logContentRef.current;
+        if (!content || typeof ResizeObserver === "undefined") return;
+
+        const observer = new ResizeObserver(() => {
+            if (autoScroll.current) {
+                requestAnimationFrame(() => scrollToBottom());
+            }
+        });
+        observer.observe(content);
+        return () => observer.disconnect();
+    }, [scrollToBottom]);
 
     const [showScrollDown, setShowScrollDown] = useState<boolean>(false)
 
@@ -141,18 +179,14 @@ const ChatLog = () => {
                 opacity: showScrollDown ? 1 : 0,
             }}
             onClick={() => {
-                if (logContainerRef.current) {
-                    logContainerRef.current.scrollTo({
-                        top: logContainerRef.current.scrollHeight,
-                        behavior: "smooth",
-                    })
-                }
+                autoScroll.current = true;
+                scrollToBottom("smooth");
             }}
         >
             <IconContainer icon={ChevronsDown} size={2}
                            className={"text-gray-600 hover:text-gray-800 transition-colors duration-200"}/>
         </motion.button>
-    }, [showScrollDown])
+    }, [scrollToBottom, showScrollDown])
 
     const followUpQuestionsMemo = useMemo(() => {
         const disabled = inProgress;
@@ -375,13 +409,14 @@ const ChatLog = () => {
                     onScroll={onScroll}
                 >
                     <div
+                        ref={logContentRef}
                         className="border-r border-l border-gray-200 mx-auto min-h-full bg-slate-50 w-full max-w-[50vw]">
                         <div className="px-10 py-4">
                             {turnsRender}
                             {processingRender}
                             {followUpQuestionsMemo}
                         </div>
-                        <div className="pb-22"/>
+                        <div aria-hidden="true" style={{height: inputClearance}}/>
                     </div>
                 </div>
                 <div className={"absolute bottom-24 right-1/4 pr-6"}>
@@ -389,7 +424,7 @@ const ChatLog = () => {
                 </div>
             </div>
         )
-    }, [followUpQuestionsMemo, onScroll, processingRender, scrollDownButton, turnsRender])
+    }, [followUpQuestionsMemo, inputClearance, onScroll, processingRender, scrollDownButton, turnsRender])
 }
 
 export default ChatLog;

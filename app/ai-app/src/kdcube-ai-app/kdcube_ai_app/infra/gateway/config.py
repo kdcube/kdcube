@@ -19,6 +19,7 @@ from enum import Enum
 
 from kdcube_ai_app.infra.gateway.definitions import ServiceCapacity, CapacityBasedBackpressureConfig
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
+from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.policy import DataBusSettings
 from kdcube_ai_app.infra.namespaces import CONFIG, ns_key
 from kdcube_ai_app.infra.service_hub.cache import (
     NamespacedKVCacheConfig,
@@ -243,6 +244,7 @@ class GatewayConfiguration:
     redis_url: str
     guarded_rest_patterns: list[str] = field(default_factory=list)
     bypass_throttling_patterns: list[str] = field(default_factory=list)
+    data_bus: DataBusSettings = field(default_factory=DataBusSettings)
 
     # Computed properties
     @property
@@ -286,6 +288,7 @@ class GatewayConfiguration:
             "redis": asdict(self.redis),
             "pools": asdict(self.pools),
             "limits": asdict(self.limits),
+            "data_bus": asdict(self.data_bus),
             "guarded_rest_patterns": list(self.guarded_rest_patterns or []),
             "bypass_throttling_patterns": list(self.bypass_throttling_patterns or []),
             "computed_metrics": {
@@ -567,6 +570,24 @@ def validate_gateway_config(config: GatewayConfiguration) -> list[str]:
             issues.append(f"{role} hourly rate limit must be positive or -1 for unlimited")
         if rl.burst <= 0:
             issues.append(f"{role} burst limit must be positive")
+
+    # Data Bus publish validation. These limits are per Socket.IO session and
+    # protect a streaming package path, not HTTP request admission.
+    for role, limit in config.data_bus.publish_limits.items():
+        if not isinstance(limit.enabled, bool):
+            issues.append(f"{role} data_bus.enabled must be boolean")
+        for field_name in (
+            "packages_per_minute",
+            "messages_per_minute",
+            "bytes_per_minute",
+            "max_messages_per_package",
+            "max_package_bytes",
+        ):
+            value = getattr(limit, field_name)
+            if value < 0 and value != -1:
+                issues.append(f"{role} data_bus.{field_name} must be >= 0 or -1 for unlimited")
+        if limit.window_seconds <= 0:
+            issues.append(f"{role} data_bus.window_seconds must be positive")
 
     # Service capacity validation - updated for multi-process
     if config.service_capacity.concurrent_requests_per_process <= 0:
@@ -882,6 +903,7 @@ def _serialize_gateway_config(config: GatewayConfiguration) -> Dict[str, Any]:
         "redis": asdict(config.redis),
         "pools": asdict(config.pools),
         "limits": asdict(config.limits),
+        "data_bus": asdict(config.data_bus),
         "guarded_rest_patterns": list(config.guarded_rest_patterns or []),
         "bypass_throttling_patterns": list(config.bypass_throttling_patterns or []),
     }
@@ -1056,6 +1078,13 @@ def _config_from_dict(data: Dict[str, Any], *, component_override: Optional[str]
         except Exception:
             limits_kwargs[key] = None
     limits = LimitsSettings(**limits_kwargs)
+    data_bus_payload = _select_component_payload(data.get("data_bus", {}) or {}) or {}
+    publish_limits_payload = {}
+    if isinstance(data_bus_payload, dict):
+        publish_limits_payload = data_bus_payload.get("publish_limits") or {}
+    if not isinstance(publish_limits_payload, dict):
+        publish_limits_payload = {}
+    data_bus = DataBusSettings(publish_limits=publish_limits_payload)
 
     profile_raw = str(data.get("profile") or GatewayProfile.DEVELOPMENT.value)
     profile = GatewayProfile(profile_raw) if profile_raw in GatewayProfile._value2member_map_ else GatewayProfile.DEVELOPMENT
@@ -1099,6 +1128,7 @@ def _config_from_dict(data: Dict[str, Any], *, component_override: Optional[str]
         redis=redis,
         pools=pools,
         limits=limits,
+        data_bus=data_bus,
         redis_url=str(data.get("redis_url") or get_settings().REDIS_URL),
         guarded_rest_patterns=guarded_rest_patterns,
         bypass_throttling_patterns=bypass_throttling_patterns,
@@ -1367,6 +1397,7 @@ def apply_gateway_config_snapshot(gateway, new_config: GatewayConfiguration) -> 
     gateway.gateway_config.circuit_breakers = new_config.circuit_breakers
     gateway.gateway_config.monitoring = new_config.monitoring
     gateway.gateway_config.redis = new_config.redis
+    gateway.gateway_config.data_bus = new_config.data_bus
 
     # update rate limiter limits
     gateway.rate_limiter.gateway_config = gateway.gateway_config
@@ -1613,7 +1644,7 @@ class GatewayConfigurationManager:
             return True
         if "profile" in payload:
             return True
-        for key in ("service_capacity", "backpressure", "rate_limits", "pools", "limits"):
+        for key in ("service_capacity", "backpressure", "rate_limits", "pools", "limits", "data_bus"):
             value = payload.get(key)
             if isinstance(value, dict) and any(k in value for k in ("ingress", "proc", "processor", "worker")):
                 return True
@@ -1710,6 +1741,7 @@ class GatewayConfigurationManager:
         rate_limits_payload = kwargs.pop("rate_limits", None) or {}
         pools_payload = kwargs.pop("pools", None) or {}
         limits_payload = kwargs.pop("limits", None) or {}
+        data_bus_payload = kwargs.pop("data_bus", None) or {}
         guarded_rest_patterns = kwargs.pop("guarded_rest_patterns", None)
         bypass_throttling_patterns = kwargs.pop("bypass_throttling_patterns", None)
         base_config = get_gateway_config()
@@ -1736,6 +1768,9 @@ class GatewayConfigurationManager:
         merged_limits = {**limits_payload, **kwargs}
         if merged_limits:
             self._merge_component_payload(raw_config, "limits", component, merged_limits)
+
+        if data_bus_payload:
+            self._merge_component_payload(raw_config, "data_bus", component, data_bus_payload)
 
         merged_backpressure = {**backpressure_payload, **kwargs}
         if merged_backpressure:
@@ -1916,6 +1951,7 @@ class GatewayConfigurationManager:
         service_capacity_payload = kwargs.pop("service_capacity", None) or {}
         backpressure_payload = kwargs.pop("backpressure", None) or {}
         rate_limits_payload = kwargs.pop("rate_limits", None) or {}
+        data_bus_payload = kwargs.pop("data_bus", None) or {}
         guarded_rest_patterns = kwargs.pop("guarded_rest_patterns", None)
         bypass_throttling_patterns = kwargs.pop("bypass_throttling_patterns", None)
         base_config = get_gateway_config()
@@ -1939,6 +1975,9 @@ class GatewayConfigurationManager:
         roles_payload = roles_payload if roles_payload is not None else rate_limits_payload
         if isinstance(roles_payload, dict):
             self._merge_component_payload(raw_config, "rate_limits", component, {"roles": roles_payload})
+
+        if data_bus_payload:
+            self._merge_component_payload(raw_config, "data_bus", component, data_bus_payload)
 
         if isinstance(guarded_rest_patterns, list):
             patterns = [str(p) for p in guarded_rest_patterns if p]

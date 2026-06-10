@@ -135,6 +135,14 @@ class GatewayPolicyResolver:
         path = request.url.path
         candidates = self._path_candidates(path)
         cls = self.classify(path)
+        bypass_throttling = bool(
+            self._bypass_throttling_patterns
+            and any(
+                pattern.match(candidate)
+                for pattern in self._bypass_throttling_patterns
+                for candidate in candidates
+            )
+        )
 
         # chat ingress for SSE/Socket.IO is gated inside transport handlers
         if cls == EndpointClass.CHAT_INGRESS and path.startswith(("/sse/", "/socket.io")):
@@ -150,14 +158,26 @@ class GatewayPolicyResolver:
         if cls == EndpointClass.CHAT_INGRESS:
             return GatewayPolicy(
                 cls=cls,
-                bypass_throttling=False,
+                bypass_throttling=bypass_throttling,
                 bypass_gate=False,
                 bypass_backpressure=False,
                 requirements=[],
             )
 
-        # default: session resolution only; no counters
-        if cls in (EndpointClass.CONNECT, EndpointClass.READ):
+        # Connection maintenance is not work admission. Socket.IO/SSE handlers
+        # gate authenticated message publication separately, while handshakes,
+        # heartbeats and long-polls must not consume anonymous request quotas.
+        if cls == EndpointClass.CONNECT:
+            return GatewayPolicy(
+                cls=cls,
+                bypass_throttling=True,
+                bypass_gate=True,
+                bypass_backpressure=True,
+                requirements=[],
+            )
+
+        # default read path: session resolution only; no backpressure
+        if cls == EndpointClass.READ:
             pol = GatewayPolicy(
                 cls=cls,
                 bypass_throttling=False,
@@ -165,11 +185,7 @@ class GatewayPolicyResolver:
                 bypass_backpressure=True,
                 requirements=[],
             )
-            if self._bypass_throttling_patterns and any(
-                p.match(candidate)
-                for p in self._bypass_throttling_patterns
-                for candidate in candidates
-            ):
+            if bypass_throttling:
                 return GatewayPolicy(
                     cls=pol.cls,
                     bypass_throttling=True,

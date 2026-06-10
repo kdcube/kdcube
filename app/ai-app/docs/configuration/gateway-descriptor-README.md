@@ -1,7 +1,7 @@
 ---
 id: ks:docs/configuration/gateway-descriptor-README.md
 title: "Gateway Policy Descriptor"
-summary: "Gateway runtime policy configuration in gateway.yaml: guarded and bypassed routes, rate limits, backpressure, capacity, pools, and circuit-breaker behavior for ingress and proc."
+summary: "Gateway runtime policy configuration in gateway.yaml: guarded and bypassed routes, rate limits, Data Bus publish limits, backpressure, capacity, pools, and circuit-breaker behavior for ingress and proc."
 tags: ["service", "configuration", "gateway", "policy", "deployment", "descriptor"]
 keywords: ["gateway admission control", "guarded routes", "bypass routes", "rate limiting policy", "backpressure thresholds", "service capacity", "connection pool sizing", "circuit breaker settings", "monitoring flags", "ingress and processor policy"]
 see_also:
@@ -19,6 +19,7 @@ It controls:
 - which ingress REST endpoints are treated as work-creating gateway traffic
 - which endpoints bypass throttling
 - per-role rate limits
+- per-role Socket.IO Data Bus publish package limits
 - capacity and backpressure thresholds
 - gateway-owned Redis and Postgres pool sizing
 - SSE and integrations concurrency caps
@@ -100,6 +101,10 @@ gateway:
   rate_limits:
     ingress: {...}
     proc: {...}
+
+  data_bus:
+    ingress:
+      publish_limits: {...}
 
   pools:
     ingress: {...}
@@ -216,6 +221,91 @@ Validation rules:
 - `hourly` must be positive or `-1`
 - `burst` must be positive
 - the four standard roles should exist in the final effective config
+
+### `data_bus.publish_limits`
+
+`data_bus.ingress.publish_limits` defines the Socket.IO `data_bus.publish`
+package admission policy.
+
+This is a streaming policy. One connected Socket.IO client can send many
+`data_bus.publish` packages and each package can carry many durable
+`messages[]`. The Data Bus policy therefore counts packages, messages, and
+bytes before writing to the bundle-scoped Redis Stream.
+
+It is separate from:
+
+- generic `rate_limits`, which count gateway requests
+- OpenResty request-size and connection controls, which still apply at the
+  proxy layer
+- `chat_message`, which remains conversation ingress and uses
+  `external_events[]`
+
+Supported per-role fields:
+
+| Path | Type | Meaning |
+|---|---|---|
+| `enabled` | boolean | enables this role's app-layer Data Bus publish package policy; default `true`; set `false` for prototyping to bypass package/message/byte counters for that role |
+| `packages_per_minute` | integer | maximum `data_bus.publish` packages per session window; `-1` means unlimited |
+| `messages_per_minute` | integer | maximum total messages accepted from packages in the window; `-1` means unlimited |
+| `bytes_per_minute` | integer | maximum total JSON package bytes in the window; `-1` means unlimited |
+| `max_messages_per_package` | integer | maximum `messages[]` length in one package; `-1` means unlimited |
+| `max_package_bytes` | integer | maximum JSON package size before durable write; `-1` means unlimited |
+| `window_seconds` | integer | counter window length; default `60` |
+
+Default values:
+
+| Role | packages/min | messages/min | bytes/min | max messages/package | max package bytes | window |
+|---|---:|---:|---:|---:|---:|---:|
+| `anonymous` | 60 | 600 | 2097152 | 50 | 262144 | 60 |
+| `registered` | 600 | 6000 | 16777216 | 200 | 1048576 | 60 |
+| `paid` | 1200 | 12000 | 33554432 | 500 | 2097152 | 60 |
+| `privileged` | -1 | -1 | -1 | 1000 | 4194304 | 60 |
+
+Example:
+
+```yaml
+gateway:
+  data_bus:
+    ingress:
+      publish_limits:
+        registered:
+          packages_per_minute: 600
+          messages_per_minute: 6000
+          bytes_per_minute: 16777216
+          max_messages_per_package: 200
+          max_package_bytes: 1048576
+          window_seconds: 60
+```
+
+Runtime consumers:
+
+- policy shape:
+  [policy.py](/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/data_bus/policy.py)
+- limiter:
+  [data_bus_limiter.py](/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/infra/gateway/data_bus_limiter.py)
+- Socket.IO publish handler:
+  [publish.py](/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/socketio/data_bus/publish.py)
+
+Validation rules:
+
+- per-role `enabled` defaults to `true`
+- numeric limits must be `>= 0` or `-1`
+- `window_seconds` must be positive
+
+Prototype/off switch:
+
+```yaml
+gateway:
+  data_bus:
+    ingress:
+      publish_limits:
+        registered:
+          enabled: false
+```
+
+This disables only the Data Bus app-layer package/message/byte policy for
+registered sessions. The Socket.IO protocol shape checks, auth/session checks,
+bundle visibility checks, and OpenResty/proxy limits still apply.
 
 ### `service_capacity`
 

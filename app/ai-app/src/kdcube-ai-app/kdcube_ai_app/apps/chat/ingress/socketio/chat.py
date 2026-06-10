@@ -238,7 +238,11 @@ class SocketIOChatHandler:
         # origin allowlist
         origin = environ.get("HTTP_ORIGIN")
         if self.allowed_origins not in (None, [], ["*"]):
-            if not origin or (origin not in self.allowed_origins and "*" not in self.allowed_origins):
+            # Browsers commonly omit Origin on same-origin Engine.IO polling
+            # handshakes. Engine.IO already validates any Origin that is
+            # present, and the federated token remains the authentication
+            # boundary, so only reject an explicitly disallowed origin here.
+            if origin and origin not in self.allowed_origins and "*" not in self.allowed_origins:
                 logger.warning("WS connect rejected: origin '%s' not allowed", origin)
                 return False
 

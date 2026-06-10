@@ -113,6 +113,19 @@ Common platform service secrets:
 |---|---|---|---|
 | `GATEWAY_CONFIG_FORCE_ENV_ON_STARTUP` | `platform.services.<component>.service.gateway_config_force_env_on_startup` | `assembly.yaml` | ingress/proc/metrics startup; useful when `gateway.yaml` should override stale Redis gateway cache |
 
+Gateway runtime policy itself is descriptor-owned by `gateway.yaml`.
+
+| Descriptor path | Runtime owner | Purpose |
+|---|---|---|
+| `gateway.guarded_rest_patterns.<component>` | gateway policy middleware | classifies REST endpoints that create gateway-admitted work |
+| `gateway.bypass_throttling_patterns.<component>` | gateway policy middleware | skips request throttling for selected READ/CONNECT endpoints |
+| `gateway.rate_limits.<component>` | `GatewayConfiguration.rate_limits` | generic request throttling per role |
+| `gateway.data_bus.ingress.publish_limits` | `GatewayConfiguration.data_bus.publish_limits` | Socket.IO `data_bus.publish` package/message/byte limits before durable stream writes |
+| `gateway.data_bus.ingress.publish_limits.<role>.enabled` | `DataBusPublishLimit.enabled` | enables/disables Socket.IO `data_bus.publish` package/message/byte limits for one resolved user role |
+
+There is no separate env-var surface for individual Data Bus publish limits.
+Change them in `gateway.yaml` or through the gateway admin config path.
+
 ### Redis runtime
 
 | Runtime field | Descriptor path | Descriptor file | Modes |

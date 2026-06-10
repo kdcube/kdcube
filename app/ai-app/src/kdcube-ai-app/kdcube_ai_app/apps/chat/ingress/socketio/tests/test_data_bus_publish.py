@@ -11,6 +11,7 @@ from kdcube_ai_app.apps.chat.ingress.ingress_core import GatewayCheckResult, Ing
 from kdcube_ai_app.apps.chat.ingress.socketio import chat as socket_chat
 from kdcube_ai_app.apps.chat.ingress.socketio.data_bus import publish as pub
 from kdcube_ai_app.apps.chat.ingress.socketio.data_bus.publish import DataBusSocketIOIngress
+from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.policy import DataBusPublishLimit, DataBusSettings
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.types import DataBusHandlerSpec
 
 
@@ -32,6 +33,51 @@ class FakeRedis:
 
     async def get(self, key):
         return self.values.get(key)
+
+    def pipeline(self):
+        return FakePipeline(self)
+
+    async def incr(self, key):
+        self.values[key] = int(self.values.get(key) or 0) + 1
+        return self.values[key]
+
+    async def incrby(self, key, amount):
+        self.values[key] = int(self.values.get(key) or 0) + int(amount)
+        return self.values[key]
+
+    async def expire(self, key, ttl):
+        del key, ttl
+        return True
+
+
+class FakePipeline:
+    def __init__(self, redis):
+        self.redis = redis
+        self.ops = []
+
+    def incr(self, key):
+        self.ops.append(("incr", key, None))
+        return self
+
+    def incrby(self, key, amount):
+        self.ops.append(("incrby", key, amount))
+        return self
+
+    def expire(self, key, ttl):
+        self.ops.append(("expire", key, ttl))
+        return self
+
+    async def execute(self):
+        results = []
+        for op, key, value in self.ops:
+            if op == "incr":
+                results.append(await self.redis.incr(key))
+            elif op == "incrby":
+                results.append(await self.redis.incrby(key, value))
+            elif op == "expire":
+                results.append(await self.redis.expire(key, value))
+        self.ops.clear()
+        return results
 
 
 class FakeSessionManager:
@@ -98,6 +144,25 @@ def _socket_session():
             "timezone": "UTC",
         },
     }
+
+
+def _gateway_config(data_bus=None):
+    return SimpleNamespace(
+        tenant_id="tenant-a",
+        project_id="project-a",
+        data_bus=data_bus or DataBusSettings(),
+    )
+
+
+def _app(redis, gateway_adapter=None, data_bus=None):
+    return SimpleNamespace(
+        state=SimpleNamespace(
+            redis_async=redis,
+            gateway_adapter=gateway_adapter or SimpleNamespace(
+                gateway=SimpleNamespace(gateway_config=_gateway_config(data_bus=data_bus))
+            ),
+        )
+    )
 
 
 def _prompt_event(text: str = "hello") -> dict:
@@ -170,7 +235,7 @@ def _async_noop():
 @pytest.mark.asyncio
 async def test_data_bus_publish_accepts_messages_into_bundle_stream(monkeypatch):
     redis = FakeRedis()
-    app = SimpleNamespace(state=SimpleNamespace(redis_async=redis))
+    app = _app(redis)
     _patch_data_bus_contract(monkeypatch, _manifest())
 
     ingress = DataBusSocketIOIngress(app=app)
@@ -209,9 +274,129 @@ async def test_data_bus_publish_accepts_messages_into_bundle_stream(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_data_bus_publish_package_message_limit_rejection_does_not_write_stream(monkeypatch):
+    redis = FakeRedis()
+    app = _app(
+        redis,
+        data_bus=DataBusSettings(publish_limits={
+            "registered": DataBusPublishLimit(max_messages_per_package=0),
+        }),
+    )
+    _patch_data_bus_contract(monkeypatch, _manifest())
+
+    ingress = DataBusSocketIOIngress(app=app)
+    ack = await ingress.handle_publish(
+        sid="socket-1",
+        socket_session=_socket_session(),
+        data={
+            "schema": "kdcube.data_bus.ingress.v1",
+            "bundle_id": "task-tracker@1-0",
+            "messages": [
+                {
+                    "message_id": "m1",
+                    "subject": "task_tracker.canvas.patch",
+                    "object_ref": "canvas:main",
+                    "idempotency_key": "op-1",
+                    "payload": {"base_revision": 1, "operations": []},
+                }
+            ],
+        },
+    )
+
+    assert ack["status"] == "rejected"
+    assert ack["accepted"] == []
+    assert ack["rejected"][0]["error_type"] == "data_bus_limit"
+    assert ack["rejected"][0]["limit"] == "max_messages_per_package"
+    assert ack["rejected"][0]["limit_value"] == 0
+    assert ack["rejected"][0]["observed"] == 1
+    assert redis.streams == {}
+
+
+@pytest.mark.asyncio
+async def test_data_bus_publish_limits_can_be_disabled_for_prototyping(monkeypatch):
+    redis = FakeRedis()
+    app = _app(
+        redis,
+        data_bus=DataBusSettings(
+            publish_limits={
+                "registered": DataBusPublishLimit(enabled=False, max_messages_per_package=0),
+            },
+        ),
+    )
+    _patch_data_bus_contract(monkeypatch, _manifest())
+
+    ingress = DataBusSocketIOIngress(app=app)
+    ack = await ingress.handle_publish(
+        sid="socket-1",
+        socket_session=_socket_session(),
+        data={
+            "schema": "kdcube.data_bus.ingress.v1",
+            "bundle_id": "task-tracker@1-0",
+            "messages": [
+                {
+                    "message_id": "m1",
+                    "subject": "task_tracker.canvas.patch",
+                    "object_ref": "canvas:main",
+                    "idempotency_key": "op-1",
+                    "payload": {"base_revision": 1, "operations": []},
+                }
+            ],
+        },
+    )
+
+    assert ack["status"] == "accepted"
+    stream_key = "kdcube:data-bus:tenant-a:project-a:task-tracker@1-0:messages"
+    assert len(redis.streams[stream_key]) == 1
+    assert not any(":data-bus-publish:" in key for key in redis.values)
+
+
+@pytest.mark.asyncio
+async def test_data_bus_publish_package_rate_limit_rejection_does_not_write_second_package(monkeypatch):
+    redis = FakeRedis()
+    app = _app(
+        redis,
+        data_bus=DataBusSettings(publish_limits={
+            "registered": DataBusPublishLimit(
+                packages_per_minute=1,
+                messages_per_minute=-1,
+                bytes_per_minute=-1,
+            ),
+        }),
+    )
+    _patch_data_bus_contract(monkeypatch, _manifest())
+
+    ingress = DataBusSocketIOIngress(app=app)
+    payload = {
+        "schema": "kdcube.data_bus.ingress.v1",
+        "bundle_id": "task-tracker@1-0",
+        "messages": [
+            {
+                "message_id": "m1",
+                "subject": "task_tracker.canvas.patch",
+                "object_ref": "canvas:main",
+                "idempotency_key": "op-1",
+                "payload": {"base_revision": 1, "operations": []},
+            }
+        ],
+    }
+
+    first_ack = await ingress.handle_publish(sid="socket-1", socket_session=_socket_session(), data=payload)
+    second_payload = json.loads(json.dumps(payload))
+    second_payload["messages"][0]["message_id"] = "m2"
+    second_ack = await ingress.handle_publish(sid="socket-1", socket_session=_socket_session(), data=second_payload)
+
+    assert first_ack["status"] == "accepted"
+    assert second_ack["status"] == "rejected"
+    assert second_ack["rejected"][0]["limit"] == "packages_per_minute"
+    assert second_ack["rejected"][0]["observed"] == 2
+    stream_key = "kdcube:data-bus:tenant-a:project-a:task-tracker@1-0:messages"
+    assert len(redis.streams[stream_key]) == 1
+
+
+@pytest.mark.asyncio
 async def test_data_bus_publish_defaults_to_timestamp_message_id(monkeypatch):
     redis = FakeRedis()
-    app = SimpleNamespace(state=SimpleNamespace(redis_async=redis))
+    app = _app(redis)
     _patch_data_bus_contract(monkeypatch, _manifest())
 
     ingress = DataBusSocketIOIngress(app=app)
@@ -242,7 +427,7 @@ async def test_data_bus_publish_defaults_to_timestamp_message_id(monkeypatch):
 @pytest.mark.asyncio
 async def test_data_bus_publish_can_target_sse_reply_stream(monkeypatch):
     redis = FakeRedis()
-    app = SimpleNamespace(state=SimpleNamespace(redis_async=redis))
+    app = _app(redis)
     _patch_data_bus_contract(monkeypatch, _manifest())
 
     ingress = DataBusSocketIOIngress(app=app)
@@ -278,7 +463,7 @@ async def test_data_bus_publish_can_target_sse_reply_stream(monkeypatch):
 @pytest.mark.asyncio
 async def test_data_bus_publish_anonymous_threshold_handler_accepts_platform_registered_session(monkeypatch):
     redis = FakeRedis()
-    app = SimpleNamespace(state=SimpleNamespace(redis_async=redis))
+    app = _app(redis)
     manifest = SimpleNamespace(
         allowed_roles=(),
         allowed_roles_config=None,
@@ -319,7 +504,7 @@ async def test_data_bus_publish_anonymous_threshold_handler_accepts_platform_reg
 @pytest.mark.asyncio
 async def test_data_bus_publish_queues_unknown_subject_for_proc_side_rejection(monkeypatch):
     redis = FakeRedis()
-    app = SimpleNamespace(state=SimpleNamespace(redis_async=redis))
+    app = _app(redis)
     _patch_data_bus_contract(monkeypatch, _manifest())
 
     ingress = DataBusSocketIOIngress(app=app)
@@ -349,7 +534,7 @@ async def test_data_bus_publish_queues_unknown_subject_for_proc_side_rejection(m
 @pytest.mark.asyncio
 async def test_data_bus_publish_rejects_subject_outside_federated_token_scope(monkeypatch):
     redis = FakeRedis()
-    app = SimpleNamespace(state=SimpleNamespace(redis_async=redis))
+    app = _app(redis)
     manifest = SimpleNamespace(
         allowed_roles=(),
         allowed_roles_config=None,
@@ -388,7 +573,7 @@ async def test_data_bus_publish_rejects_subject_outside_federated_token_scope(mo
 @pytest.mark.asyncio
 async def test_data_bus_publish_rejects_bundle_outside_federated_token_scope(monkeypatch):
     redis = FakeRedis()
-    app = SimpleNamespace(state=SimpleNamespace(redis_async=redis))
+    app = _app(redis)
     manifest = SimpleNamespace(
         allowed_roles=(),
         allowed_roles_config=None,
@@ -429,7 +614,7 @@ async def test_data_bus_publish_rejects_bundle_outside_federated_token_scope(mon
 @pytest.mark.asyncio
 async def test_socketio_chat_message_and_data_bus_publish_coexist_without_cross_routing(monkeypatch):
     redis = FakeRedis()
-    app = SimpleNamespace(state=SimpleNamespace(redis_async=redis))
+    app = _app(redis)
     _patch_data_bus_contract(monkeypatch, _manifest())
 
     captured_chat: dict[str, dict] = {}
@@ -497,8 +682,7 @@ async def test_socketio_chat_message_and_data_bus_publish_coexist_without_cross_
     assert "external_events" not in record
 
 
-@pytest.mark.asyncio
-async def test_socketio_connect_accepts_scoped_federated_data_bus_token(monkeypatch):
+async def _federated_handler(monkeypatch):
     from kdcube_ai_app.apps.chat.sdk import config as sdk_config
 
     async def fake_get_secret(key, default=None, **kwargs):
@@ -542,6 +726,12 @@ async def test_socketio_connect_accepts_scoped_federated_data_bus_token(monkeypa
     handler._sid_to_session_id = {}
     handler._sid_to_tenant_project = {}
     handler._session_refcounts = {}
+    return handler, grant
+
+
+@pytest.mark.asyncio
+async def test_socketio_connect_accepts_scoped_federated_data_bus_token(monkeypatch):
+    handler, grant = await _federated_handler(monkeypatch)
 
     ok = await handler._handle_connect(
         "socket-1",
@@ -563,3 +753,46 @@ async def test_socketio_connect_accepts_scoped_federated_data_bus_token(monkeypa
     assert handler.sio.rooms == [("socket-1", grant.session.session_id)]
     assert handler.sio.saved_sessions["socket-1"]["user_session"]["user_id"] == "telegram:42"
     assert handler.sio.saved_sessions["socket-1"]["bundle_id"] == "task-tracker@1-0"
+
+
+@pytest.mark.asyncio
+async def test_federated_connect_allows_missing_origin_for_same_origin_polling(monkeypatch):
+    handler, grant = await _federated_handler(monkeypatch)
+
+    ok = await handler._handle_connect(
+        "socket-no-origin",
+        {
+            "REMOTE_ADDR": "127.0.0.1",
+            "HTTP_USER_AGENT": "pytest",
+        },
+        {
+            "tenant": "tenant-a",
+            "project": "project-a",
+            "bundle_id": "task-tracker@1-0",
+            "federated_token": grant.token,
+        },
+    )
+
+    assert ok is True
+
+
+@pytest.mark.asyncio
+async def test_federated_connect_rejects_explicitly_disallowed_origin(monkeypatch):
+    handler, grant = await _federated_handler(monkeypatch)
+
+    ok = await handler._handle_connect(
+        "socket-bad-origin",
+        {
+            "HTTP_ORIGIN": "https://attacker.example",
+            "REMOTE_ADDR": "127.0.0.1",
+            "HTTP_USER_AGENT": "pytest",
+        },
+        {
+            "tenant": "tenant-a",
+            "project": "project-a",
+            "bundle_id": "task-tracker@1-0",
+            "federated_token": grant.token,
+        },
+    )
+
+    assert ok is False

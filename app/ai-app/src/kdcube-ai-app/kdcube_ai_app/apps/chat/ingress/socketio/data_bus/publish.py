@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import uuid
 from typing import Any, Mapping
 
@@ -22,14 +21,14 @@ from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.types import (
     utc_now_iso,
 )
 from kdcube_ai_app.auth.sessions import UserSession, UserType
+from kdcube_ai_app.infra.gateway.data_bus_limiter import (
+    DataBusPublishLimitResult,
+    check_data_bus_publish_limits,
+)
 from kdcube_ai_app.infra.plugin.bundle_store import get_bundle_props, load_registry
 
 logger = logging.getLogger("kdcube.data_bus.socketio")
 
-DATA_BUS_PACKAGE_MAX_BYTES = max(
-    4096,
-    int(os.getenv("DATA_BUS_PACKAGE_MAX_BYTES", str(1024 * 1024)) or str(1024 * 1024)),
-)
 _DISABLED_VALUES = frozenset({"false", "disable", "disabled", "off", "0"})
 
 
@@ -120,8 +119,6 @@ class DataBusSocketIOIngress:
             encoded_size = len(json.dumps(data, ensure_ascii=False).encode("utf-8"))
         except Exception:
             return self._ack(status="rejected", rejected=[{"index": None, "error": "payload must be JSON-serializable"}])
-        if encoded_size > DATA_BUS_PACKAGE_MAX_BYTES:
-            return self._ack(status="rejected", rejected=[{"index": None, "error": "payload too large"}])
 
         bundle_id = str(data.get("bundle_id") or "").strip()
         if not bundle_id:
@@ -145,6 +142,34 @@ class DataBusSocketIOIngress:
             return self._ack(status="rejected", rejected=[{"index": None, "error": "tenant/project scope is required"}])
 
         session = _session_from_socket_meta(socket_session)
+        gateway_adapter = getattr(getattr(self.app, "state", None), "gateway_adapter", None)
+        gateway_config = getattr(getattr(gateway_adapter, "gateway", None), "gateway_config", None)
+        if gateway_config is None:
+            logger.warning(
+                "[data_bus.publish] rejected package because gateway configuration is unavailable tenant=%s project=%s bundle=%s sid=%s",
+                tenant,
+                project,
+                bundle_id,
+                sid,
+            )
+            return self._ack(
+                status="rejected",
+                rejected=[{
+                    "index": None,
+                    "error": "gateway configuration unavailable",
+                    "error_type": "gateway_unavailable",
+                    "status": 503,
+                }],
+            )
+        limit_result = await check_data_bus_publish_limits(
+            redis=self._redis(),
+            gateway_config=gateway_config,
+            session=session,
+            package_bytes=encoded_size,
+            message_count=len(messages),
+        )
+        if not limit_result.ok:
+            return self._ack(status="rejected", rejected=[self._limit_rejection(limit_result)])
 
         try:
             await self._ensure_registered_bundle(
@@ -322,6 +347,24 @@ class DataBusSocketIOIngress:
             "accepted": accepted or [],
             "rejected": rejected or [],
         }
+
+    @staticmethod
+    def _limit_rejection(result: DataBusPublishLimitResult) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "index": None,
+            "error": result.error,
+            "error_type": result.error_type,
+            "status": 429,
+            "limit": result.limit,
+            "limit_value": result.limit_value,
+            "observed": result.observed,
+            "window_seconds": result.window_seconds,
+        }
+        if result.retry_after is not None:
+            payload["retry_after"] = result.retry_after
+        if result.stats:
+            payload["stats"] = dict(result.stats)
+        return payload
 
 
 def attach_data_bus_socketio_handlers(chat_handler: Any) -> None:

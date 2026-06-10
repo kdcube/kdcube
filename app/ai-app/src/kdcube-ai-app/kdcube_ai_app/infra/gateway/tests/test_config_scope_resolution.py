@@ -50,3 +50,55 @@ def test_config_from_dict_keeps_explicit_scope_values(monkeypatch):
 
     assert cfg.tenant_id == "tenant-a"
     assert cfg.project_id == "project-a"
+
+
+def test_config_from_dict_parses_component_scoped_data_bus_publish_limits(monkeypatch):
+    monkeypatch.setattr(
+        gateway_config,
+        "get_settings",
+        lambda: SimpleNamespace(
+            REDIS_URL="redis://example",
+            TENANT="settings-tenant",
+            PROJECT="settings-project",
+        ),
+    )
+
+    cfg = gateway_config.parse_gateway_config_for_component(
+        {
+            "tenant": "tenant-a",
+            "project": "project-a",
+            "profile": "development",
+            "data_bus": {
+                "ingress": {
+                    "publish_limits": {
+                        "registered": {
+                            "enabled": False,
+                            "packages_per_minute": 11,
+                            "messages_per_minute": 22,
+                            "bytes_per_minute": 33,
+                            "max_messages_per_package": 4,
+                            "max_package_bytes": 55,
+                            "window_seconds": 6,
+                        }
+                    }
+                },
+                "proc": {
+                    "publish_limits": {
+                        "registered": {
+                            "packages_per_minute": 999,
+                        }
+                    }
+                },
+            },
+        },
+        "ingress",
+    )
+
+    limit = cfg.data_bus.get("registered")
+    assert limit.enabled is False
+    assert limit.packages_per_minute == 11
+    assert limit.messages_per_minute == 22
+    assert limit.bytes_per_minute == 33
+    assert limit.max_messages_per_package == 4
+    assert limit.max_package_bytes == 55
+    assert limit.window_seconds == 6

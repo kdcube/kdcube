@@ -57,6 +57,27 @@ def test_gateway_policy_resolver_treats_public_bundle_route_as_guarded_ingress()
     assert policy.bypass_backpressure is False
 
 
+def test_gateway_policy_resolver_bypasses_configured_public_bundle_route():
+    resolver = GatewayPolicyResolver()
+    resolver.set_bypass_throttling_patterns(
+        [
+            r"^.*/integrations/bundles/home/demo/"
+            r"signalk(?:@|%40)2026-06-05/public/signalk_token_claim$"
+        ]
+    )
+    request = _request(
+        "/api/integrations/bundles/home/demo/"
+        "signalk%402026-06-05/public/signalk_token_claim"
+    )
+
+    policy = resolver.resolve(request)
+
+    assert policy.cls == EndpointClass.CHAT_INGRESS
+    assert policy.bypass_throttling is True
+    assert policy.bypass_gate is False
+    assert policy.bypass_backpressure is False
+
+
 def test_gateway_policy_resolver_treats_public_bundle_mcp_route_as_guarded_ingress():
     resolver = GatewayPolicyResolver()
     request = _request("/api/integrations/bundles/tenant-a/project-a/bundle.demo/public/mcp/tools")

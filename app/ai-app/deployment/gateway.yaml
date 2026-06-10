@@ -64,6 +64,43 @@ gateway:
       paid: { hourly: 12000, burst: 220, burst_window: 60 }
       privileged: { hourly: -1, burst: 400, burst_window: 60 }
 
+  # Socket.IO data_bus.publish is a streaming package path. These limits are
+  # evaluated per connected user session before messages are written to durable
+  # Redis Streams. HTTP request throttles and OpenResty request-size limits still
+  # apply outside this package/message/byte policy.
+  data_bus:
+    ingress:
+      # For prototyping, set publish_limits.<role>.enabled: false.
+      publish_limits:
+        anonymous:
+          packages_per_minute: 60
+          messages_per_minute: 600
+          bytes_per_minute: 2097152
+          max_messages_per_package: 50
+          max_package_bytes: 262144
+          window_seconds: 60
+        registered:
+          packages_per_minute: 600
+          messages_per_minute: 6000
+          bytes_per_minute: 16777216
+          max_messages_per_package: 200
+          max_package_bytes: 1048576
+          window_seconds: 60
+        paid:
+          packages_per_minute: 1200
+          messages_per_minute: 12000
+          bytes_per_minute: 33554432
+          max_messages_per_package: 500
+          max_package_bytes: 2097152
+          window_seconds: 60
+        privileged:
+          packages_per_minute: -1
+          messages_per_minute: -1
+          bytes_per_minute: -1
+          max_messages_per_package: 1000
+          max_package_bytes: 4194304
+          window_seconds: 60
+
   pools:
     ingress: { pg_pool_min_size: 0, pg_pool_max_size: 4, redis_max_connections: 20 }
     proc: { pg_pool_min_size: 0, pg_pool_max_size: 8, redis_max_connections: 40 }
