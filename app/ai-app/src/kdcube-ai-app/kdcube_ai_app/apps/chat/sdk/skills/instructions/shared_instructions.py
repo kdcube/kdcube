@@ -768,12 +768,12 @@ WORK_WITH_DOCUMENTS_AND_IMAGES = """
   can react before rendering if the shape is wrong.
 - Use the input type documented by the target rendering tool. Do not reuse one
   source across different output formats unless that tool explicitly supports it.
-- Preferred: then call the renderer with `content="ref:<external artifact path>"`.
-  The path after `ref:` may be the artifact_path/logical_path (`fi:...`) or the
-  visible physical path (`turn_<id>/outputs/...`); missing `fi:` is assumed for
-  ordinary artifact paths.
-  Inline renderer content is accepted when needed, but do not bind internal
-  artifacts into rendering_tools.write_*.
+- Preferred: then call the renderer with `content="ref:<visible text source ref>"`,
+  for example `content="ref:fi:turn_<id>.outputs/<artifact_scope>/report.html"`.
+  Inline renderer content is accepted when needed. If you want to render a
+  user/assistant/event object by reference, the referenced content must resolve
+  to text in the renderer's requested input format. Do not bind physical paths,
+  external owner refs, or internal artifacts into rendering_tools.write_*.
 - Internal text artifacts are still valid for private notes, intermediate
   analysis, machine-readable scratch data, and other agent/runtime-only files
   that are not meant to be rendered or shared as user deliverables.
@@ -1019,7 +1019,7 @@ Where to look in the visible context:
 
 ### Context artifacts discovery and access (CRITICAL)
 You use these paths to:
-1) bind content into tool params with "ref:<artifact path>";
+1) bind content into tool params with "ref:<visible logical path>";
 2) to load content with react.read in react loop tool;
 3) to read supported context objects in your code (exec snippets) with ctx_tools.fetch_ctx.
 
@@ -1411,9 +1411,12 @@ You have following tools to capture content which you produce in the named and d
 
 - Use rendering_tools.write_* to render and write the special formats (pdf, pptx, docx, png).
 For normal user document deliverables, write the source first, then render it
-with `content="ref:<artifact_path_or_visible_file_path>"`. Use the input type documented by the
-target rendering tool. Missing `fi:` is assumed for ordinary artifact paths.
-The renderer source ref must be external: use
+with `content="ref:<visible text source ref>"`, normally a visible `fi:` source
+file such as `content="ref:fi:turn_<id>.outputs/<source-file>"`. Use the input
+type documented by the target rendering tool. Renderer `content=ref:` source
+content must resolve to text in the requested input format. Do not pass physical
+paths. If the source object is external, call `react.pull` first and use the
+returned logical path. User-facing source files must be external: use
 `react.write(..., channel="canvas", ...)`, or an exec artifact with
 `visibility=external`. Do not use `channel="internal"` refs as
 rendering_tools.write_* source. Internal artifacts are for private scratch,
@@ -1452,8 +1455,8 @@ still valid when needed; do not mix inline content and `ref:` in the same
 
 [When you need to call a tool]
 1) Choose the right tool for the sub-goal.
-2) Provide complete params; required args must be set directly or via param binding with ref:<artifact path>.
-3) Use ref:<artifact path> in param value to bind content into a tool param (like a pointer/alias/ref). The runtime injects the referenced content.
+2) Provide complete params; required args must be set directly or via param binding with ref:<visible logical path>.
+3) Use ref:<visible logical path> in param value to bind content into a tool param (like a pointer/alias/ref). The runtime injects the referenced content.
 4) Only bind/fill params that the tool actually declares in its args.
 5) Use react.write to write your generated content (reports, summaries, plans, prose). For non-internal channels, it will be streamed to a user.
    Regardless of whether you pick the kind='display' (no file shared) or kind='file' (stream and also share the file), we always capture it as a file artifact.
@@ -1476,8 +1479,11 @@ still valid when needed; do not mix inline content and `ref:` in the same
 
 8) rendering_tools.write_* tools: for final PDF/PPTX/DOCX/PNG deliverables,
    prefer generating source content first, then rendering it with
-   `content="ref:<artifact_path_or_visible_file_path>"`. Missing `fi:` is assumed
-   for ordinary artifact paths. The ref must point to an external artifact:
+   `content="ref:<visible text source ref>"`, normally
+   `content="ref:fi:turn_<id>.outputs/<source-file>"`. The ref must resolve to
+   text in the renderer's requested input format. Do not pass physical paths as
+   renderer `content=ref:`. If the source object is external, call `react.pull`
+   first and use the returned logical path. User-facing source files must be external:
    use `react.write(..., channel="canvas", ...)` or exec `visibility=external`.
    Do not use `channel="internal"` refs as rendering_tools.write_* source.
    Use the input type documented by the target rendering tool.

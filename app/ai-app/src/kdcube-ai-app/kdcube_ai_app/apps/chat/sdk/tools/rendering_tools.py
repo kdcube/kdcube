@@ -380,10 +380,8 @@ async def rendering_tool_call_validation_policy(
 
 
 REACT_RENDER_REF_NOTE = (
-    "REACT REF SOURCE: If content is `ref:<path>`, the ref must point to an external artifact "
-    "(react.write channel=canvas, or exec visibility=external). `ref:fi:turn_<id>.outputs/<scope>/<file>` and "
-    "`ref:turn_<id>/outputs/<scope>/<file>` both resolve to the same visible artifact when present. "
-    "channel=internal refs are private and are rejected for rendering_tools.write_*.\n\n"
+    "REACT REF SOURCE: `content` may be inline literal source text. If `content` is `ref:<path>`, "
+    "the ref must resolve to text in this renderer's requested input format. channel=internal refs are rejected.\n\n"
 )
 
 TOOL_CONTRACT_NOTE = (

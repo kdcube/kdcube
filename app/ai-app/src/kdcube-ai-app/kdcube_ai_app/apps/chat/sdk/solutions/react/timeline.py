@@ -57,6 +57,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.events.projection import (
     patch_timeline_segment_marks,
     produce_event_source_announce_blocks,
 )
+from kdcube_ai_app.tools.content_type import is_text_mime_type
 from kdcube_ai_app.infra.service_hub.multimodality import (
     MODALITY_DOC_MIME,
     MODALITY_IMAGE_MIME,
@@ -2028,6 +2029,10 @@ class Timeline:
         def _resolve_ref(val: Any, param_name: Optional[str] = None):
             if not isinstance(val, str) or not val.startswith("ref:"):
                 return val
+            is_rendering_content_ref = (
+                (tool_id or "").startswith("rendering_tools.")
+                and (param_name or "") == "content"
+            )
             ref = val[len("ref:"):].strip()
             original_ref = ref
             if (
@@ -2098,18 +2103,80 @@ class Timeline:
             # resolve via timeline
             if ref.startswith("so:") or ref.startswith("sources_pool["):
                 resolved = self.resolve_sources_pool(ref if ref.startswith("sources_pool[") else ref[3:])
+                if is_rendering_content_ref:
+                    violations.append({
+                        "code": "renderer_content_ref_not_text",
+                        "path": ref,
+                        "param": param_name,
+                        "message": "Renderer content refs must resolve to text in the renderer's requested input format.",
+                    })
+                    return None
                 return resolved
             resolved = self.resolve_artifact(ref)
             if isinstance(resolved, dict):
-                if isinstance(resolved.get("text"), str):
-                    return resolved.get("text")
-                if resolved.get("base64"):
-                    return resolved.get("base64")
                 fp = resolved.get("filepath") or ""
                 if fp:
                     txt = _read_text_from_file(fp)
                     if isinstance(txt, str):
                         return txt
+                if ref.startswith("fi:"):
+                    encoded = resolved.get("base64")
+                    mime = (resolved.get("mime") or "").strip()
+                    if encoded:
+                        if is_rendering_content_ref:
+                            if is_text_mime_type(mime):
+                                try:
+                                    import base64 as _base64
+                                    return _base64.b64decode(str(encoded)).decode("utf-8")
+                                except Exception:
+                                    pass
+                            violations.append({
+                                "code": "renderer_content_ref_not_text",
+                                "path": ref,
+                                "param": param_name,
+                                "message": "Renderer content refs must resolve to text in the renderer's requested input format.",
+                            })
+                            return None
+                        return encoded
+                    violations.append({
+                        "code": "fi_ref_not_materialized",
+                        "path": ref,
+                        "param": param_name,
+                        "message": (
+                            "This fi: ref is visible but its artifact file is not materialized locally. "
+                            "ref:fi bindings must consume artifact bytes/text, not timeline-rendered previews."
+                        ),
+                    })
+                    return None
+                text_value = resolved.get("text")
+                if isinstance(text_value, str):
+                    return text_value
+                encoded = resolved.get("base64")
+                if encoded:
+                    mime = (resolved.get("mime") or "").strip()
+                    if is_rendering_content_ref:
+                        if is_text_mime_type(mime):
+                            try:
+                                import base64 as _base64
+                                return _base64.b64decode(str(encoded)).decode("utf-8")
+                            except Exception:
+                                pass
+                        violations.append({
+                            "code": "renderer_content_ref_not_text",
+                            "path": ref,
+                            "param": param_name,
+                            "message": "Renderer content refs must resolve to text in the renderer's requested input format.",
+                        })
+                        return None
+                    return encoded
+                if is_rendering_content_ref:
+                    violations.append({
+                        "code": "renderer_content_ref_not_text",
+                        "path": ref,
+                        "param": param_name,
+                        "message": "Renderer content refs must resolve to text in the renderer's requested input format.",
+                    })
+                    return None
             return resolved
 
         def _walk(obj: Any, param_name: Optional[str] = None):

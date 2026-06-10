@@ -371,7 +371,9 @@ REACT_LITE_RENDERING_TOOLS = """
 - Rendering tools create user-visible artifacts such as PDF, DOCX, PPTX, PNG, or HTML.
 - Renderer `content=ref:...` should point to the source artifact used by the renderer, not the final rendered output.
 - If the source is authored in this turn, write it as an external/canvas artifact first; render it only in a later round after reviewing the visible write result. A source written earlier in the same response is not already visible. Example: generate/write a document source first, review it in the next round, then render it.
-- Source refs may be `fi:turn_<id>.outputs/...`, `fi:turn_<id>.files/...`, or a visible physical artifact path when the renderer documents that form.
+- Renderer source refs must resolve to text in the renderer's requested input format. A visible `fi:` source file is the normal case. Do not pass physical paths as renderer `content=ref:...`.
+- Inline renderer content is accepted when needed.
+- If the source object is external, call `react.pull` first and use the returned logical path as the renderer source ref.
 - Do not use internal/private artifacts as renderer sources for user deliverables. Rendering tools work only for user-visible artifacts for now.
 - Do not use exec to call ordinary PDF/PPTX/DOCX renderers. Generate source content, then call the renderer as a top-level ReAct tool.
 """

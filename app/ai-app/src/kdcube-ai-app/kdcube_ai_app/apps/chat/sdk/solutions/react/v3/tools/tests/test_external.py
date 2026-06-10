@@ -163,6 +163,9 @@ async def test_rendering_tool_accepts_generic_outdir_fi_path(monkeypatch, tmp_pa
 async def test_rendering_tool_normalizes_visible_current_turn_shorthand_ref(monkeypatch, tmp_path):
     runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path))
     ctx = FakeBrowser(runtime)
+    source_target = artifact_outdir_for(tmp_path) / "turn_exec/outputs/report.html"
+    source_target.parent.mkdir(parents=True, exist_ok=True)
+    source_target.write_text("<html><body>source</body></html>", encoding="utf-8")
     ctx.timeline.blocks.append({
         "type": "react.tool.result",
         "turn_id": "turn_exec",
@@ -211,6 +214,160 @@ async def test_rendering_tool_normalizes_visible_current_turn_shorthand_ref(monk
     notices = [b for b in ctx.timeline.blocks if b.get("type") == "react.notice"]
     assert any("protocol_warning.ref_path_normalized" in (b.get("text") or "") for b in notices)
     assert any("ref:fi:turn_exec.outputs/report.html" in (b.get("text") or "") for b in notices)
+
+
+@pytest.mark.asyncio
+async def test_rendering_tool_ref_uses_artifact_file_not_text_preview(monkeypatch, tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path / "work"))
+    ctx = FakeBrowser(runtime)
+    physical_path = "turn_exec/outputs/report.html"
+    full_html = "<html><body><h1>Full report</h1><p>actual content</p></body></html>"
+    target = artifact_outdir_for(tmp_path) / physical_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(full_html, encoding="utf-8")
+    ctx.timeline.blocks.append({
+        "type": "react.tool.result",
+        "turn_id": "turn_exec",
+        "path": "fi:turn_exec.outputs/report.html",
+        "mime": "text/html",
+        "text": "<html><body><h1>Rendered preview only</h1></body></html>",
+        "meta": {
+            "artifact_path": "fi:turn_exec.outputs/report.html",
+            "physical_path": physical_path,
+            "visibility": "external",
+        },
+    })
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "tool_id": "rendering_tools.write_pdf",
+                "params": {
+                    "path": "outputs/report.pdf",
+                    "content": "ref:fi:turn_exec.outputs/report.html",
+                    "format": "html",
+                },
+            }
+        },
+        "outdir": str(tmp_path),
+        "workdir": str(tmp_path / "work"),
+    }
+    captured = {}
+
+    async def _fake_execute_tool(**kwargs):
+        captured["params"] = kwargs["tool_execution_context"]["params"]
+        pdf_target = artifact_outdir_for(tmp_path) / "turn_exec/outputs/report.pdf"
+        pdf_target.parent.mkdir(parents=True, exist_ok=True)
+        pdf_target.write_bytes(b"%PDF-1.4\n")
+        return {"output": "turn_exec/outputs/report.pdf", "summary": ""}
+
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v3.tools.external.execute_tool", _fake_execute_tool)
+
+    react = FakeReact()
+    react.tools_subsystem = None
+
+    await handle_external_tool(react=react, ctx_browser=ctx, state=state, tool_call_id="e_preview_ref")
+
+    assert captured["params"]["content"] == full_html
+    assert "Rendered preview only" not in captured["params"]["content"]
+    assert not state.get("retry_decision")
+
+
+@pytest.mark.asyncio
+async def test_rendering_tool_ref_accepts_visible_markdown_event(monkeypatch, tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path / "work"))
+    ctx = FakeBrowser(runtime)
+    markdown = "# User note\n\nPlease render this as markdown."
+    ctx.timeline.blocks.append({
+        "type": "user.message",
+        "turn_id": "turn_exec",
+        "path": "ar:turn_exec.user.prompt",
+        "mime": "text/markdown",
+        "text": markdown,
+    })
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "tool_id": "rendering_tools.write_docx",
+                "params": {
+                    "path": "outputs/note.docx",
+                    "content": "ref:ar:turn_exec.user.prompt",
+                },
+            }
+        },
+        "outdir": str(tmp_path),
+        "workdir": str(tmp_path / "work"),
+    }
+    captured = {}
+
+    async def _fake_execute_tool(**kwargs):
+        captured["params"] = kwargs["tool_execution_context"]["params"]
+        docx_target = artifact_outdir_for(tmp_path) / "turn_exec/outputs/note.docx"
+        docx_target.parent.mkdir(parents=True, exist_ok=True)
+        docx_target.write_bytes(b"PK\x03\x04")
+        return {"output": "turn_exec/outputs/note.docx", "summary": ""}
+
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v3.tools.external.execute_tool", _fake_execute_tool)
+
+    react = FakeReact()
+    react.tools_subsystem = None
+
+    await handle_external_tool(react=react, ctx_browser=ctx, state=state, tool_call_id="e_ar_ref")
+
+    assert captured["params"]["content"] == markdown
+    assert not state.get("retry_decision")
+
+
+@pytest.mark.asyncio
+async def test_rendering_tool_ref_rejects_unmaterialized_visible_block(monkeypatch, tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path / "work"))
+    ctx = FakeBrowser(runtime)
+    ctx.timeline.blocks.append({
+        "type": "react.tool.result",
+        "turn_id": "turn_exec",
+        "path": "fi:turn_exec.outputs/report.html",
+        "mime": "text/html",
+        "text": "<html><body><h1>Rendered block is not artifact content</h1></body></html>",
+        "meta": {
+            "artifact_path": "fi:turn_exec.outputs/report.html",
+            "physical_path": "turn_exec/outputs/report.html",
+            "visibility": "external",
+        },
+    })
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "tool_id": "rendering_tools.write_pdf",
+                "params": {
+                    "path": "outputs/report.pdf",
+                    "content": "ref:fi:turn_exec.outputs/report.html",
+                    "format": "html",
+                },
+            }
+        },
+        "outdir": str(tmp_path),
+        "workdir": str(tmp_path / "work"),
+    }
+    called = False
+
+    async def _fake_execute_tool(**kwargs):
+        nonlocal called
+        called = True
+        return {"output": "turn_exec/outputs/report.pdf", "summary": ""}
+
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v3.tools.external.execute_tool", _fake_execute_tool)
+
+    react = FakeReact()
+    react.tools_subsystem = None
+
+    await handle_external_tool(react=react, ctx_browser=ctx, state=state, tool_call_id="e_unmaterialized")
+
+    assert called is False
+    assert state.get("retry_decision") is True
+    assert any(
+        "ref:fi bindings must consume artifact bytes/text" in (b.get("text") or "")
+        for b in ctx.timeline.blocks
+        if b.get("type") == "react.notice"
+    )
 
 
 @pytest.mark.asyncio

@@ -170,6 +170,18 @@ The split is:
 - skills teach the model how to author good input for the renderer
 - `rendering_tools.write_*` produces the final artifact
 
+Renderer input rule:
+- `content` may be inline literal source text when the target renderer accepts
+  that format.
+- `content="ref:..."` renderer source refs must resolve to text in the
+  renderer's requested input format, for example markdown for DOCX or HTML for
+  normal PDF rendering.
+- Visible `fi:` source files are the normal case for generated reports, for
+  example `content="ref:fi:turn_<id>.outputs/report/source.html"`.
+- Do not pass physical paths as renderer `content=ref:...`.
+- If a source object is external, import it with `react.pull` first and render
+  from the returned logical path.
+
 This is especially useful in ReAct flows, where the model can:
 1. plan the artifact,
 2. draft the content with the right structure,
