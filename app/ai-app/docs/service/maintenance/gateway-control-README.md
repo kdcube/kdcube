@@ -7,6 +7,7 @@ keywords: ["gateway control", "rate limit reset", "anonymous burst limit", "redi
 see_also:
   - ks:docs/service/maintenance/requests-monitoring-README.md
   - ks:docs/configuration/gateway-descriptor-README.md
+  - ks:docs/service/scale/redis-cluster-README.md
 ---
 # Gateway Control Maintenance
 
@@ -145,7 +146,14 @@ Relevant keys:
 ```text
 <tenant>:<project>:kdcube:system:capacity:counter
 <tenant>:<project>:kdcube:system:capacity:counter:total
+<tenant>:<project>:kdcube:system:capacity:process-index:<service_type>:<service_name>
 ```
+
+The `process-index` key is a bounded sorted set maintained by process
+heartbeats. Gateway admission reads it to compute healthy process count and
+capacity before running the Lua admission script. Do not delete it during normal
+rate-limit cleanup. Delete it only when process heartbeat keys are known stale
+and the service has been restarted or will immediately repopulate the index.
 
 Do not purge chat queues during normal rate-limit recovery. Queue purge drops
 pending work and should be reserved for explicit incident recovery.

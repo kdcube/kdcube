@@ -35,6 +35,7 @@ def test_get_plain_reads_assembly_by_default(monkeypatch, tmp_path):
         "AI_REACT_PRUNED_TURN_SUMMARY_MODE",
         "CLAUDE_CODE_SESSION_STORE_IMPLEMENTATION",
         "CLAUDE_CODE_SESSION_GIT_REPO",
+        "REDIS_TOPOLOGY",
     ):
         monkeypatch.delenv(key, raising=False)
     assembly_path = tmp_path / "assembly.yaml"
@@ -69,6 +70,11 @@ def test_get_plain_reads_assembly_by_default(monkeypatch, tmp_path):
                     }
                 },
                 "frontend": {"routes_prefix": "/platform"},
+                "infra": {
+                    "redis": {
+                        "topology": "cluster",
+                    },
+                },
             },
             sort_keys=False,
         )
@@ -105,6 +111,7 @@ def test_get_plain_reads_assembly_by_default(monkeypatch, tmp_path):
     assert settings.AI_REACT_PRUNED_TURN_SUMMARY_MODE == "working_summary"
     assert settings.CLAUDE_CODE_SESSION_STORE_IMPLEMENTATION == "git"
     assert settings.CLAUDE_CODE_SESSION_GIT_REPO == "https://example.com/sessions.git"
+    assert settings.REDIS_TOPOLOGY == "cluster"
 
 
 @pytest.mark.asyncio

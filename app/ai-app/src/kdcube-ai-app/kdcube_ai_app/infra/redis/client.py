@@ -11,75 +11,38 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import time
 import contextlib
-from typing import Dict, Optional, Tuple, Callable, Any, List
+from typing import Dict, Optional, Callable, Any, List
 
 import redis
-import redis.asyncio as aioredis
 from redis.asyncio import Redis as AsyncRedis
+
+from kdcube_ai_app.infra.redis.factory import (
+    RedisClientFactory,
+    RedisClientRuntime,
+    build_redis_client_name,
+    redis_client_name_prefix,
+    safe_redis_url,
+)
 
 logger = logging.getLogger(__name__)
 
-_ASYNC_CLIENTS: Dict[Tuple[str, bool, Optional[int]], AsyncRedis] = {}
-_SYNC_CLIENTS: Dict[Tuple[str, bool, Optional[int]], redis.Redis] = {}
 _MONITORS: Dict[str, "RedisConnectionMonitor"] = {}
-
-_DEFAULT_REDIS_CONNECT_TIMEOUT_SEC = 5.0
-_DEFAULT_REDIS_HEALTH_CHECK_INTERVAL_SEC = 30
-_DEFAULT_REDIS_SOCKET_KEEPALIVE = True
-
-
-def _client_name_base() -> str:
-    return (
-        os.getenv("REDIS_CLIENT_NAME")
-        or os.getenv("SERVICE_NAME")
-        or os.getenv("APP_NAME")
-        or os.getenv("COMPONENT_NAME")
-        or "kdcube"
-    )
-
-
-def _client_instance_hint() -> str:
-    return os.getenv("INSTANCE_ID") or os.getenv("HOSTNAME") or "local"
-
-
-def _sanitize_client_name(raw: str) -> str:
-    safe = "".join(ch if (ch.isalnum() or ch in {"-", "_", ":", "."}) else "_" for ch in raw)
-    return safe[:128]
+_CLIENT_FACTORY: RedisClientFactory | None = None
 
 
 def _build_client_name(kind: str) -> str:
-    base = _client_name_base()
-    instance = _client_instance_hint()
-    pid = os.getpid()
-    return _sanitize_client_name(f"{base}:{instance}:{pid}:{kind}")
+    return build_redis_client_name(kind)
 
 
 def get_redis_client_name_prefix() -> str:
     """Prefix used for Redis client_name (without pool kind)."""
-    base = _client_name_base()
-    instance = _client_instance_hint()
-    pid = os.getpid()
-    return _sanitize_client_name(f"{base}:{instance}:{pid}")
+    return redis_client_name_prefix()
 
 
 def _safe_redis_url(url: str) -> str:
-    if not url:
-        return url
-    try:
-        if "://" not in url:
-            return url
-        scheme, rest = url.split("://", 1)
-        if "@" not in rest:
-            return url
-        creds, host = rest.split("@", 1)
-        if ":" in creds:
-            return f"{scheme}://***:***@{host}"
-        return f"{scheme}://***@{host}"
-    except Exception:
-        return url
+    return safe_redis_url(url)
 
 
 def _resolve_max_connections(default: Optional[int] = None) -> Optional[int]:
@@ -97,40 +60,23 @@ def _resolve_max_connections(default: Optional[int] = None) -> Optional[int]:
     return None
 
 
-def _build_async_client(
-    redis_url: str,
-    *,
-    decode_responses: bool = False,
-    max_connections: Optional[int] = None,
-    shared: bool,
-    client_name_kind: Optional[str] = None,
-    **kwargs,
-) -> AsyncRedis:
-    max_connections = _resolve_max_connections(max_connections)
-    options = {"decode_responses": decode_responses, **kwargs}
-    if max_connections is not None:
-        options["max_connections"] = max_connections
-    options.setdefault("socket_connect_timeout", _DEFAULT_REDIS_CONNECT_TIMEOUT_SEC)
-    options.setdefault("health_check_interval", _DEFAULT_REDIS_HEALTH_CHECK_INTERVAL_SEC)
-    options.setdefault("socket_keepalive", _DEFAULT_REDIS_SOCKET_KEEPALIVE)
-    options.setdefault("retry_on_timeout", True)
-    options["client_name"] = options.get("client_name") or _build_client_name(
-        client_name_kind or ("async_decode" if decode_responses else "async")
-    )
-    client = aioredis.from_url(redis_url, **options)
-    try:
-        setattr(client, "_kdcube_shared", shared)
-    except Exception:
-        pass
-    logger.info(
-        "Created %s async Redis client url=%s decode_responses=%s max_connections=%s client_name=%s",
-        "shared" if shared else "dedicated",
-        _safe_redis_url(redis_url),
-        decode_responses,
-        max_connections,
-        options.get("client_name"),
-    )
-    return client
+def _get_client_factory() -> RedisClientFactory:
+    global _CLIENT_FACTORY
+    if _CLIENT_FACTORY is None:
+        try:
+            from kdcube_ai_app.apps.chat.sdk.config import get_settings
+
+            topology_value = getattr(get_settings(), "REDIS_TOPOLOGY", None)
+            topology = str(topology_value).strip() if topology_value is not None else ""
+        except Exception:
+            topology = ""
+        if not topology:
+            topology = "standalone"
+        _CLIENT_FACTORY = RedisClientFactory(
+            default_topology=topology,
+            max_connections_resolver=_resolve_max_connections,
+        )
+    return _CLIENT_FACTORY
 
 
 def create_async_redis_client(
@@ -147,14 +93,17 @@ def create_async_redis_client(
     Use this for long-lived blocking or pub/sub flows that should be recreated
     independently from the process-wide shared pool.
     """
-    return _build_async_client(
+    factory = _get_client_factory()
+    request = factory.request(
         redis_url,
+        runtime=RedisClientRuntime.ASYNC,
         decode_responses=decode_responses,
         max_connections=max_connections,
         shared=False,
         client_name_kind=client_name_kind,
         **kwargs,
     )
+    return factory.client(request)
 
 
 def get_async_redis_client(
@@ -163,19 +112,15 @@ def get_async_redis_client(
     decode_responses: bool = False,
     max_connections: Optional[int] = None,
 ) -> AsyncRedis:
-    max_connections = _resolve_max_connections(max_connections)
-    key = (redis_url, decode_responses, max_connections)
-    client = _ASYNC_CLIENTS.get(key)
-    if client is not None:
-        return client
-    client = _build_async_client(
+    factory = _get_client_factory()
+    request = factory.request(
         redis_url,
+        runtime=RedisClientRuntime.ASYNC,
         decode_responses=decode_responses,
         max_connections=max_connections,
         shared=True,
     )
-    _ASYNC_CLIENTS[key] = client
-    return client
+    return factory.client(request)
 
 
 def get_sync_redis_client(
@@ -184,57 +129,32 @@ def get_sync_redis_client(
     decode_responses: bool = False,
     max_connections: Optional[int] = None,
 ) -> redis.Redis:
-    max_connections = _resolve_max_connections(max_connections)
-    key = (redis_url, decode_responses, max_connections)
-    client = _SYNC_CLIENTS.get(key)
-    if client is not None:
-        return client
-
-    kwargs = {"decode_responses": decode_responses}
-    if max_connections is not None:
-        kwargs["max_connections"] = max_connections
-    kwargs.setdefault("socket_connect_timeout", _DEFAULT_REDIS_CONNECT_TIMEOUT_SEC)
-    kwargs.setdefault("health_check_interval", _DEFAULT_REDIS_HEALTH_CHECK_INTERVAL_SEC)
-    kwargs.setdefault("socket_keepalive", _DEFAULT_REDIS_SOCKET_KEEPALIVE)
-    kwargs.setdefault("retry_on_timeout", True)
-    kwargs["client_name"] = _build_client_name("sync_decode" if decode_responses else "sync")
-    client = redis.Redis.from_url(redis_url, **kwargs)
-    try:
-        setattr(client, "_kdcube_shared", True)
-    except Exception:
-        pass
-    _SYNC_CLIENTS[key] = client
-    logger.info(
-        "Created sync Redis client pool url=%s decode_responses=%s max_connections=%s client_name=%s",
-        _safe_redis_url(redis_url),
-        decode_responses,
-        max_connections,
-        kwargs.get("client_name"),
+    factory = _get_client_factory()
+    request = factory.request(
+        redis_url,
+        runtime=RedisClientRuntime.SYNC,
+        decode_responses=decode_responses,
+        max_connections=max_connections,
+        shared=True,
     )
-    return client
+    return factory.client(request)
 
 
 async def close_async_redis_clients() -> None:
-    for client in list(_ASYNC_CLIENTS.values()):
-        try:
-            await client.close()
-        except Exception:
-            logger.debug("Failed to close async Redis client", exc_info=True)
-    _ASYNC_CLIENTS.clear()
+    if _CLIENT_FACTORY is not None:
+        await _CLIENT_FACTORY.close_async_clients()
 
 
 def close_sync_redis_clients() -> None:
-    for client in list(_SYNC_CLIENTS.values()):
-        try:
-            client.close()
-        except Exception:
-            logger.debug("Failed to close sync Redis client", exc_info=True)
-    _SYNC_CLIENTS.clear()
+    if _CLIENT_FACTORY is not None:
+        _CLIENT_FACTORY.close_sync_clients()
 
 
 async def close_all_redis_clients() -> None:
+    global _CLIENT_FACTORY
     await close_async_redis_clients()
     close_sync_redis_clients()
+    _CLIENT_FACTORY = None
 
 
 class RedisConnectionMonitor:
@@ -322,8 +242,6 @@ class RedisConnectionMonitor:
 def get_redis_monitor(redis_url: str) -> RedisConnectionMonitor:
     monitor = _MONITORS.get(redis_url)
     if monitor is None:
-        interval = float(os.getenv("REDIS_HEALTHCHECK_INTERVAL_SEC", "5"))
-        timeout = float(os.getenv("REDIS_HEALTHCHECK_TIMEOUT_SEC", "2"))
-        monitor = RedisConnectionMonitor(redis_url, interval_sec=interval, timeout_sec=timeout)
+        monitor = RedisConnectionMonitor(redis_url)
         _MONITORS[redis_url] = monitor
     return monitor

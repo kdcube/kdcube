@@ -87,6 +87,12 @@ class MultiprocessDistributedMiddleware:
     def ns(self, base: str) -> str:
         return ns_key(base, tenant=self.tenant, project=self.project)
 
+    def _capacity_process_index_key(self, service_type: str, service_name: str) -> str:
+        return f"{self.CAPACITY_PREFIX}:process-index:{service_type}:{service_name}"
+
+    def _instance_status_index_key(self) -> str:
+        return f"{self.INSTANCE_STATUS_PREFIX}:index"
+
     async def init_redis(self):
         if not self.redis:
             self.redis = get_async_redis_client(self.redis_url)
@@ -122,6 +128,9 @@ class MultiprocessDistributedMiddleware:
 
         key = f"{self.PROCESS_HEARTBEAT_PREFIX}:{self.instance_id}:{service_type}:{service_name}:{process_id}"
         await self.redis.setex(key, self.HEARTBEAT_TTL, json.dumps(asdict(heartbeat), default=str, ensure_ascii=False))
+        capacity_index_key = self._capacity_process_index_key(service_type, service_name)
+        await self.redis.zadd(capacity_index_key, {key: heartbeat.last_heartbeat})
+        await self.redis.expire(capacity_index_key, self.PROCESS_TIMEOUT + self.HEARTBEAT_TTL)
 
         # Also register service endpoint for local discovery
         if port:
@@ -141,9 +150,10 @@ class MultiprocessDistributedMiddleware:
         """Aggregate process heartbeats into instance-level service status"""
         await self.init_redis()
 
-        # Get all process heartbeats for this service on this instance
-        pattern = f"{self.PROCESS_HEARTBEAT_PREFIX}:{self.instance_id}:{service_type}:{service_name}:*"
-        keys = await self.redis.keys(pattern)
+        capacity_index_key = self._capacity_process_index_key(service_type, service_name)
+        stale_before = time.time() - self.PROCESS_TIMEOUT
+        await self.redis.zremrangebyscore(capacity_index_key, "-inf", stale_before)
+        keys = await self.redis.zrange(capacity_index_key, 0, -1)
 
         process_heartbeats = []
         healthy_count = 0
@@ -154,10 +164,15 @@ class MultiprocessDistributedMiddleware:
             data = await self.redis.get(key)
             if data:
                 try:
+                    if isinstance(data, bytes):
+                        data = data.decode("utf-8")
                     heartbeat = ProcessHeartbeat(**json.loads(data))
+                    if heartbeat.instance_id != self.instance_id:
+                        continue
 
                     # Check if process is still alive
                     if time.time() - heartbeat.last_heartbeat > self.PROCESS_TIMEOUT:
+                        await self.redis.zrem(capacity_index_key, key)
                         continue  # Skip dead processes
 
                     process_heartbeats.append(heartbeat)
@@ -197,6 +212,9 @@ class MultiprocessDistributedMiddleware:
         # Store aggregated status
         status_key = f"{self.INSTANCE_STATUS_PREFIX}:{self.instance_id}:{service_type}:{service_name}"
         await self.redis.setex(status_key, self.HEARTBEAT_TTL, json.dumps(asdict(status), default=str, ensure_ascii=False))
+        status_index_key = self._instance_status_index_key()
+        await self.redis.zadd(status_index_key, {status_key: status.last_updated})
+        await self.redis.expire(status_index_key, self.PROCESS_TIMEOUT + self.HEARTBEAT_TTL)
 
         return status
 
@@ -219,8 +237,10 @@ class MultiprocessDistributedMiddleware:
         """Get all instance service statuses across the cluster"""
         await self.init_redis()
 
-        pattern = f"{self.INSTANCE_STATUS_PREFIX}:*"
-        keys = await self.redis.keys(pattern)
+        status_index_key = self._instance_status_index_key()
+        stale_before = time.time() - self.PROCESS_TIMEOUT
+        await self.redis.zremrangebyscore(status_index_key, "-inf", stale_before)
+        keys = await self.redis.zrange(status_index_key, 0, -1)
 
         instances = {}
 
@@ -239,6 +259,8 @@ class MultiprocessDistributedMiddleware:
 
                 except Exception as e:
                     logger.error(f"Error parsing instance status {key}: {e}")
+            else:
+                await self.redis.zrem(status_index_key, key)
 
         return instances
 

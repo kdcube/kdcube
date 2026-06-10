@@ -171,7 +171,9 @@ Look for these log lines:
    - "Starting task <task_id> queue_wait_ms=... current_load=..."
 
 How to interpret:
-- If `enqueue_ms` is high: Redis or Lua script is slow (possible KEYS scan pressure).
+- If `enqueue_ms` is high: Redis or the Lua admission script is slow. Gateway
+  admission does not scan the Redis keyspace; it reads the bounded capacity
+  index before Lua and passes numeric capacity into the script.
 - If `queue_wait_ms` is high: backlog or not enough healthy processes.
 - If `queue_wait_ms` is low but UI is quiet: SSE/Socket stream delivery issue.
 - If you see queue depth growing with no new `acquired task` logs, check for proc Redis timeout/reset logs below.
@@ -238,8 +240,10 @@ Note: Responses include queue stats, capacity context, and throttling data.
    - `/sse/stream?stream_id=...` and `/sse/chat?stream_id=...` must match.
 2. Processor capacity leak on invalid payloads
    - Fixed in `kdcube_ai_app/apps/chat/processor.py` (load is decremented on invalid payload).
-3. Redis KEYS in enqueue Lua
-   - Can block Redis under large keyspace; watch `enqueue_ms` spikes.
+3. Redis admission latency
+   - Gateway admission no longer uses `KEYS`/`SCAN` in Lua. If `enqueue_ms`
+     spikes, inspect Redis latency, queue size, capacity-index freshness, and
+     cross-service network pressure.
 
 ## Expected heartbeat behavior after restart
 Defaults:

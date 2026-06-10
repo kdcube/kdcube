@@ -74,6 +74,7 @@ These env vars are the direct runtime surface for assembly-backed settings.
 | `KDCUBE_UI_SSL_PORT` | `ports.ui_ssl` | `get_settings()` | CLI local compose |
 | `KDCUBE_PROXY_HTTP_PORT` | `ports.proxy_http` | `get_settings()` | CLI local compose |
 | `KDCUBE_PROXY_HTTPS_PORT` | `ports.proxy_https` | `get_settings()` | CLI local compose |
+| `REDIS_TOPOLOGY` | `infra.redis.topology` | `get_settings()` / Redis client factory | all modes |
 | `REACT_WORKSPACE_IMPLEMENTATION` | `storage.workspace.type` | `get_settings()` | CLI local compose, direct local service run |
 | `REACT_WORKSPACE_GIT_REPO` | `storage.workspace.repo` | `get_settings()` | CLI local compose, direct local service run |
 | `AI_REACT_AGENT_VERSION` | `ai.react.react_agent_version` | `get_settings()` | all modes |
@@ -167,6 +168,19 @@ validates an external identity and calls the async platform session authority to
 issue platform-recognized `kst1.*` cookies. It requires
 `services.session_token.secret` in `secrets.yaml`. See
 [Bundle Session Auth](../service/auth/bundle-session-auth-README.md).
+
+### `infra.redis.topology`
+
+`infra.redis.topology` selects the Redis client topology used by the shared
+Redis client factory. The canonical values are:
+
+| Value | Meaning |
+|---|---|
+| `standalone` | single Redis endpoint |
+| `cluster` | Redis Cluster topology |
+
+The reference descriptor sets `standalone`. The current runtime recognizes
+`cluster` but fails fast until the cluster key-slot migration is complete.
 
 ### `auth.turnstile_development_token`
 

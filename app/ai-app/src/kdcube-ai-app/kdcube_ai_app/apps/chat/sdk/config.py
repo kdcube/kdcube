@@ -630,6 +630,7 @@ class Settings(PLATFORM_CONFIG):
     REDIS_PORT: int = Field(default=6379)
     REDIS_PASSWORD: str | None = Field(default=None)
     REDIS_DB: int = Field(default=0)
+    REDIS_TOPOLOGY: str = Field(default="standalone")
 
     STORAGE_PATH: str | None = Field(default=None, alias="KDCUBE_STORAGE_PATH")
     BUNDLE_STORAGE_URL: str | None = Field(default=None, alias="CB_BUNDLE_STORAGE_URL")
@@ -895,6 +896,9 @@ class Settings(PLATFORM_CONFIG):
                 plain_path="infra.redis.password",
                 secret_path="infra.redis.password",
             )
+        val = self._assembly_str("infra.redis.topology")
+        if val:
+            self.REDIS_TOPOLOGY = val
 
         # 4. Build REDIS_URL from components if not explicitly set in env.
         #    Must happen after infra reads so assembly.yaml host/port/password are reflected.
@@ -1452,6 +1456,7 @@ def export_managed_env(
     _put("BUNDLE_SECRETS_YAML", resolved.BUNDLE_SECRETS_YAML)
     _put("PLATFORM_DESCRIPTORS_DIR", resolved.PLATFORM_DESCRIPTORS_DIR)
     _put("REDIS_URL", resolved.REDIS_URL)
+    _put("REDIS_TOPOLOGY", resolved.REDIS_TOPOLOGY)
     _put("TENANT_ID", resolved.TENANT)
     _put("PROJECT_ID", resolved.PROJECT)
     _put("INSTANCE_ID", resolved.INSTANCE_ID)

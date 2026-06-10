@@ -46,6 +46,99 @@ async def _get_combined_queue_sizes(
         sizes[user_type] = int(ready) + int(inflight) + int(continuation or 0)
     return sizes
 
+
+def _capacity_process_index_key(capacity_prefix: str, service_type: str, service_name: str) -> str:
+    return f"{capacity_prefix}:process-index:{service_type}:{service_name}"
+
+
+async def _get_capacity_from_process_index(
+    *,
+    redis,
+    capacity_prefix: str,
+    service_type: str,
+    service_name: str,
+    heartbeat_timeout_seconds: int,
+    capacity_buffer: float,
+    queue_depth_multiplier: float,
+) -> Tuple[int, int]:
+    index_key = _capacity_process_index_key(capacity_prefix, service_type, service_name)
+    now = time.time()
+    stale_before = now - int(heartbeat_timeout_seconds or 0)
+    await redis.zremrangebyscore(index_key, "-inf", stale_before)
+    keys = await redis.zrange(index_key, 0, -1)
+
+    healthy_count = 0
+    actual_capacity = 0
+    for key in keys or []:
+        try:
+            data = await redis.get(key)
+            if not data:
+                await redis.zrem(index_key, key)
+                continue
+            if isinstance(data, bytes):
+                data = data.decode("utf-8")
+            heartbeat = json.loads(data)
+            if (
+                heartbeat.get("service_type") != service_type
+                or heartbeat.get("service_name") != service_name
+            ):
+                continue
+            age = now - float(heartbeat.get("last_heartbeat") or 0)
+            if age > heartbeat_timeout_seconds:
+                await redis.zrem(index_key, key)
+                continue
+
+            health_status = str(heartbeat.get("health_status") or "").upper()
+            is_healthy = "HEALTHY" in health_status
+            if is_healthy:
+                healthy_count += 1
+                max_cap = int(heartbeat.get("max_capacity") or 0)
+                effective = int(max_cap * (1 - capacity_buffer))
+                queue_cap = int(max_cap * queue_depth_multiplier)
+                actual_capacity += effective + queue_cap
+        except Exception as e:
+            logger.debug("Error parsing indexed process heartbeat %s: %s", key, e)
+
+    return healthy_count, actual_capacity
+
+
+async def _get_alive_instances_from_process_index(
+    *,
+    redis,
+    capacity_prefix: str,
+    service_type: str,
+    service_name: str,
+    heartbeat_timeout_seconds: int,
+) -> Set[str]:
+    index_key = _capacity_process_index_key(capacity_prefix, service_type, service_name)
+    now = time.time()
+    stale_before = now - int(heartbeat_timeout_seconds or 0)
+    await redis.zremrangebyscore(index_key, "-inf", stale_before)
+    keys = await redis.zrange(index_key, 0, -1)
+
+    alive_instances: Set[str] = set()
+    for key in keys or []:
+        try:
+            data = await redis.get(key)
+            if not data:
+                await redis.zrem(index_key, key)
+                continue
+            if isinstance(data, bytes):
+                data = data.decode("utf-8")
+            heartbeat = json.loads(data)
+            age = now - float(heartbeat.get("last_heartbeat") or 0)
+            if age > heartbeat_timeout_seconds:
+                await redis.zrem(index_key, key)
+                continue
+            instance_id = str(heartbeat.get("instance_id") or "").strip()
+            if instance_id:
+                alive_instances.add(instance_id)
+        except Exception as e:
+            logger.debug("Error parsing indexed process heartbeat %s: %s", key, e)
+
+    return alive_instances
+
+
 class BackpressureError(GatewayError):
     """System under pressure"""
     def __init__(self, message: str, retry_after: int = 60, session: UserSession = None):
@@ -98,58 +191,17 @@ class BackpressureManager:
         self.capacity_calculator = calculator
 
     async def get_alive_instances(self) -> Set[str]:
-        """Get unique alive instances from heartbeat keys"""
-        current_time = time.time()
-
-        # Use cache if still valid
-        # if current_time - self._last_instance_check < self._instance_cache_ttl:
-        #     return self._cached_instances
+        """Get unique alive instances from the service-scoped capacity index."""
 
         await self.init_redis()
-        # Pattern matches: kdcube:heartbeat:instance:instance-id:service-type:service-name
-        # or kdcube:heartbeat:process:instance-id:service-type:service-name:process-id
-        patterns = [
-            f"{self.INSTANCE_STATUS_PREFIX}:*",
-            f"{self.PROCESS_HEARTBEAT_PREFIX}:*"
-        ]
-
-        alive_instances = set()
-
-        for pattern in patterns:
-            keys = await self.redis.keys(pattern)
-
-            for key in keys:
-                try:
-                    # Extract instance ID from key (position 2 in split)
-                    # kdcube:instance:home-instance-1:chat:rest -> home-instance-1
-                    # kdcube:process:home-instance-1:kb:rest:12345 -> home-instance-1
-                    key_parts = key.decode().split(':')
-                    if len(key_parts) >= 4:
-                        instance_id = key_parts[3]
-
-                        # Check if the heartbeat is recent (not expired)
-                        data = await self.redis.get(key)
-                        if data:
-                            try:
-                                heartbeat_data = json.loads(data)
-                                last_heartbeat = heartbeat_data.get('last_heartbeat', 0)
-
-                                # Use configured heartbeat timeout
-                                heartbeat_timeout = self.gateway_config.monitoring.heartbeat_timeout_seconds
-                                if current_time - last_heartbeat <= heartbeat_timeout:
-                                    alive_instances.add(instance_id)
-                            except (json.JSONDecodeError, KeyError):
-                                # If we can't parse the data, skip this key
-                                continue
-
-                except Exception as e:
-                    logger.debug(f"Error processing heartbeat key {key}: {e}")
-                    continue
-        # Update cache
-        # self._cached_instances = alive_instances
-        # self._last_instance_check = current_time
-
-        return alive_instances
+        service_type, service_name = self.gateway_config.capacity_source_selector()
+        return await _get_alive_instances_from_process_index(
+            redis=self.redis,
+            capacity_prefix=self.ns(REDIS.SYSTEM.CAPACITY),
+            service_type=service_type,
+            service_name=service_name,
+            heartbeat_timeout_seconds=self.gateway_config.monitoring.heartbeat_timeout_seconds,
+        )
 
     async def get_individual_queue_sizes(self) -> Dict[str, int]:
         """Get individual queue sizes"""
@@ -598,6 +650,7 @@ class AtomicBackpressureManager:
         self.QUEUE_CONTINUATION_COUNT_PREFIX = self.ns(REDIS.CHAT.CONVERSATION_MAILBOX_COUNT_PREFIX)
         self.PROCESS_HEARTBEAT_PREFIX = self.ns(REDIS.PROCESS.HEARTBEAT_PREFIX)
         self.INSTANCE_STATUS_PREFIX = self.ns(REDIS.INSTANCE.HEARTBEAT_PREFIX)
+        self.CAPACITY_PREFIX = self.ns(REDIS.SYSTEM.CAPACITY)
         self.CAPACITY_COUNTER_KEY = self.ns(f"{REDIS.SYSTEM.CAPACITY}:counter")
 
         # Queue analytics keys
@@ -623,40 +676,8 @@ class AtomicBackpressureManager:
         local registered_ratio = tonumber(ARGV[3])
         local paid_ratio = tonumber(ARGV[4])
         local hard_ratio = tonumber(ARGV[5])
-        local capacity_buffer = tonumber(ARGV[6])
-        local queue_depth_multiplier = tonumber(ARGV[7])
-        local heartbeat_timeout = tonumber(ARGV[8])
-        local current_time = tonumber(ARGV[9])
-        local heartbeat_pattern = ARGV[10]
-        local target_service_type = ARGV[11]
-        local target_service_name = ARGV[12]
-        
-        -- Count healthy capacity-source processes and aggregate capacity
-        local heartbeat_keys = redis.call('KEYS', heartbeat_pattern)
-        local healthy_processes = 0
-        local actual_capacity = 0
-        
-        for i, key in ipairs(heartbeat_keys) do
-            local heartbeat_data = redis.call('GET', key)
-            if heartbeat_data then
-                local success, heartbeat = pcall(cjson.decode, heartbeat_data)
-                if success and heartbeat then
-                    if heartbeat.service_type == target_service_type and heartbeat.service_name == target_service_name then
-                        local age = current_time - (heartbeat.last_heartbeat or 0)
-                        local is_healthy = (heartbeat.health_status == "healthy" or 
-                                          heartbeat.health_status == "HEALTHY" or
-                                          string.find(tostring(heartbeat.health_status), "HEALTHY"))
-                        if age <= heartbeat_timeout and is_healthy then
-                            healthy_processes = healthy_processes + 1
-                            local max_cap = tonumber(heartbeat.max_capacity) or 0
-                            local effective = math.floor(max_cap * (1 - capacity_buffer))
-                            local queue_cap = math.floor(max_cap * queue_depth_multiplier)
-                            actual_capacity = actual_capacity + effective + queue_cap
-                        end
-                    end
-                end
-            end
-        end
+        local actual_capacity = tonumber(ARGV[6]) or 0
+        local healthy_processes = tonumber(ARGV[7]) or 0
         
         -- Get current queue sizes
         local anon_queue = redis.call('LLEN', anon_queue_key) + redis.call('LLEN', anon_inflight_key) + tonumber(redis.call('GET', anon_cont_key) or '0')
@@ -711,6 +732,28 @@ class AtomicBackpressureManager:
         """Inject dynamic capacity calculator (same interface as original)"""
         self.capacity_calculator = calculator
 
+    async def _get_capacity_snapshot(self) -> Tuple[int, int]:
+        """Return healthy process count and weighted capacity from the process index."""
+        try:
+            service_type, service_name = self.gateway_config.capacity_source_selector()
+            return await _get_capacity_from_process_index(
+                redis=self.redis,
+                capacity_prefix=self.CAPACITY_PREFIX,
+                service_type=service_type,
+                service_name=service_name,
+                heartbeat_timeout_seconds=self.gateway_config.monitoring.heartbeat_timeout_seconds,
+                capacity_buffer=self.gateway_config.backpressure.capacity_buffer,
+                queue_depth_multiplier=self.gateway_config.backpressure.queue_depth_multiplier,
+            )
+        except Exception as e:
+            fallback_capacity = int(self.gateway_config.total_capacity_per_instance or 1)
+            logger.warning(
+                "Could not collect gateway capacity snapshot from process index; using configured fallback capacity=%s: %s",
+                fallback_capacity,
+                e,
+            )
+            return 1, fallback_capacity
+
     async def check_capacity(self,
                              user_type: UserType,
                              session: UserSession,
@@ -745,8 +788,7 @@ class AtomicBackpressureManager:
         priv_inflight_key = f"{self.QUEUE_INFLIGHT_PREFIX}:privileged"
         paid_inflight_key = f"{self.QUEUE_INFLIGHT_PREFIX}:paid"
 
-        heartbeat_pattern = f"{self.PROCESS_HEARTBEAT_PREFIX}:*"
-        service_type, service_name = self.gateway_config.capacity_source_selector()
+        healthy_processes, actual_capacity = await self._get_capacity_snapshot()
         bp = self.gateway_config.backpressure
         try:
             result = await self.redis.eval(
@@ -770,13 +812,8 @@ class AtomicBackpressureManager:
                 str(bp.registered_pressure_threshold),
                 str(bp.paid_pressure_threshold),
                 str(bp.hard_limit_threshold),
-                str(bp.capacity_buffer),
-                str(bp.queue_depth_multiplier),
-                str(self.gateway_config.monitoring.heartbeat_timeout_seconds),
-                str(time.time()),
-                heartbeat_pattern,
-                service_type,
-                service_name,
+                str(actual_capacity),
+                str(healthy_processes),
             )
 
             success = bool(result[0])
@@ -860,41 +897,16 @@ class AtomicBackpressureManager:
 
     # Keep all existing methods for compatibility with monitoring and capacity calculator
     async def get_alive_instances(self):
-        """Keep existing implementation"""
-        current_time = time.time()
+        """Get unique alive instances from the service-scoped capacity index."""
         await self.init_redis()
-
-        patterns = [
-            f"{self.INSTANCE_STATUS_PREFIX}:*",
-            f"{self.PROCESS_HEARTBEAT_PREFIX}:*"
-        ]
-
-        alive_instances = set()
-
-        for pattern in patterns:
-            keys = await self.redis.keys(pattern)
-
-            for key in keys:
-                try:
-                    key_parts = key.decode().split(':')
-                    if len(key_parts) >= 4:
-                        instance_id = key_parts[3]
-
-                        data = await self.redis.get(key)
-                        if data:
-                            try:
-                                heartbeat_data = json.loads(data)
-                                last_heartbeat = heartbeat_data.get('last_heartbeat', 0)
-                                heartbeat_timeout = self.gateway_config.monitoring.heartbeat_timeout_seconds
-                                if current_time - last_heartbeat <= heartbeat_timeout:
-                                    alive_instances.add(instance_id)
-                            except (json.JSONDecodeError, KeyError):
-                                continue
-                except Exception as e:
-                    logger.debug(f"Error processing heartbeat key {key}: {e}")
-                    continue
-
-        return alive_instances
+        service_type, service_name = self.gateway_config.capacity_source_selector()
+        return await _get_alive_instances_from_process_index(
+            redis=self.redis,
+            capacity_prefix=self.ns(REDIS.SYSTEM.CAPACITY),
+            service_type=service_type,
+            service_name=service_name,
+            heartbeat_timeout_seconds=self.gateway_config.monitoring.heartbeat_timeout_seconds,
+        )
 
     async def get_individual_queue_sizes(self) -> Dict[str, int]:
         """Get individual queue sizes"""
@@ -1090,39 +1102,18 @@ class AtomicBackpressureManager:
         )
 
     async def _get_capacity_from_heartbeats(self) -> Tuple[int, int]:
-        """Aggregate healthy process count and capacity from heartbeats."""
+        """Aggregate healthy process count and capacity from the process index."""
         try:
-            pattern = f"{self.PROCESS_HEARTBEAT_PREFIX}:*"
-            keys = await self.redis.keys(pattern)
-            healthy_count = 0
-            current_time = time.time()
-            actual_capacity = 0
             service_type, service_name = self.gateway_config.capacity_source_selector()
-
-            for key in keys:
-                try:
-                    data = await self.redis.get(key)
-                    if not data:
-                        continue
-
-                    heartbeat = json.loads(data)
-                    if (heartbeat.get("service_type") == service_type and
-                            heartbeat.get("service_name") == service_name):
-
-                        age = current_time - heartbeat.get("last_heartbeat", 0)
-                        health_status = str(heartbeat.get("health_status", "")).upper()
-                        is_healthy = "HEALTHY" in health_status
-
-                        if age <= self.gateway_config.monitoring.heartbeat_timeout_seconds and is_healthy:
-                            healthy_count += 1
-                            max_cap = int(heartbeat.get("max_capacity") or 0)
-                            effective = int(max_cap * (1 - self.gateway_config.backpressure.capacity_buffer))
-                            queue_cap = int(max_cap * self.gateway_config.backpressure.queue_depth_multiplier)
-                            actual_capacity += effective + queue_cap
-
-                except Exception as e:
-                    logger.debug(f"Error parsing heartbeat {key}: {e}")
-                    continue
+            healthy_count, actual_capacity = await _get_capacity_from_process_index(
+                redis=self.redis,
+                capacity_prefix=self.ns(REDIS.SYSTEM.CAPACITY),
+                service_type=service_type,
+                service_name=service_name,
+                heartbeat_timeout_seconds=self.gateway_config.monitoring.heartbeat_timeout_seconds,
+                capacity_buffer=self.gateway_config.backpressure.capacity_buffer,
+                queue_depth_multiplier=self.gateway_config.backpressure.queue_depth_multiplier,
+            )
 
             if actual_capacity <= 0:
                 actual_capacity = self.gateway_config.total_capacity_per_instance * max(healthy_count, 1)
@@ -1158,6 +1149,7 @@ class AtomicChatQueueManager:
         self.QUEUE_INFLIGHT_PREFIX = self.ns(REDIS.CHAT.PROMPT_QUEUE_INFLIGHT_PREFIX)
         self.QUEUE_CONTINUATION_COUNT_PREFIX = self.ns(REDIS.CHAT.CONVERSATION_MAILBOX_COUNT_PREFIX)
         self.PROCESS_HEARTBEAT_PREFIX = self.ns(REDIS.PROCESS.HEARTBEAT_PREFIX)
+        self.CAPACITY_PREFIX = self.ns(REDIS.SYSTEM.CAPACITY)
         self.CAPACITY_COUNTER_KEY = self.ns(f"{REDIS.SYSTEM.CAPACITY}:counter")
 
         # Lua script for atomic capacity check and task enqueue
@@ -1183,41 +1175,10 @@ class AtomicChatQueueManager:
         local registered_ratio = tonumber(ARGV[4])
         local paid_ratio = tonumber(ARGV[5])
         local hard_ratio = tonumber(ARGV[6])
-        local capacity_buffer = tonumber(ARGV[7])
-        local queue_depth_multiplier = tonumber(ARGV[8])
-        local heartbeat_timeout = tonumber(ARGV[9])
-        local current_time = tonumber(ARGV[10])
-        local heartbeat_pattern = ARGV[11]
-        local max_queue_size = tonumber(ARGV[12])
-        local target_service_type = ARGV[13]
-        local target_service_name = ARGV[14]
-        
-        -- Count healthy capacity-source processes
-        local heartbeat_keys = redis.call('KEYS', heartbeat_pattern)
-        local healthy_processes = 0
-        local actual_capacity = 0
-        
-        for i, key in ipairs(heartbeat_keys) do
-            local heartbeat_data = redis.call('GET', key)
-            if heartbeat_data then
-                local success, heartbeat = pcall(cjson.decode, heartbeat_data)
-                if success and heartbeat then
-                    if heartbeat.service_type == target_service_type and heartbeat.service_name == target_service_name then
-                        local age = current_time - (heartbeat.last_heartbeat or 0)
-                        local is_healthy = (heartbeat.health_status == "healthy" or 
-                                          heartbeat.health_status == "HEALTHY" or
-                                          string.find(tostring(heartbeat.health_status), "HEALTHY"))
-                        if age <= heartbeat_timeout and is_healthy then
-                            healthy_processes = healthy_processes + 1
-                            local max_cap = tonumber(heartbeat.max_capacity) or 0
-                            local effective = math.floor(max_cap * (1 - capacity_buffer))
-                            local queue_cap = math.floor(max_cap * queue_depth_multiplier)
-                            actual_capacity = actual_capacity + effective + queue_cap
-                        end
-                    end
-                end
-            end
-        end
+        local max_queue_size = tonumber(ARGV[7])
+        local actual_capacity = tonumber(ARGV[8]) or 0
+        local healthy_processes = tonumber(ARGV[9]) or 0
+        local lane_event_count = tonumber(ARGV[10] or '0')
         
         -- Get current queue sizes
         local anon_queue = redis.call('LLEN', anon_queue_key) + redis.call('LLEN', anon_inflight_key) + tonumber(redis.call('GET', anon_cont_key) or '0')
@@ -1260,13 +1221,66 @@ class AtomicChatQueueManager:
             rejection_reason = total_queue >= anon_threshold and "anonymous_threshold_exceeded" or ""
         end
         
+        local function command_failed(result)
+            return type(result) == 'table' and result['err']
+        end
+
+        local function cleanup_lane_writes(lane_log_key, written_stream_ids, written_event_keys)
+            for i, stream_id in ipairs(written_stream_ids) do
+                redis.pcall('XDEL', lane_log_key, stream_id)
+            end
+            for i, event_key in ipairs(written_event_keys) do
+                redis.pcall('DEL', event_key)
+            end
+        end
+
         if can_admit then
+            local stream_ids = {}
+            local written_event_keys = {}
+            if lane_event_count and lane_event_count > 0 then
+                local lane_log_key = KEYS[15]
+                for i = 1, lane_event_count do
+                    local event_key = KEYS[15 + i]
+                    local message_id = ARGV[10 + i]
+                    local event_json = ARGV[10 + lane_event_count + i]
+                    if not message_id or message_id == "" or not event_json or event_json == "" then
+                        cleanup_lane_writes(lane_log_key, stream_ids, written_event_keys)
+                        return {0, "invalid_lane_event_records", total_queue, actual_capacity, healthy_processes}
+                    end
+                    local stream_id = redis.pcall('XADD', lane_log_key, '*', 'message_id', message_id)
+                    if command_failed(stream_id) then
+                        cleanup_lane_writes(lane_log_key, stream_ids, written_event_keys)
+                        return {0, "lane_stream_write_failed", total_queue, actual_capacity, healthy_processes}
+                    end
+                    local set_result = redis.pcall('SET', event_key, event_json)
+                    if command_failed(set_result) then
+                        stream_ids[i] = stream_id
+                        cleanup_lane_writes(lane_log_key, stream_ids, written_event_keys)
+                        return {0, "lane_event_write_failed", total_queue, actual_capacity, healthy_processes}
+                    end
+                    stream_ids[i] = stream_id
+                    written_event_keys[i] = event_key
+                end
+            end
             -- Atomically add processor wakeup payload to queue
-            redis.call('LPUSH', queue_key, chat_task_json)
-            redis.call('INCR', capacity_counter_key)
-            redis.call('EXPIRE', capacity_counter_key, 300)
+            local push_result = redis.pcall('LPUSH', queue_key, chat_task_json)
+            if command_failed(push_result) then
+                if lane_event_count and lane_event_count > 0 then
+                    cleanup_lane_writes(KEYS[15], stream_ids, written_event_keys)
+                end
+                return {0, "queue_push_failed", total_queue, actual_capacity, healthy_processes}
+            end
+            local incr_result = redis.pcall('INCR', capacity_counter_key)
+            if command_failed(incr_result) then
+                redis.pcall('LREM', queue_key, 1, chat_task_json)
+                if lane_event_count and lane_event_count > 0 then
+                    cleanup_lane_writes(KEYS[15], stream_ids, written_event_keys)
+                end
+                return {0, "capacity_counter_failed", total_queue, actual_capacity, healthy_processes}
+            end
+            redis.pcall('EXPIRE', capacity_counter_key, 300)
             
-            return {1, "admitted", total_queue + 1, actual_capacity, healthy_processes}
+            return {1, "admitted", total_queue + 1, actual_capacity, healthy_processes, cjson.encode(stream_ids)}
         else
             return {0, rejection_reason, total_queue, actual_capacity, healthy_processes}
         end
@@ -1278,6 +1292,29 @@ class AtomicChatQueueManager:
     async def init_redis(self):
         if not self.redis:
             self.redis = get_async_redis_client(self.redis_url)
+
+    async def _get_capacity_snapshot(self) -> Tuple[int, int]:
+        """Return healthy process count and weighted capacity from the process index."""
+        try:
+            service_type, service_name = self.gateway_config.capacity_source_selector()
+            return await _get_capacity_from_process_index(
+                redis=self.redis,
+                capacity_prefix=self.CAPACITY_PREFIX,
+                service_type=service_type,
+                service_name=service_name,
+                heartbeat_timeout_seconds=self.gateway_config.monitoring.heartbeat_timeout_seconds,
+                capacity_buffer=self.gateway_config.backpressure.capacity_buffer,
+                queue_depth_multiplier=self.gateway_config.backpressure.queue_depth_multiplier,
+            )
+
+        except Exception as e:
+            fallback_capacity = int(self.gateway_config.total_capacity_per_instance or 1)
+            logger.warning(
+                "Could not collect chat queue capacity snapshot from process index; using configured fallback capacity=%s: %s",
+                fallback_capacity,
+                e,
+            )
+            return 1, fallback_capacity
 
     async def enqueue_chat_task_atomic(self,
                                        user_type: UserType,
@@ -1303,8 +1340,7 @@ class AtomicChatQueueManager:
         priv_inflight_key = f"{self.QUEUE_INFLIGHT_PREFIX}:privileged"
         paid_inflight_key = f"{self.QUEUE_INFLIGHT_PREFIX}:paid"
 
-        heartbeat_pattern = f"{self.PROCESS_HEARTBEAT_PREFIX}:*"
-        service_type, service_name = self.gateway_config.capacity_source_selector()
+        healthy_processes, actual_capacity = await self._get_capacity_snapshot()
         bp = self.gateway_config.backpressure
         try:
             result = await self.redis.eval(
@@ -1331,14 +1367,9 @@ class AtomicChatQueueManager:
                 str(bp.registered_pressure_threshold),
                 str(bp.paid_pressure_threshold),
                 str(bp.hard_limit_threshold),
-                str(bp.capacity_buffer),
-                str(bp.queue_depth_multiplier),
-                str(self.gateway_config.monitoring.heartbeat_timeout_seconds),
-                str(time.time()),
-                heartbeat_pattern,
                 str(self.max_queue_size),
-                service_type,
-                service_name,
+                str(actual_capacity),
+                str(healthy_processes),
             )
 
             success = bool(result[0])
@@ -1379,6 +1410,145 @@ class AtomicChatQueueManager:
 
         except Exception as e:
             logger.error(f"Atomic chat enqueue failed: {e}")
+            return False, f"atomic_enqueue_error: {str(e)}", {}
+
+    async def enqueue_chat_task_with_lane_events_atomic(self,
+                                                        user_type: UserType,
+                                                        chat_task_data: Dict[str, Any],
+                                                        session: UserSession,
+                                                        context: RequestContext,
+                                                        endpoint: str,
+                                                        *,
+                                                        lane_log_key: str,
+                                                        lane_events: list[Dict[str, Any]]) -> Tuple[bool, str, Dict[str, Any]]:
+        """
+        Atomically admit a processor wakeup and publish prepared lane events.
+
+        This is used by conversation external-event ingress so the client sees
+        a single outcome: either the whole batch is accepted into the lane and a
+        wake is queued, or neither happens.
+        """
+
+        await self.init_redis()
+
+        lane_events = list(lane_events or [])
+        queue_key = f"{self.QUEUE_PREFIX}:{user_type.value}"
+        capacity_counter_key = self.CAPACITY_COUNTER_KEY
+        anon_queue_key = f"{self.QUEUE_PREFIX}:anonymous"
+        reg_queue_key = f"{self.QUEUE_PREFIX}:registered"
+        priv_queue_key = f"{self.QUEUE_PREFIX}:privileged"
+        paid_queue_key = f"{self.QUEUE_PREFIX}:paid"
+        anon_inflight_key = f"{self.QUEUE_INFLIGHT_PREFIX}:anonymous"
+        reg_inflight_key = f"{self.QUEUE_INFLIGHT_PREFIX}:registered"
+        priv_inflight_key = f"{self.QUEUE_INFLIGHT_PREFIX}:privileged"
+        paid_inflight_key = f"{self.QUEUE_INFLIGHT_PREFIX}:paid"
+
+        event_keys = [str(item.get("event_key") or "") for item in lane_events]
+        event_payloads = [dict(item.get("event") or {}) for item in lane_events]
+        event_message_ids = [str(payload.get("message_id") or payload.get("event_id") or "") for payload in event_payloads]
+        if any(not key for key in event_keys) or any(not payload.get("message_id") for payload in event_payloads):
+            return False, "invalid_lane_event_records", {}
+
+        healthy_processes, actual_capacity = await self._get_capacity_snapshot()
+        bp = self.gateway_config.backpressure
+        try:
+            result = await self.redis.eval(
+                self.ATOMIC_CHAT_ENQUEUE_SCRIPT,
+                15 + len(event_keys),
+                queue_key,
+                capacity_counter_key,
+                anon_queue_key,
+                reg_queue_key,
+                priv_queue_key,
+                paid_queue_key,
+                anon_inflight_key,
+                reg_inflight_key,
+                priv_inflight_key,
+                paid_inflight_key,
+                f"{self.QUEUE_CONTINUATION_COUNT_PREFIX}:anonymous",
+                f"{self.QUEUE_CONTINUATION_COUNT_PREFIX}:registered",
+                f"{self.QUEUE_CONTINUATION_COUNT_PREFIX}:privileged",
+                f"{self.QUEUE_CONTINUATION_COUNT_PREFIX}:paid",
+                str(lane_log_key or ""),
+                *event_keys,
+                user_type.value,
+                json.dumps(chat_task_data, ensure_ascii=False),
+                str(bp.anonymous_pressure_threshold),
+                str(bp.registered_pressure_threshold),
+                str(bp.paid_pressure_threshold),
+                str(bp.hard_limit_threshold),
+                str(self.max_queue_size),
+                str(actual_capacity),
+                str(healthy_processes),
+                str(len(event_payloads)),
+                *event_message_ids,
+                *[json.dumps(payload, ensure_ascii=False) for payload in event_payloads],
+            )
+
+            success = bool(result[0])
+            reason = result[1]
+            current_queue_size = result[2]
+            actual_capacity = int(result[3])
+            healthy_processes = result[4] if len(result) > 4 else 0
+            stream_ids_raw = result[5] if len(result) > 5 else "[]"
+            if isinstance(stream_ids_raw, bytes):
+                stream_ids_raw = stream_ids_raw.decode("utf-8")
+            try:
+                stream_ids = json.loads(stream_ids_raw or "[]")
+            except Exception:
+                stream_ids = []
+            lane_stream_id_mismatch = bool(success and len(stream_ids) != len(event_payloads))
+            if lane_stream_id_mismatch:
+                logger.error(
+                    "Atomic chat enqueue accepted lane batch but returned mismatched stream ids: expected=%s actual=%s",
+                    len(event_payloads),
+                    len(stream_ids),
+                )
+            theoretical_thresholds = self.gateway_config.get_thresholds_for_actual_capacity(actual_capacity)
+
+            stats = {
+                "current_queue_size": current_queue_size,
+                "actual_capacity": actual_capacity,
+                "healthy_processes": healthy_processes,
+                "configured_capacity": self.gateway_config.total_capacity_per_instance,
+                "theoretical_thresholds": theoretical_thresholds,
+                "user_type": user_type.value,
+                "task_id": (chat_task_data.get("meta") or {}).get("task_id") or chat_task_data.get("task_id"),
+                "check_type": "chat_enqueue_with_event_lane_publish",
+                "lane_event_count": len(event_payloads),
+                "lane_stream_ids": stream_ids,
+                "lane_stream_id_mismatch": lane_stream_id_mismatch,
+                "gateway_config": {
+                    "profile": self.gateway_config.profile.value,
+                    "instance_id": self.gateway_config.instance_id
+                }
+            }
+
+            task_id = (chat_task_data.get("meta") or {}).get("task_id") or chat_task_data.get("task_id")
+            if success:
+                logger.info(
+                    "Chat task wakeup and lane batch admitted atomically: %s (%s), events=%s, queue=%s/%s",
+                    task_id,
+                    user_type.value,
+                    len(event_payloads),
+                    current_queue_size,
+                    actual_capacity,
+                )
+            else:
+                logger.warning(
+                    "Chat task wakeup and lane batch rejected atomically: %s (%s), reason=%s, queue=%s/%s",
+                    task_id,
+                    user_type.value,
+                    reason,
+                    current_queue_size,
+                    actual_capacity,
+                )
+                await self._record_chat_backpressure_rejection(reason, session, context, endpoint, stats)
+
+            return success, reason, stats
+
+        except Exception as e:
+            logger.error(f"Atomic chat enqueue with lane events failed: {e}")
             return False, f"atomic_enqueue_error: {str(e)}", {}
 
     async def _record_chat_backpressure_rejection(self, reason: str, session: UserSession,

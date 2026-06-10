@@ -83,6 +83,7 @@ infra:
   redis:
     host: "redis"        # REDIS_HOST
     port: "6379"         # REDIS_PORT
+    topology: "standalone" # REDIS_TOPOLOGY
     password: "redispass" # REDIS_PASSWORD → also in secrets.yaml: infra.redis.password
 
 # ---------------------------------------------------------------------------

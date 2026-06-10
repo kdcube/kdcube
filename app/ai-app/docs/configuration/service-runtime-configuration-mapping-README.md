@@ -113,6 +113,16 @@ Common platform service secrets:
 |---|---|---|---|
 | `GATEWAY_CONFIG_FORCE_ENV_ON_STARTUP` | `platform.services.<component>.service.gateway_config_force_env_on_startup` | `assembly.yaml` | ingress/proc/metrics startup; useful when `gateway.yaml` should override stale Redis gateway cache |
 
+### Redis runtime
+
+| Runtime field | Descriptor path | Descriptor file | Modes |
+|---|---|---|---|
+| `REDIS_TOPOLOGY` | `infra.redis.topology` | `assembly.yaml` | all modes |
+
+`infra.redis.topology` uses the canonical value `standalone` in current
+reference descriptors. The Redis client factory also recognizes `cluster` and
+fails fast until Redis Cluster key-slot migration is complete.
+
 ### Bundle registry and bundle authority
 
 | Env var | Descriptor path | Descriptor file | Modes |
