@@ -48,6 +48,7 @@ def _short_event_message_id(*, created_at: float, sequence: int) -> str:
 @dataclass
 class ConversationExternalEvent:
     message_id: str
+    batch_id: str
     kind: str
     created_at: float
     sequence: int
@@ -79,6 +80,7 @@ class ConversationExternalEvent:
         return {
             "message_id": self.message_id,
             "event_id": self.message_id,
+            "batch_id": self.batch_id or "",
             "kind": str(self.kind or "external"),
             "created_at": float(self.created_at or 0.0),
             "sequence": int(self.sequence or 0),
@@ -126,6 +128,7 @@ class ConversationExternalEvent:
             )
         return cls(
             message_id=str(raw.get("message_id") or raw.get("event_id") or ""),
+            batch_id=str(raw.get("batch_id") or ""),
             kind=str(raw.get("kind") or "external"),
             created_at=float(raw.get("created_at") or 0.0),
             sequence=int(raw.get("sequence") or 0),
@@ -294,6 +297,7 @@ class RedisConversationExternalEventSource:
         *,
         kind: str,
         event_id: Optional[str] = None,
+        batch_id: Optional[str] = None,
         explicit: bool = False,
         is_continuation: Optional[bool] = None,
         target_turn_id: Optional[str] = None,
@@ -319,6 +323,7 @@ class RedisConversationExternalEventSource:
         )
         event = ConversationExternalEvent(
             message_id=message_id,
+            batch_id=str(batch_id or ""),
             kind=str(kind or "external"),
             created_at=created_at,
             sequence=sequence,
@@ -337,6 +342,7 @@ class RedisConversationExternalEventSource:
                 task_payload,
                 kind=str(kind or "external"),
                 event_id="",
+                batch_id=str(batch_id or ""),
                 sequence=sequence,
                 event_source_id=str(event_source_id or ""),
                 is_continuation=continuation_flag,
@@ -346,6 +352,7 @@ class RedisConversationExternalEventSource:
             event.task_payload,
             kind=str(event.kind or "external"),
             event_id=event.message_id,
+            batch_id=event.batch_id,
             sequence=event.sequence,
             event_source_id=event.event_source_id,
             is_continuation=event.is_continuation,
@@ -354,12 +361,13 @@ class RedisConversationExternalEventSource:
         event.stream_id = str(stream_id or "")
         await self._write_event(event)
         logger.info(
-            "[external_events.publish] conversation=%s agent_id=%s kind=%s event_source_id=%s event_id=%s seq=%s stream_id=%s target_turn=%s active_turn=%s owner_turn=%s explicit=%s is_continuation=%s text=%r",
+            "[external_events.publish] conversation=%s agent_id=%s kind=%s event_source_id=%s event_id=%s batch_id=%s seq=%s stream_id=%s target_turn=%s active_turn=%s owner_turn=%s explicit=%s is_continuation=%s text=%r",
             self.conversation_id,
             self.agent_id,
             event.kind,
             event.event_source_id,
             event.message_id,
+            event.batch_id,
             event.sequence,
             event.stream_id,
             event.target_turn_id,
@@ -378,6 +386,7 @@ class RedisConversationExternalEventSource:
         *,
         kind: str,
         event_id: str,
+        batch_id: str,
         sequence: int,
         event_source_id: str,
         is_continuation: bool,
@@ -392,6 +401,8 @@ class RedisConversationExternalEventSource:
         event["is_continuation"] = bool(is_continuation)
         if event_id:
             event["event_id"] = str(event_id)
+        if batch_id:
+            event["batch_id"] = str(batch_id)
         if sequence:
             event["sequence"] = int(sequence)
         payload["event"] = event

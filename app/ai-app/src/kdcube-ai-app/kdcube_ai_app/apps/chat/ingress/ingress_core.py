@@ -29,6 +29,7 @@ from kdcube_ai_app.apps.chat.sdk.event_identity import (
     DEFAULT_REACT_AGENT_ID,
     build_event_logical_path,
     normalize_agent_id,
+    safe_event_lane_part,
     safe_event_object_path,
 )
 from kdcube_ai_app.infra.accounting.envelope import build_envelope_from_session
@@ -271,6 +272,32 @@ def _first_reactive_or_first_event(events: List[Dict[str, Any]]) -> Optional[Dic
     return next((event for event in events if _external_event_is_reactive(event)), events[0])
 
 
+def _external_event_batch_id(message_data: Dict[str, Any], events: List[Dict[str, Any]]) -> str:
+    payload = _message_payload(message_data)
+    candidates: List[Any] = [
+        message_data.get("batch_id"),
+        payload.get("batch_id"),
+    ]
+    candidates.extend(event.get("batch_id") for event in events if isinstance(event, dict))
+    for value in candidates:
+        text = str(value or "").strip()
+        if text:
+            return safe_event_lane_part(text, default="")
+    return f"batch_{uuid.uuid4().hex}"
+
+
+def _stamp_external_event_batch(message_data: Dict[str, Any], events: List[Dict[str, Any]]) -> None:
+    if not events:
+        return
+    batch_id = _external_event_batch_id(message_data, events)
+    for event in events:
+        event["batch_id"] = batch_id
+    message_data["batch_id"] = batch_id
+    payload = message_data.get("payload")
+    if isinstance(payload, dict):
+        payload["batch_id"] = batch_id
+
+
 def _external_event_object_path(event: Dict[str, Any], *, event_id: str) -> str:
     logical_path = str(event.get("logical_path") or "").strip()
     marker = ".events/"
@@ -323,6 +350,7 @@ def _accept_external_events(
             )
         accepted.append(event)
     if accepted:
+        _stamp_external_event_batch(message_data, accepted)
         message_data["external_events"] = accepted
     return accepted
 
@@ -343,6 +371,8 @@ def _external_event_envelope(
         "event": dict(event),
         "is_continuation": bool(is_continuation),
     }
+    if event.get("batch_id"):
+        envelope["batch_id"] = str(event.get("batch_id") or "")
     if target:
         envelope["target"] = dict(target)
     return envelope
@@ -371,6 +401,7 @@ def _task_payload_for_external_event(
         "agent_id": normalize_agent_id(event.get("agent_id"), default=DEFAULT_REACT_AGENT_ID),
         "event_source_id": _external_event_source_id(event),
         "event_id": str(event.get("event_id") or ""),
+        "batch_id": str(event.get("batch_id") or ""),
         "logical_path": str(event.get("logical_path") or ""),
         "story_id": event.get("story_id"),
         "reactive": _external_event_is_reactive(event),
@@ -402,6 +433,7 @@ async def _publish_external_event_batch(
         env = await external_event_source.publish(
             kind=kind,
             event_id=str(event.get("event_id") or "") or None,
+            batch_id=str(event.get("batch_id") or "") or None,
             explicit=explicit,
             is_continuation=is_continuation,
             target_turn_id=target_turn_id,
@@ -1313,98 +1345,6 @@ async def process_chat_message(
                     env = next((item for item in published_events if item.message_id == selected_event_id), published_events[0])
                     last_env = published_events[-1]
                     live_owner_detected = bool(owner_turn_id and active_turn and owner_turn_id == str(active_turn))
-                    no_owner_wakeup_queued = False
-                    no_owner_wakeup_stats: Dict[str, Any] = {}
-                    no_owner_wakeup_error: Optional[IngressResult] = None
-                    if external_event_reactive and not live_owner_detected:
-                        try:
-                            try:
-                                wakeup_payload = env.task_payload_model()
-                            except Exception:
-                                wakeup_payload = payload
-                            wakeup = _event_lane_wakeup_from_payload(
-                                payload=wakeup_payload,
-                                event=env,
-                                tenant=tenant_id,
-                                project=project_id,
-                                user_id=session.user_id or session.fingerprint or "",
-                                conversation_id=conversation_id,
-                                agent_id=target_agent_id,
-                                reason="reactive_continuation_no_live_owner",
-                            )
-                            queued, queue_reason, queued_stats = await chat_queue_manager.enqueue_chat_task_atomic(
-                                session.user_type,
-                                wakeup.model_dump(),
-                                session,
-                                request_context,
-                                ingress.entrypoint,
-                            )
-                            no_owner_wakeup_stats = dict(queued_stats or {})
-                            no_owner_wakeup_stats["queue_reason"] = queue_reason
-                            if queued:
-                                no_owner_wakeup_queued = True
-                                for item in published_events:
-                                    await external_event_source.mark_promoted(
-                                        message_id=item.message_id,
-                                        claimant_id="ingress.continuation_no_owner_wakeup",
-                                        task_id=task_id,
-                                    )
-                            else:
-                                logger.warning(
-                                    "No-owner reactive continuation wakeup enqueue was rejected: conversation=%s task_id=%s reason=%s stats=%s",
-                                    conversation_id,
-                                    task_id,
-                                    queue_reason,
-                                    queued_stats,
-                                )
-                                for item in published_events:
-                                    try:
-                                        await external_event_source.mark_failed(
-                                            message_id=item.message_id,
-                                            claimant_id="ingress.continuation_no_owner_wakeup",
-                                            reason=f"wakeup_enqueue_rejected:{queue_reason}",
-                                        )
-                                    except Exception:
-                                        logger.debug(
-                                            "Failed to mark rejected no-owner continuation event failed: event_id=%s",
-                                            item.message_id,
-                                            exc_info=True,
-                                        )
-                                no_owner_wakeup_error = IngressResult(
-                                    ok=False,
-                                    error_type="queue.enqueue_rejected",
-                                    error=f"System under pressure - continuation rejected ({queue_reason})",
-                                    http_status=503,
-                                    retry_after=30,
-                                    reason=queue_reason,
-                                )
-                        except Exception:
-                            logger.exception(
-                                "Failed to enqueue no-owner reactive continuation wakeup conversation=%s task_id=%s",
-                                conversation_id,
-                                task_id,
-                            )
-                            for item in published_events:
-                                try:
-                                    await external_event_source.mark_failed(
-                                        message_id=item.message_id,
-                                        claimant_id="ingress.continuation_no_owner_wakeup",
-                                        reason="wakeup_enqueue_error",
-                                    )
-                                except Exception:
-                                    logger.debug(
-                                        "Failed to mark errored no-owner continuation event failed: event_id=%s",
-                                        item.message_id,
-                                        exc_info=True,
-                                    )
-                            no_owner_wakeup_error = IngressResult(
-                                ok=False,
-                                error_type="queue.enqueue_error",
-                                error="Continuation could not be queued.",
-                                http_status=500,
-                            )
-                    if no_owner_wakeup_error is not None:
-                        return no_owner_wakeup_error
                     logger.info(
                         "[ingress.external] published open-turn event batch conversation=%s event_source_id=%s event_id=%s last_seq=%s count=%s active_turn=%s owner_turn=%s target_turn=%s live_owner=%s text=%r",
                         conversation_id,
@@ -1464,7 +1404,6 @@ async def process_chat_message(
                                     "event_count": len(published_events),
                                     "event_sequence": last_env.sequence,
                                     "live_owner_detected": False,
-                                    "queued_wakeup": no_owner_wakeup_queued,
                                 },
                             )
                     except Exception:
@@ -1480,8 +1419,6 @@ async def process_chat_message(
                             "external_event_sequence": last_env.sequence,
                             "external_event_count": len(published_events),
                             "live_owner_detected": live_owner_detected,
-                            "queued_wakeup": no_owner_wakeup_queued,
-                            **no_owner_wakeup_stats,
                         },
                         reason="external_event_accepted",
                         is_continuation=True,

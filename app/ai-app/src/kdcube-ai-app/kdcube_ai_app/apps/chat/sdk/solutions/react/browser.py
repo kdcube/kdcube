@@ -693,6 +693,11 @@ class ContextBrowser:
                 block_type = "event.external"
         logical_path = str(accepted_event.get("logical_path") or "").strip()
         hosted_uri = str(accepted_event.get("hosted_uri") or "").strip()
+        batch_id = (
+            str(getattr(event, "batch_id", "") or "").strip()
+            or str(accepted_event.get("batch_id") or "").strip()
+            or str(payload.get("batch_id") or "").strip()
+        )
         meta = {
             "event_kind": kind,
             "event_type": block_type,
@@ -708,6 +713,8 @@ class ContextBrowser:
             "explicit": bool(getattr(event, "explicit", False)),
             "source": str(getattr(event, "source", "") or ""),
         }
+        if batch_id:
+            meta["batch_id"] = batch_id
         if payload:
             meta["payload"] = dict(payload)
         if accepted_event:
@@ -778,6 +785,7 @@ class ContextBrowser:
             "event": dict(accepted_event or {}),
             "event_source_id": event_source_id,
             "event_id": event_id,
+            "batch_id": batch_id,
             "block_type": block_type,
             "logical_path": logical_path,
             "hosted_uri": hosted_uri,
@@ -816,6 +824,7 @@ class ContextBrowser:
                     "event_type": "event.user.attachment",
                     "event_source_id": event_source_id,
                     "message_id": event_id,
+                    "batch_id": batch_id,
                     "sequence": int(getattr(event, "sequence", 0) or 0),
                     "is_continuation": bool(getattr(event, "is_continuation", False)),
                     "attachment_origin": attachment_kind,
@@ -834,6 +843,14 @@ class ContextBrowser:
                 event_id=event_id,
                 story_id=story_id or None,
             )
+        if batch_id:
+            for block in blocks:
+                if not isinstance(block, dict):
+                    continue
+                meta_block = block.get("meta") if isinstance(block.get("meta"), dict) else {}
+                meta_block = dict(meta_block)
+                meta_block["batch_id"] = batch_id
+                block["meta"] = meta_block
         return blocks
 
     async def _materialize_external_event_attachments(

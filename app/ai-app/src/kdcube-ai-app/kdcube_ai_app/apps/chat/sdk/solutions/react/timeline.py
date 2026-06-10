@@ -6110,6 +6110,90 @@ class Timeline:
                 "react.tool.result",
                 "assistant.completion.attempt",
             }
+
+        def _batch_id_for_render(blk: Dict[str, Any]) -> str:
+            meta_local = blk.get("meta") if isinstance(blk.get("meta"), dict) else {}
+            return str(meta_local.get("batch_id") or blk.get("batch_id") or "").strip()
+
+        def _is_user_control_block_for_render(blk: Dict[str, Any]) -> bool:
+            btype_local = str(blk.get("type") or "").strip()
+            if btype_local in {
+                "user.followup",
+                "user.steer",
+                "user.followup.preserved",
+                "user.steer.preserved",
+            }:
+                return True
+            meta_local = blk.get("meta") if isinstance(blk.get("meta"), dict) else {}
+            event_type = str(meta_local.get("event_type") or "").strip()
+            return event_type in {"event.user.followup", "event.user.steer"}
+
+        def _clone_block_for_render(blk: Dict[str, Any], *, meta_update: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+            cloned = dict(blk)
+            meta_local = dict(cloned.get("meta") if isinstance(cloned.get("meta"), dict) else {})
+            if meta_update:
+                meta_local.update(meta_update)
+            cloned["meta"] = meta_local
+            return cloned
+
+        def _coalesce_followup_batches_for_render(input_blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            rendered_blocks: List[Dict[str, Any]] = []
+            idx = 0
+            total = len(input_blocks or [])
+            while idx < total:
+                block = input_blocks[idx]
+                batch_id = _batch_id_for_render(block)
+                if not batch_id:
+                    rendered_blocks.append(block)
+                    idx += 1
+                    continue
+                group: List[Dict[str, Any]] = []
+                while idx < total and _batch_id_for_render(input_blocks[idx]) == batch_id:
+                    group.append(input_blocks[idx])
+                    idx += 1
+                control_blocks = [candidate for candidate in group if _is_user_control_block_for_render(candidate)]
+                if len(group) <= 1 or not control_blocks:
+                    rendered_blocks.extend(group)
+                    continue
+
+                first_control = control_blocks[0]
+                control_kind = (
+                    "steer"
+                    if "steer" in str(first_control.get("type") or "").strip()
+                    else "followup"
+                )
+                header = _clone_block_for_render(
+                    first_control,
+                    meta_update={
+                        "render_batch_header_only": True,
+                        "batch_id": batch_id,
+                        "batch_event_count": len(group),
+                    },
+                )
+                header["text"] = ""
+                rendered_blocks.append(header)
+
+                for candidate in group:
+                    if _is_user_control_block_for_render(candidate):
+                        continue
+                    rendered_blocks.append(candidate)
+
+                for candidate in control_blocks:
+                    if not str(candidate.get("text") or "").strip():
+                        continue
+                    rendered_blocks.append(_clone_block_for_render(
+                        candidate,
+                        meta_update={
+                            "render_batch_text_only": True,
+                            "batch_control_kind": control_kind,
+                            "batch_id": batch_id,
+                        },
+                    ))
+            return rendered_blocks
+
+        blocks_for_render = _coalesce_followup_batches_for_render([
+            b for b in (blocks or []) if isinstance(b, dict)
+        ])
         for b in (blocks or []):
             if not isinstance(b, dict):
                 continue
@@ -6143,7 +6227,7 @@ class Timeline:
             if tool_call_id and tool_id:
                 call_id_to_tool_id[tool_call_id] = tool_id
 
-        for b in (blocks or []):
+        for b in blocks_for_render:
             if not isinstance(b, dict):
                 continue
             cache = bool(b.get("cache"))
@@ -6223,9 +6307,18 @@ class Timeline:
             }:
                 lines = []
                 ts_line = _ts_line(ts)
-                if ts_line:
+                render_batch_text_only = bool(isinstance(meta, dict) and meta.get("render_batch_text_only"))
+                render_batch_header_only = bool(isinstance(meta, dict) and meta.get("render_batch_header_only"))
+                if ts_line and not render_batch_text_only:
                     lines.append(ts_line)
-                if "followup" in btype:
+                if render_batch_text_only:
+                    if "steer" in btype:
+                        lines.append("[STEER MESSAGE]")
+                    elif "followup" in btype:
+                        lines.append("[FOLLOWUP MESSAGE]")
+                    else:
+                        lines.append("[EXTERNAL EVENT MESSAGE]")
+                elif "followup" in btype:
                     lines.append("[FOLLOWUP DURING TURN]")
                 elif "steer" in btype:
                     lines.append("[STEER DURING TURN]")
@@ -6233,11 +6326,11 @@ class Timeline:
                     lines.append("[EXTERNAL EVENT]")
                 if path:
                     lines.append(f"[path: {path}]")
-                if isinstance(meta, dict):
+                if isinstance(meta, dict) and not render_batch_text_only:
                     target_turn = str(meta.get("target_turn_id") or "").strip()
                     if target_turn:
                         lines.append(f"[target_turn_id: {target_turn}]")
-                if text:
+                if text and not render_batch_header_only:
                     lines.append(text)
                 text = "\n".join(lines).strip()
             elif btype in {"assistant.completion", "assistant.completion.attempt"}:

@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 
 from kdcube_ai_app.apps.chat.external_events import build_conversation_external_event_source
+from kdcube_ai_app.apps.chat.sdk.context.memory import tools as memory_tools
+from kdcube_ai_app.apps.chat.sdk.events import EventSourceSubsystem
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v3.browser import ContextBrowser
 from kdcube_ai_app.apps.chat.sdk.solutions.react.proto import RuntimeCtx
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v3.timeline import extract_user_attachments_from_blocks
@@ -225,6 +227,116 @@ async def test_browser_folds_external_events_into_history_and_current_turn(tmp_p
         assert hook_saw_current_prompt == [True]
         assert browser.timeline.last_external_event_id == "3-0"
         assert int(browser.timeline.last_external_event_seq or 0) == 3
+    finally:
+        await browser.stop_external_event_listener()
+
+
+@pytest.mark.asyncio
+async def test_browser_renders_followup_batch_as_one_section(tmp_path):
+    redis = _FakeRedis()
+    source = build_conversation_external_event_source(
+        redis=redis,
+        tenant="tenant",
+        project="project",
+        conversation_id="conv_1",
+    )
+    batch_id = "batch_followup_context"
+    await source.publish(
+        kind="external_event",
+        batch_id=batch_id,
+        explicit=True,
+        target_turn_id="turn_current",
+        active_turn_id_at_ingress="turn_current",
+        owner_turn_id="turn_current",
+        source="ingress.sse",
+        event_source_id="memory.context",
+        payload={
+            "event": {
+                "event_id": "evt_memory",
+                "type": "event.external",
+                "event_source_id": "memory.context",
+                "logical_path": "ev:turn_current.events/mem_1",
+                "hosted_uri": "mem:mem_1",
+                "reactive": False,
+                "payload": {
+                    "mime": "application/json",
+                    "event_ref": "mem:mem_1",
+                    "event": {
+                        "context_role": "context",
+                        "kind": "memory",
+                        "label": "Excel with openpyxl charts",
+                        "summary": "Never use openpyxl native chart objects.",
+                        "ref": "mem:mem_1",
+                    },
+                },
+            }
+        },
+    )
+    await source.publish(
+        kind="followup",
+        batch_id=batch_id,
+        explicit=True,
+        target_turn_id="turn_current",
+        active_turn_id_at_ingress="turn_current",
+        owner_turn_id="turn_current",
+        source="ingress.sse",
+        text="and this?",
+        payload={"message": "and this?"},
+        task_payload={
+            "request": {
+                "payload": {
+                    "attachments": [
+                        {
+                            "filename": "brief.txt",
+                            "mime": "text/plain",
+                            "hosted_uri": "s3://bucket/brief.txt",
+                        }
+                    ]
+                }
+            }
+        },
+    )
+
+    runtime = RuntimeCtx(
+        tenant="tenant",
+        project="project",
+        user_id="user_1",
+        user_type="privileged",
+        conversation_id="conv_1",
+        turn_id="turn_current",
+        bundle_id="bundle@1",
+        started_at="2026-04-11T10:00:00Z",
+        outdir=str(tmp_path / "out"),
+        workdir=str(tmp_path / "work"),
+        external_event_source=source,
+        event_sources=EventSourceSubsystem(modules=[{"mod": memory_tools, "alias": "memory"}]),
+        event_source_pipeline_enabled=True,
+    )
+    browser = ContextBrowser(
+        ctx_client=_FakeCtxClient(),
+        runtime_ctx=runtime,
+    )
+
+    await browser.load_timeline()
+    try:
+        current_blocks = browser.timeline.get_turn_blocks()
+        memory_block = next(
+            block for block in current_blocks
+            if (block.get("meta") or {}).get("event_source_id") == "memory.context"
+        )
+        assert (memory_block.get("meta") or {}).get("batch_id") == batch_id
+
+        rendered = await browser.timeline.render(cache_last=False, include_sources=False, include_announce=False)
+        text = "\n".join(str(block.get("text") or "") for block in rendered if isinstance(block, dict))
+
+        followup_section_idx = text.index("[FOLLOWUP DURING TURN]")
+        memory_idx = text.index("[MEMORY CONTEXT]")
+        attachment_idx = text.index("[USER ATTACHMENT] brief.txt")
+        followup_message_idx = text.index("[FOLLOWUP MESSAGE]")
+        assert followup_section_idx < memory_idx < attachment_idx < followup_message_idx
+        assert text.count("[FOLLOWUP DURING TURN]") == 1
+        assert "object_ref: mem:mem_1" in text
+        assert "and this?" in text
     finally:
         await browser.stop_external_event_listener()
 
