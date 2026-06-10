@@ -1112,81 +1112,27 @@ async def test_process_task_promotes_next_external_event_to_ready_queue(_patch_p
 
 
 @pytest.mark.asyncio
-async def test_process_task_promotes_followup_arriving_during_idle_transition(_patch_processor_dependencies):
+async def test_legacy_queue_requeues_when_conversation_lock_is_held(_patch_processor_dependencies):
     redis = _MinimalRedis()
-    relay = _NoopRelay()
+    processor = _build_processor(redis)
 
-    current_payload = _build_task_payload("task-current", user_type="registered")
-    next_payload = _build_task_payload("task-late", user_type="registered")
-    next_payload["routing"]["turn_id"] = "turn-late"
-    next_payload["request"]["external_events"] = [
-        {
-            "type": "event.user.followup",
-            "event_source_id": "event.user.followup",
-            "reactive": True,
-            "payload": {"mime": "text/plain", "event": {"text": "late follow up"}},
-        }
-    ]
-    next_payload["continuation"] = {"is_continuation": True, "active_turn_id": "turn-1"}
-
-    class _IdleTransitionPublisher(_NoopConversationCtx):
-        def __init__(self):
-            super().__init__()
-            self.source = None
-            self.published = False
-
-        async def set_conversation_state(self, **kwargs):
-            self.calls.append(kwargs)
-            if kwargs.get("new_state") == "idle" and not self.published:
-                self.published = True
-                await self.source.publish(
-                    kind="external_event",
-                    event_id="evt-late",
-                    source="test",
-                    event_source_id="event.user.followup",
-                    text="late follow up",
-                    payload={"event": next_payload["request"]["external_events"][0]},
-                    task_payload=next_payload,
-                )
-            return {
-                "updated_at": "2026-03-16T00:00:00Z",
-                "current_turn_id": kwargs.get("last_turn_id"),
-            }
-
-    conversation_ctx = _IdleTransitionPublisher()
-    processor = _build_processor(redis, conversation_ctx=conversation_ctx, relay=relay)
-    conversation_ctx.source = processor._external_event_source_for(
-        ExternalEventPayload.model_validate(current_payload)
-    )
-
-    raw_payload = json.dumps(current_payload).encode("utf-8")
+    task_payload = _build_task_payload("task-locked", user_type="registered")
+    raw_payload = json.dumps(task_payload).encode("utf-8")
+    ready_key = "queue:registered"
     inflight_key = "queue:inflight:registered"
-    lock_key = "lock:task-current"
-    redis.seed_list(inflight_key, [raw_payload])
-    redis.lock_ttls[lock_key] = 300
-    processor._current_load = 1
+    redis.seed_list(ready_key, [raw_payload])
 
-    task_data = dict(current_payload)
-    task_data["_lock_key"] = lock_key
-    task_data["_raw_payload"] = raw_payload
-    task_data["_ready_queue_key"] = "queue:registered"
-    task_data["_inflight_queue_key"] = inflight_key
-    task_data["_queue_wait_ms"] = 10
+    conversation_lock_key = processor._task_conversation_lock_key(task_payload)
+    assert conversation_lock_key is not None
+    redis.values[conversation_lock_key] = "other-processor"
 
-    await processor._process_task(task_data)
+    result = await processor._legacy_pop_any_queue_fair()
 
+    assert result is None
+    assert redis.lists[ready_key] == [raw_payload]
     assert redis.lists[inflight_key] == []
-    promoted = redis.lists["queue:registered"][0]
-    promoted_payload = json.loads(promoted)
-    assert promoted_payload["kind"] == "external_event_lane_wakeup"
-    assert promoted_payload["meta"]["task_id"] == "task-late"
-    assert promoted_payload["event_lane"]["event_id"] == "evt-late"
-    stored = await conversation_ctx.source.get_event("evt-late")
-    assert stored is not None
-    assert stored.promoted_task_id == "task-late"
-    assert [call["new_state"] for call in conversation_ctx.calls[-2:]] == ["idle", "in_progress"]
-    assert conversation_ctx.calls[-1]["last_turn_id"] == "turn-late"
-    assert relay.conv_status_calls[-1]["kwargs"]["completion"] == "queued_next"
+    assert redis.values[conversation_lock_key] == "other-processor"
+    assert "lock:task-locked" in redis.delete_calls
 
 
 @pytest.mark.asyncio
