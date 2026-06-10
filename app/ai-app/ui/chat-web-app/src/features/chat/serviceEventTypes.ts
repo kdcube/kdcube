@@ -55,7 +55,8 @@ export interface RateLimitPayload {
 export type ServiceEventType = "rate_limit.warning" | "rate_limit.denied"
     | "rate_limit.project_exhausted" | "rate_limit.no_funding" | "rate_limit.subscription_exhausted"
     | "rate_limit.snapshot" | "rate_limit.attachment_failure"
-    | "rate_limit.lane_switch" | "economics.user_underfunded_absorbed";
+    | "rate_limit.lane_switch" | "economics.user_underfunded_absorbed"
+    | "queue.enqueue_rejected";
 
 export interface ChatServiceEnvelope {
     type: ServiceEventType | string;
@@ -68,7 +69,12 @@ export interface ChatServiceEnvelope {
         scope?: "user" | "project" | "tenant" | "bundle";
     };
     data: {
-        rate_limit: RateLimitPayload;
+        rate_limit?: RateLimitPayload;
+        message?: string;
+        error_type?: string;
+        reason?: string;
+        retry_after?: number | null;
+        queue_stats?: Record<string, unknown>;
         [k: string]: unknown;
     };
 }

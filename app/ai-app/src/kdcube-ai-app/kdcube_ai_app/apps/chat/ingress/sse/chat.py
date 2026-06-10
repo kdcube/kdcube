@@ -906,8 +906,10 @@ def create_sse_router(
             if error_type in ("queue.enqueue_rejected",):
                 detail = {
                     "error": "System under pressure",
+                    "error_type": result.error_type,
                     "reason": result.reason,
                     "retry_after": result.retry_after,
+                    "queue_stats": result.queue_stats,
                 }
             elif error_type == "missing_message":
                 detail = result.error or 'Missing "message"'

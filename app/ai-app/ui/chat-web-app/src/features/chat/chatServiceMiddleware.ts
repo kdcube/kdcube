@@ -210,6 +210,10 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
             return "You've reached your usage limit. Please try again later.";
         };
 
+        const submitErrorMessage = (error: unknown): string => {
+            return error instanceof Error ? error.message : String(error);
+        };
+
         const handleServiceMessage = (env: ChatServiceEnvelope) => {
             const eventType = env.type;
             const data = env.data;
@@ -302,6 +306,13 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
                 case "economics.user_underfunded_absorbed":
                     console.info(env)
                     break;
+                case "queue.enqueue_rejected": {
+                    const message = typeof data.message === "string" && data.message.trim()
+                        ? data.message
+                        : "System under pressure - request rejected. Please try again in a moment.";
+                    showPopup("error", message)
+                    break;
+                }
                 default:
                     console.warn("unknown eventType", env);
             }
@@ -517,6 +528,7 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
                         }
                     }).catch(error => {
                         console.error(error)
+                        const errorMessage = submitErrorMessage(error);
                         if (targetsOpenTurn) {
                             const conversationId = selectConversationId(store.getState())
                             if (conversationId) {
@@ -524,9 +536,18 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
                             }
                             dispatch(pushNotification({
                                 type: "error",
-                                text: error instanceof Error ? error.message : String(error),
+                                text: errorMessage,
                             }))
                         } else {
+                            const currentTurns = selectTurns(store.getState())
+                            if (!currentTurns[turnId]) {
+                                dispatch(newTurn({
+                                    id: turnId,
+                                    state: "new",
+                                    userMessage: message,
+                                    attachments
+                                }))
+                            }
                             dispatch(turnError({turnId, error}))
                         }
                     })

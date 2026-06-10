@@ -124,6 +124,7 @@ export interface ChatErrorEnvelope extends BaseEnvelope {
 }
 
 export interface ChatMessageSendResponse {
+    ok?: boolean;
     status: string;
     task_id: string;
     session_id: string;
@@ -140,6 +141,106 @@ export interface ChatMessageSendResponse {
     is_continuation?: boolean | null;
     message: string;
 }
+
+export interface ChatSubmitErrorPayload {
+    status?: number | string | null;
+    error_type?: string | null;
+    error?: string | null;
+    reason?: string | null;
+    retry_after?: number | null;
+    queue_stats?: Record<string, unknown> | null;
+    detail?: unknown;
+    [k: string]: unknown;
+}
+
+const asRecord = (value: unknown): Record<string, unknown> | null => (
+    value !== null && typeof value === "object" && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : null
+);
+
+const optionalString = (value: unknown): string | null => (
+    typeof value === "string" && value.trim() ? value : null
+);
+
+const optionalNumber = (value: unknown): number | null => {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && value.trim()) {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed)) return parsed;
+    }
+    return null;
+};
+
+export const chatSubmitErrorMessage = (payload: ChatSubmitErrorPayload, fallback = "Chat request failed"): string => {
+    const detail = asRecord(payload.detail);
+    const source = detail || payload;
+    const errorType = optionalString(source.error_type) || optionalString(payload.error_type);
+    const serverError = optionalString(source.error) || optionalString(payload.error);
+    const reason = optionalString(source.reason) || optionalString(payload.reason);
+
+    if (errorType === "queue.enqueue_rejected") {
+        if (serverError) return serverError;
+        return reason
+            ? `System under pressure - request rejected (${reason})`
+            : "System under pressure - request rejected";
+    }
+
+    if (serverError) return serverError;
+    if (typeof payload.detail === "string" && payload.detail.trim()) return payload.detail;
+    return fallback;
+};
+
+export class ChatSubmitError extends Error {
+    public readonly httpStatus?: number;
+    public readonly errorType?: string | null;
+    public readonly reason?: string | null;
+    public readonly retryAfter?: number | null;
+    public readonly queueStats?: Record<string, unknown> | null;
+    public readonly raw: unknown;
+
+    constructor(payload: ChatSubmitErrorPayload, fallback?: string) {
+        super(chatSubmitErrorMessage(payload, fallback));
+        this.name = "ChatSubmitError";
+        const detail = asRecord(payload.detail);
+        const source = detail || payload;
+        this.httpStatus = optionalNumber(source.status) || optionalNumber(payload.status) || undefined;
+        this.errorType = optionalString(source.error_type) || optionalString(payload.error_type);
+        this.reason = optionalString(source.reason) || optionalString(payload.reason);
+        this.retryAfter = optionalNumber(source.retry_after) || optionalNumber(payload.retry_after);
+        this.queueStats = asRecord(source.queue_stats) || asRecord(payload.queue_stats);
+        this.raw = payload;
+    }
+}
+
+export const chatSubmitErrorFromResponse = async (res: Response): Promise<ChatSubmitError> => {
+    const text = await res.text();
+    let parsed: unknown = null;
+    if (text) {
+        try {
+            parsed = JSON.parse(text);
+        } catch {
+            parsed = text;
+        }
+    }
+
+    const body = asRecord(parsed);
+    const detail = body?.detail ?? parsed;
+    const detailRecord = asRecord(detail);
+    const payload: ChatSubmitErrorPayload = detailRecord
+        ? {...detailRecord, status: res.status}
+        : {detail, error: typeof detail === "string" ? detail : null, status: res.status};
+
+    return new ChatSubmitError(payload, `sse/chat failed (${res.status})`);
+};
+
+export const assertChatSubmitAccepted = (ack: unknown): ChatMessageSendResponse => {
+    const payload = asRecord(ack);
+    if (payload?.ok === false) {
+        throw new ChatSubmitError(payload as ChatSubmitErrorPayload, "Chat request was rejected");
+    }
+    return ack as ChatMessageSendResponse;
+};
 
 export interface DataBusMessageInput {
     message_id?: string;

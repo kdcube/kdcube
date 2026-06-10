@@ -618,6 +618,9 @@ class SocketIOChatHandler:
                     "status": result.http_status or 400,
                     "error_type": result.error_type,
                     "error": result.error,
+                    "reason": result.reason,
+                    "retry_after": result.retry_after,
+                    "queue_stats": result.queue_stats,
                     "conversation_id": result.conversation_id or conversation_id,
                 }
 

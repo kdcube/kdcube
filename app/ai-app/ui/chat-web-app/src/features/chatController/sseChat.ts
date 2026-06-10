@@ -1,13 +1,16 @@
 import {
+    assertChatSubmitAccepted,
     ChatBase,
     ChatCompactionEnvelope,
     ChatCompleteEnvelope,
     ChatDeltaEnvelope,
-    ChatErrorEnvelope, ChatMessageSendResponse,
+    ChatErrorEnvelope,
+    ChatMessageSendResponse,
     ChatOptions,
     ChatRequest,
     ChatStartEnvelope,
     ChatStepEnvelope,
+    chatSubmitErrorFromResponse,
     ConvStatusEnvelope
 } from "./chatBase.ts";
 
@@ -141,8 +144,8 @@ class SSEChat extends ChatBase {
             const headers = makeHeaders(); // auth headers, no content-type for FormData
 
             const res = await fetch(url, {method: "POST", headers, body: form, credentials: "include"});
-            if (!res.ok) throw new Error(`sse/chat failed (${res.status}) ${await res.text()}`);
-            return res.json();
+            if (!res.ok) throw await chatSubmitErrorFromResponse(res);
+            return assertChatSubmitAccepted(await res.json());
         } else {
             const headers = makeHeaders({"Content-Type": "application/json"});
             const res = await fetch(url, {
@@ -151,8 +154,8 @@ class SSEChat extends ChatBase {
                 body: JSON.stringify(eventSubmission),
                 credentials: "include"
             });
-            if (!res.ok) throw new Error(`sse/chat failed (${res.status}) ${await res.text()}`);
-            return res.json();
+            if (!res.ok) throw await chatSubmitErrorFromResponse(res);
+            return assertChatSubmitAccepted(await res.json());
         }
     }
 

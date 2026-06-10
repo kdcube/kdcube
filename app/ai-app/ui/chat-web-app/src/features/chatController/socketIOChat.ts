@@ -1,11 +1,16 @@
 import {
+    assertChatSubmitAccepted,
     ChatBase,
     ChatCompactionEnvelope,
     ChatCompleteEnvelope,
     ChatDeltaEnvelope,
-    ChatErrorEnvelope, ChatMessageSendResponse,
-    ChatOptions, DataBusPublishAck, DataBusPublishRequest,
-    ChatRequest, ChatStartEnvelope,
+    ChatErrorEnvelope,
+    ChatMessageSendResponse,
+    ChatOptions,
+    DataBusPublishAck,
+    DataBusPublishRequest,
+    ChatRequest,
+    ChatStartEnvelope,
     ChatStepEnvelope
 } from "./chatBase.ts";
 import {Manager, Socket} from "socket.io-client";
@@ -232,7 +237,7 @@ class SocketIOChat extends ChatBase {
         }
 
         const data = files.map(value => value.data)
-        return this._socket.emitWithAck("chat_message", eventSubmission, ...data);
+        return assertChatSubmitAccepted(await this._socket.emitWithAck("chat_message", eventSubmission, ...data));
     }
 
     public override async requestConvStatus(conversationId: string) {
