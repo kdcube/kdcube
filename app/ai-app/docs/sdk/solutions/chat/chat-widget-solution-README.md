@@ -19,6 +19,8 @@ see_also:
   - ks:docs/sdk/bundle/bundle-widget-integration-README.md
   - ks:docs/sdk/bundle/bundle-subsystem-integration-README.md
   - ks:docs/sdk/solutions/event-hub/resolver-and-policy-registration-README.md
+  - ks:docs/sdk/solutions/scene/scene-composition-README.md
+  - ks:docs/sdk/solutions/memory/memory-widget-solution-README.md
   - ks:docs/sdk/events/external-events-README.md
 ---
 # Chat Widget Solution

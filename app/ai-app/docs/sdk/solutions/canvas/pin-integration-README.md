@@ -22,6 +22,8 @@ see_also:
   - ks:docs/sdk/solutions/canvas/canvas-module-guide-README.md
   - ks:docs/sdk/solutions/canvas/pin-operations-README.md
   - ks:docs/sdk/solutions/canvas/external-subsystem-event-source-products-pins-README.md
+  - ks:docs/sdk/solutions/event-hub/resolver-and-policy-registration-README.md
+  - ks:docs/sdk/solutions/scene/scene-surface-registry-README.md
   - ks:applications/playground/bundles/task-tracker@1-0/doc/runtime/message-routing.md
   - ks:docs/service/comm/conversation-event-bus-and-data-bus-README.md
   - ks:docs/sdk/events/namespaces-README.md

@@ -19,6 +19,8 @@ keywords:
   ]
 see_also:
   - ks:docs/sdk/solutions/event-hub/design/resolver-directory-and-operation-routing-README.md
+  - ks:docs/sdk/solutions/canvas/pin-integration-README.md
+  - ks:docs/sdk/solutions/scene/scene-surface-registry-README.md
   - ks:docs/sdk/events/namespaces-README.md
   - ks:docs/sdk/events/event-subsystem-README.md
   - ks:docs/sdk/events/external-events-README.md

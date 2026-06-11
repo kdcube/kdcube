@@ -16,9 +16,11 @@ keywords:
     "resolver response",
   ]
 see_also:
+  - ks:docs/sdk/solutions/scene/scene-composition-README.md
   - ks:docs/sdk/solutions/canvas/pin-integration-README.md
   - ks:docs/sdk/solutions/event-hub/resolver-and-policy-registration-README.md
   - ks:docs/sdk/solutions/chat/chat-widget-solution-README.md
+  - ks:docs/sdk/solutions/memory/memory-widget-solution-README.md
   - ks:docs/sdk/bundle/bundle-subsystem-integration-README.md
   - ks:docs/sdk/bundle/bundle-widget-integration-README.md
 ---

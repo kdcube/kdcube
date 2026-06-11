@@ -22,6 +22,7 @@ see_also:
   - ks:docs/sdk/solutions/canvas/pin-integration-README.md
   - ks:docs/sdk/solutions/canvas/external-subsystem-event-source-products-pins-README.md
   - ks:docs/sdk/solutions/event-hub/resolver-and-policy-registration-README.md
+  - ks:docs/sdk/solutions/scene/scene-composition-README.md
   - ks:docs/sdk/events/namespaces-README.md
   - ks:docs/service/comm/conversation-event-bus-and-data-bus-README.md
   - ks:docs/service/comm/data-bus-README.md
