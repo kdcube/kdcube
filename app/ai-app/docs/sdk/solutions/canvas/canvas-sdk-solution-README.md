@@ -182,10 +182,40 @@ Built-in SDK resolver support:
 | --- | --- | --- |
 | `CanvasArtifactResolver` | `cnv:` | Reads canvas-owned artifact refs from canvas artifact storage. |
 | `NamespaceHandoffResolver` | any | Declares that another subsystem owns the namespace. |
+| `NamedServiceCanvasObjectResolver` | configured | Calls the namespace-owning bundle's named-service API endpoint. |
 | `CanvasObjectResolverRegistry` | all | Dispatches actions to registered resolvers by namespace. |
 
-The task-tracker bundle registers `task:` and `mem:` by importing their owning
-modules. Canvas does not duplicate those implementations.
+Composition bundles can register named-service resolvers from bundle config:
+
+```yaml
+named_services:
+  namespaces:
+    task:
+      provider:
+        bundle_id: task-tracker@1-0
+        provider: task.issue
+        operation: named_service
+```
+
+```python
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
+    register_configured_named_service_canvas_resolvers,
+)
+
+register_configured_named_service_canvas_resolvers(
+    registry,
+    namespaces=self.bundle_prop("named_services.namespaces", {}) or {},
+    tenant=tenant,
+    project=project,
+    logger=_log,
+)
+```
+
+The helper registers `NamedServiceCanvasObjectResolver` for each configured
+namespace. The resolver calls the owning bundle operation through the
+request-bound local operation bridge, so canvas and chat object actions share
+the same current user/session context. Canvas does not duplicate owner
+implementations.
 
 ## ReAct Integration
 

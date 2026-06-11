@@ -468,6 +468,34 @@ keeps request/response operations such as `canvas_read`, `canvas_list`,
 The canvas event source ids are generic protocol names: `canvas.state` and
 `canvas.focus`.
 
+The `canvas_object_action` operation also hosts configured named-service
+namespace resolvers for both canvas and chat object actions. For example,
+`task:` refs can be delegated to a task-tracker owner bundle:
+
+```yaml
+named_services:
+  namespaces:
+    task:
+      provider:
+        bundle_id: task-tracker@1-0
+        provider: task.issue
+        operation: named_service
+      clients:
+        default_client:
+          tools:
+            operations: [provider.about, object.list, object.search, object.get, object.action]
+            actions: [preview, open, describe]
+```
+
+The configured resolver calls the owning bundle operation through the
+request-bound local operation bridge, so it preserves the current
+tenant/project/user session without making an HTTP callback.
+
+The `clients` section controls model-callable named-service tools per client.
+Canvas/chat object resolution only needs `named_services.namespaces`; tool
+exposure is intentionally scoped to the client that should use those
+operations.
+
 Detailed scene wiring is documented in `docs/design/scene-sdk-components.md`.
 
 ## Widget integration contract

@@ -21,6 +21,7 @@ from kdcube_ai_app.apps.chat.sdk.protocol import (
     ExternalEventUser,
     ServiceCtx,
 )
+from kdcube_ai_app.apps.chat.sdk.infra.auth_context import AuthContext, bind_auth_context
 from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_request_context
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.locks import (
     RedisDataBusPartitionLocker,
@@ -476,11 +477,23 @@ class DataBusBundleWorker:
 
         reply_comm = _make_reply_comm(message=message, relay=self.relay)
         reply = DataBusReply(message=message, comm=reply_comm)
+        auth_context = AuthContext.from_mapping(
+            {
+                "tenant": message.tenant,
+                "project": message.project,
+                "bundle_id": message.bundle_id,
+                "stream_id": claim.stream_id,
+                "actor": dict(message.actor or {}),
+                "request_id": message.message_id,
+            },
+            source="data_bus",
+        )
         ctx = DataBusContext(
             tenant=message.tenant,
             project=message.project,
             bundle_id=message.bundle_id,
             actor=dict(message.actor or {}),
+            auth_context=auth_context,
             bundle=instance,
             comm=reply_comm,
             reply=reply,
@@ -488,7 +501,7 @@ class DataBusBundleWorker:
             consumer_name=claim.consumer_name,
             handler=handler_spec,
         )
-        with bind_current_request_context(
+        with bind_auth_context(auth_context), bind_current_request_context(
             comm_context,
             comm=reply_comm,
             bundle_id=message.bundle_id,

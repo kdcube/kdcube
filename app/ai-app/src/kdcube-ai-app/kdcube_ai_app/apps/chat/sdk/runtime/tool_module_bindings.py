@@ -82,7 +82,7 @@ def bind_module_target(target: Any, *, svc: Any, registry: Any = None, integrati
     elif not already_bound and hasattr(target, "set_service") and callable(target.set_service):
         target.set_service(svc)
 
-    if not already_bound and registry is not None and hasattr(target, "bind_registry") and callable(target.bind_registry):
+    if registry is not None and hasattr(target, "bind_registry") and callable(target.bind_registry):
         target.bind_registry(registry)
 
     if integrations is not None and hasattr(target, "bind_integrations") and callable(target.bind_integrations):

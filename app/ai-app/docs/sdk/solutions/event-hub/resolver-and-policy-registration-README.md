@@ -18,6 +18,7 @@ keywords:
     "react event policy",
   ]
 see_also:
+  - ks:docs/sdk/namespace-services/providers-README.md
   - ks:docs/sdk/solutions/event-hub/design/resolver-directory-and-operation-routing-README.md
   - ks:docs/sdk/solutions/canvas/pin-integration-README.md
   - ks:docs/sdk/solutions/scene/scene-surface-registry-README.md
@@ -42,6 +43,7 @@ one working assistant scene.
 | Event domain | A subsystem that owns a logical object family, event source family, or namespace. Examples: ReAct artifacts, memory, task issues, canvas. |
 | Namespace | The prefix before `:` in a logical ref. Examples: `fi:`, `mem:`, `task:`, `cnv:`. |
 | Namespace owner | The domain that mints refs in a namespace and defines their semantics. |
+| Named service provider | The broader provider/client contract for namespace owners and other named semantic services. It can expose object operations, relations, actions, capabilities, and transport adapters. |
 | Resolver | Backend callable owned by the namespace owner. It maps `object_ref + action` to a bounded result. |
 | Event source reader | Backend callable owned by the namespace owner. Runtime/policy code can use it to resolve a canonical ref into an event-source payload. It is not automatically a direct model tool. |
 | Namespace rehoster | Backend callable owned by the namespace owner. It materializes an external owner ref such as `mem:` or `cnv:` into the ReAct workspace for `react.pull`. |
@@ -79,6 +81,11 @@ The task-tracker bundle is currently a composition bundle. It imports the
 domains above and registers them. It is not the owner of `fi:` or `mem:`.
 
 ## Resolver Contract
+
+The resolver contract is one operation family inside the broader
+[Namespace Services: Providers](../../namespace-services/providers-README.md)
+model. New cross-bundle/client object operations should use the named service
+provider vocabulary and may delegate existing resolver code underneath.
 
 A resolver answers actions for one namespace.
 

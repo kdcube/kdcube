@@ -27,7 +27,7 @@ import {
   type CanvasReadResponse,
   type CanvasUploadResponse,
 } from '@kdcube/canvas-component'
-import { Archive, Bot, Gauge, Maximize2, Minimize2, Plus, X } from 'lucide-react'
+import { Archive, Bot, Gauge, ListTodo, Maximize2, Minimize2, Plus, X } from 'lucide-react'
 import React, { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { createRoot } from 'react-dom/client'
 import { io, type Socket } from 'socket.io-client'
@@ -39,6 +39,8 @@ const CHAT_CONFIG_IDENTITY = 'BUNDLE_VERSATILE_CHAT_VIEW'
 const CHAT_WIDGET_ALIAS = 'versatile_chat'
 const MEMORY_WIDGET_ALIAS = 'memories'
 const USAGE_CARD_WIDGET_ALIAS = 'usage_card'
+const TASK_TRACKER_BUNDLE_ID = 'task-tracker@1-0'
+const TASKS_WIDGET_ALIAS = 'task_tracker_tasks'
 // Debounce burst-y accounting.usage broadcasts so a chatty turn does not
 // hammer /api/economics/me/budget-breakdown. 800 ms catches the typical
 // trailing accounting event after the final delta without feeling stale.
@@ -96,7 +98,7 @@ interface DataBusServiceEnvelope {
   }
 }
 
-type ScenePanelId = 'chat' | 'memory' | 'usage'
+type ScenePanelId = 'chat' | 'memory' | 'tasks' | 'usage'
 
 interface SceneSurfaceOpenRequest {
   targetSurface: string
@@ -182,14 +184,18 @@ function contextFromConfig(config: RuntimeConfig | null, fallback: RouteContext)
   }
 }
 
-function widgetUrl(ctx: RouteContext, alias: string, params?: Record<string, string>): string {
-  const base = `${ctx.baseUrl}/api/integrations/bundles/${encodeURIComponent(ctx.tenant)}/${encodeURIComponent(ctx.project)}/${encodeURIComponent(ctx.bundleId)}`
+function widgetUrlForBundle(ctx: RouteContext, bundleId: string, alias: string, params?: Record<string, string>): string {
+  const base = `${ctx.baseUrl}/api/integrations/bundles/${encodeURIComponent(ctx.tenant)}/${encodeURIComponent(ctx.project)}/${encodeURIComponent(bundleId)}`
   const route = ctx.publicStatic ? 'public/widgets' : 'widgets'
   const url = new URL(`${base}/${route}/${alias}`)
   if (params) {
     Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value))
   }
   return url.toString()
+}
+
+function widgetUrl(ctx: RouteContext, alias: string, params?: Record<string, string>): string {
+  return widgetUrlForBundle(ctx, ctx.bundleId, alias, params)
 }
 
 function chatWidgetUrl(ctx: RouteContext): string {
@@ -227,6 +233,12 @@ function memoryWidgetUrl(ctx: RouteContext, expanded: boolean): string {
 
 function usageCardWidgetUrl(ctx: RouteContext): string {
   return widgetUrl(ctx, USAGE_CARD_WIDGET_ALIAS)
+}
+
+function tasksWidgetUrl(ctx: RouteContext, expanded: boolean): string {
+  return widgetUrlForBundle(ctx, TASK_TRACKER_BUNDLE_ID, TASKS_WIDGET_ALIAS, {
+    view: expanded ? 'expanded' : 'compact',
+  })
 }
 
 function operationsUrl(ctx: RouteContext, alias: string): string {
@@ -387,6 +399,20 @@ function memoryIdFromSurfaceOpenRequest(request: SceneSurfaceOpenRequest): strin
   return ref.startsWith('mem:') ? ref.slice(4).split(/[?#]/, 1)[0].replace(/^\/+/, '') : ''
 }
 
+function taskIssueIdFromSurfaceOpenRequest(request: SceneSurfaceOpenRequest): string {
+  const eventIssueId = request.uiEvent.issue_id
+  if (typeof eventIssueId === 'string' && eventIssueId.trim()) return eventIssueId.trim()
+  const issue = request.response.issue
+  if (issue && typeof issue === 'object') {
+    const id = (issue as { id?: unknown }).id
+    if (typeof id === 'string' && id.trim()) return id.trim()
+  }
+  const ref = String(request.uiEvent.object_ref || request.response.object_ref || request.response.ref || '').trim()
+  if (ref.startsWith('task:issues/')) return ref.slice('task:issues/'.length).split(/[?#]/, 1)[0].replace(/^\/+/, '')
+  if (ref.startsWith('task:issue:')) return ref.slice('task:issue:'.length).split(/[?#]/, 1)[0].replace(/^\/+/, '')
+  return ''
+}
+
 function memoryPanelSize(expanded: boolean) {
   // Don't viewport-clamp the enlarged preset — we observed cases where
   // the scene window was only ~450 px tall, so the Enlarge button ended
@@ -438,12 +464,28 @@ function usagePanelSize() {
   }
 }
 
+function tasksPanelSize(expanded: boolean) {
+  return {
+    width: expanded ? Math.min(760, window.innerWidth - 72) : Math.min(410, window.innerWidth - 72),
+    height: expanded ? Math.min(680, window.innerHeight - 92) : Math.min(540, window.innerHeight - 110),
+  }
+}
+
 function defaultUsageFrame(chatWidth: number, chatOpen: boolean) {
   const panel = usagePanelSize()
   const rightEdge = chatOpen ? Math.max(64, window.innerWidth - chatWidth - 18) : window.innerWidth - 62
   return {
     x: clamp(rightEdge - panel.width - 12, 8, Math.max(8, window.innerWidth - panel.width - 8)),
     y: 104,
+  }
+}
+
+function defaultTasksFrame(chatWidth: number, chatOpen: boolean, expanded: boolean) {
+  const panel = tasksPanelSize(expanded)
+  const rightEdge = chatOpen ? Math.max(64, window.innerWidth - chatWidth - 18) : window.innerWidth - 62
+  return {
+    x: clamp(rightEdge - panel.width - 12, 8, Math.max(8, window.innerWidth - panel.width - 8)),
+    y: expanded ? 74 : 132,
   }
 }
 
@@ -673,6 +715,28 @@ function objectRefForPatch(input: CanvasPatchInput): string {
   return `canvas:${canvasName}`
 }
 
+const CANVAS_CONTEXT_CARD_KINDS = new Set([
+  'user.text',
+  'user.attachment',
+  'agent.text',
+  'file',
+  'memory',
+  'source',
+  'search.result',
+  'issue.ref',
+  'story.ref',
+  'note',
+  'object.ref',
+  'conversation',
+])
+
+function cardKindFromContext(context: CanvasContextItem, ref: string): CanvasCard['kind'] | undefined {
+  const kind = String(context.kind || '').trim()
+  if (CANVAS_CONTEXT_CARD_KINDS.has(kind)) return kind as CanvasCard['kind']
+  void ref
+  return undefined
+}
+
 function cardFromContext(context: CanvasContextItem, rect: CanvasCard['rect']) {
   const ref = String(context.logical_path ?? context.ref ?? context.id ?? '').trim()
   return cardFromSearchResult(
@@ -681,7 +745,7 @@ function cardFromContext(context: CanvasContextItem, rect: CanvasCard['rect']) {
       title: context.label ? context.label : ref,
       mime: context.mime,
       summary: context.summary,
-      kind: context.kind === 'memory' ? 'memory' : undefined,
+      kind: cardKindFromContext(context, ref),
     },
     { placement: 'placed', rect },
   )
@@ -743,6 +807,9 @@ function App() {
   // the iframe overlay, so we render an explicit handle on top of the
   // iframe and drive width/height from this state.
   const [memorySize, setMemorySize] = useState(() => memoryPanelSize(false))
+  const [tasksOpen, setTasksOpen] = useState(false)
+  const [tasksExpanded, setTasksExpanded] = useState(false)
+  const [tasksFrame, setTasksFrame] = useState(() => defaultTasksFrame(chatSizing.width, true, false))
   const [usageOpen, setUsageOpen] = useState(false)
   const [usageFrame, setUsageFrame] = useState(() => defaultUsageFrame(chatSizing.width, true))
   const [userType, setUserType] = useState<string | null>(null)
@@ -750,7 +817,8 @@ function App() {
   const [panelZ, setPanelZ] = useState<Record<ScenePanelId, number>>({
     chat: FLOATING_PANEL_BASE_Z,
     memory: FLOATING_PANEL_BASE_Z + 1,
-    usage: FLOATING_PANEL_BASE_Z + 2,
+    tasks: FLOATING_PANEL_BASE_Z + 2,
+    usage: FLOATING_PANEL_BASE_Z + 3,
   })
   const [activeCanvasName, setActiveCanvasName] = useState('main')
   const [canvases, setCanvases] = useState<CanvasDefinition[]>([emptyCanvasDefinition('main')])
@@ -758,10 +826,11 @@ function App() {
   const [notice, setNotice] = useState('')
   const chatFrameRef = useRef<HTMLIFrameElement | null>(null)
   const memoryFrameRef = useRef<HTMLIFrameElement | null>(null)
+  const tasksFrameRef = useRef<HTMLIFrameElement | null>(null)
   const usageFrameRef = useRef<HTMLIFrameElement | null>(null)
   const usageRefreshTimerRef = useRef<number | null>(null)
   const pendingSurfaceCommandsRef = useRef<Record<string, Record<string, unknown>>>({})
-  const panelZCursorRef = useRef(FLOATING_PANEL_BASE_Z + 3)
+  const panelZCursorRef = useRef(FLOATING_PANEL_BASE_Z + 4)
   const isRegistered = userType != null && userType !== 'anonymous'
 
   const activeCanvas = useMemo(
@@ -786,6 +855,14 @@ function App() {
     memoryFrameRef.current?.contentWindow?.postMessage({
       type: 'kdcube-set-view',
       widget: MEMORY_WIDGET_ALIAS,
+      view,
+    }, '*')
+  }, [])
+
+  const syncTasksWidgetView = useCallback((view: 'compact' | 'expanded') => {
+    tasksFrameRef.current?.contentWindow?.postMessage({
+      type: 'kdcube-set-view',
+      widget: TASKS_WIDGET_ALIAS,
       view,
     }, '*')
   }, [])
@@ -850,6 +927,29 @@ function App() {
     return true
   }, [])
 
+  const sendTasksWidgetCommand = useCallback((command: Record<string, unknown>) => {
+    const target = tasksFrameRef.current?.contentWindow
+    if (!target) return false
+    target.postMessage({
+      type: 'kdcube-task-tracker-widget-command',
+      widget: TASKS_WIDGET_ALIAS,
+      ...command,
+    }, '*')
+    return true
+  }, [])
+
+  const openTasksWidget = useCallback((expanded = false) => {
+    bringPanelToFront('tasks')
+    setTasksOpen(true)
+    setTasksExpanded(expanded)
+    const panel = tasksPanelSize(expanded)
+    setTasksFrame((frame) => ({
+      x: clamp(frame.x, 8, Math.max(8, window.innerWidth - panel.width - 8)),
+      y: clamp(frame.y, 62, Math.max(62, window.innerHeight - panel.height - 8)),
+    }))
+    window.setTimeout(() => syncTasksWidgetView(expanded ? 'expanded' : 'compact'), 0)
+  }, [bringPanelToFront, syncTasksWidgetView])
+
   const surfaceRegistry = useMemo<Record<string, SceneSurfaceRegistration>>(() => ({
     'sdk.memory.viewer': {
       label: 'memory viewer',
@@ -889,7 +989,29 @@ function App() {
         }
       },
     },
-  }), [openMemoryWidget, sendMemoryWidgetCommand, sendChatWidgetCommand, bringPanelToFront])
+    'task_tracker.issue_list': {
+      label: 'task list',
+      ensureOpen: () => openTasksWidget(false),
+      postCommand: sendTasksWidgetCommand,
+      commandFromOpen: () => ({ action: 'refresh' }),
+    },
+    'task_tracker.issue_editor': {
+      label: 'task editor',
+      ensureOpen: () => openTasksWidget(true),
+      postCommand: sendTasksWidgetCommand,
+      commandFromOpen: (request) => {
+        const issueId = taskIssueIdFromSurfaceOpenRequest(request)
+        if (!issueId) return null
+        return {
+          action: 'open',
+          issue_id: issueId,
+          object_ref: request.uiEvent.object_ref || request.response.object_ref || request.response.ref || `task:issues/${issueId}`,
+          issue: request.response.issue,
+          view: 'expanded',
+        }
+      },
+    },
+  }), [openMemoryWidget, sendMemoryWidgetCommand, sendChatWidgetCommand, bringPanelToFront, openTasksWidget, sendTasksWidgetCommand])
 
   const flushSurfaceCommand = useCallback((targetSurface: string) => {
     const command = pendingSurfaceCommandsRef.current[targetSurface]
@@ -1092,6 +1214,45 @@ function App() {
     window.addEventListener('pointercancel', finish, { once: true })
     window.addEventListener('blur', finish, { once: true })
   }, [bringPanelToFront, usageFrame])
+
+  const startTasksDrag = useCallback((event: React.PointerEvent<HTMLElement>) => {
+    if ((event.target as HTMLElement).closest('button')) return
+    bringPanelToFront('tasks')
+    event.preventDefault()
+    const dragTarget = event.currentTarget
+    try {
+      dragTarget.setPointerCapture?.(event.pointerId)
+    } catch {
+      // Some embedded browsers do not expose pointer capture consistently.
+    }
+    document.body.classList.add('scene-moving-tasks')
+    const startX = event.clientX
+    const startY = event.clientY
+    const startFrame = tasksFrame
+    const panel = tasksPanelSize(tasksExpanded)
+    const onMove = (move: PointerEvent) => {
+      setTasksFrame({
+        x: clamp(startFrame.x + move.clientX - startX, 8, Math.max(8, window.innerWidth - panel.width - 8)),
+        y: clamp(startFrame.y + move.clientY - startY, 62, Math.max(62, window.innerHeight - panel.height - 8)),
+      })
+    }
+    const finish = () => {
+      try {
+        dragTarget.releasePointerCapture?.(event.pointerId)
+      } catch {
+        // The pointer may already have been released by the browser.
+      }
+      document.body.classList.remove('scene-moving-tasks')
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', finish)
+      window.removeEventListener('pointercancel', finish)
+      window.removeEventListener('blur', finish)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', finish, { once: true })
+    window.addEventListener('pointercancel', finish, { once: true })
+    window.addEventListener('blur', finish, { once: true })
+  }, [bringPanelToFront, tasksExpanded, tasksFrame])
 
   // Debounced usage-card refresh nudge. Burst-y accounting.usage broadcasts
   // collapse to a single postMessage so the widget makes one round trip
@@ -1482,6 +1643,7 @@ function App() {
       const childWindows = [
         chatFrameRef.current?.contentWindow,
         memoryFrameRef.current?.contentWindow,
+        tasksFrameRef.current?.contentWindow,
         usageFrameRef.current?.contentWindow,
       ].filter(Boolean)
 
@@ -1507,11 +1669,18 @@ function App() {
             setMemoryExpanded(data.view === 'expanded')
             return
           }
+          if (data.widget === TASKS_WIDGET_ALIAS) {
+            bringPanelToFront('tasks')
+            setTasksOpen(true)
+            setTasksExpanded(data.view === 'expanded')
+            return
+          }
           return
         }
         if (data.type === 'kdcube-widget-focus') {
           if (data.widget === CHAT_WIDGET_ALIAS) bringPanelToFront('chat')
           if (data.widget === MEMORY_WIDGET_ALIAS) bringPanelToFront('memory')
+          if (data.widget === TASKS_WIDGET_ALIAS) bringPanelToFront('tasks')
           return
         }
         if (data.type === 'kdcube-memory-widget-status' && data.widget === MEMORY_WIDGET_ALIAS) {
@@ -1525,7 +1694,24 @@ function App() {
             setMemoryExpanded(data.view === 'expanded')
             return
           }
+          if (data.widget === TASKS_WIDGET_ALIAS) {
+            setTasksExpanded(data.view === 'expanded')
+            return
+          }
           setChatExpanded(data.view === 'expanded')
+          return
+        }
+        if (data.type === 'kdcube-task-tracker-open-issue' && data.widget === TASKS_WIDGET_ALIAS) {
+          bringPanelToFront('tasks')
+          setTasksOpen(true)
+          setTasksExpanded(true)
+          return
+        }
+        if (data.type === 'kdcube-task-tracker-create-issue' && data.widget === TASKS_WIDGET_ALIAS) {
+          bringPanelToFront('tasks')
+          setTasksOpen(true)
+          setTasksExpanded(true)
+          setNotice('Task editor requested from task list.')
           return
         }
         if (['kdcube-context-attach', 'kdcube-context-focus', 'kdcube-context-remove'].includes(data.type)) {
@@ -1674,6 +1860,27 @@ function App() {
             }}
           >
             <Archive size={21} strokeWidth={2.1} />
+          </button>
+          <button
+            type="button"
+            className="scene-rail-button tasks-shortcut"
+            title={tasksOpen ? 'Hide tasks' : 'Open tasks'}
+            aria-label={tasksOpen ? 'Hide tasks' : 'Open tasks'}
+            aria-pressed={tasksOpen}
+            onClick={() => {
+              bringPanelToFront('tasks')
+              setTasksOpen((open) => {
+                const next = !open
+                if (!next) {
+                  setTasksExpanded(false)
+                } else {
+                  setTasksFrame(defaultTasksFrame(chatWidth, chatOpen, tasksExpanded))
+                }
+                return next
+              })
+            }}
+          >
+            <ListTodo size={21} strokeWidth={2.1} />
           </button>
           {isRegistered ? (
             <button
@@ -1833,6 +2040,70 @@ function App() {
             onPointerDown={startMemoryResize}
             title="Resize memories"
             aria-label="Resize memories"
+          />
+        </section>
+      ) : null}
+      {tasksOpen ? (
+        <section
+          className={`tasks-pane${tasksExpanded ? ' expanded' : ''}`}
+          style={{
+            left: tasksFrame.x,
+            top: tasksFrame.y,
+            width: tasksPanelSize(tasksExpanded).width,
+            height: tasksPanelSize(tasksExpanded).height,
+            zIndex: panelZ.tasks,
+          } as CSSProperties}
+          aria-label="Tasks"
+          onPointerDownCapture={() => bringPanelToFront('tasks')}
+        >
+          <header onPointerDown={startTasksDrag}>
+            <span className="tasks-pane-title">
+              <strong>Tasks</strong>
+              <small>{tasksExpanded ? 'expanded' : 'compact'}</small>
+            </span>
+            <div>
+              <button
+                type="button"
+                onClick={() => {
+                  setTasksExpanded((value) => {
+                    const next = !value
+                    const panel = tasksPanelSize(next)
+                    setTasksFrame((frame) => ({
+                      x: clamp(frame.x, 8, Math.max(8, window.innerWidth - panel.width - 8)),
+                      y: clamp(frame.y, 62, Math.max(62, window.innerHeight - panel.height - 8)),
+                    }))
+                    window.setTimeout(() => syncTasksWidgetView(next ? 'expanded' : 'compact'), 0)
+                    return next
+                  })
+                }}
+                title={tasksExpanded ? 'Compact tasks' : 'Enlarge tasks'}
+                aria-label={tasksExpanded ? 'Compact tasks' : 'Enlarge tasks'}
+              >
+                {tasksExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setTasksOpen(false)
+                  setTasksExpanded(false)
+                }}
+                title="Close tasks"
+                aria-label="Close tasks"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          </header>
+          <iframe
+            ref={tasksFrameRef}
+            className="tasks-frame"
+            title="Task tracker tasks"
+            src={tasksWidgetUrl(ctx, false)}
+            onLoad={() => {
+              syncTasksWidgetView(tasksExpanded ? 'expanded' : 'compact')
+              flushSurfaceCommand('task_tracker.issue_list')
+              flushSurfaceCommand('task_tracker.issue_editor')
+            }}
           />
         </section>
       ) : null}

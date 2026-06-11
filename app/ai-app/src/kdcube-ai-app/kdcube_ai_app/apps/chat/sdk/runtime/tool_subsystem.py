@@ -198,6 +198,8 @@ class ToolSubsystem:
     def get_tool_runtime(self, tool_id: str) -> Optional[str]:
         if not tool_id:
             return None
+        if str(tool_id).startswith("named_services."):
+            return "none"
         val = self._tool_runtime.get(tool_id)
         if not isinstance(val, str):
             return None

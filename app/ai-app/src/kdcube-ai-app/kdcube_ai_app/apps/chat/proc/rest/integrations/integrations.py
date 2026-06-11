@@ -18,7 +18,7 @@ import uuid
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, Any, Set, List, Tuple
+from typing import Optional, Dict, Any, Set, List, Tuple, Mapping
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
@@ -49,6 +49,10 @@ from kdcube_ai_app.apps.chat.sdk.protocol import (
     ExternalEventRequest,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_request_context
+from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import (
+    BundleOperationCall,
+    bind_bundle_operation_caller,
+)
 from kdcube_ai_app.apps.chat.sdk.runtime.http_ops import (
     BundleBinaryResponse,
     BundleFileResponse,
@@ -4186,7 +4190,26 @@ async def _call_bundle_op_inner(
             fingerprint=session.fingerprint,
         )
         runtime_comm = _resolve_bound_runtime_comm(workflow=workflow, comm_context=comm_context)
-        with bind_current_request_context(comm_context, comm=runtime_comm):
+
+        async def _call_peer_bundle_operation(call: BundleOperationCall) -> Mapping[str, Any]:
+            return await _call_bundle_op_inner(
+                tenant=call.tenant or tenant_id,
+                project=call.project or project_id,
+                bundle_id=call.bundle_id,
+                payload=BundleSuggestionsRequest(
+                    conversation_id=payload.conversation_id,
+                    data=dict(call.data or {}),
+                ),
+                uploaded_files=[],
+                request=request,
+                operation=call.operation,
+                route=call.route or "operations",
+                session=session,
+            )
+
+        with bind_current_request_context(comm_context, comm=runtime_comm), bind_bundle_operation_caller(
+            _call_peer_bundle_operation
+        ):
             result = await _invoke_bundle_callable(fn, **extra)
     except HTTPException:
         raise

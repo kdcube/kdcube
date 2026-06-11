@@ -286,6 +286,7 @@ async def _run_job_loop(
                 try:
                     await _invoke_job(
                         bundle_id=_bid,
+                        job_alias=_alias,
                         method_name=_method,
                         bundle_spec=_spec,
                         bundle_config=_cfg,
@@ -378,6 +379,7 @@ async def _run_with_redis_lock(
         )
         await _invoke_job(
             bundle_id=bundle_id,
+            job_alias=job_alias,
             method_name=method_name,
             bundle_spec=bundle_spec,
             bundle_config=bundle_config,
@@ -428,11 +430,14 @@ async def _renew_lock_loop(*, redis: Any, lock_key: str, token: str) -> None:
 async def _invoke_job(
     *,
     bundle_id: str,
+    job_alias: str | None = None,
     method_name: str,
     bundle_spec: Any,
     bundle_config: Any,
 ) -> None:
     """Load the bundle entrypoint instance and invoke the scheduled method."""
+    from kdcube_ai_app.apps.chat.sdk.infra.auth_context import AuthContext, bind_auth_context
+    from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_bundle_id
     from kdcube_ai_app.infra.plugin.bundle_loader import get_workflow_instance_async
 
     # Resolve pg_pool lazily — same singleton used by the rest of the proc process.
@@ -445,57 +450,69 @@ async def _invoke_job(
 
     _log.info("[scheduler] Job started: bundle=%s method=%s", bundle_id, method_name)
     try:
-        comm_context = getattr(bundle_config, "_headless_comm_context", bundle_config)
-        instance, _ = await get_workflow_instance_async(
-            bundle_spec,
-            bundle_config,
-            comm_context=comm_context,
-            redis=getattr(bundle_config, "redis", None),
-            pg_pool=pg_pool,
+        auth_context = AuthContext.for_bundle_job(
+            tenant=str(getattr(bundle_config, "tenant", "") or ""),
+            project=str(getattr(bundle_config, "project", "") or ""),
+            bundle_id=bundle_id,
+            job_alias=job_alias,
+            source="bundle_scheduler",
         )
-        # Ensure the instance has Redis-loaded bundle props overrides, not just
-        # hardcoded defaults from configuration_defaults(). refresh_bundle_props
-        # is normally called during execute(), but scheduled jobs bypass that path.
-        refresh_fn = getattr(instance, "refresh_bundle_props", None)
-        if callable(refresh_fn):
-            try:
-                refresh_kwargs = {
-                    "state": {
-                        "tenant": getattr(bundle_config, "tenant", None),
-                        "project": getattr(bundle_config, "project", None),
-                    },
-                }
-                try:
-                    refresh_params = inspect.signature(refresh_fn).parameters
-                except (TypeError, ValueError):
-                    refresh_params = {}
-                accepts_kwargs = any(
-                    param.kind == inspect.Parameter.VAR_KEYWORD
-                    for param in refresh_params.values()
-                )
-                if accepts_kwargs or "notify" in refresh_params:
-                    refresh_kwargs["notify"] = False
-                if accepts_kwargs or "reason" in refresh_params:
-                    refresh_kwargs["reason"] = "scheduled_job"
-                await refresh_fn(**refresh_kwargs)
-            except Exception:
-                _log.warning(
-                    "[scheduler] refresh_bundle_props failed for bundle=%s; "
-                    "proceeding with defaults",
-                    bundle_id, exc_info=True,
-                )
-
-        fn = getattr(instance, method_name, None)
-        if fn is None:
-            _log.error(
-                "[scheduler] Method not found on bundle instance: bundle=%s method=%s",
-                bundle_id, method_name,
+        try:
+            bundle_config._headless_auth_context = auth_context
+        except Exception:
+            pass
+        comm_context = getattr(bundle_config, "_headless_comm_context", bundle_config)
+        with bind_auth_context(auth_context), bind_current_bundle_id(bundle_id):
+            instance, _ = await get_workflow_instance_async(
+                bundle_spec,
+                bundle_config,
+                comm_context=comm_context,
+                redis=getattr(bundle_config, "redis", None),
+                pg_pool=pg_pool,
             )
-            return
-        if asyncio.iscoroutinefunction(fn):
-            await fn()
-        else:
-            await asyncio.to_thread(fn)
+            # Ensure the instance has Redis-loaded bundle props overrides, not just
+            # hardcoded defaults from configuration_defaults(). refresh_bundle_props
+            # is normally called during execute(), but scheduled jobs bypass that path.
+            refresh_fn = getattr(instance, "refresh_bundle_props", None)
+            if callable(refresh_fn):
+                try:
+                    refresh_kwargs = {
+                        "state": {
+                            "tenant": getattr(bundle_config, "tenant", None),
+                            "project": getattr(bundle_config, "project", None),
+                        },
+                    }
+                    try:
+                        refresh_params = inspect.signature(refresh_fn).parameters
+                    except (TypeError, ValueError):
+                        refresh_params = {}
+                    accepts_kwargs = any(
+                        param.kind == inspect.Parameter.VAR_KEYWORD
+                        for param in refresh_params.values()
+                    )
+                    if accepts_kwargs or "notify" in refresh_params:
+                        refresh_kwargs["notify"] = False
+                    if accepts_kwargs or "reason" in refresh_params:
+                        refresh_kwargs["reason"] = "scheduled_job"
+                    await refresh_fn(**refresh_kwargs)
+                except Exception:
+                    _log.warning(
+                        "[scheduler] refresh_bundle_props failed for bundle=%s; "
+                        "proceeding with defaults",
+                        bundle_id, exc_info=True,
+                    )
+
+            fn = getattr(instance, method_name, None)
+            if fn is None:
+                _log.error(
+                    "[scheduler] Method not found on bundle instance: bundle=%s method=%s",
+                    bundle_id, method_name,
+                )
+                return
+            if asyncio.iscoroutinefunction(fn):
+                await fn()
+            else:
+                await asyncio.to_thread(fn)
         _log.info("[scheduler] Job completed: bundle=%s method=%s", bundle_id, method_name)
     except Exception:
         _log.exception("[scheduler] Job raised: bundle=%s method=%s", bundle_id, method_name)

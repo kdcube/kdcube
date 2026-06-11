@@ -21,6 +21,7 @@ keywords:
     "cnv:",
   ]
 see_also:
+  - ks:docs/sdk/namespace-services/providers-README.md
   - ks:docs/sdk/events/external-events-README.md
   - ks:docs/sdk/events/external-event-envelope-README.md
   - ks:docs/sdk/events/event-subsystem-README.md
@@ -41,7 +42,10 @@ task:issues/ticket_2026-06-07-10-20-30
 ```
 
 The namespace tells ReAct and event-source policies which subsystem owns the
-reference and which resolver/tool path can interpret it.
+reference and which resolver/tool path can interpret it. When that owner exposes
+a cross-bundle/client contract, use the
+[Namespace Services: Providers](../namespace-services/providers-README.md)
+model. In that model, a namespace-owning provider is a namespaced service.
 
 This is not a transport concept. For example, Data Bus `object_ref` is an
 opaque partition key unless a bundle explicitly chooses to put a logical ref
@@ -184,6 +188,8 @@ cross-conversation artifact/event resolution.
 When introducing a new namespace:
 
 - define the namespace owner;
+- define the namespaced service when other bundles, widgets, agents, or scene
+  hosts need a stable provider/client contract for the namespace;
 - define whether refs are event objects, artifacts, domain objects, or aliases;
 - define whether `react.read` can read them directly;
 - if `react.read` is supported, register an owner-domain event source reader

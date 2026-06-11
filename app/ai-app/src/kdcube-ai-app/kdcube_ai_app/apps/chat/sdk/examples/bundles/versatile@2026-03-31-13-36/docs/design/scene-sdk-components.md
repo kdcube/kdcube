@@ -88,6 +88,40 @@ The backend registers resolvers for namespaces the scene can display:
 | `fi:` | ReAct event/artifact resolver |
 | `mem:` | memory subsystem resolver |
 | `cnv:` | canvas-owned object resolver |
+| configured namespaces, for example `task:` | named-service provider resolver |
 
 The canvas card stores one canonical object ref. The resolver owns preview,
 download, open, and rehost behavior.
+
+Configured named-service resolvers are read from bundle props:
+
+```yaml
+named_services:
+  namespaces:
+    task:
+      provider:
+        bundle_id: task-tracker@1-0
+        provider: task.issue
+        operation: named_service
+      clients:
+        default_client:
+          tools:
+            operations: [provider.about, object.list, object.search, object.get, object.action]
+            actions: [preview, open, describe]
+```
+
+The SDK helper `register_configured_named_service_canvas_resolvers(...)`
+registers `named_services.namespaces` into the canvas object resolver registry.
+The same registry backs the scene canvas and the chat widget object-action path
+through `canvas_object_action`.
+
+The `named_services.namespaces.<namespace>.clients` section is only for
+model-callable tools. Scene, canvas, chat, event, and block/render resolvers
+use the bundle-level namespace configuration.
+
+For the task-tracker provider, `object.action(open)` returns
+`target_surface = "task_tracker.issue_editor"`. The versatile scene maps that
+surface to the `task_tracker_tasks` iframe from `task-tracker@1-0`, switches it
+to expanded form, and posts an `open` command with the issue id/ref. The same
+widget can be opened as `task_tracker.issue_list` in compact form from the
+scene rail.

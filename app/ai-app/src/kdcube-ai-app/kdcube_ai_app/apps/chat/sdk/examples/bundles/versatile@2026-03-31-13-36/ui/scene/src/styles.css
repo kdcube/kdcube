@@ -138,6 +138,7 @@ button {
 
 .chat-pane-header button,
 .memory-pane header button,
+.tasks-pane header button,
 .usage-pane header button,
 .notice button {
   display: inline-flex;
@@ -387,6 +388,17 @@ button {
   box-shadow: 0 0 0 4px rgba(221, 234, 254, 0.62);
 }
 
+.scene-rail-button.tasks-shortcut {
+  box-shadow: 0 0 0 3px rgba(232, 246, 251, 0.56);
+}
+
+.scene-rail-button.tasks-shortcut:hover,
+.scene-rail-button.tasks-shortcut[aria-pressed="true"] {
+  border-color: #1a6f91;
+  color: #1a6f91;
+  box-shadow: 0 0 0 4px rgba(232, 246, 251, 0.74);
+}
+
 .scene-rail-button.usage-shortcut {
   box-shadow: 0 0 0 3px rgba(255, 248, 220, 0.62);
 }
@@ -553,6 +565,90 @@ button {
 }
 
 body.scene-moving-memory .memory-frame {
+  pointer-events: none;
+}
+
+.tasks-pane {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 58;
+  display: flex;
+  flex-direction: column;
+  min-width: 300px;
+  min-height: 260px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  overflow: hidden;
+  box-shadow: 0 20px 42px rgba(13, 30, 44, 0.16);
+}
+
+.tasks-pane.expanded {
+  z-index: 70;
+  min-width: 420px;
+  min-height: 420px;
+}
+
+.tasks-pane header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 32px;
+  border-bottom: 1px solid var(--line-soft);
+  background: rgba(247, 250, 251, 0.96);
+  padding: 5px 8px;
+  color: var(--ink);
+  font-size: 13px;
+  cursor: move;
+  user-select: none;
+}
+
+.tasks-pane header div {
+  display: inline-flex;
+  gap: 5px;
+}
+
+.tasks-pane-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tasks-pane-title strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tasks-pane-title small {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.tasks-pane header button {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+}
+
+.tasks-frame {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  background: var(--surface);
+}
+
+body.scene-moving-tasks .tasks-frame {
   pointer-events: none;
 }
 
@@ -1717,5 +1813,11 @@ body.scene-moving-chat .chat-frame {
   .memory-pane.expanded {
     width: min(760px, calc(100vw - 18px));
     height: min(720px, calc(100vh - 76px));
+  }
+
+  .tasks-pane,
+  .tasks-pane.expanded {
+    width: min(760px, calc(100vw - 18px));
+    height: min(680px, calc(100vh - 76px));
   }
 }

@@ -1,8 +1,8 @@
 ---
 id: ks:docs/sdk/bundle/bundle-subsystem-integration-README.md
 title: "Bundle Subsystem Integration"
-summary: "Concrete checklist for mounting reusable SDK subsystems inside a bundle: entrypoint mixins, APIs, widgets, tools, event policies, object resolvers, config, visibility, storage, and runtime verification."
-tags: ["sdk", "bundle", "subsystem", "integration", "memory", "canvas", "widgets", "tools", "events", "resolvers"]
+summary: "Concrete checklist for mounting reusable SDK subsystems inside a bundle: entrypoint mixins, APIs, widgets, tools, event policies, object resolvers, named service providers, config, visibility, storage, and runtime verification."
+tags: ["sdk", "bundle", "subsystem", "integration", "memory", "canvas", "widgets", "tools", "events", "resolvers", "named-service-provider"]
 keywords:
   [
     "bundle subsystem integration",
@@ -15,6 +15,7 @@ keywords:
   ]
 updated_at: 2026-06-08
 see_also:
+  - ks:docs/sdk/namespace-services/providers-README.md
   - ks:docs/sdk/bundle/bundle-entrypoint-classes-README.md
   - ks:docs/sdk/bundle/bundle-widget-integration-README.md
   - ks:docs/sdk/bundle/ui-components-lifecycle-README.md
@@ -41,6 +42,7 @@ entrypoint class/mixin
   -> optional static UI source
   -> optional agent tools and skills
   -> optional event-source policies and resolvers
+  -> optional named service provider/client surfaces
   -> storage/schema/user-scope hooks
   -> runtime verification
 ```
@@ -70,6 +72,7 @@ For each subsystem, answer these questions:
 | Event policies | Which event source modules render timeline/ANNOUNCE/compaction blocks? | Context is lost or appears as generic JSON. |
 | Namespace rehosters | Which namespace rehosters are registered for `react.pull` on owner refs such as `mem:` or `cnv:`? | Agent sees refs but cannot import exact content into its workspace. |
 | Resolvers | Which namespace/object resolvers are registered, and who owns each namespace? | Pins/refs are visible but cannot preview/open/download/rehost. |
+| Named service provider | Does the subsystem expose `provider.about`, capabilities, object operations, actions, relations, and transport adapters through one provider/client contract? | Widgets, agents, canvas, and scene hosts hardcode bundle-specific routes and duplicate ownership logic. |
 | Storage | Which store/schema/user-scope hooks does the subsystem need? | State is lost, cross-user data leaks, or first request fails schema checks. |
 | Runtime identity | Which shared helper supplies tenant/project/user/fingerprint for REST, Data Bus, tools, and jobs? | One transport works while another writes to `default/default`, fails store creation, or loses user scope. |
 | Transport | Does UI use REST operations, Data Bus, comm stream, or all three? | UI mutations hang, duplicate, or never reach the owning bundle. |
@@ -98,6 +101,8 @@ The composition bundle should:
   values
 - include SDK tool/event/skill modules by descriptor
 - register object resolvers from the subsystem that owns each namespace
+- register named service providers when the subsystem is meant to be called by
+  canvas, chat, widgets, agents, MCP clients, scheduled jobs, or other bundles
 - assemble UI widgets and main views from subsystem UI components
 - keep product policy local, such as "which widgets are shown in this bundle"
   and "which agent ids are allowed"

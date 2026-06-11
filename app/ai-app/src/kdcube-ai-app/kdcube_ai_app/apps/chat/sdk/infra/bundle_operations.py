@@ -1,0 +1,461 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Elena Viter
+
+from __future__ import annotations
+
+import asyncio
+import copy
+import inspect
+import logging
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass, field
+from typing import Any, Awaitable, Callable, Mapping
+from uuid import uuid4
+
+from kdcube_ai_app.apps.chat.sdk.protocol import (
+    ExternalEventActor,
+    ExternalEventPayload,
+    ExternalEventRequest,
+    ExternalEventRouting,
+    ExternalEventUser,
+)
+
+
+LOGGER = logging.getLogger("kdcube.sdk.bundle_operations")
+
+
+BundleOperationCaller = Callable[["BundleOperationCall"], Awaitable[Mapping[str, Any]]]
+
+BUNDLE_OPERATION_CALLER_CV: ContextVar[BundleOperationCaller | None] = ContextVar(
+    "BUNDLE_OPERATION_CALLER_CV",
+    default=None,
+)
+
+
+@dataclass(frozen=True)
+class BundleOperationCall:
+    """Request-bound call to a bundle operation.
+
+    This is an SDK-facing local operation bridge. It is bound by platform
+    ingress while invoking a bundle operation, so composed bundles can call a
+    peer bundle under the same user session without making an HTTP callback.
+    """
+
+    bundle_id: str
+    operation: str
+    data: dict[str, Any] = field(default_factory=dict)
+    tenant: str | None = None
+    project: str | None = None
+    route: str = "operations"
+
+
+_DISABLED_PROP_VALUES: frozenset[str] = frozenset({"false", "disable", "disabled", "off", "0"})
+
+
+def _is_truthy_enabled(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value != 0
+    return str(value).strip().lower() not in _DISABLED_PROP_VALUES
+
+
+def _enabled_section(props: Mapping[str, Any] | None, kind: str) -> Mapping[str, Any] | None:
+    section = (props or {}).get("enabled")
+    if not isinstance(section, Mapping):
+        return None
+    sub = section.get(kind)
+    return sub if isinstance(sub, Mapping) else None
+
+
+def _bundle_enabled(props: Mapping[str, Any] | None) -> bool:
+    section = (props or {}).get("enabled")
+    if not isinstance(section, Mapping):
+        return True
+    return _is_truthy_enabled(section.get("bundle"))
+
+
+def _api_enabled(props: Mapping[str, Any] | None, spec: Any) -> bool:
+    sub = _enabled_section(props, "api")
+    if sub is None:
+        return True
+    route_key = f"{spec.route}.{spec.alias}.{spec.http_method}"
+    if route_key in sub:
+        return _is_truthy_enabled(sub.get(route_key))
+    return _is_truthy_enabled(sub.get(f"{spec.alias}.{spec.http_method}"))
+
+
+_USER_TYPE_VISIBILITY_ORDER: dict[str, int] = {
+    "anonymous": 0,
+    "registered": 1,
+    "paid": 2,
+    "privileged": 3,
+}
+
+
+def _session_user_type(session: Any) -> str:
+    value = getattr(session, "user_type", None)
+    text = str(getattr(value, "value", value) or "").strip().lower()
+    return text
+
+
+def _user_types_visible(required_user_types: tuple[str, ...] | list[str] | None, session: Any) -> bool:
+    user_types = tuple(
+        str(user_type or "").strip().lower()
+        for user_type in (required_user_types or ())
+        if str(user_type or "").strip()
+    )
+    if not user_types:
+        return True
+    current = _session_user_type(session)
+    if not current:
+        return False
+    current_rank = _USER_TYPE_VISIBILITY_ORDER.get(current)
+    if current_rank is None:
+        return current in set(user_types)
+    thresholds = [
+        _USER_TYPE_VISIBILITY_ORDER[user_type]
+        for user_type in user_types
+        if user_type in _USER_TYPE_VISIBILITY_ORDER
+    ]
+    if not thresholds:
+        return current in set(user_types)
+    return current_rank >= min(thresholds)
+
+
+def _raw_roles_visible(required_roles: tuple[str, ...] | list[str] | None, session: Any) -> bool:
+    roles = tuple(str(role or "").strip() for role in (required_roles or ()) if str(role or "").strip())
+    if not roles:
+        return True
+    session_roles = {
+        role
+        for role in (getattr(session, "roles", None) or [])
+        if isinstance(role, str) and role.startswith("kdcube:role:")
+    }
+    return bool(session_roles & set(roles))
+
+
+def _endpoint_visible(required_user_types: tuple[str, ...] | list[str] | None, required_roles: tuple[str, ...] | list[str] | None, session: Any) -> bool:
+    return _user_types_visible(required_user_types, session) and _raw_roles_visible(required_roles, session)
+
+
+def _deep_merge_bundle_props(base: Mapping[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:
+    out = copy.deepcopy(dict(base or {}))
+    for key, value in dict(override or {}).items():
+        if isinstance(value, Mapping) and isinstance(out.get(key), Mapping):
+            out[key] = _deep_merge_bundle_props(out[key], value)
+        else:
+            out[key] = copy.deepcopy(value)
+    return out
+
+
+def _apply_bundle_props_to_workflow(*, workflow: Any, props: Mapping[str, Any]) -> dict[str, Any]:
+    defaults = copy.deepcopy(getattr(workflow, "bundle_props_defaults", None) or {})
+    if not defaults:
+        defaults = copy.deepcopy(getattr(workflow, "bundle_props", None) or {})
+    merger = getattr(workflow, "_deep_merge_props", None)
+    merged = merger(defaults, dict(props or {})) if callable(merger) else _deep_merge_bundle_props(defaults, props or {})
+    try:
+        setattr(workflow, "bundle_props", merged)
+    except Exception:
+        return merged
+    for hook_name in ("_apply_bundle_props_overrides", "_sync_runtime_ctx_bundle_props"):
+        hook = getattr(workflow, hook_name, None)
+        if callable(hook):
+            try:
+                hook()
+            except Exception:
+                LOGGER.debug("Bundle prop hook failed during local operation apply: %s", hook_name, exc_info=True)
+    return getattr(workflow, "bundle_props", None) or merged
+
+
+async def _invoke_bundle_callable(fn: Any, **kwargs: Any) -> Any:
+    if inspect.iscoroutinefunction(fn):
+        return await fn(**kwargs)
+    result = await asyncio.to_thread(fn, **kwargs)
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
+async def _stored_session_by_id(
+    redis: Any,
+    *,
+    tenant: str,
+    project: str,
+    session_id: str,
+) -> Any | None:
+    if redis is None or not session_id:
+        return None
+    try:
+        from kdcube_ai_app.auth.sessions import SessionManager
+
+        manager = SessionManager(redis_url="", tenant=tenant, project=project)
+        manager.redis = redis
+        return await manager.get_session_by_id(session_id)
+    except Exception:
+        LOGGER.debug(
+            "Named-service peer operation could not load session from store: tenant=%s project=%s session_id=%s",
+            tenant,
+            project,
+            session_id,
+            exc_info=True,
+        )
+        return None
+
+
+def _fallback_session_from_comm_context(comm_context: ExternalEventPayload) -> Any:
+    from kdcube_ai_app.auth.sessions import RequestContext, UserSession
+
+    user = getattr(comm_context, "user", None)
+    routing = getattr(comm_context, "routing", None)
+    return UserSession(
+        session_id=str(getattr(routing, "session_id", None) or ""),
+        user_type=str(getattr(user, "user_type", None) or "anonymous"),
+        fingerprint=getattr(user, "fingerprint", None),
+        user_id=getattr(user, "user_id", None),
+        username=getattr(user, "username", None),
+        roles=list(getattr(user, "roles", None) or []),
+        permissions=list(getattr(user, "permissions", None) or []),
+        email=getattr(user, "email", None),
+        timezone=getattr(user, "timezone", None),
+        request_context=RequestContext(
+            client_ip="",
+            user_agent="",
+            user_timezone=getattr(user, "timezone", None),
+            user_utc_offset_min=getattr(user, "utc_offset_min", None),
+        ),
+    )
+
+
+async def _session_for_comm_context(redis: Any, comm_context: ExternalEventPayload, *, tenant: str, project: str) -> Any:
+    routing = getattr(comm_context, "routing", None)
+    session_id = str(getattr(routing, "session_id", None) or "").strip()
+    stored = await _stored_session_by_id(redis, tenant=tenant, project=project, session_id=session_id)
+    return stored or _fallback_session_from_comm_context(comm_context)
+
+
+def _target_comm_context(
+    source: ExternalEventPayload,
+    *,
+    bundle_id: str,
+    tenant: str,
+    project: str,
+    session: Any,
+) -> ExternalEventPayload:
+    routing = getattr(source, "routing", None)
+    return ExternalEventPayload(
+        request=ExternalEventRequest(request_id=str(uuid4())),
+        routing=ExternalEventRouting(
+            session_id=str(getattr(routing, "session_id", None) or getattr(session, "session_id", None) or ""),
+            bundle_id=bundle_id,
+            conversation_id=getattr(routing, "conversation_id", None),
+            turn_id=getattr(routing, "turn_id", None),
+            socket_id=getattr(routing, "socket_id", None),
+        ),
+        actor=ExternalEventActor(tenant_id=tenant, project_id=project),
+        user=ExternalEventUser(
+            user_type=_session_user_type(session) or "anonymous",
+            user_id=getattr(session, "user_id", None),
+            username=getattr(session, "username", None),
+            email=getattr(session, "email", None),
+            fingerprint=getattr(session, "fingerprint", None),
+            roles=list(getattr(session, "roles", None) or []),
+            permissions=list(getattr(session, "permissions", None) or []),
+            timezone=getattr(session, "timezone", None),
+            utc_offset_min=getattr(getattr(session, "request_context", None), "user_utc_offset_min", None),
+        ),
+    )
+
+
+async def invoke_local_bundle_operation(
+    call: BundleOperationCall,
+    *,
+    comm_context: ExternalEventPayload,
+    redis: Any,
+    pg_pool: Any,
+) -> Mapping[str, Any]:
+    """Invoke a peer bundle operation from a non-HTTP runtime.
+
+    This is the processor/job equivalent of the REST integration bridge: it
+    preserves the current tenant/project/user/session context, loads the target
+    bundle through the runtime registry, applies descriptor-backed props, checks
+    operation visibility, and awaits the target API method directly.
+    """
+
+    from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_request_context
+    from kdcube_ai_app.infra.plugin.bundle_loader import (
+        BundleSpec,
+        apply_api_overrides,
+        get_workflow_instance_async,
+        resolve_bundle_api_endpoint,
+    )
+    from kdcube_ai_app.infra.plugin.bundle_store import get_bundle_props, resolve_bundle_spec_from_store
+    from kdcube_ai_app.infra.service_hub.inventory import ConfigRequest, create_workflow_config, resolve_config_request_secrets
+
+    actor = getattr(comm_context, "actor", None)
+    tenant = str(call.tenant or getattr(actor, "tenant_id", None) or "").strip()
+    project = str(call.project or getattr(actor, "project_id", None) or "").strip()
+    if not tenant or not project:
+        raise RuntimeError("Tenant/project scope is required for local bundle operation")
+    bundle_id = str(call.bundle_id or "").strip()
+    operation = str(call.operation or "").strip()
+    route = str(call.route or "operations").strip() or "operations"
+    if not bundle_id or not operation:
+        raise RuntimeError("bundle_id and operation are required for local bundle operation")
+
+    session = await _session_for_comm_context(redis, comm_context, tenant=tenant, project=project)
+    LOGGER.info(
+        "Local bundle operation call start: tenant=%s project=%s bundle=%s operation=%s route=%s user_type=%s session_id=%s",
+        tenant,
+        project,
+        bundle_id,
+        operation,
+        route,
+        _session_user_type(session),
+        getattr(session, "session_id", None),
+    )
+
+    spec_resolved = await resolve_bundle_spec_from_store(redis, tenant=tenant, project=project, bundle_id=bundle_id)
+    if spec_resolved is None:
+        raise RuntimeError(f"Bundle {bundle_id} not found")
+
+    cfg_req = await resolve_config_request_secrets(
+        ConfigRequest(agentic_bundle_id=spec_resolved.id, tenant=tenant, project=project),
+        bundle_id=spec_resolved.id,
+    )
+    wf_config = create_workflow_config(cfg_req)
+    wf_config.ai_bundle_spec = spec_resolved
+    spec = BundleSpec(
+        path=spec_resolved.path,
+        module=spec_resolved.module,
+        singleton=bool(getattr(spec_resolved, "singleton", False)),
+    )
+    target_context = _target_comm_context(
+        comm_context,
+        bundle_id=spec_resolved.id,
+        tenant=tenant,
+        project=project,
+        session=session,
+    )
+    workflow, _mod = await get_workflow_instance_async(
+        spec,
+        wf_config,
+        comm_context=target_context,
+        redis=redis,
+        pg_pool=pg_pool,
+    )
+
+    props = await get_bundle_props(redis, tenant=tenant, project=project, bundle_id=spec_resolved.id)
+    endpoint_spec, allowed_methods = resolve_bundle_api_endpoint(
+        workflow,
+        alias=operation,
+        http_method="POST",
+        route=route,
+        bundle_id=spec_resolved.id,
+    )
+    if endpoint_spec is None:
+        if allowed_methods:
+            raise RuntimeError(
+                f"Bundle operation {operation} does not support POST. Allowed: {', '.join(allowed_methods)}"
+            )
+        raise RuntimeError(f"Bundle does not support operation {operation}")
+    endpoint_spec = apply_api_overrides(endpoint_spec, props or {})
+    if not _endpoint_visible(endpoint_spec.user_types, endpoint_spec.roles, session):
+        raise RuntimeError(f"Bundle operation {operation} is not visible to this user")
+    _apply_bundle_props_to_workflow(workflow=workflow, props=props or {})
+    if not _bundle_enabled(props):
+        raise RuntimeError(f"Bundle {spec_resolved.id} is disabled")
+    if not _api_enabled(props, endpoint_spec):
+        raise RuntimeError(f"Bundle operation {operation} is not available")
+
+    fn = getattr(workflow, endpoint_spec.method_name)
+    extra = dict(call.data or {})
+    extra.setdefault("user_id", getattr(session, "user_id", None) or getattr(session, "fingerprint", None))
+    extra.setdefault("fingerprint", getattr(session, "fingerprint", None))
+    nested_caller = make_local_bundle_operation_caller(
+        redis=redis,
+        pg_pool=pg_pool,
+        comm_context=target_context,
+    )
+    with bind_current_request_context(target_context, comm=None), bind_bundle_operation_caller(nested_caller):
+        result = await _invoke_bundle_callable(fn, **extra)
+
+    LOGGER.info(
+        "Local bundle operation call complete: tenant=%s project=%s bundle=%s operation=%s route=%s result_type=%s",
+        tenant,
+        project,
+        spec_resolved.id,
+        operation,
+        route,
+        type(result).__name__,
+    )
+    return result if isinstance(result, Mapping) else {"result": result}
+
+
+def make_local_bundle_operation_caller(
+    *,
+    redis: Any,
+    pg_pool: Any,
+    comm_context: ExternalEventPayload,
+) -> BundleOperationCaller:
+    async def _caller(call: BundleOperationCall) -> Mapping[str, Any]:
+        return await invoke_local_bundle_operation(
+            call,
+            comm_context=comm_context,
+            redis=redis,
+            pg_pool=pg_pool,
+        )
+
+    return _caller
+
+
+@contextmanager
+def bind_bundle_operation_caller(caller: BundleOperationCaller | None):
+    token = BUNDLE_OPERATION_CALLER_CV.set(caller)
+    try:
+        yield caller
+    finally:
+        BUNDLE_OPERATION_CALLER_CV.reset(token)
+
+
+def get_current_bundle_operation_caller() -> BundleOperationCaller | None:
+    return BUNDLE_OPERATION_CALLER_CV.get()
+
+
+async def call_bundle_operation(
+    *,
+    bundle_id: str,
+    operation: str,
+    data: Mapping[str, Any] | None = None,
+    tenant: str | None = None,
+    project: str | None = None,
+    route: str = "operations",
+) -> Mapping[str, Any]:
+    caller = get_current_bundle_operation_caller()
+    if caller is None:
+        raise RuntimeError("No request-bound bundle operation caller is available")
+    return await caller(
+        BundleOperationCall(
+            bundle_id=str(bundle_id or "").strip(),
+            operation=str(operation or "").strip(),
+            data=dict(data or {}),
+            tenant=str(tenant or "").strip() or None,
+            project=str(project or "").strip() or None,
+            route=str(route or "operations").strip() or "operations",
+        )
+    )
+
+
+__all__ = [
+    "BundleOperationCall",
+    "BundleOperationCaller",
+    "bind_bundle_operation_caller",
+    "call_bundle_operation",
+    "get_current_bundle_operation_caller",
+    "invoke_local_bundle_operation",
+    "make_local_bundle_operation_caller",
+]

@@ -28,6 +28,10 @@ from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import (
     bind_current_request_context,
     bind_current_task_activity_touch,
 )
+from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import (
+    bind_bundle_operation_caller,
+    make_local_bundle_operation_caller,
+)
 from kdcube_ai_app.infra.availability.health_and_heartbeat import MultiprocessDistributedMiddleware, logger
 from kdcube_ai_app.infra.aws.ecs_container_instance_drain import (
     build_ecs_container_instance_drain_detector,
@@ -2607,7 +2611,14 @@ class EnhancedChatRequestProcessor:
                             "conversation_id": payload.routing.conversation_id,
                             "turn_id": payload.routing.turn_id,
                         }):
-                            with bind_current_request_context(payload, comm=tracked_comm):
+                            peer_bundle_caller = make_local_bundle_operation_caller(
+                                redis=self.redis,
+                                pg_pool=getattr(self.middleware, "pg_pool", None),
+                                comm_context=payload,
+                            )
+                            with bind_current_request_context(payload, comm=tracked_comm), bind_bundle_operation_caller(
+                                peer_bundle_caller
+                            ):
                                 with bind_current_task_activity_touch(
                                         lambda kind, _task=processor_task: self._touch_task_activity(
                                             kind,

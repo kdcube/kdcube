@@ -27,6 +27,8 @@ bundles:
           artifact_resolver_name: canvas.bundle_artifact_storage
           data_bus_subject: canvas.patch
           revision_retention: 80
+        named_services:
+          namespaces: {}
         execution:
           runtime:
             mode: docker

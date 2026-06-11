@@ -16,6 +16,7 @@ keywords:
     "resolver response",
   ]
 see_also:
+  - ks:docs/sdk/namespace-services/providers-README.md
   - ks:docs/sdk/solutions/scene/scene-composition-README.md
   - ks:docs/sdk/solutions/canvas/pin-integration-README.md
   - ks:docs/sdk/solutions/event-hub/resolver-and-policy-registration-README.md
@@ -39,7 +40,7 @@ surface is mounted and how to deliver a command to that widget.
 | Concern | Owner |
 | --- | --- |
 | Object identity | The originating namespace, for example `mem:`, `task:`, `fi:`, `cnv:`. |
-| Object semantics | The namespace owner's resolver. |
+| Object semantics | The namespace owner's named service provider or resolver. |
 | Canvas board layout | Canvas. |
 | Chat event packaging | Chat widget. |
 | Widget mounting and z-order | Scene host. |
@@ -62,17 +63,20 @@ stays with memory.
 
 ## Open Flow
 
-When the user presses **Open** on a canvas card, the flow is:
+When the user presses **Open** on a canvas card, the standard flow is a named
+service provider `object.action`. Existing composition bundles may expose a
+compatibility operation such as `canvas_object_action`, but that operation
+should delegate to the namespace owner.
 
 ```text
 canvas card
   object_ref = mem:mem_123
         |
         v
-canvas_object_action({ action: "open", object_ref: "mem:mem_123" })
+object.action({ action: "open", object_ref: "mem:mem_123" })
         |
         v
-memory resolver
+memory named service provider / resolver
         |
         v
 {
@@ -242,11 +246,11 @@ widgets, register their surfaces, and dispatch resolver responses by
 
 When the board itself is a standalone iframe (the `pinboard` widget) rather
 than an in-React component, the resolver `open` reaches the host one hop
-further out: the widget runs the `canvas_object_action` itself, then forwards
-the resolver's `target_surface` to its parent as a `kdcube-pinboard-open`
-postMessage. The host feeds that `target_surface` into this same registry — the
-routing contract is unchanged, only the board-to-host transport is a
-postMessage. See the host-broker contract in
+further out: the widget runs the provider-backed object action itself, then
+forwards the resolver's `target_surface` to its parent as a
+`kdcube-pinboard-open` postMessage. The host feeds that `target_surface` into
+this same registry — the routing contract is unchanged, only the board-to-host
+transport is a postMessage. See the host-broker contract in
 [Scene Composition](scene-composition-README.md#the-canvas-board-as-a-standalone-widget).
 
 ## Current Implementation
@@ -255,11 +259,18 @@ The versatile scene implements the first local version of this registry:
 
 ```text
 sdk.memory.viewer -> memory iframe
+task_tracker.issue_list -> task-tracker task list/search iframe, compact form
+task_tracker.issue_editor -> task-tracker task list/search iframe, expanded form
 ```
 
 This replaces the older canvas action branch that checked for memory directly.
 Additional surfaces should be added by registering another `target_surface`
 entry rather than changing canvas or chat behavior.
+
+Task-tracker issue opens currently route to the reusable list/search widget.
+The widget selects the requested issue and presents the expanded detail form;
+the owning task editor/wizard can be added as another registered surface when
+that iframe command contract is available.
 
 The memory widget also implements focused object mode. A command like:
 

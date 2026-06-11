@@ -165,6 +165,24 @@ That dispatch — surface registry, `target_surface` mapping, and per-widget
 command shape — is its own contract:
 [Scene Surface Registry](scene-surface-registry-README.md).
 
+Namespace resolvers can be configured instead of hardcoded in the composition
+bundle. A task card can resolve through the task-tracker bundle like this:
+
+```yaml
+named_services:
+  namespaces:
+    task:
+      provider:
+        bundle_id: task-tracker@1-0
+        provider: task.issue
+        operation: named_service
+```
+
+The bundle registers those config entries with
+`register_configured_named_service_canvas_resolvers(...)`. The same resolver is
+used by the scene canvas and by the chat widget's object-action path, because
+both call the bundle's `canvas_object_action` operation.
+
 ## The Canvas Board As A Standalone Widget
 
 The canvas board ships **two ways** from one component

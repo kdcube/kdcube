@@ -15,6 +15,7 @@ see_also:
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
   - ks:docs/sdk/bundle/bundle-subsystem-integration-README.md
+  - ks:docs/sdk/namespace-services/providers-README.md
   - ks:docs/sdk/bundle/bundle-developer-guide-README.md
   - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
   - ks:docs/sdk/bundle/bundle-entrypoint-classes-README.md
@@ -578,6 +579,7 @@ Before writing code, classify the product surface and state model.
 | --- | --- | --- | --- | --- |
 | Copilot/chat experience | `@bundle_entrypoint` / `@on_reactive_event` | request-bound chat path | conversation stores, retrieval systems, bundle props | start here for assistant-style products |
 | Admin console | `@ui_widget` + `@api(route="operations")` | widget -> operations | descriptor-backed config, bundle local storage, DB/Redis | keep admin separate from public/user surface |
+| Named semantic provider | named service provider with local/API/MCP/Data Bus adapters | client/provider dispatch | owner storage plus transport-specific auth context | use when other bundles, widgets, agents, or scene hosts need stable access to owned objects, relations, actions, or namespace-level commands |
 | Durable widget/domain mutation | Socket.IO `data_bus.publish` + `@data_bus_handler(...)` | Data Bus Redis Stream -> proc worker -> handler | bundle-owned DB/Redis/storage with idempotency | use for non-chat state changes that need retry or per-object serialization |
 | External webhook/integration | `@api(route="public")` | public HTTP path | bundle props + secrets, external systems | auth boundary must be explicit |
 | Tool-serving integration | `@mcp(...)` | MCP dispatch path | bundle props + secrets, external systems | bundle owns MCP auth |
@@ -601,6 +603,7 @@ Before creating a new `services/`, `subsystems/`, `tools/`, or provider adapter
 module, check:
 
 - [how-to-assemble-bundle-with-sdk-building-blocks-README.md](how-to-assemble-bundle-with-sdk-building-blocks-README.md)
+- [../../namespace-services/providers-README.md](../../namespace-services/providers-README.md)
 
 Current reusable blocks include:
 

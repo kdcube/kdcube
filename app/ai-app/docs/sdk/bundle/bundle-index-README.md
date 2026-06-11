@@ -23,6 +23,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
   - ks:docs/sdk/bundle/bundle-transports-README.md
   - ks:docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
+  - ks:docs/sdk/namespace-services/providers-README.md
   - ks:docs/service/comm/data-bus-README.md
 ---
 # Bundle Docs Index
@@ -98,6 +99,7 @@ Older `docs/sdk/example-bundle` sample docs are no longer part of the bundle pat
 | Runtime surfaces | [bundle-runtime-README.md](bundle-runtime-README.md) |
 | Record and sink selected comm events | [bundle-event-recording-and-sinks-README.md](bundle-event-recording-and-sinks-README.md) |
 | Conversation agent lanes and Data Bus partitions | [../../service/comm/bus-routing-and-partitioning-README.md](../../service/comm/bus-routing-and-partitioning-README.md) |
+| Named provider/client surfaces for namespaced services, object actions, relations, API/MCP/Data Bus adapters | [../namespace-services/providers-README.md](../namespace-services/providers-README.md) |
 | Durable bundle-scoped inbound Data Bus messages | [../../service/comm/data-bus-README.md](../../service/comm/data-bus-README.md), [bundle-client-communication-README.md#data-bus-contract](bundle-client-communication-README.md#data-bus-contract) |
 | Bundle-authored events, event sources, ReAct policies, snapshots, and custom namespace rehosters | [bundle-events-README.md](bundle-events-README.md) |
 | React, tools/skills, MCP, Claude Code, and file-producing tool integration | [bundle-agent-integration-README.md](bundle-agent-integration-README.md) |

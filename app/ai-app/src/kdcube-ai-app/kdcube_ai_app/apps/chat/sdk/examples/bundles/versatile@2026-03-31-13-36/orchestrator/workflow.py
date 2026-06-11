@@ -196,10 +196,16 @@ class VersatileWorkflow(BaseWorkflow):
                 return state
 
             async def _react_node(state: Dict[str, Any]) -> Dict[str, Any]:
+                client_id = getattr(getattr(self, "runtime_ctx", None), "agent_id", None)
+                mod_tools_spec = tools_descriptor.tools_for_client(
+                    client_id,
+                    bundle_props=self.bundle_props,
+                ) if hasattr(tools_descriptor, "tools_for_client") else tools_descriptor.TOOLS_SPECS
+                mcp_tools_spec = getattr(tools_descriptor, "MCP_TOOL_SPECS", None) or []
                 react = self.build_react(
                     tools_runtime=getattr(tools_descriptor, "TOOL_RUNTIME", None),
-                    mod_tools_spec=tools_descriptor.TOOLS_SPECS,
-                    mcp_tools_spec=getattr(tools_descriptor, "MCP_TOOL_SPECS", None) or [],
+                    mod_tools_spec=mod_tools_spec,
+                    mcp_tools_spec=mcp_tools_spec,
                     event_source_specs=getattr(events_descriptor, "EVENT_SOURCE_SPECS", None) or [],
                     custom_skills_root=skills_descriptor.CUSTOM_SKILLS_ROOT,
                     skills_visibility_agents_config=skills_descriptor.AGENTS_CONFIG or {},
@@ -208,10 +214,10 @@ class VersatileWorkflow(BaseWorkflow):
                 )
                 allowed_plugins = [
                     spec.get("alias")
-                    for spec in (tools_descriptor.TOOLS_SPECS or [])
+                    for spec in (mod_tools_spec or [])
                     if spec.get("alias")
                 ]
-                for spec in (getattr(tools_descriptor, "MCP_TOOL_SPECS", None) or []):
+                for spec in (mcp_tools_spec or []):
                     alias = spec.get("alias") or f"mcp_{spec.get('server_id')}"
                     if alias:
                         allowed_plugins.append(alias)

@@ -19,6 +19,7 @@ keywords:
     "data bus resolver role",
   ]
 see_also:
+  - ks:docs/sdk/namespace-services/providers-README.md
   - ks:docs/sdk/solutions/event-hub/resolver-and-policy-registration-README.md
   - ks:docs/sdk/solutions/canvas/pin-integration-README.md
   - ks:docs/sdk/events/namespaces-README.md
@@ -28,8 +29,9 @@ see_also:
 ---
 # Resolver Directory And Operation Routing Design
 
-This is a design document for the next resolver layer. It is not the current
-runtime contract.
+This is a design document for resolver directory mechanics under the broader
+[Namespace Services: Providers](../../../namespace-services/providers-README.md)
+concept. It is not the current runtime contract.
 
 The current implemented mode is local Python import plus explicit resolver
 registration inside a composition bundle. That local path stays valid and

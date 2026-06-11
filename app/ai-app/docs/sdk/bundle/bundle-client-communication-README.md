@@ -11,6 +11,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
   - ks:docs/sdk/bundle/bundle-frontend-awareness-README.md
   - ks:docs/sdk/bundle/bundle-events-README.md
+  - ks:docs/sdk/namespace-services/providers-README.md
   - ks:docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/service/auth/auth-README.md
@@ -31,6 +32,10 @@ This document is the browser/UI contract for talking to the platform over:
 It focuses on what a bundle-facing client can send, what the server accepts, and what the client should expect back.
 
 This page is intentionally browser/UI-oriented.
+
+For provider/client contracts that can be exposed through API, MCP, Data Bus,
+or local adapters, use
+[Namespace Services: Providers](../namespace-services/providers-README.md).
 
 It does not define bundle-served MCP routes or the full bundle transport map.
 Use:

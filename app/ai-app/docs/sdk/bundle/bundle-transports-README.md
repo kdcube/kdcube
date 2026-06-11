@@ -13,6 +13,7 @@ see_also:
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
+  - ks:docs/sdk/namespace-services/providers-README.md
   - ks:docs/service/streams/background-jobs-README.md
   - ks:docs/service/comm/conversation-event-bus-and-data-bus-README.md
   - ks:docs/service/comm/data-bus-README.md
@@ -30,6 +31,14 @@ It answers:
 - what `operations` vs `public` means for REST and MCP
 
 This page is transport-focused.
+
+Named service providers define semantic provider/client contracts above these
+transports. A named service provider can expose the same operation through
+local, API, MCP, or Data Bus adapters while keeping one owner-side
+implementation. Local/headless calls use the same provider contract without
+round-tripping through ingress; API, MCP, and Data Bus adapters only hydrate
+the caller context and protocol envelope. See
+[Namespace Services: Providers](../namespace-services/providers-README.md).
 
 For agent-level wiring of React tools/skills, bundle-served MCP, and Claude Code
 MCP clients, read [Bundle Agent Integration](bundle-agent-integration-README.md).

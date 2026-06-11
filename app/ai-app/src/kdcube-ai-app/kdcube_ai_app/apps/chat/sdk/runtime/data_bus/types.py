@@ -316,6 +316,7 @@ class DataBusContext:
     project: str
     bundle_id: str
     actor: dict[str, Any]
+    auth_context: Any | None
     bundle: Any
     comm: Any | None
     reply: DataBusReply

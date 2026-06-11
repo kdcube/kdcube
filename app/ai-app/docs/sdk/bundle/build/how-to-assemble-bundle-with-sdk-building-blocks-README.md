@@ -34,6 +34,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-transports-README.md
   - ks:docs/sdk/bundle/build/design/bundle-loader-import-isolation-README.md
   - ks:docs/sdk/bundle/bundle-widget-integration-README.md
+  - ks:docs/sdk/namespace-services/providers-README.md
   - ks:docs/sdk/solutions/scene/scene-composition-README.md
   - ks:docs/sdk/solutions/scene/scene-surface-registry-README.md
   - ks:docs/sdk/solutions/chat/chat-widget-solution-README.md
@@ -136,6 +137,7 @@ ownership.
 | Bundle-served MCP endpoint | `@mcp(...)` | [Bundle Platform Integration](../bundle-platform-integration-README.md), [MCP Tools](../../tools/mcp-README.md) |
 | Claude Code subagent with scoped MCP/tools | `ClaudeCodeAgent`, `ClaudeCodeWorkspaceConfig` | [Bundle Agent Integration](../bundle-agent-integration-README.md) |
 | Browser widget or Mini App | `@ui_widget(...)`, source-folder widget build, operations/public APIs | [Bundle Widget Integration](../bundle-widget-integration-README.md) |
+| Named provider surface for namespaced objects, relations, actions, and agent/widget access | Named service provider with local/API/MCP/Data Bus adapters | [Namespace Services: Providers](../../namespace-services/providers-README.md), [Bundle Subsystem Integration](../bundle-subsystem-integration-README.md) |
 | Widget expand to fullscreen/overlay when embedded as an iframe | host-driven `kdcube-widget-view` / `kdcube-set-view` postMessage; host promotes the same iframe (no reload) | [Frame View Contract](../bundle-widget-integration-README.md#frame-view-contract-host-driven-expand) |
 | Live events from a non-chat widget/API operation to the browser | `/sse/stream` or Socket.IO plus `KDC-Stream-ID`; bundle emits `comm.service_event(...)` from request-bound context | [Bundle Client Communication](../bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream), [Bundle Transports](../bundle-transports-README.md#71-communicator-output) |
 | Tenant/project widget refresh events | SSE `/sse/stream?project_events=true`; bundle emits compact `comm.project_event(...)` snapshots | [Bundle Client Communication](../bundle-client-communication-README.md#tenantproject-sse-broadcast), [Bundle Platform Integration](../bundle-platform-integration-README.md#bundle-to-client-event-scopes) |

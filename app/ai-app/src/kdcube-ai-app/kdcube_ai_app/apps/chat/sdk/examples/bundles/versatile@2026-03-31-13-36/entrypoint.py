@@ -44,6 +44,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.chat.events.resolver import (
     conversation_ref_capabilities,
     resolve_conversation_ref_action,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
+    register_configured_named_service_canvas_resolvers,
+)
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus import DataBusResult, data_bus_handler
 from kdcube_ai_app.infra.plugin.bundle_loader import bundle_entrypoint, api, on_job, ui_widget
 from kdcube_ai_app.infra.service_hub.inventory import BundleState, Config
@@ -542,7 +545,17 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
                 handler=_resolve_conv,
             )
         )
+        self._register_named_service_canvas_resolvers(registry, tenant=tenant, project=project)
         return registry
+
+    def _register_named_service_canvas_resolvers(self, registry: Any, *, tenant: str, project: str) -> None:
+        register_configured_named_service_canvas_resolvers(
+            registry,
+            namespaces=self.bundle_prop("named_services.namespaces", {}) or {},
+            tenant=tenant,
+            project=project,
+            logger=_log,
+        )
 
     def _canvas_target(self) -> Dict[str, str]:
         return {
@@ -830,6 +843,57 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
         except Exception as exc:
             result = {"ok": False, "user_id": user_id, "story_id": story_id, "error": str(exc)}
         _log_canvas_failure("canvas_list", payload, result)
+        return result
+
+    @api(method="POST", alias="canvas_set_active", route="operations", **_api_visibility("canvas_set_active"))
+    async def canvas_set_active(self, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
+        payload = _payload(data, **kwargs)
+        user_id = self._resolve_user_id(payload)
+        story_id = _protocol_string(payload, "story_id")
+        try:
+            result = canvas_api.set_active(
+                payload=payload,
+                store=self._canvas_store(payload, user_id=user_id),
+                user_id=user_id,
+                story_id=story_id,
+            )
+        except Exception as exc:
+            result = {"ok": False, "user_id": user_id, "story_id": story_id, "error": str(exc)}
+        _log_canvas_failure("canvas_set_active", payload, result)
+        return result
+
+    @api(method="POST", alias="canvas_archive", route="operations", **_api_visibility("canvas_archive"))
+    async def canvas_archive(self, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
+        payload = _payload(data, **kwargs)
+        user_id = self._resolve_user_id(payload)
+        story_id = _protocol_string(payload, "story_id")
+        try:
+            result = canvas_api.archive(
+                payload=payload,
+                store=self._canvas_store(payload, user_id=user_id),
+                user_id=user_id,
+                story_id=story_id,
+            )
+        except Exception as exc:
+            result = {"ok": False, "user_id": user_id, "story_id": story_id, "error": str(exc)}
+        _log_canvas_failure("canvas_archive", payload, result)
+        return result
+
+    @api(method="POST", alias="canvas_delete", route="operations", **_api_visibility("canvas_delete"))
+    async def canvas_delete(self, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
+        payload = _payload(data, **kwargs)
+        user_id = self._resolve_user_id(payload)
+        story_id = _protocol_string(payload, "story_id")
+        try:
+            result = canvas_api.delete(
+                payload=payload,
+                store=self._canvas_store(payload, user_id=user_id),
+                user_id=user_id,
+                story_id=story_id,
+            )
+        except Exception as exc:
+            result = {"ok": False, "user_id": user_id, "story_id": story_id, "error": str(exc)}
+        _log_canvas_failure("canvas_delete", payload, result)
         return result
 
     @api(method="POST", alias="canvas_read", route="operations", **_api_visibility("canvas_read"))
@@ -1393,6 +1457,9 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
                 "artifact_resolver_name": CANVAS_ARTIFACT_RESOLVER_NAME,
                 "data_bus_subject": CANVAS_DATA_BUS_SUBJECT,
                 "revision_retention": 80,
+            },
+            "named_services": {
+                "namespaces": {},
             },
             "memory": {
                 "enabled": True,

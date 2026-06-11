@@ -19,6 +19,7 @@ import {
   cardFromChatAssistantText,
   cardFromSearchResult,
   cardFromSelectedText,
+  normalizeContext,
   uploadAndPinFiles,
   emptyCanvasDefinition,
   normalizeCanvasPatchEvent,
@@ -42,6 +43,7 @@ import { createCanvasHost, type CanvasHost, type RouteContext } from './api/canv
 const ATTACH_MESSAGE = 'kdcube-pinboard-attach'
 const OPEN_MESSAGE = 'kdcube-pinboard-open'
 const CLOSE_MESSAGE = 'kdcube-pinboard-close'
+const DROP_CONTEXT_MESSAGE = 'kdcube-pinboard-drop-context'
 
 function postToHost(message: Record<string, unknown>): void {
   if (window.parent && window.parent !== window) {
@@ -62,6 +64,28 @@ function storyIdFor(bundleId: string): string {
 
 // Local card builders for the two ingress paths the scene also handles
 // inline (these are not exported by the component package).
+const CANVAS_CONTEXT_CARD_KINDS = new Set([
+  'user.text',
+  'user.attachment',
+  'agent.text',
+  'file',
+  'memory',
+  'source',
+  'search.result',
+  'issue.ref',
+  'story.ref',
+  'note',
+  'object.ref',
+  'conversation',
+])
+
+function cardKindFromContext(context: CanvasContextItem, ref: string): CanvasCard['kind'] | undefined {
+  const kind = String(context.kind || '').trim()
+  if (CANVAS_CONTEXT_CARD_KINDS.has(kind)) return kind as CanvasCard['kind']
+  void ref
+  return undefined
+}
+
 function cardFromContext(context: CanvasContextItem, rect: CanvasCard['rect']) {
   const ref = String(context.logical_path ?? context.ref ?? context.id ?? '').trim()
   return cardFromSearchResult(
@@ -70,7 +94,7 @@ function cardFromContext(context: CanvasContextItem, rect: CanvasCard['rect']) {
       title: context.label ? context.label : ref,
       mime: context.mime,
       summary: context.summary,
-      kind: context.kind === 'memory' ? 'memory' : undefined,
+      kind: cardKindFromContext(context, ref),
     },
     { placement: 'placed', rect },
   )
@@ -87,6 +111,18 @@ function cardFromIngress(payload: CanvasIngressPayload, rect: CanvasCard['rect']
     return cardFromChatAssistantText(payload.text, { title: payload.title, placement: 'placed', rect })
   }
   throw new Error(`Unsupported canvas ingress kind: ${(payload as { kind?: string }).kind}`)
+}
+
+function rectFromDropMessage(value: unknown): CanvasCard['rect'] {
+  const raw = value && typeof value === 'object' ? value as Record<string, unknown> : {}
+  const x = Number(raw.x)
+  const y = Number(raw.y)
+  return {
+    x: Number.isFinite(x) ? Math.max(16, x) : 64,
+    y: Number.isFinite(y) ? Math.max(16, y) : 64,
+    w: 224,
+    h: 104,
+  }
 }
 
 export default function App() {
@@ -204,6 +240,21 @@ export default function App() {
       .then(applyPatchResponse)
       .catch(failNotice)
   }, [applyPatchResponse, canvasIngressClient, canvasTarget, failNotice])
+
+  useEffect(() => {
+    function onMessage(event: MessageEvent) {
+      const data = event.data as Record<string, unknown> | null
+      if (!data || typeof data !== 'object' || data.type !== DROP_CONTEXT_MESSAGE) return
+      const context = normalizeContext(data.context)
+      if (!context) {
+        setNotice('Dropped context is not valid.')
+        return
+      }
+      onDropContext(context, rectFromDropMessage(data))
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [onDropContext])
 
   // Attaching / focusing a pin in chat is not something the standalone board
   // can do — forward the intent to the host broker.

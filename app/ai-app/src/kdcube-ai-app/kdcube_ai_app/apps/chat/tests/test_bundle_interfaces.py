@@ -17,6 +17,7 @@ from starlette.routing import Route
 from kdcube_ai_app.apps.chat.proc.rest.integrations import integrations
 from kdcube_ai_app.auth.sessions import UserType
 from kdcube_ai_app.apps.chat.sdk.runtime.http_ops import BundleBinaryResponse
+from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import call_bundle_operation
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint import BaseEntrypoint
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_economic import BaseEntrypointWithEconomics
 from kdcube_ai_app.infra.plugin.bundle_loader import (
@@ -1203,6 +1204,49 @@ async def test_call_bundle_op_inner_supports_widget_compat_api(monkeypatch):
     )
 
     assert result["preferences_widget"] == ["<p>fp-1</p>"]
+
+
+@pytest.mark.asyncio
+async def test_call_bundle_op_inner_binds_request_scoped_peer_operation_caller(monkeypatch):
+    class _CallerWorkflow:
+        @api(method="POST", alias="proxy", route="operations")
+        async def proxy(self, **kwargs):
+            peer = await call_bundle_operation(
+                bundle_id="bundle.provider",
+                operation="echo",
+                data={"value": kwargs.get("value")},
+            )
+            return {"ok": True, "peer": peer}
+
+    class _ProviderWorkflow:
+        @api(method="POST", alias="echo", route="operations")
+        async def echo(self, **kwargs):
+            return {"ok": True, "value": kwargs.get("value"), "user_id": kwargs.get("user_id")}
+
+    async def _load_bundle_workflow(**kwargs):
+        bundle_id = kwargs.get("bundle_id")
+        if bundle_id == "bundle.provider":
+            return _ProviderWorkflow(), SimpleNamespace(id="bundle.provider"), "tenant-a", "project-a"
+        return _CallerWorkflow(), SimpleNamespace(id="bundle.caller"), "tenant-a", "project-a"
+
+    monkeypatch.setattr(integrations, "_load_bundle_workflow", _load_bundle_workflow)
+
+    result = await integrations._call_bundle_op_inner(
+        tenant="tenant-a",
+        project="project-a",
+        bundle_id="bundle.caller",
+        payload=integrations.BundleSuggestionsRequest(data={"value": "BUG-123"}),
+        request=_request(
+            method="POST",
+            path="/api/integrations/bundles/tenant-a/project-a/bundle.caller/operations/proxy",
+        ),
+        operation="proxy",
+        route="operations",
+        session=_session(),
+    )
+
+    assert result["proxy"]["ok"] is True
+    assert result["proxy"]["peer"]["echo"] == {"ok": True, "value": "BUG-123", "user_id": "user-1"}
 
 
 @pytest.mark.asyncio
