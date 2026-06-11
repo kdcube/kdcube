@@ -3467,7 +3467,9 @@ class MemoryEntrypointMixin:
             scope_id=f"mem_reconcile_{job_id}",
             flow="memory.reconciler",
             estimate=EconomicsEstimate(reservation_usd=self._memory_reconciliation_reservation_usd()),
-            policy=FlowPolicy(enforce_concurrency=False, emit_user_events=False),
+            # Reserving surface -> serialize the admit->reserve window per user with
+            # the distributed quota lock (no-op if redis is unavailable).
+            policy=FlowPolicy(enforce_concurrency=False, emit_user_events=False, enforce_quota_lock=True),
         )
 
     async def _memory_reconciliation_mark_economics_denied(self, job: Dict[str, Any], exc) -> None:

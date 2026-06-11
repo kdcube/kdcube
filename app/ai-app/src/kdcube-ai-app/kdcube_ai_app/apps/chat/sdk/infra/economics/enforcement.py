@@ -21,13 +21,15 @@ Design: docs/economics/economic-enforcement-non-chat-v2-README.md
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import math
+import secrets
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional, Tuple
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from kdcube_ai_app.infra import accounting as acct
 from kdcube_ai_app.apps.chat.sdk.infra.economics.policy import (
@@ -103,6 +105,14 @@ class FlowPolicy:
     # paid lane (re-admit paid policy + reserve wallet) instead of denying.
     # Off by default (non-chat denies); chat / run()-on-engine sets it True.
     allow_paid_lane_fallback: bool = False
+    # Serialize the admit->reserve planning window per user with a distributed
+    # Redis lock (mirrors run()'s quota_lock). Only meaningful for RESERVING
+    # surfaces (full guard) — closes the read-remaining-quota -> reserve TOCTOU
+    # between concurrent turns of the same user. Off by default; needs redis on
+    # the entrypoint. preflight-only flows have no reserve window and ignore it.
+    enforce_quota_lock: bool = False
+    quota_lock_ttl_sec: int = 60        # lock key expiry (safety net if holder dies)
+    quota_lock_wait_sec: float = 5.0    # max spin-wait before denying as "system busy"
 
 
 @dataclass
@@ -118,9 +128,11 @@ class EconomicsDecision:
     nested: bool = False                # degraded to preflight inside a parent ctx
     scope_id: Optional[str] = None
     admit: Optional[AdmitResult] = None
-    # reservation handles for settlement
-    app_reservation_id: Optional[UUID] = None       # subscription/project hold
+    # plan-lane reservation metadata (the actual hold lives in funding_flow's
+    # PlanFundingReservation, kept on the guard as _funding_res; these are the
+    # decision-level mirror used for tracing/assertions).
     app_reservation_source: Optional[str] = None     # which limiter holds it
+    app_reservation_active: bool = False             # primary money hold was taken
     wallet_reservation_id: Optional[str] = None       # lifetime-token hold
     wallet_reserved_tokens: int = 0
     extra: dict = field(default_factory=dict)
@@ -226,6 +238,7 @@ class EconomicsGuard:
         self.cp = getattr(entrypoint, "cp_manager", None)
         self.rl = getattr(entrypoint, "rl", None)
         self.budget_limiter = getattr(entrypoint, "budget_limiter", None)
+        self.redis = getattr(entrypoint, "redis", None)
         self.bundle_id = str(getattr(getattr(getattr(entrypoint, "config", None), "ai_bundle_spec", None), "id", "") or "")
 
         self.subj = subject_id_of(subject.tenant, subject.project, subject.user_id)
@@ -238,6 +251,10 @@ class EconomicsGuard:
         self._subscription_limiter = None  # SubscriptionBudgetLimiter when applicable
         self._funding_ctx_obj = None       # funding_flow.FundingContext (plan lane)
         self._funding_res = None           # funding_flow.PlanFundingReservation (plan lane)
+        # quota-lock state (distributed admit->reserve serialization)
+        self._quota_lock_key: Optional[str] = None
+        self._quota_lock_token: Optional[str] = None
+        self._quota_lock_acquired: bool = False
 
     # -- logging / events -----------------------------------------------------
     def _log(self, stage: str, msg: str, level: str = "INFO", **kv):
@@ -277,6 +294,95 @@ class EconomicsGuard:
         self._log("deny", message, "WARN", code=code)
         await self._emit_denial(code=code, title=title, data=payload)
         raise EconomicsLimitException(message, code=code, data=payload)
+
+    # -- quota lock (distributed admit->reserve serialization) ----------------
+    async def _quota_lock_try_acquire(self, key: str, token: str, ttl_sec: int) -> bool:
+        r = self.redis
+        if r is None:
+            return False
+        try:
+            return bool(await r.set(key, token, nx=True, ex=ttl_sec))
+        except TypeError:
+            pass
+        except Exception:
+            return False
+        try:
+            return bool(await r.set(key, token, nx=True, px=int(ttl_sec * 1000)))
+        except Exception:
+            return False
+
+    async def _quota_lock_release_key(self, key: str, token: str) -> None:
+        r = self.redis
+        if r is None:
+            return
+        # compare-and-del: only release the lock if WE still hold it (token match),
+        # so a release after our TTL expired can't drop a successor's lock.
+        lua = (
+            "if redis.call('get', KEYS[1]) == ARGV[1] then "
+            "return redis.call('del', KEYS[1]) else return 0 end"
+        )
+        try:
+            await r.eval(lua, 1, key, token)
+            return
+        except TypeError:
+            try:
+                await r.eval(lua, keys=[key], args=[token])
+                return
+            except Exception:
+                pass
+        except Exception:
+            pass
+        try:
+            cur = await r.get(key)
+            if cur is None:
+                return
+            if isinstance(cur, (bytes, bytearray)):
+                cur = cur.decode("utf-8", errors="ignore")
+            if str(cur) == str(token):
+                await r.delete(key)
+        except Exception:
+            pass
+
+    async def _acquire_quota_lock_or_deny(self, *, scope: str, budget_bypass: bool) -> None:
+        # Only reserving surfaces opt in; admin bypass has no shared-pool reserve
+        # window to serialize; without redis we degrade to no lock (log a warning).
+        if not self.policy.enforce_quota_lock or budget_bypass:
+            return
+        if self.redis is None:
+            self._log("quota_lock", "redis unavailable; quota_lock disabled", "WARN")
+            return
+        s = self.subject
+        self._quota_lock_key = f"quota_lock:{s.tenant}:{s.project}:{s.user_id}:{scope}:{GLOBAL_BUNDLE_ID}"
+        self._quota_lock_token = secrets.token_hex(16)
+        ttl_sec = int(self.policy.quota_lock_ttl_sec)
+        wait_total = float(self.policy.quota_lock_wait_sec)
+        t0 = asyncio.get_event_loop().time()
+        sleep = 0.05
+        while True:
+            if await self._quota_lock_try_acquire(self._quota_lock_key, self._quota_lock_token, ttl_sec=ttl_sec):
+                self._quota_lock_acquired = True
+                self._log("quota_lock", "acquired", key=self._quota_lock_key, scope=scope, ttl_sec=ttl_sec)
+                return
+            if (asyncio.get_event_loop().time() - t0) >= wait_total:
+                self._log("quota_lock", "failed to acquire within wait window", "WARN",
+                          key=self._quota_lock_key, scope=scope)
+                await self._deny(
+                    code="quota_lock_timeout",
+                    title="System busy",
+                    message=f"{self.flow}: quota_lock contended; concurrent planning in progress",
+                    user_message="Too many concurrent requests are planning quotas right now. Please retry.",
+                    data={"reason": "quota_lock_timeout", "lane": "deny", "scope": scope},
+                )
+            await asyncio.sleep(sleep)
+            sleep = min(sleep * 1.5, 0.25)
+
+    async def _release_quota_lock_if_held(self) -> None:
+        if self._quota_lock_acquired and self._quota_lock_key and self._quota_lock_token:
+            await self._quota_lock_release_key(self._quota_lock_key, self._quota_lock_token)
+            self._log("quota_lock", "released", key=self._quota_lock_key)
+        self._quota_lock_key = None
+        self._quota_lock_token = None
+        self._quota_lock_acquired = False
 
     # -- pre-run --------------------------------------------------------------
     async def __aenter__(self) -> EconomicsDecision:
@@ -462,67 +568,84 @@ class EconomicsGuard:
         budget_bypass = r["budget_bypass"]
         funding_source, available_usd = self._funding_summary(r)
 
-        # 1) verify quota AND reserve RL plan tokens at the start (full run() parity)
-        admit = await self._admit(r["base_policy"], reserve_tokens=est_turn_tokens)
-        if not admit.allowed and not budget_bypass:
-            await self._deny(
-                code="rate_limited",
-                title="Rate limit exceeded",
-                message=f"{self.flow}: rate limited: {admit.reason or 'unknown'}",
-                user_message=MSG_DENIED_GENERIC,
-                data={"reason": admit.reason, "snapshot": admit.snapshot, "lane": "deny"},
-            )
-
-        est_turn_usd = float(r["est_turn_usd"])
-        decision = EconomicsDecision(
-            lane="bypass" if budget_bypass else ("paid" if funding_source == "wallet" else "plan"),
-            plan_id=r["plan_id"],
-            funding_source=funding_source,
-            funding_available_usd=available_usd,
-            est_turn_tokens=est_turn_tokens,
-            est_turn_usd=est_turn_usd,
-            budget_bypass=budget_bypass,
-            nested=False,
-            scope_id=self.scope_id,
-            admit=admit,
-            extra={
-                "effective_policy": r["base_policy"],
-                "plan_balance": r["plan_balance"],
-                "wallet_tokens": int(r["wallet_tokens"]),
-            },
-        )
-
-        if funding_source == "none" and not budget_bypass:
-            await self._deny(
-                code="no_funding_source",
-                title="No funding source",
-                message=f"{self.flow}: no funding source for user",
-                user_message=MSG_NO_FUNDING,
-                data={"reason": "no_funding_source", "funding_source": "none"},
-            )
-
-        # 2) reserve funding via the shared plan-lane flow (primary + wallet overflow)
-        from kdcube_ai_app.apps.chat.sdk.infra.economics.funding_flow import ReserveStatus
+        # Serialize the admit->reserve planning window per user (reserving surfaces
+        # only; no-op unless policy.enforce_quota_lock + redis). Acquired BEFORE
+        # admit (which reserves RL tokens) and released as soon as all holds are
+        # taken (or on any deny) — never held across the LLM work. Mirrors run().
+        _, quota_scope = r["base_policy"].effective_allowed_tokens()
+        await self._acquire_quota_lock_or_deny(scope=str(quota_scope or "month"), budget_bypass=budget_bypass)
         try:
-            if funding_source in ("project", "subscription") or budget_bypass:
-                outcome = await self._reserve_plan_lane(decision, r, admit=admit, funding_source=funding_source)
-                if outcome.status is ReserveStatus.DENIED:
+            # 1) verify quota AND reserve RL plan tokens at the start (full run() parity)
+            admit = await self._admit(r["base_policy"], reserve_tokens=est_turn_tokens)
+
+            est_turn_usd = float(r["est_turn_usd"])
+            decision = EconomicsDecision(
+                lane="bypass" if budget_bypass else ("paid" if funding_source == "wallet" else "plan"),
+                plan_id=r["plan_id"],
+                funding_source=funding_source,
+                funding_available_usd=available_usd,
+                est_turn_tokens=est_turn_tokens,
+                est_turn_usd=est_turn_usd,
+                budget_bypass=budget_bypass,
+                nested=False,
+                scope_id=self.scope_id,
+                admit=admit,
+                extra={
+                    "effective_policy": r["base_policy"],
+                    "plan_balance": r["plan_balance"],
+                    "wallet_tokens": int(r["wallet_tokens"]),
+                },
+            )
+
+            if not admit.allowed and not budget_bypass:
+                # Plan policy rate-limited. If the flow allows a paid-lane fallback
+                # and the user has a wallet to back it, switch to the paid lane
+                # instead of denying (run() parity: admit-denied -> paid for payers).
+                # Otherwise deny. _switch_to_paid raises on its own failures.
+                if self.policy.allow_paid_lane_fallback and r["has_wallet"]:
+                    await self._switch_to_paid(decision, r, reason="plan_admit_rate_limited")
+                else:
                     await self._deny(
-                        code=outcome.deny_code or "no_funding_source",
-                        title="Insufficient funds",
-                        message=outcome.deny_message or f"{self.flow}: cannot fund request",
-                        user_message=MSG_NO_FUNDING,
-                        data=outcome.deny_data or {"reason": "no_funding_source"},
+                        code="rate_limited",
+                        title="Rate limit exceeded",
+                        message=f"{self.flow}: rate limited: {admit.reason or 'unknown'}",
+                        user_message=MSG_DENIED_GENERIC,
+                        data={"reason": admit.reason, "snapshot": admit.snapshot, "lane": "deny"},
                     )
-                elif outcome.status is ReserveStatus.SWITCH_TO_PAID:
-                    await self._switch_to_paid(decision, r, reason=outcome.switch_reason or "plan_tokens_exhausted_for_turn")
-                # OK -> _reserve_plan_lane stored _funding_res
-            elif funding_source == "wallet":
-                # wallet-primary edge (anonymous + wallet) — not a plan lane
-                await self._reserve_wallet_or_deny(decision, r, reserve_usd=est_turn_usd, exhausted=None)
-        except EconomicsLimitException as exc:
-            await self._on_funding_denied(exc)
-            raise
+            else:
+                if funding_source == "none" and not budget_bypass:
+                    await self._deny(
+                        code="no_funding_source",
+                        title="No funding source",
+                        message=f"{self.flow}: no funding source for user",
+                        user_message=MSG_NO_FUNDING,
+                        data={"reason": "no_funding_source", "funding_source": "none"},
+                    )
+
+                # 2) reserve funding via the shared plan-lane flow (primary + wallet overflow)
+                from kdcube_ai_app.apps.chat.sdk.infra.economics.funding_flow import ReserveStatus
+                try:
+                    if funding_source in ("project", "subscription") or budget_bypass:
+                        outcome = await self._reserve_plan_lane(decision, r, admit=admit, funding_source=funding_source)
+                        if outcome.status is ReserveStatus.DENIED:
+                            await self._deny(
+                                code=outcome.deny_code or "no_funding_source",
+                                title="Insufficient funds",
+                                message=outcome.deny_message or f"{self.flow}: cannot fund request",
+                                user_message=MSG_NO_FUNDING,
+                                data=outcome.deny_data or {"reason": "no_funding_source"},
+                            )
+                        elif outcome.status is ReserveStatus.SWITCH_TO_PAID:
+                            await self._switch_to_paid(decision, r, reason=outcome.switch_reason or "plan_tokens_exhausted_for_turn")
+                        # OK -> _reserve_plan_lane stored _funding_res
+                    elif funding_source == "wallet":
+                        # wallet-primary edge (anonymous + wallet) — not a plan lane
+                        await self._reserve_wallet_or_deny(decision, r, reserve_usd=est_turn_usd, exhausted=None)
+                except EconomicsLimitException as exc:
+                    await self._on_funding_denied(exc)
+                    raise
+        finally:
+            await self._release_quota_lock_if_held()
 
         # 3) bind accounting (Variant A) + mark active economics scope
         self._bind_accounting()
@@ -592,9 +715,11 @@ class EconomicsGuard:
 
     async def _switch_to_paid(self, decision: EconomicsDecision, r: dict, *, reason: str) -> None:
         """Release the plan RL token reservation, re-admit against the paid policy,
-        and reserve wallet as the primary funding (wallet-only paid lane).
-        Mirrors run()'s _switch_plan_to_paid_or_die (minus the SSE lane_switch event,
-        which is emitted only when policy.emit_user_events)."""
+        and reserve wallet as the primary funding (wallet-only paid lane). Triggered
+        either by plan-admit rate-limit or by plan-funding exhaustion (ReserveStatus
+        .SWITCH_TO_PAID). Mirrors run()'s _switch_plan_to_paid_or_die money flow; the
+        switch is logged only (no rate_limit.lane_switch SSE event is emitted here —
+        UX events stay in run())."""
         # release the plan-lane RL token reservation + lock taken by the plan admit
         try:
             await self.rl.release_token_reservation(
@@ -840,6 +965,15 @@ class EconomicsGuard:
         except Exception as e:
             self._log("rl.commit", "failed to commit rl usage", "WARN", error=str(e))
         if d.wallet_reservation_id:
+            if int(ranked_tokens) <= 0:
+                # Nothing consumed (e.g. free-tier provider): commit_reserved_lifetime_tokens
+                # no-ops on tokens<=0 and would leave the hold 'reserved' until TTL —
+                # release it so the wallet balance frees immediately.
+                await self.cp.user_credits_mgr.release_lifetime_token_reservation(
+                    tenant=s.tenant, project=s.project, user_id=s.user_id,
+                    reservation_id=d.wallet_reservation_id, reason=f"{self.flow}: zero actual cost",
+                )
+                return
             uncovered = await self.cp.user_credits_mgr.commit_reserved_lifetime_tokens(
                 tenant=s.tenant, project=s.project, user_id=s.user_id,
                 reservation_id=d.wallet_reservation_id, tokens=int(ranked_tokens),

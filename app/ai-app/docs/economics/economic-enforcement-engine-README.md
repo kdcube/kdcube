@@ -3,7 +3,7 @@ id: repo:kdcube-ai-app/app/ai-app/docs/economics/economic-enforcement-engine-REA
 title: "Economics Enforcement Engine"
 summary: "Reusable API for enforcing the economics model (quota, funding, settlement) on accountable flows outside the chat entrypoint."
 tags: ["economics", "enforcement", "engine", "api", "integration"]
-keywords: ["EconomicsGuard", "economic_preflight", "EconomicsSubject", "RoleResolver", "FlowPolicy", "reservation", "settlement", "scope_id"]
+keywords: ["EconomicsGuard", "economic_preflight", "EconomicsSubject", "RoleResolver", "FlowPolicy", "reservation", "settlement", "scope_id", "quota lock", "paid lane", "lane switch", "allow_paid_lane_fallback", "enforce_quota_lock"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/economics/economic-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/economics/economics-events-README.md
@@ -141,6 +141,10 @@ except EconomicsLimitException:
 | `reservation_ttl_sec` | `900` | reservation hold lifetime |
 | `lock_ttl_sec` | `180` | admit lock lifetime |
 | `emit_user_events` | `False` | emit `rate_limit.*` SSE events on denial (needs a `comm` channel); background flows log only |
+| `allow_paid_lane_fallback` | `False` | when the plan lane cannot cover but the user can pay, switch to a wallet‑only paid lane instead of denying (see *Paid‑lane switch* below) |
+| `enforce_quota_lock` | `False` | serialize the admit→reserve window per user with a distributed lock (reserving flows only; see *Quota lock* below) |
+| `quota_lock_ttl_sec` | `60` | quota‑lock key lifetime (safety net if the holder dies) |
+| `quota_lock_wait_sec` | `5.0` | how long to wait for the lock before denying as `quota_lock_timeout` |
 
 ### `EconomicsDecision` — outcome (returned by both APIs)
 
@@ -152,13 +156,31 @@ Carries the resolved `lane` (`plan` / `paid` / `bypass`), `plan_id`,
 ## Behavior notes
 
 - **Denial.** When the flow is not feasible the API raises `EconomicsLimitException`
-  before any work runs. `exc.code` is `rate_limited` (quota) or `no_funding_source`
-  (no eligible funding); `exc.data` carries the snapshot. See
+  before any work runs. `exc.code` is `rate_limited` (quota), `no_funding_source`
+  (no eligible funding), or `quota_lock_timeout` (lock contended — see *Quota lock*);
+  `exc.data` carries the snapshot. See
   [economics-events-README.md](./economics-events-README.md) for the event payloads
   emitted when `emit_user_events` is on.
+- **Paid‑lane switch.** With `allow_paid_lane_fallback` on, a plan‑lane request that
+  cannot be served from the plan — the plan admit is rate‑limited, or plan funding is
+  exhausted and cannot be reserved — switches to a **wallet‑only paid lane** instead
+  of denying, provided the user has a wallet: the plan reservation is released, admit
+  is retried against the pay‑as‑you‑go policy, and the wallet becomes the primary
+  funding. Off by default, so a flow denies rather than charging the wallet unless it
+  opts in.
 - **Settlement (guard only).** On exit, actual spend is charged across the same lanes
   as chat — plan/subscription/project first, wallet for the overflow, with project
-  budget absorbing any shortfall. Subscriptions and wallets never go negative.
+  budget absorbing any shortfall. A paid‑lane flow settles from the wallet (project
+  absorbs any uncovered remainder). A flow whose actual cost is zero releases its
+  holds rather than charging. Subscriptions and wallets never go negative.
+- **Quota lock.** With `enforce_quota_lock` on (and Redis available on the
+  entrypoint), the admit→reserve planning window is serialized per user with a
+  distributed lock, closing the read‑remaining‑quota → reserve race between concurrent
+  requests of the same user. The lock is held only across planning and released before
+  the work runs; if it cannot be acquired within `quota_lock_wait_sec` the flow is
+  denied with `quota_lock_timeout`. It is skipped for `privileged`/`admin` (which
+  bypass funding) and is only meaningful for reserving flows — `economic_preflight`
+  takes no reservation and ignores it. Without Redis it degrades to no lock.
 - **Nested safety.** If a guard is entered while an economics scope is already active
   on the same logical task, it automatically degrades to verify-only (the outer scope
   settles) so the same work is never charged twice.

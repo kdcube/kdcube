@@ -371,17 +371,25 @@ async def settle_plan_funding(
         # quota, but we record the request + tokens against RL (reservation-free).
         user_uncovered = 0
         remaining = int(ranked_tokens)
-        if remaining > 0 and res.wallet_reservation_active and res.wallet_reservation_id and res.wallet_reserved_tokens > 0:
-            reserved_target = min(remaining, int(res.wallet_reserved_tokens))
+        if res.wallet_reservation_active and res.wallet_reservation_id and res.wallet_reserved_tokens > 0:
+            reserved_target = min(int(remaining), int(res.wallet_reserved_tokens))
             try:
-                reserved_uncovered = await ctx.cp_manager.user_credits_mgr.commit_reserved_lifetime_tokens(
-                    tenant=ctx.tenant, project=ctx.project, user_id=ctx.user_id,
-                    reservation_id=str(res.wallet_reservation_id), tokens=int(reserved_target),
-                )
+                if reserved_target > 0:
+                    reserved_uncovered = await ctx.cp_manager.user_credits_mgr.commit_reserved_lifetime_tokens(
+                        tenant=ctx.tenant, project=ctx.project, user_id=ctx.user_id,
+                        reservation_id=str(res.wallet_reservation_id), tokens=int(reserved_target),
+                    )
+                    reserved_consumed = max(int(reserved_target) - int(reserved_uncovered or 0), 0)
+                    remaining = max(remaining - reserved_consumed, 0)
+                else:
+                    # nothing consumed: commit_reserved_lifetime_tokens no-ops on tokens<=0
+                    # and would leave the hold 'reserved' until TTL -> release it explicitly.
+                    await ctx.cp_manager.user_credits_mgr.release_lifetime_token_reservation(
+                        tenant=ctx.tenant, project=ctx.project, user_id=ctx.user_id,
+                        reservation_id=str(res.wallet_reservation_id), reason="zero actual cost",
+                    )
             finally:
                 res.wallet_reservation_active = False
-            reserved_consumed = max(int(reserved_target) - int(reserved_uncovered or 0), 0)
-            remaining = max(remaining - reserved_consumed, 0)
         if remaining > 0:
             user_uncovered = await ctx.cp_manager.user_credits_mgr.consume_lifetime_tokens(
                 tenant=ctx.tenant, project=ctx.project, user_id=ctx.user_id, tokens=int(remaining),

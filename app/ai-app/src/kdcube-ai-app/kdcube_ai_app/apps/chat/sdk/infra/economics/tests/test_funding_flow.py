@@ -229,6 +229,27 @@ async def test_settle_wallet_primary_paid_lane():
     assert out.wallet_usd == pytest.approx(0.015, rel=1e-6)
 
 
+async def test_settle_wallet_zero_cost_releases_reservation():
+    # paid lane with zero actual cost (ranked_tokens=0): commit_reserved no-ops on
+    # tokens<=0, so the wallet hold must be RELEASED, not left 'reserved' until TTL.
+    credits = _Credits()
+    ctx = _ctx(credits=credits)
+    res = ff.PlanFundingReservation(
+        funding_source="wallet", budget_bypass=False, est_turn_tokens=2000,
+        wallet_reservation_id="scope-1", wallet_reserved_tokens=2000, wallet_reservation_active=True,
+        has_wallet=True,
+    )
+    out = await ff.settle_plan_funding(
+        ctx, res, ranked_tokens=0, total_cost_usd=0.0,
+        effective_policy=QuotaPolicy(tokens_per_month=10**9),
+        plan_has_lifetime_budget=True, user_budget_tokens=10**9,
+    )
+    assert credits.committed == []                     # nothing committed
+    assert len(credits.released) == 1                  # hold released
+    assert credits.released[0]["reservation_id"] == "scope-1"
+    assert res.wallet_reservation_active is False
+
+
 async def test_settle_none_charges_project_last_resort():
     ctx = _ctx()
     res = ff.PlanFundingReservation(funding_source="none", budget_bypass=False, est_turn_tokens=2000)

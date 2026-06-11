@@ -104,23 +104,26 @@ class _CP:
 
 
 class _RL:
-    def __init__(self, allowed: bool = True, reason=None):
+    def __init__(self, allowed: bool = True, reason=None, deny_first: bool = False):
         self.allowed = allowed
         self.reason = reason
+        self.deny_first = deny_first   # deny the 1st admit, allow the rest (plan-admit rate-limit -> switch)
         self.admit_calls = []
         self.commits = []
         self.releases = []
 
     async def admit(self, **kw):
+        first = not self.admit_calls
         self.admit_calls.append(kw)
+        allowed = self.allowed and not (self.deny_first and first)
         reserve = int(kw.get("reserve_tokens") or 0)
         return AdmitResult(
-            allowed=self.allowed,
-            reason=None if self.allowed else (self.reason or "tokens_per_month"),
-            lock_id=kw.get("lock_id") if self.allowed else None,
+            allowed=allowed,
+            reason=None if allowed else (self.reason or "tokens_per_month"),
+            lock_id=kw.get("lock_id") if allowed else None,
             snapshot={"tok_month": 0, "req_day": 0},
-            reserved_tokens=reserve if self.allowed else 0,
-            reservation_id=(kw.get("reservation_id") if (self.allowed and reserve > 0) else None),
+            reserved_tokens=reserve if allowed else 0,
+            reservation_id=(kw.get("reservation_id") if (allowed and reserve > 0) else None),
         )
 
     async def commit_with_reservation(self, **kw):
@@ -160,6 +163,34 @@ class _Budget:
 
     async def force_project_spend(self, **kw):
         self.forced.append(kw)
+
+
+class _FakeRedis:
+    """Minimal async Redis supporting SET NX EX, GET, DELETE, and the Lua
+    compare-and-del used by the quota lock."""
+    def __init__(self):
+        self.store = {}
+        self.set_calls = []
+
+    async def set(self, key, val, nx=False, ex=None, px=None):
+        self.set_calls.append({"key": key, "nx": nx, "ex": ex, "px": px})
+        if nx and key in self.store:
+            return None
+        self.store[key] = val
+        return True
+
+    async def get(self, key):
+        return self.store.get(key)
+
+    async def delete(self, key):
+        self.store.pop(key, None)
+        return 1
+
+    async def eval(self, lua, numkeys, key, token):
+        if self.store.get(key) == token:
+            self.store.pop(key, None)
+            return 1
+        return 0
 
 
 class _Spec:
@@ -438,6 +469,29 @@ async def test_paid_lane_switch_when_primary_exhausted_and_fallback_allowed():
     assert len(ep.rl.commits) == 1
 
 
+async def test_paid_lane_wallet_zero_cost_releases_reservation():
+    # paid lane (switch), but the actual cost settles to 0 (e.g. free-tier provider).
+    # commit_reserved_lifetime_tokens no-ops on tokens<=0, so the hold must be
+    # RELEASED explicitly — otherwise the wallet stays debited until TTL.
+    class _ZeroBudget(_Budget):
+        async def get_app_budget_balance(self):
+            return {"available_usd": 0.0, "overdraft_limit_usd": 0.0}
+
+    cp = _CP(wallet=1_000_000, plan_balance=_PlanBalance(wallet=True))
+    ep = _EP(cp=cp, rl=_RL(), budget=_ZeroBudget(), accounting_result=(0, {"cost_total_usd": 0.0}))
+    g = EconomicsGuard(
+        ep, subject=_subject("registered"), scope_id="z1", flow="f",
+        estimate=EconomicsEstimate(reservation_usd=0.05),
+        policy=FlowPolicy(allow_paid_lane_fallback=True),
+    )
+    await g.__aenter__()
+    assert len(ep.cp_manager.user_credits_mgr.reserved) == 1
+    await g.__aexit__(None, None, None)
+    # zero actual cost -> reservation released, NOT committed
+    assert len(ep.cp_manager.user_credits_mgr.released) == 1
+    assert ep.cp_manager.user_credits_mgr.committed == []
+
+
 async def test_no_paid_switch_when_fallback_disabled_denies():
     # same setup, but allow_paid_lane_fallback=False (default non-chat) -> deny.
     class _ZeroBudget(_Budget):
@@ -458,6 +512,43 @@ async def test_no_paid_switch_when_fallback_disabled_denies():
     await g.__aexit__(None, None, None)
 
 
+async def test_paid_lane_switch_on_admit_rate_limit_when_fallback_allowed():
+    # plan admit is rate-limited, but the user has a wallet + fallback is allowed:
+    # switch to the paid lane (re-admit paid policy + reserve wallet), DO NOT deny.
+    cp = _CP(wallet=1_000_000, plan_balance=_PlanBalance(wallet=True))
+    ep = _EP(cp=cp, rl=_RL(deny_first=True), budget=_Budget(),
+             accounting_result=(1000, {"cost_total_usd": 0.02}))
+    g = EconomicsGuard(
+        ep, subject=_subject("registered"), scope_id="sw3", flow="f",
+        estimate=EconomicsEstimate(reservation_usd=0.05),
+        policy=FlowPolicy(allow_paid_lane_fallback=True),
+    )
+    decision = await g.__aenter__()
+    assert decision.lane == "paid"
+    assert decision.funding_source == "wallet"
+    assert decision.wallet_reservation_id == "sw3"
+    assert len(ep.cp_manager.user_credits_mgr.reserved) == 1   # wallet reserved as primary
+    assert ep.budget_limiter.reserved == []                    # plan funding never reserved
+    assert len(ep.rl.admit_calls) == 2                         # denied plan admit + paid re-admit
+    await g.__aexit__(None, None, None)
+    assert len(ep.cp_manager.user_credits_mgr.committed) == 1  # wallet committed at settle
+
+
+async def test_admit_rate_limit_denies_without_wallet_even_if_fallback_allowed():
+    # plan admit rate-limited, fallback allowed, but NO wallet -> deny (nothing to switch to).
+    cp = _CP(plan_balance=_PlanBalance(False))
+    ep = _EP(cp=cp, rl=_RL(deny_first=True), budget=_Budget())
+    g = EconomicsGuard(
+        ep, subject=_subject("registered"), scope_id="sw4", flow="f",
+        estimate=EconomicsEstimate(reservation_usd=0.05),
+        policy=FlowPolicy(allow_paid_lane_fallback=True),
+    )
+    with pytest.raises(EconomicsLimitException) as ei:
+        await g.__aenter__()
+    assert ei.value.code == "rate_limited"
+    assert len(ep.rl.admit_calls) == 1                         # no paid re-admit
+
+
 async def test_top_level_releases_reservation_on_accounting_failure():
     class _BadEP(_EP):
         async def run_accounting(self, **kw):
@@ -472,3 +563,78 @@ async def test_top_level_releases_reservation_on_accounting_failure():
     # settlement failed -> reservation released, accounting unbound
     assert len(ep.budget_limiter.released) == 1
     assert enf.active_econ_scope() is None
+
+
+# --------------------------------------------------------------------------
+# Quota lock (distributed admit->reserve serialization)
+# --------------------------------------------------------------------------
+async def test_quota_lock_acquired_then_released_on_success():
+    ep = _ep(accounting=(1000, {"cost_total_usd": 0.03}))
+    ep.redis = _FakeRedis()
+    g = EconomicsGuard(ep, subject=_subject("registered"), scope_id="ql1", flow="memory.reconciler",
+                       estimate=EconomicsEstimate(reservation_usd=0.05),
+                       policy=FlowPolicy(enforce_quota_lock=True))
+    await g.__aenter__()
+    # lock was taken with SET NX during the planning window...
+    assert any(c["nx"] for c in ep.redis.set_calls)
+    # ...and released as soon as holds were reserved (not held across the body)
+    assert ep.redis.store == {}
+    assert g._quota_lock_acquired is False
+    await g.__aexit__(None, None, None)
+    assert ep.redis.store == {}
+
+
+async def test_quota_lock_timeout_denies_when_contended():
+    ep = _ep()
+    ep.redis = _FakeRedis()
+    s = _subject("registered")
+    # another holder already owns the lock key for this user/scope/bundle
+    from kdcube_ai_app.apps.chat.sdk.infra.economics.limiter import GLOBAL_BUNDLE_ID
+    key = f"quota_lock:{s.tenant}:{s.project}:{s.user_id}:month:{GLOBAL_BUNDLE_ID}"
+    ep.redis.store[key] = "someone-else"
+    g = EconomicsGuard(ep, subject=s, scope_id="ql2", flow="memory.reconciler",
+                       estimate=EconomicsEstimate(reservation_usd=0.05),
+                       policy=FlowPolicy(enforce_quota_lock=True, quota_lock_wait_sec=0.2))
+    with pytest.raises(EconomicsLimitException) as ei:
+        await g.__aenter__()
+    assert ei.value.code == "quota_lock_timeout"
+    # contended -> we never admitted/reserved, and the other holder's key is intact
+    assert ep.rl.admit_calls == []
+    assert ep.redis.store.get(key) == "someone-else"
+
+
+async def test_quota_lock_released_on_deny():
+    # rate-limited deny inside the lock window must still release the lock.
+    ep = _ep(allowed=False, reason="tokens_per_month")
+    ep.redis = _FakeRedis()
+    g = EconomicsGuard(ep, subject=_subject("registered"), scope_id="ql3", flow="f",
+                       estimate=EconomicsEstimate(reservation_usd=0.05),
+                       policy=FlowPolicy(enforce_quota_lock=True))
+    with pytest.raises(EconomicsLimitException):
+        await g.__aenter__()
+    assert ep.redis.store == {}
+    assert g._quota_lock_acquired is False
+
+
+async def test_quota_lock_skipped_for_bypass():
+    # admin/privileged bypass has no shared-pool reserve window -> no lock attempt.
+    ep = _ep()
+    ep.redis = _FakeRedis()
+    g = EconomicsGuard(ep, subject=_subject("privileged"), scope_id="ql4", flow="f",
+                       estimate=EconomicsEstimate(reservation_usd=0.05),
+                       policy=FlowPolicy(enforce_quota_lock=True))
+    await g.__aenter__()
+    assert ep.redis.set_calls == []
+    await g.__aexit__(None, None, None)
+
+
+async def test_quota_lock_noop_without_redis():
+    # enforce_quota_lock=True but no redis on the entrypoint -> degrade to no lock.
+    ep = _ep(accounting=(1000, {"cost_total_usd": 0.03}))
+    assert getattr(ep, "redis", None) is None
+    g = EconomicsGuard(ep, subject=_subject("registered"), scope_id="ql5", flow="f",
+                       estimate=EconomicsEstimate(reservation_usd=0.05),
+                       policy=FlowPolicy(enforce_quota_lock=True))
+    decision = await g.__aenter__()
+    assert decision.funding_source == "project"
+    await g.__aexit__(None, None, None)
