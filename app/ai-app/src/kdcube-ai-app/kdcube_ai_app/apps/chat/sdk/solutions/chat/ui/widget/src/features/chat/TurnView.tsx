@@ -152,6 +152,7 @@ function TurnFeedback({
 
 function TurnViewImpl({
   turn,
+  conversationId,
   sendingDisabled,
   reaction,
   onFeedback,
@@ -159,6 +160,7 @@ function TurnViewImpl({
   onDownloadError,
 }: {
   turn: ChatTurn
+  conversationId?: string | null
   sendingDisabled: boolean
   reaction: TurnReaction | null
   onFeedback: (turnId: string, reaction: TurnReaction | null, text?: string) => void
@@ -270,6 +272,7 @@ function TurnViewImpl({
                   <AttachmentChip
                     key={attachment.id}
                     attachment={attachment}
+                    conversationId={conversationId}
                     onError={onDownloadError}
                   />
                 ))}
@@ -374,7 +377,7 @@ function TurnViewImpl({
           {activeTab === 'canvases' ? <CanvasPanel canvases={canvases} /> : null}
           {activeTab === 'links' ? <LinksPanel links={turnLinks} /> : null}
           {activeTab === 'files' ? (
-            <DownloadsPanel attachments={allUserAttachments} files={assistantFiles} onError={onDownloadError} />
+            <DownloadsPanel attachments={allUserAttachments} files={assistantFiles} conversationId={conversationId} onError={onDownloadError} />
           ) : null}
         </div>
 

@@ -20,17 +20,24 @@ import {
 } from '../service.ts'
 import type { TurnAttachment } from '../features/chat/chatTypes.ts'
 import { canonicalObjectRef, setChatFileDragData } from '../features/chat/fileDrag.ts'
+import { durableHistoricalObjectRef } from '../features/chat/historicalRefs.ts'
 import { formatBytes, messageForError } from './utils.ts'
 
 export function AttachmentChip({
   attachment,
+  conversationId,
   onError,
 }: {
   attachment: TurnAttachment
+  conversationId?: string | null
   onError?: (text: string) => void
 }) {
   const [downloading, setDownloading] = useState(false)
-  const dragRef = canonicalObjectRef(attachment.logicalPath)
+  // A user attachment's logical_path is often the non-durable `fi:turn_…`
+  // form; promote it to the durable `fi:conv_<id>.turn_…` ref the canvas
+  // accepts (the same normalization assistant files already get), so the
+  // chip becomes draggable/pinnable like a bot-produced file.
+  const dragRef = canonicalObjectRef(durableHistoricalObjectRef(attachment.logicalPath, conversationId ?? undefined))
   const canDownload = Boolean(attachment.file || dragRef)
   const handleClick = async (event: React.MouseEvent) => {
     event.preventDefault()

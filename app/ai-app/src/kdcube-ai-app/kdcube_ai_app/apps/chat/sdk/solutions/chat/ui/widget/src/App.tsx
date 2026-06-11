@@ -1693,6 +1693,7 @@ export default function App() {
                       <TurnView
                         key={turn.id}
                         turn={turn}
+                        conversationId={state.conversationId}
                         sendingDisabled={sendingDisabled}
                         reaction={state.feedback[turn.id] ?? null}
                         onFeedback={handleTurnFeedback}

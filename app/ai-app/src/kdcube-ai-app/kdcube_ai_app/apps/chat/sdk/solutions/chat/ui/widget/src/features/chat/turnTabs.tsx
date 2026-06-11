@@ -46,6 +46,7 @@ import type {
   TurnStep,
 } from './chatTypes.ts'
 import { canonicalObjectRef, setChatFileDragData, type ChatFileDragInput } from './fileDrag.ts'
+import { durableHistoricalObjectRef } from './historicalRefs.ts'
 
 function StepListImpl({ steps }: { steps: TurnStep[] }) {
   if (steps.length === 0) return null
@@ -392,10 +393,12 @@ function TimelineFeedImpl({ entries }: { entries: TimelineEntry[] }) {
 function DownloadsPanelImpl({
   attachments,
   files,
+  conversationId,
   onError,
 }: {
   attachments: TurnAttachment[]
   files: FileArtifact[]
+  conversationId?: string | null
   onError: (text: string) => void
 }) {
   const [downloadingId, setDownloadingId] = useState<string | null>(null)
@@ -411,7 +414,7 @@ function DownloadsPanelImpl({
         downloadBlobAsFile(attachment.file, attachment.name)
         return
       }
-      const objectRef = canonicalObjectRef(attachment.logicalPath)
+      const objectRef = canonicalObjectRef(durableHistoricalObjectRef(attachment.logicalPath, conversationId ?? undefined))
       if (objectRef) {
         await downloadObjectRef(objectRef, attachment.name, attachment.mime)
         return
@@ -516,9 +519,9 @@ function DownloadsPanelImpl({
               () => void handleAttachmentDownload(attachment, index),
               downloadingId === `attachment:${index}` ? 'Preparing…' : 'Download',
               'user',
-              canonicalObjectRef(attachment.logicalPath)
+              canonicalObjectRef(durableHistoricalObjectRef(attachment.logicalPath, conversationId ?? undefined))
                 ? {
-                    ref: canonicalObjectRef(attachment.logicalPath),
+                    ref: canonicalObjectRef(durableHistoricalObjectRef(attachment.logicalPath, conversationId ?? undefined)),
                     filename: attachment.name,
                     mime: attachment.mime,
                     preview: attachment.description,
