@@ -79,7 +79,7 @@ interface MemoriesState {
 
 const initialState: MemoriesState = {
   viewMode: 'full',
-  scopeFilter: 'current_bundle',
+  scopeFilter: 'all_user_memories',
   query: '',
   labelsFilter: '',
   keywordsFilter: '',

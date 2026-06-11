@@ -11,21 +11,17 @@ import {
   setKeywordsFilter,
   setLabelsFilter,
   setQuery,
-  setScopeFilter,
   setStatus,
 } from './memoriesSlice';
-import type { ScopeFilter } from '../../api/types';
 
 export function MemoryFilters() {
   const dispatch = useAppDispatch();
   const {
-    allowAllUserMemories,
     focusedMemoryIds,
     keywordsFilter,
     labelsFilter,
     memories,
     query,
-    scopeFilter,
     status,
     viewMode,
     loading,
@@ -100,19 +96,6 @@ export function MemoryFilters() {
       ) : null}
       {compact ? null : <div className="filter-row">
         <label>
-          <span>Scope</span>
-          <select
-            value={scopeFilter}
-            onChange={(event) => {
-              dispatch(setScopeFilter(event.target.value as ScopeFilter));
-              void dispatch(loadMemories());
-            }}
-          >
-            <option value="current_bundle">This bundle</option>
-            {allowAllUserMemories ? <option value="all_user_memories">All user memories</option> : null}
-          </select>
-        </label>
-        <label>
           <span>Status</span>
           <select value={status} onChange={(event) => dispatch(setStatus(event.target.value))}>
             <option value="active">Active</option>
@@ -149,19 +132,6 @@ export function MemoryFilters() {
           onChange={(event) => dispatch(setKeywordsFilter(event.target.value))}
           placeholder="Keywords"
         />}
-        {compact && allowAllUserMemories ? (
-          <select
-            aria-label="Memory scope"
-            value={scopeFilter}
-            onChange={(event) => {
-              dispatch(setScopeFilter(event.target.value as ScopeFilter));
-              void dispatch(loadMemories());
-            }}
-          >
-            <option value="current_bundle">This bundle</option>
-            <option value="all_user_memories">All memories</option>
-          </select>
-        ) : null}
         <button type="submit" disabled={loading}>
           Search
         </button>

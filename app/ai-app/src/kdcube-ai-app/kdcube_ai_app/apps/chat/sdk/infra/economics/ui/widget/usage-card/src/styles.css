@@ -267,46 +267,120 @@ p {
 }
 
 /* ── Super-compact view (default in a summoned panel) ───────────────── */
-.usage-compact .eyebrow,
-.usage-compact .usage-card-account {
-  display: none;
+.usage-compact.usage-card-shell {
+  gap: 8px;
+  padding: 9px 10px 10px;
 }
 .usage-compact .usage-card-header {
-  padding-bottom: 8px;
+  padding-bottom: 0;
+  align-items: center;
 }
-.usage-compact .usage-card-header h2 {
-  font-size: 14px;
+.uc-plan-line {
+  margin: 0;
+  min-width: 0;
+  flex: 1 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  line-height: 1.3;
+}
+.uc-plan-label {
+  color: var(--muted);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 10px;
+}
+.uc-plan-name {
+  color: var(--ink);
+  font-weight: 700;
+  text-transform: capitalize;
+}
+.uc-plan-sep {
+  color: var(--muted);
+}
+.uc-plan-acct {
+  color: var(--text-2);
+  font-weight: 600;
+}
+.usage-compact .usage-refresh {
+  width: 20px;
+  height: 20px;
+  font-size: 11px;
 }
 .usage-compact-body {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  padding: 0;
-}
-.usage-compact-stat {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 9px 11px;
-  border: 1px solid var(--line, #d7e4ea);
-  border-radius: 8px;
-  background: var(--surface-2, #f7fafb);
+  gap: 6px;
+  padding: 0;
 }
-.usage-compact-stat .uc-l {
+.uc-win {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+.uc-win-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.uc-win-title {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: var(--muted, #6c8aa2);
+  color: var(--muted);
 }
-.usage-compact-stat .uc-v {
-  font-size: 18px;
-  font-weight: 800;
-  color: var(--ink, #102033);
-  font-variant-numeric: tabular-nums;
+.uc-win-reset {
+  font-size: 9px;
+  color: var(--muted);
 }
-.usage-compact-stat .uc-s {
+.uc-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.uc-metric-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.uc-metric-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.uc-metric-value {
   font-size: 11px;
-  color: var(--muted, #6c8aa2);
+  font-weight: 700;
+  color: var(--ink);
   font-variant-numeric: tabular-nums;
+}
+.uc-metric-sep {
+  color: var(--muted);
+  font-weight: 600;
+}
+.uc-bar {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--line-soft);
+  overflow: hidden;
+}
+.uc-bar-fill {
+  height: 100%;
+  background: var(--teal);
+  transition: width 0.18s ease;
+}
+.uc-metric[data-pct='high'] .uc-bar-fill {
+  background: var(--gold);
+}
+.uc-metric[data-pct='full'] .uc-bar-fill {
+  background: var(--red);
 }

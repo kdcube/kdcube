@@ -119,6 +119,55 @@ const UsageWindow: React.FC<UsageWindowProps> = ({ title, resetAt, children }) =
   );
 };
 
+interface CompactMetricDef {
+  label: string;
+  used: number | null | undefined;
+  limit: number | null | undefined;
+  usd?: boolean;
+}
+
+const CompactMetric: React.FC<CompactMetricDef> = ({ label, used, limit, usd }) => {
+  const u = Number(used || 0);
+  const hasLimit = limit != null && limit > 0;
+  const pct = hasLimit ? Math.min(100, Math.max(0, Math.round((u / (limit as number)) * 100))) : 0;
+  const usedText = usd ? formatUsd(used) : formatCount(used);
+  const limitText = usd ? formatUsdLimit(limit) : formatCount(limit);
+  return (
+    <div className="uc-metric" data-pct={pct >= 100 ? 'full' : pct >= 80 ? 'high' : 'normal'}>
+      <div className="uc-metric-top">
+        <span className="uc-metric-label">{label}</span>
+        <span className="uc-metric-value">
+          {usedText} <span className="uc-metric-sep">/</span> {limitText}
+        </span>
+      </div>
+      <div className="uc-bar" aria-hidden>
+        <div className="uc-bar-fill" style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+};
+
+interface CompactWindowDef {
+  title: string;
+  resetAt?: string | null;
+  metrics: CompactMetricDef[];
+}
+
+const CompactWindow: React.FC<CompactWindowDef> = ({ title, resetAt, metrics }) => {
+  const reset = formatRelativeReset(resetAt);
+  return (
+    <section className="uc-win">
+      <div className="uc-win-head">
+        <span className="uc-win-title">{title}</span>
+        {reset ? <span className="uc-win-reset">resets {reset}</span> : null}
+      </div>
+      {metrics.map((metric) => (
+        <CompactMetric key={metric.label} {...metric} />
+      ))}
+    </section>
+  );
+};
+
 function accountIdentity(profile: ProfileResponse | null): string | null {
   if (!profile) return null;
   const candidate = profile.email || profile.username || profile.user_id;
@@ -211,17 +260,30 @@ export const App: React.FC = () => {
   return (
     <div className={`usage-card-shell${compact ? ' usage-compact' : ''}${status.loading ? ' is-loading' : ''}`}>
       <header className="usage-card-header">
-        <div className="usage-card-identity">
-          <p className="eyebrow">Plan</p>
-          <h2 title={breakdown?.plan_id || undefined}>
-            {breakdown?.plan_id ? breakdown.plan_id : 'Plan'}
-          </h2>
-          {accountIdentity(profile) ? (
-            <p className="usage-card-account" title={accountIdentity(profile) || undefined}>
-              {accountIdentity(profile)}
-            </p>
-          ) : null}
-        </div>
+        {compact ? (
+          <p className="uc-plan-line" title={`${breakdown?.plan_id || 'Plan'}${accountIdentity(profile) ? ' · ' + accountIdentity(profile) : ''}`}>
+            <span className="uc-plan-label">Plan:</span>{' '}
+            <span className="uc-plan-name">{breakdown?.plan_id ? breakdown.plan_id : 'Plan'}</span>
+            {accountIdentity(profile) ? (
+              <>
+                {' '}<span className="uc-plan-sep">·</span>{' '}
+                <span className="uc-plan-acct">{accountIdentity(profile)}</span>
+              </>
+            ) : null}
+          </p>
+        ) : (
+          <div className="usage-card-identity">
+            <p className="eyebrow">Plan</p>
+            <h2 title={breakdown?.plan_id || undefined}>
+              {breakdown?.plan_id ? breakdown.plan_id : 'Plan'}
+            </h2>
+            {accountIdentity(profile) ? (
+              <p className="usage-card-account" title={accountIdentity(profile) || undefined}>
+                {accountIdentity(profile)}
+              </p>
+            ) : null}
+          </div>
+        )}
         <button
           type="button"
           className="usage-refresh"
@@ -244,16 +306,29 @@ export const App: React.FC = () => {
       {breakdown ? (
         compact ? (
           <div className="usage-body usage-compact-body">
-            <div className="usage-compact-stat">
-              <span className="uc-l">This month</span>
-              <span className="uc-v">{formatUsd(breakdown.current_usage.tokens_this_month_usd)}</span>
-              <span className="uc-s">{formatCount(breakdown.current_usage.requests_this_month)} req</span>
-            </div>
-            <div className="usage-compact-stat">
-              <span className="uc-l">Today</span>
-              <span className="uc-v">{formatUsd(breakdown.current_usage.tokens_today_usd)}</span>
-              <span className="uc-s">{formatCount(breakdown.current_usage.requests_today)} req</span>
-            </div>
+            <CompactWindow
+              title="This month"
+              resetAt={breakdown.reset_windows?.month_reset_at}
+              metrics={[
+                { label: 'Cost', usd: true, used: breakdown.current_usage.tokens_this_month_usd, limit: breakdown.effective_policy.usd_per_month },
+                { label: 'Requests', used: breakdown.current_usage.requests_this_month, limit: breakdown.effective_policy.requests_per_month },
+              ]}
+            />
+            <CompactWindow
+              title="Today"
+              metrics={[
+                { label: 'Cost', usd: true, used: breakdown.current_usage.tokens_today_usd, limit: breakdown.effective_policy.usd_per_day },
+                { label: 'Requests', used: breakdown.current_usage.requests_today, limit: breakdown.effective_policy.requests_per_day },
+              ]}
+            />
+            <CompactWindow
+              title="Last hour"
+              resetAt={breakdown.reset_windows?.hour_reset_at}
+              metrics={[
+                { label: 'Cost', usd: true, used: breakdown.current_usage.tokens_this_hour_usd, limit: breakdown.effective_policy.usd_per_hour },
+                { label: 'Tokens', used: breakdown.current_usage.tokens_this_hour, limit: breakdown.effective_policy.tokens_per_hour },
+              ]}
+            />
           </div>
         ) : (
         <div className="usage-body">
