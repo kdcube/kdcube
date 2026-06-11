@@ -123,6 +123,24 @@ function formatCardAdded(value?: string | null): string {
   return `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())} ${pad(t.getHours())}:${pad(t.getMinutes())}`
 }
 
+// Per-file size cap for files dropped/uploaded onto the board. Oversize
+// files are rejected client-side with a message rather than failing the
+// upload server-side.
+const MAX_CANVAS_FILE_BYTES = 25 * 1024 * 1024
+const MAX_CANVAS_FILE_LABEL = '25 MB'
+
+function formatFileSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  let value = bytes
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  return `${value >= 10 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`
+}
+
 function cloneCards(cards: CanvasCard[]): CanvasCard[] {
   return cards.map((card) => ({
     ...card,
@@ -903,19 +921,35 @@ export function CanvasBoard({
     onDropText(text.trim(), newCardRect(238, 112))
   }
 
+  // Drop files over the per-file size cap and surface a message naming
+  // them; only the within-limit files are pinned.
+  function acceptCanvasFiles(files: File[]): File[] {
+    const oversize = files.filter((file) => file.size > MAX_CANVAS_FILE_BYTES)
+    if (oversize.length) {
+      const names = oversize.map((file) => `${file.name} (${formatFileSize(file.size)})`).join(', ')
+      setPatchError(
+        `${oversize.length === 1 ? 'File is' : `${oversize.length} files are`} larger than the ${MAX_CANVAS_FILE_LABEL} per-file limit and ${oversize.length === 1 ? 'was' : 'were'} not pinned: ${names}`,
+      )
+    }
+    return files.filter((file) => file.size <= MAX_CANVAS_FILE_BYTES)
+  }
+
   function createUserAttachmentCard(files: FileList | null) {
-    const selected = Array.from(files || []).filter(Boolean)
-    if (!selected.length) return
-    onDropFiles(selected, newCardRect(260, 120))
+    const selected = acceptCanvasFiles(Array.from(files || []).filter(Boolean))
     if (attachmentInputRef.current) {
       attachmentInputRef.current.value = ''
     }
+    if (!selected.length) return
+    onDropFiles(selected, newCardRect(260, 120))
   }
 
   function handleExternalDrop(event: DragEvent<HTMLElement>) {
-    const droppedFiles = Array.from(event.dataTransfer.files || []).filter(Boolean)
-    if (droppedFiles.length) {
-      onDropFiles(droppedFiles, dropRect(event, 260, 120))
+    const rawDroppedFiles = Array.from(event.dataTransfer.files || []).filter(Boolean)
+    if (rawDroppedFiles.length) {
+      const droppedFiles = acceptCanvasFiles(rawDroppedFiles)
+      if (droppedFiles.length) {
+        onDropFiles(droppedFiles, dropRect(event, 260, 120))
+      }
       return
     }
 
