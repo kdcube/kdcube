@@ -1,66 +1,85 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.6.6.342"
+  ref: "2026.6.11.415"
   description: |
-    This platform release improves bundle-to-client communication, Data Bus
-    transport handling, federated browser-client access, Socket.IO routing,
-    and ReAct timeline preview behavior.
+    This platform release strengthens the conversation event-bus runtime,
+    Data Bus admission control, Redis topology handling, and bundle-builder
+    documentation. It also includes recent canvas, scene, memory, and chat UI
+    improvements.
 
     Highlights
 
-    - Adds scoped bundle communication support so bundle operations can target
-      connected peers and sessions more consistently.
-    - Adds a concrete Data Bus runtime path for durable bundle-owned messages,
-      including Redis stream admission, proc-owned workers, handler dispatch,
-      partition locking, result records, and focused regression coverage.
-    - Adds short-lived federated Data Bus tokens for browser clients that are
-      authenticated by a bundle-specific public entrypoint before connecting to
-      the platform Socket.IO transport.
-    - Keeps Data Bus Socket.IO ingress at the transport boundary: ingress now
-      authenticates and enqueues, while proc loads bundle manifests and
-      enforces bundle/handler visibility before invoking handlers.
-    - Aligns bundle Socket.IO clients and nginx proxy templates on the root
-      Socket.IO namespace and standard `/socket.io` path.
-    - Refreshes generated local proxy config during `kdcube refresh`, so proxy
-      template fixes are applied to existing local workdirs.
-    - Improves ReAct dry-run timeline previews by expanding rendered text while
-      keeping preview output bounded.
-    - Fixes asynchronous integration callback handling.
-    - Updates bundle communication and Data Bus documentation with the current
-      platform-authenticated and bundle-issued federated client handshakes.
+    - Adds a Redis-backed conversation event-bus state table and orchestrator
+      for lane wake scheduling, handler open/close state, reader acceptance,
+      and post-save handoff.
+    - Integrates conversation lane wakeups through ingress, proc, BaseWorkflow,
+      ContextBrowser, and ReAct close gates so late followups and steers remain
+      ordered without proc-side lane scanning after task completion.
+    - Adds an event-bus simulator and focused tests that model ingress, wake
+      publication, proc wake resolution, handler setup, reader drain, ReAct
+      close, artifact persistence, and post-save handoff.
+    - Adds Redis topology configuration and a Redis client factory, with
+      standalone topology as the current default and Redis Cluster constraints
+      documented for future hardening.
+    - Reworks gateway queue-admission accounting to use indexed queue state
+      instead of broad keyspace scans.
+    - Adds app-layer Data Bus publish limits for Socket.IO and HTTP publish
+      packages, covering package rate, message count, and payload bytes before
+      durable stream writes.
+    - Propagates queue/gateway rejection details to chat clients so clients can
+      surface rate-limit, backpressure, and queue-admission failures clearly.
+    - Aligns Socket.IO chat clients on top-level `external_events[]` while
+      keeping `data_bus.publish` separate with top-level `messages[]`.
+    - Refreshes processor, ingress, ECS, system architecture, Data Bus, Redis,
+      gateway, and Tier 1 bundle-builder documentation to match the current
+      runtime contract.
+    - Improves canvas and scene surfaces, including pin board naming, canvas
+      pin interactions, file upload limits, draggable/pinnable attachments, and
+      memory pane layout behavior.
+    - Adds scene composition, memory widget, chat widget, and related solution
+      documentation updates for bundle builders.
 
     Runtime and deployment notes:
 
-    - Deployments must point the platform ref at 2026.6.6.342 to receive this
+    - Deployments must point the platform ref at 2026.6.11.415 to receive this
       update.
-    - Local deployments that use `kdcube refresh` will refresh the generated
-      nginx proxy config from the platform templates.
-    - Browser Socket.IO clients should connect on namespace `/` and path
-      `/socket.io`.
-    - Data Bus publish acknowledgements confirm stream admission only. Handler
-      success, visibility failures, and domain conflicts are proc-side results.
-    - Bundle-issued federated clients should obtain their token from a bundle
-      endpoint that validates the upstream identity before opening Socket.IO.
+    - Data Bus widget traffic is now subject to
+      `gateway.data_bus.ingress.publish_limits`; tune package, message, and
+      byte limits in `gateway.yaml`, not in bundle props.
+    - `assembly.yaml` may explicitly set `infra.redis.topology: standalone`.
+      Standalone remains the current default when omitted.
+    - Socket.IO chat traffic must keep using top-level `external_events[]`.
+      Data Bus traffic must use `data_bus.publish` with top-level `messages[]`.
+    - Conversation followup/steer recovery now relies on lane state and
+      ContextBrowser post-save handoff. Proc resolves lane wakeups but does not
+      scan the lane after task completion.
+    - Data Bus publish acknowledgements confirm ingress admission only. Handler
+      success, visibility failures, conflicts, and storage results remain
+      proc-side Data Bus results or explicit replies.
 
     Validation and regression coverage:
 
-    - Focused Socket.IO Data Bus ingress tests passed.
-    - Focused Data Bus stream/lock tests passed.
-    - Python compile checks for updated Data Bus runtime modules passed.
-    - TypeScript checks for updated referent bundle UI clients passed.
+    - Conversation event-bus state and simulator tests were added and run
+      during development.
+    - Focused continuation, external-event, processor, Data Bus publish,
+      gateway configuration, queue-depth, and Redis factory tests were added or
+      updated.
+    - TypeScript/UI validation was performed for changed widget and scene
+      surfaces during development.
     - Staged release diff private-name scan must pass before the release
       commit.
 
     Changelog
 
-    - Added scoped bundle communication support.
-    - Added bundle-issued federated Data Bus token support.
-    - Added Data Bus runtime worker and stream coverage.
-    - Moved Data Bus handler visibility enforcement to proc.
-    - Fixed standard Socket.IO route handling in nginx templates and local
-      refresh.
-    - Fixed bundle Socket.IO namespace defaults.
-    - Fixed asynchronous integration callback handling.
-    - Improved ReAct dry-run timeline previews.
+    - Added conversation event-bus lane state and orchestrator primitives.
+    - Integrated lane wakeups and post-save handoff through conversation
+      runtime paths.
+    - Added Data Bus publish admission limits and gateway docs.
+    - Added Redis topology factory groundwork and indexed queue admission.
+    - Propagated queue rejection details to chat clients.
+    - Updated Socket.IO chat/Data Bus client contracts.
+    - Updated processor, ingress, architecture, ECS, Data Bus, Redis, gateway,
+      and Tier 1 bundle-builder documentation.
+    - Improved canvas, scene, chat widget, and memory widget behavior.
 config:
-    version: "2026.6.6.342"
+    version: "2026.6.11.415"
