@@ -215,6 +215,10 @@ export default function App() {
   }, [dispatch])
 
   const stateRef = useRef<ChatState>(state)
+  /* Latest loadConversation, so the host-message listener (subscribed
+   * once) can switch the active conversation when a `conversation` pin
+   * is opened from the canvas, without a stale closure. */
+  const loadConversationRef = useRef<((conversationId: string) => void) | null>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
   const connectPromiseRef = useRef<Promise<void> | null>(null)
   const reconnectTimerRef = useRef<number | null>(null)
@@ -264,6 +268,16 @@ export default function App() {
         if (data.view === 'compact' || data.view === 'expanded') setHostView(data.view)
         return
       }
+      /* Host opened a conversation pin from the canvas: switch the active
+       * conversation instead of attaching anything to the composer. */
+      if (data.type === 'kdcube-chat-widget-command' && data.action === 'load-conversation') {
+        const conversationId = typeof data.conversation_id === 'string' ? data.conversation_id.trim() : ''
+        if (conversationId) {
+          // Load the conversation only — never change the host view form.
+          loadConversationRef.current?.(conversationId)
+        }
+        return
+      }
       const removedContextIds = recognizeContextRemoval(data)
       if (removedContextIds.length > 0) {
         removedContextIds.forEach((id) => dispatch(chatActions.removeComposerContext(id)))
@@ -291,6 +305,64 @@ export default function App() {
     window.addEventListener('message', onHostMessage)
     return () => window.removeEventListener('message', onHostMessage)
   }, [dispatch])
+
+  /* Anywhere in the chat widget accepts a dropped conversation pin
+   * (a `conv:` ref) and loads that conversation — the same way the
+   * memory widget loads a dropped `mem:` pin. Non-conversation drops
+   * are ignored here and left to the file drop zone / host context
+   * relay. View form is never changed. */
+  useEffect(() => {
+    const conversationIdFromTransfer = (dt: DataTransfer | null): string => {
+      if (!dt) return ''
+      const idFromConvRef = (ref: string): string => {
+        const value = String(ref || '').trim()
+        if (!value.startsWith('conv:')) return ''
+        const parts = value.slice('conv:'.length).split('/')
+        return (parts[parts.length - 1] || '').trim()
+      }
+      const fromJson = (raw: string): string => {
+        if (!raw) return ''
+        try {
+          const parsed = JSON.parse(raw)
+          const items = Array.isArray(parsed?.contexts) ? parsed.contexts : [parsed]
+          for (const item of items) {
+            if (!item || typeof item !== 'object') continue
+            const kind = String(item.kind || '')
+            const ref = String(item.ref || item.logical_path || item.id || '')
+            if (kind === 'conversation' || ref.startsWith('conv:')) {
+              const fromData = item.data && typeof item.data === 'object'
+                ? String((item.data as Record<string, unknown>).conversation_id || '')
+                : ''
+              return fromData || idFromConvRef(ref)
+            }
+          }
+        } catch {
+          /* not JSON */
+        }
+        return ''
+      }
+      return fromJson(dt.getData('application/json')) || idFromConvRef(dt.getData('text/uri-list'))
+    }
+    const looksLikeContextDrag = (dt: DataTransfer | null): boolean =>
+      !!dt && Array.from(dt.types || []).some((type) => type === 'application/json' || type === 'text/uri-list')
+    const onDragOver = (event: DragEvent) => {
+      if (!looksLikeContextDrag(event.dataTransfer)) return
+      event.preventDefault()
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+    }
+    const onDrop = (event: DragEvent) => {
+      const conversationId = conversationIdFromTransfer(event.dataTransfer)
+      if (!conversationId) return
+      event.preventDefault()
+      loadConversationRef.current?.(conversationId)
+    }
+    window.addEventListener('dragover', onDragOver)
+    window.addEventListener('drop', onDrop)
+    return () => {
+      window.removeEventListener('dragover', onDragOver)
+      window.removeEventListener('drop', onDrop)
+    }
+  }, [])
 
   useEffect(() => {
     if (!convMenuOpen) return
@@ -484,6 +556,7 @@ export default function App() {
       setBootError(message)
     }
   }
+  loadConversationRef.current = (conversationId: string) => { void loadConversation(conversationId) }
 
   const startNewChat = () => {
     dispatch(chatActions.startNewConversation())
@@ -903,6 +976,23 @@ export default function App() {
     }
   }
 
+  /* Pin the active conversation to the canvas. We only hand the host the
+   * conversation identity + a label; the host (scene) builds the durable
+   * `conv:<tenant>/<project>/<user>/<bundle>/<agent>/<conversation_id>`
+   * ref from its own runtime coordinates and creates the canvas card. */
+  const pinConversationToCanvas = () => {
+    const conversationId = stateRef.current.conversationId
+    if (!conversationId) return
+    if (!window.parent || window.parent === window) return
+    window.parent.postMessage({
+      type: 'kdcube-pin-conversation',
+      source: 'versatile.chat',
+      conversation_id: conversationId,
+      title: stateRef.current.conversationTitle || 'Conversation',
+      agent: 'main',
+    }, '*')
+  }
+
   /* Resolve who the visitor is (server-authoritative via /profile) and,
    * if authenticated, open the stream and load their conversations.
    * Called at boot and again whenever the host re-posts runtime config
@@ -1254,11 +1344,27 @@ export default function App() {
                 <span className="text-[10px] font-semibold uppercase tracking-[0.05em] text-[var(--muted)]">
                   {CHAT_BRAND_LABEL}
                 </span>
-                <span
-                  className="truncate text-[13px] font-semibold text-[var(--ink)]"
-                  title={state.conversationId || undefined}
-                >
-                  {state.conversationTitle || (state.conversationId ? 'Untitled conversation' : 'New chat')}
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span
+                    className="truncate text-[13px] font-semibold text-[var(--ink)]"
+                    title={state.conversationId || undefined}
+                  >
+                    {state.conversationTitle || (state.conversationId ? 'Untitled conversation' : 'New chat')}
+                  </span>
+                  {state.conversationId ? (
+                    <button
+                      type="button"
+                      onClick={pinConversationToCanvas}
+                      className="k-conv-pin shrink-0 text-[var(--muted)]"
+                      aria-label="Pin this conversation to the canvas"
+                      title="Pin this conversation to the canvas"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M12 17v5" />
+                        <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
+                      </svg>
+                    </button>
+                  ) : null}
                 </span>
               </span>
             ) : (
@@ -1531,6 +1637,20 @@ export default function App() {
                       <span className="opacity-0 transition-opacity group-hover:opacity-100">
                         <CopyButton value={state.conversationId} title="Copy conversation id" />
                       </span>
+                    ) : null}
+                    {state.conversationId ? (
+                      <button
+                        type="button"
+                        onClick={pinConversationToCanvas}
+                        className="k-conv-pin opacity-0 transition-opacity group-hover:opacity-100"
+                        aria-label="Pin this conversation to the canvas"
+                        title="Pin this conversation to the canvas"
+                      >
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M12 17v5" />
+                          <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
+                        </svg>
+                      </button>
                     ) : null}
                   </div>
                   {!state.conversationId ? (

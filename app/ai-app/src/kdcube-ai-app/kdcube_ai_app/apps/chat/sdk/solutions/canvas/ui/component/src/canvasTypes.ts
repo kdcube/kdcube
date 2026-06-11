@@ -30,6 +30,7 @@ export type CanvasCardKind =
   | 'story.ref'
   | 'note'
   | 'object.ref'
+  | 'conversation'
 
 /** `suggested` is a pending/limbo state for any card kind: file, memory,
  *  source result, link, or text. It is not equivalent to `agent.text`. */
@@ -288,6 +289,12 @@ export interface CanvasObjectActionResponse {
     mode?: string
     issue_id?: string
     memory_id?: string
+    conversation_id?: string
+    tenant?: string
+    project?: string
+    user_id?: string
+    bundle_id?: string
+    agent?: string
     title?: string
   }
   error?: string

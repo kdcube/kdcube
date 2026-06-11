@@ -40,6 +40,10 @@ from kdcube_ai_app.apps.chat.sdk.solutions.canvas.events.resolver import (
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.canvas.storage import CanvasStore
 from kdcube_ai_app.apps.chat.sdk.solutions.react.events.resolver import resolve_event_ref_action
+from kdcube_ai_app.apps.chat.sdk.solutions.chat.events.resolver import (
+    conversation_ref_capabilities,
+    resolve_conversation_ref_action,
+)
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus import DataBusResult, data_bus_handler
 from kdcube_ai_app.infra.plugin.bundle_loader import bundle_entrypoint, api, on_job, ui_widget
 from kdcube_ai_app.infra.service_hub.inventory import BundleState, Config
@@ -488,6 +492,54 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
                 resolver_status="implemented",
                 capabilities=memory_ref_capabilities(),
                 handler=_resolve_mem,
+            )
+        )
+
+        # conv: pinned conversations. The chat solution owns the resolver
+        # semantics (parse, preview shape, open event); the bundle only injects
+        # the conversation-metadata fetch, mirroring how mem: is wired above.
+        async def _fetch_conversation_details(
+            fetch_user_id: str,
+            conversation_id: str,
+            bundle_id: Optional[str],
+        ) -> Optional[Mapping[str, Any]]:
+            from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_rag import ContextRAGClient
+            from kdcube_ai_app.apps.chat.sdk.context.vector.conv_index import ConvIndex
+            from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore
+
+            conv_idx = ConvIndex(pool=self.pg_pool)
+            await conv_idx.init()
+            ctx_client = ContextRAGClient(
+                conv_idx=conv_idx,
+                store=ConversationStore(self.settings.STORAGE_PATH),
+                model_service=self.models_service,
+            )
+            return await ctx_client.get_conversation_details(
+                user_id=fetch_user_id,
+                conversation_id=conversation_id,
+                bundle_id=bundle_id,
+            )
+
+        async def _resolve_conv(
+            action_payload: Mapping[str, Any],
+            resolver_user_id: str,
+            resolver_story_id: str,
+            action: str,
+        ) -> Mapping[str, Any]:
+            del resolver_story_id
+            return await resolve_conversation_ref_action(
+                {**dict(action_payload if action_payload is not None else {}), "action": action},
+                user_id=resolver_user_id,
+                fetch_details=_fetch_conversation_details,
+            )
+
+        registry.register(
+            CallableCanvasObjectResolver(
+                namespace="conv",
+                resolver="sdk.chat.conversation",
+                resolver_status="implemented",
+                capabilities=conversation_ref_capabilities(),
+                handler=_resolve_conv,
             )
         )
         return registry

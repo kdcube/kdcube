@@ -6,6 +6,7 @@ import {
   Grip,
   Info,
   Maximize2,
+  MessageSquare,
   MessageSquarePlus,
   Minimize2,
   Paperclip,
@@ -91,6 +92,7 @@ function iconForKind(kind: string) {
   if (kind === 'agent.text') return Sparkles
   if (kind === 'file') return FileText
   if (kind === 'issue.ref') return ClipboardPenLine
+  if (kind === 'conversation') return MessageSquare
   return Pin
 }
 
@@ -106,6 +108,7 @@ const NAMESPACE_BY_KIND: Record<string, string> = {
   'story.ref': 'sty',
   'note': 'note',
   'object.ref': 'obj',
+  'conversation': 'conv',
 }
 
 function namespaceForKind(kind: string): string {
@@ -1481,7 +1484,7 @@ export function CanvasBoard({
             ].join('\n')
             const kind = card.kind
             const wantsDownload = kind === 'file' || kind === 'user.attachment'
-            const wantsOpen = kind === 'memory' || kind === 'source' || kind === 'search.result' || kind === 'issue.ref' || kind === 'story.ref' || kind === 'object.ref'
+            const wantsOpen = kind === 'memory' || kind === 'source' || kind === 'search.result' || kind === 'issue.ref' || kind === 'story.ref' || kind === 'object.ref' || kind === 'conversation'
             const capabilities = resolverState?.capabilities
             return (
               <article
@@ -1545,10 +1548,14 @@ export function CanvasBoard({
                       <button
                         type="button"
                         className="primary"
-                        title="Open in owning surface"
+                        title={kind === 'conversation' ? 'Open conversation in chat' : 'Open in owning surface'}
                         disabled={capabilities && capabilities.open === false}
                         onClick={(event) => {
                           event.stopPropagation()
+                          // Open through the registered object resolver — for a
+                          // conversation pin the resolver returns a ui_event the
+                          // scene routes to the chat surface (drag-onto-chat
+                          // remains a separate direct-load shortcut).
                           void runObjectAction(card, 'open')
                         }}
                         onMouseDown={(event) => event.stopPropagation()}
@@ -1616,7 +1623,12 @@ export function CanvasBoard({
                     <pre className="canvas-card-flyout-preview-text">{resolverNotice}</pre>
                   ) : null}
                   {!resolverLoading && !resolverNotice ? (
-                    wantsDownload || kind === 'object.ref' ? (
+                    kind === 'conversation' ? (
+                      <dl className="canvas-card-flyout-kv">
+                        <div><dt>chat</dt><dd>{card.title || 'Conversation'}</dd></div>
+                        {card.summary ? <div><dt>last</dt><dd>{card.summary}</dd></div> : null}
+                      </dl>
+                    ) : wantsDownload || kind === 'object.ref' ? (
                       <dl className="canvas-card-flyout-kv">
                         <div><dt>file</dt><dd>{card.ref || card.title}</dd></div>
                         <div><dt>type</dt><dd>{card.mime || '—'}</dd></div>

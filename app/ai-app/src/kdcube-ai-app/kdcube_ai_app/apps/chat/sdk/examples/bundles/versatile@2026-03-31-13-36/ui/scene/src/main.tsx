@@ -447,9 +447,10 @@ function defaultUsageFrame(chatWidth: number, chatOpen: boolean) {
   }
 }
 
-async function fetchProfileUserType(ctx: RouteContext): Promise<string | null> {
-  // Lenient profile fetch for UI gating. Tolerates 401/network errors
-  // by returning null — the caller then leaves the usage button hidden,
+async function fetchProfileIdentity(ctx: RouteContext): Promise<{ userType: string | null; userId: string | null }> {
+  // Lenient profile fetch for UI gating + the authenticated user id used
+  // when building a conv: pin ref. Tolerates 401/network errors by
+  // returning nulls — the caller then leaves the usage button hidden,
   // which is the safe fallback for anything other than a confirmed
   // non-anonymous response.
   try {
@@ -459,12 +460,13 @@ async function fetchProfileUserType(ctx: RouteContext): Promise<string | null> {
       cache: 'no-store',
       headers: { Accept: 'application/json' },
     })
-    if (!response.ok) return null
-    const payload = (await response.json()) as { user_type?: string | null }
+    if (!response.ok) return { userType: null, userId: null }
+    const payload = (await response.json()) as { user_type?: string | null; user_id?: string | null }
     const userType = String(payload.user_type || '').trim().toLowerCase()
-    return userType || null
+    const userId = String(payload.user_id || '').trim()
+    return { userType: userType || null, userId: userId || null }
   } catch {
-    return null
+    return { userType: null, userId: null }
   }
 }
 
@@ -744,6 +746,7 @@ function App() {
   const [usageOpen, setUsageOpen] = useState(false)
   const [usageFrame, setUsageFrame] = useState(() => defaultUsageFrame(chatSizing.width, true))
   const [userType, setUserType] = useState<string | null>(null)
+  const [userId, setUserId] = useState<string | null>(null)
   const [panelZ, setPanelZ] = useState<Record<ScenePanelId, number>>({
     chat: FLOATING_PANEL_BASE_Z,
     memory: FLOATING_PANEL_BASE_Z + 1,
@@ -836,6 +839,17 @@ function App() {
     window.setTimeout(() => syncMemoryWidgetView(expanded ? 'expanded' : 'compact'), 0)
   }, [bringPanelToFront, syncMemoryWidgetView])
 
+  const sendChatWidgetCommand = useCallback((command: Record<string, unknown>) => {
+    const target = chatFrameRef.current?.contentWindow
+    if (!target) return false
+    target.postMessage({
+      type: 'kdcube-chat-widget-command',
+      widget: CHAT_WIDGET_ALIAS,
+      ...command,
+    }, '*')
+    return true
+  }, [])
+
   const surfaceRegistry = useMemo<Record<string, SceneSurfaceRegistration>>(() => ({
     'sdk.memory.viewer': {
       label: 'memory viewer',
@@ -851,7 +865,31 @@ function App() {
         }
       },
     },
-  }), [openMemoryWidget, sendMemoryWidgetCommand])
+    'sdk.chat.viewer': {
+      label: 'chat',
+      ensureOpen: () => {
+        // Open + front, but keep the pane's current compact/expanded form —
+        // opening a conversation is content-only.
+        bringPanelToFront('chat')
+        setChatOpen(true)
+      },
+      postCommand: sendChatWidgetCommand,
+      commandFromOpen: (request) => {
+        const ev = request.uiEvent
+        const conversationId = String(ev.conversation_id || '').trim()
+        if (!conversationId) return null
+        return {
+          action: 'load-conversation',
+          conversation_id: conversationId,
+          tenant: ev.tenant,
+          project: ev.project,
+          user_id: ev.user_id,
+          bundle_id: ev.bundle_id,
+          agent: ev.agent,
+        }
+      },
+    },
+  }), [openMemoryWidget, sendMemoryWidgetCommand, sendChatWidgetCommand, bringPanelToFront])
 
   const flushSurfaceCommand = useCallback((targetSurface: string) => {
     const command = pendingSurfaceCommandsRef.current[targetSurface]
@@ -1073,9 +1111,10 @@ function App() {
   // usage card affordance even though the widget URL itself is reachable.
   useEffect(() => {
     let cancelled = false
-    void fetchProfileUserType(ctx).then((next) => {
+    void fetchProfileIdentity(ctx).then((next) => {
       if (cancelled) return
-      setUserType(next)
+      setUserType(next.userType)
+      setUserId(next.userId)
     })
     return () => {
       cancelled = true
@@ -1191,6 +1230,56 @@ function App() {
     setNotice(`Attached ${contexts.length} item${contexts.length === 1 ? '' : 's'} to chat.`)
   }, [sendToChat])
 
+  // Open a conversation pin in the chat window. A `conversation` card is
+  // not attached as composer context — it switches the active chat
+  // conversation. The conversation id + coordinates come from the card's
+  // `data` (set when it was pinned), falling back to parsing the
+  // `conv:<tenant>/<project>/<user>/<bundle>/<agent>/<conversation_id>`
+  // ref tail.
+  const openChatConversation = useCallback((context: CanvasContextItem) => {
+    const data = (context.data ?? {}) as Record<string, unknown>
+    const refTail = String(context.ref ?? '').replace(/^conv:/, '')
+    const refParts = refTail ? refTail.split('/') : []
+    const conversationId = String(
+      data.conversation_id ?? data.conversationId ?? refParts[refParts.length - 1] ?? '',
+    ).trim()
+    if (!conversationId) {
+      setNotice('This conversation pin has no conversation id.')
+      return
+    }
+    // Open the chat pane and bring it forward, but DO NOT change its
+    // compact/expanded form — loading a conversation is content-only.
+    bringPanelToFront('chat')
+    setChatOpen(true)
+    const post = () => sendToChat({
+      type: 'kdcube-chat-widget-command',
+      widget: CHAT_WIDGET_ALIAS,
+      action: 'load-conversation',
+      conversation_id: conversationId,
+      tenant: data.tenant ?? refParts[0],
+      project: data.project ?? refParts[1],
+      user_id: data.user_id ?? refParts[2],
+      bundle_id: data.bundle_id ?? refParts[3],
+      agent: data.agent ?? refParts[4],
+    })
+    post()
+    // The pane may have just been opened; re-send next frame so the
+    // command lands after the iframe is mounted.
+    window.requestAnimationFrame(post)
+    setNotice('Opening conversation in chat…')
+  }, [bringPanelToFront, sendToChat])
+
+  const handleAttachCards = useCallback((input: CanvasContextItem | CanvasContextItem[]) => {
+    const items = Array.isArray(input) ? input : [input]
+    const conversation = items.find((item) => item.kind === 'conversation')
+    if (conversation) {
+      // Conversation pins load in chat; never land in the composer.
+      openChatConversation(conversation)
+      return
+    }
+    attachContexts('kdcube-context-focus', items)
+  }, [attachContexts, openChatConversation])
+
   const applyPatchResponse = useCallback((response: CanvasPatchResponse) => {
     if (!response.ok) return
     const event = normalizeCanvasPatchEvent(response.ui_event ?? response)
@@ -1287,6 +1376,34 @@ function App() {
       canvasIngressClient,
     ).then(applyPatchResponse).catch((error) => setNotice(error instanceof Error ? error.message : String(error)))
   }, [applyPatchResponse, canvasIngressClient, canvasTarget])
+
+  // Pin a conversation as a `conversation` card. The durable ref is built
+  // here from the scene's own coordinates plus the chat-supplied agent /
+  // conversation id:
+  //   conv:<tenant>/<project>/<user>/<bundle>/<agent>/<conversation_id>
+  // Loading the pin later goes through the chat's own fetch-by-id, so the
+  // server already enforces that the user may open it.
+  const pinConversationToCanvas = useCallback((input: { conversation_id: string; title: string; agent: string }) => {
+    const conversationId = input.conversation_id.trim()
+    if (!conversationId) {
+      setNotice('No conversation to pin.')
+      return
+    }
+    const agent = input.agent.trim() || 'main'
+    const userSegment = (userId && userId.trim()) || 'me'
+    const ref = `conv:${ctx.tenant}/${ctx.project}/${userSegment}/${ctx.bundleId}/${agent}/${conversationId}`
+    const rect = { x: 48, y: 48, w: 252, h: 120 }
+    void applyCanvasCards(
+      [cardFromSearchResult(
+        { ref, title: input.title || 'Conversation', mime: 'application/x-conversation', kind: 'conversation' },
+        { placement: 'placed', rect },
+      )],
+      canvasTarget(rect),
+      canvasIngressClient,
+    ).then(applyPatchResponse)
+      .then(() => setNotice('Pinned conversation to canvas.'))
+      .catch((error) => setNotice(error instanceof Error ? error.message : String(error)))
+  }, [applyPatchResponse, canvasIngressClient, canvasTarget, ctx.tenant, ctx.project, ctx.bundleId, userType])
 
   const handleCanvasObjectAction = useCallback(async (
     card: CanvasCard,
@@ -1422,6 +1539,14 @@ function App() {
           }
           return
         }
+        if (data.type === 'kdcube-pin-conversation') {
+          pinConversationToCanvas({
+            conversation_id: typeof data.conversation_id === 'string' ? data.conversation_id : '',
+            title: typeof data.title === 'string' ? data.title : '',
+            agent: typeof data.agent === 'string' ? data.agent : '',
+          })
+          return
+        }
       }
 
       if (['CONFIG_RESPONSE', 'CONN_RESPONSE'].includes(data.type)) {
@@ -1430,7 +1555,7 @@ function App() {
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [bringPanelToFront, flushSurfaceCommand, pinIngressPayloadToCanvas, sendToChat])
+  }, [bringPanelToFront, flushSurfaceCommand, pinIngressPayloadToCanvas, pinConversationToCanvas, sendToChat])
 
   useEffect(() => {
     syncChatWidgetView(chatExpanded ? 'expanded' : 'compact')
@@ -1481,7 +1606,7 @@ function App() {
                 readCanvas={readCanvas}
                 onCanvasChange={setActiveCanvasName}
                 onAttachCanvas={(context) => attachContexts('kdcube-context-attach', [context])}
-                onAttachCard={(context) => attachContexts('kdcube-context-focus', Array.isArray(context) ? context : [context])}
+                onAttachCard={handleAttachCards}
                 onDragCard={() => undefined}
                 onCloseCanvas={() => setCanvasOpen(false)}
                 onDropFiles={pinDroppedFilesToCanvas}
