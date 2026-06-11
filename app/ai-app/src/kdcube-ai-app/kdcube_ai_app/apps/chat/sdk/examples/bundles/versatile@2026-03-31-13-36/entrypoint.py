@@ -717,6 +717,33 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
             "</div>"
         ]
 
+    @api(
+        alias="pinboard_widget",
+        route="operations",
+        **_api_visibility("pinboard_widget"),
+    )
+    @ui_widget(
+        icon={
+            "tailwind": "heroicons-outline:bookmark",
+            "lucide": "Pin",
+        },
+        alias="pinboard",
+        **_widget_visibility("pinboard"),
+    )
+    def pinboard_widget(self, **kwargs):
+        # Static fallback served when the built widget is not yet on disk.
+        # The platform routes the real UI from
+        # sdk://solutions/canvas/ui/widget/pinboard once the bundle build ran.
+        # The board talks to the same canvas operations + Data Bus the scene
+        # uses, so a pin made here is visible in the scene's board and vice
+        # versa (both default to the `<bundle>:main` canvas story).
+        del kwargs
+        return [
+            "<div style=\"font-family:system-ui,sans-serif;padding:16px\">"
+            "Pin Board is served from sdk://solutions/canvas/ui/widget/pinboard after build."
+            "</div>"
+        ]
+
     @api(method="POST", alias="canvas_attachment_upload", route="operations", **_api_visibility("canvas_attachment_upload"))
     async def canvas_attachment_upload(self, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
         payload = _payload(data, **kwargs)
@@ -1399,6 +1426,23 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
                         "enabled": True,
                         "src_folder": "sdk://infra/economics/ui/widget/usage-card",
                         "build_command": "npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build",
+                    },
+                    "pinboard": {
+                        "enabled": True,
+                        # Standalone Pin Board: hosts the canvas component as
+                        # its own iframe so a host page can broker it next to
+                        # chat / memory instead of embedding the whole scene.
+                        # The component is materialized into the widget build
+                        # the same way the scene materializes it, so the
+                        # widget's vite alias resolves to the staged copy.
+                        "src_folder": "sdk://solutions/canvas/ui/widget/pinboard",
+                        "build_command": "npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build",
+                        "shared_sources": {
+                            "canvas_component": {
+                                "src_folder": "sdk://solutions/canvas/ui/component",
+                                "target": "_shared/canvas-component",
+                            },
+                        },
                     },
                     "versatile_webapp": {
                         "src_folder": "ui/widgets/versatile_webapp",

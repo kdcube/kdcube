@@ -1,0 +1,279 @@
+/**
+ * Standalone Pin Board widget.
+ *
+ * Hosts the shared `CanvasBoard` component as its own iframe so a host page
+ * (the Option B landing scene) can broker it alongside the chat / memory
+ * widgets instead of embedding the whole multi-widget scene. Self-contained
+ * canvas operations (pin a drop, patch, read, object actions) run here
+ * against the bundle's canvas operations + Data Bus via `createCanvasHost`.
+ * Cross-widget intents the board can't satisfy on its own — attaching a card
+ * to chat, opening a conversation / memory in another surface — are posted
+ * to the parent frame, which routes them to the right sibling widget.
+ */
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  CanvasBoard,
+  applyCanvasCards,
+  cardFromChatArtifact,
+  cardFromChatAssistantText,
+  cardFromSearchResult,
+  cardFromSelectedText,
+  uploadAndPinFiles,
+  emptyCanvasDefinition,
+  normalizeCanvasPatchEvent,
+  canvasFromPatchEvent,
+  upsertCanvasDefinition,
+  type CanvasCard,
+  type CanvasContextItem,
+  type CanvasDefinition,
+  type CanvasIngressPayload,
+  type CanvasObjectActionName,
+  type CanvasObjectActionResponse,
+  type CanvasPatchInput,
+  type CanvasPatchResponse,
+  type CanvasPatchUiEvent,
+} from '@kdcube/canvas-component'
+import { settings } from './api/settings'
+import { createCanvasHost, type CanvasHost, type RouteContext } from './api/canvasHost'
+
+// postMessage vocabulary for the host broker (Option B). The standalone
+// board emits intents; the parent page routes them to sibling widgets.
+const ATTACH_MESSAGE = 'kdcube-pinboard-attach'
+const OPEN_MESSAGE = 'kdcube-pinboard-open'
+const CLOSE_MESSAGE = 'kdcube-pinboard-close'
+
+function postToHost(message: Record<string, unknown>): void {
+  if (window.parent && window.parent !== window) {
+    window.parent.postMessage({ source: 'kdcube.pinboard', ...message }, '*')
+  }
+}
+
+function storyIdFor(bundleId: string): string {
+  const query = new URLSearchParams(window.location.search)
+  const explicit = (query.get('story_id') || query.get('storyId') || '').trim()
+  if (explicit) return explicit
+  // Mirror the scene's `<bundle>:main` convention (e.g. `versatile:main`),
+  // derived from the bundle id prefix so a board hosted in the same bundle
+  // shares the same canvas the scene writes to.
+  const prefix = (bundleId.split('@')[0] || '').trim()
+  return prefix ? `${prefix}:main` : 'main'
+}
+
+// Local card builders for the two ingress paths the scene also handles
+// inline (these are not exported by the component package).
+function cardFromContext(context: CanvasContextItem, rect: CanvasCard['rect']) {
+  const ref = String(context.logical_path ?? context.ref ?? context.id ?? '').trim()
+  return cardFromSearchResult(
+    {
+      ref,
+      title: context.label ? context.label : ref,
+      mime: context.mime,
+      summary: context.summary,
+      kind: context.kind === 'memory' ? 'memory' : undefined,
+    },
+    { placement: 'placed', rect },
+  )
+}
+
+function cardFromIngress(payload: CanvasIngressPayload, rect: CanvasCard['rect']) {
+  if (payload.kind === 'chat.artifact') {
+    return cardFromChatArtifact(
+      { ref: payload.ref, filename: payload.filename, mime: payload.mime, preview: payload.preview },
+      { placement: 'placed', rect },
+    )
+  }
+  if (payload.kind === 'chat.assistant.text') {
+    return cardFromChatAssistantText(payload.text, { title: payload.title, placement: 'placed', rect })
+  }
+  throw new Error(`Unsupported canvas ingress kind: ${(payload as { kind?: string }).kind}`)
+}
+
+export default function App() {
+  const [ready, setReady] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [host, setHost] = useState<CanvasHost | null>(null)
+  const [activeCanvasName, setActiveCanvasName] = useState('main')
+  const [canvases, setCanvases] = useState<CanvasDefinition[]>([emptyCanvasDefinition('main')])
+  const [canvasPatchEvent, setCanvasPatchEvent] = useState<CanvasPatchUiEvent | null>(null)
+
+  const activeCanvas = useMemo(
+    () => canvases.find((canvas) => canvas.name === activeCanvasName) ?? emptyCanvasDefinition(activeCanvasName),
+    [activeCanvasName, canvases],
+  )
+  const activeCanvasRef = useRef(activeCanvas)
+  activeCanvasRef.current = activeCanvas
+
+  // Boot: resolve runtime config, build the host, load the board.
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        await settings.setupParentListener()
+        const ctx: RouteContext = {
+          tenant: settings.getTenant(),
+          project: settings.getProject(),
+          bundleId: settings.getBundleId(),
+          baseUrl: settings.getBaseUrl(),
+          accessToken: settings.getAccessToken(),
+          idToken: settings.getIdToken(),
+        }
+        if (!ctx.tenant || !ctx.project || !ctx.bundleId) {
+          throw new Error('Pin Board could not resolve tenant / project / bundle from its host.')
+        }
+        const nextHost = createCanvasHost({ ctx, storyId: storyIdFor(ctx.bundleId) })
+        const loaded = await nextHost.loadCanvas(activeCanvasName)
+        if (cancelled) return
+        setHost(nextHost)
+        if (loaded.length) setCanvases(loaded)
+        setReady(true)
+      } catch (err) {
+        if (cancelled) return
+        setError(err instanceof Error ? err.message : String(err))
+        setReady(true)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+    // activeCanvasName is the initial 'main'; the board drives changes after boot.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const applyPatchResponse = useCallback((response: CanvasPatchResponse) => {
+    if (!response.ok) return
+    const event = normalizeCanvasPatchEvent(response.ui_event ?? response)
+    if (!event) return
+    setCanvasPatchEvent(event)
+    setCanvases((current) => upsertCanvasDefinition(current, canvasFromPatchEvent(event, activeCanvasRef.current)))
+  }, [])
+
+  const patchCanvas = useCallback(async (input: CanvasPatchInput): Promise<CanvasPatchResponse> => {
+    if (!host) throw new Error('Pin Board is not ready yet.')
+    const response = await host.patchCanvas(input)
+    applyPatchResponse(response)
+    return response
+  }, [host, applyPatchResponse])
+
+  const readCanvas = useCallback((input: Parameters<CanvasHost['readCanvas']>[0]) => {
+    if (!host) return Promise.reject(new Error('Pin Board is not ready yet.'))
+    return host.readCanvas(input)
+  }, [host])
+
+  const canvasIngressClient = useMemo(() => ({
+    patchCanvas,
+    uploadCanvasAttachments: (payload: Record<string, unknown>, files: File[]) => {
+      if (!host) return Promise.reject(new Error('Pin Board is not ready yet.'))
+      return host.uploadCanvasAttachments(payload, files)
+    },
+  }), [patchCanvas, host])
+
+  const canvasTarget = useCallback((rect?: CanvasCard['rect']) => ({
+    storyId: host?.storyId,
+    canvasId: activeCanvas.id,
+    canvasName: activeCanvas.name,
+    baseRevision: activeCanvas.revision,
+    rect,
+  }), [activeCanvas, host])
+
+  const failNotice = useCallback((err: unknown) => {
+    setNotice(err instanceof Error ? err.message : String(err))
+  }, [])
+
+  const onDropFiles = useCallback((files: File[], rect: CanvasCard['rect']) => {
+    void uploadAndPinFiles(files, canvasTarget(rect), canvasIngressClient, { placement: 'placed', rect })
+      .then(applyPatchResponse)
+      .catch(failNotice)
+  }, [applyPatchResponse, canvasIngressClient, canvasTarget, failNotice])
+
+  const onDropText = useCallback((text: string, rect: CanvasCard['rect']) => {
+    void applyCanvasCards([cardFromSelectedText(text, { placement: 'placed', rect })], canvasTarget(rect), canvasIngressClient)
+      .then(applyPatchResponse)
+      .catch(failNotice)
+  }, [applyPatchResponse, canvasIngressClient, canvasTarget, failNotice])
+
+  const onDropContext = useCallback((context: CanvasContextItem, rect: CanvasCard['rect']) => {
+    void applyCanvasCards([cardFromContext(context, rect)], canvasTarget(rect), canvasIngressClient)
+      .then(applyPatchResponse)
+      .catch(failNotice)
+  }, [applyPatchResponse, canvasIngressClient, canvasTarget, failNotice])
+
+  const onDropIngress = useCallback((payload: CanvasIngressPayload, rect: CanvasCard['rect']) => {
+    void applyCanvasCards([cardFromIngress(payload, rect)], canvasTarget(rect), canvasIngressClient)
+      .then(applyPatchResponse)
+      .catch(failNotice)
+  }, [applyPatchResponse, canvasIngressClient, canvasTarget, failNotice])
+
+  // Attaching / focusing a pin in chat is not something the standalone board
+  // can do — forward the intent to the host broker.
+  const onAttachCard = useCallback((input: CanvasContextItem | CanvasContextItem[]) => {
+    const items = Array.isArray(input) ? input : [input]
+    if (!items.length) return
+    const conversation = items.find((item) => item.kind === 'conversation')
+    postToHost({
+      type: ATTACH_MESSAGE,
+      mode: conversation ? 'open-conversation' : 'focus',
+      contexts: items,
+    })
+  }, [])
+
+  const onAttachCanvas = useCallback((context: CanvasContextItem) => {
+    postToHost({ type: ATTACH_MESSAGE, mode: 'attach', contexts: [context] })
+  }, [])
+
+  const onObjectAction = useCallback(async (
+    card: CanvasCard,
+    action: CanvasObjectActionName,
+  ): Promise<CanvasObjectActionResponse> => {
+    if (!host) throw new Error('Pin Board is not ready yet.')
+    const response = await host.objectAction(card, action, activeCanvasRef.current)
+    // An `open` that resolves to another surface (memory / chat) is routed
+    // by the host page; the board itself only previews/describes inline.
+    const uiEvent = response.ui_event as Record<string, unknown> | undefined
+    const targetSurface = uiEvent ? String(uiEvent.target_surface || '').trim() : ''
+    if (action === 'open' && targetSurface) {
+      postToHost({ type: OPEN_MESSAGE, target_surface: targetSurface, ui_event: uiEvent, card_ref: card.ref })
+    }
+    return response
+  }, [host])
+
+  const onCloseCanvas = useCallback(() => {
+    postToHost({ type: CLOSE_MESSAGE })
+  }, [])
+
+  if (!ready) {
+    return <div className="boot">Loading Pin Board…</div>
+  }
+  if (error) {
+    return <div className="error">Pin Board failed to load: {error}</div>
+  }
+
+  return (
+    <div className="pinboard-shell">
+      {notice ? (
+        <div className="notice" role="status">
+          <span>{notice}</span>
+          <button type="button" onClick={() => setNotice(null)} aria-label="Dismiss">×</button>
+        </div>
+      ) : null}
+      <CanvasBoard
+        activeCanvasName={activeCanvasName}
+        canvases={canvases}
+        canvasPatchEvent={canvasPatchEvent}
+        patchCanvas={patchCanvas}
+        readCanvas={readCanvas}
+        onCanvasChange={setActiveCanvasName}
+        onAttachCanvas={onAttachCanvas}
+        onAttachCard={onAttachCard}
+        onDragCard={() => undefined}
+        onCloseCanvas={onCloseCanvas}
+        onDropFiles={onDropFiles}
+        onDropText={onDropText}
+        onDropContext={onDropContext}
+        onDropIngress={onDropIngress}
+        onObjectAction={onObjectAction}
+      />
+    </div>
+  )
+}

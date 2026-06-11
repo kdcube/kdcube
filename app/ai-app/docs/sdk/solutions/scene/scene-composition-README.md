@@ -86,7 +86,10 @@ def versatile_chat_widget(self, **kwargs):
         "versatile_chat": {"src_folder": "sdk://solutions/chat/ui/widget"},
         "memories":       {"src_folder": "sdk://context/memory/ui/widget/memories"},
         "usage_card":     {"src_folder": "sdk://infra/economics/ui/widget/usage-card"},
-        # the canvas board is a React component compiled into the scene, not an iframe alias
+        # the canvas board is available two ways: compiled into the scene as a
+        # React component (below), AND as a standalone `pinboard` widget iframe
+        # any host can broker — see "The Canvas Board As A Standalone Widget".
+        "pinboard":       {"src_folder": "sdk://solutions/canvas/ui/widget/pinboard"},
     },
 }
 ```
@@ -162,6 +165,50 @@ That dispatch — surface registry, `target_surface` mapping, and per-widget
 command shape — is its own contract:
 [Scene Surface Registry](scene-surface-registry-README.md).
 
+## The Canvas Board As A Standalone Widget
+
+The canvas board ships **two ways** from one component
+(`sdk://solutions/canvas/ui/component`):
+
+1. **In-scene React component** — the versatile scene imports `CanvasBoard`
+   and wires it inline. Use this when the board lives inside a host you also
+   build in React and you want the tightest integration.
+2. **Standalone `pinboard` widget** (`sdk://solutions/canvas/ui/widget/pinboard`)
+   — the same `CanvasBoard` hosted as its own iframe. Use this when a host
+   brokers each surface as a separate iframe rather than embedding a whole
+   React scene: a non-React page, or an external host such as a product
+   landing page that wants the board next to a few other widgets.
+
+Both paths share the same two framework-free building blocks, so the board
+behaves identically in either host:
+
+| Building block | What it is | Lives in |
+| --- | --- | --- |
+| `canvasHost.ts` | A React-free `createCanvasHost(ctx, storyId)` factory: the canvas `operations/*` REST calls (read / list / object-action / attachment-upload) plus the Socket.IO Data Bus `canvas.patch` publish-and-wait. | the `pinboard` widget's `api/` (the scene keeps an equivalent inline copy) |
+| `canvasBoard.css` | The board's own stylesheet — design tokens, reset, and every `.canvas-*` rule — so it renders the same in any iframe. | the canvas component package (`canvasBoard.css`) |
+
+### Host-broker contract for the standalone widget
+
+A standalone board cannot reach the chat or memory surfaces itself — those are
+sibling iframes the host owns. So it does the canvas-local work inline (pin a
+drop, patch, preview) and **posts the cross-surface intents to its parent**,
+which routes them exactly like the in-scene broker routes the equivalent
+in-scene calls. Same model as [What The Host Owns](#what-the-host-owns); only
+the transport differs (postMessage across the iframe boundary instead of a
+React callback).
+
+| Message (from the board) | The host should | In-scene equivalent |
+| --- | --- | --- |
+| `CONFIG_REQUEST` (identity `PINBOARD_WIDGET`) | Reply `CONFIG_RESPONSE` with runtime config. | Same handshake as every widget. |
+| `kdcube-pinboard-attach` `{ mode, contexts }` | Attach the card(s) to chat (`focus`/`attach`), or load a conversation (`open-conversation`). | `kdcube-context-focus` / `kdcube-context-attach`. |
+| `kdcube-pinboard-open` `{ target_surface, ui_event }` | Route the resolver `open` to that surface. | [Opening Objects From The Board](#opening-objects-from-the-board). |
+| `kdcube-pinboard-close` | Hide / dismiss the board panel. | Panel close in the scene host. |
+
+The widget defaults its canvas story to `<bundle>:main` (overridable with a
+`?story_id=` query param), so a board hosted in the same bundle as the scene
+reads and writes the **same** canvas — a pin made in the standalone widget
+shows up in the scene's board and vice versa.
+
 ## Reference
 
 The versatile bundle is the working scene:
@@ -171,6 +218,14 @@ src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03
   ui/scene/src/main.tsx          host page: iframe mounts, CONFIG relay, message broker, Data Bus
   entrypoint.py                  @ui_widget aliases, configuration_defaults, canvas resolver registry
   docs/design/scene-sdk-components.md   bundle-local design note
+
+src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/canvas/ui
+  component/src/CanvasBoard.tsx   the shared board (in-scene component AND widget host it)
+  component/src/canvasBoard.css   component-owned board styles, reused by any host
+  widget/pinboard/                standalone `pinboard` widget app
+    src/App.tsx                   mounts CanvasBoard, emits the host-broker intents
+    src/api/canvasHost.ts         React-free operations + Data Bus factory
+    src/api/settings.ts           CONFIG bridge (identity PINBOARD_WIDGET)
 ```
 
 The tier-1 builder entry point for this pattern is the *Multi-Component Host

@@ -41,6 +41,7 @@ This is the bundle to study first.
 | SDK chat widget mount | `ui.widgets.versatile_chat` in `entrypoint.py` and `config/bundles.template.yaml` |
 | SDK memory widget mount | `ui.widgets.memories` in `entrypoint.py` and `config/bundles.template.yaml` |
 | SDK canvas component mount | `ui/scene`, `sdk://solutions/canvas/ui/component`, `entrypoint.py` canvas operations |
+| SDK canvas board as a standalone widget | `ui.widgets.pinboard`, `sdk://solutions/canvas/ui/widget/pinboard`; see [Scene Composition](../solutions/scene/scene-composition-README.md#the-canvas-board-as-a-standalone-widget) |
 | Legacy custom chat main UI kept for comparison | `ui/main/src/App.tsx` |
 | Source-folder Telegram/WebApp widget with shared UI sources | `entrypoint.py`, `ui/widgets/versatile_webapp`, `config/bundles.template.yaml` |
 | Public Telegram webhook and WebApp bridge | `entrypoint.py`, `docs/integrations/telegram-setup.md`, `docs/design/telegram-webapp.md` |

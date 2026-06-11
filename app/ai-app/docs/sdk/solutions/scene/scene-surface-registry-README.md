@@ -240,6 +240,15 @@ The landing page should not learn memory internals. It should mount iframe
 widgets, register their surfaces, and dispatch resolver responses by
 `target_surface`.
 
+When the board itself is a standalone iframe (the `pinboard` widget) rather
+than an in-React component, the resolver `open` reaches the host one hop
+further out: the widget runs the `canvas_object_action` itself, then forwards
+the resolver's `target_surface` to its parent as a `kdcube-pinboard-open`
+postMessage. The host feeds that `target_surface` into this same registry — the
+routing contract is unchanged, only the board-to-host transport is a
+postMessage. See the host-broker contract in
+[Scene Composition](scene-composition-README.md#the-canvas-board-as-a-standalone-widget).
+
 ## Current Implementation
 
 The versatile scene implements the first local version of this registry:

@@ -60,6 +60,13 @@ bundles:
             memories:
               src_folder: sdk://context/memory/ui/widget/memories
               build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
+            pinboard:
+              src_folder: sdk://solutions/canvas/ui/widget/pinboard
+              build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
+              shared_sources:
+                canvas_component:
+                  src_folder: sdk://solutions/canvas/ui/component
+                  target: _shared/canvas-component
             versatile_webapp:
               src_folder: ui/widgets/versatile_webapp
               build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
