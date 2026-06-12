@@ -1,7 +1,0 @@
-tools:
-  - id: react.read
-    role: load skill and fixture files
-    why: Read the skill text and exact `ks:src/kdcube-ai-app/.../sdk/tests/bundle/...` pytest files into visible context.
-  - id: exec_tools.execute_code_python
-    role: run pytest in isolated exec
-    why: Use isolated Python to browse the current bundle pytest suite and run the relevant exact file or subset against `BUNDLE_UNDER_TEST` or an explicit `--bundle-path`.
