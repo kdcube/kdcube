@@ -1164,10 +1164,12 @@ General rule: if action B's success or content depends on action A's result, A a
   - STATE CHANGE + anything else (durable memory writes such as record_memory / confirm_memory / retire_memory must run alone).
   - TOOL ACTION + complete/exit. Any final_answer accompanying a tool call asserts the work is done before that tool's result exists. This applies to EVERY tool — including "lightweight" ones like react.read, react.hide, react.memsearch, web_tools.web_search. Lightweight-feel is not a license to bundle.
 
-EXPLORATION vs EXPLOITATION (positive form of the rule above):
-- EXPLORATION = any action that requests data (read, fetch, search, memory-search, exec that produces a result you'll inspect).
-- EXPLOITATION = any action that USES that data (write, render, patch, exec consuming it, or `complete`/`exit` whose `final_answer` draws on it).
-- You may begin exploitation for a given prerequisite ONLY AFTER you have (a) requested the exploration as an action in an earlier round, AND (b) the tool result for that action is visible in your timeline NOW. Emitting an exploration action is NOT the same as having its result. Until the result block appears in a later round, behave as if the request has not happened — do not use, cite, summarize, or close the turn on data that is not yet visible.
+ACTION KINDS — EXPLORATION / EXPLOITATION / NEUTRAL (positive form of the rule above):
+- EXPLORATION = an action that REQUESTS data you will inspect (read, fetch, search, memory-search).
+- EXPLOITATION = an action that USES data (write, render, patch, or `complete`/`exit` whose `final_answer` draws on retrieved/produced content).
+- NEUTRAL = an action that neither requests data a sibling would use nor produces data a sibling would use (e.g. hiding a stale block from your own view).
+- NO FIXED KIND -> SOLO: some actions cannot be placed in advance. Code execution (exec_tools.execute_code_python) is the canonical case — the same call can explore (compute a result you'll read) or exploit (consume retrieved data, emit a deliverable), so neither you nor the runtime can fix its kind ahead of time. Any action with no fixed kind — exec, or a tool you cannot confidently classify — runs ALONE, never in a multi-action batch.
+An EXPLORATION and an EXPLOITATION NEVER share a round — even when this exploitation looks unrelated to this exploration. The runtime decides by KIND and cannot verify the pair is independent, so it rejects the whole batch. Exploit a prerequisite ONLY AFTER its exploration result is visible in an EARLIER round; emitting an exploration is not the same as having its result. Until the result block appears in a later round, behave as if the request has not happened — do not use, cite, summarize, or close the turn on data that is not yet visible.
 
 Bad chain example: round N emits an exec to create report.xlsx, then the same response says "report.xlsx is ready". Correct chain: round N says "Creating the Excel file", emits the exec action, stops; round N+1 sees success and the file ref, then says the file is ready.
 """
@@ -1175,12 +1177,14 @@ Bad chain example: round N emits an exec to create report.xlsx, then the same re
 
 MULTI_ACTION_INDEPENDENCE_AND_GOOD_SHAPES = """
 [INDEPENDENCE GATE — WHEN MULTI-ACTION IS ALLOWED]
-Multi-action (more than one action in the same round) is allowed ONLY when every action in the round is fully determined by data already visible before this response began AND every pair of actions passes this test: "could B succeed and be correct even if A failed completely?" If any pair fails the test, split them across rounds.
+Multi-action (more than one action in the same round) must clear TWO gates, in order:
+1. KIND gate (categorical): no exploration shares the round with an exploitation; neutral combines with either; a state-changing memory write, code execution (exec), or any action with no fixed kind goes ALONE. "They happen to be independent" does NOT unlock an exploration+exploitation round — the runtime rejects that shape by kind, without checking the specific pair.
+2. INDEPENDENCE gate (only for a kind-compatible batch): every action must be fully determined by data already visible before this response began, AND every pair must pass "could B succeed and be correct even if A failed completely?" If any pair fails, split them across rounds.
 Once you emit any action that must execute, retrieve, write, render, store, or change state, the response can no longer assert anything that depends on its outcome — that result is not visible until the next round.
 
 [GOOD MULTI-ACTION SHAPES]
-  - Independent renders/writes (e.g. PDF + PPTX + DOCX) all consuming a source whose path/ref was visible at the START of this round (i.e. produced in an EARLIER round).
-  - One retrieval call against multiple known logical paths.
+  - Independent exploitations: PDF + PPTX + DOCX all consuming a source whose path/ref was visible at the START of this round (produced in an EARLIER round).
+  - One exploration against multiple known logical paths; or several independent explorations of different targets.
 Visible timeline should normally read as action -> result, then next action -> result. That shape is what confirms causality.
 """
 

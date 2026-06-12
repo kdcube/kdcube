@@ -83,7 +83,7 @@ The card renders in one of two densities:
 
 | Mode | When | Shows |
 | --- | --- | --- |
-| Super-compact | Default when summoned with `?view=compact` (or `?compact=1`) | One-line `Plan: <name> · <email>` header, then `Last hour` / `Today` / `This month` (in that order). Each block shows `$ spent / quota` as the headline (colored gold ≥80%, red at the cap) with `tokens spent / quota` alongside, plus when the window resets. No request counts; quota reads `∞` on an unlimited plan. |
+| Super-compact | Default when summoned with `?view=compact` (or `?compact=1`) | One-line `Plan: <name> · <email>` header, then the rolling windows `Last hour` / `Last 24h` / `Last 30 days`. Each block shows `$ spent / quota` as the headline (colored gold ≥80%, red at the cap) with `tokens spent / quota` alongside, plus when the window resets (hourly roll-off and the 30-day `period_end`; the 24h window has no reset, and unlimited plans show none). No request counts; quota reads `∞` on an unlimited plan. |
 | Full | Default standalone, or after the host sends `kdcube-set-view {view:"expanded"}` | The three stacked windows above with per-row pill bars and policy hints. |
 
 A scene host flips between the two with `kdcube-set-view`; the same message the

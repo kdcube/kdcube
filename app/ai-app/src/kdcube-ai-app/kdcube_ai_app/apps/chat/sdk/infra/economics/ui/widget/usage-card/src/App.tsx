@@ -342,14 +342,14 @@ export const App: React.FC = () => {
               tokQuota={breakdown.effective_policy.tokens_per_hour}
             />
             <UsageBlock
-              label="Today"
+              label="Last 24h"
               costUsed={breakdown.current_usage.tokens_today_usd}
               costQuota={breakdown.effective_policy.usd_per_day}
               tokUsed={breakdown.current_usage.tokens_today}
               tokQuota={breakdown.effective_policy.tokens_per_day}
             />
             <UsageBlock
-              label="This month"
+              label="Last 30 days"
               resetAt={breakdown.reset_windows?.month_reset_at}
               costUsed={breakdown.current_usage.tokens_this_month_usd}
               costQuota={breakdown.effective_policy.usd_per_month}
