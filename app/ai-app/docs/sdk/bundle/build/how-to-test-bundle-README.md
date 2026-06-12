@@ -1,40 +1,40 @@
 ---
-id: ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-test-bundle-README.md
 title: "How To Test A Bundle"
 summary: "Testing guide for bundle authors and QA: local syntax/suite/pytest validation, runtime reload validation, widget/API/event-source checks, scheduled-job verification, and failure diagnosis in the local runtime."
 tags: ["sdk", "bundle", "testing", "pytest", "widget", "events", "runtime", "validation"]
 keywords: ["bundle testing workflow", "shared bundle suite", "local bundle tests", "widget and api validation", "event source validation", "artifact rehoster validation", "shared sdk widget source validation", "runtime reload verification", "scheduled job checks", "bundle failure diagnosis", "manual and automated test loop", "local qa for bundles", "integration qa for bundles"]
 updated_at: 2026-06-11
 see_also:
-  - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
-  - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
-  - ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
-  - ks:docs/sdk/bundle/build/how-to-avoid-common-bundle-integration-failures-README.md
-  - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
-  - ks:docs/sdk/bundle/build/how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md
-  - ks:docs/sdk/bundle/build/how-to-release-bundle-content-README.md
-  - ks:docs/sdk/bundle/bundle-agent-integration-README.md
-  - ks:docs/sdk/bundle/bundle-entrypoint-classes-README.md
-  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
-  - ks:docs/sdk/bundle/bundle-subsystem-integration-README.md
-  - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
-  - ks:docs/sdk/bundle/bundle-widget-integration-README.md
-  - ks:docs/sdk/bundle/bundle-events-README.md
-  - ks:docs/sdk/integrations/telegram/telegram-README.md
-  - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
-  - ks:docs/sdk/integrations/browser/browser-tools-README.md
-  - ks:docs/service/cicd/ngrok-README.md
-  - ks:docs/sdk/tools/custom-tools-README.md
-  - ks:docs/sdk/tools/tool-subsystem-README.md
-  - ks:docs/sdk/events/event-subsystem-README.md
-  - ks:docs/sdk/events/external-events-README.md
-  - ks:docs/service/comm/data-bus-README.md
-  - ks:docs/service/comm/conversation-event-bus-and-data-bus-README.md
-  - ks:docs/configuration/gateway-descriptor-README.md
-  - ks:docs/sdk/agents/react/event-source/event-source-README.md
-  - ks:docs/sdk/bundle/bundle-delivery-and-update-README.md
-  - ks:docs/sdk/bundle/bundle-runtime-README.md
-  - ks:docs/sdk/bundle/build/design/bundle-loader-import-isolation-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-write-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-avoid-common-bundle-integration-failures-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-release-bundle-content-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-agent-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-entrypoint-classes-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-subsystem-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/versatile-reference-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-external-prereq-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/browser/browser-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/ngrok-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/custom-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/tool-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/conversation-event-bus-and-data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/gateway-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-delivery-and-update-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-runtime-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/design/bundle-loader-import-isolation-README.md
 ---
 # How To Test A KDCube Bundle
 

@@ -1,17 +1,17 @@
 ---
-id: ks:docs/README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/README.md
 title: "Platform Documentation Index"
 summary: "Curated top-level map of the KDCube documentation tree for builders, integrators, operators, and agents."
 tags: ["docs", "index", "sdk", "service", "ops", "architecture"]
 keywords: ["documentation index", "platform architecture", "configuration guides", "service runtime docs", "bundle sdk docs", "execution docs", "deployment and operations docs", "bundle builder docs", "client widgets", "streaming", "memory", "claude code"]
 updated_at: 2026-05-27
 see_also:
-  - ks:docs/what-you-can-do-with-kdcube-README.md
-  - ks:docs/quick-start-README.md
-  - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
-  - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
-  - ks:docs/sdk/bundle/bundle-index-README.md
-  - ks:docs/arch/architecture-short.md
+  - repo:kdcube-ai-app/app/ai-app/docs/what-you-can-do-with-kdcube-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/quick-start-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-write-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-index-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/architecture-short.md
 ---
 # Docs Index
 

@@ -1,14 +1,14 @@
 ---
-id: ks:docs/sdk/bundle/bundle-node-backend-bridge-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-node-backend-bridge-README.md
 title: "Bundle Node Backend Bridge"
 summary: "Bundle pattern for keeping the public KDCube app surface in Python while delegating selected backend logic to a bundle-local Node or TypeScript sidecar."
 tags: ["sdk", "bundle", "node", "typescript", "bridge", "backend", "sidecar"]
 keywords: ["bundle node backend", "typescript bundle backend", "python owned app surface", "node sidecar pattern", "bundle local backend process", "node integration example"]
 see_also:
-  - ks:docs/sdk/node/node-backend-sidecar-README.md
-  - ks:docs/sdk/bundle/bundle-platform-integration-README.md
-  - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
-  - ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/node.bridge.mcp@2026-04-24/entrypoint.py
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/node/node-backend-sidecar-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md
+  - repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/node.bridge.mcp@2026-04-24/entrypoint.py
 ---
 # Bundle Node Backend Bridge
 
@@ -59,10 +59,10 @@ Detailed runtime doc:
 - [node-backend-sidecar-README.md](../node/node-backend-sidecar-README.md)
 
 Reusable SDK runtime helper:
-- `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/node/runtime_bridge.py`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/node/runtime_bridge.py`
 
 Runnable public example:
-- `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/node.bridge.mcp@2026-04-24/entrypoint.py`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/node.bridge.mcp@2026-04-24/entrypoint.py`
 
 ## Public example behavior
 

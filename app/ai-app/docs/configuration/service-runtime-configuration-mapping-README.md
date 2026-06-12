@@ -1,16 +1,16 @@
 ---
-id: ks:docs/configuration/service-runtime-configuration-mapping-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
 title: "Service Runtime Configuration Mapping"
 summary: "Cross-descriptor runtime mapping for the platform: which file or env owns which runtime values across CLI compose, direct local runs, and AWS deployment."
 tags: ["service", "configuration", "env", "descriptors"]
 keywords: ["descriptor to runtime mapping", "compose versus direct run versus aws", "descriptor file locations", "runtime env translation", "bundle descriptor provider mapping", "secrets provider mapping", "workspace backend mapping", "mode specific configuration contract", "local mount variables", "deployment runtime configuration overview"]
 see_also:
-  - ks:docs/service/cicd/descriptors-README.md
-  - ks:docs/configuration/runtime-read-write-contract-README.md
-  - ks:docs/configuration/runtime-configuration-and-secrets-store-README.md
-  - ks:docs/configuration/assembly-descriptor-README.md
-  - ks:docs/configuration/bundles-descriptor-README.md
-  - ks:docs/configuration/secrets-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/descriptors-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/runtime-read-write-contract-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/runtime-configuration-and-secrets-store-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/assembly-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/secrets-descriptor-README.md
 ---
 # Service Runtime Configuration Mapping
 
@@ -199,9 +199,6 @@ The proc service reads these non-secret ReAct limits from `assembly.yaml` throug
 | `AI_REACT_READ_VISIBLE_MAX_TOKENS` | `ai.react.read_visible_max_tokens` | `assembly.yaml` | all modes | token guard per `react.read` text path |
 | `AI_REACT_READ_VISIBLE_MAX_BYTES` | `ai.react.read_visible_max_bytes` | `assembly.yaml` | all modes | raw byte guard for every `react.read` payload |
 | `AI_REACT_READ_VISIBLE_CONTEXT_FRACTION` | `ai.react.read_visible_context_fraction` | `assembly.yaml` | all modes | additional clamp against the current ReAct context budget |
-| `AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_TEXT_SYMBOLS` | `ai.react.knowledge_read_visible_max_text_symbols` | `assembly.yaml` | all modes | optional text cap for `ks:` article reads; default `null` means uncapped |
-| `AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_TOKENS` | `ai.react.knowledge_read_visible_max_tokens` | `assembly.yaml` | all modes | optional token guard for `ks:` article reads; default `null` means uncapped |
-| `AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_BYTES` | `ai.react.knowledge_read_visible_max_bytes` | `assembly.yaml` | all modes | optional byte guard for `ks:` payloads; default `null` means uncapped |
 | `AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS` | `ai.react.exec_text_preview_max_symbols` | `assembly.yaml` | all modes | text preview cap for each exec-produced text artifact |
 | `AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS` | `ai.react.tool_result_preview_max_text_symbols` | `assembly.yaml` | all modes | model-visible text preview cap for large initial tool results |
 | `AI_REACT_LINE_NUMBERS_MODE` | `ai.react.line_numbers_mode` | `assembly.yaml` | all modes | rendered text preview line numbering mode: `disabled`, `lines`, or `sparsed`; bundle `config.react.default_agent.line_numbers_mode` or named-agent override takes precedence |
@@ -220,9 +217,8 @@ Unit contract:
   previews; oversized initial tool results render as a bounded preview plus
   shape/recovery metadata. Per-call `max_text_symbols` only asks for a smaller
   explicit `react.read` text preview. Read caps apply per requested path.
-- Skills are not read-capped. `ks:` knowledge-space text reads are uncapped by
-  default; the optional `AI_REACT_KNOWLEDGE_READ_VISIBLE_*` limits exist only
-  for deployments that need to cap maintainer-authored articles.
+- Skills are not read-capped. Owner-defined document/source systems should
+  expose their own tools, namespace service endpoints, or rehosters.
 - `*_TOKENS` is a model-context budget guard.
 - `*_BYTES` is a raw payload guard. PDF/image reads are either attached whole
   under the byte cap or represented by a recovery marker; they are not partially

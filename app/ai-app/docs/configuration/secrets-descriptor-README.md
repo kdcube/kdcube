@@ -1,15 +1,15 @@
 ---
-id: ks:docs/configuration/secrets-descriptor-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/configuration/secrets-descriptor-README.md
 title: "Platform Secrets Descriptor"
 summary: "Platform-level secret configuration in secrets.yaml: model provider credentials, git and auth secrets, and other global deployment secrets across local file mode and AWS. Service keys under services.* can be overridden per bundle via bundles.secrets.yaml."
 tags: ["service", "configuration", "platform", "secrets", "deployment", "descriptor"]
 keywords: ["platform global secrets", "model provider credentials", "git transport credentials", "identity provider secrets", "cloud credentials", "email credentials", "local secrets file mode", "aws secrets manager global secrets", "canonical secret keys", "deployment secret inventory", "bundle service key override", "per-bundle api key"]
 see_also:
-  - ks:docs/service/cicd/descriptors-README.md
-  - ks:docs/configuration/bundles-secrets-descriptor-README.md
-  - ks:docs/configuration/service-runtime-configuration-mapping-README.md
-  - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
-  - ks:docs/configuration/runtime-configuration-and-secrets-store-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/descriptors-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-secrets-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/runtime-configuration-and-secrets-store-README.md
 ---
 # Platform Secrets Descriptor
 

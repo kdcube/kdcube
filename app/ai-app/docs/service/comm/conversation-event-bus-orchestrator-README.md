@@ -1,5 +1,5 @@
 ---
-id: ks:docs/service/comm/conversation-event-bus-orchestrator-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/comm/conversation-event-bus-orchestrator-README.md
 title: "Conversation Event Bus Orchestrator"
 summary: "Design for the conversation external-event bus orchestrator and its shared Redis synchronization table."
 status: draft
@@ -15,11 +15,11 @@ keywords:
     "sync table",
   ]
 see_also:
-  - ks:docs/service/comm/conversation-event-bus-and-data-bus-README.md
-  - ks:docs/service/comm/comm-system.md
-  - ks:docs/service/comm/README-comm.md
-  - ks:docs/sdk/events/external-events-journey-and-handling-README.md
-  - ks:docs/sdk/events/conversation-event-lane-state-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/conversation-event-bus-and-data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/comm-system.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/README-comm.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-journey-and-handling-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/conversation-event-lane-state-README.md
 ---
 # Conversation Event Bus Orchestrator
 

@@ -1,13 +1,13 @@
 ---
-id: ks:docs/sdk/integrations/email/email-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/email/email-README.md
 title: "Email SDK Integration"
 summary: "Reusable email integration mechanics for KDCube bundles: account metadata, Gmail OAuth/API access, iCloud IMAP/SMTP, attachment materialization, email MCP runs, and Claude Code email processing."
 tags: ["sdk", "integrations", "email", "gmail", "icloud", "imap", "mcp", "bundles"]
 keywords: ["email integration", "gmail integration", "email accounts", "email attachments", "email mcp", "claude code email"]
 see_also:
-  - ks:docs/sdk/integrations/email/email-external-prereq-README.md
-  - ks:docs/sdk/integrations/telegram/telegram-README.md
-  - ks:docs/service/servicing-interfaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/email/email-external-prereq-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/servicing-interfaces-README.md
 ---
 
 # Email SDK Integration

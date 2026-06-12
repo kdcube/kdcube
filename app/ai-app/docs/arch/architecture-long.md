@@ -1,16 +1,16 @@
 ---
-id: ks:docs/arch/architecture-long.md
+id: repo:kdcube-ai-app/app/ai-app/docs/arch/architecture-long.md
 title: "Architecture Long"
 summary: "End‑to‑end system architecture: transports, gateway, processing, relay, storage, and economics."
 tags: ["arch", "architecture", "system", "services", "dataflow", "ecs", "fargate"]
 keywords: ["ingress", "proc", "gateway", "SSE", "redis", "storage", "economics", "auth", "ecs", "fargate", "alb", "cloud-map"]
 see_also:
-  - ks:docs/arch/architecture-short.md
-  - ks:docs/service/comm/README-comm.md
-  - ks:docs/service/comm/conversation-event-bus-and-data-bus-README.md
-  - ks:docs/service/comm/data-bus-README.md
-  - ks:docs/service/auth/auth-README.md
-  - ks:docs/service/proxy/proxy-ecs-ops-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/architecture-short.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/README-comm.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/conversation-event-bus-and-data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/proxy/proxy-ecs-ops-README.md
 ---
 # KDCube AI App — System Architecture (Long)
 

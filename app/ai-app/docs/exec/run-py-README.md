@@ -1,13 +1,13 @@
 ---
-id: ks:docs/exec/run-py-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/exec/run-py-README.md
 title: "Run Py"
 summary: "Minimal setup to run Python via the ISO runtime in Docker (exec tools quickstart)."
 tags: ["exec", "python", "iso-runtime", "quickstart", "docker"]
 keywords: ["run python", "exec_tools", "ISO runtime", "docker executor", "bundle example", "out_dir"]
 see_also:
-  - ks:docs/exec/README-iso-runtime.md
-  - ks:docs/exec/runtime-README.md
-  - ks:docs/exec/operations.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/README-iso-runtime.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/runtime-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/operations.md
 ---
 # Run Python in ISO Runtime (Docker) — Minimal Developer Guide
 
@@ -117,8 +117,10 @@ If a bundle also depends on prepared local readonly data, the runtime passes a c
 BUNDLE_STORAGE_DIR
 ```
 
-That path points at the per-bundle readonly storage dir physically available inside isolated exec.
-Example: `kdcube.copilot` reads its built knowledge space from `BUNDLE_STORAGE_DIR`.
+That path points at the per-bundle readonly storage dir physically available
+inside isolated exec. Bundle code can use it for prepared local readonly data,
+but cross-bundle access should go through explicit tools, named services,
+MCP/search, or rehosters.
 
 ---
 

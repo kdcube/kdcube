@@ -1,14 +1,14 @@
 ---
-id: ks:docs/service/streams/background-jobs-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/streams/background-jobs-README.md
 title: "Background Job Streams"
 summary: "Redis Stream contract for ready bundle-owned background work claimed by proc and dispatched to a bundle @on_job handler."
 tags: ["service", "streams", "background-jobs", "redis", "proc", "on_job", "bundles"]
 keywords: ["background job stream", "RedisBackgroundJobStream", "on_job", "ready work", "job envelope", "dedupe", "XAUTOCLAIM"]
 see_also:
-  - ks:docs/service/streams/README.md
-  - ks:docs/service/streams/telemetry-README.md
-  - ks:docs/sdk/bundle/bundle-scheduled-jobs-README.md
-  - ks:docs/sdk/bundle/bundle-transports-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/streams/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/streams/telemetry-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-scheduled-jobs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-transports-README.md
 ---
 # Background Job Streams
 

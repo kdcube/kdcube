@@ -1,13 +1,13 @@
 ---
-id: ks:docs/service/maintenance/gateway-control-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/maintenance/gateway-control-README.md
 title: "Gateway Control Maintenance"
 summary: "Operational notes for clearing gateway rate-limit, Data Bus publish-limit, and backpressure state without flushing Redis."
 tags: ["service", "maintenance", "gateway", "redis", "rate-limit", "data-bus", "backpressure"]
 keywords: ["gateway control", "rate limit reset", "data bus publish limit reset", "anonymous burst limit", "redis browser", "throttling reset"]
 see_also:
-  - ks:docs/service/maintenance/requests-monitoring-README.md
-  - ks:docs/configuration/gateway-descriptor-README.md
-  - ks:docs/service/scale/redis-cluster-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/maintenance/requests-monitoring-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/gateway-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/scale/redis-cluster-README.md
 ---
 # Gateway Control Maintenance
 

@@ -1,13 +1,13 @@
 ---
-id: ks:docs/exec/README-runtime-modes-builtin-tools.md
+id: repo:kdcube-ai-app/app/ai-app/docs/exec/README-runtime-modes-builtin-tools.md
 title: "Runtime Modes Builtin Tools"
 summary: "Where built‑in tools execute (in‑proc vs isolated vs Docker) and how to configure default modes."
 tags: ["exec", "tools", "runtime-modes", "isolation", "configuration"]
 keywords: ["builtin tools", "tool runtime", "isolated subprocess", "docker mode", "tool_id", "default mode"]
 see_also:
-  - ks:docs/exec/runtime-README.md
-  - ks:docs/exec/README-iso-runtime.md
-  - ks:docs/exec/distributed-exec-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/runtime-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/README-iso-runtime.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/distributed-exec-README.md
 ---
 # Runtime modes for built-in tools
 

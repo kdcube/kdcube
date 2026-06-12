@@ -1,17 +1,17 @@
 ---
-id: ks:docs/sdk/agents/react/react-turn-workspace-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-turn-workspace-README.md
 title: "ReAct Turn Workspace"
 summary: "Filesystem contract and lifecycle of the per-turn ReAct workspace (work/out), including local origin, runtime population, persistence, and Fargate/distributed snapshot transport."
 tags: ["sdk", "agents", "react", "workspace", "execution", "snapshot", "fargate", "distributed"]
 keywords: ["exec-workspace", "exec_YYYYMMDDHHMMSS", "workdir", "outdir", "timeline.json", "tool_calls_index.json", "user.log", "infra.log", "EXEC_SNAPSHOT", "build_exec_snapshot_workspace", "snapshot_exec_input", "py_code_exec_entry.py"]
 see_also:
-  - ks:docs/sdk/agents/react/agent-workspace-collboration-README.md
-  - ks:docs/sdk/agents/react/timeline-README.md
-  - ks:docs/sdk/agents/react/turn-log-README.md
-  - ks:docs/sdk/agents/react/source-pool-README.md
-  - ks:docs/sdk/agents/react/external-exec-README.md
-  - ks:docs/exec/distributed-exec-README.md
-  - ks:docs/sdk/agents/react/files-vs-outputs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/agent-workspace-collboration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/timeline-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/turn-log-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/source-pool-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/external-exec-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/distributed-exec-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/files-vs-outputs-README.md
 ---
 # ReAct Turn Workspace
 
@@ -61,7 +61,6 @@ Current behavior:
 - Reads can target:
   - versioned turn artifacts and attachments
   - any readable artifact file already present under `out/workdir/`
-  - exact logical `ks:` paths via `react.read`
 - External owner refs such as `nmsp:`, `cnv:`, or `mem:` have no physical path
   until `react.pull` invokes a registered namespace rehoster and returns the
   materialized `fi:` / physical rows.
@@ -84,31 +83,22 @@ Workspace implementation (`RuntimeCtx.workspace_implementation`):
   - folder pulls expand from timeline/git metadata and fetch exact hosted blobs; they do not list storage buckets or extract execution snapshots
   - in `git` mode, exact non-text `.files/...` refs that resolve to hosted artifacts are still hydrated from artifact/hosting history, not from git
 
-### Knowledge space and exec-time path resolution
+### Namespace-owned files and exec-time path resolution
 
-`ks:` is readable by logical path, for example `react.read(["ks:<bundle-defined-path>"])`.
-Knowledge-space articles are uncapped only when no
-`ai.react.knowledge_read_visible_*` cap is configured. When a cap is configured,
-large `ks:` articles are recoverable by parts with `react.read` range items:
-
-```json
-{"paths":["ks:<bundle-defined-path>"],"stats_only":true}
-{"items":[{"path":"ks:<bundle-defined-path>","line_start":1,"line_count":120}]}
-```
-
-Important constraints:
-- `react.rg` does not browse `ks:`.
-- `fetch_ctx` does not support `ks:`.
-- `ks:` becomes a physical directory tree only inside isolated exec **if** the bundle exposes a namespace resolver/helper for it.
+Bundle-owned files are not exposed through a generic ReAct-readable knowledge
+space. If generated code needs to inspect namespace-owned bytes or directory-like
+content, the owning bundle must provide an explicit resolver, rehoster, tool,
+MCP/search surface, or named-service operation that enforces the current auth
+context.
 
 When such a resolver exists, the generated code flow is:
-1. start from a logical ref such as `ks:<bundle-defined-root>`
-2. call the bundle/helper resolver inside exec
-3. receive an exec-local physical path
-4. browse descendants in code for discovery only
-5. emit discovered logical refs like `ks:<bundle-defined-root>/foo/bar.py` back into OUTPUT_DIR artifacts or short logs so the agent can later call `react.read` on them, including range reads when they are large
-
-If the bundle does **not** expose a resolver for directory-style browsing, then `ks:` remains readable only by exact logical path or by bundle-specific search tools. It is not a normal browseable filesystem from standard React tools.
+1. start from a namespace-owned logical ref such as `task:...`
+2. call the owner-provided resolver or service operation
+3. receive an exec-local physical path or a byte stream scoped to that request
+4. inspect the content for discovery only
+5. emit owner refs or hosted file refs back into OUTPUT_DIR artifacts or short
+   logs so the agent can later use the correct owner API or `react.read` on
+   normal `fi:`/`tc:`/`ar:` artifacts
 
 ## Lifecycle at a glance
 

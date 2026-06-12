@@ -28,6 +28,15 @@ def _unwrap_api_payload(payload: Mapping[str, Any] | None, request_fields: Mappi
     return data
 
 
+def _coerce_api_request(
+    payload: Mapping[str, Any] | NamedServiceRequest | None,
+    request_fields: Mapping[str, Any],
+) -> NamedServiceRequest:
+    if payload is not None and not isinstance(payload, Mapping) and not request_fields:
+        return NamedServiceRequest.coerce(payload)
+    return NamedServiceRequest.from_dict(_unwrap_api_payload(payload, request_fields))
+
+
 class NamedServiceApiTransport:
     """API transport adapter that dispatches through the local provider loop."""
 
@@ -47,18 +56,15 @@ class NamedServiceApiTransport:
         payload: Mapping[str, Any] | NamedServiceRequest | None = None,
         **request_fields: Any,
     ) -> dict[str, Any]:
-        if isinstance(payload, NamedServiceRequest):
-            request = payload
-        else:
-            try:
-                request = NamedServiceRequest.from_dict(_unwrap_api_payload(payload, request_fields))
-            except Exception as exc:
-                LOGGER.warning("Named-service API request invalid: error=%s", exc)
-                return NamedServiceResponse.error_response(
-                    code="named_service_api_request_invalid",
-                    message=str(exc),
-                    status=400,
-                ).to_dict()
+        try:
+            request = _coerce_api_request(payload, request_fields)
+        except Exception as exc:
+            LOGGER.warning("Named-service API request invalid: error=%s", exc)
+            return NamedServiceResponse.error_response(
+                code="named_service_api_request_invalid",
+                message=str(exc),
+                status=400,
+            ).to_dict()
         client = self.client
         if client is None:
             client = NamedServiceClient.from_current_request(
@@ -107,3 +113,69 @@ async def dispatch_named_service_api_request(
 
     transport = NamedServiceApiTransport(registry, auth_context=auth_context, client=client)
     return await transport.dispatch(payload, **request_fields)
+
+
+async def dispatch_named_service_api_stream_request(
+    registry: NamedServiceRegistry,
+    payload: Mapping[str, Any] | NamedServiceRequest | None = None,
+    *,
+    auth_context: AuthContext | None = None,
+    client: NamedServiceClient | None = None,
+    **request_fields: Any,
+) -> Any:
+    """Dispatch one API request expected to return a stream-capable response."""
+
+    try:
+        request = _coerce_api_request(payload, request_fields)
+    except Exception as exc:
+        LOGGER.warning("Named-service API stream request invalid: error=%s", exc)
+        return NamedServiceResponse.error_response(
+            code="named_service_api_request_invalid",
+            message=str(exc),
+            status=400,
+        ).to_dict()
+    resolved_client = client
+    if resolved_client is None:
+        resolved_client = NamedServiceClient.from_current_request(
+            registry,
+            transport=TRANSPORT_API,
+            source="named_service.api.stream",
+        ) if auth_context is None else NamedServiceClient(
+            registry,
+            auth_context=auth_context,
+            transport=TRANSPORT_API,
+        )
+    LOGGER.info(
+        "Named-service API stream dispatch start: provider=%s namespace=%s operation=%s action=%s object_ref=%s",
+        request.provider or "",
+        request.namespace or "",
+        request.operation,
+        request.action or "",
+        request.object_ref or "",
+    )
+    raw, entry, req = await resolved_client.call_raw(request)
+    if entry is None:
+        response = NamedServiceResponse.coerce(raw)
+        LOGGER.warning(
+            "Named-service API stream dispatch failed before provider: namespace=%s operation=%s status=%s",
+            req.namespace or "",
+            req.operation,
+            response.status,
+        )
+        return response.to_dict()
+    try:
+        response = NamedServiceResponse.coerce(raw)
+    except TypeError:
+        response = None
+    if response is not None:
+        return response.to_dict()
+    LOGGER.info(
+        "Named-service API stream dispatch complete: provider=%s namespace=%s operation=%s action=%s object_ref=%s result_type=%s",
+        entry.spec.provider_id,
+        req.namespace or "",
+        req.operation,
+        req.action or "",
+        req.object_ref or "",
+        type(raw).__name__,
+    )
+    return raw

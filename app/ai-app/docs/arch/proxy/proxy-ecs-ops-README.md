@@ -1,13 +1,13 @@
 ---
-id: ks:docs/arch/proxy/proxy-ecs-ops-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/arch/proxy/proxy-ecs-ops-README.md
 title: "Proxy ECS Ops"
 summary: "Ops guide for the OpenResty reverse proxy on AWS ECS/Fargate: ALB setup, real IP recovery, SSL offload, service discovery, IAM, ECR, and EFS."
 tags: ["proxy", "openresty", "ops", "ecs", "fargate", "aws", "alb", "ecr", "efs", "nginx"]
 keywords: ["OpenResty", "ECS", "Fargate", "ALB", "ACM", "real_ip_header", "set_real_ip_from", "service discovery", "Cloud Map", "ECR", "EFS", "awsvpc", "task IAM role", "nginx_proxy_ssl_cognito.conf"]
 see_also:
-  - ks:docs/arch/proxy/proxy-ops-README.md
-  - ks:docs/arch/proxy/proxy-local-ops-README.md
-  - ks:docs/sdk/bundle/bundle-delivery-and-update-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proxy/proxy-ops-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proxy/proxy-local-ops-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-delivery-and-update-README.md
 ---
 # Proxy ECS Ops Guide (OpenResty on AWS ECS/Fargate)
 
@@ -310,7 +310,7 @@ Do not open proxy port 80 to `0.0.0.0/0`. All external traffic must flow through
 
 ## EFS for shared bundle storage
 
-If `chat-proc` uses bundles with `ks:` (shared local storage), mount EFS as described in the bundle ops guide:
+If `chat-proc` uses bundles with shared local storage, mount EFS as described in the bundle ops guide:
 
 ```
 BUNDLE_STORAGE_ROOT=/bundle-storage
@@ -394,6 +394,6 @@ log_format main '$remote_addr - $remote_user [$time_local] "$request" '
 
 - Proxy config (EC2/ECS base): `deployment/docker/custom-ui-managed-infra/nginx_proxy_ssl_cognito.conf`
 - Proxy Dockerfile: `deployment/docker/Dockerfile_ProxyOpenResty`
-- Bundle storage (EFS): `ks:docs/sdk/bundle/bundle-delivery-and-update-README.md` — Shared bundle local storage section
+- Bundle storage (EFS): `repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-delivery-and-update-README.md` — Shared bundle local storage section
 - Chat processor task def: `deployment/ecs/task-definitions/chat-proc.json`
 - Chat ingress task def: `deployment/ecs/task-definitions/chat-ingress.json`

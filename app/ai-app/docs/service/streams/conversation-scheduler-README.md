@@ -1,14 +1,14 @@
 ---
-id: ks:docs/service/streams/conversation-scheduler-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/streams/conversation-scheduler-README.md
 title: "Conversation Scheduler Streams"
 summary: "Service-level boundary for the target conversation-native processor scheduler using mailbox streams, wake streams, leases, owner loops, and started-turn recovery."
 status: proposal
 tags: ["service", "streams", "conversation-scheduler", "proc", "redis", "kafka", "leases", "followup", "steer"]
 keywords: ["conversation scheduler stream", "conversation mailbox", "wake stream", "conversation lease", "owner loop", "started marker", "CHAT_SCHEDULER_BACKEND"]
 see_also:
-  - ks:docs/service/streams/README.md
-  - ks:docs/arch/proc/processor-arch-README.md
-  - ks:docs/arch/proc/design/conversation-scheduler-streams-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/streams/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/processor-arch-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/design/conversation-scheduler-streams-README.md
 ---
 # Conversation Scheduler Streams
 

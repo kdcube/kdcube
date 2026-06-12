@@ -1,29 +1,31 @@
 ---
-id: ks:docs/sdk/bundle/bundle-runtime-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-runtime-README.md
 title: "Bundle Runtime"
 summary: "Runtime objects and capabilities available inside bundle entrypoints and tools: communicator, Data Bus context, integrations, props and secrets, caches, artifacts, and isolated-execution surfaces."
 tags: ["sdk", "bundle", "runtime", "tools", "integrations", "communicator", "isolation", "data-bus"]
 keywords: ["bundle runtime objects", "communicator access", "data bus context", "integrations access", "props and secrets access", "cache access", "artifact handling", "isolated execution surface", "entrypoint runtime context"]
-updated_at: 2026-06-09
+updated_at: 2026-06-11
 see_also:
-  - ks:docs/sdk/bundle/bundle-developer-guide-README.md
-  - ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
-  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
-  - ks:docs/sdk/bundle/build/design/bundle-loader-import-isolation-README.md
-  - ks:docs/sdk/bundle/bundle-lifecycle-README.md
-  - ks:docs/sdk/bundle/bundle-agent-integration-README.md
-  - ks:docs/sdk/bundle/bundle-platform-integration-README.md
-  - ks:docs/sdk/bundle/bundle-interfaces-README.md
-  - ks:docs/sdk/tools/custom-tools-README.md
-  - ks:docs/sdk/tools/tool-subsystem-README.md
-  - ks:docs/sdk/bundle/bundle-client-communication-README.md
-  - ks:docs/sdk/bundle/auth-bundle-federated-README.md
-  - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
-  - ks:docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
-  - ks:docs/service/comm/bus-routing-and-partitioning-README.md
-  - ks:docs/service/comm/data-bus-README.md
-  - ks:docs/service/synch-mechanisms/critical-section-README.md
-  - ks:docs/service/cicd/cli-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/cross-runtime-context-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-developer-guide-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/design/bundle-loader-import-isolation-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-lifecycle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-agent-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-interfaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/custom-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/tool-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-communication-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/auth-bundle-federated-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-chat-stream-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/bus-routing-and-partitioning-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/synch-mechanisms/critical-section-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/cli-README.md
 ---
 # Bundle Runtime
 
@@ -33,6 +35,10 @@ This page explains the actual runtime surfaces available to:
 - tool code running in isolated execution
 
 Use this together with:
+- [Runtime Surfaces And Boundaries](../../runtime/README.md) for the platform
+  runtime map and cross-boundary guarantees
+- [Cross-Runtime Context](../../runtime/cross-runtime-context-README.md) for
+  the portable context room restored in tools, subprocesses, and ISO runtimes
 - [How To Assemble A Bundle With SDK Building Blocks](build/how-to-assemble-bundle-with-sdk-building-blocks-README.md) for the reusable SDK/platform blocks to prefer before writing a custom subsystem
 - [Bundle Properties And Secrets Lifecycle](bundle-properties-and-secrets-lifecycle-README.md) for how `self.bundle_props`, descriptor/admin props, and bundle secrets flow
 - [Bundle Lifecycle](bundle-lifecycle-README.md) for phase ordering
@@ -66,6 +72,31 @@ There are two different runtime surfaces:
    - `REGISTRY`
 
 They are related, but they are not identical.
+
+## Platform Portable Context Room
+
+When execution crosses into a tool subprocess, Docker/Fargate supervisor, or
+other child runtime, KDCube does not serialize live Python objects. The platform
+serializes a small runtime room in `PORTABLE_SPEC_JSON` and reconstructs
+trusted SDK services in the target runtime.
+
+The platform-owned room currently carries:
+
+| Field | Purpose |
+| --- | --- |
+| `REQUEST_CONTEXT` | `ExternalEventPayload` with tenant/project/user/routing/request metadata. |
+| `BUNDLE_ID` | current bundle id for bundle-scoped helpers. |
+| `BUNDLE_CALL_CONTEXT` | bundle-owned JSON-safe per-invocation metadata. |
+| `NAMED_SERVICE_DISCOVERY` | tenant/project discovery descriptor for namespace-service provider lookup. |
+
+Bundle code should write only `bundle_call_context`. Platform code binds the
+request context, bundle id, and named-service discovery scope. Redis clients,
+Postgres pools, provider objects, callbacks, and secrets are not serialized;
+they are reconstructed or looked up through the target runtime's normal
+descriptor-backed services.
+
+See [Cross-Runtime Context](../../runtime/cross-runtime-context-README.md) for
+the full boundary contract.
 
 ## Critical Bundle-Local Import Rule
 
@@ -210,6 +241,7 @@ HTTP/chat/job request
 | task-local runtime context    |
 | - REQUEST_CONTEXT_CV          |
 | - BUNDLE_CALL_CONTEXT_CV      |
+| - NAMED_SERVICE_DISCOVERY_CV  |
 +---+-----------------------+---+
     |                       |
     |                       |
@@ -229,6 +261,7 @@ context()                   ["bundle_call_context"]
 | - contextvars.comm_ctx        |
 |   - REQUEST_CONTEXT           |
 |   - BUNDLE_CALL_CONTEXT       |
+|   - NAMED_SERVICE_DISCOVERY   |
 +---------------+---------------+
                 |
                 | child bootstrap restore

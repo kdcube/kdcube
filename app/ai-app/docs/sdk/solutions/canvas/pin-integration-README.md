@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/solutions/canvas/pin-integration-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/pin-integration-README.md
 title: "Canvas Pin Integration"
 summary: "SDK integration contract for registering canvas object resolvers, routing pin actions through server-side resolver functions, and coordinating UI widgets over the data bus."
 status: active
@@ -18,15 +18,15 @@ keywords:
     "external_events",
   ]
 see_also:
-  - ks:docs/sdk/bundle/bundle-subsystem-integration-README.md
-  - ks:docs/sdk/solutions/canvas/canvas-module-guide-README.md
-  - ks:docs/sdk/solutions/canvas/pin-operations-README.md
-  - ks:docs/sdk/solutions/canvas/external-subsystem-event-source-products-pins-README.md
-  - ks:docs/sdk/solutions/event-hub/resolver-and-policy-registration-README.md
-  - ks:docs/sdk/solutions/scene/scene-surface-registry-README.md
-  - ks:applications/playground/bundles/task-tracker@1-0/doc/runtime/message-routing.md
-  - ks:docs/service/comm/conversation-event-bus-and-data-bus-README.md
-  - ks:docs/sdk/events/namespaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-subsystem-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/canvas-module-guide-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/pin-operations-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/external-subsystem-event-source-products-pins-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/event-hub/resolver-and-policy-registration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-surface-registry-README.md
+  - repo:kdcube-applications/playground/bundles/task-tracker@1-0/doc/runtime/message-routing.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/conversation-event-bus-and-data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
 ---
 # Canvas Pin Integration
 
@@ -47,7 +47,7 @@ canvas module         board, pins, revisions, comments, suggestions
 task subsystem        task: issues, issue tools, issue editor
 chat subsystem        ar: replicas, fi: chat attachments and ReAct artifacts
 memory subsystem      mem: memories and memory search
-knowledge subsystem   ks: knowledge articles through MCP/search
+knowledge subsystem   repo: repository-backed knowledge articles through MCP/search
 source/search pool    so: or future source refs
 ```
 
@@ -65,7 +65,7 @@ canvas = CanvasModule(
         PlatformArtifactResolver(),   # fi:
         TaskIssueResolver(),          # task:
         MemoryObjectResolver(),       # mem:
-        KnowledgeArticleResolver(),   # ks:
+        KnowledgeArticleResolver(),   # repo:
         CanvasOwnedResolver(),        # cnv:
     ],
 )
@@ -93,7 +93,7 @@ The registry dispatches by URI prefix:
 task:issues/ticket_...      -> TaskIssueResolver
 fi:conv_...                 -> PlatformArtifactResolver
 mem:user/...                -> MemoryObjectResolver
-ks:docs/...                 -> KnowledgeArticleResolver
+repo:kdcube-ai-app/app/ai-app/docs/...                 -> KnowledgeArticleResolver
 cnv:.../ut_...              -> CanvasOwnedResolver
 ```
 
@@ -333,18 +333,18 @@ memories widget
 knowledge context refs
 ```
 
-The website's Why, What, and How sections should become concrete knowledge
-refs, for example `ks:` article refs, not implicit page text. When those refs
-are attached to chat, the knowledge resolver and knowledge MCP provide exact
+The website's Why, What, and How sections should become concrete repository
+refs, for example `repo:kdcube-ai-app/app/ai-app/docs/...`, not implicit page
+text. When those refs are attached to chat, the resolver and MCP provide exact
 read/search behavior.
 
 Canvas should treat those refs the same way as every other object:
 
 ```text
-pin ks:... on the board
-focus ks:... into chat
-open ks:... through knowledge surface if mounted
-preview/read ks:... through knowledge resolver
+pin repo:kdcube-ai-app/app/ai-app/docs/... on the board
+focus repo:kdcube-ai-app/app/ai-app/docs/... into chat
+open repo:kdcube-ai-app/app/ai-app/docs/... through a mounted repository surface
+preview/read repo:kdcube-ai-app/app/ai-app/docs/... through a repository resolver
 ```
 
 ## Current Task-Tracker Implementation

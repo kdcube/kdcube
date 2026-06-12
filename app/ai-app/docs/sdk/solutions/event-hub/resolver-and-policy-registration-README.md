@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/solutions/event-hub/resolver-and-policy-registration-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/event-hub/resolver-and-policy-registration-README.md
 title: "Event Domain Resolvers And Policies"
 summary: "Concrete SDK contract for namespace-owning event domains, their object resolvers, ReAct rendering policies, and the composition bundle that mounts multiple integrations."
 status: draft
@@ -18,17 +18,17 @@ keywords:
     "react event policy",
   ]
 see_also:
-  - ks:docs/sdk/namespace-services/providers-README.md
-  - ks:docs/sdk/solutions/event-hub/design/resolver-directory-and-operation-routing-README.md
-  - ks:docs/sdk/solutions/canvas/pin-integration-README.md
-  - ks:docs/sdk/solutions/scene/scene-surface-registry-README.md
-  - ks:docs/sdk/events/namespaces-README.md
-  - ks:docs/sdk/events/event-subsystem-README.md
-  - ks:docs/sdk/events/external-events-README.md
-  - ks:docs/sdk/events/external-event-envelope-README.md
-  - ks:docs/sdk/agents/react/event-source/events-blocks-and-rendering-README.md
-  - ks:docs/service/comm/conversation-event-bus-and-data-bus-README.md
-  - ks:docs/service/comm/data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/providers-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/event-hub/design/resolver-directory-and-operation-routing-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/pin-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-surface-registry-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-event-envelope-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/events-blocks-and-rendering-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/conversation-event-bus-and-data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
 ---
 # Event Domain Resolvers And Policies
 
@@ -75,7 +75,7 @@ one working assistant scene.
 | Memory | `mem:<memory-id>` | SDK memory module | `kdcube_ai_app.apps.chat.sdk.context.memory.events.resolver` | memory event policies when present | Memory SDK |
 | Task issue story | `task:issues/<issue-id>` | Task/issue subsystem | bundle task module, for example `issues/events/resolver.py` | task issue policies | Task subsystem |
 | Canvas board | canvas events and canvas-owned refs | Canvas subsystem | canvas module, for example `canvas/events/resolver.py` | canvas event policies | Canvas subsystem |
-| Knowledge source | `ks:<doc-or-source-ref>` | Knowledge subsystem | knowledge resolver module | knowledge/source policies | Knowledge subsystem |
+| Knowledge source | `repo:<repo>/<path>` | Knowledge subsystem | knowledge resolver module | knowledge/source policies | Knowledge subsystem |
 
 The task-tracker bundle is currently a composition bundle. It imports the
 domains above and registers them. It is not the owner of `fi:` or `mem:`.

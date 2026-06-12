@@ -1,13 +1,13 @@
 ---
-id: ks:docs/service/environment/setup-for-dockercompose-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/environment/setup-for-dockercompose-README.md
 title: "Setup For Dockercompose"
 summary: "How to run git‑defined bundles with docker‑compose."
 tags: ["service", "environment", "docker-compose", "bundles"]
 keywords: ["all_in_one_kdcube", "custom-ui-managed-infra", "volume mounts", "bundles.yaml"]
 see_also:
-  - ks:docs/service/environment/setup-dev-env-README.md
-  - ks:docs/service/environment/setup-for-ecs-README.md
-  - ks:docs/configuration/service-runtime-configuration-mapping-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/environment/setup-dev-env-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/environment/setup-for-ecs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
 ---
 # Setup for Docker Compose (Bundles from bundles.yaml)
 

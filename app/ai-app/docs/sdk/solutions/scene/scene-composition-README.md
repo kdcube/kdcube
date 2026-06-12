@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/solutions/scene/scene-composition-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-composition-README.md
 title: "Scene Composition"
 summary: "How a bundle assembles a host scene from reusable SDK components — iframe mounts by alias, the runtime CONFIG handshake, the component-to-component postMessage broker, and the Data Bus wiring. The routing of resolver object-opens lives in the surface registry doc."
 status: draft
@@ -19,16 +19,16 @@ keywords:
     "multi component scene",
   ]
 see_also:
-  - ks:docs/sdk/solutions/scene/scene-surface-registry-README.md
-  - ks:docs/sdk/solutions/chat/chat-widget-solution-README.md
-  - ks:docs/sdk/solutions/memory/memory-widget-solution-README.md
-  - ks:docs/sdk/solutions/canvas/canvas-sdk-solution-README.md
-  - ks:docs/sdk/solutions/usage/usage-card-README.md
-  - ks:docs/sdk/bundle/bundle-widget-integration-README.md
-  - ks:docs/sdk/bundle/ui-components-lifecycle-README.md
-  - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
-  - ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
-  - ks:docs/service/comm/data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-surface-registry-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/chat/chat-widget-solution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/memory/memory-widget-solution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/canvas-sdk-solution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/usage/usage-card-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/ui-components-lifecycle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/versatile-reference-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
 ---
 # Scene Composition
 

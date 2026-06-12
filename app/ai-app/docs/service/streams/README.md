@@ -1,16 +1,16 @@
 ---
-id: ks:docs/service/streams/README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/streams/README.md
 title: "Service Streams"
 summary: "Map of KDCube stream families: background jobs, telemetry, conversation scheduling, and relay/pubsub, with ownership and reliability boundaries."
 tags: ["service", "streams", "redis", "kafka", "telemetry", "background-jobs", "scheduler"]
 keywords: ["stream families", "background job stream", "telemetry stream", "conversation scheduler stream", "redis streams", "kafka mapping", "bundle event listener"]
 see_also:
-  - ks:docs/service/streams/background-jobs-README.md
-  - ks:docs/service/streams/telemetry-README.md
-  - ks:docs/service/streams/conversation-scheduler-README.md
-  - ks:docs/service/external-log-collector/frontend-events-design.md
-  - ks:docs/sdk/bundle/build/design/@longrun-README.md
-  - ks:docs/arch/proc/processor-arch-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/streams/background-jobs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/streams/telemetry-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/streams/conversation-scheduler-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/external-log-collector/frontend-events-design.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/design/@longrun-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/processor-arch-README.md
 ---
 # Service Streams
 

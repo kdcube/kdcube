@@ -1,13 +1,13 @@
 ---
-id: ks:docs/sdk/integrations/linkedin/linkedin-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/linkedin/linkedin-README.md
 title: "LinkedIn SDK Integration"
 summary: "Reusable LinkedIn integration mechanics for KDCube bundles: account metadata, LinkedIn OAuth, UGC Posts API for publishing content on behalf of connected users, and account settings operations."
 tags: ["sdk", "integrations", "linkedin", "oauth", "ugc posts", "bundles"]
 keywords: ["linkedin integration", "linkedin oauth", "linkedin post", "ugc posts api", "linkedin accounts"]
 see_also:
-  - ks:docs/sdk/integrations/linkedin/linkedin-external-prereq-README.md
-  - ks:docs/sdk/integrations/email/email-README.md
-  - ks:docs/service/servicing-interfaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/linkedin/linkedin-external-prereq-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/email/email-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/servicing-interfaces-README.md
 ---
 
 # LinkedIn SDK Integration

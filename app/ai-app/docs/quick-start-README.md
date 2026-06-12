@@ -1,21 +1,21 @@
 ---
-id: ks:docs/quick-start-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/quick-start-README.md
 title: "Quick Start: Local KDCube"
 summary: "Current local-start guide for booting KDCube with the CLI, descriptor sets, Docker Compose runtime, bundle registry, refresh flow, and bundle release loop."
 tags: ["docs", "quickstart", "local", "docker-compose", "cli", "descriptors", "bundle"]
 keywords: ["local quick start", "kdcube init start bundle reload", "docker compose startup", "descriptor driven install", "oss cli descriptors", "local bundle development", "run kdcube locally", "bundle config apply", "bundle release", "demo environment bootstrap", "kdcube copilot local"]
 updated_at: 2026-05-27
 see_also:
-  - ks:docs/what-you-can-do-with-kdcube-README.md
-  - ks:docs/service/cicd/cli-README.md
-  - ks:docs/service/environment/setup-for-dockercompose-README.md
-  - ks:docs/configuration/assembly-descriptor-README.md
-  - ks:docs/configuration/bundles-descriptor-README.md
-  - ks:docs/configuration/secrets-descriptor-README.md
-  - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
-  - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
-  - ks:docs/sdk/bundle/build/how-to-release-bundle-content-README.md
-  - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/what-you-can-do-with-kdcube-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/cli-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/environment/setup-for-dockercompose-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/assembly-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/secrets-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-write-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-release-bundle-content-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/versatile-reference-bundle-README.md
 ---
 # Quick Start: Local KDCube
 

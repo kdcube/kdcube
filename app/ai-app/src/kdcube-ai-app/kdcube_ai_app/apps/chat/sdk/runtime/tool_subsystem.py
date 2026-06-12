@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 import os
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, asdict
 
 import sys
@@ -13,7 +14,7 @@ import asyncio
 import inspect
 import importlib
 import importlib.util
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from kdcube_ai_app.apps.chat.sdk.runtime.isolated.secure_client import ToolStub
 from kdcube_ai_app.apps.chat.sdk.runtime.dynamic_module_loader import (
@@ -193,6 +194,79 @@ class ToolSubsystem:
                 pass
 
         self._secure_stub = ToolStub()
+
+    def _named_service_tools_configured(self) -> bool:
+        try:
+            from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
+                client_has_named_service_tools,
+            )
+            bundle_props = self.registry.get("bundle_props")
+            return client_has_named_service_tools(
+                bundle_props if isinstance(bundle_props, Mapping) else {},
+                client_id=self.registry.get("client_id"),
+            )
+        except Exception:
+            return False
+
+    def _request_scope(self) -> tuple[str, str]:
+        comm_context = self.registry.get("comm_context")
+        actor = getattr(comm_context, "actor", None) if comm_context is not None else None
+        config = getattr(self.svc, "config", None)
+        tenant = str(
+            getattr(actor, "tenant_id", None)
+            or getattr(config, "tenant", "")
+            or ""
+        ).strip()
+        project = str(
+            getattr(actor, "project_id", None)
+            or getattr(config, "project", "")
+            or ""
+        ).strip()
+        return tenant, project
+
+    @contextmanager
+    def bind_portable_runtime_context(self):
+        """Bind request and discovery context before taking a portable runtime snapshot."""
+
+        with ExitStack() as stack:
+            comm_context = self.registry.get("comm_context")
+            if comm_context is not None:
+                from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_request_context
+
+                stack.enter_context(bind_current_request_context(comm_context, comm=self.comm))
+
+            if self._named_service_tools_configured():
+                redis = self.registry.get("redis")
+                tenant, project = self._request_scope()
+                if redis is not None and tenant and project:
+                    from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.discovery import (
+                        RedisNamedServiceDiscovery,
+                        bind_named_service_discovery,
+                    )
+
+                    stack.enter_context(
+                        bind_named_service_discovery(
+                            RedisNamedServiceDiscovery(redis, tenant=tenant, project=project)
+                        )
+                    )
+                else:
+                    try:
+                        self.log.warning(
+                            "named-service tools are configured but discovery context cannot be bound: "
+                            f"redis_present={redis is not None} "
+                            f"tenant={tenant or '<missing>'} "
+                            f"project={project or '<missing>'}"
+                        )
+                    except Exception:
+                        pass
+
+            yield
+
+    def build_portable_spec(self):
+        from kdcube_ai_app.apps.chat.sdk.runtime.snapshot import build_portable_spec
+
+        with self.bind_portable_runtime_context():
+            return build_portable_spec(svc=self.svc, chat_comm=self.comm)
 
     # ---------- public surface used by manager + react solver ----------
     def get_tool_runtime(self, tool_id: str) -> Optional[str]:
@@ -508,7 +582,7 @@ class ToolSubsystem:
                 logger.log(f"[tool-subsystem] preload dyn module failed: {dyn_mod}: {e}", level="WARNING")
 
         # Bootstrap all loaded module names for service bindings in this process
-        spec = build_portable_spec(svc=self.svc, chat_comm=self.comm)
+        spec = self.build_portable_spec()
         bind_names = [m["name"] for m in self._modules]
         try:
             bootstrap_bind_all(spec.to_json(), module_names=bind_names, bootstrap_env=bootstrap_env)

@@ -1,14 +1,14 @@
 ---
-id: ks:docs/sdk/agents/react/event-source/block-production-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/block-production-README.md
 title: "Block Production Phase"
 summary: "Implemented ReAct event-source phase that maps tool/event results into timeline blocks, source rows, artifact rows, and notices."
 tags: ["sdk", "agents", "react", "event-source", "block-production"]
 keywords: ["block_production", "result_items", "artifact_rows", "source_rows", "declared_file_items", "snapshot_refs", "announce_candidates"]
 see_also:
-  - ks:docs/sdk/agents/react/event-source/event-source-README.md
-  - ks:docs/sdk/agents/react/event-source/events-blocks-and-rendering-README.md
-  - ks:docs/sdk/agents/react/tool-call-blocks-README.md
-  - ks:docs/sdk/agents/react/source-pool-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/events-blocks-and-rendering-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/tool-call-blocks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/source-pool-README.md
 ---
 # Block Production Phase
 

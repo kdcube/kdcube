@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/events/external-events-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-README.md
 title: "External Events"
 summary: "Semantic and transport model for conversation-scoped external events, including reactive/non-reactive behavior, story targeting, Redis transport, and ReAct folding."
 status: draft
@@ -17,16 +17,16 @@ keywords:
     "react event source",
   ]
 see_also:
-  - ks:docs/sdk/events/namespaces-README.md
-  - ks:docs/sdk/bundle/bundle-events-README.md
-  - ks:docs/sdk/events/external-event-envelope-README.md
-  - ks:docs/sdk/events/external-events-journey-and-handling-README.md
-  - ks:docs/arch/ingress/events-inception-README.md
-  - ks:docs/arch/proc/events-orchestration-README.md
-  - ks:docs/sdk/events/event-subsystem-README.md
-  - ks:docs/sdk/agents/react/event-source/event-source-README.md
-  - ks:docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
-  - ks:docs/sdk/agents/react/runtime-configuration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-event-envelope-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-journey-and-handling-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/ingress/events-inception-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/events-orchestration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/runtime-configuration-README.md
 ---
 
 # External Events

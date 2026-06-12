@@ -1,13 +1,13 @@
 ---
-id: ks:docs/aggregations/README-AGGREGATIONS.md
+id: repo:kdcube-ai-app/app/ai-app/docs/aggregations/README-AGGREGATIONS.md
 title: "Aggregations"
 summary: "Pre‑computed accounting aggregates used by the OPEX API."
 tags: ["aggregations", "accounting", "opex", "metrics"]
 keywords: ["daily aggregates", "accounting events", "OPEX API", "storage layout"]
 see_also:
-  - ks:docs/sdk/storage/sdk-store-README.md
-  - ks:docs/README.md
-  - ks:docs/citations-system.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/storage/sdk-store-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/citations-system.md
 ---
 # OPEX Aggregations
 

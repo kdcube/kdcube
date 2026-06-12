@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/agents/react/workspace/workspace-checkout-model-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/workspace-checkout-model-README.md
 title: "Workspace Checkout Model"
 summary: "Final ReAct pull/checkout contract: react.pull materializes source refs, while react.checkout defines the current editable files/ workspace."
 status: confirmed
@@ -15,13 +15,13 @@ keywords:
     "custom workspace",
   ]
 see_also:
-  - ks:docs/sdk/events/namespaces-README.md
-  - ks:docs/sdk/agents/react/agent-workspace-collboration-README.md
-  - ks:docs/sdk/agents/react/react-turn-workspace-README.md
-  - ks:docs/sdk/agents/react/custom-isolated-workspace-mental-map-README.md
-  - ks:docs/sdk/agents/react/workspace/git-based-isolated-workspace-README.md
-  - ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/tools/pull.py
-  - ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/tools/checkout.py
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/agent-workspace-collboration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-turn-workspace-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/custom-isolated-workspace-mental-map-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/git-based-isolated-workspace-README.md
+  - repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/tools/pull.py
+  - repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/tools/checkout.py
 ---
 
 # Workspace Checkout Model

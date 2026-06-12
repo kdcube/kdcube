@@ -1,15 +1,15 @@
 ---
-id: ks:docs/sdk/agents/react/event-source/events-blocks-and-rendering-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/events-blocks-and-rendering-README.md
 title: "Events, Blocks, And Rendering"
 summary: "Matrix of ReAct event-source phases, timeline spots, built-in sources, and current implementation status."
 tags: ["sdk", "agents", "react", "event-source", "timeline", "rendering"]
 keywords: ["timeline_projection", "block_production", "announce_production", "compaction_projection", "tool_call_validation", "cache markers"]
 see_also:
-  - ks:docs/sdk/agents/react/event-source/event-source-README.md
-  - ks:docs/sdk/agents/react/event-source/block-production-README.md
-  - ks:docs/sdk/agents/react/timeline-README.md
-  - ks:docs/sdk/agents/react/context-caching-README.md
-  - ks:docs/sdk/agents/react/compaction-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/block-production-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/timeline-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-caching-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/compaction-README.md
 ---
 # Events, Blocks, And ReAct Rendering
 

@@ -1,15 +1,14 @@
 ---
 id: ks:docs/next/sdk/react-agent-tools-completeness-workspace-awareness-README.md
 title: "React Agent Tools Completeness & Workspace Awareness"
-summary: "Current state and near-term plan for React agent turn workspace, conversation artifact memory, knowledge space, and isolated browsing via exec."
-tags: ["next", "sdk", "react", "workspace", "knowledge-space", "copilot", "tools"]
-keywords: ["turn workspace", "artifact memory", "knowledge space", "kdcube.copilot", "resolver", "isolated exec", "fi namespace", "ks namespace"]
+summary: "Current state and near-term plan for React agent turn workspace, conversation artifact memory, owner namespaces, and isolated browsing via exec."
+tags: ["next", "sdk", "react", "workspace", "owner-namespaces", "copilot", "tools"]
+keywords: ["turn workspace", "artifact memory", "owner namespaces", "kdcube.copilot", "resolver", "isolated exec", "fi namespace", "rehoster"]
 see_also:
   - ks:docs/sdk/agents/react/agent-workspace-collboration-README.md
   - ks:docs/sdk/agents/react/artifact-discovery-README.md
   - ks:docs/sdk/agents/react/react-turn-workspace-README.md
   - ks:docs/sdk/agents/react/timeline-README.md
-  - ks:docs/next/copilot-new-namespaces-knowledge-space-index.md
   - ks:docs/exec/exec-logging-error-propagation-README.md
 ---
 # React Agent Tools Completeness & Workspace Awareness
@@ -102,7 +101,8 @@ When React uses isolated exec, there is also a concrete physical layout that mat
 The three important physical areas are:
 - `workdir` — scratch input code and temporary runtime working files
 - `outdir` — writable outputs and runtime logs
-- bundle storage — bundle-managed data such as knowledge spaces
+- bundle storage — bundle-managed prepared data such as indexes and cached
+  readonly assets
 
 ### Path matrix
 
@@ -581,11 +581,11 @@ Once that is explicit, the tool design becomes much cleaner:
 
 ## Historical note
 
-The older note `copilot-new-namespaces-knowledge-space-index.md` remains relevant as a precursor:
-- it correctly separated `fi:` from `ks:`
-- it proposed `ks:index.md` as a stable entry point
+The older generic bundle reference-space proposal has been removed. The current
+direction is owner namespaces plus explicit resolvers/rehosters/tools, because
+the owner must control API shape, permissions, and transport.
 
-What it did not yet cover is:
+Open follow-up work:
 - the distinction between current turn working set and conversation artifact memory
 - rehydration of historical artifacts into the current turn
 - the distinction between logical namespaces and exec-visible browse roots

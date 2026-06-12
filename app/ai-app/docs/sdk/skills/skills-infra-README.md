@@ -1,13 +1,13 @@
 ---
-id: ks:docs/sdk/skills/skills-infra-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/skills/skills-infra-README.md
 title: "Skills Infra"
 summary: "Infrastructure wiring for core SDK skills, SDK solution skills, and bundle-local skills across React runtime and isolated execution."
 tags: ["sdk", "skills", "infra", "runtime", "react", "isolated", "solutions"]
 keywords: ["skills registry", "skill descriptors", "solution skills", "react instructions", "iso runtime", "skills loader"]
 see_also:
-  - ks:docs/sdk/skills/custom-skills-README.md
-  - ks:docs/sdk/skills/skills-README.md
-  - ks:docs/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/skills/custom-skills-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/skills/skills-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/README.md
 ---
 # Skills Infrastructure
 

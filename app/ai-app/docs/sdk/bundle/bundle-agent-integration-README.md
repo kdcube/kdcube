@@ -1,24 +1,24 @@
 ---
-id: ks:docs/sdk/bundle/bundle-agent-integration-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-agent-integration-README.md
 title: "Bundle Agent Integration"
 summary: "Canonical bundle guide for wiring React agents, bundle-local tools and skills, MCP connectors, bundle-served MCP endpoints, and Claude Code subagents with deployable auth and network requirements."
 tags: ["sdk", "bundle", "agents", "react", "claude-code", "tools", "skills", "mcp", "deployment"]
 keywords: ["bundle agent integration", "React tools descriptor", "skills descriptor", "MCP_TOOL_SPECS", "event_source_reader", "bundle served MCP", "Claude Code MCP", "ClaudeCodeAgent", "mcp_base_url", "agent runtime context"]
 see_also:
-  - ks:docs/sdk/bundle/bundle-runtime-README.md
-  - ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
-  - ks:docs/sdk/bundle/bundle-platform-integration-README.md
-  - ks:docs/sdk/bundle/bundle-transports-README.md
-  - ks:docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
-  - ks:docs/sdk/bundle/bundle-events-README.md
-  - ks:docs/sdk/events/event-subsystem-README.md
-  - ks:docs/sdk/agents/react/runtime-configuration-README.md
-  - ks:docs/service/comm/bus-routing-and-partitioning-README.md
-  - ks:docs/sdk/bundle/bundle-reserved-platform-properties-README.md
-  - ks:docs/sdk/tools/mcp-README.md
-  - ks:docs/sdk/agents/claude/claude-code-README.md
-  - ks:docs/sdk/agents/claude/claude-code-workspace-bootstrap-README.md
-  - ks:docs/sdk/agents/react/react-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-runtime-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-transports-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/runtime-configuration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/bus-routing-and-partitioning-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-reserved-platform-properties-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/mcp-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/claude/claude-code-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/claude/claude-code-workspace-bootstrap-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-tools-README.md
 ---
 # Bundle Agent Integration
 

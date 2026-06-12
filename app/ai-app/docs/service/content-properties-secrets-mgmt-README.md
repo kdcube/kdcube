@@ -1,14 +1,14 @@
 ---
-id: ks:docs/service/content-properties-secrets-mgmt-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/content-properties-secrets-mgmt-README.md
 title: "Content Properties and Secrets Management"
 summary: "Concrete storage and export model for deployment-scoped bundle descriptors, bundle props, bundle secrets, and user secrets across local and ECS deployments."
 tags: ["service", "props", "secrets", "aws-sm", "bundles", "deployment"]
 keywords: ["bundle props", "bundle secrets", "bundles-meta", "bundles descriptor", "aws secrets manager", "redis cache", "bundles.yaml", "bundles.secrets.yaml"]
 see_also:
-  - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
-  - ks:docs/configuration/bundles-descriptor-README.md
-  - ks:docs/configuration/bundles-secrets-descriptor-README.md
-  - ks:docs/service/secrets/secrets-service-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-secrets-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/secrets/secrets-service-README.md
 ---
 # Content Properties and Secrets Management
 

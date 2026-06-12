@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/bundle/build/how-to-avoid-common-bundle-integration-failures-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-avoid-common-bundle-integration-failures-README.md
 title: "How To Avoid Common Bundle Integration Failures"
 summary: "Short bundle implementation recipes for recurring integration mistakes: bundle-local imports, widget origins and assets, visibility gates, live events, Data Bus boundaries, authored events, subsystem mounting, and resolver ownership."
 tags: ["sdk", "bundle", "recipes", "integration", "widgets", "events", "data-bus", "imports", "resolvers"]
@@ -18,19 +18,19 @@ keywords:
   ]
 updated_at: 2026-06-11
 see_also:
-  - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
-  - ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
-  - ks:docs/sdk/bundle/bundle-subsystem-integration-README.md
-  - ks:docs/sdk/bundle/bundle-runtime-README.md
-  - ks:docs/sdk/bundle/bundle-widget-integration-README.md
-  - ks:docs/sdk/bundle/bundle-client-communication-README.md
-  - ks:docs/sdk/bundle/bundle-events-README.md
-  - ks:docs/sdk/bundle/bundle-platform-integration-README.md
-  - ks:docs/sdk/tools/custom-tools-README.md
-  - ks:docs/service/comm/conversation-event-bus-and-data-bus-README.md
-  - ks:docs/service/comm/data-bus-README.md
-  - ks:docs/configuration/gateway-descriptor-README.md
-  - ks:docs/sdk/solutions/event-hub/resolver-and-policy-registration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-subsystem-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-runtime-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-communication-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/custom-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/conversation-event-bus-and-data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/gateway-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/event-hub/resolver-and-policy-registration-README.md
 ---
 # How To Avoid Common Bundle Integration Failures
 
@@ -296,7 +296,7 @@ Object resolver behavior belongs to the namespace owner.
 | `mem:` | memory subsystem |
 | `task:` | task or issue subsystem |
 | `cnv:` | canvas subsystem |
-| `ks:` | knowledge-space subsystem |
+| provider-defined refs | named-service providers, MCP/search surfaces, or explicit rehosters |
 
 A composition bundle registers the resolvers it mounts. It should not duplicate
 the resolver behavior in unrelated files. For example, canvas can ask

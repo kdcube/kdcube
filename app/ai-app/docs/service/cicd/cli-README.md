@@ -1,20 +1,20 @@
 ---
-id: ks:docs/service/cicd/cli-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/cicd/cli-README.md
 title: "Current KDCube CLI"
 summary: "Current implemented CLI surface for local environment bootstrapping, workdir preparation, Docker Compose startup, descriptor validation, bundle config and secret patching, and the practical rule that multiple namespaced runtime snapshots may exist on one machine while local compose-backed execution remains one active deployment at a time."
 tags: ["service", "cicd", "cli", "env", "deployment", "bundle"]
 keywords: ["kdcube cli", "local environment bootstrap", "workdir setup", "docker compose control", "descriptor validation", "current cli contract", "local deployment tooling", "multiple local runtime snapshots", "single active local deployment", "tenant project workdir namespace", "bundle config patch", "bundle secret patch", "kdcube bundle command", "bundle reload internals", "reload-authority"]
 see_also:
-  - ks:docs/service/cicd/release-README.md
-  - ks:docs/service/cicd/descriptors-README.md
-  - ks:docs/service/cicd/design/cli--as-control-plane-README.md
-  - ks:docs/configuration/assembly-descriptor-README.md
-  - ks:docs/configuration/secrets-descriptor-README.md
-  - ks:docs/configuration/bundles-descriptor-README.md
-  - ks:docs/configuration/service-runtime-configuration-mapping-README.md
-  - ks:docs/configuration/gateway-descriptor-README.md
-  - ks:docs/service/environment/setup-dev-env-README.md
-  - ks:docs/service/environment/setup-for-dockercompose-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/release-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/descriptors-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/design/cli--as-control-plane-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/assembly-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/secrets-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/gateway-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/environment/setup-dev-env-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/environment/setup-for-dockercompose-README.md
 ---
 # KDCube CLI (Design)
 

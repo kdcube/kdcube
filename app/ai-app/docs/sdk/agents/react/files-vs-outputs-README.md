@@ -1,14 +1,14 @@
 ---
-id: ks:docs/sdk/agents/react/files-vs-outputs-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/files-vs-outputs-README.md
 title: "Files Vs Outputs"
 summary: "Short ReAct namespace reference for files, outputs, snapshots, and attachments. The canonical workspace/artifact model is agent-workspace-collboration-README.md."
 tags: ["sdk", "agents", "react", "workspace", "artifacts"]
 keywords: ["files namespace", "outputs namespace", "snapshots namespace", "workspace membership", "artifact origin"]
 see_also:
-  - ks:docs/sdk/agents/react/agent-workspace-collboration-README.md
-  - ks:docs/sdk/agents/react/react-turn-workspace-README.md
-  - ks:docs/sdk/agents/react/workspace/workspace-checkout-model-README.md
-  - ks:docs/sdk/events/event-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/agent-workspace-collboration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-turn-workspace-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/workspace-checkout-model-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
 status: confirmed
 ---
 # Files Vs Outputs

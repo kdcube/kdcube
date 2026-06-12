@@ -1,24 +1,24 @@
 ---
-id: ks:docs/sdk/bundle/bundle-client-ui-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-ui-README.md
 title: "Bundle Client UI"
 summary: "Entry page for bundle-facing frontend integration: source layout for main UI vs widgets, browser transport, auth, chat stream lifecycle, multi-tab behavior, and widget or operation interoperability."
 tags: ["sdk", "bundle", "frontend", "transport", "auth", "sse", "socketio", "rest", "ui"]
 keywords: ["frontend integration entrypoint", "bundle ui contract", "main view ui/main", "widget source folder", "widget and operation interoperability", "browser auth and transport", "chat stream lifecycle guidance", "multi tab coordination", "client side bundle behavior"]
 updated_at: 2026-06-06
 see_also:
-  - ks:docs/sdk/bundle/bundle-widget-integration-README.md
-  - ks:docs/sdk/bundle/bundle-client-communication-README.md
-  - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
-  - ks:docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
-  - ks:docs/sdk/bundle/bundle-frontend-awareness-README.md
-  - ks:docs/sdk/bundle/bundle-interfaces-README.md
-  - ks:docs/service/auth/auth-README.md
-  - ks:docs/service/comm/README-comm.md
-  - ks:docs/service/comm/bus-routing-and-partitioning-README.md
-  - ks:docs/service/comm/conversation-event-bus-and-data-bus-README.md
-  - ks:docs/service/comm/data-bus-README.md
-  - ks:docs/service/cicd/cli-README.md
-  - ks:docs/service/cicd/embedding-control-plane-frontend-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-communication-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-chat-stream-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-frontend-awareness-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-interfaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/README-comm.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/bus-routing-and-partitioning-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/conversation-event-bus-and-data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/cli-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/embedding-control-plane-frontend-README.md
 ---
 # Bundle Client UI
 

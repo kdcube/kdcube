@@ -1,15 +1,15 @@
 ---
-id: ks:docs/service/auth/auth-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
 title: "Auth"
 summary: "Authentication providers and token transport across REST/SSE/Socket.IO."
 tags: ["service", "auth", "security", "tokens"]
 keywords: ["delegated auth", "cookie auth", "JWT", "SSE auth", "Socket.IO"]
 see_also:
-  - ks:docs/service/auth/bundle-session-auth-README.md
-  - ks:docs/service/auth/bundle-simple-idp-bridge-README.md
-  - ks:docs/service/comm/README-comm.md
-  - ks:docs/arch/architecture-long.md
-  - ks:docs/service/README-monitoring-observability.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/bundle-session-auth-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/bundle-simple-idp-bridge-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/README-comm.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/architecture-long.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/README-monitoring-observability.md
 ---
 # Auth Overview
 

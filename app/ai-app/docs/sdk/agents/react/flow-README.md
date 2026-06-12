@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/agents/react/flow-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/flow-README.md
 title: "Flow"
 summary: "End-to-end React turn flow from turn start through version selection, workspace bootstrap, timeline and sources-pool load, tool execution, optional distributed exec packaging, and turn finish."
 tags: ["sdk", "agents", "react", "flow", "timeline", "workspace"]
@@ -15,10 +15,10 @@ keywords:
     "turn finish",
   ]
 see_also:
-  - ks:docs/sdk/agents/react/react-announce-README.md
-  - ks:docs/sdk/agents/react/react-turn-workspace-README.md
-  - ks:docs/sdk/agents/react/source-pool-README.md
-  - ks:docs/sdk/agents/react/external-exec-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-announce-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-turn-workspace-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/source-pool-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/external-exec-README.md
 ---
 # End-to-end flow (React)
 

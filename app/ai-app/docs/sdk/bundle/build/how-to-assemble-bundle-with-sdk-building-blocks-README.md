@@ -1,49 +1,49 @@
 ---
-id: ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
 title: "How To Assemble A Bundle With SDK Building Blocks"
 summary: "Tier 1 bundle-builder map for choosing reusable KDCube SDK and platform blocks before writing custom bundle services: tools, event sources, agents, storage, widgets, jobs, integrations, and solutions."
 tags: ["sdk", "bundle", "tier-1", "building-blocks", "integrations", "solutions", "tools"]
 keywords: ["bundle building blocks", "sdk integrations", "sdk solutions", "bundle assembly map", "reuse sdk components", "telegram integration", "email integration", "tasks solution", "delivery integration", "shared sdk widget components", "built in tools", "react tools", "bundle events", "event sources", "artifact rehosters"]
 updated_at: 2026-06-11
 see_also:
-  - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
-  - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
-  - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
-  - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
-  - ks:docs/sdk/bundle/build/how-to-avoid-common-bundle-integration-failures-README.md
-  - ks:docs/sdk/bundle/build/how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md
-  - ks:docs/sdk/solutions/tasks-README.md
-  - ks:docs/sdk/integrations/README.md
-  - ks:docs/sdk/integrations/email/README.md
-  - ks:docs/sdk/integrations/telegram/README.md
-  - ks:docs/sdk/integrations/telegram/telegram-README.md
-  - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
-  - ks:docs/sdk/integrations/browser/browser-tools-README.md
-  - ks:docs/service/cicd/ngrok-README.md
-  - ks:docs/sdk/tools/sdk-tools-README.md
-  - ks:docs/sdk/tools/custom-tools-README.md
-  - ks:docs/sdk/tools/tool-subsystem-README.md
-  - ks:docs/sdk/bundle/bundle-agent-integration-README.md
-  - ks:docs/sdk/bundle/bundle-client-communication-README.md
-  - ks:docs/sdk/bundle/bundle-events-README.md
-  - ks:docs/sdk/bundle/bundle-entrypoint-classes-README.md
-  - ks:docs/sdk/bundle/bundle-subsystem-integration-README.md
-  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
-  - ks:docs/sdk/bundle/bundle-platform-integration-README.md
-  - ks:docs/sdk/bundle/bundle-runtime-README.md
-  - ks:docs/sdk/bundle/bundle-transports-README.md
-  - ks:docs/sdk/bundle/build/design/bundle-loader-import-isolation-README.md
-  - ks:docs/sdk/bundle/bundle-widget-integration-README.md
-  - ks:docs/sdk/namespace-services/providers-README.md
-  - ks:docs/sdk/solutions/scene/scene-composition-README.md
-  - ks:docs/sdk/solutions/scene/scene-surface-registry-README.md
-  - ks:docs/sdk/solutions/chat/chat-widget-solution-README.md
-  - ks:docs/sdk/solutions/memory/memory-widget-solution-README.md
-  - ks:docs/sdk/solutions/canvas/canvas-sdk-solution-README.md
-  - ks:docs/sdk/events/event-subsystem-README.md
-  - ks:docs/sdk/agents/react/event-source/event-source-README.md
-  - ks:docs/service/comm/conversation-event-bus-and-data-bus-README.md
-  - ks:docs/service/comm/data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-write-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-test-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-avoid-common-bundle-integration-failures-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/tasks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/email/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-external-prereq-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/browser/browser-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/ngrok-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/sdk-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/custom-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/tool-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-agent-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-communication-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-entrypoint-classes-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-subsystem-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-runtime-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-transports-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/design/bundle-loader-import-isolation-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/providers-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-composition-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-surface-registry-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/chat/chat-widget-solution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/memory/memory-widget-solution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/canvas-sdk-solution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/conversation-event-bus-and-data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
 ---
 # How To Assemble A Bundle With SDK Building Blocks
 
@@ -56,8 +56,8 @@ policy, route aliases, prompts, UI composition, and user-scope decisions.
 If you landed here directly, first read
 [how-to-navigate-kdcube-docs-README.md](how-to-navigate-kdcube-docs-README.md).
 This page is the SDK/platform block map, not the whole bundle-building route.
-The `ks:docs/...` ids in front matter are KDCube knowledge-space doc ids; in a
-local checkout they resolve under `repo:kdcube-ai-app/app/ai-app/docs/...`.
+Doc front-matter IDs are platform doc IDs. In a local checkout, read the files
+directly under `repo:kdcube-ai-app/app/ai-app/docs/...`.
 
 For the local runtime command flow, use the canonical schemas in
 [how-to-configure-and-run-bundle-README.md#canonical-cli-flow-schemas](how-to-configure-and-run-bundle-README.md#canonical-cli-flow-schemas):

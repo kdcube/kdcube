@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/solutions/chat/chat-widget-solution-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/chat/chat-widget-solution-README.md
 title: "Chat Widget Solution"
 summary: "How to mount the reusable SDK chat widget in a bundle and configure its event-source profile for ReAct, canvas, snapshots, and attachments."
 status: draft
@@ -15,13 +15,13 @@ keywords:
     "reusable chat component",
   ]
 see_also:
-  - ks:docs/sdk/bundle/bundle-client-ui-README.md
-  - ks:docs/sdk/bundle/bundle-widget-integration-README.md
-  - ks:docs/sdk/bundle/bundle-subsystem-integration-README.md
-  - ks:docs/sdk/solutions/event-hub/resolver-and-policy-registration-README.md
-  - ks:docs/sdk/solutions/scene/scene-composition-README.md
-  - ks:docs/sdk/solutions/memory/memory-widget-solution-README.md
-  - ks:docs/sdk/events/external-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-ui-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-subsystem-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/event-hub/resolver-and-policy-registration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-composition-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/memory/memory-widget-solution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-README.md
 ---
 # Chat Widget Solution
 

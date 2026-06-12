@@ -1,5 +1,5 @@
 ---
-id: ks:docs/arch/proc/design/conversation-scheduler-streams-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/arch/proc/design/conversation-scheduler-streams-README.md
 title: "Design: Conversation Scheduler With Redis Streams"
 summary: "Target processor design for replacing the coarse global ready queue with a conversation-oriented scheduler built on Redis Streams, leases, owner loops, and a Kafka-compatible mapping."
 draft: true
@@ -18,11 +18,11 @@ keywords:
     "steer",
   ]
 see_also:
-  - ks:docs/arch/proc/processor-arch-README.md
-  - ks:docs/arch/proc/events-orchestration-README.md
-  - ks:docs/arch/proc/longrun-protection-README.md
-  - ks:docs/service/streams/conversation-scheduler-README.md
-  - ks:docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/processor-arch-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/events-orchestration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/longrun-protection-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/streams/conversation-scheduler-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
 ---
 # Design: Conversation Scheduler With Redis Streams
 

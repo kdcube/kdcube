@@ -1,20 +1,20 @@
 ---
-id: ks:docs/service/streams/telemetry-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/streams/telemetry-README.md
 title: "Telemetry Streams"
 summary: "Design boundary for usage and observability telemetry: event schema, ingestion modes, reliability, privacy, storage, and how collector bundles should consume events."
 status: proposal
 tags: ["service", "streams", "telemetry", "usage", "events", "redis", "kafka", "bundles"]
 keywords: ["telemetry stream", "usage events", "collector bundle", "event ingestion", "mcp analytics", "tool usage", "comm recording", "comm event sink", "bundle listener"]
 see_also:
-  - ks:docs/service/streams/README.md
-  - ks:docs/service/streams/background-jobs-README.md
-  - ks:docs/service/external-log-collector/frontend-events-design.md
-  - ks:docs/service/external-log-collector/Architecture.md
-  - ks:docs/service/comm/comm-system.md
-  - ks:docs/service/comm/README-comm.md
-  - ks:docs/service/comm/comm-recording-event-sinks-README.md
-  - ks:docs/sdk/bundle/build/design/@longrun-README.md
-  - ks:docs/accounting/accounting-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/streams/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/streams/background-jobs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/external-log-collector/frontend-events-design.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/external-log-collector/Architecture.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/comm-system.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/README-comm.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/comm-recording-event-sinks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/design/@longrun-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/accounting/accounting-README.md
 ---
 # Telemetry Streams
 

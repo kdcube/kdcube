@@ -1,15 +1,15 @@
 ---
-id: ks:docs/service/auth/bundle-simple-idp-bridge-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/auth/bundle-simple-idp-bridge-README.md
 title: "Bundle SimpleIDP Bridge"
 summary: "How a bundle can validate an external sign-in flow and issue platform-recognized SimpleIDP cookies."
 tags: ["service", "auth", "simple-idp", "bundle", "sso"]
 keywords: ["SimpleIDP", "bundle auth", "external identity", "SSO bridge", "cookie auth", "idp_users.json"]
 see_also:
-  - ks:docs/service/auth/auth-README.md
-  - ks:docs/service/auth/bundle-session-auth-README.md
-  - ks:docs/sdk/bundle/bundle-platform-integration-README.md
-  - ks:docs/sdk/bundle/bundle-firewall-README.md
-  - ks:docs/service/comm/data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/bundle-session-auth-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-firewall-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
 ---
 # Bundle SimpleIDP Bridge
 

@@ -1,13 +1,13 @@
 ---
-id: ks:docs/sdk/agents/react/source-pool-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/source-pool-README.md
 title: "Source Pool"
 summary: "Sources pool population, storage, and access patterns."
 tags: ["sdk", "agents", "react", "sources", "citations"]
 keywords: ["sources_pool", "citations", "dedupe", "source entries"]
 see_also:
-  - ks:docs/sdk/agents/react/artifact-discovery-README.md
-  - ks:docs/sdk/agents/react/artifact-storage-README.md
-  - ks:docs/sdk/agents/react/compaction-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-discovery-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-storage-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/compaction-README.md
 ---
 # Sources Pool
 

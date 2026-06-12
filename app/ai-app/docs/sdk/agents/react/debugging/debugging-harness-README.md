@@ -1,19 +1,19 @@
 ---
-id: ks:docs/sdk/agents/react/debugging/debugging-harness-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/debugging/debugging-harness-README.md
 title: "React Harness Debugging"
 summary: "How to trace a React turn through the SDK harness: runtime context, tool calls, workspace writes, artifact hosting, communicator events, persisted turn logs, and failure markers."
 tags: ["sdk", "agents", "react", "debugging", "harness", "tools", "artifacts", "streaming"]
 keywords: ["React harness debugging", "turn_id", "conversation_id", "tool_call_id", "chat.files", "host_files", "artifact hosting", "turn log", "timeline", "communicator", "external events", "tool subsystem"]
 see_also:
-  - ks:docs/sdk/agents/react/react-tools-README.md
-  - ks:docs/sdk/agents/react/tool-call-blocks-README.md
-  - ks:docs/sdk/agents/react/turn-log-README.md
-  - ks:docs/sdk/agents/react/conversation-artifacts-README.md
-  - ks:docs/sdk/agents/react/artifact-storage-README.md
-  - ks:docs/sdk/agents/react/react-turn-workspace-README.md
-  - ks:docs/sdk/tools/tool-subsystem-README.md
-  - ks:docs/sdk/tools/custom-tools-README.md
-  - ks:docs/hosting/files-storage-system-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/tool-call-blocks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/turn-log-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/conversation-artifacts-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-storage-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-turn-workspace-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/tool-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/custom-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/hosting/files-storage-system-README.md
 ---
 # React Harness Debugging
 

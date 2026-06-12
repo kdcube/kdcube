@@ -1,15 +1,17 @@
 ---
-id: ks:docs/exec/distributed-exec-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/exec/distributed-exec-README.md
 title: "Distributed Exec — Fargate"
 summary: "End-to-end design and deployment guide for the Fargate isolated execution task."
 tags: ["exec", "distributed", "fargate", "external", "architecture", "ecs"]
 keywords: ["distributed exec", "snapshot zip", "bundle", "outdir", "workdir", "remote executor", "run-task", "ECS"]
 see_also:
-  - ks:docs/exec/README-iso-runtime.md
-  - ks:docs/exec/runtime-README.md
-  - ks:docs/exec/operations.md
-  - ks:docs/exec/exec-logging-error-propagation-README.md
-  - ks:docs/sdk/agents/react/external-exec-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/cross-runtime-context-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/README-iso-runtime.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/runtime-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/operations.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/exec-logging-error-propagation-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/external-exec-README.md
 ---
 
 # Distributed Execution — Fargate
@@ -249,20 +251,16 @@ ECS FARGATE EXEC TASK
 │  │       yes → restore_zip_to_dir → BUNDLE_STORAGE_DIR  (supervisor-side)
 │  │       no  → continue
 │  │
-│  │     Bundle-local exec-only tools may then resolve logical bundle refs
-│  │     (for example ks:docs or ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk) to exec-visible physical paths under
-│  │     that restored readonly subtree.
+│  │     Bundle-local exec-only tools may then resolve owner-defined refs to
+│  │     exec-visible physical paths under that restored readonly subtree.
 │  │
 │  │     Those returned physical paths are runtime-local only:
 │  │       • valid only inside this exec task
 │  │       • subject to the returned access mode ('r' or 'rw')
 │  │       • not valid as normal react logical or physical artifact paths
 │  │
-│  │     If code wants the agent to follow up later with react.read(...), it must
-│  │     emit logical refs derived from the resolver input logical_ref, for example:
-│  │       logical_ref = "ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk"
-│  │       discovered relative file = "runtime/execution.py"
-│  │       emitted follow-up ref = "ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/execution.py"
+│  │     If code wants the agent to follow up later, it must emit normal hosted
+│  │     artifact refs or owner-defined refs that the owner service can resolve.
 │  │
 │  ├── baseline_work = build_manifest(workdir)   (for delta upload)
 │  ├── baseline_out  = build_manifest(outdir)
@@ -337,8 +335,8 @@ Preferred model:
    - `access: 'r' | 'rw'`
    - `browseable: bool`
 4. generated code reads that path if appropriate
-5. if code wants later `react.read(...)` follow-up, it emits logical refs derived from the original resolver input logical_ref
-   - example: `logical_ref="ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk"` plus discovered relative file `runtime/execution.py` becomes `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/execution.py`
+5. if code wants later follow-up, it emits normal hosted `fi:` refs or
+   owner-defined refs that the owner service can resolve
 6. generated code propagates useful results back through:
    - files under `OUTPUT_DIR`
    - and/or short `user.log` output
@@ -577,7 +575,7 @@ vars are not inherited by generated code.
 
 | Key | Purpose |
 |---|---|
-| `PORTABLE_SPEC_JSON` | Platform-built portable spec: ModelService config, communicator/integrations, accounting, and contextvar snapshot including `comm_ctx.BUNDLE_CALL_CONTEXT` |
+| `PORTABLE_SPEC_JSON` | Platform-built portable spec: ModelService config, communicator/integrations, accounting, and contextvar snapshot including `comm_ctx.BUNDLE_CALL_CONTEXT` and `comm_ctx.NAMED_SERVICE_DISCOVERY` |
 | `TOOL_ALIAS_MAP` | `{alias: dynamic_module_name}` |
 | `TOOL_MODULE_FILES` | `{alias: /path/to/tool.py}` — rewritten for container |
 | `BUNDLE_SPEC` | `{id, module, version, ...}` |

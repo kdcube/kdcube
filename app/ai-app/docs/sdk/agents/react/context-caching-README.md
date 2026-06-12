@@ -1,16 +1,16 @@
 ---
-id: ks:docs/sdk/agents/react/context-caching-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-caching-README.md
 title: "Context Caching"
 summary: "Dual checkpoint caching strategy for stable prefixes and growing tails."
 tags: ["sdk", "agents", "react", "context", "caching"]
 keywords: ["cache checkpoints", "prefix", "tail", "Anthropic cache", "cache TTL"]
 see_also:
-  - ks:docs/sdk/agents/react/compaction-README.md
-  - ks:docs/sdk/agents/react/context-browser-README.md
-  - ks:docs/sdk/agents/react/context-layout.md
-  - ks:docs/sdk/agents/react/context-progression.md
-  - ks:docs/sdk/agents/react/micro-agents-and-subagents-README.md
-  - ks:docs/sdk/agents/react/system-instruction-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/compaction-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-browser-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-layout.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-progression.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/micro-agents-and-subagents-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/system-instruction-README.md
 ---
 # Context Caching (Dual Checkpoints, Round-Based)
 

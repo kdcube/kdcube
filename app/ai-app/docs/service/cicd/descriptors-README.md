@@ -1,19 +1,19 @@
 ---
-id: ks:docs/service/cicd/descriptors-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/cicd/descriptors-README.md
 title: "Deployment Descriptors Overview"
 summary: "Overview of the deployment descriptor set, what each file owns, and how descriptor authority differs between current local CLI runs, direct local service runs, and AWS deployment."
 tags: ["service", "cicd", "descriptors", "configuration"]
 keywords: ["deployment descriptors", "platform descriptor ownership", "local versus aws authority", "assembly bundles gateway secrets files", "descriptor-driven deployment contract", "runtime configuration entry files"]
 see_also:
-  - ks:docs/service/cicd/cli-README.md
-  - ks:docs/configuration/runtime-read-write-contract-README.md
-  - ks:docs/configuration/runtime-configuration-and-secrets-store-README.md
-  - ks:docs/configuration/assembly-descriptor-README.md
-  - ks:docs/configuration/bundles-descriptor-README.md
-  - ks:docs/configuration/bundles-secrets-descriptor-README.md
-  - ks:docs/configuration/secrets-descriptor-README.md
-  - ks:docs/configuration/gateway-descriptor-README.md
-  - ks:docs/configuration/service-runtime-configuration-mapping-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/cli-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/runtime-read-write-contract-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/runtime-configuration-and-secrets-store-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/assembly-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-secrets-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/secrets-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/gateway-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
 ---
 # Descriptors
 

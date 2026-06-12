@@ -1,14 +1,14 @@
 ---
-id: ks:docs/sdk/agents/react/react-round-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-round-README.md
 title: "React Round"
 summary: "How React rounds represent decision attempts, executed tool calls, and results in v2 and v3."
 tags: ["sdk", "agents", "react", "tool-calls"]
 keywords: ["ReactRound", "tool call blocks", "results mapping", "react.round.start", "react.notice", "v3 multi-action"]
 see_also:
-  - ks:docs/sdk/agents/react/tool-call-blocks-README.md
-  - ks:docs/sdk/agents/react/event-blocks-README.md
-  - ks:docs/sdk/agents/react/react-tools-README.md
-  - ks:docs/sdk/agents/react/timeline-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/tool-call-blocks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-blocks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/timeline-README.md
 ---
 # React Round Model
 

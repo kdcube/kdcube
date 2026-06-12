@@ -1,12 +1,12 @@
 ---
-id: ks:docs/economics/economics-events-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/economics/economics-events-README.md
 title: "Economics Rate-Limit SSE Events"
 summary: "Reference for all rate_limit.* server-sent events: when they fire, what payload they carry, and where user-facing messages are defined."
 tags: ["economics", "rate-limit", "sse", "events", "client"]
 keywords: ["rate_limit.warning", "rate_limit.denied", "rate_limit.no_funding", "rate_limit.subscription_exhausted", "rate_limit.project_exhausted", "user_message", "events_resources"]
 see_also:
-  - ks:docs/economics/economic-README.md
-  - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/economic-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-chat-stream-events-README.md
 ---
 # Economics Rate-Limit SSE Events
 

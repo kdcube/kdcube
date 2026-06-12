@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/solutions/memory/memory-widget-solution-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/memory/memory-widget-solution-README.md
 title: "Memory Widget Solution"
 summary: "How to mount the reusable SDK memory widget in a bundle, the host postMessage commands it accepts, its drag/context payload, and how mem: pins resolve. Memory semantics (tiers, reconciliation, snapshots) live in the memory operational docs."
 status: draft
@@ -17,14 +17,14 @@ keywords:
     "memory widget mount",
   ]
 see_also:
-  - ks:docs/sdk/solutions/chat/chat-widget-solution-README.md
-  - ks:docs/sdk/solutions/scene/scene-composition-README.md
-  - ks:docs/sdk/solutions/scene/scene-surface-registry-README.md
-  - ks:docs/sdk/bundle/bundle-widget-integration-README.md
-  - ks:docs/sdk/bundle/bundle-subsystem-integration-README.md
-  - ks:docs/sdk/memory/user-memories-overview-README.md
-  - ks:docs/sdk/memory/user-memories-operational-README.md
-  - ks:docs/sdk/memory/user-memories-react-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/chat/chat-widget-solution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-composition-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-surface-registry-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-subsystem-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/user-memories-overview-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/user-memories-operational-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/user-memories-react-integration-README.md
 ---
 # Memory Widget Solution
 

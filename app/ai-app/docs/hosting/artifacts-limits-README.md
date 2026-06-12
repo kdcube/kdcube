@@ -1,13 +1,13 @@
 ---
-id: ks:docs/hosting/artifacts-limits-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/hosting/artifacts-limits-README.md
 title: "Artifacts Limits"
 summary: "Hard limits and truncation policies for artifacts, sources, and tool outputs."
 tags: ["hosting", "artifacts", "limits", "truncation", "sources"]
 keywords: ["base64 limits", "timeline limits", "tool output truncation", "artifact size"]
 see_also:
-  - ks:docs/hosting/attachments-system.md
-  - ks:docs/citations-system.md
-  - ks:docs/economics/eco-kickoff-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/hosting/attachments-system.md
+  - repo:kdcube-ai-app/app/ai-app/docs/citations-system.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/eco-kickoff-README.md
 ---
 # Artifacts Limits
 

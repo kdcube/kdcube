@@ -1,12 +1,12 @@
 ---
-id: ks:docs/economics/economic-enforcement-engine-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/economics/economic-enforcement-engine-README.md
 title: "Economics Enforcement Engine"
 summary: "Reusable API for enforcing the economics model (quota, funding, settlement) on accountable flows outside the chat entrypoint."
 tags: ["economics", "enforcement", "engine", "api", "integration"]
 keywords: ["EconomicsGuard", "economic_preflight", "EconomicsSubject", "RoleResolver", "FlowPolicy", "reservation", "settlement", "scope_id"]
 see_also:
-  - ks:docs/economics/economic-README.md
-  - ks:docs/economics/economics-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/economic-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/economics-events-README.md
 ---
 # Economics Enforcement Engine
 

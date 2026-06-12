@@ -1,13 +1,13 @@
 ---
-id: ks:docs/service/ecs/metrics-autoscaling-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/ecs/metrics-autoscaling-README.md
 title: "Metrics Autoscaling"
 summary: "How metrics service supports autoscaling for ingress and proc."
 tags: ["service", "ecs", "autoscaling", "metrics"]
 keywords: ["CloudWatch", "HPA", "metrics endpoints", "scale policies"]
 see_also:
-  - ks:docs/service/scale/metrics-README.md
-  - ks:docs/service/ecs/custom-ecs-README.md
-  - ks:docs/service/environment/setup-for-ecs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/scale/metrics-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/ecs/custom-ecs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/environment/setup-for-ecs-README.md
 ---
 # Metrics + Autoscaling (ECS)
 

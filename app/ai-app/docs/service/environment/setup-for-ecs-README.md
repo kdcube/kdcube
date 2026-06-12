@@ -1,13 +1,13 @@
 ---
-id: ks:docs/service/environment/setup-for-ecs-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/environment/setup-for-ecs-README.md
 title: "Setup For ECS"
 summary: "How to run git‑defined bundles on ECS with bundles.yaml."
 tags: ["service", "environment", "ecs", "bundles"]
 keywords: ["task definition", "EFS", "secrets", "bundles.yaml"]
 see_also:
-  - ks:docs/service/environment/setup-for-dockercompose-README.md
-  - ks:docs/service/environment/setup-dev-env-README.md
-  - ks:docs/configuration/service-runtime-configuration-mapping-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/environment/setup-for-dockercompose-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/environment/setup-dev-env-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
 ---
 # Setup for ECS (Bundles from Assembly Descriptor)
 

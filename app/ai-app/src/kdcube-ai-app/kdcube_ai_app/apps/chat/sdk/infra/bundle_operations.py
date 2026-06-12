@@ -7,11 +7,19 @@ import asyncio
 import copy
 import inspect
 import logging
+from collections.abc import AsyncIterable, AsyncIterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping
 from uuid import uuid4
+
+from kdcube_ai_app.apps.chat.sdk.runtime.http_ops import (
+    BundleBinaryResponse,
+    BundleFileResponse,
+    BundleStreamResponse,
+)
 
 from kdcube_ai_app.apps.chat.sdk.protocol import (
     ExternalEventActor,
@@ -26,9 +34,19 @@ LOGGER = logging.getLogger("kdcube.sdk.bundle_operations")
 
 
 BundleOperationCaller = Callable[["BundleOperationCall"], Awaitable[Mapping[str, Any]]]
+BundleOperationStreamCaller = Callable[["BundleOperationStreamCall"], Awaitable["BundleOperationStreamResult"]]
+BundleNamedServiceCaller = Callable[["BundleNamedServiceCall"], Awaitable["BundleNamedServiceResult"]]
 
 BUNDLE_OPERATION_CALLER_CV: ContextVar[BundleOperationCaller | None] = ContextVar(
     "BUNDLE_OPERATION_CALLER_CV",
+    default=None,
+)
+BUNDLE_OPERATION_STREAM_CALLER_CV: ContextVar[BundleOperationStreamCaller | None] = ContextVar(
+    "BUNDLE_OPERATION_STREAM_CALLER_CV",
+    default=None,
+)
+BUNDLE_NAMED_SERVICE_CALLER_CV: ContextVar[BundleNamedServiceCaller | None] = ContextVar(
+    "BUNDLE_NAMED_SERVICE_CALLER_CV",
     default=None,
 )
 
@@ -48,6 +66,40 @@ class BundleOperationCall:
     tenant: str | None = None
     project: str | None = None
     route: str = "operations"
+
+
+@dataclass(frozen=True)
+class BundleOperationStreamCall:
+    bundle_id: str
+    operation: str
+    data: dict[str, Any] = field(default_factory=dict)
+    tenant: str | None = None
+    project: str | None = None
+    route: str = "operations"
+    chunk_size: int = 1024 * 1024
+
+
+@dataclass(frozen=True)
+class BundleOperationStreamResult:
+    chunks: AsyncIterable[bytes]
+    filename: str | None = None
+    media_type: str | None = "application/octet-stream"
+    headers: dict[str, str] = field(default_factory=dict)
+    status_code: int = 200
+
+
+@dataclass(frozen=True)
+class BundleNamedServiceCall:
+    bundle_id: str
+    request: Any
+    tenant: str | None = None
+    project: str | None = None
+    registry_method: str = "named_services"
+
+
+@dataclass(frozen=True)
+class BundleNamedServiceResult:
+    value: Any
 
 
 _DISABLED_PROP_VALUES: frozenset[str] = frozenset({"false", "disable", "disabled", "off", "0"})
@@ -271,13 +323,13 @@ def _target_comm_context(
     )
 
 
-async def invoke_local_bundle_operation(
+async def _invoke_local_bundle_operation_raw(
     call: BundleOperationCall,
     *,
     comm_context: ExternalEventPayload,
     redis: Any,
     pg_pool: Any,
-) -> Mapping[str, Any]:
+) -> Any:
     """Invoke a peer bundle operation from a non-HTTP runtime.
 
     This is the processor/job equivalent of the REST integration bridge: it
@@ -287,6 +339,10 @@ async def invoke_local_bundle_operation(
     """
 
     from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_request_context
+    from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.discovery import (
+        RedisNamedServiceDiscovery,
+        bind_named_service_discovery,
+    )
     from kdcube_ai_app.infra.plugin.bundle_loader import (
         BundleSpec,
         apply_api_overrides,
@@ -381,7 +437,23 @@ async def invoke_local_bundle_operation(
         pg_pool=pg_pool,
         comm_context=target_context,
     )
-    with bind_current_request_context(target_context, comm=None), bind_bundle_operation_caller(nested_caller):
+    nested_stream_caller = make_local_bundle_operation_stream_caller(
+        redis=redis,
+        pg_pool=pg_pool,
+        comm_context=target_context,
+    )
+    nested_named_service_caller = make_local_bundle_named_service_caller(
+        redis=redis,
+        pg_pool=pg_pool,
+        comm_context=target_context,
+    )
+    with (
+        bind_current_request_context(target_context, comm=None),
+        bind_named_service_discovery(RedisNamedServiceDiscovery(redis, tenant=tenant, project=project)),
+        bind_bundle_named_service_caller(nested_named_service_caller),
+        bind_bundle_operation_caller(nested_caller),
+        bind_bundle_operation_stream_caller(nested_stream_caller),
+    ):
         result = await _invoke_bundle_callable(fn, **extra)
 
     LOGGER.info(
@@ -393,7 +465,215 @@ async def invoke_local_bundle_operation(
         route,
         type(result).__name__,
     )
+    return result
+
+
+async def invoke_local_bundle_operation(
+    call: BundleOperationCall,
+    *,
+    comm_context: ExternalEventPayload,
+    redis: Any,
+    pg_pool: Any,
+) -> Mapping[str, Any]:
+    result = await _invoke_local_bundle_operation_raw(
+        call,
+        comm_context=comm_context,
+        redis=redis,
+        pg_pool=pg_pool,
+    )
     return result if isinstance(result, Mapping) else {"result": result}
+
+
+async def _iter_file_chunks(path: str, *, chunk_size: int) -> AsyncIterator[bytes]:
+    size = max(1, int(chunk_size or 1024 * 1024))
+    with Path(path).open("rb") as fh:
+        while True:
+            chunk = await asyncio.to_thread(fh.read, size)
+            if not chunk:
+                break
+            yield chunk
+
+
+async def _iter_single_chunk(data: bytes) -> AsyncIterator[bytes]:
+    if data:
+        yield data
+
+
+def _coerce_stream_result(result: Any, *, chunk_size: int) -> BundleOperationStreamResult:
+    if isinstance(result, BundleStreamResponse):
+        return BundleOperationStreamResult(
+            chunks=result.chunks,
+            filename=result.filename,
+            media_type=result.media_type,
+            headers=dict(result.headers or {}),
+            status_code=result.status_code,
+        )
+    if isinstance(result, BundleFileResponse):
+        return BundleOperationStreamResult(
+            chunks=_iter_file_chunks(result.path, chunk_size=chunk_size),
+            filename=result.filename,
+            media_type=result.media_type or "application/octet-stream",
+            headers=dict(result.headers or {}),
+            status_code=result.status_code,
+        )
+    if isinstance(result, BundleBinaryResponse):
+        return BundleOperationStreamResult(
+            chunks=_iter_single_chunk(bytes(result.content or b"")),
+            filename=result.filename,
+            media_type=result.media_type or "application/octet-stream",
+            headers=dict(result.headers or {}),
+            status_code=result.status_code,
+        )
+    if isinstance(result, (bytes, bytearray, memoryview)):
+        return BundleOperationStreamResult(
+            chunks=_iter_single_chunk(bytes(result)),
+        )
+    if isinstance(result, Mapping):
+        raise RuntimeError(str(result.get("error") or result.get("message") or "Bundle operation did not return a byte stream"))
+    raise RuntimeError(f"Bundle operation returned unsupported stream response type: {type(result).__name__}")
+
+
+async def invoke_local_bundle_operation_stream(
+    call: BundleOperationStreamCall,
+    *,
+    comm_context: ExternalEventPayload,
+    redis: Any,
+    pg_pool: Any,
+) -> BundleOperationStreamResult:
+    result = await _invoke_local_bundle_operation_raw(
+        BundleOperationCall(
+            bundle_id=call.bundle_id,
+            operation=call.operation,
+            data=dict(call.data or {}),
+            tenant=call.tenant,
+            project=call.project,
+            route=call.route,
+        ),
+        comm_context=comm_context,
+        redis=redis,
+        pg_pool=pg_pool,
+    )
+    return _coerce_stream_result(result, chunk_size=call.chunk_size)
+
+
+async def invoke_local_bundle_named_service(
+    call: BundleNamedServiceCall,
+    *,
+    comm_context: ExternalEventPayload,
+    redis: Any,
+    pg_pool: Any,
+) -> BundleNamedServiceResult:
+    """Invoke a peer bundle named-service registry directly in this runtime."""
+
+    from kdcube_ai_app.apps.chat.sdk.infra.auth_context import AuthContext
+    from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_request_context
+    from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.discovery import (
+        RedisNamedServiceDiscovery,
+        bind_named_service_discovery,
+    )
+    from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client import NamedServiceClient
+    from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.registry import NamedServiceRegistry
+    from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import NamedServiceRequest, NamedServiceResponse
+    from kdcube_ai_app.infra.plugin.bundle_loader import BundleSpec, get_workflow_instance_async
+    from kdcube_ai_app.infra.plugin.bundle_store import get_bundle_props, resolve_bundle_spec_from_store
+    from kdcube_ai_app.infra.service_hub.inventory import ConfigRequest, create_workflow_config, resolve_config_request_secrets
+
+    actor = getattr(comm_context, "actor", None)
+    tenant = str(call.tenant or getattr(actor, "tenant_id", None) or "").strip()
+    project = str(call.project or getattr(actor, "project_id", None) or "").strip()
+    if not tenant or not project:
+        raise RuntimeError("Tenant/project scope is required for local named-service call")
+    bundle_id = str(call.bundle_id or "").strip()
+    if not bundle_id:
+        raise RuntimeError("bundle_id is required for local named-service call")
+
+    session = await _session_for_comm_context(redis, comm_context, tenant=tenant, project=project)
+    LOGGER.info(
+        "Local bundle named-service call start: tenant=%s project=%s bundle=%s registry_method=%s user_type=%s session_id=%s",
+        tenant,
+        project,
+        bundle_id,
+        call.registry_method,
+        _session_user_type(session),
+        getattr(session, "session_id", None),
+    )
+
+    spec_resolved = await resolve_bundle_spec_from_store(redis, tenant=tenant, project=project, bundle_id=bundle_id)
+    if spec_resolved is None:
+        raise RuntimeError(f"Bundle {bundle_id} not found")
+    cfg_req = await resolve_config_request_secrets(
+        ConfigRequest(agentic_bundle_id=spec_resolved.id, tenant=tenant, project=project),
+        bundle_id=spec_resolved.id,
+    )
+    wf_config = create_workflow_config(cfg_req)
+    wf_config.ai_bundle_spec = spec_resolved
+    spec = BundleSpec(
+        path=spec_resolved.path,
+        module=spec_resolved.module,
+        singleton=bool(getattr(spec_resolved, "singleton", False)),
+    )
+    target_context = _target_comm_context(
+        comm_context,
+        bundle_id=spec_resolved.id,
+        tenant=tenant,
+        project=project,
+        session=session,
+    )
+    workflow, _mod = await get_workflow_instance_async(
+        spec,
+        wf_config,
+        comm_context=target_context,
+        redis=redis,
+        pg_pool=pg_pool,
+    )
+    props = await get_bundle_props(redis, tenant=tenant, project=project, bundle_id=spec_resolved.id)
+    _apply_bundle_props_to_workflow(workflow=workflow, props=props or {})
+    if not _bundle_enabled(props):
+        raise RuntimeError(f"Bundle {spec_resolved.id} is disabled")
+
+    method_name = str(call.registry_method or "named_services").strip() or "named_services"
+    registry_factory = getattr(workflow, method_name, None)
+    if not callable(registry_factory) and method_name != "_named_services":
+        registry_factory = getattr(workflow, "_named_services", None)
+    if not callable(registry_factory):
+        raise RuntimeError(f"Bundle {spec_resolved.id} does not expose named-service registry method {method_name!r}")
+    registry = registry_factory()
+    if not isinstance(registry, NamedServiceRegistry):
+        raise RuntimeError(f"Bundle {spec_resolved.id} named-service registry method {method_name!r} returned {type(registry).__name__}")
+
+    request = NamedServiceRequest.coerce(call.request)
+    auth = AuthContext.from_external_event_payload(target_context, source="named_service.bundle_registry")
+    client = NamedServiceClient(registry, auth_context=auth)
+    nested_caller = make_local_bundle_operation_caller(redis=redis, pg_pool=pg_pool, comm_context=target_context)
+    nested_stream_caller = make_local_bundle_operation_stream_caller(redis=redis, pg_pool=pg_pool, comm_context=target_context)
+    nested_named_service_caller = make_local_bundle_named_service_caller(
+        redis=redis,
+        pg_pool=pg_pool,
+        comm_context=target_context,
+    )
+    with (
+        bind_current_request_context(target_context, comm=None),
+        bind_named_service_discovery(RedisNamedServiceDiscovery(redis, tenant=tenant, project=project)),
+        bind_bundle_operation_caller(nested_caller),
+        bind_bundle_operation_stream_caller(nested_stream_caller),
+        bind_bundle_named_service_caller(nested_named_service_caller),
+    ):
+        raw, entry, req = await client.call_raw(request)
+    if entry is None or isinstance(raw, NamedServiceResponse):
+        value = raw
+    elif isinstance(raw, (BundleStreamResponse, BundleFileResponse, BundleBinaryResponse)):
+        value = raw
+    else:
+        value = client._coerce_response(raw, entry=entry, request=req)
+    LOGGER.info(
+        "Local bundle named-service call complete: tenant=%s project=%s bundle=%s operation=%s result_type=%s",
+        tenant,
+        project,
+        spec_resolved.id,
+        req.operation,
+        type(value).__name__,
+    )
+    return BundleNamedServiceResult(value=value)
 
 
 def make_local_bundle_operation_caller(
@@ -404,6 +684,40 @@ def make_local_bundle_operation_caller(
 ) -> BundleOperationCaller:
     async def _caller(call: BundleOperationCall) -> Mapping[str, Any]:
         return await invoke_local_bundle_operation(
+            call,
+            comm_context=comm_context,
+            redis=redis,
+            pg_pool=pg_pool,
+        )
+
+    return _caller
+
+
+def make_local_bundle_operation_stream_caller(
+    *,
+    redis: Any,
+    pg_pool: Any,
+    comm_context: ExternalEventPayload,
+) -> BundleOperationStreamCaller:
+    async def _caller(call: BundleOperationStreamCall) -> BundleOperationStreamResult:
+        return await invoke_local_bundle_operation_stream(
+            call,
+            comm_context=comm_context,
+            redis=redis,
+            pg_pool=pg_pool,
+        )
+
+    return _caller
+
+
+def make_local_bundle_named_service_caller(
+    *,
+    redis: Any,
+    pg_pool: Any,
+    comm_context: ExternalEventPayload,
+) -> BundleNamedServiceCaller:
+    async def _caller(call: BundleNamedServiceCall) -> BundleNamedServiceResult:
+        return await invoke_local_bundle_named_service(
             call,
             comm_context=comm_context,
             redis=redis,
@@ -424,6 +738,32 @@ def bind_bundle_operation_caller(caller: BundleOperationCaller | None):
 
 def get_current_bundle_operation_caller() -> BundleOperationCaller | None:
     return BUNDLE_OPERATION_CALLER_CV.get()
+
+
+@contextmanager
+def bind_bundle_operation_stream_caller(caller: BundleOperationStreamCaller | None):
+    token = BUNDLE_OPERATION_STREAM_CALLER_CV.set(caller)
+    try:
+        yield caller
+    finally:
+        BUNDLE_OPERATION_STREAM_CALLER_CV.reset(token)
+
+
+def get_current_bundle_operation_stream_caller() -> BundleOperationStreamCaller | None:
+    return BUNDLE_OPERATION_STREAM_CALLER_CV.get()
+
+
+@contextmanager
+def bind_bundle_named_service_caller(caller: BundleNamedServiceCaller | None):
+    token = BUNDLE_NAMED_SERVICE_CALLER_CV.set(caller)
+    try:
+        yield caller
+    finally:
+        BUNDLE_NAMED_SERVICE_CALLER_CV.reset(token)
+
+
+def get_current_bundle_named_service_caller() -> BundleNamedServiceCaller | None:
+    return BUNDLE_NAMED_SERVICE_CALLER_CV.get()
 
 
 async def call_bundle_operation(
@@ -450,12 +790,76 @@ async def call_bundle_operation(
     )
 
 
+async def call_bundle_operation_stream(
+    *,
+    bundle_id: str,
+    operation: str,
+    data: Mapping[str, Any] | None = None,
+    tenant: str | None = None,
+    project: str | None = None,
+    route: str = "operations",
+    chunk_size: int = 1024 * 1024,
+) -> BundleOperationStreamResult:
+    caller = get_current_bundle_operation_stream_caller()
+    if caller is None:
+        raise RuntimeError("No request-bound bundle operation stream caller is available")
+    return await caller(
+        BundleOperationStreamCall(
+            bundle_id=str(bundle_id or "").strip(),
+            operation=str(operation or "").strip(),
+            data=dict(data or {}),
+            tenant=str(tenant or "").strip() or None,
+            project=str(project or "").strip() or None,
+            route=str(route or "operations").strip() or "operations",
+            chunk_size=max(1, int(chunk_size or 1024 * 1024)),
+        )
+    )
+
+
+async def call_bundle_named_service(
+    *,
+    bundle_id: str,
+    request: Any,
+    tenant: str | None = None,
+    project: str | None = None,
+    registry_method: str = "named_services",
+) -> BundleNamedServiceResult:
+    caller = get_current_bundle_named_service_caller()
+    if caller is None:
+        raise RuntimeError("No request-bound bundle named-service caller is available")
+    return await caller(
+        BundleNamedServiceCall(
+            bundle_id=str(bundle_id or "").strip(),
+            request=request,
+            tenant=str(tenant or "").strip() or None,
+            project=str(project or "").strip() or None,
+            registry_method=str(registry_method or "named_services").strip() or "named_services",
+        )
+    )
+
+
 __all__ = [
     "BundleOperationCall",
     "BundleOperationCaller",
+    "BundleNamedServiceCall",
+    "BundleNamedServiceCaller",
+    "BundleNamedServiceResult",
+    "BundleOperationStreamCall",
+    "BundleOperationStreamCaller",
+    "BundleOperationStreamResult",
+    "bind_bundle_named_service_caller",
     "bind_bundle_operation_caller",
+    "bind_bundle_operation_stream_caller",
+    "call_bundle_named_service",
     "call_bundle_operation",
+    "call_bundle_operation_stream",
+    "get_current_bundle_named_service_caller",
     "get_current_bundle_operation_caller",
+    "get_current_bundle_operation_stream_caller",
+    "invoke_local_bundle_named_service",
     "invoke_local_bundle_operation",
+    "invoke_local_bundle_operation_stream",
+    "make_local_bundle_named_service_caller",
     "make_local_bundle_operation_caller",
+    "make_local_bundle_operation_stream_caller",
 ]

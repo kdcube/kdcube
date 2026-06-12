@@ -1,14 +1,14 @@
 ---
-id: ks:docs/sdk/bundle/bundle-delivery-and-update-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-delivery-and-update-README.md
 title: "Bundle Delivery And Update"
 summary: "Operational guide for shipping and updating bundles: local-path or git delivery modes, descriptor-authoritative reloads, runtime override hygiene, and deployment-side bundle resolution."
 tags: ["sdk", "bundle", "ops", "registry", "git", "reload", "deployment"]
 keywords: ["bundle delivery modes", "local path bundles", "git defined bundles", "descriptor authoritative reload", "runtime override hygiene", "bundle deployment operations", "bundle registry updates", "bundle reload procedure"]
 see_also:
-  - ks:docs/sdk/bundle/bundle-developer-guide-README.md
-  - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
-  - ks:docs/configuration/bundles-descriptor-README.md
-  - ks:docs/service/cicd/cli-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-developer-guide-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/cli-README.md
 ---
 # Bundle Delivery And Update
 

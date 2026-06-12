@@ -1,14 +1,14 @@
 ---
-id: ks:docs/sdk/agents/react/artifact-storage-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-storage-README.md
 title: "Artifact Storage"
 summary: "Where artifacts are stored and how artifact files/attachments are organized."
 tags: ["sdk", "agents", "react", "artifacts", "storage"]
 keywords: ["artifact storage", "attachments", "turn artifacts", "timeline files", "storage rules"]
 see_also:
-  - ks:docs/sdk/agents/react/artifact-discovery-README.md
-  - ks:docs/sdk/agents/react/conversation-artifacts-README.md
-  - ks:docs/sdk/agents/react/react-tools-README.md
-  - ks:docs/sdk/agents/react/files-vs-outputs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-discovery-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/conversation-artifacts-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/files-vs-outputs-README.md
 ---
 # Artifact Storage Rules
 

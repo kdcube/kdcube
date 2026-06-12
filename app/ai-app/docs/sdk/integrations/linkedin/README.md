@@ -1,13 +1,13 @@
 ---
-id: ks:docs/sdk/integrations/linkedin/README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/linkedin/README.md
 title: "LinkedIn Integration Docs"
 summary: "Index for the KDCube LinkedIn SDK integration docs."
 tags: ["sdk", "integrations", "linkedin"]
 keywords: ["linkedin integration", "linkedin oauth", "linkedin posts", "ugc posts"]
 see_also:
-  - ks:docs/sdk/integrations/linkedin/linkedin-README.md
-  - ks:docs/sdk/integrations/linkedin/linkedin-external-prereq-README.md
-  - ks:docs/sdk/integrations/email/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/linkedin/linkedin-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/linkedin/linkedin-external-prereq-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/email/README.md
 ---
 
 # LinkedIn Integration Docs

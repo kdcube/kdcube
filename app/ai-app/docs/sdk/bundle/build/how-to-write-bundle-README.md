@@ -1,47 +1,47 @@
 ---
-id: ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-write-bundle-README.md
 title: "How To Write A Bundle"
 summary: "Authoring guide for bundle creators and integrators: bundle shape, lifecycle, decorators, runtime surfaces, bundle events, configuration and storage decisions, and how to turn a product idea or existing app into a deployable bundle."
 tags: ["sdk", "bundle", "authoring", "workflow", "widget", "api", "events", "testing"]
 keywords: ["bundle authoring guide", "bundle creator path", "bundle integrator path", "end to end bundle design", "decorator selection", "runtime surface selection", "widget api mcp cron on_job choices", "bundle events", "event sources", "artifact rehosters", "shared sdk widget components", "configuration and storage decisions", "bundle lifecycle design", "reference authoring patterns"]
 updated_at: 2026-06-11
 see_also:
-  - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
-  - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
-  - ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
-  - ks:docs/sdk/bundle/build/how-to-avoid-common-bundle-integration-failures-README.md
-  - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
-  - ks:docs/sdk/bundle/build/how-to-release-bundle-content-README.md
-  - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
-  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
-  - ks:docs/sdk/bundle/bundle-subsystem-integration-README.md
-  - ks:docs/sdk/namespace-services/providers-README.md
-  - ks:docs/sdk/bundle/bundle-developer-guide-README.md
-  - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
-  - ks:docs/sdk/bundle/bundle-entrypoint-classes-README.md
-  - ks:docs/sdk/bundle/bundle-agent-integration-README.md
-  - ks:docs/sdk/bundle/bundle-platform-integration-README.md
-  - ks:docs/sdk/bundle/bundle-client-communication-README.md
-  - ks:docs/sdk/bundle/bundle-events-README.md
-  - ks:docs/sdk/bundle/bundle-transports-README.md
-  - ks:docs/sdk/bundle/bundle-widget-integration-README.md
-  - ks:docs/sdk/integrations/telegram/telegram-README.md
-  - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
-  - ks:docs/service/cicd/ngrok-README.md
-  - ks:docs/sdk/bundle/bundle-runtime-README.md
-  - ks:docs/sdk/bundle/bundle-storage-and-cache-README.md
-  - ks:docs/sdk/tools/custom-tools-README.md
-  - ks:docs/sdk/tools/tool-subsystem-README.md
-  - ks:docs/sdk/events/event-subsystem-README.md
-  - ks:docs/sdk/events/external-events-README.md
-  - ks:docs/sdk/agents/react/event-source/event-source-README.md
-  - ks:docs/service/comm/conversation-event-bus-and-data-bus-README.md
-  - ks:docs/service/comm/data-bus-README.md
-  - ks:docs/configuration/gateway-descriptor-README.md
-  - ks:docs/sdk/bundle/build/design/bundle-loader-import-isolation-README.md
-  - ks:docs/sdk/storage/cache-README.md
-  - ks:docs/sdk/storage/git-store-README.md
-  - ks:docs/sdk/storage/sdk-store-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-test-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-avoid-common-bundle-integration-failures-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-release-bundle-content-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-subsystem-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/providers-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-developer-guide-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/versatile-reference-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-entrypoint-classes-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-agent-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-communication-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-transports-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-external-prereq-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/ngrok-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-runtime-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-storage-and-cache-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/custom-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/tool-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/conversation-event-bus-and-data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/gateway-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/design/bundle-loader-import-isolation-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/storage/cache-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/storage/git-store-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/storage/sdk-store-README.md
 ---
 # How To Write A KDCube Bundle
 

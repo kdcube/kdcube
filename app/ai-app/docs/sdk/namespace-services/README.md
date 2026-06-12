@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/namespace-services/README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/README.md
 title: "Namespace Services"
 summary: "Index and mental model for namespace-owning service providers, clients, object resolution, and bundle-to-bundle integration."
 status: design
@@ -16,11 +16,12 @@ keywords:
     "bundle integration",
   ]
 see_also:
-  - ks:docs/sdk/namespace-services/providers-README.md
-  - ks:docs/sdk/namespace-services/clients-README.md
-  - ks:docs/sdk/namespace-services/integration-README.md
-  - ks:docs/sdk/events/namespaces-README.md
-  - ks:docs/sdk/solutions/scene/scene-surface-registry-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/providers-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/clients-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/cross-runtime-context-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-surface-registry-README.md
 ---
 # Namespace Services
 
@@ -39,8 +40,10 @@ TaskIssueNamedServiceProvider
   |
   +-- object.search
   +-- object.get
+  +-- object.schema
   +-- object.action(open)
   +-- object.upsert / delete when allowed
+  +-- block.produce / block.render when the namespace owns ReAct projection
 ```
 
 The same provider can be consumed by canvas pins, chat context chips,
@@ -58,13 +61,14 @@ Two bundles, one configured edge, no shared code:
  │ NamedServiceProvider       │         │ canvas pin / chat chip / tool   │
  │   object.search/get/action │         │   object_ref "task:issues/42"   │
  │            ▲               │         │            │                    │
- │ @api("named_service")      │◀────────│  NamedServiceCanvasObjectResolver│
- │   + NamedServiceRegistry   │  bridge │  (built from config, no API code)│
+ │ named_services() registry │◀────────│  NamedServiceCanvasObjectResolver│
+ │ @api("named_service") API │ endpoint│  (built from config, no API code)│
  └────────────────────────────┘         └─────────────────────────────────┘
         owner logic lives here       in-runtime bridge keeps tenant/user/project
 
-  Consumer wires the edge in config — discovery is configured, not automatic:
-    named_services.namespaces.task.provider = { bundle_id, provider, operation }
+  Provider registers in Named Service Discovery when loaded.
+  Consumer config names the namespace and client policy; provider location is
+  normally resolved from the Redis-backed discovery table at call time.
 ```
 
 ## Two Resolution Tiers
@@ -90,23 +94,44 @@ strictly more reach for foreign refs, zero change to owned-pin semantics.
 | [Providers](providers-README.md) | Provider contract, operation vocabulary, auth context, and transport adapters. |
 | [Clients](clients-README.md) | Client config, tool exposure, current resolver behavior, and client ids. |
 | [Integration](integration-README.md) | Visual provider-host/client-bundle flow using task-tracker and versatile. |
-| [Logical Reference Namespaces](../events/namespaces-README.md) | Foundational rules for `task:`, `mem:`, `cnv:`, `fi:`, `ks:`, and other refs. |
+| [Logical Reference Namespaces](../events/namespaces-README.md) | Foundational rules for `task:`, `mem:`, `cnv:`, `fi:`, and other refs. |
 
 ## Current Scope
 
-The current implementation is generic enough for configured provider/client
-integration:
+The current implementation is generic enough for provider/client integration
+through Named Service Discovery:
 
-- a provider bundle exposes a `named_service` API operation backed by a local
-  `NamedServiceRegistry`;
-- a client bundle configures `named_services.namespaces.<namespace>.provider`;
+- a provider bundle exposes a `named_services()` registry object and may also
+  expose a `named_service` API operation backed by that registry;
+- a provider bundle registers its providers into Redis-backed Named Service
+  Discovery after its local prerequisites are ready;
+- a client bundle configures `named_services.namespaces.<namespace>.clients`
+  for the model tools and resolver surfaces allowed to use that namespace;
 - canvas/chat object actions use a reusable resolver adapter;
+- namespace artifact refs can be rehosted through a backend rehoster that
+  streams bytes from the provider under the current auth context;
+- configured namespaces can register ReAct event sources such as
+  `named_services.task`; block production delegates to the provider's
+  `block.produce` operation;
 - model-callable tools can be enabled per `clients.<client_id>.tools`;
-- calls use the request-bound local operation bridge when inside the same
-  KDCube runtime, preserving current tenant/project/user context.
+- model clients can call `provider.about` and `object.schema` before they
+  create/update/delete an object, so entity shape stays with the provider;
+- canvas/chat clients only enable namespace resolution; concrete resolver
+  actions remain provider decisions;
+- same-KDCube calls prefer the `bundle_registry` transport, which calls the
+  owning bundle's registry object directly under the current tenant/project/user
+  context;
+- provider discovery scope is part of the platform cross-runtime context room,
+  so tools can resolve provider records after subprocess or ISO bootstrap
+  without passing a live Redis object through the tool registry;
+- `bundle_operation` remains available when the owner exposes only the API
+  facade or when the call path intentionally wants the operation envelope.
 
-The current implementation is not yet a global service discovery service. A
-client bundle must be configured with the namespace provider it should call.
+Named Service Discovery is a provider index, not a one-namespace/one-bundle
+map. More than one bundle may register providers for the same namespace. Each
+provider advertises the operations, refs, and object kinds it supports; the
+runtime chooses the provider per request.
+
 MCP and Data Bus are part of the provider capabilities vocabulary, but the
 generic platform adapters are still integration work.
 

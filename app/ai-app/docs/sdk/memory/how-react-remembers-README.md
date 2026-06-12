@@ -1,14 +1,14 @@
 ---
-id: ks:docs/sdk/memory/how-react-remembers-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/how-react-remembers-README.md
 title: "How ReAct Remembers"
 summary: "Explains the different memory mechanisms available to ReAct: visible timeline, working summaries, range summaries, internal memory beacons, memsearch, turn indexes, and durable user memories."
 tags: ["sdk", "memory", "react", "compaction", "memsearch", "internal-notes", "user-memory"]
 keywords: ["react memory", "internal memory beacons", "react.note", "react.memsearch", "conv.working.summary", "conv.range.summary", "turn index", "user memories", "compaction"]
 see_also:
-  - ks:docs/sdk/memory/conversational-memory-search-README.md
-  - ks:docs/sdk/memory/user-memories-overview-README.md
-  - ks:docs/sdk/memory/user-memories-react-integration-README.md
-  - ks:docs/sdk/memory/user-memories-operational-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/conversational-memory-search-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/user-memories-overview-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/user-memories-react-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/user-memories-operational-README.md
 ---
 # How ReAct Remembers
 

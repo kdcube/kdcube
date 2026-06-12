@@ -1,13 +1,13 @@
 ---
-id: ks:docs/hosting/attachments-system.md
+id: repo:kdcube-ai-app/app/ai-app/docs/hosting/attachments-system.md
 title: "Attachments System"
 summary: "Attachments pipeline: upload, storage, access, and scanning."
 tags: ["hosting", "attachments", "storage", "api", "security"]
 keywords: ["upload", "download", "clamav", "attachments API", "storage backend"]
 see_also:
-  - ks:docs/sdk/bundle/bundle-developer-guide-README.md
-  - ks:docs/hosting/artifacts-limits-README.md
-  - ks:docs/arch/architecture-long.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-developer-guide-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/hosting/artifacts-limits-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/architecture-long.md
 ---
 # Attachments System
 

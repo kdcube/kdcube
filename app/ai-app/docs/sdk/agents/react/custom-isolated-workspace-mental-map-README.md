@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/agents/react/custom-isolated-workspace-mental-map-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/custom-isolated-workspace-mental-map-README.md
 title: "Custom Isolated Workspace Mental Map"
 summary: "How the React agent perceives its workspace in workspace_implementation=custom — what ANNOUNCE shows, what is reconstructed live vs persisted, how the agent reasons about continuation, and what is intentionally not in the picture (no git history, no implicit deletes)."
 status: confirmed
@@ -16,15 +16,15 @@ keywords:
     "react.checkout",
   ]
 see_also:
-  - ks:docs/sdk/agents/react/react-turn-workspace-README.md
-  - ks:docs/sdk/agents/react/workspace/workspace-checkout-model-README.md
-  - ks:docs/sdk/agents/react/workspace/git-based-isolated-workspace-README.md
-  - ks:docs/sdk/agents/react/files-vs-outputs-README.md
-  - ks:docs/sdk/agents/react/agent-workspace-collboration-README.md
-  - ks:docs/sdk/agents/react/react-announce-README.md
-  - ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/layout.py
-  - ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/workspace.py
-  - ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/tools/checkout.py
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-turn-workspace-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/workspace-checkout-model-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/git-based-isolated-workspace-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/files-vs-outputs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/agent-workspace-collboration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-announce-README.md
+  - repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/layout.py
+  - repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/workspace.py
+  - repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/tools/checkout.py
 ---
 
 # Custom Isolated Workspace Mental Map
@@ -86,10 +86,10 @@ In `custom` mode the agent does not see one mutable directory. It reasons across
                                   │
                                   ▼
   ┌─────────────────────────────────────────────────────────────────────────┐
-  │ (3) BUNDLE KNOWLEDGE SPACE  ks:  ─  logical, read-only, virtual          │
+  │ (3) OWNER NAMESPACES  task:/mem:/cnv:/... ─ logical, owner-resolved      │
   │                                                                          │
-  │   ks:<bundle-defined-path>/...                                           │
-  │   Not part of the artifact root. Loaded into context via react.read.    │
+  │   Not part of the artifact root until pulled or rehosted as fi:.        │
+  │   Access goes through the owning service, resolver, or tool surface.     │
   └─────────────────────────────────────────────────────────────────────────┘
                                   │
                                   ▼

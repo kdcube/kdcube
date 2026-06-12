@@ -11,7 +11,11 @@ from kdcube_ai_app.apps.chat.sdk.solutions.canvas.events.resolver import (
     object_ref_from_payload,
 )
 
-from .transports.api_client import NamedServiceApiEndpoint, call_named_service_api_endpoint
+from .client_tools import (
+    named_service_namespace_client_resolver_config,
+    named_service_namespace_provider_configs_from_config,
+)
+from .transports.api_client import NamedServiceEndpoint, call_named_service_endpoint
 from .types import OBJECT_ACTION, NamedServiceRequest
 
 LOGGER = logging.getLogger("kdcube.sdk.named_services.canvas_resolver")
@@ -26,20 +30,13 @@ class NamedServiceCanvasObjectResolver(CanvasObjectResolver):
         self,
         *,
         namespace: str,
-        endpoint: NamedServiceApiEndpoint,
+        endpoint: NamedServiceEndpoint,
         resolver: str | None = None,
-        capabilities: Mapping[str, bool] | None = None,
     ) -> None:
         self.namespace = str(namespace or endpoint.namespace or "").strip().lower()
         self.endpoint = endpoint
         self.resolver = str(resolver or f"named_service.{endpoint.provider or self.namespace}").strip()
-        source = dict(capabilities or {})
-        self._capabilities = {
-            "preview": bool(source.get("preview", True)),
-            "open": bool(source.get("open", True)),
-            "download": bool(source.get("download", False)),
-            "rehost": bool(source.get("rehost", False)),
-        }
+        self._capabilities: dict[str, bool] = {}
 
     def capabilities_for_ref(self, ref: str) -> dict[str, bool]:
         del ref
@@ -55,8 +52,6 @@ class NamedServiceCanvasObjectResolver(CanvasObjectResolver):
     ) -> dict[str, Any]:
         object_ref = object_ref_from_payload(payload)
         base = self.base_response(ref=object_ref, action=action)
-        if action in {"capabilities", "describe"}:
-            return base
         LOGGER.info(
             "Named-service canvas resolver call start: namespace=%s provider=%s bundle=%s action=%s object_ref=%s user_id=%s story_id=%s",
             self.namespace,
@@ -67,7 +62,7 @@ class NamedServiceCanvasObjectResolver(CanvasObjectResolver):
             user_id,
             story_id,
         )
-        response = await call_named_service_api_endpoint(
+        response = await call_named_service_endpoint(
             self.endpoint,
             NamedServiceRequest(
                 operation=OBJECT_ACTION,
@@ -103,7 +98,7 @@ class NamedServiceCanvasObjectResolver(CanvasObjectResolver):
                 "error": code,
                 "message": message,
                 "provider": dict(response.provider or {}),
-                "data": dict(response.data or {}),
+                "extra": dict(response.extra or {}),
             }
 
         result: dict[str, Any] = {
@@ -112,7 +107,7 @@ class NamedServiceCanvasObjectResolver(CanvasObjectResolver):
             "provider": dict(response.provider or {}),
             "object": dict(response.object or {}),
             "items": list(response.items or []),
-            "data": dict(response.data or {}),
+            "extra": dict(response.extra or {}),
         }
         if response.capabilities:
             result["capabilities"] = dict(response.capabilities)
@@ -122,9 +117,18 @@ class NamedServiceCanvasObjectResolver(CanvasObjectResolver):
             result["object_ref"] = response.object_ref
             result["ref"] = response.object_ref
         object_payload = dict(response.object or {})
-        for key in ("title", "summary", "mime", "story_id", "object_kind"):
-            if object_payload.get(key) is not None:
-                result[key] = object_payload.get(key)
+        identity = object_payload.get("identity") if isinstance(object_payload.get("identity"), Mapping) else {}
+        meta = object_payload.get("meta") if isinstance(object_payload.get("meta"), Mapping) else {}
+        body = object_payload.get("body") if isinstance(object_payload.get("body"), Mapping) else {}
+        derived = {
+            "title": body.get("title") or object_payload.get("title"),
+            "description": body.get("description") or object_payload.get("description"),
+            "mime": meta.get("mime") or object_payload.get("mime"),
+            "object_kind": identity.get("object_kind") or object_payload.get("object_kind"),
+        }
+        for key, value in derived.items():
+            if value is not None:
+                result[key] = value
         LOGGER.info(
             "Named-service canvas resolver call complete: namespace=%s provider=%s bundle=%s action=%s object_ref=%s status=%s ui_event=%s",
             self.namespace,
@@ -175,43 +179,36 @@ def register_configured_named_service_canvas_resolvers(
                 namespace,
             )
             continue
-        provider_cfg = raw_config.get("provider")
-        if not isinstance(provider_cfg, Mapping):
-            log.warning(
-                "[canvas.object_action] named service resolver namespace=%s skipped: provider is required",
+        resolver_cfg = named_service_namespace_client_resolver_config(
+            {"named_services": {"namespaces": {namespace: raw_config}}},
+            namespace=namespace,
+            client_id="canvas",
+        )
+        if resolver_cfg.get("enabled") is not True:
+            log.info(
+                "[canvas.object_action] skipping namespace=%s because clients.canvas.resolver.enabled is not true",
                 namespace,
             )
             continue
-        bundle_id = str(provider_cfg.get("bundle_id") or "").strip()
-        if not bundle_id:
-            log.warning(
-                "[canvas.object_action] named service resolver namespace=%s skipped: bundle_id is required",
-                namespace,
-            )
-            continue
+        provider_configs = named_service_namespace_provider_configs_from_config(raw_config)
+        endpoint = (
+            NamedServiceEndpoint.from_provider_configs(provider_configs, namespace=namespace, tenant=tenant, project=project)
+            if provider_configs
+            else NamedServiceEndpoint(namespace=namespace, tenant=tenant, project=project)
+        )
 
-        capabilities = raw_config.get("capabilities")
         registry.register(
             NamedServiceCanvasObjectResolver(
                 namespace=namespace,
-                endpoint=NamedServiceApiEndpoint(
-                    bundle_id=bundle_id,
-                    operation=str(provider_cfg.get("operation") or "named_service").strip() or "named_service",
-                    route=str(provider_cfg.get("route") or "operations").strip() or "operations",
-                    tenant=str(provider_cfg.get("tenant") or tenant or "").strip() or None,
-                    project=str(provider_cfg.get("project") or project or "").strip() or None,
-                    provider=str(provider_cfg.get("provider") or "").strip() or None,
-                    namespace=namespace,
-                ),
+                endpoint=endpoint,
                 resolver=str(raw_config.get("resolver") or "").strip() or None,
-                capabilities=capabilities if isinstance(capabilities, Mapping) else None,
             )
         )
         log.info(
             "[canvas.object_action] registered named service resolver namespace=%s provider=%s bundle=%s",
             namespace,
-            str(provider_cfg.get("provider") or "").strip() or "",
-            bundle_id,
+            endpoint.provider or "<discovery>",
+            endpoint.bundle_id or endpoint.module or "<discovery>",
         )
         registered += 1
     return registered

@@ -1,14 +1,14 @@
 ---
-id: ks:docs/sdk/storage/cache-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/storage/cache-README.md
 title: "Cache"
 summary: "Redis KV cache abstraction for the SDK, including namespaced (tenant/project) caches."
 tags: ["sdk", "storage", "cache", "redis"]
 keywords: ["KVCache", "NamespacedKVCache", "tenant/project scope", "ServiceHub cache", "redis"]
 see_also:
-  - ks:docs/sdk/bundle/bundle-storage-and-cache-README.md
-  - ks:docs/sdk/storage/sdk-store-README.md
-  - ks:docs/sdk/storage/git-store-README.md
-  - ks:docs/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-storage-and-cache-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/storage/sdk-store-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/storage/git-store-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/README.md
 ---
 # KV Cache (Service Hub)
 

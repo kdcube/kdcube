@@ -1,13 +1,13 @@
 ---
-id: ks:docs/sdk/bundle/bundle-storage-and-cache-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-storage-and-cache-README.md
 title: "Bundle Storage And Cache"
 summary: "Bundle storage surfaces: runtime-provided bundle storage root, BundleArtifactStorage, and KV cache, including path layout and access patterns."
 tags: ["sdk", "bundle", "storage", "cache", "s3", "filesystem"]
 keywords: ["per bundle durable storage", "runtime provided bundle storage", "kv cache usage", "bundle storage root", "storage path layout", "artifact read write patterns", "cache backed bundle state"]
 see_also:
-  - ks:docs/sdk/storage/cache-README.md
-  - ks:docs/sdk/bundle/bundle-developer-guide-README.md
-  - ks:docs/sdk/bundle/bundle-index-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/storage/cache-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-developer-guide-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-index-README.md
 ---
 # Bundle Storage + Cache
 
@@ -176,12 +176,12 @@ Important contract:
 - the bundle owns everything below that root
 - if the bundle wants rebuildable caches, it should create and manage them under that stable root explicitly
 
-ReAct integration (optional):
-- You can expose a knowledge space (`ks:`) backed by this local storage.
-- Example: `react.read(["ks:docs/README.md"])` reads from a bundle‑defined resolver.
+ReAct integration:
+- Local bundle storage is not automatically a ReAct-readable namespace.
+- If the agent needs document/source access, expose it through explicit bundle
+  tools, namespace services, MCP/search tools, or a registered rehoster.
 
 See:
-- [docs/sdk/bundle/bundle-knowledge-space-README.md](bundle-knowledge-space-README.md) (resolver + ks namespace)
 - [docs/sdk/bundle/bundle-developer-guide-README.md](bundle-developer-guide-README.md) (on_bundle_load + usage)
 - Example bundle: `.../examples/bundles/kdcube.copilot@2026-04-03-19-05`
 

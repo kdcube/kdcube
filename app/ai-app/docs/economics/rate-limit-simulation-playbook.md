@@ -1,14 +1,14 @@
 ---
-id: ks:docs/economics/rate-limit-simulation-playbook.md
+id: repo:kdcube-ai-app/app/ai-app/docs/economics/rate-limit-simulation-playbook.md
 title: "Rate Limit Event Simulation Playbook"
 summary: "Step-by-step scenarios to trigger each rate_limit.* SSE event in local dev."
 tags: ["economics", "rate-limit", "sse", "testing", "playbook"]
 keywords: ["rate_limit.warning", "rate_limit.denied", "SSE", "quota", "throttling"]
 see_also:
-  - ks:docs/economics/economics-events-README.md
-  - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
-  - ks:docs/economics/eco-test-README.md
-  - ks:docs/economics/operational-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/economics-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-chat-stream-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/eco-test-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/operational-README.md
 ---
 # Rate Limit Event Simulation Playbook
 

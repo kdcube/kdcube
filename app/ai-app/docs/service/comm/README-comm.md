@@ -1,21 +1,23 @@
 ---
-id: ks:docs/service/comm/README-comm.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/comm/README-comm.md
 title: "Comm"
 summary: "Entry point for communication transports and integrations."
 tags: ["service", "comm", "transports", "sse", "socketio"]
 keywords: ["SSE", "Socket.IO", "REST", "relay", "transports", "data bus"]
 see_also:
-  - ks:docs/service/comm/CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md
-  - ks:docs/service/comm/comm-system.md
-  - ks:docs/service/comm/bus-routing-and-partitioning-README.md
-  - ks:docs/service/comm/conversation-event-bus-and-data-bus-README.md
-  - ks:docs/service/comm/data-bus-README.md
-  - ks:docs/service/comm/comm-recording-event-sinks-README.md
-  - ks:docs/service/streams/telemetry-README.md
-  - ks:docs/service/auth/auth-README.md
-  - ks:docs/sdk/bundle/bundle-firewall-README.md
-  - ks:docs/sdk/bundle/bundle-client-communication-README.md
-  - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/cross-runtime-context-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/comm-system.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/bus-routing-and-partitioning-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/conversation-event-bus-and-data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/comm-recording-event-sinks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/streams/telemetry-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-firewall-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-communication-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-chat-stream-events-README.md
 ---
 # Communication Integrations (External + Internal)
 
@@ -33,6 +35,9 @@ This README is the entry point for **communication integrations**:
   queue
 - **Comm recording and event sinks**: optional recording of selected comm
   envelopes and bounded batch dispatch to telemetry or other configured sinks
+- **Runtime context crossing**: when comm-backed execution crosses into tools,
+  subprocesses, or ISO runtime, the platform uses the portable context room
+  documented in [Cross-Runtime Context](../../runtime/cross-runtime-context-README.md)
 
 If you are implementing a UI, API client, or a new transport, start here.
 

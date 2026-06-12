@@ -1,14 +1,14 @@
 ---
-id: ks:docs/exec/exec-logging-error-propagation-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/exec/exec-logging-error-propagation-README.md
 title: "Logging"
 summary: "Executor logging model: separate user/program logs from infra/runtime logs."
 tags: ["exec", "logging", "observability", "runtime"]
 keywords: ["executor logs", "user logs", "infra logs", "stdout", "stderr", "separation"]
 see_also:
-  - ks:docs/exec/README-iso-runtime.md
-  - ks:docs/exec/README-runtime-modes-builtin-tools.md
-  - ks:docs/exec/distributed-exec-README.md
-  - ks:docs/sdk/agents/react/external-exec-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/README-iso-runtime.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/README-runtime-modes-builtin-tools.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/distributed-exec-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/external-exec-README.md
 ---
 ## Executor log streams
 

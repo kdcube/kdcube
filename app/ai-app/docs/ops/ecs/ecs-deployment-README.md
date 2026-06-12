@@ -1,14 +1,14 @@
 ---
-id: ks:docs/ops/ecs/ecs-deployment-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/ops/ecs/ecs-deployment-README.md
 title: "ECS Deployment"
 summary: "Current AWS ECS deployment model for KDCube: descriptor-driven provisioning, mixed-capacity runtime, proc on EC2, autoscaling, and rollout behavior."
 tags: ["ops", "ecs", "deployment", "aws", "autoscaling"]
 keywords: ["ecs", "terraform", "github actions", "proc ec2", "fargate", "cloudwatch", "autoscaling", "deployment descriptors"]
 see_also:
-  - ks:docs/ops/health-README.md
-  - ks:docs/service/scale/metric-server-README.md
-  - ks:docs/service/scale/metrics-README.md
-  - ks:docs/service/ecs/custom-ecs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/ops/health-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/scale/metric-server-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/scale/metrics-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/ecs/custom-ecs-README.md
 ---
 # ECS Deployment
 

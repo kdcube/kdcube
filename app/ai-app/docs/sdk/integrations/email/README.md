@@ -1,13 +1,13 @@
 ---
-id: ks:docs/sdk/integrations/email/README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/email/README.md
 title: "Email Integration Docs"
 summary: "Index for the KDCube Email SDK integration docs."
 tags: ["sdk", "integrations", "email"]
 keywords: ["email integration", "gmail integration", "email prerequisites"]
 see_also:
-  - ks:docs/sdk/integrations/email/email-README.md
-  - ks:docs/sdk/integrations/email/email-external-prereq-README.md
-  - ks:docs/sdk/integrations/telegram/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/email/email-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/email/email-external-prereq-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/README.md
 ---
 
 # Email Integration Docs

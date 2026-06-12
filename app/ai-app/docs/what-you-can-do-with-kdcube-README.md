@@ -1,29 +1,29 @@
 ---
-id: ks:docs/what-you-can-do-with-kdcube-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/what-you-can-do-with-kdcube-README.md
 title: "What You Can Do With KDCube"
 summary: "Dense product and builder overview of KDCube: what it is, who it is for, why bundles matter, what surfaces and runtimes it supports, and how engineers or coding agents turn code into runnable AI products."
 tags: ["docs", "product", "overview", "sdk", "platform", "bundle", "agent", "react", "exec"]
 keywords: ["what is kdcube", "what can kdcube do", "ai product platform", "bundle runtime", "hot reload bundle", "kdcube bundle", "build ai app", "wrap existing app", "coding agent build bundle", "claude code build bundle", "local to cloud workflow", "mcp endpoint", "react agent", "announce", "steer followup", "user memory", "iso runtime", "distributed exec", "streaming widgets", "artifact provenance"]
 updated_at: 2026-05-27
 see_also:
-  - ks:docs/quick-start-README.md
-  - ks:docs/README.md
-  - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
-  - ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
-  - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
-  - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
-  - ks:docs/sdk/bundle/bundle-agent-integration-README.md
-  - ks:docs/sdk/bundle/bundle-platform-integration-README.md
-  - ks:docs/sdk/bundle/bundle-widget-integration-README.md
-  - ks:docs/sdk/agents/react/react-announce-README.md
-  - ks:docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
-  - ks:docs/sdk/agents/react/why/why-not-simply-tool-calling-README.md
-  - ks:docs/sdk/tools/sdk-tools-README.md
-  - ks:docs/sdk/skills/skills-README.md
-  - ks:docs/sdk/streaming/llm-streaming-README.md
-  - ks:docs/exec/README-iso-runtime.md
-  - ks:docs/exec/distributed-exec-README.md
-  - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/quick-start-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-write-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-agent-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-announce-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/why/why-not-simply-tool-calling-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/sdk-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/skills/skills-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/streaming/llm-streaming-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/README-iso-runtime.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/distributed-exec-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md
 ---
 # What You Can Do With KDCube
 
@@ -232,7 +232,7 @@ message.
 
 Artifacts keep provenance:
 
-- logical paths such as `fi:`, `tc:`, `ar:`, `so:`, `ks:`
+- logical paths such as `fi:`, `tc:`, `ar:`, `so:`, and repository refs such as `repo:kdcube-ai-app/app/ai-app/docs/...`
 - tool call/result records
 - visibility (`internal` vs user-visible/external)
 - source-pool citation tokens and replacement

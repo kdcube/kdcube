@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/streaming/llm-streaming-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/streaming/llm-streaming-README.md
 title: "LLM Streaming And Accountable Invocation"
 summary: "Provider-agnostic LLM invocation interface: role-mapped clients, streaming deltas/events, normalized usage, accounting, tool-call events, citations, and custom endpoint compatibility."
 tags: ["sdk", "streaming", "llm", "accounting", "service-hub", "models"]
@@ -13,11 +13,11 @@ keywords:
   - "tool-call streaming"
   - "provider-agnostic model invocation"
 see_also:
-  - ks:docs/sdk/streaming/channeled-streamer-README.md
-  - ks:docs/accounting/accounting-README.md
-  - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
-  - ks:docs/sdk/agents/react/react-state-machine-README.md
-  - ks:docs/sdk/agents/claude/claude-code-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/streaming/channeled-streamer-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/accounting/accounting-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-state-machine-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/claude/claude-code-README.md
 ---
 # LLM Streaming And Accountable Invocation
 

@@ -1,13 +1,13 @@
 ---
-id: ks:docs/service/gateway-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/gateway-README.md
 title: "Gateway"
 summary: "Gateway behavior and configuration: rate limits, backpressure, and admission control."
 tags: ["service", "gateway", "admission-control", "rate-limits", "backpressure"]
 keywords: ["rate limits", "backpressure", "tenant/project config", "gateway config JSON"]
 see_also:
-  - ks:docs/configuration/service-runtime-configuration-mapping-README.md
-  - ks:docs/service/README-monitoring-observability.md
-  - ks:docs/service/service-and-infrastructure-index-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/README-monitoring-observability.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/service-and-infrastructure-index-README.md
 ---
 # Gateway & Admission Control (Current)
 

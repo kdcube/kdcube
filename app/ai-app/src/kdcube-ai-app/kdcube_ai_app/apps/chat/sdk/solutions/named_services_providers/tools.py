@@ -12,15 +12,17 @@ from kdcube_ai_app.apps.chat.sdk.event_identity import DEFAULT_REACT_AGENT_ID, n
 
 from .client_tools import (
     named_service_namespace_client_tools_config,
-    named_service_namespace_provider_config,
+    named_service_namespace_provider_configs,
     named_service_namespaces,
 )
-from .transports.api_client import NamedServiceApiEndpoint, call_named_service_api_endpoint
+from .discovery import get_current_named_service_discovery
+from .transports.api_client import NamedServiceEndpoint, call_named_service_endpoint
 from .types import (
     OBJECT_ACTION,
     OBJECT_DELETE,
     OBJECT_GET,
     OBJECT_LIST,
+    OBJECT_SCHEMA,
     OBJECT_SEARCH,
     OBJECT_UPSERT,
     PROVIDER_ABOUT,
@@ -36,9 +38,18 @@ _DEFAULT_READ_OPERATIONS = frozenset({
     OBJECT_LIST,
     OBJECT_SEARCH,
     OBJECT_GET,
-    OBJECT_ACTION,
+    OBJECT_SCHEMA,
 })
-_DEFAULT_ACTIONS = frozenset({"preview", "open", "capabilities", "describe"})
+_TOOL_OPERATIONS = {
+    "provider_about": PROVIDER_ABOUT,
+    "list_objects": OBJECT_LIST,
+    "search_objects": OBJECT_SEARCH,
+    "get_object": OBJECT_GET,
+    "object_schema": OBJECT_SCHEMA,
+    "object_action": OBJECT_ACTION,
+    "upsert_object": OBJECT_UPSERT,
+    "delete_object": OBJECT_DELETE,
+}
 
 
 def bind_registry(registry: Mapping[str, Any] | None) -> None:
@@ -137,19 +148,16 @@ def _allowed_values(raw: Any, defaults: frozenset[str]) -> frozenset[str]:
 
 def _operation_allowed(namespace: str, operation: str) -> bool:
     policy = _client_namespace_policy(namespace)
-    allowed = _allowed_values(policy.get("operations"), _DEFAULT_READ_OPERATIONS)
+    allowed = _allowed_values(policy.get("allowed_operations"), _DEFAULT_READ_OPERATIONS)
     return "*" in allowed or operation in allowed
 
 
 def _action_allowed(namespace: str, action: str) -> bool:
-    if not action:
-        return True
-    policy = _client_namespace_policy(namespace)
-    allowed = _allowed_values(policy.get("actions"), _DEFAULT_ACTIONS)
-    return "*" in allowed or action in allowed
+    del namespace, action
+    return True
 
 
-def _endpoint(namespace: str) -> NamedServiceApiEndpoint | Dict[str, Any]:
+def _endpoint(namespace: str) -> NamedServiceEndpoint | Dict[str, Any]:
     namespace_cfg = _namespace_config(namespace)
     if not namespace_cfg:
         return _error(
@@ -165,29 +173,10 @@ def _endpoint(namespace: str) -> NamedServiceApiEndpoint | Dict[str, Any]:
             namespace=namespace,
             client_id=_client_id(),
         )
-    provider_cfg = named_service_namespace_provider_config(_bundle_props(), namespace=namespace)
-    if not provider_cfg:
-        return _error(
-            "named_service_namespace_provider_missing",
-            f"Namespace {namespace!r} is missing provider configuration.",
-            namespace=namespace,
-        )
-    bundle_id = str(provider_cfg.get("bundle_id") or "").strip()
-    if not bundle_id:
-        return _error(
-            "named_service_namespace_bundle_missing",
-            f"Namespace {namespace!r} provider is missing bundle_id.",
-            namespace=namespace,
-        )
-    return NamedServiceApiEndpoint(
-        bundle_id=bundle_id,
-        operation=str(provider_cfg.get("operation") or "named_service").strip() or "named_service",
-        route=str(provider_cfg.get("route") or "operations").strip() or "operations",
-        tenant=str(provider_cfg.get("tenant") or "").strip() or None,
-        project=str(provider_cfg.get("project") or "").strip() or None,
-        provider=str(provider_cfg.get("provider") or "").strip() or None,
-        namespace=namespace,
-    )
+    provider_configs = named_service_namespace_provider_configs(_bundle_props(), namespace=namespace)
+    if not provider_configs:
+        return NamedServiceEndpoint(namespace=namespace)
+    return NamedServiceEndpoint.from_provider_configs(provider_configs, namespace=namespace)
 
 
 async def _call(
@@ -231,7 +220,11 @@ async def _call(
     endpoint = _endpoint(ns)
     if isinstance(endpoint, dict):
         LOGGER.warning(
-            "Named-service client endpoint unavailable: namespace=%s operation=%s client=%s error=%s",
+            "Named-service client endpoint unavailable:\n"
+            "  namespace: %s\n"
+            "  operation: %s\n"
+            "  client: %s\n"
+            "  error: %s",
             ns,
             operation,
             _client_id(),
@@ -240,14 +233,26 @@ async def _call(
         return endpoint
 
     LOGGER.info(
-        "Named-service client call start: namespace=%s operation=%s action=%s client=%s provider_bundle=%s provider=%s route=%s",
+        "Named-service client request start:\n"
+        "  namespace: %s\n"
+        "  operation: %s\n"
+        "  action: %s\n"
+        "  client: %s\n"
+        "  configured_endpoint:\n"
+        "    transport: %s\n"
+        "    explicit_bundle: %s\n"
+        "    explicit_provider: %s\n"
+        "    route: %s\n"
+        "    provider_config_count: %s",
         ns,
         operation,
         action or "",
         _client_id(),
-        endpoint.bundle_id,
+        endpoint.transport,
+        endpoint.bundle_id or endpoint.module or "",
         endpoint.provider or "",
         endpoint.route,
+        len(endpoint.provider_configs or ()),
     )
     request = NamedServiceRequest(
         operation=operation,
@@ -273,18 +278,36 @@ async def _call(
         },
         payload=dict(payload or {}),
     )
-    response = await call_named_service_api_endpoint(endpoint, request)
+    LOGGER.info(
+        "Named-service client discovery context:\n"
+        "  namespace: %s\n"
+        "  operation: %s\n"
+        "  client: %s\n"
+        "  bound: %s",
+        ns,
+        operation,
+        _client_id(),
+        get_current_named_service_discovery() is not None,
+    )
+    response = await call_named_service_endpoint(endpoint, request)
     payload = response.to_dict()
     log_fn = LOGGER.info if payload.get("ok") else LOGGER.warning
     log_fn(
-        "Named-service client call complete: namespace=%s operation=%s action=%s client=%s ok=%s error=%s status=%s",
+        "Named-service client request complete:\n"
+        "  namespace: %s\n"
+        "  operation: %s\n"
+        "  action: %s\n"
+        "  client: %s\n"
+        "  ok: %s\n"
+        "  error: %s\n"
+        "  status: %s",
         ns,
         operation,
         action or "",
         _client_id(),
         payload.get("ok"),
         (payload.get("error") or {}).get("code") if isinstance(payload.get("error"), Mapping) else "",
-        payload.get("status"),
+        response.status,
     )
     return payload
 
@@ -364,12 +387,32 @@ async def get_object(
     )
 
 
+async def object_schema(
+    namespace: Annotated[str, "Configured named-service namespace, for example 'task'."],
+    object_kind: Annotated[str, "Provider object kind, for example 'task.issue' or 'task.attachment'."] = "",
+    object_ref: Annotated[str, "Canonical object ref when asking for the schema of a concrete ref."] = "",
+) -> Annotated[Dict[str, Any], "Named service response envelope with schema and usage guidance."]:
+    """Return provider-defined schema and tool payload guidance for objects in a namespace."""
+
+    payload: Dict[str, Any] = {}
+    if object_kind:
+        payload["object_kind"] = object_kind
+    if object_ref:
+        payload["object_ref"] = object_ref
+    return await _call(
+        namespace=namespace,
+        operation=OBJECT_SCHEMA,
+        object_ref=object_ref,
+        payload=payload,
+    )
+
+
 async def object_action(
     namespace: Annotated[str, "Configured named-service namespace, for example 'task'."],
     object_ref: Annotated[str, "Canonical object ref, for example 'task:issues/BUG-123'."],
     action: Annotated[str, "Bounded provider action, for example preview, open, or describe."] = "preview",
     payload: Annotated[str, "Optional JSON object with provider-specific action payload."] = "",
-) -> Annotated[Dict[str, Any], "Named service response envelope with object, data, or ui_event."]:
+) -> Annotated[Dict[str, Any], "Named service response envelope with ret.object, ret.extra, or ret.ui_event."]:
     """Run a bounded action against one object in a configured namespace."""
 
     try:
@@ -432,7 +475,7 @@ async def delete_object(
 
 
 def list_tools() -> Dict[str, Dict[str, Any]]:
-    return {
+    tools = {
         "provider_about": {
             "callable": provider_about,
             "description": "Describe a configured named-service provider available to this client.",
@@ -449,6 +492,10 @@ def list_tools() -> Dict[str, Dict[str, Any]]:
             "callable": get_object,
             "description": "Read one object from a configured named-service namespace by object_ref or object_id.",
         },
+        "object_schema": {
+            "callable": object_schema,
+            "description": "Return provider-defined object schema and named-service tool payload guidance.",
+        },
         "object_action": {
             "callable": object_action,
             "description": "Run a bounded provider action such as preview, open, or describe on one named-service object.",
@@ -462,6 +509,19 @@ def list_tools() -> Dict[str, Dict[str, Any]]:
             "description": "Delete or archive one named-service object when this client's policy allows mutation.",
         },
     }
+    namespaces = [
+        str(namespace or "").strip().lower().rstrip(":")
+        for namespace in named_service_namespaces(_bundle_props())
+        if str(namespace or "").strip()
+    ]
+    if not namespaces:
+        return {}
+    visible: Dict[str, Dict[str, Any]] = {}
+    for tool_name, meta in tools.items():
+        operation = _TOOL_OPERATIONS.get(tool_name)
+        if operation and any(_operation_allowed(namespace, operation) for namespace in namespaces):
+            visible[tool_name] = meta
+    return visible
 
 
 tools = sys.modules[__name__]

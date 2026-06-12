@@ -1,12 +1,12 @@
 ---
-id: ks:docs/sdk/agents/claude/claude-code-accounting-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/claude/claude-code-accounting-README.md
 title: "Claude Code Accounting"
 summary: "How Claude Code runs are emitted into KDCube accounting as accountable LLM usage, including model resolution, usage extraction, cost fallback, and calculator compatibility."
 tags: ["sdk", "agents", "claude", "claude-code", "accounting", "economics"]
 keywords: ["track_llm", "cost_usd", "stream-json", "claude-sonnet-4-6", "claude-opus-4-6", "runtime=claude_code"]
 see_also:
-  - ks:docs/sdk/agents/claude/claude-code-README.md
-  - ks:docs/sdk/agents/claude/claude-code-workspace-bootstrap-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/claude/claude-code-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/claude/claude-code-workspace-bootstrap-README.md
 ---
 # Claude Code Accounting
 

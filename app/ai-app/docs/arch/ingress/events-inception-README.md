@@ -1,5 +1,5 @@
 ---
-id: ks:docs/arch/ingress/events-inception-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/arch/ingress/events-inception-README.md
 title: "Ingress Event Inception"
 summary: "How chat ingress accepts built-in user events and authored domain events before they enter the ordered event lane, ready queue, Redis external-event stream, or ReAct."
 tags: ["arch", "ingress", "events", "chat", "react", "followup", "steer", "external-events"]
@@ -16,16 +16,16 @@ keywords:
     "conversation timeline",
   ]
 see_also:
-  - ks:docs/service/comm/conversation-event-bus-and-data-bus-README.md
-  - ks:docs/service/comm/data-bus-README.md
-  - ks:docs/service/comm/bus-routing-and-partitioning-README.md
-  - ks:docs/arch/proc/events-orchestration-README.md
-  - ks:docs/sdk/events/conversation-event-lane-state-README.md
-  - ks:docs/sdk/events/external-events-README.md
-  - ks:docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
-  - ks:docs/sdk/agents/react/runtime-configuration-README.md
-  - ks:docs/sdk/bundle/bundle-client-communication-README.md
-  - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/conversation-event-bus-and-data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/bus-routing-and-partitioning-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/events-orchestration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/conversation-event-lane-state-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/runtime-configuration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-communication-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-chat-stream-events-README.md
 ---
 
 # Ingress Event Inception

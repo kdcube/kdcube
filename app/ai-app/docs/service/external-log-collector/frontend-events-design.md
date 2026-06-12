@@ -1,13 +1,13 @@
 ---
-id: ks:docs/service/external-log-collector/frontend-events-design.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/external-log-collector/frontend-events-design.md
 title: "Frontend Log Events Design"
 summary: "Source event schema for browser log events, the planned metric extension, and normalization into the shared telemetry envelope."
 tags: ["service", "frontend", "logging", "events", "observability", "design"]
 keywords: ["frontend log event schema", "browser metric payloads", "client telemetry models", "log collector event contract", "frontend observability payload design"]
 see_also:
-  - ks:docs/service/external-log-collector/Architecture.md
-  - ks:docs/service/streams/telemetry-README.md
-  - ks:docs/service/README-monitoring-observability.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/external-log-collector/Architecture.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/streams/telemetry-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/README-monitoring-observability.md
 ---
 # Frontend Log Events — Design
 

@@ -55,7 +55,7 @@ TOOL_SPEC = {
     "purpose": (
         "Read ReAct-local logical refs into visible context so you can use them. "
         "Paths must be logical paths (look like <namespace>:), not physical paths. "
-        "Built-in examples include ar:, fi:, tc:, ev:, so:, su:, ws:, ks:, and sk:. "
+        "Built-in examples include ar:, fi:, tc:, ev:, so:, su:, ws:, and sk:. "
         "External namespace refs such as mem:, cnv:, or task: are not read directly. "
         "When exact content from an external ref is needed, first use react.pull on that ref; "
         "then use the returned fi: logical_path or physical_path with react.read, react.rg, or exec/code. "
@@ -68,8 +68,6 @@ TOOL_SPEC = {
         "Each path you read becomes visible in the timeline; skills are shown with ACTIVE 💡 banner and are never read-capped. "
         "A read result is visible only after the current response is rendered; do not emit a downstream action in the same response when it depends on newly read content. "
         "Skill reads may be combined with independent actions such as web search when those actions do not rely on the unread skill text. "
-        "Use ks:<relpath> to read files from the knowledge space (read-only reference files prepared by the system). "
-        "Knowledge-space text is uncapped by default; operators can set ai.react.knowledge_read_visible_* caps if a deployment needs them. "
         "For fi: files, normal readable content is text, plus multimodal PDF/image payloads. "
         "For so:sources_pool[...] paths, react.read returns JSON source rows; web rows use content for full fetched text "
         "when available and text for the search preview/snippet. Source rows are materialized in full by default. "
@@ -92,8 +90,7 @@ TOOL_SPEC = {
             "files via fi:turn_<id>.files/<filepath>, "
             "event blocks via ev:turn_<id>.events/<event_path>, "
             "sources via so:sources_pool[...] or so:conv_<conversation_id>.sources_pool[...], "
-            "skills via sk:<skill_id or num>, "
-            "knowledge space via ks:<relpath> (read-only reference files). "
+            "skills via sk:<skill_id or num>. "
             "External namespace refs such as mem:, cnv:, or task: must be pulled first; after pull, read the returned fi: logical_path. "
             "fi: normally yields full text for text files and multimodal/base64 payloads for PDF/images only. "
             "An fi:conv_<conversation_id>.turn_<id>... path belongs to another conversation and is resolved in that conversation. "
@@ -101,7 +98,7 @@ TOOL_SPEC = {
         ),
         "items": (
             "optional list of read specs, each with path plus optional line_start/line_count or "
-            "offset_text_symbols/max_text_symbols. Works for text-backed logical paths such as fi:, tc:/ev:/ar:, and ks:. "
+            "offset_text_symbols/max_text_symbols. Works for text-backed logical paths such as fi: and tc:/ev:/ar:. "
             "Use read_items returned by react.rg when available; otherwise create manual line ranges from stats_only metadata."
         ),
         "line_numbers": (
@@ -1428,7 +1425,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
         abs_path = None
 
         if resolver_fn is None:
-            # If a bundle provides knowledge space, it must expose a resolver.
+            # Owner-defined logical namespaces must expose an explicit resolver.
             # Do not silently fall back to filesystem here.
             missing_artifacts.append(ctx_path)
             per_path.append({

@@ -13,6 +13,7 @@ from .types import (
     OBJECT_DELETE,
     OBJECT_GET,
     OBJECT_LIST,
+    OBJECT_SCHEMA,
     OBJECT_RESOLVE,
     OBJECT_SEARCH,
     OBJECT_UPSERT,
@@ -102,16 +103,38 @@ class NamedServiceClient:
         return cls(registry, auth_context=auth, transport=transport)
 
     async def call(self, request: NamedServiceRequest | Mapping[str, Any]) -> NamedServiceResponse:
-        req = request if isinstance(request, NamedServiceRequest) else NamedServiceRequest.from_dict(request)
+        raw, entry, req = await self.call_raw(request)
+        if entry is None:
+            try:
+                return NamedServiceResponse.coerce(raw)
+            except TypeError:
+                return NamedServiceResponse.from_dict(
+                    {
+                        "ok": False,
+                        "error": {
+                            "code": "named_service_provider_not_found",
+                            "message": "No named service provider matched the request",
+                        },
+                    }
+                )
+        response = self._coerce_response(raw, entry=entry, request=req)
+        return response
+
+    async def call_raw(
+        self,
+        request: NamedServiceRequest | Mapping[str, Any],
+    ) -> tuple[Any, RegisteredNamedServiceProvider | None, NamedServiceRequest]:
+        req = NamedServiceRequest.coerce(request)
         entry = self._resolve(req)
         if entry is None:
-            return NamedServiceResponse.error_response(
+            response = NamedServiceResponse.error_response(
                 code="named_service_provider_not_found",
                 message="No named service provider matched the request",
                 status=404,
                 namespace=req.namespace or namespace_for_ref(req.object_ref),
                 object_ref=req.object_ref,
             )
+            return response, None, req
         if not entry.spec.supports_operation(req.operation):
             return NamedServiceResponse.error_response(
                 code="named_service_operation_not_supported",
@@ -120,7 +143,7 @@ class NamedServiceClient:
                 provider=self._provider_identity(entry),
                 namespace=req.namespace,
                 object_ref=req.object_ref,
-            )
+            ), entry, req
         if not entry.spec.supports_transport(req.operation, self.transport):
             return NamedServiceResponse.error_response(
                 code="named_service_transport_not_supported",
@@ -129,13 +152,12 @@ class NamedServiceClient:
                 provider=self._provider_identity(entry),
                 namespace=req.namespace,
                 object_ref=req.object_ref,
-            )
+            ), entry, req
         result = entry.provider.dispatch(self.context, req)
         if not hasattr(result, "__await__"):
             raise TypeError("Named service provider dispatch must be async")
         raw = await result
-        response = self._coerce_response(raw, entry=entry, request=req)
-        return response
+        return raw, entry, req
 
     async def about(self, **kwargs: Any) -> NamedServiceResponse:
         return await self.call(self._request(PROVIDER_ABOUT, **kwargs))
@@ -155,6 +177,14 @@ class NamedServiceClient:
 
     async def get(self, **kwargs: Any) -> NamedServiceResponse:
         return await self.call(self._request(OBJECT_GET, **kwargs))
+
+    async def schema(self, **kwargs: Any) -> NamedServiceResponse:
+        object_kind = kwargs.pop("object_kind", None)
+        if object_kind:
+            payload = dict(kwargs.get("payload") or {})
+            payload.setdefault("object_kind", object_kind)
+            kwargs["payload"] = payload
+        return await self.call(self._request(OBJECT_SCHEMA, **kwargs))
 
     async def upsert(self, **kwargs: Any) -> NamedServiceResponse:
         return await self.call(self._request(OBJECT_UPSERT, **kwargs))
@@ -205,17 +235,26 @@ class NamedServiceClient:
         entry: RegisteredNamedServiceProvider,
         request: NamedServiceRequest,
     ) -> NamedServiceResponse:
-        if isinstance(raw, NamedServiceResponse):
-            return raw
+        if not isinstance(raw, Mapping):
+            try:
+                return NamedServiceResponse.coerce(raw)
+            except TypeError:
+                pass
         if raw is None:
             raw = {"ok": True}
         if not isinstance(raw, Mapping):
-            raw = {"ok": True, "data": {"result": raw}}
+            raw = {"ok": True, "ret": {"extra": {"result": raw}}}
         payload = dict(raw)
         payload.setdefault("ok", True)
-        payload.setdefault("provider", self._provider_identity(entry))
-        payload.setdefault("namespace", request.namespace or entry.spec.namespace)
-        payload.setdefault("object_ref", request.object_ref)
+        ret = dict(payload.get("ret") or {})
+        attrs = dict(ret.get("attrs") or {})
+        attrs.setdefault("provider", self._provider_identity(entry))
+        attrs.setdefault("namespace", request.namespace or entry.spec.namespace)
+        if request.object_ref is not None:
+            attrs.setdefault("object_ref", request.object_ref)
+        if attrs:
+            ret["attrs"] = attrs
+        payload["ret"] = ret
         return NamedServiceResponse.from_dict(payload)
 
     @staticmethod

@@ -1,13 +1,13 @@
 ---
-id: ks:docs/service/ecs/iam-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/ecs/iam-README.md
 title: "IAM"
 summary: "Minimum IAM permissions for ECS tasks and CI/CD."
 tags: ["service", "ecs", "iam", "security"]
 keywords: ["task execution role", "ECR", "CloudWatch logs", "IAM policy"]
 see_also:
-  - ks:docs/service/ecs/custom-ecs-README.md
-  - ks:docs/service/ecs/metrics-autoscaling-README.md
-  - ks:docs/configuration/service-runtime-configuration-mapping-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/ecs/custom-ecs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/ecs/metrics-autoscaling-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
 ---
 # ECS IAM Guide
 

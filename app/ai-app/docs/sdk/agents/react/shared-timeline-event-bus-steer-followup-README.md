@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
 title: "Shared Timeline Event Bus for Steer and Followup"
 summary: "How active React turns consume followup and steer events through the shared conversation event bus while preserving turn ownership and fallback continuation execution."
 tags: ["sdk", "agents", "react", "timeline", "steer", "followup", "continuations", "redis"]
@@ -16,13 +16,13 @@ keywords:
     "external events",
   ]
 see_also:
-  - ks:docs/sdk/events/external-events-journey-and-handling-README.md
-  - ks:docs/arch/ingress/events-inception-README.md
-  - ks:docs/arch/proc/events-orchestration-README.md
-  - ks:docs/sdk/agents/react/timeline-README.md
-  - ks:docs/sdk/agents/react/context-browser-README.md
-  - ks:docs/sdk/agents/react/turn-log-README.md
-  - ks:docs/sdk/agents/react/why/memory-architecture-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-journey-and-handling-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/ingress/events-inception-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/events-orchestration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/timeline-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-browser-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/turn-log-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/why/memory-architecture-README.md
 ---
 
 # Shared Timeline Event Bus for Steer and Followup

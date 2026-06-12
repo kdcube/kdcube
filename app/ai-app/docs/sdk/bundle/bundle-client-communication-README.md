@@ -1,24 +1,24 @@
 ---
-id: ks:docs/sdk/bundle/bundle-client-communication-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-communication-README.md
 title: "Bundle Client Communication"
 summary: "Browser-to-bundle communication contract across widget iframes, integrations, REST, SSE, Socket.IO, and Data Bus: auth propagation, headers, cookies, stream and session identifiers, and peer targeting."
 tags: ["sdk", "bundle", "transport", "auth", "headers", "cookies", "sse", "socketio", "rest", "integrations", "data-bus"]
 keywords: ["browser to bundle transport", "widget iframe communication", "integration request headers", "data bus publish", "auth token forwarding", "session and stream identifiers", "peer targeting", "sse and socket communication", "bundle client request contract"]
 updated_at: 2026-06-06
 see_also:
-  - ks:docs/sdk/bundle/bundle-transports-README.md
-  - ks:docs/sdk/bundle/bundle-client-ui-README.md
-  - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
-  - ks:docs/sdk/bundle/bundle-frontend-awareness-README.md
-  - ks:docs/sdk/bundle/bundle-events-README.md
-  - ks:docs/sdk/namespace-services/providers-README.md
-  - ks:docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
-  - ks:docs/sdk/bundle/bundle-interfaces-README.md
-  - ks:docs/service/auth/auth-README.md
-  - ks:docs/service/comm/README-comm.md
-  - ks:docs/service/comm/bus-routing-and-partitioning-README.md
-  - ks:docs/service/comm/conversation-event-bus-and-data-bus-README.md
-  - ks:docs/service/comm/data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-transports-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-ui-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-chat-stream-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-frontend-awareness-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/providers-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-interfaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/README-comm.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/bus-routing-and-partitioning-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/conversation-event-bus-and-data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
 ---
 # Bundle Client Communication
 

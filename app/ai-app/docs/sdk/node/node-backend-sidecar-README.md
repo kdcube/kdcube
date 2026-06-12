@@ -1,14 +1,14 @@
 ---
-id: ks:docs/sdk/node/node-backend-sidecar-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/node/node-backend-sidecar-README.md
 title: "Node Backend Sidecar"
 summary: "How a bundle starts and calls a local Node or TypeScript backend sidecar from the KDCube runtime, including local machine and Docker chat-proc behavior."
 tags: ["sdk", "node", "typescript", "sidecar", "bundle", "runtime"]
 keywords: ["node backend sidecar", "typescript bundle backend", "python to node bridge", "chat-proc node runtime", "docker node sidecar", "bundle local backend"]
 see_also:
-  - ks:docs/sdk/bundle/bundle-node-backend-bridge-README.md
-  - ks:docs/sdk/tools/mcp-README.md
-  - ks:docs/exec/README-iso-runtime.md
-  - ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/node.bridge.mcp@2026-04-24/entrypoint.py
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-node-backend-bridge-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/mcp-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/README-iso-runtime.md
+  - repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/node.bridge.mcp@2026-04-24/entrypoint.py
 ---
 # Node Backend Sidecar
 
@@ -45,12 +45,12 @@ This is a **process-local sidecar**, not a direct FastAPI replacement.
 
 Public runtime helper:
 
-- `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/node/runtime_bridge.py`
+- `repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/node/runtime_bridge.py`
 
 Public sidecar launcher files:
 
-- `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/node/sidecar/cli.mjs`
-- `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/node/sidecar/ts_loader.mjs`
+- `repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/node/sidecar/cli.mjs`
+- `repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/node/sidecar/ts_loader.mjs`
 
 The helper:
 - resolves the current bundle root
@@ -63,11 +63,11 @@ The helper:
 
 Runnable example bundle:
 
-- `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/node.bridge.mcp@2026-04-24/entrypoint.py`
+- `repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/node.bridge.mcp@2026-04-24/entrypoint.py`
 
 Its Node backend source lives inside the bundle:
 
-- `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/node.bridge.mcp@2026-04-24/backend_src/src/bridge_app.ts`
+- `repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/node.bridge.mcp@2026-04-24/backend_src/src/bridge_app.ts`
 
 What it demonstrates:
 - Python `@api(...)` methods calling the Node sidecar

@@ -1,5 +1,5 @@
 ---
-id: ks:docs/service/comm/bus-routing-and-partitioning-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/comm/bus-routing-and-partitioning-README.md
 title: "Bus Routing And Partitioning"
 summary: "Compact routing and partitioning contract for KDCube conversation event lanes and bundle Data Bus streams."
 status: active
@@ -16,12 +16,12 @@ keywords:
     "redis streams",
   ]
 see_also:
-  - ks:docs/service/comm/conversation-event-bus-and-data-bus-README.md
-  - ks:docs/service/comm/data-bus-README.md
-  - ks:docs/sdk/events/external-events-README.md
-  - ks:docs/sdk/bundle/bundle-events-README.md
-  - ks:docs/sdk/bundle/bundle-interfaces-README.md
-  - ks:docs/sdk/bundle/bundle-client-communication-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/conversation-event-bus-and-data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-interfaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-communication-README.md
 ---
 # Bus Routing And Partitioning
 

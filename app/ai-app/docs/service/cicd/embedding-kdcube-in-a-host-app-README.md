@@ -1,16 +1,16 @@
 ---
-id: ks:docs/service/cicd/embedding-kdcube-in-a-host-app-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/cicd/embedding-kdcube-in-a-host-app-README.md
 title: "Embedding KDCube In A Host App (Topologies + Auth)"
 summary: "The big picture for putting a KDCube surface (bundle widget, bundle main view, or control-plane frontend) inside your own web page via iframe: the three independent browser checks (frame policy, cookies, CORS), the three deployment topologies (same-origin, same-site subdomain, cross-site) with diagrams, a decision matrix, the auth flow per topology, and the runtime config/token handshake."
 tags: ["service", "cicd", "frontend", "embedding", "iframe", "auth", "cookies", "security"]
 keywords: ["embed kdcube iframe", "host app integration", "same-site subdomain cookie", "cross-site iframe auth", "frame-ancestors", "samesite none cookie", "config_response token handoff", "bundle widget embedding topology", "shared parent domain cookie", "iframe auth decision matrix"]
 see_also:
-  - ks:docs/service/cicd/embedding-control-plane-frontend-README.md
-  - ks:docs/sdk/bundle/bundle-client-ui-README.md
-  - ks:docs/sdk/bundle/bundle-widget-integration-README.md
-  - ks:docs/configuration/assembly-descriptor-README.md
-  - ks:docs/service/cicd/ngrok-README.md
-  - ks:docs/service/auth/auth-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/embedding-control-plane-frontend-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-ui-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/assembly-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/ngrok-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
 ---
 # Embedding KDCube In A Host App (Topologies + Auth)
 

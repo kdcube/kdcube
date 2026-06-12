@@ -1,13 +1,13 @@
 ---
-id: ks:docs/service/scale/metrics-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/scale/metrics-README.md
 title: "Metrics"
 summary: "What to measure and how to scale ingress and proc."
 tags: ["service", "autoscaling", "metrics", "ingress", "proc"]
 keywords: ["queue depth", "SSE connections", "backpressure", "p95 latency", "scale-up"]
 see_also:
-  - ks:docs/service/ecs/metrics-autoscaling-README.md
-  - ks:docs/service/scale/metric-server-README.md
-  - ks:docs/service/environment/setup-for-ecs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/ecs/metrics-autoscaling-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/scale/metric-server-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/environment/setup-for-ecs-README.md
 ---
 # Metrics & Autoscaling Guide (Ingress + Processor)
 

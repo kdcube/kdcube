@@ -1,14 +1,14 @@
 ---
-id: ks:docs/sdk/storage/sdk-store-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/storage/sdk-store-README.md
 title: "SDK Store"
 summary: "Storage layout used by the Chat SDK (local FS or S3) for artifacts and accounting."
 tags: ["sdk", "storage", "layout", "artifacts", "accounting"]
 keywords: ["storage paths", "artifacts", "attachments", "s3", "local fs", "conversation data"]
 see_also:
-  - ks:docs/sdk/storage/cache-README.md
-  - ks:docs/sdk/storage/git-store-README.md
-  - ks:docs/README.md
-  - ks:docs/aggregations/README-AGGREGATIONS.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/storage/cache-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/storage/git-store-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/aggregations/README-AGGREGATIONS.md
 ---
 # SDK Storage Layout
 

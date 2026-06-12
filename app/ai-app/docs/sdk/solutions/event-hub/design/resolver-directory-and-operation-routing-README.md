@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/solutions/event-hub/design/resolver-directory-and-operation-routing-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/event-hub/design/resolver-directory-and-operation-routing-README.md
 title: "Resolver Directory And Operation Routing Design"
 summary: "Design for fast cross-bundle object resolver discovery using a Redis TTL directory, local-first dispatch, direct resolver operation calls, temporary blob exchange, and Data Bus only for durable/asynchronous coordination."
 status: design
@@ -19,13 +19,13 @@ keywords:
     "data bus resolver role",
   ]
 see_also:
-  - ks:docs/sdk/namespace-services/providers-README.md
-  - ks:docs/sdk/solutions/event-hub/resolver-and-policy-registration-README.md
-  - ks:docs/sdk/solutions/canvas/pin-integration-README.md
-  - ks:docs/sdk/events/namespaces-README.md
-  - ks:docs/service/comm/conversation-event-bus-and-data-bus-README.md
-  - ks:docs/service/comm/data-bus-README.md
-  - ks:docs/sdk/bundle/bundle-subsystem-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/providers-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/event-hub/resolver-and-policy-registration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/pin-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/conversation-event-bus-and-data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-subsystem-integration-README.md
 ---
 # Resolver Directory And Operation Routing Design
 
@@ -47,7 +47,7 @@ subsystems:
 task:issues/...
 mem:...
 fi:conv_.../turn_.../outputs/report.md
-ks:docs/...
+repo:kdcube-ai-app/app/ai-app/docs/...
 cnv:.../ut_...
 ```
 
@@ -127,7 +127,7 @@ event plane:
 | `fi:` | ReAct/platform artifact system | ReAct event/artifact module |
 | `mem:` | Memory subsystem | SDK memory module |
 | `task:` | Task/issue subsystem | Task solution or bundle task domain |
-| `ks:` | Knowledge subsystem | Knowledge bundle/module |
+| `repo:` | Repository-backed knowledge subsystem | Knowledge bundle/module |
 | `cnv:` | Canvas subsystem | SDK canvas module |
 | `ext:` | Existing bundle-hosted external artifacts | The bundle/module that minted the ref |
 
@@ -643,7 +643,7 @@ chat widget bundle
   remote resolvers:
     task: from task bundle directory record
     mem: from memory bundle/module directory record
-    ks: from knowledge bundle directory record
+    repo: from repository bundle directory record
 ```
 
 When a context pin is attached to chat, the chat widget should preserve the

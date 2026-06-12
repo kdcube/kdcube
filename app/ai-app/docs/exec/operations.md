@@ -1,13 +1,13 @@
 ---
-id: ks:docs/exec/operations.md
+id: repo:kdcube-ai-app/app/ai-app/docs/exec/operations.md
 title: "Operations"
 summary: "Operations guide for isolated Python execution: Docker setup, host paths, and security constraints."
 tags: ["exec", "operations", "docker", "security", "deployment"]
 keywords: ["exec-workspace", "docker socket", "host paths", "ISO runtime", "network isolation"]
 see_also:
-  - ks:docs/exec/runtime-README.md
-  - ks:docs/exec/README-iso-runtime.md
-  - ks:docs/exec/run-py-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/runtime-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/README-iso-runtime.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/run-py-README.md
 ---
 # Isolated Code Execution - Operations Guide
 

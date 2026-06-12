@@ -1,19 +1,19 @@
 ---
-id: ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
 title: "Bundle Properties And Secrets Lifecycle"
 summary: "Concise bundle-author lifecycle for code defaults, descriptor/admin bundle props, effective runtime props, bundle secrets, user-scoped state, and what is merged versus only stored as authority."
 tags: ["sdk", "bundle", "configuration", "props", "secrets", "lifecycle", "descriptor"]
 keywords: ["bundle props lifecycle", "bundle secrets lifecycle", "configuration_defaults", "bundle_props_defaults", "effective bundle props", "bundles.yaml config", "bundles.secrets.yaml", "descriptor authority", "redis bundle props cache", "set_bundle_prop", "set_bundle_secret", "bundle props merge", "bundle props materialization"]
 updated_at: 2026-05-22
 see_also:
-  - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
-  - ks:docs/configuration/runtime-configuration-and-secrets-store-README.md
-  - ks:docs/configuration/bundles-descriptor-README.md
-  - ks:docs/configuration/bundles-secrets-descriptor-README.md
-  - ks:docs/sdk/bundle/bundle-reserved-platform-properties-README.md
-  - ks:docs/sdk/bundle/bundle-platform-integration-README.md
-  - ks:docs/sdk/bundle/bundle-entrypoint-classes-README.md
-  - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/runtime-configuration-and-secrets-store-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-secrets-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-reserved-platform-properties-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-entrypoint-classes-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
 ---
 # Bundle Properties And Secrets Lifecycle
 

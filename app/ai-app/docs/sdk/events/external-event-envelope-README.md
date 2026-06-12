@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/events/external-event-envelope-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-event-envelope-README.md
 title: "External Event Envelope"
 summary: "Canonical plural external-event payload shape, accepted event fields, event logical paths (`ev:`), hosted event payload URIs, inline payloads, snapshot events, file upload events, and text-selection context events."
 status: draft
@@ -21,13 +21,13 @@ keywords:
     "canvas event",
   ]
 see_also:
-  - ks:docs/sdk/events/namespaces-README.md
-  - ks:docs/sdk/events/external-events-README.md
-  - ks:docs/sdk/events/external-events-journey-and-handling-README.md
-  - ks:docs/sdk/events/event-subsystem-README.md
-  - ks:docs/sdk/agents/react/event-source/event-source-README.md
-  - ks:docs/sdk/agents/react/event-source/timeline-projection-README.md
-  - ks:docs/sdk/agents/react/react-announce-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-journey-and-handling-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/timeline-projection-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-announce-README.md
 ---
 # External Event Envelope
 

@@ -1,14 +1,14 @@
 ---
-id: ks:docs/arch/proc/design/README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/arch/proc/design/README.md
 title: "Proc Design Notes"
 summary: "Design notes for the next-generation processor scheduler and conversation ownership model."
 tags: ["arch", "proc", "design", "scheduler", "redis-streams", "kafka", "cron"]
 keywords: ["proc design", "conversation scheduler", "redis streams", "kafka", "leases", "wake stream", "cron longrun"]
 see_also:
-  - ks:docs/arch/proc/processor-arch-README.md
-  - ks:docs/arch/proc/events-orchestration-README.md
-  - ks:docs/arch/proc/longrun-protection-README.md
-  - ks:docs/sdk/events/conversation-event-lane-state-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/processor-arch-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/events-orchestration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/longrun-protection-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/conversation-event-lane-state-README.md
 ---
 # Proc Design Notes
 

@@ -1,17 +1,17 @@
 ---
-id: ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md
 title: "Bundle Runtime Settings, Configuration, and Secrets"
 summary: "Canonical author-facing configuration model for bundle code: how platform settings, bundle props and secrets, and user-scoped state are read, written, owned, stored, and exported."
 tags: ["sdk", "configuration", "bundle", "props", "secrets"]
 keywords: ["programmatic configuration access", "platform settings and secrets", "bundle scoped props and secrets", "user scoped props and secrets", "helper api selection", "ownership boundary", "live authority and export rules", "get_settings and get_secret", "bundle_prop and set_bundle_prop", "user prop and user secret CRUD", "get_secret", "service key override", "per-bundle provider key"]
 see_also:
-  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
-  - ks:docs/sdk/bundle/bundle-developer-guide-README.md
-  - ks:docs/sdk/bundle/bundle-reserved-platform-properties-README.md
-  - ks:docs/configuration/runtime-configuration-and-secrets-store-README.md
-  - ks:docs/configuration/bundles-descriptor-README.md
-  - ks:docs/configuration/bundles-secrets-descriptor-README.md
-  - ks:docs/configuration/assembly-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-developer-guide-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-reserved-platform-properties-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/runtime-configuration-and-secrets-store-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-secrets-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/assembly-descriptor-README.md
 ---
 # Bundle Runtime Settings, Configuration, and Secrets
 

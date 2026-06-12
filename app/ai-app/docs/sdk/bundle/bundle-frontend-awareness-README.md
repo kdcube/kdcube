@@ -1,19 +1,19 @@
 ---
-id: ks:docs/sdk/bundle/bundle-frontend-awareness-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-frontend-awareness-README.md
 title: "Bundle Frontend Awareness"
 summary: "Frontend operating guidance for bundle UIs against scaled ingress and proc backends: retries, drain behavior, rate limiting, backpressure, shared widget source, and multi-tab or session coordination."
 tags: ["sdk", "bundle", "frontend", "sse", "retries", "rate-limits", "backpressure", "scaling", "widget"]
 keywords: ["scaled frontend behavior", "sse retry strategy", "drain and shutdown behavior", "rate limit handling", "backpressure handling", "multi tab coordination", "ingress and proc awareness", "shared sdk widget source", "bundle ui resilience"]
 updated_at: 2026-05-19
 see_also:
-  - ks:docs/sdk/bundle/bundle-client-ui-README.md
-  - ks:docs/sdk/bundle/bundle-client-communication-README.md
-  - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
-  - ks:docs/sdk/bundle/bundle-interfaces-README.md
-  - ks:docs/service/comm/conversation-event-bus-and-data-bus-README.md
-  - ks:docs/service/comm/data-bus-README.md
-  - ks:docs/service/README-monitoring-observability.md
-  - ks:docs/service/auth/auth-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-ui-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-communication-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-chat-stream-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-interfaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/conversation-event-bus-and-data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/README-monitoring-observability.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
 ---
 # Bundle Frontend Awareness Guide (Ingress/Proc, Rate Limits, and Serverless Behavior)
 

@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/bundle/auth-bundle-federated-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/auth-bundle-federated-README.md
 title: "Bundle Federated Auth For Data Bus"
 summary: "How a bundle-owned federated client, such as a Telegram WebApp, claims a short-lived scoped token and uses it to publish Data Bus messages without a platform browser login."
 status: active
@@ -14,11 +14,11 @@ keywords:
     "bundle owned identity",
   ]
 see_also:
-  - ks:docs/service/comm/data-bus-README.md
-  - ks:docs/sdk/bundle/bundle-platform-integration-README.md
-  - ks:docs/sdk/bundle/bundle-client-communication-README.md
-  - ks:docs/sdk/bundle/bundle-transports-README.md
-  - ks:docs/sdk/bundle/bundle-runtime-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-communication-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-transports-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-runtime-README.md
 ---
 # Bundle Federated Auth For Data Bus
 

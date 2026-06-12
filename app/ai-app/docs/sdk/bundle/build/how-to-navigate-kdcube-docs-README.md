@@ -1,7 +1,7 @@
 ---
-id: ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
 title: "How To Navigate KDCube Bundle Docs"
-summary: "Navigation guide for KDCube bundle docs: use docs/knowledge search first when available, resolve ks: and repo: links, choose the next document by task, and avoid reading or editing unrelated docs."
+summary: "Navigation guide for KDCube bundle docs: use docs/search surfaces first when available, resolve repo links, choose the next document by task, and avoid reading or editing unrelated docs."
 tags: ["sdk", "bundle", "docs", "navigation", "tier-1", "authoring"]
 keywords:
   [
@@ -16,22 +16,22 @@ keywords:
   ]
 updated_at: 2026-06-11
 see_also:
-  - ks:docs/sdk/bundle/bundle-index-README.md
-  - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
-  - ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
-  - ks:docs/sdk/bundle/build/how-to-avoid-common-bundle-integration-failures-README.md
-  - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
-  - ks:docs/sdk/bundle/bundle-subsystem-integration-README.md
-  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
-  - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
-  - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
-  - ks:docs/sdk/bundle/build/how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md
-  - ks:docs/sdk/bundle/build/how-to-release-bundle-content-README.md
-  - ks:docs/sdk/bundle/bundle-agent-integration-README.md
-  - ks:docs/sdk/bundle/bundle-events-README.md
-  - ks:docs/sdk/bundle/bundle-widget-integration-README.md
-  - ks:docs/sdk/bundle/bundle-entrypoint-classes-README.md
-  - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-index-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-test-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-avoid-common-bundle-integration-failures-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-write-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-subsystem-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-release-bundle-content-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-agent-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-entrypoint-classes-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/versatile-reference-bundle-README.md
 ---
 # How To Navigate KDCube Bundle Docs
 
@@ -51,8 +51,9 @@ Use this order.
 
    If the environment exposes a KDCube docs, knowledge, or MCP search tool, ask
    it a narrow question before scanning the repository. The result should give
-   `ks:docs/...` or `repo:...` links. Treat those links as ranked entrypoints,
-   then open the source docs they point to.
+   repository paths, relative Markdown links, or tool-specific document ids.
+   Treat those links as ranked entrypoints, then open the source docs they point
+   to.
 
    Good search prompts:
 
@@ -66,18 +67,17 @@ Use this order.
 
 2. **Resolve returned links.**
 
-   KDCube docs use logical links:
+   KDCube docs use repository and Markdown links:
 
    | Link | Meaning |
    | --- | --- |
-   | `ks:docs/...` | Knowledge-space doc id. In this repo it resolves below `repo:kdcube-ai-app/app/ai-app/docs/...`. |
    | `repo:kdcube-ai-app/...` | Path relative to the KDCube platform repo checkout. |
    | `repo:applications/...` | Path relative to the applications/content repo checkout. |
    | `repo:website/...` | Path relative to the website repo checkout. |
    | relative Markdown link | Resolve relative to the current doc file. |
 
    Do not replace reusable docs with one developer's absolute filesystem path.
-   Use `ks:` and `repo:` links in docs and handoff notes.
+   Use repository-relative or Markdown-relative links in docs and handoff notes.
 
 3. **Open the smallest set of source docs needed.**
 
@@ -101,7 +101,7 @@ For serious bundle work, read these as one compact pack:
 
 | Order | Doc | Purpose |
 | --- | --- | --- |
-| 1 | this page | Find the right docs and resolve `ks:` / `repo:` links. |
+| 1 | this page | Find the right docs and resolve repository/document links. |
 | 2 | [how-to-test-bundle-README.md](how-to-test-bundle-README.md) | Know what the bundle must prove before designing the change. |
 | 3 | [how-to-assemble-bundle-with-sdk-building-blocks-README.md](how-to-assemble-bundle-with-sdk-building-blocks-README.md) | Reuse existing SDK/platform blocks before writing new mechanics. |
 | 4 | [how-to-write-bundle-README.md](how-to-write-bundle-README.md) | Bundle authoring structure and code layout. |
@@ -165,7 +165,7 @@ several roles.
 ## Agent Rules
 
 - Prefer docs/knowledge MCP search when available.
-- Preserve `ks:` and `repo:` links in notes and docs.
+- Preserve repository-relative and Markdown-relative links in notes and docs.
 - Open source docs behind returned links before changing code.
 - Do not read the whole docs tree unless the task is a docs audit.
 - Do not paste implementation rules into this navigation page; add them to the

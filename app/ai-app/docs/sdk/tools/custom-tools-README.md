@@ -1,18 +1,18 @@
 ---
-id: ks:docs/sdk/tools/custom-tools-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/custom-tools-README.md
 title: "Custom Tools"
 summary: "How to author bundle-local tools and register them in tools_descriptor.py with module/ref entries and consumer runtime wiring."
 tags: ["sdk", "tools", "custom", "bundle", "descriptor", "semantic-kernel", "authoring", "runtime"]
 keywords: ["tools_descriptor.py", "TOOLS_SPECS", "module", "ref", "alias", "kernel_function", "create_tool_subsystem_with_mcp", "tool_call", "TOOL_RUNTIME", "MCP_TOOL_SPECS", "_SERVICE", "_INTEGRATIONS", "KV_CACHE", "get_comm"]
 see_also:
-  - ks:docs/sdk/tools/tool-subsystem-README.md
-  - ks:docs/sdk/tools/mcp-README.md
-  - ks:docs/sdk/events/event-subsystem-README.md
-  - ks:docs/sdk/agents/react/event-source/event-source-README.md
-  - ks:docs/sdk/agents/react/event-source/block-production-README.md
-  - ks:docs/sdk/bundle/bundle-runtime-README.md
-  - ks:docs/sdk/bundle/bundle-index-README.md
-  - ks:docs/exec/README-runtime-modes-builtin-tools.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/tool-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/mcp-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/block-production-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-runtime-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-index-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/README-runtime-modes-builtin-tools.md
 ---
 # Custom Tools (Bundle-Local)
 

@@ -1,13 +1,13 @@
 ---
-id: ks:docs/sdk/agents/react/react-announce-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-announce-README.md
 title: "React Announce"
 summary: "Announce block semantics and lifecycle in React v2/v3."
 tags: ["sdk", "agents", "react", "announce", "timeline"]
 keywords: ["announce banner", "system signals", "plan status", "feedback"]
 see_also:
-  - ks:docs/sdk/agents/react/feedback-README.md
-  - ks:docs/sdk/agents/react/flow-README.md
-  - ks:docs/sdk/agents/react/plan-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/feedback-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/flow-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/plan-README.md
 ---
 # ReAct Announce Block (ANNOUNCE banner)
 

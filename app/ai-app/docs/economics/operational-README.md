@@ -1,14 +1,14 @@
 ---
-id: ks:docs/economics/operational-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/economics/operational-README.md
 title: "Operational"
 summary: "Operational requirements for economics: schemas, jobs, and configuration."
 tags: ["economics", "operations", "maintenance", "control-plane"]
 keywords: ["database schema", "maintenance jobs", "emailing", "plan policies", "runtime config"]
 see_also:
-  - ks:docs/economics/economic-README.md
-  - ks:docs/economics/stripe-README.md
-  - ks:docs/economics/eco-admin-README.md
-  - ks:docs/configuration/service-runtime-configuration-mapping-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/economic-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/stripe-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/eco-admin-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
 ---
 # Economics Operations (Schema + Jobs + Config)
 

@@ -1,14 +1,14 @@
 ---
-id: ks:docs/service/scale/metric-server-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/scale/metric-server-README.md
 title: "Metric Server"
 summary: "Metrics server architecture and exports for autoscaling."
 tags: ["service", "metrics", "autoscaling", "observability"]
 keywords: ["metrics server", "CloudWatch", "Prometheus", "redis metrics", "autoscaler"]
 see_also:
-  - ks:docs/service/scale/metrics-README.md
-  - ks:docs/service/README-monitoring-observability.md
-  - ks:docs/ops/ops-overview-README.md
-  - ks:docs/service/ecs/custom-ecs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/scale/metrics-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/README-monitoring-observability.md
+  - repo:kdcube-ai-app/app/ai-app/docs/ops/ops-overview-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/ecs/custom-ecs-README.md
 ---
 # Metrics Server (Autoscaling Source of Truth)
 

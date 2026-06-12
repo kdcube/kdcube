@@ -1,14 +1,14 @@
 ---
-id: ks:docs/service/external-log-collector/Architecture.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/external-log-collector/Architecture.md
 title: "External Log Collector Architecture"
 summary: "Architecture of the browser-side log collector that intercepts frontend errors and warnings, enriches them with runtime context, and sends them to backend storage for analysis."
 tags: ["service", "frontend", "logging", "observability", "browser", "design"]
 keywords: ["browser log collection", "frontend error interception", "console warning capture", "context-enriched client logs", "backend log ingestion", "frontend observability architecture"]
 see_also:
-  - ks:docs/service/external-log-collector/frontend-events-design.md
-  - ks:docs/service/streams/telemetry-README.md
-  - ks:docs/service/README-monitoring-observability.md
-  - ks:docs/service/comm/README-comm.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/external-log-collector/frontend-events-design.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/streams/telemetry-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/README-monitoring-observability.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/README-comm.md
 ---
 # External Log Collector — Architecture & Design
 
@@ -169,7 +169,7 @@ Ready for analysis, dashboards, alerting
 
 The collector source event is not the analytics schema. A telemetry collector
 normalizes it into the unified event envelope documented in
-`ks:docs/service/streams/telemetry-README.md`.
+`repo:kdcube-ai-app/app/ai-app/docs/service/streams/telemetry-README.md`.
 
 ```text
 browser ExternalLogEvent

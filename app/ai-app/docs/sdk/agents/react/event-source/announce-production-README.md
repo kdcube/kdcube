@@ -1,13 +1,13 @@
 ---
-id: ks:docs/sdk/agents/react/event-source/announce-production-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/announce-production-README.md
 title: "Announce Production Phase"
 summary: "ReAct event-source phase for producing non-durable ANNOUNCE tail material from event sources and story materializers."
 tags: ["sdk", "agents", "react", "event-source", "announce"]
 keywords: ["announce_production", "ANNOUNCE", "tail material", "snapshot materialization", "story state"]
 see_also:
-  - ks:docs/sdk/agents/react/react-announce-README.md
-  - ks:docs/sdk/agents/react/event-source/event-source-README.md
-  - ks:docs/sdk/agents/react/event-source/block-production-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-announce-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/block-production-README.md
 ---
 # Announce Production Phase
 

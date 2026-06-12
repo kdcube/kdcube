@@ -1,0 +1,244 @@
+---
+id: repo:kdcube-ai-app/app/ai-app/docs/runtime/cross-runtime-context-README.md
+title: "Cross-Runtime Context"
+summary: "Reference for the portable context room that carries request identity, bundle call context, and platform descriptors across KDCube runtime boundaries."
+tags: ["runtime", "context", "comm_ctx", "portable-spec", "subprocess", "iso-runtime", "namespace-services"]
+keywords:
+  [
+    "cross runtime context",
+    "portable context room",
+    "comm_ctx",
+    "REQUEST_CONTEXT",
+    "BUNDLE_CALL_CONTEXT",
+    "NAMED_SERVICE_DISCOVERY",
+    "PORTABLE_SPEC_JSON",
+    "ContextVar restore",
+  ]
+updated_at: 2026-06-11
+see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-runtime-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/runtime-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/README-iso-runtime.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/clients-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/comm-recording-event-sinks-README.md
+---
+# Cross-Runtime Context
+
+The cross-runtime context is the platform-owned portable room that lets KDCube
+preserve request identity and small runtime descriptors when execution crosses
+async tasks, tools, subprocesses, Docker/Fargate supervisors, and peer bundle
+calls.
+
+It is not a generic object serializer. It is a compact set of JSON-safe fields
+that the target runtime can use to rebuild trusted SDK surfaces.
+
+## What Crosses
+
+The current portable context is carried through `contextvars.comm_ctx` inside
+`PORTABLE_SPEC_JSON`:
+
+```text
+comm_ctx
+  REQUEST_CONTEXT
+    ExternalEventPayload
+      actor.tenant_id
+      actor.project_id
+      routing.bundle_id
+      routing.session_id
+      routing.conversation_id
+      routing.turn_id
+      user.user_type / user_id / roles / permissions
+      request metadata
+      bundle_call_context
+
+  BUNDLE_ID
+    current bundle id for bundle-scoped helpers
+
+  BUNDLE_CALL_CONTEXT
+    JSON-safe bundle-owned invocation metadata
+
+  NAMED_SERVICE_DISCOVERY
+    schema = kdcube.named_service.discovery.v1
+    backend = redis
+    tenant
+    project
+```
+
+The host builds the portable spec in:
+
+```text
+kdcube_ai_app/apps/chat/sdk/runtime/snapshot.py
+```
+
+Child runtimes restore it in:
+
+```text
+kdcube_ai_app/apps/chat/sdk/runtime/bootstrap.py
+```
+
+The context accessors live in:
+
+```text
+kdcube_ai_app/apps/chat/sdk/runtime/comm_ctx.py
+```
+
+## What Does Not Cross
+
+These are not serialized:
+
+- Redis client objects
+- Postgres pools
+- bundle entrypoint instances
+- Python callbacks
+- arbitrary provider/client objects
+- non-JSON selector functions
+- secrets
+- large documents or binary payloads
+
+The target runtime reconstructs trusted services from descriptor-backed runtime
+configuration and the restored identity descriptor.
+
+## Flow
+
+```text
+Host proc task
+        |
+        | bind_current_request_context(...)
+        | bind_named_service_discovery(...)
+        | update_current_bundle_call_context(...)
+        v
++------------------------------------------+
+| ContextVars in current task              |
+| - REQUEST_CONTEXT_CV                     |
+| - BUNDLE_ID_CV                           |
+| - BUNDLE_CALL_CONTEXT_CV                 |
+| - NAMED_SERVICE_DISCOVERY_CV             |
++------------------+-----------------------+
+                   |
+                   | build_portable_spec(...)
+                   v
++------------------------------------------+
+| PORTABLE_SPEC_JSON                       |
+| contextvars.comm_ctx                     |
+|   REQUEST_CONTEXT                        |
+|   BUNDLE_ID                              |
+|   BUNDLE_CALL_CONTEXT                    |
+|   NAMED_SERVICE_DISCOVERY                |
++------------------+-----------------------+
+                   |
+                   | runtime bootstrap
+                   v
++------------------------------------------+
+| Target runtime                           |
+| - restores comm_ctx ContextVars          |
+| - rebuilds communicator from comm spec   |
+| - rebuilds Redis clients from settings   |
+| - rebuilds ModelService / ToolSubsystem  |
++------------------+-----------------------+
+                   |
+                   v
+trusted bundle/tool code uses normal SDK accessors
+```
+
+## Accessors
+
+| Context | Write/bind | Read |
+| --- | --- | --- |
+| request context | `bind_current_request_context(...)` | `get_current_request_context()` |
+| bundle id | `bind_current_bundle_id(...)` or request bind | `get_current_bundle_id()` |
+| bundle call context | `update_current_bundle_call_context(...)`, `bind_current_bundle_call_context_patch(...)` | `get_current_bundle_call_context()` |
+| named-service discovery | `bind_named_service_discovery(...)` | `get_current_named_service_discovery()` |
+
+Bundle code should normally write only `bundle_call_context`. Platform code
+binds request context, bundle id, and named-service discovery.
+
+## Named Service Discovery Context
+
+Named Service Discovery is a provider lookup table scoped to tenant/project.
+Provider bundles register records in Redis when they are loaded. Client bundles
+configure the namespace and client policy, then resolve provider location at
+call time.
+
+The portable context carries only this descriptor:
+
+```json
+{
+  "schema": "kdcube.named_service.discovery.v1",
+  "backend": "redis",
+  "tenant": "tenant-a",
+  "project": "project-a"
+}
+```
+
+In the target runtime, `get_current_named_service_discovery()` reconstructs a
+`RedisNamedServiceDiscovery` using the runtime Redis configuration. It first
+uses the explicit `NAMED_SERVICE_DISCOVERY` descriptor when present. If that
+descriptor is absent but `REQUEST_CONTEXT` was restored, it uses
+`REQUEST_CONTEXT.actor.tenant_id` and `REQUEST_CONTEXT.actor.project_id` as the
+discovery scope. This is why named-service tools can discover providers after a
+subprocess or ISO bootstrap without passing a live Redis object into the tool
+registry.
+
+Provider calls still run through a runtime bridge:
+
+| Bridge | Use |
+| --- | --- |
+| `bundle_registry` | Same-KDCube direct registry call when the runtime has a platform-bound local named-service caller. |
+| `bundle_operation` | Same-KDCube operation facade, useful when the provider exposes `@api(alias="named_service")` or when direct registry call is unavailable. |
+| `module` | Same-runtime importable module provider. |
+| MCP / Data Bus | Provider capability vocabulary; generic adapters are separate integration work. |
+
+The call must preserve request identity. The provider authorizes through the
+current `ExternalEventPayload` / `AuthContext`, not through a model-supplied
+user id.
+
+## Bundle Call Context
+
+`bundle_call_context` is the bundle-owned part of the portable room. It is for
+small request-scoped metadata that must follow nested tools and child runtimes.
+
+Good values:
+
+- ids
+- execution modes
+- selected agent strength
+- correlation ids
+- request-scoped policy snapshots
+- `role_models` overlays for the current invocation
+
+Bad values:
+
+- secrets
+- large documents
+- binary payloads
+- mutable process-local objects
+- durable state that a later request must recover
+
+If a later cron/job/request needs the value, store it in durable bundle state
+and re-bind it when that later invocation starts.
+
+## Runtime Guarantees By Boundary
+
+| Boundary | Guaranteed |
+| --- | --- |
+| Same async task | Current ContextVars are visible during awaits. |
+| In-process tool | Tool module sees the same restored request and bundle call context after SDK binding. |
+| Local subprocess tool | `PORTABLE_SPEC_JSON` restores `run_ctx`, `comm_ctx`, and accounting; Redis/comm/model services are rebuilt from config. |
+| Docker/Fargate supervisor | Same portable context restore, plus descriptor-backed settings/secrets for trusted supervisor tools. |
+| Docker/Fargate executor | Minimal safe env and supervisor socket only; executor asks supervisor for approved tool calls. |
+| Peer bundle local operation | Platform local caller builds a target request context for the target bundle and binds it around the call. |
+| Data Bus handler | Handler receives `DataBusContext`; if it needs user context, the message actor/auth metadata must carry it. |
+| Cron/job | Headless by default; use stored job auth/request metadata when a job must act on behalf of a user. |
+
+## Design Rules
+
+1. Keep the portable room JSON-safe and small.
+2. Do not pass live infrastructure handles through tool registries.
+3. Reconstruct runtime services from descriptor-backed settings.
+4. Let platform code bind platform context; let bundle code write only
+   bundle-owned call metadata.
+5. Treat browser state, comm relay state, Data Bus state, and conversation lane
+   state as separate surfaces.
+6. Preserve user/session context for provider calls; do not let models provide
+   identity as ordinary tool arguments.

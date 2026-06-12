@@ -1,15 +1,15 @@
 ---
-id: ks:docs/configuration/assembly-descriptor-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/configuration/assembly-descriptor-README.md
 title: "Platform Assembly Descriptor"
 summary: "Platform-level non-secret deployment configuration in assembly.yaml: tenant/project identity, auth, ports, storage backends, local runtime paths, and frontend/runtime wiring."
 tags: ["service", "configuration", "platform", "deployment", "assembly", "descriptor"]
 keywords: ["platform deployment identity", "tenant and project scope", "auth and cognito settings", "service port layout", "storage and workspace backends", "runtime path wiring", "bundle descriptor provider", "frontend build metadata", "local compose topology", "aws deployment mapping"]
 see_also:
-  - ks:docs/service/cicd/descriptors-README.md
-  - ks:docs/configuration/service-runtime-configuration-mapping-README.md
-  - ks:docs/configuration/bundles-descriptor-README.md
-  - ks:docs/configuration/secrets-descriptor-README.md
-  - ks:docs/configuration/gateway-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/descriptors-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/secrets-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/gateway-descriptor-README.md
 ---
 # Platform Assembly Descriptor
 
@@ -85,9 +85,6 @@ These env vars are the direct runtime surface for assembly-backed settings.
 | `AI_REACT_READ_VISIBLE_MAX_TOKENS` | `ai.react.read_visible_max_tokens` | `get_settings()` | all modes |
 | `AI_REACT_READ_VISIBLE_MAX_BYTES` | `ai.react.read_visible_max_bytes` | `get_settings()` | all modes |
 | `AI_REACT_READ_VISIBLE_CONTEXT_FRACTION` | `ai.react.read_visible_context_fraction` | `get_settings()` | all modes |
-| `AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_TEXT_SYMBOLS` | `ai.react.knowledge_read_visible_max_text_symbols` | `get_settings()` | all modes |
-| `AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_TOKENS` | `ai.react.knowledge_read_visible_max_tokens` | `get_settings()` | all modes |
-| `AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_BYTES` | `ai.react.knowledge_read_visible_max_bytes` | `get_settings()` | all modes |
 | `AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS` | `ai.react.exec_text_preview_max_symbols` | `get_settings()` | all modes |
 | `AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS` | `ai.react.tool_result_preview_max_text_symbols` | `get_settings()` | all modes |
 | `AI_REACT_LINE_NUMBERS_MODE` | `ai.react.line_numbers_mode` | `get_settings()` / `RuntimeCtx.line_numbers_mode` | all modes |
@@ -298,9 +295,6 @@ ai:
     read_visible_max_tokens: 12000      # AI_REACT_READ_VISIBLE_MAX_TOKENS
     read_visible_max_bytes: 10485760    # AI_REACT_READ_VISIBLE_MAX_BYTES
     read_visible_context_fraction: 0.15 # AI_REACT_READ_VISIBLE_CONTEXT_FRACTION
-    knowledge_read_visible_max_text_symbols: null # AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_TEXT_SYMBOLS
-    knowledge_read_visible_max_tokens: null       # AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_TOKENS
-    knowledge_read_visible_max_bytes: null        # AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_BYTES
     exec_text_preview_max_symbols: 8000 # AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS
     tool_result_preview_max_text_symbols: 12000 # AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS
     line_numbers_mode: "lines"         # AI_REACT_LINE_NUMBERS_MODE: disabled | lines | sparsed
@@ -322,9 +316,6 @@ ai:
 | `read_visible_max_tokens` | `AI_REACT_READ_VISIBLE_MAX_TOKENS` | Default token guard per `react.read` text path; default `12000` |
 | `read_visible_max_bytes` | `AI_REACT_READ_VISIBLE_MAX_BYTES` | Raw byte guard for every `react.read` payload; PDF/image content is attached whole only when under this cap; default `10485760` |
 | `read_visible_context_fraction` | `AI_REACT_READ_VISIBLE_CONTEXT_FRACTION` | Additional clamp so one read does not consume more than this fraction of the React context budget; default `0.15` |
-| `knowledge_read_visible_max_text_symbols` | `AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_TEXT_SYMBOLS` | Optional max visible text characters for `ks:` knowledge-space article reads; default `null` means uncapped |
-| `knowledge_read_visible_max_tokens` | `AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_TOKENS` | Optional token guard for `ks:` knowledge-space article reads; default `null` means uncapped |
-| `knowledge_read_visible_max_bytes` | `AI_REACT_KNOWLEDGE_READ_VISIBLE_MAX_BYTES` | Optional raw byte guard for `ks:` knowledge-space payloads; default `null` means uncapped |
 | `exec_text_preview_max_symbols` | `AI_REACT_EXEC_TEXT_PREVIEW_MAX_SYMBOLS` | Max text characters embedded as preview for each text file produced by exec tools; default `8000` |
 | `tool_result_preview_max_text_symbols` | `AI_REACT_TOOL_RESULT_PREVIEW_MAX_TEXT_SYMBOLS` | Max text characters embedded from a large initial tool result before the prompt renderer replaces the rest with shape/recovery metadata; default `12000` |
 | `line_numbers_mode` | `AI_REACT_LINE_NUMBERS_MODE` | How rendered text previews show line numbers: `lines` numbers every line, `sparsed` numbers first/middle/last lines only, and `disabled` omits line prefixes; bundle `config.react.default_agent.line_numbers_mode` or named-agent override takes precedence |
@@ -342,10 +333,8 @@ Visible read limits use separate units:
   text payloads. Oversized text returns a bounded preview by default; per-call
   `max_text_symbols` requests a smaller explicit preview. Caps apply per
   requested path.
-- Skills are not read-capped. `ks:` knowledge-space text reads are uncapped only
-  when the `knowledge_read_visible_*` fields are `null`; once any such cap is
-  configured, agents must treat affected `ks:` reads as capped text and recover
-  needed evidence by ranges.
+- Skills are not read-capped. Owner-defined document/source systems should
+  expose their own tools, namespace service endpoints, or rehosters.
 - `read_visible_max_tokens` guards the model-visible text budget.
 - `read_visible_max_bytes` guards raw bytes for all payloads. PDF/image reads
   are not partially sliced: under the byte cap they are attached whole as

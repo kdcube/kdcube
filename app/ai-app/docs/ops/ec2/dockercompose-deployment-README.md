@@ -1,13 +1,13 @@
 ---
-id: ks:docs/ops/ec2/dockercompose-deployment-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/ops/ec2/dockercompose-deployment-README.md
 title: "Dockercompose Deployment"
 summary: "EC2 docker‑compose deployment for platform + custom UI + bundles using descriptor-driven compose setup."
 tags: ["ops", "ec2", "docker-compose", "deployment", "custom-ui", "bundles"]
 keywords: ["docker compose", "dc-infra", "bundles.yaml", "frontend config", "nginx", "bundles mount", "env files", "host folders"]
 see_also:
-  - ks:docs/ops/ecs/ecs-deployment-README.md
-  - ks:docs/ops/deployment-options-index-README.md
-  - ks:docs/ops/ops-overview-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/ops/ecs/ecs-deployment-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/ops/deployment-options-index-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/ops/ops-overview-README.md
 ---
 # EC2 Docker‑Compose Deployment (Custom UI + Bundles)
 
@@ -120,7 +120,7 @@ Symlink note:
 
 Bundles can use a shared local filesystem to store read‑only assets, indexes,
 or any bundle‑specific data that should be reused across instances. If you use
-`ks:` resolvers, this is where they read from.
+bundle-local resolvers backed by shared storage, this is where they read from.
 
 In docker‑compose, mount it explicitly and set:
 

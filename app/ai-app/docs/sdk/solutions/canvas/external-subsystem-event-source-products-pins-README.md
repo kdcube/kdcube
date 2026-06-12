@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/solutions/canvas/external-subsystem-event-source-products-pins-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/external-subsystem-event-source-products-pins-README.md
 title: "External Subsystem Event Source Product Pins"
 summary: "Canvas pin contract for products emitted by external subsystem event sources: task refs, memory refs, file refs, source refs, snapshot context, drag-to-canvas, and resolver ownership."
 status: active
@@ -18,12 +18,12 @@ keywords:
     "canvas host extension",
   ]
 see_also:
-  - ks:docs/sdk/solutions/canvas/canvas-module-guide-README.md
-  - ks:docs/sdk/solutions/canvas/pin-operations-README.md
-  - ks:docs/sdk/solutions/canvas/pin-integration-README.md
-  - ks:applications/playground/bundles/task-tracker@1-0/doc/runtime/storage-and-search.md
-  - ks:applications/playground/bundles/task-tracker@1-0/doc/runtime/wizard-events-and-snapshots.md
-  - ks:applications/playground/bundles/task-tracker@1-0/doc/design/agents-and-wizard.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/canvas-module-guide-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/pin-operations-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/pin-integration-README.md
+  - repo:kdcube-applications/playground/bundles/task-tracker@1-0/doc/runtime/storage-and-search.md
+  - repo:kdcube-applications/playground/bundles/task-tracker@1-0/doc/runtime/wizard-events-and-snapshots.md
+  - repo:kdcube-applications/playground/bundles/task-tracker@1-0/doc/design/agents-and-wizard.md
 ---
 # External Subsystem Event Source Product Pins
 

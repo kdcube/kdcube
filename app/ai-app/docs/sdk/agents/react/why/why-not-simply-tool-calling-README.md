@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/agents/react/why/why-not-simply-tool-calling-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/why/why-not-simply-tool-calling-README.md
 title: "Why Not Simply Tool Calling"
 summary: "Why React does not use provider-native tool calling as its primary orchestration protocol, and why it instead uses a timeline-driven, event-source-policy-driven, channeled, distributed execution model."
 tags: ["sdk", "agents", "react", "tool-calling", "timeline", "streaming", "event-sources", "external-events"]
@@ -17,18 +17,18 @@ keywords:
     "namespace rehoster",
   ]
 see_also:
-  - ks:docs/sdk/agents/react/react-context-README.md
-  - ks:docs/sdk/agents/react/react-announce-README.md
-  - ks:docs/sdk/agents/react/flow-README.md
-  - ks:docs/sdk/agents/react/external-exec-README.md
-  - ks:docs/sdk/agents/react/tool-call-blocks-README.md
-  - ks:docs/sdk/agents/react/event-source/event-source-README.md
-  - ks:docs/sdk/agents/react/event-source/timeline-projection-README.md
-  - ks:docs/sdk/events/external-events-README.md
-  - ks:docs/sdk/events/external-event-envelope-README.md
-  - ks:docs/sdk/streaming/channeled-streamer-README.md
-  - ks:docs/service/comm/README-comm.md
-  - ks:docs/sdk/bundle/bundle-client-communication-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-context-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-announce-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/flow-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/external-exec-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/tool-call-blocks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/timeline-projection-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-event-envelope-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/streaming/channeled-streamer-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/README-comm.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-communication-README.md
 ---
 # Why Not Simply Tool Calling
 
@@ -416,7 +416,7 @@ That pushes the architecture toward:
 
 For example:
 - React tools operate mostly on logical paths such as `fi:`, `ar:`, `so:`,
-  `su:`, `tc:`, `ev:`, `ks:`, and `sk:`
+  `su:`, `tc:`, `ev:`, and `sk:`, plus owner namespace handoff rules
 - `tc:` addresses tool call/result memory
 - `ev:` addresses generic accepted event occurrences
 - registered external namespaces such as `nmsp:`, `cnv:`, or `mem:` can be
@@ -653,7 +653,7 @@ The current React implementation that reflects this design includes:
   - `external-exec-README.md`
 - explicit workspace activation and logical-path-oriented artifacts:
   - `react.pull(...)`
-  - `fi:`, `ar:`, `so:`, `su:`, `tc:`, `ev:`, `ks:`, `sk:`
+  - `fi:`, `ar:`, `so:`, `su:`, `tc:`, `ev:`, `sk:`, and owner namespace handoff rules
   - registered external owner namespaces such as `nmsp:`, `cnv:`, or `mem:` through namespace
     rehosters
 

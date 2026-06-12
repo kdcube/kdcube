@@ -1,14 +1,14 @@
 ---
-id: ks:docs/sdk/agents/react/runtime-configuration-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/runtime-configuration-README.md
 title: "Runtime Configuration"
 summary: "RuntimeCtx, version selection, and session configuration fields for the React runtime, including knowledge hooks and experimental multi-action mode."
 tags: ["sdk", "agents", "react", "configuration"]
 keywords: ["RuntimeCtx", "RuntimeSessionConfig", "cache config", "pruning settings", "knowledge_search_fn", "knowledge_read_fn", "bundle_storage", "AI_REACT_AGENT_VERSION", "AI_REACT_AGENT_MULTI_ACTION", "AI_REACT_MAX_ITERATIONS", "AI_REACT_RENDER_THINKING", "multi_action_mode"]
 see_also:
-  - ks:docs/sdk/agents/react/compaction-README.md
-  - ks:docs/sdk/agents/react/context-caching-README.md
-  - ks:docs/sdk/agents/react/feedback-README.md
-  - ks:docs/sdk/agents/react/react-round-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/compaction-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-caching-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/feedback-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-round-README.md
 ---
 # Runtime Configuration
 
@@ -118,8 +118,6 @@ When enabled, snapshots are written under `REACT_DEBUG_ROOT`, normally
 - `workspace_git_repo`: optional remote git repo URL used as the authoritative backup/version-control store for React's git-backed workspace lineage snapshots.
 - `multi_action_mode`: decision contract selector. `off` keeps the one-action-per-response contract. `safe_fanout` enables the experimental v3 multi-action protocol.
 - `model_service`: model service handle.
-- `knowledge_search_fn`: bundle‑supplied search function for `react.search_knowledge`.
-- `knowledge_read_fn`: bundle‑supplied resolver for `react.read(ks:...)` paths.
 - `on_before_compaction`: async hook before compaction.
 - `on_after_compaction`: async hook after compaction.
 - `save_summary`: async hook to persist compaction summaries.
@@ -139,7 +137,8 @@ When enabled, snapshots are written under `REACT_DEBUG_ROOT`, normally
 - Main workflow initialization attempts to populate it from bundle spec + tenant + project via the bundle storage helper.
 - Cached workflow instances should also refresh it when request context is rebound to a new tenant/project/turn.
 - Typical contents are bundle-managed assets such as cloned repos, generated indexes, and readonly data areas prepared by the bundle.
-- Bundles that expose `ks:` usually rely on this directory together with their `knowledge_read_fn`.
+- Cross-bundle access to this data should go through explicit tools, named
+  services, MCP/search, or rehosters that enforce the current auth context.
 - In isolated exec, the corresponding exec-visible env var is `BUNDLE_STORAGE_DIR`.
 - Isolated exec can derive the same directory from bundle spec + tenant + project when `RuntimeCtx.bundle_storage` is missing, but that is a fallback for robustness, not the primary contract.
 - Many tests and synthetic runtime constructions use `RuntimeCtx()` directly, so code must not assume `bundle_storage` is always populated outside real workflow initialization.
@@ -175,7 +174,7 @@ This is the only React workspace paradigm switch:
 
 Exact attachment/binary pulls remain point-wise and hosting-backed in both modes.
 
-`react.rg` searches only files already materialized in the local artifact workspace on the worker handling the turn. It does not search unpulled lineage snapshots, hidden/pruned timeline blocks, or `ks:`. If a task needs local search over older state, first identify the `fi:` ref from visible context or `react.memsearch`, then materialize it with `react.pull`; use `react.checkout` only when the pulled `files/...` ref must become an editable current-turn copy. Preferred `react.rg` roots are visible path forms: `files/...`, `outputs/...`, `attachments/...`, `turn_<id>/files/...`, `turn_<id>/outputs/...`, `turn_<id>/attachments/...`, or matching `fi:` artifact paths.
+`react.rg` searches only files already materialized in the local artifact workspace on the worker handling the turn. It does not search unpulled lineage snapshots, hidden/pruned timeline blocks, or owner namespaces. If a task needs local search over older state, first identify the `fi:` ref from visible context or `react.memsearch`, then materialize it with `react.pull`; use `react.checkout` only when the pulled `files/...` ref must become an editable current-turn copy. Preferred `react.rg` roots are visible path forms: `files/...`, `outputs/...`, `attachments/...`, `turn_<id>/files/...`, `turn_<id>/outputs/...`, `turn_<id>/attachments/...`, or matching `fi:` artifact paths.
 
 ## Visible read limits
 
@@ -206,17 +205,14 @@ but the model-visible view contains a truncated preview, a depth-limited shape,
 size metadata, and recovery instructions.
 
 ANNOUNCE includes a short `[CONTEXT CAPS]` line with the active regular-read,
-`ks_read`, tool-result-preview, and exec-file-preview caps so the model can
-choose between bounded previews and ranged `react.read` recovery. `ks_read`
-prints `none` for each dimension when no `knowledge_read_visible_*` cap is
-configured. Exec output is also capped; it can compute over data or create
-smaller derived artifacts, but it is not an uncapped channel for putting full
-content into model-visible context.
+tool-result-preview, and exec-file-preview caps so the model can choose between
+bounded previews and ranged `react.read` recovery. Exec output is also capped;
+it can compute over data or create smaller derived artifacts, but it is not an
+uncapped channel for putting full content into model-visible context.
 
-Skills are not read-capped. `ks:` knowledge-space article reads are uncapped
-only when the `ai.react.knowledge_read_visible_*` values are unset/null; if a
-deployment configures them, capped `ks:` content should be recovered by
-`stats_only` and ranged reads like any other capped text.
+Skills are not read-capped. Bundle-owned domain files should be exposed through
+explicit tools, named-service reads/rehosters, MCP/search, or hosted files
+rather than a generic ReAct-readable knowledge namespace.
 
 PDF/image reads are not partially sliced. If the raw payload is under
 `read_visible_max_bytes`, React attaches it whole as multimodal content. If it

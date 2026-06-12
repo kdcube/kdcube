@@ -17,7 +17,6 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.proto import RuntimeCtx
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_subsystem import ToolSubsystem
 
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
-from kdcube_ai_app.apps.chat.sdk.runtime.snapshot import build_portable_spec
 
 from kdcube_ai_app.apps.chat.sdk.runtime.iso_runtime import _InProcessRuntime
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_index import read_index
@@ -533,12 +532,13 @@ async def _execute_tool_in_memory(
     # Call via io_tools (handles its own error capture)
     exception_info = None
     try:
-        await agent_io_tools.tool_call(
-            fn=fn,
-            params=params,
-            call_reason=call_reason,
-            tool_id=tool_id,
-        )
+        with tool_manager.bind_portable_runtime_context():
+            await agent_io_tools.tool_call(
+                fn=fn,
+                params=params,
+                call_reason=call_reason,
+                tool_id=tool_id,
+            )
     except Exception as e:
         exception_info = {
             "code": type(e).__name__,
@@ -698,7 +698,7 @@ async def execute_tool_in_isolation(
         pass
 
     # portable spec for child to rebind services
-    spec = build_portable_spec(svc=tool_manager.svc, chat_comm=tool_manager.comm)
+    spec = tool_manager.build_portable_spec()
     portable_spec_json = spec.to_json()
 
     # communicator spec (redis relay etc.)

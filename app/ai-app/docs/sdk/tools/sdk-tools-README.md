@@ -1,18 +1,18 @@
 ---
-id: ks:docs/sdk/tools/sdk-tools-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/sdk-tools-README.md
 title: "SDK Tools"
 summary: "Overview of built-in SDK tool families, including rendering tools, web research, multimodal flows, and accounting-aware runtime integration."
 tags: ["sdk", "tools", "runtime", "rendering", "web", "multimodal", "accounting", "citations", "sources"]
 keywords: ["sdk tools", "rendering_tools", "web_tools", "sources_pool", "citations", "trusted tools", "multimodal", "accounting", "tool families"]
 see_also:
-  - ks:docs/sdk/tools/custom-tools-README.md
-  - ks:docs/sdk/tools/tool-subsystem-README.md
-  - ks:docs/sdk/events/event-subsystem-README.md
-  - ks:docs/sdk/agents/react/event-source/event-source-README.md
-  - ks:docs/sdk/agents/react/event-source/block-production-README.md
-  - ks:docs/citations-system.md
-  - ks:docs/sdk/agents/react/source-pool-README.md
-  - ks:docs/sdk/agents/react/react-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/custom-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/tool-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/block-production-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/citations-system.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/source-pool-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-tools-README.md
 ---
 # SDK Tools
 

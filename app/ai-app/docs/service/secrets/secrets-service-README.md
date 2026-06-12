@@ -1,14 +1,14 @@
 ---
-id: ks:docs/service/secrets/secrets-service-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/secrets/secrets-service-README.md
 title: "Secrets Manager Implementations"
 summary: "Runtime secrets providers, persistence model, and user-scoped secret behavior."
 tags: ["service", "secrets", "configuration", "aws", "runtime"]
 keywords: ["SECRETS_PROVIDER", "secrets-service", "aws-sm", "secrets-file", "in-memory", "user secrets", "bundle secrets"]
 see_also:
-  - ks:docs/configuration/service-runtime-configuration-mapping-README.md
-  - ks:docs/configuration/secrets-descriptor-README.md
-  - ks:docs/service/environment/setup-dev-env-README.md
-  - ks:docs/service/environment/setup-for-ecs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/secrets-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/environment/setup-dev-env-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/environment/setup-for-ecs-README.md
 ---
 # Secrets Manager Implementations
 

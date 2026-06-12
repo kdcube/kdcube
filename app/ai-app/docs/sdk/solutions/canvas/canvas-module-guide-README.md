@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/solutions/canvas/canvas-module-guide-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/canvas-module-guide-README.md
 title: "Canvas Module Guide"
 summary: "SDK-level contract for collaborative canvas: card semantics, versioned storage, transport lanes, external events, ReAct tools/instructions, ANNOUNCE rendering, and conflict handling."
 status: active
@@ -20,15 +20,15 @@ keywords:
     "ext refs",
   ]
 see_also:
-  - ks:docs/sdk/solutions/canvas/pin-operations-README.md
-  - ks:docs/sdk/solutions/canvas/pin-integration-README.md
-  - ks:docs/sdk/solutions/canvas/external-subsystem-event-source-products-pins-README.md
-  - ks:applications/playground/bundles/task-tracker@1-0/doc/storage/README.md
-  - ks:applications/playground/bundles/task-tracker@1-0/doc/design/canvas.md
-  - ks:applications/playground/bundles/task-tracker@1-0/doc/design/ui-surfaces.md
-  - ks:docs/sdk/agents/react/event-source/events-blocks-and-rendering-README.md
-  - ks:docs/sdk/events/external-event-envelope-README.md
-  - ks:docs/service/comm/data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/pin-operations-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/pin-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/external-subsystem-event-source-products-pins-README.md
+  - repo:kdcube-applications/playground/bundles/task-tracker@1-0/doc/storage/README.md
+  - repo:kdcube-applications/playground/bundles/task-tracker@1-0/doc/design/canvas.md
+  - repo:kdcube-applications/playground/bundles/task-tracker@1-0/doc/design/ui-surfaces.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/events-blocks-and-rendering-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-event-envelope-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
 ---
 # Canvas Module Guide
 

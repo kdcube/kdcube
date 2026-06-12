@@ -1,13 +1,13 @@
 ---
-id: ks:docs/sdk/memory/user-memories-operational-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/user-memories-operational-README.md
 title: "User Memories Operational Model"
 summary: "Operational structure of SDK user memories: Postgres tables, event provenance, manual and conversational creation flows, query collection, compact rendering, and update maintenance."
 tags: ["sdk", "memory", "operations", "postgres", "pgvector", "visibility", "provenance"]
 keywords: ["memory structure", "memory provenance", "manual memory", "conversation_id", "turn_id", "memory events", "memory query collection", "memory updates", "render memory", "memory evidence"]
 see_also:
-  - ks:docs/sdk/memory/user-memories-overview-README.md
-  - ks:docs/sdk/memory/user-memories-react-integration-README.md
-  - ks:docs/sdk/memory/user-memories-reconcilation-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/user-memories-overview-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/user-memories-react-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/user-memories-reconcilation-README.md
 ---
 # User Memories Operational Model
 

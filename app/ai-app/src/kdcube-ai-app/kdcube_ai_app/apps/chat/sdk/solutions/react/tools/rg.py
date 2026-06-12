@@ -40,7 +40,7 @@ TOOL_SPEC = {
     "purpose": (
         "Ripgrep-like safe search over files already materialized in the visible artifact workspace. "
         "Use it to discover files by name and/or locate text regions by regex before reading exact ranges. "
-        "It does not search unmaterialized conversation history, hidden timeline memory, or knowledge space; "
+        "It does not search unmaterialized conversation history, hidden timeline memory, or bundle-owned service namespaces; "
         "pull/check out older files first when local search is needed. "
         "It does not load full file content into visible context. "
         "Results include file metadata, line counts for text files, line-numbered matches, and ready-to-pass "

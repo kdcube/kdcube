@@ -1,19 +1,19 @@
 ---
-id: ks:docs/sdk/agents/react/event-source/event-source-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
 title: "React Event Sources"
 summary: "Event-source declarations, ReAct policy bindings, discovery, identity, and feature-flagged rollout."
 tags: ["sdk", "agents", "react", "event-source", "policies"]
 keywords: ["event_source", "event_source_id", "event_id", "react_phase", "event_policy_id", "tool policy", "timeline projection"]
 see_also:
-  - ks:docs/sdk/events/external-event-envelope-README.md
-  - ks:docs/sdk/events/external-events-README.md
-  - ks:docs/sdk/events/external-events-journey-and-handling-README.md
-  - ks:docs/arch/proc/events-orchestration-README.md
-  - ks:docs/sdk/events/event-subsystem-README.md
-  - ks:docs/sdk/agents/react/event-source/events-blocks-and-rendering-README.md
-  - ks:docs/sdk/agents/react/event-source/block-production-README.md
-  - ks:docs/sdk/agents/react/tool-call-blocks-README.md
-  - ks:docs/sdk/agents/react/event-blocks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-event-envelope-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-journey-and-handling-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/events-orchestration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/events-blocks-and-rendering-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/block-production-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/tool-call-blocks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-blocks-README.md
 ---
 # React Event Sources
 

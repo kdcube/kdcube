@@ -1,17 +1,17 @@
 ---
-id: ks:docs/configuration/bundles-descriptor-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.md
 title: "Bundles Descriptor"
 summary: "Bundle registry and non-secret bundle deployment configuration in bundles.yaml: default bundle, git or local bundle sources, module paths, and bundle-scoped config."
 tags: ["service", "configuration", "bundle", "bundle-registry", "deployment", "descriptor"]
 keywords: ["bundle registry", "default bundle selection", "git bundle source", "local path bundle source", "bundle module mapping", "bundle configuration", "bundle inventory", "file-backed bundle authority", "bundle reload workflow", "deployment bundle catalog"]
 see_also:
-  - ks:docs/service/cicd/descriptors-README.md
-  - ks:docs/configuration/assembly-descriptor-README.md
-  - ks:docs/configuration/bundles-secrets-descriptor-README.md
-  - ks:docs/configuration/service-runtime-configuration-mapping-README.md
-  - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
-  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
-  - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/descriptors-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/assembly-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-secrets-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
 ---
 # Bundles Descriptor
 

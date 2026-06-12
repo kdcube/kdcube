@@ -1,13 +1,13 @@
 ---
-id: ks:docs/sdk/agents/react/event-source/tool-call-validation-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/tool-call-validation-README.md
 title: "Tool Call Validation Phase"
 summary: "Pre-execution ReAct policy phase for validating and preparing external tool calls."
 tags: ["sdk", "agents", "react", "event-source", "tool-call-validation"]
 keywords: ["tool_call_validation", "final_params", "exec preflight", "rendering input preparation"]
 see_also:
-  - ks:docs/sdk/agents/react/event-source/event-source-README.md
-  - ks:docs/sdk/agents/react/event-source/events-blocks-and-rendering-README.md
-  - ks:docs/sdk/agents/react/external-exec-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/events-blocks-and-rendering-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/external-exec-README.md
 ---
 # Tool Call Validation Phase
 

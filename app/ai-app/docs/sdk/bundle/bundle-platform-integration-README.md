@@ -1,28 +1,28 @@
 ---
-id: ks:docs/sdk/bundle/bundle-platform-integration-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md
 title: "Bundle Platform Integration"
 summary: "Declarative platform contract for exposing bundle capabilities through decorators, manifest metadata, REST operations, widgets, MCP routes, static UI, public routes, Data Bus handlers, scheduled jobs, and background job handlers."
 tags: ["sdk", "bundle", "integration", "decorators", "widgets", "operations", "mcp", "ui", "manifest", "cron", "scheduled-jobs", "background-jobs", "data-bus"]
 keywords: ["decorator based integration", "bundle manifest contract", "rest operations exposure", "widget exposure", "mcp route exposure", "static ui exposure", "public route exposure", "data bus handler", "scheduled job exposure", "on_job background job handler"]
 updated_at: 2026-06-06
 see_also:
-  - ks:docs/sdk/bundle/bundle-agent-integration-README.md
-  - ks:docs/sdk/bundle/bundle-entrypoint-classes-README.md
-  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
-  - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
-  - ks:docs/sdk/bundle/bundle-transports-README.md
-  - ks:docs/sdk/bundle/auth-bundle-federated-README.md
-  - ks:docs/sdk/bundle/bundle-client-communication-README.md
-  - ks:docs/sdk/bundle/bundle-interfaces-README.md
-  - ks:docs/sdk/bundle/bundle-scheduled-jobs-README.md
-  - ks:docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
-  - ks:docs/sdk/bundle/bundle-developer-guide-README.md
-  - ks:docs/sdk/bundle/bundle-venv-README.md
-  - ks:docs/service/streams/background-jobs-README.md
-  - ks:docs/service/comm/bus-routing-and-partitioning-README.md
-  - ks:docs/service/comm/data-bus-README.md
-  - ks:docs/sdk/bundle/bundle-index-README.md
-  - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-agent-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-entrypoint-classes-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-transports-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/auth-bundle-federated-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-communication-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-interfaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-scheduled-jobs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-developer-guide-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-venv-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/streams/background-jobs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/bus-routing-and-partitioning-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-index-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/versatile-reference-bundle-README.md
 ---
 # Bundle Platform Integration
 

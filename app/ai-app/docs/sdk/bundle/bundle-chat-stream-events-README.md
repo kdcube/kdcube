@@ -1,19 +1,19 @@
 ---
-id: ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-chat-stream-events-README.md
 title: "Bundle Chat Stream Events"
 summary: "Reference catalog for chat stream events visible to bundle-facing clients: shared event envelope and lifecycle across SSE and Socket.IO, plus continuation acknowledgements, rate limits, backpressure, and bundle-emitted events."
 tags: ["sdk", "bundle", "sse", "socketio", "protocol", "events", "streaming", "chat"]
 keywords: ["chat stream event catalog", "socketio event catalog", "sse event catalog", "client visible event lifecycle", "continuation acknowledgements", "chat step events", "rate limit events", "backpressure events", "bundle emitted events", "stream protocol reference"]
 see_also:
-  - ks:docs/sdk/bundle/bundle-client-ui-README.md
-  - ks:docs/sdk/bundle/bundle-client-communication-README.md
-  - ks:docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
-  - ks:docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
-  - ks:docs/sdk/bundle/bundle-frontend-awareness-README.md
-  - ks:docs/sdk/bundle/bundle-interfaces-README.md
-  - ks:docs/service/comm/comm-system.md
-  - ks:docs/arch/architecture-long.md
-  - ks:docs/economics/rate-limit-simulation-playbook.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-ui-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-communication-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-frontend-awareness-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-interfaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/comm-system.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/architecture-long.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/rate-limit-simulation-playbook.md
 ---
 # Bundle Chat Stream Events
 

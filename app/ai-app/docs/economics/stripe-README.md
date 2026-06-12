@@ -1,14 +1,14 @@
 ---
-id: ks:docs/economics/stripe-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/economics/stripe-README.md
 title: "Stripe Integration"
 summary: "Stripe integration guide: checkout, webhooks, reconcile job, local dev setup, and payment flow diagrams."
 tags: ["economics", "stripe", "payments", "webhooks", "subscriptions", "reconcile"]
 keywords: ["stripe webhooks", "checkout session", "wallet topup", "subscription sync", "refunds", "reconcile job", "stripe cli", "stripe listen"]
 see_also:
-  - ks:docs/economics/eco-admin-README.md
-  - ks:docs/economics/operational-README.md
-  - ks:docs/configuration/secrets-descriptor-README.md
-  - ks:docs/configuration/service-runtime-configuration-mapping-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/eco-admin-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/operational-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/secrets-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
 ---
 # Stripe Integration Guide
 

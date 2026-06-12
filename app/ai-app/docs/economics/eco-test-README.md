@@ -1,13 +1,13 @@
 ---
-id: ks:docs/economics/eco-test-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/economics/eco-test-README.md
 title: "Eco Test"
 summary: "QA test plan for the economics subsystem and expected behaviors."
 tags: ["economics", "testing", "qa", "budgets", "plans"]
 keywords: ["test plan", "wallets", "shortfall", "rate limits", "admin UI"]
 see_also:
-  - ks:docs/economics/eco-admin-README.md
-  - ks:docs/economics/eco-kickoff-README.md
-  - ks:docs/economics/economic-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/eco-admin-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/eco-kickoff-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/economic-README.md
 ---
 # Economics QA Test Guide
 

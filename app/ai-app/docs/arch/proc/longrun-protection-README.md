@@ -1,15 +1,15 @@
 ---
-id: ks:docs/arch/proc/longrun-protection-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/arch/proc/longrun-protection-README.md
 title: "Proc Long-Run Protection"
 summary: "How the processor protects running bundle requests across queue ownership, shutdown, recovery, and ECS service updates."
 tags: ["arch", "proc", "shutdown", "recovery", "task-protection", "ecs"]
 keywords: ["long run protection", "started marker", "task protection", "proc drain", "worker loss", "turn interrupted"]
 see_also:
-  - ks:docs/arch/proc/processor-arch-README.md
-  - ks:docs/arch/proc/events-orchestration-README.md
-  - ks:docs/service/comm/data-bus-README.md
-  - ks:docs/ops/ecs/components/proc-README.md
-  - ks:docs/arch/ecs-service-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/processor-arch-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/events-orchestration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/ops/ecs/components/proc-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/ecs-service-README.md
 ---
 # Proc Long-Run Protection
 

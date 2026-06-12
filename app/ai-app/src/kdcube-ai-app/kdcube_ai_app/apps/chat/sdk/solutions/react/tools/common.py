@@ -62,6 +62,16 @@ def _hash_text(value: str) -> str:
 
 def _tool_call_omission_marker(*, value: str, key_path: str, call_path: str) -> Dict[str, Any]:
     preview = value[:_TOOL_CALL_STRING_PREVIEW_CHARS]
+    if call_path:
+        recover_with = (
+            f"react.read(paths=[{json.dumps(call_path)}]) to load the saved full tool-call payload; "
+            f"then inspect field {key_path!r}. Use stats_only/ranged read items only if that artifact is still capped."
+        )
+    else:
+        recover_with = (
+            "react.read on the matching tc:<turn>.<call>.call path to load the saved full tool-call payload; "
+            f"then inspect field {key_path!r}. Use stats_only/ranged read items only if that artifact is still capped."
+        )
     return {
         "preview": preview,
         "truncated": True,
@@ -69,11 +79,10 @@ def _tool_call_omission_marker(*, value: str, key_path: str, call_path: str) -> 
         "text_symbols": len(value),
         "size_bytes": len(value.encode("utf-8", errors="ignore")),
         "sha1": _hash_text(value),
-        "recover_with": (
-            f"react.read(paths=[{json.dumps(call_path)}], stats_only=true), then ranged react.read items if text is large"
-            if call_path
-            else "react.read on the matching tc:<turn>.<call>.call path, with stats_only and ranged items if text is large"
-        ),
+        "full_value_ref": call_path or "tc:<turn>.<call>.call",
+        "full_value_field": key_path,
+        "recovery_hint": "This is only a shortened preview. The saved tool-call artifact preserves the complete value.",
+        "recover_with": recover_with,
         "field": key_path,
     }
 

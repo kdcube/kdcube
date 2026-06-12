@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/events/namespaces-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
 title: "Logical Reference Namespaces"
 summary: "Foundational model for model-facing logical refs such as ar:, ev:, tc:, fi:, task:, mem:, cnv:, and so:, and how they relate to events, react.read, react.pull, and react.checkout."
 status: draft
@@ -21,13 +21,13 @@ keywords:
     "cnv:",
   ]
 see_also:
-  - ks:docs/sdk/namespace-services/providers-README.md
-  - ks:docs/sdk/events/external-events-README.md
-  - ks:docs/sdk/events/external-event-envelope-README.md
-  - ks:docs/sdk/events/event-subsystem-README.md
-  - ks:docs/sdk/agents/react/artifact-discovery-README.md
-  - ks:docs/sdk/agents/react/workspace/workspace-checkout-model-README.md
-  - ks:docs/sdk/agents/react/files-vs-outputs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/providers-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-event-envelope-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-discovery-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/workspace-checkout-model-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/files-vs-outputs-README.md
 ---
 # Logical Reference Namespaces
 
@@ -85,7 +85,6 @@ namespace.
 | `mem:` | Memory subsystem refs | not directly by default; use visible context | yes when the memory namespace rehoster is registered; returns a `fi:` mirror | no |
 | `cnv:` | Canvas subsystem refs, including boards such as `cnv:main@7` and canvas-owned objects | not directly by default; use visible canvas ANNOUNCE/context | yes when the canvas namespace rehoster is registered; returns a `fi:` mirror | no |
 | `so:` / `su:` | Source/search subsystems | through source/search tooling or visible source pools | subsystem-defined | no |
-| `ks:` | Knowledge/docs namespace | subsystem-defined; often read/browse tooling | subsystem-defined | no |
 
 This table describes the default architectural contract. A bundle can add a
 registered rehoster or tool for a namespace, but that registration belongs to
@@ -96,7 +95,7 @@ use `react.pull(paths=["<namespace>:..."])`. The runtime-connected namespace
 rehoster mirrors the owner content into the ReAct workspace and returns ordinary
 `fi:` logical paths plus physical paths. ReAct then reads, searches, or executes
 against those returned paths. ReAct does not hard-code memory, canvas, task, or
-knowledge object rendering.
+owner object rendering.
 
 ## Events And Namespaces
 
@@ -159,7 +158,7 @@ carry refs in other namespaces.
 
 Use `react.read` when the target ref already names readable model/context
 content in the ReAct-visible logical space, such as `ar:`, `tc:`, `ev:`, `fi:`,
-`so:`, `su:`, `ks:`, or `sk:` refs supported by the runtime.
+`so:`, `su:`, or `sk:` refs supported by the runtime.
 
 Use `react.pull` when exact bytes/content from historical artifacts or external
 owner refs must be materialized into the current ReAct artifact space. Pull

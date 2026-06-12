@@ -1,15 +1,15 @@
 ---
-id: ks:docs/sdk/agents/react/external-exec-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/external-exec-README.md
 title: "External Exec"
 summary: "External execution flow for React (snapshots, remote runners)."
 tags: ["sdk", "agents", "react", "exec", "external"]
 keywords: ["snapshot", "external exec", "fargate", "distributed execution"]
 see_also:
-  - ks:docs/sdk/agents/react/event-blocks-README.md
-  - ks:docs/sdk/agents/react/artifact-discovery-README.md
-  - ks:docs/sdk/agents/react/artifact-storage-README.md
-  - ks:docs/exec/exec-logging-error-propagation-README.md
-  - ks:docs/exec/distributed-exec-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-blocks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-discovery-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-storage-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/exec-logging-error-propagation-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/distributed-exec-README.md
 ---
 ## External execution notes (Fargate / distributed)
 
@@ -36,7 +36,7 @@ The per-bundle readonly storage dir is where bundles keep prepared local data su
 
 - cloned docs repos
 - built indexes
-- cached read-only knowledge space files
+- cached read-only bundle data
 
 In supervised external exec, that directory is restored or mounted for the supervisor side at `BUNDLE_STORAGE_DIR`.
 Generated code in the executor is not supposed to receive or browse that path directly.
@@ -77,8 +77,8 @@ Practical consequence:
 Example: `kdcube.copilot`
 
 - bundle code lives under `/bundles/kdcube.copilot@...`
-- its built knowledge space lives under the per-bundle storage dir
-- `react.search_knowledge(...)` reads that physical knowledge space through `knowledge/resolver.py`
+- its prepared index data lives under the per-bundle storage dir
+- its public search surface reads that physical data through its bundle resolver
 - if isolated exec loads the resolver without having run the bundle entrypoint first, the supervisor-side resolver falls back to `BUNDLE_STORAGE_DIR`
 
 ### What the agent calls

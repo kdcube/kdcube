@@ -46,7 +46,7 @@ REACT_LITE_TIMELINE_CONTEXT = """
 - The rendered timeline is both working context and a recovery map. It may show compact summaries, metadata, logical paths, source ids, tool ids, and turn indexes for content that is no longer fully visible.
 - It is ordered oldest to newest. The newest same-turn `followup` or `steer` is the latest user control input.
 - A turn can contain multiple visible assistant completions if a live followup extends the same turn after an earlier completion. Those completions are already visible to the user; later completions should be incremental, not a replay of the whole turn.
-- Stable logical paths identify recoverable content. Built-in examples are `ar:`, `fi:`, `tc:`, `ev:`, `so:`, `su:`, `ws:`, `ks:`, and `sk:` when present. The current runtime may also show namespace refs whose resolvers are connected by the runtime; runtime instructions or ANNOUNCE may name those namespaces.
+- Stable logical paths identify recoverable content. Built-in examples are `ar:`, `fi:`, `tc:`, `ev:`, `so:`, `su:`, `ws:`, and `sk:` when present. The current runtime may also show namespace refs whose resolvers are connected by the runtime; runtime instructions or ANNOUNCE may name those namespaces.
 - Use visible evidence first. When exact content is missing, hidden, pruned, compacted, or too large, use the timeline's recovery handles to read/search/pull the needed material.
 - Line numbers shown in previews are model-facing viewing prefixes. Use them for ranged reads and patch locations; never copy them into patch/full-file content.
 """
@@ -163,11 +163,11 @@ REACT_LITE_PATHS_AND_NAMESPACES = """
 - `so:conv_<conversation_id>.sources_pool[1,3]` addresses source rows from another conversation's persisted source pool; use `react.read` for this form.
 - `ws:turn_<id>.conv.working.summary` addresses the latest working summary for a turn.
 - `su:turn_<id>.conv.range.summary` addresses a compacted range summary.
-- `ks:<path>` addresses read-only bundle knowledge space. `sk:<skill_id>` addresses skill text.
+- `sk:<skill_id>` addresses skill text.
 - The current runtime may expose additional logical refs whose namespaces are owned outside the ReAct workspace. Use runtime instruction hints, ANNOUNCE, or visible labels to understand what those refs mean.
 - External owner refs may appear in event data or snapshots, usually as `object_ref: <namespace>:...`. They are owner-managed objects/artifacts outside the ReAct workspace. Resolve and rehost exact content with `react.pull(paths=[object_ref])`; after pull, continue from the returned `fi:` logical path or physical path. Unsupported namespaces are reported by the pull result.
 - Canonical physical OUT_DIR-relative paths are qualified with a turn root: `turn_<id>/files/...`, `turn_<id>/outputs/...`, `turn_<id>/snapshots/...`, `turn_<id>/attachments/...`, `turn_<id>/external/...`, plus runtime `logs/...`.
-- Derived physical OUT_DIR paths exist for `fi:` file/output/snapshot/attachment refs. Other logical refs such as `ar:`, `tc:`, `so:`, `su:`, `ks:`, `sk:`, and resolver-backed namespace refs stay logical context refs unless the runtime explicitly gives a physical path.
+- Derived physical OUT_DIR paths exist for `fi:` file/output/snapshot/attachment refs. Other logical refs such as `ar:`, `tc:`, `so:`, `su:`, `sk:`, and resolver-backed namespace refs stay logical context refs unless the runtime explicitly gives a physical path.
 - Logical <-> physical conversion is mechanical:
   - `fi:turn_<id>.files/<rel>` <-> `turn_<id>/files/<rel>`
   - `fi:turn_<id>.outputs/<rel>` <-> `turn_<id>/outputs/<rel>`
@@ -187,7 +187,7 @@ REACT_LITE_PATHS_AND_NAMESPACES = """
 REACT_LITE_REACT_READ_RECOVERY = """
 [RECOVERY WITH react.read]
 - Visible summaries and metadata are not always the exact content. Treat them as maps to exact logical paths.
-- Use `react.read` when you already know a readable logical path such as `fi:`, `ar:`, `tc:`, `so:`, `su:`, `ws:`, `ks:`, or `sk:`.
+- Use `react.read` when you already know a readable logical path such as `fi:`, `ar:`, `tc:`, `so:`, `su:`, `ws:`, or `sk:`.
 - External owner refs are imported with `react.pull` when exact content is needed; after pull, use the returned `fi:` logical path or physical path with `react.read`, `react.rg`, or exec/code.
 - Use `react.read(paths=[...],stats_only=true)` to inspect size/mime/line metadata without adding content blocks.
 - Use `react.read(items=[{"path":"...","line_start":N,"line_count":M}])` for bounded text ranges.
@@ -215,7 +215,7 @@ REACT_LITE_MEMORY_SEARCH_RECOVERY = """
 # Include this block only when `react.rg` is available.
 REACT_LITE_LOCAL_ARTIFACT_SEARCH = """
 [LOCAL ARTIFACT SEARCH WITH react.rg]
-- Use `react.rg` only for readable files already materialized locally under OUT_DIR. It does not search hidden timeline, unmaterialized conversation history, or `ks:`.
+- Use `react.rg` only for readable files already materialized locally under OUT_DIR. It does not search hidden timeline or unmaterialized conversation history.
 - `react.rg` hits may include `logical_path` and ready-to-pass `read_item` ranges for `react.read`.
 - Search roots should match visible/local paths: omit `root`, or use `turn_<id>/files/...`, `turn_<id>/outputs/...`, `turn_<id>/attachments/...`, or a matching `fi:` artifact path.
 - If the target is in an older turn, identify the `fi:` ref from visible context or `react.memsearch`, then pull it before local search.
@@ -241,7 +241,6 @@ REACT_LITE_WORKSPACE_BASE = """
   - versioned conversation artifact refs: logical `fi:turn_<id>.files/...`, `fi:turn_<id>.outputs/...`, `fi:turn_<id>.snapshots/...`, attachments, and cross-conversation `fi:conv_<conversation_id>.turn_<id>...`
 - external owner refs: opaque `<namespace>:...` refs that `react.pull` may rehost into ordinary `fi:` refs
   - timeline event refs: `ev:turn_<id>.events/<event_path>` identify event objects, not artifact bytes
-  - read-only bundle knowledge space: logical `ks:<path>`
 - When files are materialized, the filesystem visible to exec/code is rooted at `OUTPUT_DIR` and is shaped like:
   ```text
   OUTPUT_DIR/
@@ -356,7 +355,7 @@ REACT_LITE_EXEC_TOOL = """
 - If generating code that integrates with an SDK or runtime, confirm exact symbols from visible docs, tests, examples, or source before using them.
 - Do not invent imports, helper APIs, tool names, or framework symbols.
 - Avoid dead code and unused variables; every substantial operation should contribute to contracted artifacts or concise diagnostics.
-- Inside exec, `ctx_tools.fetch_ctx` supports only logical `ar:`, `tc:`, and `so:` paths. It does not support `fi:`, `ks:`, `sk:`, or `su:`.
+- Inside exec, `ctx_tools.fetch_ctx` supports only logical `ar:`, `tc:`, and `so:` paths. It does not support `fi:`, `sk:`, or `su:`.
 - `react.read`, `react.write`, `react.patch`, and other `react.*` tools do not exist inside the exec environment; call them only as top-level ReAct tools.
 - If code must call an execution-enabled tool from inside exec, use `await agent_io_tools.tool_call(...)`.
 - Use only local, non-interactive subprocesses when materially useful; handle missing commands and keep output small.

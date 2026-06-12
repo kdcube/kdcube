@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/agents/claude/claude-code-workspace-bootstrap-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/claude/claude-code-workspace-bootstrap-README.md
 title: "Claude Code Workspace Management"
 summary: "How KDCube manages Claude Code session continuity through a bundle-controlled local root and an optional git-backed per-conversation session store."
 tags: ["sdk", "agents", "claude", "claude-code", "workspace", "git", "bootstrap"]
@@ -13,12 +13,12 @@ keywords:
     "run_claude_code_turn",
   ]
 see_also:
-  - ks:docs/sdk/agents/claude/claude-code-README.md
-  - ks:docs/sdk/agents/claude/claude-code-accounting-README.md
-  - ks:docs/configuration/service-runtime-configuration-mapping-README.md
-  - ks:docs/configuration/assembly-descriptor-README.md
-  - ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/claude_code/runtime.py
-  - ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/claude_code/agent.py
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/claude/claude-code-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/claude/claude-code-accounting-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/assembly-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/claude_code/runtime.py
+  - repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/claude_code/agent.py
 ---
 # Claude Code Workspace Management
 

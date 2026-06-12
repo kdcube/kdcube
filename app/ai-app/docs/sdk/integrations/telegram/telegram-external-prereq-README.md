@@ -1,12 +1,12 @@
 ---
-id: ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-external-prereq-README.md
 title: "Telegram External Prerequisites"
 summary: "External Telegram Bot API, BotFather, webhook, public URL, and Mini App setup required before KDCube Telegram SDK integrations can work."
 tags: ["sdk", "integrations", "telegram", "webhook", "mini-app", "prerequisites"]
 keywords: ["telegram prerequisites", "telegram botfather", "telegram webhook", "telegram mini app", "telegram bot token"]
 see_also:
-  - ks:docs/sdk/integrations/telegram/telegram-README.md
-  - ks:docs/sdk/integrations/email/email-external-prereq-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/email/email-external-prereq-README.md
 ---
 
 # Telegram External Prerequisites

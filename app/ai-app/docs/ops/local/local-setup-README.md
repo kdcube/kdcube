@@ -1,11 +1,11 @@
 ---
-id: ks:docs/ops/local/local-setup-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/ops/local/local-setup-README.md
 title: "Local Setup (CLI)"
 summary: "How the kdcube CLI provisions local workdir, config, data, and secrets."
 tags: ["ops", "local", "cli", "docker-compose", "secrets"]
 keywords: ["kdcube", "workdir", "config", "data", "logs", "secrets", "sidecar"]
 see_also:
-  - ks:docs/ops/deployment-options-index-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/ops/deployment-options-index-README.md
 ---
 # Local setup (CLI)
 

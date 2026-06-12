@@ -1,15 +1,15 @@
 ---
-id: ks:docs/sdk/agents/react/micro-agents-and-subagents-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/micro-agents-and-subagents-README.md
 title: "Micro-Agents And Subagents"
 summary: "How separate agent calls affect rendered context, prompt caching, and data handoff cost."
 tags: ["sdk", "agents", "react", "context", "caching", "subagents"]
 keywords: ["subagent", "micro-agent", "prompt cache", "system instruction", "handoff", "announce"]
 see_also:
-  - ks:docs/sdk/agents/react/context-caching-README.md
-  - ks:docs/sdk/agents/react/context-layout.md
-  - ks:docs/sdk/agents/react/context-progression.md
-  - ks:docs/sdk/agents/react/system-instruction-README.md
-  - ks:docs/sdk/agents/react/react-announce-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-caching-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-layout.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-progression.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/system-instruction-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-announce-README.md
 ---
 # Micro-Agents And Subagents
 

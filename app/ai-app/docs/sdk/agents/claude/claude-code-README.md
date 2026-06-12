@@ -1,16 +1,16 @@
 ---
-id: ks:docs/sdk/agents/claude/claude-code-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/claude/claude-code-README.md
 title: "Claude Code Agent"
 summary: "Native Python SDK runner for Claude Code with deterministic user and conversation binding, workspace-scoped execution, communicator-backed streaming, framed structured-output parsing, timeout control, and correct session resume semantics."
 tags: ["sdk", "agents", "claude", "claude-code", "streaming", "communicator", "workspace"]
 keywords: ["ClaudeCodeAgent", "run_followup", "run_steer", "allowedTools", "session-id", "resume", "add-dir", "permission-mode", "stream-json", "ChatCommunicator", "timeout_seconds", "structured_output_prefixes"]
 see_also:
-  - ks:docs/sdk/bundle/bundle-agent-integration-README.md
-  - ks:docs/sdk/bundle/bundle-runtime-README.md
-  - ks:docs/sdk/streaming/channeled-streamer-README.md
-  - ks:docs/sdk/tools/tool-subsystem-README.md
-  - ks:docs/sdk/agents/claude/claude-code-accounting-README.md
-  - ks:docs/sdk/agents/claude/claude-code-workspace-bootstrap-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-agent-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-runtime-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/streaming/channeled-streamer-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/tool-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/claude/claude-code-accounting-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/claude/claude-code-workspace-bootstrap-README.md
 ---
 # Claude Code Agent
 
@@ -435,7 +435,7 @@ Claude Code runs are accounted as normal `service_type=llm` usage events with:
 - `metadata.runtime="claude_code"`
 - resolved usage from the `stream-json` result stream
 
-See [ks:docs/sdk/agents/claude/claude-code-accounting-README.md](ks:docs/sdk/agents/claude/claude-code-accounting-README.md).
+See [claude-code-accounting-README.md](claude-code-accounting-README.md).
 
 ## Workspace model
 
@@ -579,7 +579,7 @@ That layer supports:
 - `CLAUDE_CODE_SESSION_STORE_IMPLEMENTATION=local|git`
 - `CLAUDE_CODE_SESSION_GIT_REPO=<repo>`
 
-See [ks:docs/sdk/agents/claude/claude-code-workspace-bootstrap-README.md](ks:docs/sdk/agents/claude/claude-code-workspace-bootstrap-README.md).
+See [claude-code-workspace-bootstrap-README.md](claude-code-workspace-bootstrap-README.md).
 
 ## Allowed tools
 

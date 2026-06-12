@@ -1,13 +1,13 @@
 ---
-id: ks:docs/sdk/agents/react/react-budget-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-budget-README.md
 title: "React Budget"
 summary: "Budget model used by React v2 (BudgetStateV2)."
 tags: ["sdk", "agents", "react", "budget"]
 keywords: ["BudgetStateV2", "token budget", "remaining budget", "budget snapshot"]
 see_also:
-  - ks:docs/sdk/agents/react/react-state-machine-README.md
-  - ks:docs/sdk/agents/react/artifact-discovery-README.md
-  - ks:docs/sdk/agents/react/artifact-storage-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-state-machine-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-discovery-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-storage-README.md
 ---
 # ReAct v2 Budget Model
 

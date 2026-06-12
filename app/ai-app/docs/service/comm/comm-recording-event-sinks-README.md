@@ -1,17 +1,17 @@
 ---
-id: ks:docs/service/comm/comm-recording-event-sinks-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/comm/comm-recording-event-sinks-README.md
 title: "Comm Recording And Event Sinks"
 summary: "Reference for recording selected ChatCommunicator envelopes and handing bounded batches to event sinks across host and isolated runtimes."
 tags: ["service", "comm", "recording", "event-sinks", "sdk", "runtime"]
 keywords: ["comm record", "send recorded events", "ChatCommunicator recording", "comm event sink", "comm event selector", "iso runtime recorded events merge"]
 see_also:
-  - ks:docs/service/comm/README-comm.md
-  - ks:docs/service/comm/comm-system.md
-  - ks:docs/service/comm/CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md
-  - ks:docs/service/streams/telemetry-README.md
-  - ks:docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
-  - ks:docs/sdk/bundle/bundle-firewall-README.md
-  - ks:docs/exec/README-iso-runtime.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/README-comm.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/comm-system.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/streams/telemetry-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-firewall-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/README-iso-runtime.md
 ---
 # Comm Recording And Event Sinks
 

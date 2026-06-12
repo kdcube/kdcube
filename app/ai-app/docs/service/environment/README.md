@@ -1,15 +1,15 @@
 ---
-id: ks:docs/service/environment/README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/environment/README.md
 title: "Runtime Environment Setup"
 summary: "Entry page for preparing direct local runs, Docker Compose deployments, and ECS environments, with links to the exact configuration and setup procedures for each mode."
 tags: ["service", "environment", "setup"]
 keywords: ["environment setup", "local runtime setup", "docker compose environment", "ecs runtime setup", "descriptor-backed environment preparation", "deployment mode setup"]
 see_also:
-  - ks:docs/configuration/service-runtime-configuration-mapping-README.md
-  - ks:docs/service/cicd/descriptors-README.md
-  - ks:docs/service/environment/setup-dev-env-README.md
-  - ks:docs/service/environment/setup-for-dockercompose-README.md
-  - ks:docs/service/environment/setup-for-ecs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/descriptors-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/environment/setup-dev-env-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/environment/setup-for-dockercompose-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/environment/setup-for-ecs-README.md
 ---
 # Environment Setup
 

@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/events/event-subsystem-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
 title: "SDK Events Subsystem"
 summary: "Shared event-source declarations and discovery used by tools today and by broader SDK event flows over time."
 status: draft
@@ -18,19 +18,19 @@ keywords:
     "react.pull",
   ]
 see_also:
-  - ks:docs/sdk/events/namespaces-README.md
-  - ks:docs/sdk/bundle/bundle-events-README.md
-  - ks:docs/sdk/events/external-event-envelope-README.md
-  - ks:docs/sdk/events/external-events-README.md
-  - ks:docs/arch/proc/events-orchestration-README.md
-  - ks:docs/sdk/agents/react/agent-workspace-collboration-README.md
-  - ks:docs/sdk/agents/react/react-turn-workspace-README.md
-  - ks:docs/sdk/agents/react/files-vs-outputs-README.md
-  - ks:docs/sdk/agents/react/event-source/event-source-README.md
-  - ks:docs/sdk/agents/react/event-source/block-production-README.md
-  - ks:docs/sdk/tools/tool-subsystem-README.md
-  - ks:docs/sdk/tools/custom-tools-README.md
-  - ks:docs/sdk/agents/react/design/timeline-events-transport-lifecycle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-event-envelope-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/events-orchestration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/agent-workspace-collboration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-turn-workspace-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/files-vs-outputs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/block-production-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/tool-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/custom-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/design/timeline-events-transport-lifecycle-README.md
 ---
 # SDK Events Subsystem
 

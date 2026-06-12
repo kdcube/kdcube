@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/solutions/canvas/canvas-sdk-solution-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/canvas-sdk-solution-README.md
 title: "Canvas SDK Solution"
 summary: "Reusable collaborative canvas component for KDCube bundles: versioned board storage, object resolver registry, ReAct instructions/tool core, and embeddable UI component source."
 status: draft
@@ -16,16 +16,16 @@ keywords:
     "canvas ui component",
   ]
 see_also:
-  - ks:docs/sdk/bundle/bundle-subsystem-integration-README.md
-  - ks:docs/sdk/solutions/canvas/canvas-module-guide-README.md
-  - ks:docs/sdk/solutions/canvas/pin-operations-README.md
-  - ks:docs/sdk/solutions/canvas/pin-integration-README.md
-  - ks:docs/sdk/solutions/canvas/external-subsystem-event-source-products-pins-README.md
-  - ks:docs/sdk/solutions/event-hub/resolver-and-policy-registration-README.md
-  - ks:docs/sdk/solutions/scene/scene-composition-README.md
-  - ks:docs/sdk/events/namespaces-README.md
-  - ks:docs/service/comm/conversation-event-bus-and-data-bus-README.md
-  - ks:docs/service/comm/data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-subsystem-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/canvas-module-guide-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/pin-operations-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/pin-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/external-subsystem-event-source-products-pins-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/event-hub/resolver-and-policy-registration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-composition-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/conversation-event-bus-and-data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
 ---
 # Canvas SDK Solution
 
@@ -115,7 +115,7 @@ namespace when pinned:
 | Memory | `mem:<memory-id>` | Memory module |
 | Task issue | `task:issues/<issue-id>` | Task subsystem |
 | Canvas user text/upload | `cnv:<canvas-object>` | Canvas storage owner |
-| Knowledge/source row | `ks:<article>` or `so:<source>` | Knowledge/source subsystem |
+| Knowledge/source row | `repo:<repo>/<path>` or `so:<source>` | Knowledge/source subsystem |
 
 Canvas does not rehost external objects just because they are pinned. Rehosting
 is an explicit action owned by the target subsystem, for example attaching a
@@ -323,7 +323,7 @@ This is the intended SDK boundary:
 | --- | --- |
 | Canvas SDK policies | Text shape for `[CANVAS STATE]`, `[CANVAS BOARD]`, `[CANVAS FOCUS]`, and `[CANVAS FOCUSED CONTEXT]`. Focus means selected/multi-selected cards on a board. |
 | Composition bundle wrappers | Event-source ids, event-policy ids, storage prefixes, and compatibility metadata keys. |
-| Domain resolvers | Object-specific previews, open/download/rehost actions for refs such as `task:`, `mem:`, `fi:`, and `ks:`. |
+| Domain resolvers | Object-specific previews, open/download/rehost actions for refs such as `task:`, `mem:`, `fi:`, and `repo:`. |
 
 ## Data Bus Integration
 

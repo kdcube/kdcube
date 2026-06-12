@@ -1,13 +1,13 @@
 ---
-id: ks:docs/ops/s3-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/ops/s3-README.md
 title: "S3"
 summary: "S3 access model for KDCube services: IAM role on EC2 and local dev configuration."
 tags: ["ops", "s3", "aws", "storage", "iam", "ec2"]
 keywords: ["S3 bucket", "instance role", "IAM policy", "local dev credentials", "AWS CLI", "region", "KMS"]
 see_also:
-  - ks:docs/ops/deployment-options-index-README.md
-  - ks:docs/ops/health-README.md
-  - ks:docs/ops/ops-overview-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/ops/deployment-options-index-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/ops/health-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/ops/ops-overview-README.md
 ---
 # Managed Infra. S3
 

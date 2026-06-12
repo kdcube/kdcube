@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/solutions/usage/usage-card-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/usage/usage-card-README.md
 title: "Usage Card Widget"
 summary: "Compact budget/quota card that reads the economics /me/budget-breakdown route and refreshes on accounting.usage service events. Reusable bundle widget mounted by alias, with a hidden pay-flow surface."
 status: draft
@@ -18,13 +18,13 @@ keywords:
     "versatile scene panel",
   ]
 see_also:
-  - ks:docs/sdk/bundle/bundle-widget-integration-README.md
-  - ks:docs/sdk/bundle/ui-components-lifecycle-README.md
-  - ks:docs/sdk/bundle/bundle-client-ui-README.md
-  - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
-  - ks:docs/sdk/solutions/chat/chat-widget-solution-README.md
-  - ks:docs/service/comm/conversation-event-bus-and-data-bus-README.md
-  - ks:docs/service/comm/data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/ui-components-lifecycle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-ui-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/versatile-reference-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/chat/chat-widget-solution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/conversation-event-bus-and-data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
 ---
 # Usage Card Widget
 
@@ -83,12 +83,16 @@ The card renders in one of two densities:
 
 | Mode | When | Shows |
 | --- | --- | --- |
-| Super-compact | Default when summoned with `?view=compact` (or `?compact=1`) | `Plan` + account email header, then `This month` / `Today` / `Last hour`, each with `Cost` and `Requests`/`Tokens` as `used / limit` plus a thin state bar. Built to fit a small floating panel. |
+| Super-compact | Default when summoned with `?view=compact` (or `?compact=1`) | One-line `Plan: <name> · <email>` header, then `Last hour` / `Today` / `This month` (in that order). Each block shows `$ spent / quota` as the headline (colored gold ≥80%, red at the cap) with `tokens spent / quota` alongside, plus when the window resets. No request counts; quota reads `∞` on an unlimited plan. |
 | Full | Default standalone, or after the host sends `kdcube-set-view {view:"expanded"}` | The three stacked windows above with per-row pill bars and policy hints. |
 
 A scene host flips between the two with `kdcube-set-view`; the same message the
-memory and chat widgets honor. The bar color logic is shared across both modes
-(teal healthy, gold ≥80%, red at 100%).
+memory and chat widgets honor. The dollar color logic is shared across both
+modes (teal healthy, gold ≥80%, red at 100%).
+
+The super-compact view reports its rendered height to the host via a
+`kdcube-usage-resize {height, compact}` message, so a summoned panel fits to
+content (mirrors the memory and tasks widgets).
 
 ## Architecture
 

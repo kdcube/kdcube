@@ -1,22 +1,22 @@
 ---
-id: ks:docs/sdk/bundle/bundle-widget-integration-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
 title: "Bundle Widget Integration"
 summary: "Bundle widget UI contract: source-folder widget apps, runtime config handshake, operation URL construction, Data Bus publishing, auth propagation, and the recommended pattern when a capability is both widget and operation."
 tags: ["sdk", "bundle", "widget", "iframe", "frontend", "integrations", "telegram", "memory", "data-bus"]
 keywords: ["bundle widget contract", "iframe widget contract", "widget source folder", "static widget build", "runtime config handshake", "operation url construction", "data bus publishing", "auth propagation to widget", "widget and operation dual pattern", "shared sdk widget source", "telegram widget components", "memory widget component", "bundle widget integration"]
 updated_at: 2026-06-06
 see_also:
-  - ks:docs/sdk/bundle/bundle-interfaces-README.md
-  - ks:docs/sdk/bundle/bundle-subsystem-integration-README.md
-  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
-  - ks:docs/sdk/bundle/ui-components-lifecycle-README.md
-  - ks:docs/sdk/bundle/bundle-platform-integration-README.md
-  - ks:docs/sdk/bundle/bundle-client-ui-README.md
-  - ks:docs/sdk/bundle/bundle-client-communication-README.md
-  - ks:docs/service/comm/conversation-event-bus-and-data-bus-README.md
-  - ks:docs/service/comm/data-bus-README.md
-  - ks:docs/service/cicd/cli-README.md
-  - ks:docs/service/cicd/embedding-control-plane-frontend-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-interfaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-subsystem-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/ui-components-lifecycle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-ui-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-communication-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/conversation-event-bus-and-data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/cli-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/embedding-control-plane-frontend-README.md
 ---
 # Bundle Widget Integration
 

@@ -1,15 +1,15 @@
 ---
-id: ks:docs/sdk/bundle/bundle-scheduled-jobs-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-scheduled-jobs-README.md
 title: "Bundle Scheduled Jobs"
 summary: "Guide to bundle cron jobs: decorator contract, expression resolution, enable or disable gates, span semantics, timezone handling, locks, background job handoff, and local debugging."
 tags: ["sdk", "bundle", "cron", "scheduled-jobs", "scheduler", "proc", "background-jobs"]
 keywords: ["bundle cron jobs", "cron expression resolution", "enabled config gate", "span semantics", "timezone handling", "scheduler locks", "local cron debugging", "scheduled background work", "on_job background job handoff"]
 see_also:
-  - ks:docs/sdk/bundle/bundle-platform-integration-README.md
-  - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
-  - ks:docs/sdk/bundle/bundle-index-README.md
-  - ks:docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
-  - ks:docs/service/streams/background-jobs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-index-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/streams/background-jobs-README.md
 ---
 # Bundle Scheduled Jobs
 

@@ -1,24 +1,24 @@
 ---
-id: ks:docs/sdk/bundle/bundle-interfaces-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-interfaces-README.md
 title: "Bundle Interfaces"
 summary: "Bundle-facing interface surface: communicator streams, Data Bus handlers, background jobs, operations, widgets, panels, artifacts, and other bundle-visible interfaces exposed by the platform runtime."
 tags: ["sdk", "bundle", "interfaces", "streaming", "sse", "widgets", "operations", "communicator", "knowledge", "background-jobs", "data-bus"]
 keywords: ["communicator interface", "data bus handler interface", "background job interface", "on_job interface", "operations interface", "widget and panel interface", "artifact surface", "bundle visible runtime interfaces", "streaming and interaction surfaces", "knowledge and attachment surfaces"]
 updated_at: 2026-05-22
 see_also:
-  - ks:docs/service/comm/bus-routing-and-partitioning-README.md
-  - ks:docs/sdk/bundle/bundle-developer-guide-README.md
-  - ks:docs/sdk/bundle/bundle-runtime-README.md
-  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
-  - ks:docs/sdk/bundle/bundle-delivery-and-update-README.md
-  - ks:docs/sdk/bundle/bundle-venv-README.md
-  - ks:docs/sdk/bundle/bundle-index-README.md
-  - ks:docs/sdk/bundle/bundle-transports-README.md
-  - ks:docs/sdk/bundle/auth-bundle-federated-README.md
-  - ks:docs/sdk/bundle/bundle-client-communication-README.md
-  - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
-  - ks:docs/service/streams/background-jobs-README.md
-  - ks:docs/service/comm/data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/bus-routing-and-partitioning-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-developer-guide-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-runtime-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-delivery-and-update-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-venv-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-index-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-transports-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/auth-bundle-federated-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-communication-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-chat-stream-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/streams/background-jobs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
 ---
 # Bundle Interfaces (Streaming + Widgets + Operations)
 
@@ -635,14 +635,15 @@ tool through `agent_io_tools.tool_call(...)` to use it. The helper requires
 prepared tool context: a hosting-capable `ToolSubsystem`, tenant, project, user
 id, conversation id, turn id, conversation storage, and output directory.
 
-Bundles can also expose **knowledge space files** (read‑only) via `react.read`.
-`ks:` is one bundle-defined logical path space rooted at the bundle's prepared knowledge root.
-Common real-path examples in this repo:
-- `ks:docs/<path>` — documentation
-- `ks:src/kdcube-ai-app/<path>` — source files
-- `ks:deployment/<path>` — deployment artifacts (compose, env, Dockerfiles)
+Bundles that own durable documents, source snapshots, catalog files, or other
+domain files should expose them through an explicit surface:
+- hosted files for download/preview
+- named-service object reads or byte-stream rehosters for namespace-owned refs
+- bundle-specific tools, MCP/search APIs, or REST/Data Bus operations when the
+  domain needs query semantics
 
-See `bundle-developer-guide-README.md` for how these roots are configured.
+Do not model bundle-owned files as a generic ReAct-readable bundle knowledge
+namespace. The owning bundle should decide the API, permissions, and transport.
 
 Docs:
 - Attachments system: [docs/hosting/attachments-system.md](../../hosting/attachments-system.md)

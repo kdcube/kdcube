@@ -17,6 +17,7 @@ COMM_CV: ContextVar[object | None] = ContextVar("COMM_CV", default=None)
 REQUEST_CONTEXT_CV: ContextVar[ExternalEventPayload | None] = ContextVar("REQUEST_CONTEXT_CV", default=None)
 BUNDLE_ID_CV: ContextVar[str | None] = ContextVar("BUNDLE_ID_CV", default=None)
 BUNDLE_CALL_CONTEXT_CV: ContextVar[Dict[str, Any]] = ContextVar("BUNDLE_CALL_CONTEXT_CV", default={})
+NAMED_SERVICE_DISCOVERY_CV: ContextVar[Dict[str, Any]] = ContextVar("NAMED_SERVICE_DISCOVERY_CV", default={})
 TASK_ACTIVITY_TOUCH_CV: ContextVar[Callable[[str], None] | None] = ContextVar("TASK_ACTIVITY_TOUCH_CV", default=None)
 _BIND_COMM_UNSET = object()
 _BIND_BUNDLE_UNSET = object()
@@ -103,6 +104,17 @@ def set_current_bundle_call_context(context: Mapping[str, Any] | None) -> None:
 def get_current_bundle_call_context() -> Dict[str, Any]:
     """Get JSON-safe bundle-owned call metadata bound to this execution context."""
     value = BUNDLE_CALL_CONTEXT_CV.get({})
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def set_current_named_service_discovery_context(context: Mapping[str, Any] | None) -> None:
+    """Register JSON-safe named-service discovery metadata for child runtimes."""
+    NAMED_SERVICE_DISCOVERY_CV.set(_json_safe_mapping(context))
+
+
+def get_current_named_service_discovery_context() -> Dict[str, Any]:
+    """Get JSON-safe named-service discovery metadata bound to this execution context."""
+    value = NAMED_SERVICE_DISCOVERY_CV.get({})
     return dict(value) if isinstance(value, dict) else {}
 
 
@@ -285,6 +297,7 @@ def snapshot_ctxvars() -> dict:
         "REQUEST_CONTEXT": request_context,
         "BUNDLE_ID": BUNDLE_ID_CV.get(),
         "BUNDLE_CALL_CONTEXT": get_current_bundle_call_context(),
+        "NAMED_SERVICE_DISCOVERY": get_current_named_service_discovery_context(),
     }
 
 def restore_ctxvars(payload: dict) -> None:
@@ -303,3 +316,5 @@ def restore_ctxvars(payload: dict) -> None:
     if not isinstance(bundle_call_context, dict) and restored_request_context is not None:
         bundle_call_context = getattr(restored_request_context, "bundle_call_context", None)
     BUNDLE_CALL_CONTEXT_CV.set(dict(bundle_call_context or {}) if isinstance(bundle_call_context, dict) else {})
+    discovery_context = (payload or {}).get("NAMED_SERVICE_DISCOVERY")
+    NAMED_SERVICE_DISCOVERY_CV.set(dict(discovery_context or {}) if isinstance(discovery_context, dict) else {})

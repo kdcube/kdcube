@@ -1,13 +1,13 @@
 ---
-id: ks:docs/economics/eco-kickoff-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/economics/eco-kickoff-README.md
 title: "Eco Kickoff"
 summary: "Operational kickoff playbook for a manual‑subscription beta (no Stripe)."
 tags: ["economics", "operations", "kickoff", "beta", "admin"]
 keywords: ["manual subscriptions", "beta launch", "admin setup", "free plan", "limits"]
 see_also:
-  - ks:docs/economics/eco-admin-README.md
-  - ks:docs/economics/eco-test-README.md
-  - ks:docs/economics/economic-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/eco-admin-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/eco-test-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/economic-README.md
 ---
 # Economics Kickoff Plan (Beta Testers)
 

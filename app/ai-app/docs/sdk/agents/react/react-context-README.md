@@ -1,15 +1,15 @@
 ---
-id: ks:docs/sdk/agents/react/react-context-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-context-README.md
 title: "React Context"
 summary: "Single source of truth for what React agents see in v2."
 tags: ["sdk", "agents", "react", "context"]
 keywords: ["context blocks", "agent view", "timeline source"]
 see_also:
-  - ks:docs/sdk/agents/react/context-layout.md
-  - ks:docs/sdk/agents/react/context-progression.md
-  - ks:docs/sdk/agents/react/turn-log-README.md
-  - ks:docs/sdk/agents/react/react-tools-README.md
-  - ks:docs/sdk/events/namespaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-layout.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-progression.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/turn-log-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
 ---
 # ReAct v2 — Context + Turn Data
 
@@ -60,25 +60,27 @@ Block formatting lives in:
 
 ---
 
-## 2.5) Data Spaces (Knowledge vs Artifact Root vs Future Workspace)
+## 2.5) Data Spaces (Artifact Root vs Owner Namespaces vs Future Workspace)
 
-ReAct interacts with **three data spaces**. Only two exist today:
+ReAct interacts with these data spaces:
 
-- **Knowledge Space** (`ks:`) — read‑only reference files prepared by the system (docs, indexes, cloned repos).
 - **Artifact root / OUTPUT_DIR** (`fi:`) — per-turn execution output and hosted artifacts (read/write during the turn).
+- **Owner namespaces** such as `task:`, `mem:`, or `cnv:` — domain-owned refs
+  resolved through their owning service, rehoster, or tool surface.
 - **Conversation Workspace** (future) — shared, writable workspace across turns (not implemented yet).
 
 ```mermaid
 flowchart LR
-  Agent[ReAct Agent] -->|react.read ks:...| KS["Knowledge Space (read-only)"]
   Agent -->|react.read fi:...| OUT["Artifact root / OUTPUT_DIR (per-turn)"]
   Agent -->|react.write / react.patch| OUT
+  Agent -->|owner tool / rehoster| OWN["Owner namespaces"]
   Agent -. future: read/write .-> WK["Conversation Workspace (future, RW)"]
 ```
 
 Notes:
-- **Knowledge Space** is **read‑only** and accessed via `ks:<relpath>`.
 - **OUTPUT_DIR** is where tools write artifacts during a turn. It points to the artifact root (`out/workdir` in local host storage). Turn outputs map to `fi:<turn_id>.files/...` or `fi:<turn_id>.outputs/...`, and readable artifact files can be loaded with `fi:<artifact-root-relative-path>`.
+- **Owner namespaces** are accessed through their owner APIs; `react.read` only
+  reads them after they are rehosted or materialized as normal artifacts.
 - Runtime metadata such as `timeline.json`, `tool_calls_index.json`, tool-call JSON, and logs lives in the sibling runtime root `out/`; it is platform state, not the normal agent artifact namespace.
 - **Conversation Workspace** will be the long‑lived, writable project state for copilot‑style flows.
 

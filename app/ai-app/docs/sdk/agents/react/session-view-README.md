@@ -1,14 +1,14 @@
 ---
-id: ks:docs/sdk/agents/react/session-view-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/session-view-README.md
 title: "Session View"
 summary: "Session view derived from timeline under TTL pruning."
 tags: ["sdk", "agents", "react", "session", "ttl"]
 keywords: ["cache TTL", "session view", "pruning", "visible context"]
 see_also:
-  - ks:docs/sdk/agents/react/context-browser-README.md
-  - ks:docs/sdk/agents/react/context-layout.md
-  - ks:docs/sdk/agents/react/context-progression.md
-  - ks:docs/sdk/agents/react/memory-recovery-path-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-browser-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-layout.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-progression.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/memory-recovery-path-README.md
 ---
 # Session View (Cache TTL)
 

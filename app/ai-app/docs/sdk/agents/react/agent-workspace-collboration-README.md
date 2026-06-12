@@ -1,15 +1,15 @@
 ---
-id: ks:docs/sdk/agents/react/agent-workspace-collboration-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/agent-workspace-collboration-README.md
 title: "Agent Workspace Collaboration"
 summary: "Canonical ReAct workspace and artifact-origin contract: logical refs, physical OUT_DIR layout, files/outputs/snapshots/attachments semantics, cross-conversation refs, custom namespace rehosters, and read/search/write/pull/checkout cooperation."
 tags: ["sdk", "agents", "react", "workspace", "artifacts", "files"]
 keywords: ["outdir", "react.read", "react.rg", "react.patch", "versioned workspace"]
 see_also:
-  - ks:docs/sdk/agents/react/react-turn-workspace-README.md
-  - ks:docs/sdk/agents/react/artifact-discovery-README.md
-  - ks:docs/sdk/agents/react/react-tools-README.md
-  - ks:docs/sdk/agents/react/files-vs-outputs-README.md
-  - ks:docs/sdk/events/event-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-turn-workspace-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-discovery-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/files-vs-outputs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
 ---
 # Agent Workspace Collaboration
 
@@ -53,8 +53,6 @@ The agent does **not** work against one mutable flat directory. It reasons acros
    nmsp:<domain-defined-key>
    <other_namespace>:<domain-defined-key>
 
-4) BUNDLE KNOWLEDGE SPACE (logical, read-only)
-   ks:<bundle-defined-path>/...
 ```
 
 This gives two properties at once:
@@ -67,13 +65,12 @@ The logical workspace view is:
 - for `snapshots/<subpath>`: story/state snapshots, not ordinary project files
 - for `attachments/<subpath>`: the attached artifact under its original turn namespace
 - runtime folders like `logs/`: platform diagnostics, not normal agent artifact paths
-- for `ks:`: a read-only logical namespace owned by the bundle, not a directory under the artifact root
 - for custom namespace refs such as `nmsp:...`: a domain artifact handle that
   has no derived filesystem path until `react.pull` invokes a registered
   rehoster
 
 The agent should only use visible `turn_...` relative paths or logical paths
-(`fi:`, `ar:`, `tc:`, `so:`, `su:`, `ks:`, and registered owner namespace
+(`fi:`, `ar:`, `tc:`, `so:`, `su:`, and registered owner namespace
 refs such as `nmsp:`). It should not use absolute host paths, execution sandbox
 paths, hosted `file://` paths, or the runtime metadata root.
 
@@ -400,9 +397,6 @@ physical_path = build_external_attachment_physical_path(
 - also supports any readable artifact-root file via:
   - `fi:<artifact-root-relative-path>`
   - example: `fi:turn_<id>/outputs/report.md`
-- also supports exact `ks:` paths:
-  - `ks:<relpath>`
-  - example: `ks:<bundle-defined-path>`
 - does not read owner-domain refs such as `nmsp:` directly. Pull the owner ref
   first and read the returned `fi:` logical path.
 
@@ -410,7 +404,7 @@ physical_path = build_external_attachment_physical_path(
 - searches filenames and/or text for files already materialized in the local artifact workspace
 - accepts visible path roots such as `files/...`, `outputs/...`, `attachments/...`, `turn_<id>/files/...`, `turn_<id>/outputs/...`, `turn_<id>/attachments/...`, or matching `fi:` artifact paths
 - returns discovery metadata and line-oriented match ranges
-- does not browse `ks:`, hidden/pruned timeline, unpulled snapshots, or conversation artifact memory
+- does not browse owner namespaces, hidden/pruned timeline, unpulled snapshots, or conversation artifact memory
 - result shape:
   - `root`
   - `hits[]`
@@ -434,23 +428,21 @@ physical_path = build_external_attachment_physical_path(
 - does not require the file to have been created by `react.write`; current-turn files produced by exec are patchable once present locally
 - historical `turn_X/files/...` references are source material. Pull them first if needed; if editing is intended, checkout/copy them into the current turn and patch the current-turn file.
 
-## Knowledge space browsing
+## Namespace-owned file browsing
 
-`ks:` is not part of the current-turn artifact tree.
+Namespace-owned files are not part of the current-turn artifact tree unless they
+are pulled or rehosted as normal `fi:` artifacts. If a bundle owns documents,
+attachments, or source snapshots, it must expose an explicit resolver, rehoster,
+tool, MCP/search API, or named-service operation for the namespace. That owner
+surface is responsible for permissions and transport.
 
-Current rules:
-- if the exact `ks:` path is known, `react.read` can load it directly
-- `react.rg` does not browse `ks:`
-- directory-style `ks:` browsing is only possible inside isolated exec if the bundle exposes a namespace resolver/helper
-
-When exec-time `ks:` browsing exists:
-1. code starts from a logical ref such as `ks:<bundle-defined-root>`
-2. the bundle resolver returns an exec-local physical path
-3. code inspects descendants under that path
-4. code emits logical refs such as `ks:<bundle-defined-root>/foo/bar.py`
-5. the agent later uses `react.read` on those logical refs
-
-If no resolver exists, `ks:` is still readable by exact path, but not browseable as a directory tree from normal React tools.
+When exec-time namespace browsing exists:
+1. code starts from a namespace-owned logical ref such as `task:...`
+2. the owner resolver returns an exec-local physical path or byte stream
+3. code inspects descendants/content under that scoped result
+4. code emits owner refs or hosted `fi:` refs for later use
+5. the agent later uses the correct owner API or `react.read` on normal
+   `fi:`/`tc:`/`ar:` artifacts
 
 ## Safe collaboration rules
 

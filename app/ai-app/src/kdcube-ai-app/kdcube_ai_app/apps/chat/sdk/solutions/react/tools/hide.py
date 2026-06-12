@@ -22,10 +22,10 @@ TOOL_SPEC = {
         "Use to reduce visible context size; can be restored via react.read(paths=[path])."
         "Use only when the snippet is near the tail of your visible timeline of events. "
         "Enforced by RuntimeCtx.cache.editable_tail_size_in_tokens. "
-        "This tool accepts a logical path (ar: fi: tc: so: ks:), not a search query."
+        "This tool accepts a logical path (ar: fi: tc: so:), not a search query."
     ),
     "args": {
-        "path": "str (FIRST FIELD). Logical block path to hide (ar: fi: tc: so: ks:).",
+        "path": "str (FIRST FIELD). Logical block path to hide (ar: fi: tc: so:).",
         "replacement": "str (SECOND FIELD). Short replacement text; will auto-append 'retrieve back with react.read(paths=[path])'.",
     },
     "returns": "hide result (path + replaced count)",

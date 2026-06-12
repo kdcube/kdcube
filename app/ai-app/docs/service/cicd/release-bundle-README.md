@@ -1,19 +1,19 @@
 ---
-id: ks:docs/service/cicd/release-bundle-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/cicd/release-bundle-README.md
 title: "Release A Bundle"
 summary: "Human and agent guide for releasing KDCube bundles: prepare bundle-local README/config/release files, commit/tag the content repository, then update deployment descriptors separately."
 tags: ["service", "cicd", "release", "bundle", "content-release", "descriptors", "configuration"]
 keywords: ["bundle release", "content release", "release.yaml", "bundle config shape", "bundles.yaml", "bundles.secrets.yaml", "bundle tag", "descriptor update", "bundle repository release"]
 see_also:
-  - ks:deployment/cicd/kdcube/procedures/content-release.md
-  - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
-  - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
-  - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
-  - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
-  - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
-  - ks:docs/configuration/bundles-descriptor-README.md
-  - ks:docs/configuration/bundles-secrets-descriptor-README.md
-  - ks:docs/sdk/bundle/bundle-delivery-and-update-README.md
+  - repo:kdcube-ai-app/app/ai-app/deployment/cicd/kdcube/procedures/content-release.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-write-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-test-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-secrets-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-delivery-and-update-README.md
 ---
 # Release A Bundle
 

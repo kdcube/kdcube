@@ -1,17 +1,17 @@
 ---
-id: ks:docs/sdk/agents/react/tool-call-blocks-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/tool-call-blocks-README.md
 title: "Tool Call Blocks"
 summary: "What is written to the timeline when React executes tools."
 tags: ["sdk", "agents", "react", "tools", "timeline"]
 keywords: ["react.write", "exec_tools.execute_code", "rendering_tools", "tool results", "block order"]
 see_also:
-  - ks:docs/sdk/agents/react/react-round-README.md
-  - ks:docs/sdk/agents/react/event-blocks-README.md
-  - ks:docs/sdk/agents/react/event-source/block-production-README.md
-  - ks:docs/sdk/agents/react/event-source/event-source-README.md
-  - ks:docs/sdk/events/event-subsystem-README.md
-  - ks:docs/sdk/events/namespaces-README.md
-  - ks:docs/sdk/agents/react/context-progression.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-round-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-blocks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/block-production-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-progression.md
 ---
 # Tool Call Blocks
 

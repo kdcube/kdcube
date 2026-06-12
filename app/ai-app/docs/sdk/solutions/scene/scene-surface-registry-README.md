@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/solutions/scene/scene-surface-registry-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-surface-registry-README.md
 title: "Scene Surface Registry"
 summary: "How a scene host composes iframe widgets, resolver-owned object actions, and local widget commands without hardcoding object semantics in canvas or chat."
 status: draft
@@ -16,14 +16,14 @@ keywords:
     "resolver response",
   ]
 see_also:
-  - ks:docs/sdk/namespace-services/providers-README.md
-  - ks:docs/sdk/solutions/scene/scene-composition-README.md
-  - ks:docs/sdk/solutions/canvas/pin-integration-README.md
-  - ks:docs/sdk/solutions/event-hub/resolver-and-policy-registration-README.md
-  - ks:docs/sdk/solutions/chat/chat-widget-solution-README.md
-  - ks:docs/sdk/solutions/memory/memory-widget-solution-README.md
-  - ks:docs/sdk/bundle/bundle-subsystem-integration-README.md
-  - ks:docs/sdk/bundle/bundle-widget-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/providers-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-composition-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/pin-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/event-hub/resolver-and-policy-registration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/chat/chat-widget-solution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/memory/memory-widget-solution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-subsystem-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
 ---
 # Scene Surface Registry
 

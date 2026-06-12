@@ -1,15 +1,15 @@
 ---
-id: ks:docs/sdk/agents/react/timeline-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/timeline-README.md
 title: "Timeline"
 summary: "Timeline as the single source of truth for React context, artifacts, round state, and live external events."
 tags: ["sdk", "agents", "react", "timeline", "blocks"]
 keywords: ["timeline blocks", "ordered events", "artifacts", "turn context"]
 see_also:
-  - ks:docs/sdk/agents/react/structure-README.md
-  - ks:docs/sdk/agents/react/turn-log-README.md
-  - ks:docs/sdk/agents/react/artifact-discovery-README.md
-  - ks:docs/sdk/agents/react/session-view-README.md
-  - ks:docs/sdk/agents/react/event-source/events-blocks-and-rendering-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/structure-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/turn-log-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-discovery-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/session-view-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/events-blocks-and-rendering-README.md
 ---
 # Timeline (React)
 

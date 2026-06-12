@@ -1,14 +1,14 @@
 ---
-id: ks:docs/sdk/agents/react/memory-recovery-path-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/memory-recovery-path-README.md
 title: "Memory Recovery Path"
 summary: "How a React agent recovers exact prior-turn data after TTL pruning and hard compaction."
 tags: ["sdk", "agents", "react", "memory", "recovery", "compaction", "pruning"]
 keywords: ["react.memsearch", "react.read", "working summary", "turn index", "logical paths", "artifact recovery"]
 see_also:
-  - ks:docs/sdk/agents/react/session-view-README.md
-  - ks:docs/sdk/agents/react/compaction-README.md
-  - ks:docs/sdk/agents/react/artifact-discovery-README.md
-  - ks:docs/sdk/agents/react/turn-log-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/session-view-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/compaction-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-discovery-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/turn-log-README.md
 ---
 # Memory Recovery Path
 
@@ -110,7 +110,7 @@ next:
 recovery_plan:
 - first: "Use this visible reminder and retained suffix."
 - if_needed: "Use react.memsearch with exact phrase/entity anchors."
-- then_read: "Use react.read(read_refs). Skills read in full. ks: reads in full only when no knowledge_read_visible_* cap is configured; capped text uses stats_only and bounded line ranges. Exec stdout is not an uncapped read channel."
+- then_read: "Use react.read(read_refs). Skills read in full. Capped text uses stats_only and bounded line ranges. Exec stdout is not an uncapped read channel."
 
 <rest of model-generated summary text>
 [END COMPACTED PRIOR CONVERSATION MEMORY]

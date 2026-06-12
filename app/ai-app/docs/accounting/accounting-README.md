@@ -1,15 +1,15 @@
 ---
-id: ks:docs/accounting/accounting-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/accounting/accounting-README.md
 title: "Accounting & Usage Tracking"
 summary: "How runtime usage and cost events are emitted, persisted, aggregated, and priced so economics, billing, and reporting can reason about platform activity."
 tags: ["accounting", "economics", "usage", "tracking", "opex"]
 keywords: ["usage accounting", "cost event capture", "pricing calculation", "event aggregation", "billing telemetry", "turn-level usage tracking", "accounting storage layout", "economics inputs"]
 see_also:
-  - ks:docs/aggregations/README-AGGREGATIONS.md
-  - ks:docs/economics/economic-README.md
-  - ks:docs/economics/eco-admin-README.md
-  - ks:docs/sdk/storage/sdk-store-README.md
-  - ks:docs/service/README-monitoring-observability.md
+  - repo:kdcube-ai-app/app/ai-app/docs/aggregations/README-AGGREGATIONS.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/economic-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/eco-admin-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/storage/sdk-store-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/README-monitoring-observability.md
 ---
 # Accounting & Usage Tracking
 
@@ -201,7 +201,7 @@ OPEX endpoints in `src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/opex/opex.p
 
 See:
 
-- `ks:docs/aggregations/README-AGGREGATIONS.md`
+- `repo:kdcube-ai-app/app/ai-app/docs/aggregations/README-AGGREGATIONS.md`
 
 ---
 

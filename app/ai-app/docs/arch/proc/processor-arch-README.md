@@ -1,21 +1,21 @@
 ---
-id: ks:docs/arch/proc/processor-arch-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/arch/proc/processor-arch-README.md
 title: "Processor Architecture"
 summary: "Current processor architecture: queue claiming, lane-backed external-event wakeups, execution, recovery, shutdown, and shared followup/steer behavior."
 tags: ["arch", "proc", "processor", "queues", "redis", "sse", "shutdown"]
 keywords: ["proc", "chat processor", "inflight", "drain", "turn interruption", "steer", "followup", "redis streams"]
 see_also:
-  - ks:docs/arch/architecture-long.md
-  - ks:docs/arch/proc/longrun-protection-README.md
-  - ks:docs/arch/proc/events-orchestration-README.md
-  - ks:docs/sdk/events/conversation-event-lane-state-README.md
-  - ks:docs/arch/proc/design/conversation-scheduler-streams-README.md
-  - ks:docs/service/comm/data-bus-README.md
-  - ks:docs/service/streams/conversation-scheduler-README.md
-  - ks:docs/ops/ecs/components/proc-README.md
-  - ks:docs/service/maintenance/connection-pooling-README.md
-  - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
-  - ks:docs/sdk/bundle/bundle-frontend-awareness-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/architecture-long.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/longrun-protection-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/events-orchestration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/conversation-event-lane-state-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/design/conversation-scheduler-streams-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/streams/conversation-scheduler-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/ops/ecs/components/proc-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/maintenance/connection-pooling-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-chat-stream-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-frontend-awareness-README.md
 ---
 # Chat Processor Architecture
 

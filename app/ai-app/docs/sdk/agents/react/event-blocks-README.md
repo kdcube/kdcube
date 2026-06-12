@@ -1,15 +1,15 @@
 ---
-id: ks:docs/sdk/agents/react/event-blocks-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-blocks-README.md
 title: "Event Blocks"
 summary: "Block schema and event types emitted in the React timeline."
 tags: ["sdk", "agents", "react", "events", "blocks"]
 keywords: ["block types", "mime", "path", "tool results", "timeline events"]
 see_also:
-  - ks:docs/sdk/agents/react/tool-call-blocks-README.md
-  - ks:docs/sdk/agents/react/event-source/event-source-README.md
-  - ks:docs/sdk/agents/react/event-source/events-blocks-and-rendering-README.md
-  - ks:docs/sdk/agents/react/context-progression.md
-  - ks:docs/sdk/agents/react/react-round-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/tool-call-blocks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/events-blocks-and-rendering-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-progression.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-round-README.md
 ---
 # React Event Blocks
 
@@ -292,7 +292,6 @@ Blocks can be hidden with `react.hide(path, replacement_text)` (path is a logica
 - `fi:<turn_id>.code.<call_id>`
 - `tc:<turn_id>.<call_id>.call` / `.result`
 - `so:sources_pool[...]`
-- `ks:<relpath>` (knowledge space; read‑only)
 
 Physical (artifact-root-relative):
 - attachments: `turn_<id>/attachments/<name>`
@@ -365,7 +364,7 @@ Artifacts:
   (metadata: kind/visibility/channel/tokens/sources_used)
 
 [TOOL RESULT tc_...].result <tool_id>      # non-artifact tools
-logical_path: so:... / tc:... / ar:... / sk:... / ks:...
+logical_path: so:... / tc:... / ar:... / sk:...
 <result payload>
 
 [TOOL RESULT tc_...].artifact <tool_id>    # each artifact

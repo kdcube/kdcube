@@ -1,18 +1,18 @@
 ---
-id: ks:docs/sdk/integrations/telegram/telegram-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-README.md
 title: "Telegram SDK Integration"
 summary: "Reusable Telegram transport helpers for KDCube bundles: Bot API rendering, attachment hydration, activity streaming, Mini App auth, chat submitter helpers, and signed download links."
 tags: ["sdk", "integrations", "telegram", "webhooks", "mini-apps", "bundles"]
 keywords: ["telegram bot", "telegram webhook", "telegram mini app", "telegram web app", "telegram activity streamer", "chat submitter", "signed download"]
 see_also:
-  - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
-  - ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
-  - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
-  - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
-  - ks:docs/sdk/bundle/bundle-widget-integration-README.md
-  - ks:docs/service/cicd/ngrok-README.md
-  - ks:docs/service/servicing-interfaces-README.md
-  - ks:docs/sdk/integrations/email/email-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-external-prereq-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-write-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/ngrok-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/servicing-interfaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/email/email-README.md
 ---
 
 # Telegram SDK Integration

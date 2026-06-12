@@ -1,18 +1,18 @@
 ---
-id: ks:docs/sdk/bundle/bundle-reserved-platform-properties-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-reserved-platform-properties-README.md
 title: "Bundle Reserved Platform Properties"
 summary: "Reserved bundle config keys interpreted by the platform: model selection, embeddings, user memory, economics, execution runtime, MCP services, and other platform-owned bundle prop paths."
 tags: ["sdk", "bundle", "configuration", "runtime", "economics", "exec", "memory", "pdf"]
 keywords: ["platform interpreted bundle props", "model selection props", "embedding configuration props", "user memory configuration props", "economics reservation props", "execution runtime props", "mcp service props", "reserved bundle property paths", "platform owned bundle config", "pdf footer", "pdf_footer", "write_pdf footer"]
 see_also:
-  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
-  - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
-  - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
-  - ks:docs/configuration/bundles-descriptor-README.md
-  - ks:docs/sdk/bundle/bundle-developer-guide-README.md
-  - ks:docs/sdk/bundle/bundle-agent-integration-README.md
-  - ks:docs/sdk/bundle/bundle-delivery-and-update-README.md
-  - ks:docs/exec/distributed-exec-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-developer-guide-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-agent-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-delivery-and-update-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/distributed-exec-README.md
 ---
 # Bundle Reserved Platform Properties
 

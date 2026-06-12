@@ -1,12 +1,12 @@
 ---
-id: ks:docs/arch/proxy/proxy-ops-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/arch/proxy/proxy-ops-README.md
 title: "Proxy Ops"
 summary: "Ops guide for the OpenResty reverse proxy: responsibilities, SSL, auth unmask, routing, anti-DDoS hardening, and WAF protection."
 tags: ["proxy", "openresty", "ops", "nginx", "ssl", "waf", "ddos", "rate-limiting", "auth"]
 keywords: ["OpenResty", "unmask_token", "limit_req", "limit_conn", "lua-resty-waf", "ModSecurity", "OWASP CRS", "proxylogin", "SSE", "WebSocket", "gzip", "HSTS"]
 see_also:
-  - ks:docs/arch/proxy/nginx.conf
-  - ks:docs/configuration/bundles-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proxy/nginx.conf
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.md
 ---
 # Proxy Ops Guide (OpenResty)
 

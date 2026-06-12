@@ -1,17 +1,17 @@
 ---
-id: ks:docs/sdk/agents/react/react-tools-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-tools-README.md
 title: "React Tools"
 summary: "Current built-in react.* tool catalog, path contracts, and execution semantics."
 tags: ["sdk", "agents", "react", "tools"]
 keywords: ["react.read", "react.pull", "react.checkout", "react.write", "react.patch", "react.memsearch", "react.hide", "react.rg", "react.plan"]
 see_also:
-  - ks:docs/sdk/agents/react/artifact-discovery-README.md
-  - ks:docs/sdk/agents/react/react-round-README.md
-  - ks:docs/sdk/agents/react/tool-call-blocks-README.md
-  - ks:docs/sdk/events/event-subsystem-README.md
-  - ks:docs/sdk/events/namespaces-README.md
-  - ks:docs/sdk/agents/react/workspace/workspace-checkout-model-README.md
-  - ks:docs/sdk/memory/conversational-memory-search-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-discovery-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-round-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/tool-call-blocks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/workspace-checkout-model-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/conversational-memory-search-README.md
 ---
 # React Tools (react.*)
 
@@ -43,7 +43,8 @@ Used for reading, hiding, or reopening existing artifacts:
 - `so:...` — sources pool rows
 - `su:...` — summary blocks
 - `tc:...` — tool call / tool result records
-- bundle-provided logical namespaces such as `ks:...`
+- owner-defined logical namespaces after they are rehosted or resolved through
+  their owning surface
 
 ### Current-turn workspace paths
 
@@ -73,8 +74,8 @@ Reads existing logical artifacts back into the visible timeline.
 - optional input: `items: list[object]` — exact read specs with `path` plus
   optional `line_start`/`line_count` or `offset_text_symbols`/`max_text_symbols`.
   `react.rg` returns ready-to-pass `read_item` entries for this field. Text-backed
-  logical paths such as `fi:`, `tc:`, `ar:`, and `ks:` can also be read directly
-  by line or symbol ranges through this field.
+  logical paths such as `fi:`, `tc:`, and `ar:` can also be read directly by
+  line or symbol ranges through this field.
 - optional input: `max_text_symbols` — maximum visible text characters per text
   path. This requests a smaller explicit preview than the configured default.
 - optional input: `line_numbers: true|false` — include line numbers for ranged
@@ -88,7 +89,7 @@ Reads existing logical artifacts back into the visible timeline.
   For PDF/image multimodal reads there is no partial read: the payload is
   attached only when it is under the byte cap; otherwise `react.read` returns a
   recovery marker.
-- accepted paths: `ar:`, `tc:`, `fi:`, `so:`, `su:`, `ws:`, `ks:`, `sk:`
+- accepted paths: `ar:`, `tc:`, `fi:`, `so:`, `su:`, `ws:`, `sk:`
 - external owner refs: refs such as `mem:...`, `cnv:main@7`, or `task:...`
   are not direct `react.read` inputs by default. If exact owner content is
   needed, use `react.pull` first; then read/search/execute against the returned
@@ -138,16 +139,15 @@ board content is not `canvas.read(...)`; import it with `react.pull` first:
 Then inspect the `fi:`/physical path returned by `react.pull`. The model-visible
 write path remains `canvas.patch(...)`.
 
-Skills are not read-capped. `ks:` knowledge-space articles are uncapped only
-when no `ai.react.knowledge_read_visible_*` cap is configured. If a `ks:` cap is
-configured, or if a regular text-backed logical path (`fi:`, `tc:`, `ar:`) is
-too large, call `react.read` with `stats_only:true` to get line/count metadata,
-then recover the needed content through bounded `items` ranges:
+Skills are not read-capped. If a regular text-backed logical path (`fi:`,
+`tc:`, `ar:`) is too large, call `react.read` with `stats_only:true` to get
+line/count metadata, then recover the needed content through bounded `items`
+ranges:
 
 ```json
-{"paths":["ks:docs/example.md"],"stats_only":true}
-{"items":[{"path":"ks:docs/example.md","line_start":1,"line_count":120}]}
-{"items":[{"path":"ks:docs/example.md","line_start":121,"line_count":120}]}
+{"paths":["fi:turn_.../files/example.md"],"stats_only":true}
+{"items":[{"path":"fi:turn_.../files/example.md","line_start":1,"line_count":120}]}
+{"items":[{"path":"fi:turn_.../files/example.md","line_start":121,"line_count":120}]}
 ```
 
 Do not use exec stdout as an uncapped read channel; exec output is capped too.
@@ -374,7 +374,7 @@ Rules:
 Replaces a visible tail block with a short placeholder.
 
 - input: `paths: list[str]`, optional replacement text
-- accepted paths: logical paths such as `ar:`, `fi:`, `tc:`, `so:`, `ks:`
+- accepted paths: logical paths such as `ar:`, `fi:`, `tc:`, `so:`
 - output: hidden replacement blocks; original content remains stored
 - restriction: only the editable tail window can be hidden
 - cache safety: runtime enforces checkpoint rules before hiding
@@ -390,7 +390,9 @@ Searches safely over files already materialized in the local artifact workspace 
 - preferred roots: omit `root`, or use `files/...`, `outputs/...`, `attachments/...`, `turn_<id>/files/...`, `turn_<id>/outputs/...`, `turn_<id>/attachments/...`, or matching `fi:` artifact paths such as `fi:<turn_id>.files/...`, `fi:<turn_id>.outputs/...`, and `fi:<turn_id>.user.attachments/...`
 - cross-conversation roots: if the root starts `fi:conv_<conversation_id>.turn_<id>...`, it belongs to another conversation and is resolved with that scope after the file has been pulled locally
 - legacy roots: `outdir` and `outdir/<path>` are still accepted for older callers, but new calls should use visible path forms
-- not a search over hidden/pruned timeline, unpulled historical snapshots, or `ks:`; locate older refs first, then `react.pull` them before local search; checkout only when you need an editable current-turn copy
+- not a search over hidden/pruned timeline, unpulled historical snapshots, or
+  owner namespaces; locate older refs first, then `react.pull` them before local
+  search; checkout only when you need an editable current-turn copy
 - hits: include logical paths suitable for `react.read`
 - content matches: include line-numbered previews and `read_item` ranges
 - `context_lines` controls how many surrounding lines are included in the
@@ -410,10 +412,6 @@ Creates or updates the plan tracked inside the same React loop.
 
 Some bundles also expose tools that fit the same interaction model but are not part of the built-in core set.
 
-Examples:
-
-- `react.search_knowledge`
-  - bundle-provided knowledge search
-- bundle-specific logical namespaces such as `ks:...`
-
-Those are bundle contracts. The built-in React runtime only guarantees the core tools listed above.
+Examples include bundle-specific named-service tools, MCP/search tools, or
+owner-specific resolvers. Those are bundle contracts. The built-in React runtime
+only guarantees the core tools listed above.

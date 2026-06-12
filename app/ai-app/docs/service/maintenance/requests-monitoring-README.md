@@ -1,13 +1,13 @@
 ---
-id: ks:docs/service/maintenance/requests-monitoring-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/maintenance/requests-monitoring-README.md
 title: "Requests Monitoring"
 summary: "Operational checklist for investigating slow or delayed requests."
 tags: ["service", "maintenance", "monitoring", "requests"]
 keywords: ["queue delay", "redis browser", "admin UI", "server logs"]
 see_also:
-  - ks:docs/service/maintenance/connection-pooling-README.md
-  - ks:docs/service/README-monitoring-observability.md
-  - ks:docs/service/maintenance/instance-config-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/maintenance/connection-pooling-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/README-monitoring-observability.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/maintenance/instance-config-README.md
 ---
 # Requests Monitoring Cheat Sheet
 

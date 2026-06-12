@@ -1,14 +1,14 @@
 ---
-id: ks:docs/service/README-monitoring-observability.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/README-monitoring-observability.md
 title: "Monitoring and Observability"
 summary: "Operator-facing guide to health, monitoring, and observability surfaces for gateway, ingress, proc, and the metrics service, including what to inspect during runtime issues."
 tags: ["service", "monitoring", "observability", "metrics", "gateway"]
 keywords: ["service monitoring", "observability endpoints", "gateway status", "processor queue visibility", "metrics service", "health inspection", "operator debugging entrypoint"]
 see_also:
-  - ks:docs/service/maintenance/requests-monitoring-README.md
-  - ks:docs/service/scale/metric-server-README.md
-  - ks:docs/service/gateway-README.md
-  - ks:docs/service/auth/auth-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/maintenance/requests-monitoring-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/scale/metric-server-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/gateway-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
 ---
 # Monitoring & Observability (Gateway / Chat)
 

@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/agents/react/workspace/git-based-isolated-workspace-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/git-based-isolated-workspace-README.md
 title: "Git-Based Isolated Workspace"
 summary: "Git-backed React workspace model, immutable per-turn version refs, explicit workspace pull and checkout hydration, sparse current-turn repos, point-wise hosted binary hydration, and lineage-only git isolation."
 status: experimental
@@ -16,13 +16,13 @@ keywords:
     "lineage branch",
   ]
 see_also:
-  - ks:docs/sdk/agents/react/draft/note-keeping-and-working-summary-README.md
-  - ks:docs/sdk/agents/react/workspace/workspace-checkout-model-README.md
-  - ks:docs/sdk/agents/react/react-announce-README.md
-  - ks:docs/sdk/agents/react/session-view-README.md
-  - ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/solution_workspace.py
-  - ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/runtime.py
-  - ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/timeline.py
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/draft/note-keeping-and-working-summary-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/workspace-checkout-model-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-announce-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/session-view-README.md
+  - repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/solution_workspace.py
+  - repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/runtime.py
+  - repo:kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/timeline.py
 ---
 # Git-Based Isolated Workspace
 

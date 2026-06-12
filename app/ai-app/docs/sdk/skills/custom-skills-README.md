@@ -1,13 +1,13 @@
 ---
-id: ks:docs/sdk/skills/custom-skills-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/skills/custom-skills-README.md
 title: "Custom Skills"
 summary: "Bundle-local skills guide: descriptor setup, SDK solution skill interaction, AGENTS_CONFIG visibility filters, and where consumer-scoped filtering is enforced."
 tags: ["sdk", "skills", "custom", "descriptor", "agents_config", "react", "llm-generator", "visibility", "control", "solutions"]
 keywords: ["skills_descriptor.py", "CUSTOM_SKILLS_ROOT", "AGENTS_CONFIG", "solution skills", "consumer id", "solver.react.v2.decision.v2.strong", "react.read", "SKx", "llm_generator.py", "skill catalog", "skill visibility", "skill visibility control", "concerns separation"]
 see_also:
-  - ks:docs/sdk/skills/skills-README.md
-  - ks:docs/sdk/skills/skills-infra-README.md
-  - ks:docs/sdk/agents/react/source-pool-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/skills/skills-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/skills/skills-infra-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/source-pool-README.md
 ---
 # Custom Skills (Bundle‑Local)
 

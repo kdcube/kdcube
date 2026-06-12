@@ -1,16 +1,16 @@
 ---
-id: ks:docs/service/auth/bundle-session-auth-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/auth/bundle-session-auth-README.md
 title: "Bundle Session Auth"
 summary: "Platform-recognized login sessions issued by a bundle-owned sign-in flow."
 tags: ["service", "auth", "bundle", "session", "sso"]
 keywords: ["bundle auth", "session token", "front shell", "login", "logout", "register", "invalidate"]
 see_also:
-  - ks:docs/service/auth/auth-README.md
-  - ks:docs/service/auth/bundle-simple-idp-bridge-README.md
-  - ks:docs/sdk/bundle/auth-bundle-federated-README.md
-  - ks:docs/sdk/bundle/bundle-firewall-README.md
-  - ks:docs/sdk/bundle/bundle-widget-integration-README.md
-  - ks:docs/sdk/bundle/bundle-platform-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/bundle-simple-idp-bridge-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/auth-bundle-federated-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-firewall-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md
 ---
 # Bundle Session Auth
 

@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/namespace-services/providers-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/providers-README.md
 title: "Namespace Services: Providers"
 summary: "Transport-neutral SDK concept for bundles and platform subsystems that publish namespace service provider surfaces: namespace ownership, object operations, resolvers, capabilities, relations, and integrations over API, MCP, Data Bus, or local adapters."
 status: design
@@ -20,17 +20,17 @@ keywords:
     "data bus object command",
   ]
 see_also:
-  - ks:docs/sdk/namespace-services/README.md
-  - ks:docs/sdk/namespace-services/integration-README.md
-  - ks:docs/sdk/namespace-services/clients-README.md
-  - ks:docs/sdk/events/namespaces-README.md
-  - ks:docs/sdk/solutions/scene/scene-surface-registry-README.md
-  - ks:docs/sdk/solutions/event-hub/resolver-and-policy-registration-README.md
-  - ks:docs/sdk/bundle/bundle-subsystem-integration-README.md
-  - ks:docs/sdk/bundle/bundle-platform-integration-README.md
-  - ks:docs/sdk/bundle/bundle-transports-README.md
-  - ks:docs/sdk/bundle/bundle-client-communication-README.md
-  - ks:docs/service/comm/data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/clients-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-surface-registry-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/event-hub/resolver-and-policy-registration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-subsystem-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-transports-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-communication-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
 ---
 # Namespace Services: Providers
 
@@ -52,7 +52,7 @@ Examples:
 | memory provider | `mem:...`, memory search, memory viewer actions |
 | canvas provider | `cnv:...`, board patches, pins, board object actions |
 | ReAct artifact provider | `fi:...`, artifact preview/download/rehost |
-| knowledge provider | `ks:...`, document/source search and read actions |
+| document/source provider | provider-owned refs such as `docs:...` or `repo:...`, document/source search and read actions |
 
 Use **named service provider** for the top-level concept. Use **namespaced
 service** for the namespace-owning subtype. Use **object resolver** for one
@@ -66,7 +66,7 @@ owner bundle/subsystem
   NamedServiceProvider
     provider.about
     provider.capabilities
-    object.list / search / get / upsert / delete
+    object.list / search / get / schema / upsert / delete
     object.action / resolve
     relation.list / search
     event.resolve / event.action
@@ -115,6 +115,9 @@ A provider exposes operations grouped by scope.
 `provider.about` lets a client understand what the provider is for
 before choosing a narrower operation.
 
+Providers that expose mutation should include a concise service description,
+base object summaries, and object schema availability in `provider.about`.
+
 ### Object Operations
 
 | Operation | Purpose |
@@ -122,10 +125,11 @@ before choosing a narrower operation.
 | `object.list` | Browse objects in a collection with pagination. |
 | `object.search` | Search objects; default mode is hybrid when the provider supports it. |
 | `object.get` | Fetch one object by `object_ref` or owner-local id. |
+| `object.schema` | Return provider-defined object schemas and tool payload guidance for one object kind or ref. |
 | `object.upsert` | Create or update one object with idempotency and revision checks. |
 | `object.delete` | Delete or archive one object with revision checks. |
 | `object.action` | Run a bounded action on an object, such as `preview`, `open`, `download`, `pin`, `rehost`, or provider-defined actions. |
-| `object.resolve` | Normalize a ref into a canonical object descriptor and optional UI/data affordances. |
+| `object.resolve` | Normalize a ref into a canonical object descriptor and optional `ret.ui_event` or `ret.extra` hints. |
 
 ### Relation Operations
 
@@ -196,27 +200,37 @@ Responses are bounded and semantic.
 
 ```json
 {
-  "schema": "kdcube.named_service.response.v1",
   "ok": true,
-  "provider": {
-    "bundle_id": "task-tracker@1-0",
-    "provider_id": "task.issue"
+  "ret": {
+    "attrs": {
+      "provider": {
+        "bundle_id": "task-tracker@1-0",
+        "provider_id": "task.issue"
+      },
+      "namespace": "task",
+      "object_ref": "task:issues/BUG-123",
+      "next_cursor": null,
+      "revision": "rev-7",
+      "capabilities": {},
+      "relations": [],
+      "warnings": []
+    },
+    "object": {},
+    "items": [],
+    "extra": {},
+    "ui_event": null
   },
-  "namespace": "task",
-  "object_ref": "task:issues/BUG-123",
-  "object": {},
-  "items": [],
-  "next_cursor": null,
-  "revision": "rev-7",
-  "capabilities": {},
-  "relations": [],
-  "ui_event": null,
-  "warnings": []
+  "error": null
 }
 ```
 
 Large bytes, long reports, and generated artifacts should be returned as refs or
 hosted files, not as unbounded inline response payloads.
+
+When an owned namespace contains attachment refs, implement a `rehost` action
+that returns a streaming response. ReAct materializes these refs through the
+configured namespace rehoster; MCP-style metadata operations should not base64
+large files into tool results.
 
 ## Object Actions And UI Routing
 
@@ -242,18 +256,23 @@ Typical response:
 ```json
 {
   "ok": true,
-  "namespace": "task",
-  "object_ref": "task:issues/BUG-123",
-  "ui_event": {
-    "type": "kdcube.ui.object.open.requested",
-    "subject": "ui.object.open.requested",
-    "target_surface": "task_tracker.issue_editor",
-    "object_ref": "task:issues/BUG-123",
-    "mode": "focus",
-    "params": {
-      "issue_id": "BUG-123"
+  "ret": {
+    "attrs": {
+      "namespace": "task",
+      "object_ref": "task:issues/BUG-123"
+    },
+    "ui_event": {
+      "type": "kdcube.ui.object.open.requested",
+      "subject": "ui.object.open.requested",
+      "target_surface": "task_tracker.issue_editor",
+      "object_ref": "task:issues/BUG-123",
+      "mode": "focus",
+      "params": {
+        "issue_id": "BUG-123"
+      }
     }
-  }
+  },
+  "error": null
 }
 ```
 
@@ -285,6 +304,8 @@ named_service_providers:
         transports: [local, api, mcp]
       object.get:
         transports: [local, api, mcp]
+      object.schema:
+        transports: [local, api, mcp]
       object.upsert:
         transports: [local, api, mcp, data_bus]
       object.delete:
@@ -313,6 +334,7 @@ kdcube_ai_app/apps/chat/sdk/solutions/named_services_providers/
   types.py
   provider.py
   registry.py
+  discovery.py
   client.py
   canvas_resolver.py
   transports/
@@ -328,30 +350,51 @@ Named services are configured under one bundle prop root:
 named_services:
   namespaces:
     task:
-      provider:
-        bundle_id: task-tracker@1-0
-        provider: task.issue
-        operation: named_service
       clients:
         default_client:
           tools:
-            operations:
+            allowed_operations:
               - provider.about
               - object.list
               - object.search
               - object.get
-              - object.action
-            actions:
-              - preview
-              - open
-              - describe
+              - object.schema
+              - object.upsert
+              - object.delete
+        canvas:
+          resolver:
+            enabled: true
 ```
 
-`named_services.namespaces` is bundle-level: it declares how this bundle reaches
-provider-owned namespaces for canvas, chat, rendering, event, and tool
-consumers. `named_services.namespaces.<namespace>.clients.<client_id>.tools`
-is client-level: it controls which provider operations become model-callable
-tools for a specific named-service client surface. A bundle can expose the same
+`named_services.namespaces` is bundle-level: it declares which namespaces this
+bundle consumes and which clients may use model-callable tools. Provider
+location is normally resolved from Named Service Discovery.
+
+Provider bundles register their available providers into the Redis-backed
+tenant/project discovery table when the bundle is loaded and ready:
+
+```python
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
+    RedisNamedServiceDiscovery,
+)
+
+discovery = RedisNamedServiceDiscovery(redis, tenant=tenant, project=project)
+await discovery.register_registry(
+    self.named_services(),
+    bundle_id="task-tracker@1-0",
+    transport="bundle_registry",
+    registry_method="named_services",
+)
+```
+
+Named Service Discovery is a provider index. It can contain multiple providers
+for the same namespace, including providers from different bundles. Each entry
+advertises operations, object kinds, and ref patterns; the runtime chooses the
+provider per request.
+
+`named_services.namespaces.<namespace>.clients.<client_id>.tools` is
+client-level: it controls which provider operations become model-callable tools
+for a specific named-service client surface. A bundle can expose the same
 namespace to canvas/chat resolvers while only one client receives
 model-callable tools for it.
 
@@ -361,6 +404,27 @@ runtimes once their adapters consume the provider contract. When the client is
 a ReAct agent, the client id is the agent id; it still lives under
 `clients`, because the namespace is not exclusively an agent configuration
 surface.
+
+When a client must pin provider endpoints instead of using discovery, provider
+endpoint transport is explicit in `named_services.namespaces.<namespace>.providers`.
+The list is plural because one namespace may be split across providers by
+operation, ref, or object kind:
+
+In that `providers` list, `operations` is the provider capability contract. In
+`clients.<client_id>.tools`, `allowed_operations` controls the model-callable
+tool surface for that client. `clients.canvas.resolver.enabled` lets the canvas
+resolver call the provider for object refs; provider code decides which concrete
+`object.action` values are accepted.
+
+| `transport` | Runtime path | Use when |
+| --- | --- | --- |
+| `bundle_registry` | same KDCube runtime loads the owner bundle object and calls `named_services()` directly | the provider bundle is deployed in the same cube and the caller wants the fastest request-bound path |
+| `bundle_operation` | same KDCube runtime calls the owner bundle's `@api(alias="named_service")` operation | the owner has only exposed the API facade or the integration wants the operation envelope |
+| `module` | same Python runtime imports an explicit module/factory and calls the returned registry/provider | the provider lives in another module/package already importable in the current runtime |
+
+`bundle_registry` and `module` preserve the request/auth context; they only
+change how the provider object is reached. Provider code still owns object-level
+permission checks.
 
 ## Client Surface
 
@@ -575,11 +639,20 @@ request context. The helper then creates a `NamedServiceClient` with
 `/api/integrations/...`; that would add latency, duplicate auth handling, and
 break scheduled/local callers.
 
-### Request-Bound Bundle Operation Bridge
+### Request-Bound Runtime-Local Bridges
 
 A composition bundle may need to resolve an object owned by another bundle
-while handling a current browser/widget request. The SDK provides a
-request-bound local operation bridge for that path:
+while handling a current browser/widget request. Same-KDCube namespace-service
+clients should use the configured endpoint transport:
+
+- `bundle_registry` loads the owner bundle object and calls `named_services()`
+  directly. Singleton owner bundles are served from the loader singleton cache
+  after the first load.
+- `bundle_operation` calls the owner bundle's `@api(alias="named_service")`
+  facade and is the compatibility/fallback path.
+
+The lower-level operation bridge remains available for explicit bounded
+operation calls:
 
 ```python
 from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import call_bundle_operation
@@ -597,9 +670,9 @@ raw = await call_bundle_operation(
 )
 ```
 
-Platform ingress binds this caller while executing a bundle API operation. The
-peer call stays inside the same KDCube process and reuses the current
-tenant/project/session visibility checks. Bundles do not replay browser
+Platform runtime binds the same caller context while executing request-scoped
+bundle code. Peer calls stay inside the same KDCube process and reuse the
+current tenant/project/session visibility checks. Bundles do not replay browser
 cookies, mint ad-hoc tokens, or POST back to their own public API.
 
 This bridge is for request-scoped bounded operations. Headless jobs should use
@@ -616,11 +689,7 @@ both surfaces.
 ```yaml
 named_services:
   namespaces:
-    task:
-      provider:
-        bundle_id: task-tracker@1-0
-        provider: task.issue
-        operation: named_service
+    task: {}
 ```
 
 In the bundle entrypoint:
@@ -699,13 +768,18 @@ When introducing a named service provider:
 - define provider id, labels, and purpose;
 - define canonical ref grammar and object kinds when the provider owns refs;
 - define `provider.about` and `provider.capabilities`;
+- define `object.schema` for each object kind that agents may create, update,
+  delete, render, or pull from;
 - define object operations and action names;
+- define `rehost` for large attachment refs that must become `fi:` artifacts;
+- define `block.produce` / `block.render` when ReAct should project
+  provider-owned objects as model-visible blocks;
 - define pagination, search mode, revision, and idempotency rules;
 - define relation operations if the provider connects multiple objects;
 - define auth and visibility policy;
 - choose transport adapters per operation;
 - keep Data Bus for durable async commands and stream-backed mutations;
-- return refs or hosted files for large data;
+- return refs or hosted files for large object bodies or attachments;
 - document how scene `target_surface` commands are produced;
 - add tests for provider validation, client dispatch, auth context, and
   transport-specific request shapes.

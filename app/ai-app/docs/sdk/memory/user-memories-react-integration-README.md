@@ -1,14 +1,14 @@
 ---
-id: ks:docs/sdk/memory/user-memories-react-integration-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/user-memories-react-integration-README.md
 title: "User Memories ReAct Integration"
 summary: "How SDK user memories integrate with bundle configuration, the memory widget, ReAct announce hotsets, hybrid search, explicit reads, and future write tools."
 tags: ["sdk", "memory", "react", "announce", "widget", "hybrid-search", "rendering"]
 keywords: ["memory announce", "memory widget", "memory hotset", "hybrid memory search", "mem memory id", "react memory integration", "memory rendering"]
 see_also:
-  - ks:docs/sdk/memory/how-react-remembers-README.md
-  - ks:docs/sdk/memory/user-memories-overview-README.md
-  - ks:docs/sdk/memory/user-memories-operational-README.md
-  - ks:docs/sdk/memory/user-memories-reconcilation-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/how-react-remembers-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/user-memories-overview-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/user-memories-operational-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/user-memories-reconcilation-README.md
 ---
 # User Memories ReAct Integration
 

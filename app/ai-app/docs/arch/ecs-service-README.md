@@ -1,15 +1,15 @@
 ---
-id: ks:docs/arch/ecs-service-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/arch/ecs-service-README.md
 title: "ECS Service Architecture And Timeouts"
 summary: "Generic ECS deployment topology, service responsibilities, storage surfaces, execution modes, graceful shutdown budgets, and task protection semantics."
 tags: ["arch", "ecs", "fargate", "ec2", "timeouts", "proc", "ingress", "shutdown", "task-protection"]
 keywords: ["ECS topology", "ECS stopTimeout", "proc drain", "task scale-in protection", "Fargate execution", "EC2 capacity provider", "Cloud Map", "web-proxy"]
 see_also:
-  - ks:docs/arch/proc/processor-arch-README.md
-  - ks:docs/exec/README-iso-runtime.md
-  - ks:docs/exec/runtime-README.md
-  - ks:docs/sdk/bundle/bundle-frontend-awareness-README.md
-  - ks:docs/service/maintenance/requests-monitoring-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/processor-arch-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/README-iso-runtime.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/runtime-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-frontend-awareness-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/maintenance/requests-monitoring-README.md
 ---
 # ECS Service Architecture And Timeouts
 

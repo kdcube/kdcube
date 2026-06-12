@@ -1,13 +1,13 @@
 ---
-id: ks:docs/sdk/agents/react/event-source/compaction-projection-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/compaction-projection-README.md
 title: "Compaction Projection Phase"
 summary: "ReAct event-source phase for preparing selected timeline blocks for summarization, preservation, and recovery."
 tags: ["sdk", "agents", "react", "event-source", "compaction"]
 keywords: ["compaction_projection", "conv.range.summary", "preservation", "recovery refs", "snapshot refs"]
 see_also:
-  - ks:docs/sdk/agents/react/compaction-README.md
-  - ks:docs/sdk/agents/react/event-source/event-source-README.md
-  - ks:docs/sdk/agents/react/event-source/events-blocks-and-rendering-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/compaction-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/events-blocks-and-rendering-README.md
 ---
 # Compaction Projection Phase
 

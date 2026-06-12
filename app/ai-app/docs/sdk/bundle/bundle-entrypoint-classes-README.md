@@ -1,19 +1,19 @@
 ---
-id: ks:docs/sdk/bundle/bundle-entrypoint-classes-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-entrypoint-classes-README.md
 title: "Bundle Entrypoint Classes"
 summary: "Reference for the SDK bundle entrypoint class family: BaseEntrypoint, economics, memory, memory mixin composition, and when to choose each one."
 tags: ["sdk", "bundle", "entrypoint", "base-entrypoint", "economics", "memory", "mixin", "widgets"]
 keywords: ["BaseEntrypoint", "BaseEntrypointWithEconomics", "MemoryEntrypointMixin", "BaseEntrypointWithMemory", "BaseEntrypointWithEconomicsAndMemory", "bundle entrypoint class", "source folder widget build"]
 updated_at: 2026-05-22
 see_also:
-  - ks:docs/sdk/bundle/bundle-developer-guide-README.md
-  - ks:docs/sdk/bundle/bundle-subsystem-integration-README.md
-  - ks:docs/sdk/bundle/bundle-platform-integration-README.md
-  - ks:docs/sdk/bundle/bundle-widget-integration-README.md
-  - ks:docs/sdk/bundle/bundle-lifecycle-README.md
-  - ks:docs/service/comm/bus-routing-and-partitioning-README.md
-  - ks:docs/sdk/bundle/bundle-reserved-platform-properties-README.md
-  - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-developer-guide-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-subsystem-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-lifecycle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/bus-routing-and-partitioning-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-reserved-platform-properties-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/versatile-reference-bundle-README.md
 ---
 # Bundle Entrypoint Classes
 

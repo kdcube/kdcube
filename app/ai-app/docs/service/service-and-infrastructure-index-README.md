@@ -1,18 +1,18 @@
 ---
-id: ks:docs/service/service-and-infrastructure-index-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/service-and-infrastructure-index-README.md
 title: "Service and Infrastructure Documentation Index"
 summary: "Entry index for platform service runtime docs: auth, gateway, environment setup, monitoring, scaling, secrets, descriptor wiring, and infrastructure-facing operational guides."
 tags: ["service", "index", "infrastructure"]
 keywords: ["service docs index", "runtime infrastructure docs", "gateway and auth guides", "monitoring and scaling docs", "environment setup docs", "descriptor and secrets wiring", "service operations"]
 see_also:
-  - ks:docs/service/auth/auth-README.md
-  - ks:docs/service/servicing-interfaces-README.md
-  - ks:docs/service/streams/README.md
-  - ks:docs/service/synch-mechanisms/critical-section-README.md
-  - ks:docs/service/README-monitoring-observability.md
-  - ks:docs/service/gateway-README.md
-  - ks:docs/service/environment/README.md
-  - ks:docs/configuration/service-runtime-configuration-mapping-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/servicing-interfaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/streams/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/synch-mechanisms/critical-section-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/README-monitoring-observability.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/gateway-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/environment/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
 ---
 # Service and Infrastructure Index
 

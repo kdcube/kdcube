@@ -1,14 +1,14 @@
 ---
-id: ks:docs/sdk/agents/react/turn-data-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/turn-data-README.md
 title: "Turn Data"
 summary: "Turn fetch payload and how it is constructed for the client."
 tags: ["sdk", "agents", "react", "api", "turn-data"]
 keywords: ["/conversations/{id}/fetch", "turn log", "conversation payload", "client expectations"]
 see_also:
-  - ks:docs/sdk/agents/react/conversation-artifacts-README.md
-  - ks:docs/sdk/agents/react/turn-log-README.md
-  - ks:docs/sdk/agents/react/react-context-README.md
-  - ks:docs/sdk/agents/react/files-vs-outputs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/conversation-artifacts-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/turn-log-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-context-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/files-vs-outputs-README.md
 ---
 # Turn Data (Conversation Fetch)
 

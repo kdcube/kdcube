@@ -1,13 +1,13 @@
 ---
-id: ks:docs/arch/proxy/proxy-local-ops-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/arch/proxy/proxy-local-ops-README.md
 title: "Proxy Local Ops"
 summary: "Ops guide for the OpenResty reverse proxy in local/all-in-one Docker Compose setup: responsibilities, routing, CORS, and differences from the EC2/SSL deployment."
 tags: ["proxy", "openresty", "ops", "local", "docker-compose", "nginx", "dev"]
 keywords: ["OpenResty", "nginx_proxy.conf", "all_in_one_kdcube", "docker-compose", "CORS", "no-auth", "local dev", "HTTP"]
 see_also:
-  - ks:docs/arch/proxy/proxy-ops-README.md
-  - ks:docs/arch/proxy/nginx_proxy.conf
-  - ks:docs/configuration/bundles-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proxy/proxy-ops-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proxy/nginx_proxy.conf
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.md
 ---
 # Proxy Local Ops Guide (OpenResty — local / all-in-one)
 

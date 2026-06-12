@@ -1,18 +1,18 @@
 ---
-id: ks:docs/service/comm/comm-system.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/comm/comm-system.md
 title: "Comm System"
 summary: "High‑level architecture of the communication subsystem and relay."
 tags: ["service", "comm", "architecture", "relay"]
 keywords: ["redis relay", "channels", "fanout", "transport layer"]
 see_also:
-  - ks:docs/service/comm/CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md
-  - ks:docs/service/comm/README-comm.md
-  - ks:docs/service/comm/conversation-event-bus-and-data-bus-README.md
-  - ks:docs/service/comm/data-bus-README.md
-  - ks:docs/service/comm/comm-recording-event-sinks-README.md
-  - ks:docs/service/streams/telemetry-README.md
-  - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
-  - ks:docs/sdk/bundle/bundle-firewall-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/README-comm.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/conversation-event-bus-and-data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/comm-recording-event-sinks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/streams/telemetry-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-chat-stream-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-firewall-README.md
 ---
 # Communication Subsystem Architecture
 

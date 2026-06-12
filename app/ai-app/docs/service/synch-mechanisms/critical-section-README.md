@@ -1,14 +1,14 @@
 ---
-id: ks:docs/service/synch-mechanisms/critical-section-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/synch-mechanisms/critical-section-README.md
 title: "Synchronization Mechanisms"
 summary: "Explains KDCube synchronization patterns: Postgres advisory locks for database bootstrap, Redis locks for cluster coordination, observed file locks for shared filesystem mutation, and once-per-signature build helpers."
 tags: ["service", "synchronization", "critical-section", "locks", "postgres", "redis", "fs", "efs", "docker-compose", "runtime", "git-bundles"]
 keywords: ["synchronization mechanisms", "critical section", "postgres advisory lock", "observed file lock", "redis lock", "fcntl", "EFS lock", "docker compose lock", "bundle bootstrap", "bundle schema migration", "bundle git lock", "lock metadata", "managed bundles", "knowledge build"]
 see_also:
-  - ks:docs/configuration/assembly-descriptor-README.md
-  - ks:docs/configuration/bundles-descriptor-README.md
-  - ks:docs/sdk/bundle/bundle-lifecycle-README.md
-  - ks:docs/service/cicd/ngrok-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/assembly-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-lifecycle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/ngrok-README.md
 ---
 # Synchronization Mechanisms
 
@@ -316,18 +316,18 @@ one worker materializes; others wait or find fresh output
 The file lock is still needed even when Redis is enabled because it protects the
 actual filesystem path used for clone/fetch/checkout.
 
-### Documentation MCP / Knowledge Bundle
+### Documentation MCP / Prepared Bundle Data
 
 The built-in `kdcube.copilot@2026-04-03-19-05` bundle is a concrete example of
 this mechanism. It exposes a public, read-only documentation MCP endpoint over
-an indexed knowledge space. To keep that MCP endpoint fast and safe in local
-docker-compose and cloud runtimes, the bundle protects the shared prepared
-knowledge state with exclusive build guards.
+an indexed prepared-data store. To keep that MCP endpoint fast and safe in
+local docker-compose and cloud runtimes, the bundle protects the shared prepared
+state with exclusive build guards.
 
 That example has two guarded phases:
 
 - git materialization of the source repo/ref;
-- knowledge-space registry/index build under the bundle storage root.
+- registry/index build under the bundle storage root.
 
 The intended hot path is:
 
@@ -598,7 +598,7 @@ Observed file locks are currently used for:
 
 - platform-managed git bundle materialization;
 - shared example-bundle materialization into the managed-bundles root;
-- the built-in copilot bundle knowledge-space build lock;
+- the built-in copilot bundle prepared-index build lock;
 - bundle-owned knowledge/index preparation, such as `knowledge@1-0`
   materializing packaged maintained knowledge into bundle storage.
 

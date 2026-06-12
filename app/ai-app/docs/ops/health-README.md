@@ -1,13 +1,13 @@
 ---
-id: ks:docs/ops/health-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/ops/health-README.md
 title: "Health"
 summary: "Liveness/readiness endpoints for deployers and autoscalers (ingress, proc, metrics)."
 tags: ["ops", "health", "readiness", "liveness", "endpoints", "autoscaling"]
 keywords: ["health endpoint", "readiness", "liveness", "ingress", "proc", "metrics", "draining", "HTTP 200"]
 see_also:
-  - ks:docs/ops/deployment-options-index-README.md
-  - ks:docs/ops/ops-overview-README.md
-  - ks:docs/ops/s3-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/ops/deployment-options-index-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/ops/ops-overview-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/ops/s3-README.md
 ---
 # Health Endpoints (Liveness/Readiness)
 

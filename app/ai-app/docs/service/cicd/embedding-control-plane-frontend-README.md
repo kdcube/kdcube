@@ -1,13 +1,13 @@
 ---
-id: ks:docs/service/cicd/embedding-control-plane-frontend-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/cicd/embedding-control-plane-frontend-README.md
 title: "Embedding The Control Plane Frontend"
 summary: "Deployment pattern for embedding the KDCube control-plane/chat frontend inside another web application while preserving nested bundle widgets and secure frame policies."
 tags: ["service", "cicd", "frontend", "embedding", "iframe", "proxy", "security"]
 keywords: ["control plane iframe embedding", "frame ancestors", "x-frame-options", "bundle widget iframe", "nested iframe deployment", "embedded chatbot frontend"]
 see_also:
-  - ks:docs/service/cicd/descriptors-README.md
-  - ks:docs/configuration/assembly-descriptor-README.md
-  - ks:docs/service/cicd/ngrok-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/descriptors-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/assembly-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/ngrok-README.md
 ---
 # Embedding The Control Plane Frontend
 

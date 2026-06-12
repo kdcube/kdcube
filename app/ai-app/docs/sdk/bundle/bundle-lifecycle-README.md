@@ -1,22 +1,21 @@
 ---
-id: ks:docs/sdk/bundle/bundle-lifecycle-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-lifecycle-README.md
 title: "Bundle Lifecycle"
 summary: "Lifecycle model for bundles: discovery, load, initialization, invocation, hooks, background jobs, singleton state, UI build behavior, and which storage or config surfaces exist at each phase."
 tags: ["sdk", "bundle", "lifecycle", "storage", "configuration", "entrypoint", "background-jobs"]
 keywords: ["bundle discovery and load", "initialization hooks", "invocation phases", "on_job lifecycle", "background job lifecycle", "singleton bundle state", "ui build lifecycle", "storage availability by phase", "configuration availability by phase", "bundle lifecycle model"]
 updated_at: 2026-05-21
 see_also:
-  - ks:docs/sdk/bundle/bundle-developer-guide-README.md
-  - ks:docs/sdk/bundle/bundle-runtime-README.md
-  - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
-  - ks:docs/sdk/bundle/bundle-storage-and-cache-README.md
-  - ks:docs/sdk/bundle/bundle-knowledge-space-README.md
-  - ks:docs/sdk/bundle/bundle-interfaces-README.md
-  - ks:docs/sdk/bundle/bundle-venv-README.md
-  - ks:docs/sdk/bundle/auth-bundle-federated-README.md
-  - ks:docs/sdk/bundle/bundle-client-communication-README.md
-  - ks:docs/service/streams/background-jobs-README.md
-  - ks:docs/sdk/bundle/build/design/@longrun-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-developer-guide-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-runtime-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-storage-and-cache-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-interfaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-venv-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/auth-bundle-federated-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-communication-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/streams/background-jobs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/design/@longrun-README.md
 ---
 # Bundle Lifecycle
 
@@ -523,11 +522,10 @@ fall back to `index.html` for client-side routing.
 If a bundle uses the React agent:
 - teach the agent bundle-specific behavior with skills
 - expose bundle tools via `tools_descriptor.py`
-- optionally expose `ks:` as a read-only logical namespace
-- optionally back `ks:` from shared local bundle storage
+- expose document/source access through explicit tools, namespace services,
+  MCP/search surfaces, or registered rehosters
 
 See:
-- [bundle-knowledge-space-README.md](bundle-knowledge-space-README.md)
 - [../agents/react/react-turn-workspace-README.md](../agents/react/react-turn-workspace-README.md)
 
 ## Practical rules

@@ -1,11 +1,11 @@
 ---
-id: ks:docs/service/jobs/jobs-stream-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/jobs/jobs-stream-README.md
 title: "Background Jobs Stream"
 summary: "Compatibility page. The canonical background job stream documentation moved to docs/service/streams/background-jobs-README.md."
 tags: ["service", "jobs", "streams", "background-jobs"]
 see_also:
-  - ks:docs/service/streams/background-jobs-README.md
-  - ks:docs/service/streams/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/streams/background-jobs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/streams/README.md
 ---
 # Background Jobs Stream
 

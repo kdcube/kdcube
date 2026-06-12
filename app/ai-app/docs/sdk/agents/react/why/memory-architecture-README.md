@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/agents/react/why/memory-architecture-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/why/memory-architecture-README.md
 title: "Memory Architecture"
 summary: "How memory is represented, stored, indexed, policy-projected, surfaced, compressed, and reopened in the React system."
 tags: ["sdk", "agents", "react", "memory", "timeline", "workspace", "retrieval", "event-sources", "external-events"]
@@ -19,18 +19,18 @@ keywords:
     "external events",
   ]
 see_also:
-  - ks:docs/sdk/agents/react/context-layout.md
-  - ks:docs/sdk/agents/react/context-progression.md
-  - ks:docs/sdk/agents/react/context-caching-README.md
-  - ks:docs/sdk/agents/react/conversation-artifacts-README.md
-  - ks:docs/sdk/agents/react/react-announce-README.md
-  - ks:docs/sdk/agents/react/source-pool-README.md
-  - ks:docs/sdk/agents/react/react-turn-workspace-README.md
-  - ks:docs/sdk/agents/react/custom-isolated-workspace-mental-map-README.md
-  - ks:docs/sdk/agents/react/event-source/event-source-README.md
-  - ks:docs/sdk/agents/react/event-source/timeline-projection-README.md
-  - ks:docs/sdk/events/external-events-README.md
-  - ks:docs/sdk/events/external-event-envelope-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-layout.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-progression.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-caching-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/conversation-artifacts-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-announce-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/source-pool-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-turn-workspace-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/custom-isolated-workspace-mental-map-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/timeline-projection-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-event-envelope-README.md
 ---
 
 # Memory Architecture
@@ -47,7 +47,7 @@ It works with a **memory architecture** composed of several cooperating surfaces
 - the **conversation artifact store + index** as durable persisted memory
 - derived memory forms such as **summaries**, **replacement text**, **feedback**, and **plans**
 - a durable beacon lane of **Internal Memory Beacons** inside the timeline
-- adjacent readable memory realms exposed through **logical namespaces** such as `ks:` and `sk:`
+- adjacent readable memory realms exposed through **logical namespaces** such as `sk:`
 - registered external artifact namespaces that can be rehosted into React-readable `fi:` refs
 
 The key design choice is this:
@@ -184,11 +184,10 @@ Logical paths do two jobs:
 | `su:` | Summary memory | `conv.range.summary` blocks and compacted ranges |
 | `tc:` | Tool call/result memory | exact call/result artifacts from tool execution |
 | `ev:` | Event occurrence memory | accepted external events and their durable event refs |
-| `ks:` | Knowledge-space memory | bundle-owned read-only reference space |
 | `sk:` | Skill memory | loaded skill instructions and sources |
 | registered external namespaces such as `nmsp:`, `cnv:`, or `mem:` | External owner refs | domain-owned content resolved and rehosted through `react.pull` |
 
-Some of these are strictly conversation memory (`ar:`, `so:`, `su:`, `tc:`, `ev:`), while others connect adjacent reusable memory realms (`ks:`, `sk:`) or bundle/domain artifact stores (`nmsp:`, `cnv:`, `mem:`, and other registered namespaces). React treats them as one readable system because the retrieval contract is unified at the path level.
+Some of these are strictly conversation memory (`ar:`, `so:`, `su:`, `tc:`, `ev:`), while others connect adjacent reusable memory realms (`sk:`) or bundle/domain artifact stores (`nmsp:`, `cnv:`, `mem:`, and other registered namespaces). React treats them as one readable system because the retrieval contract is unified at the path level.
 
 Examples:
 
@@ -550,7 +549,6 @@ Examples:
 - reopen workspace files or outputs via `fi:...`
 - reopen an accepted event occurrence via `ev:...`
 - load a skill via `sk:...`
-- read knowledge-space references via `ks:...`
 - read the `fi:` path returned by `react.pull` for a registered external ref
 
 This is the most direct path-based memory retrieval tool.
@@ -575,10 +573,10 @@ Use to search the current local filesystem surface:
 
 - files already materialized under the artifact root
 
-It does not search hidden/pruned timeline, unpulled historical snapshots,
-registered external refs, or `ks:`. Use visible refs or `react.memsearch` to
-identify older `fi:` or registered external refs, then `react.pull` or
-`react.checkout` them before local search.
+It does not search hidden/pruned timeline, unpulled historical snapshots, or
+registered external refs. Use visible refs or `react.memsearch` to identify
+older `fi:` or registered external refs, then `react.pull` or `react.checkout`
+them before local search.
 
 It returns `logical_path` for hits, and content matches include `read_item` ranges so the agent can immediately reopen exact regions with `react.read({"items":[...]})`.
 
@@ -611,7 +609,8 @@ When needed, React can also explore local materialized memory with code:
 - local workspace files
 - logs
 - pulled files
-- bundle-readable `ks:` material if a resolver is available
+- owner-provided material only after an explicit resolver, rehoster, or service
+  operation materializes it for the current auth context
 
 This is still part of the memory system, because the code is operating on previously persisted or explicitly activated memory surfaces.
 

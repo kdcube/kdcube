@@ -1,13 +1,13 @@
 ---
-id: ks:docs/sdk/agents/react/feedback-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/feedback-README.md
 title: "Feedback"
 summary: "How user and system feedback is surfaced to the agent in v2."
 tags: ["sdk", "agents", "react", "feedback"]
 keywords: ["feedback blocks", "timeline", "reactions", "signals"]
 see_also:
-  - ks:docs/sdk/agents/react/compaction-README.md
-  - ks:docs/sdk/agents/react/flow-README.md
-  - ks:docs/sdk/agents/react/react-announce-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/compaction-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/flow-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-announce-README.md
 ---
 # Feedback Integration (React v2)
 

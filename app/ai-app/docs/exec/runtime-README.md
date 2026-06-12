@@ -1,13 +1,15 @@
 ---
-id: ks:docs/exec/runtime-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/exec/runtime-README.md
 title: "Runtime"
 summary: "Architecture of the isolated execution runtime (Docker + external modes)."
 tags: ["exec", "runtime", "architecture", "docker", "supervisor"]
 keywords: ["execution architecture", "runtime supervisor", "executor", "external modes", "isolation"]
 see_also:
-  - ks:docs/exec/README-iso-runtime.md
-  - ks:docs/exec/README-runtime-modes-builtin-tools.md
-  - ks:docs/exec/operations.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/cross-runtime-context-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/README-iso-runtime.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/README-runtime-modes-builtin-tools.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/operations.md
 ---
 # **Isolated Code Execution Architecture (Docker + External Modes)**
 
@@ -29,9 +31,14 @@ Important distinction used throughout this document:
   contextvars, and accounting storage in the child runtime.
 - **runtime globals** = the full `RUNTIME_GLOBALS_JSON` envelope. It contains
   `PORTABLE_SPEC_JSON`, `EXEC_CONTEXT`, `BUNDLE_SPEC`, tool alias maps, raw tool
-  specs, and the contextvar snapshot used to restore `bundle_call_context`.
+  specs, and the contextvar snapshot used to restore the cross-runtime context
+  room.
 
 These are transported separately in external exec.
+
+For the platform-level runtime map and portable room contract, see
+[Runtime Surfaces And Boundaries](../runtime/README.md) and
+[Cross-Runtime Context](../runtime/cross-runtime-context-README.md).
 
 ## Launch payload anatomy
 
@@ -68,6 +75,7 @@ proc / host runtime
 |        REQUEST_CONTEXT                                           |
 |        BUNDLE_ID                                                 |
 |        BUNDLE_CALL_CONTEXT  <-- bundle_call_context travels here  |
+|        NAMED_SERVICE_DISCOVERY                                   |
 |      accounting                                                  |
 +-------------------------------------------------------------------+
         |
@@ -92,6 +100,9 @@ Important:
 - `bundle_call_context` is snapshotted in `contextvars.comm_ctx` and restored
   in child runtimes, so trusted tool code can read it with
   `get_current_bundle_call_context()`
+- named-service provider discovery scope is snapshotted in
+  `contextvars.comm_ctx.NAMED_SERVICE_DISCOVERY` and reconstructed in child
+  runtimes through `get_current_named_service_discovery()`
 - request-scoped model routing uses the reserved
   `bundle_call_context.role_models` overlay; this does not mutate
   `Config.role_models` or bundle props
@@ -417,7 +428,7 @@ entrypoint flow. The split filesystem tree is documented in
 │  Host (Agent Service):                                                 │
 │  • Generate code with codegen                                          │
 │  • Prepare RUNTIME_GLOBALS_JSON and PORTABLE_SPEC_JSON                 │
-│  • Snapshot ContextVars, including comm_ctx.bundle_call_context         │
+│  • Snapshot ContextVars, including comm_ctx portable context            │
 │  • Launch docker container                                             │
 │  • Collect results from /host/outdir                                   │
 │                                                                         │
@@ -468,6 +479,7 @@ main proc task
         | current ContextVars
         | - run_ctx: OUTDIR / WORKDIR / source id
         | - comm_ctx: REQUEST_CONTEXT / BUNDLE_ID / BUNDLE_CALL_CONTEXT
+        |             / NAMED_SERVICE_DISCOVERY
         | - accounting
         v
 +-------------------------------+
@@ -491,6 +503,7 @@ child bootstrap
         |      REQUEST_CONTEXT
         |      BUNDLE_ID
         |      BUNDLE_CALL_CONTEXT
+        |      NAMED_SERVICE_DISCOVERY
         +--> restore accounting ContextVars
         +--> rebuild ModelService and ToolSubsystem
                 |
@@ -500,10 +513,11 @@ get_current_bundle_call_context()
 bundle_tool_context.scope()["bundle_call_context"]
 ```
 
-`bundle_call_context` is the bundle-owned portable room inside this mechanism.
-It is appropriate for ids, small policy snapshots, selected agent strength, and
-request-scoped model role overrides. It is not appropriate for secrets or large
-documents.
+The cross-runtime room is documented in
+[Cross-Runtime Context](../runtime/cross-runtime-context-README.md).
+`bundle_call_context` is the bundle-owned part of that room. It is appropriate
+for ids, small policy snapshots, selected agent strength, and request-scoped
+model role overrides. It is not appropriate for secrets or large documents.
 
 `bundle_call_context.role_models` is interpreted by `ModelRouter` as a
 request-scoped overlay over the configured bundle `role_models`. The overlay is
@@ -571,5 +585,7 @@ cb/tenants/<tenant>/projects/<project>/ai-bundle-storage-snapshots/
 - Tool call files are timestamp-suffixed; index file is still used for grouping.
 - Bundle code snapshot is restored when tools are bundle-local.
 - Bundle readonly data snapshot is restored to `BUNDLE_STORAGE_DIR` when the bundle needs prepared local data.
-- Example: `kdcube.copilot` keeps its built knowledge space in per-bundle storage and reads it in isolated exec via `BUNDLE_STORAGE_DIR`.
+- Bundles can keep prepared readonly data in per-bundle storage and read it in
+  isolated exec via `BUNDLE_STORAGE_DIR`; cross-bundle access should use
+  explicit tools, named services, MCP/search, or rehosters.
 - Additional implementation notes: [external-exec-README.md](../sdk/agents/react/external-exec-README.md)

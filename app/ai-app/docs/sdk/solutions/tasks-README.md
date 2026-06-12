@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/solutions/tasks-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/tasks-README.md
 title: "Tasks SDK Solution"
 summary: "Reusable scheduled/executable task component for KDCube bundles: task storage, execution journals, artifact recovery, ReAct tools, and skills."
 tags: ["sdk", "solutions", "tasks", "scheduler", "executions", "artifacts", "react"]

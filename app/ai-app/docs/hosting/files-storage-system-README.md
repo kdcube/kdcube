@@ -1,14 +1,14 @@
 ---
-id: ks:docs/hosting/files-storage-system-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/hosting/files-storage-system-README.md
 title: "File Storage and Hosting"
 summary: "How agent‑produced files are stored and served via resource routes."
 tags: ["hosting", "storage", "artifacts", "resources", "react"]
 keywords: ["files", "artifacts", "resources", "KDCUBE_STORAGE_PATH", "RN", "conversation store"]
 see_also:
-  - ks:docs/sdk/storage/sdk-store-README.md
-  - ks:docs/sdk/agents/react/conversation-artifacts-README.md
-  - ks:docs/sdk/agents/react/artifact-storage-README.md
-  - ks:docs/sdk/agents/react/react-turn-workspace-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/storage/sdk-store-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/conversation-artifacts-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-storage-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-turn-workspace-README.md
 ---
 # File Storage and Hosting
 

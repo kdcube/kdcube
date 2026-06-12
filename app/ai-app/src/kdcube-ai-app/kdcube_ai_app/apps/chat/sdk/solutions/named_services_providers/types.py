@@ -27,6 +27,7 @@ PROVIDER_OPERATION = "provider.operation"
 OBJECT_LIST = "object.list"
 OBJECT_SEARCH = "object.search"
 OBJECT_GET = "object.get"
+OBJECT_SCHEMA = "object.schema"
 OBJECT_UPSERT = "object.upsert"
 OBJECT_DELETE = "object.delete"
 OBJECT_ACTION = "object.action"
@@ -45,6 +46,7 @@ STANDARD_OPERATIONS = (
     OBJECT_LIST,
     OBJECT_SEARCH,
     OBJECT_GET,
+    OBJECT_SCHEMA,
     OBJECT_UPSERT,
     OBJECT_DELETE,
     OBJECT_ACTION,
@@ -274,6 +276,7 @@ def build_default_operations(
         OBJECT_LIST,
         OBJECT_SEARCH,
         OBJECT_GET,
+        OBJECT_SCHEMA,
         OBJECT_ACTION,
         OBJECT_RESOLVE,
         RELATION_LIST,
@@ -414,6 +417,20 @@ class NamedServiceRequest:
     schema: str = NAMED_SERVICE_REQUEST_SCHEMA
 
     @classmethod
+    def coerce(cls, value: Any) -> "NamedServiceRequest":
+        if isinstance(value, cls):
+            return value
+        if isinstance(value, Mapping):
+            return cls.from_dict(value)
+        to_dict = getattr(value, "to_dict", None)
+        if callable(to_dict):
+            return cls.from_dict(to_dict())
+        data = getattr(value, "__dict__", None)
+        if isinstance(data, Mapping):
+            return cls.from_dict(data)
+        raise TypeError(f"Cannot coerce {type(value).__name__} to NamedServiceRequest")
+
+    @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "NamedServiceRequest":
         data = dict(value or {})
         operation = normalize_required_string(data.get("operation"), field_name="operation")
@@ -469,22 +486,20 @@ class NamedServiceRequest:
 @dataclass(frozen=True)
 class NamedServiceResponse:
     ok: bool
-    status: int = 200
-    provider: dict[str, Any] = field(default_factory=dict)
-    namespace: str | None = None
-    object_ref: str | None = None
-    object: dict[str, Any] = field(default_factory=dict)
-    items: list[Any] = field(default_factory=list)
-    next_cursor: str | None = None
-    revision: str | None = None
-    capabilities: dict[str, Any] = field(default_factory=dict)
-    relations: list[Any] = field(default_factory=list)
-    ui_event: dict[str, Any] | None = None
-    data: dict[str, Any] = field(default_factory=dict)
-    warnings: list[Any] = field(default_factory=list)
+    ret: dict[str, Any] = field(default_factory=dict)
     error: NamedServiceError | None = None
-    processed_at: str = field(default_factory=utc_now_iso)
-    schema: str = NAMED_SERVICE_RESPONSE_SCHEMA
+    status: int = 200
+
+    @classmethod
+    def coerce(cls, value: Any) -> "NamedServiceResponse":
+        if isinstance(value, cls):
+            return value
+        if isinstance(value, Mapping):
+            return cls.from_dict(value)
+        to_dict = getattr(value, "to_dict", None)
+        if callable(to_dict):
+            return cls.from_dict(to_dict())
+        raise TypeError(f"Cannot coerce {type(value).__name__} to NamedServiceResponse")
 
     @classmethod
     def ok_response(
@@ -493,17 +508,48 @@ class NamedServiceResponse:
         provider: Mapping[str, Any] | None = None,
         namespace: str | None = None,
         object_ref: str | None = None,
-        data: Mapping[str, Any] | None = None,
-        **kwargs: Any,
+        object: Mapping[str, Any] | None = None,
+        items: Sequence[Any] | None = None,
+        attrs: Mapping[str, Any] | None = None,
+        extra: Mapping[str, Any] | None = None,
+        ui_event: Mapping[str, Any] | None = None,
+        next_cursor: str | None = None,
+        revision: str | None = None,
+        capabilities: Mapping[str, Any] | None = None,
+        relations: Sequence[Any] | None = None,
+        warnings: Sequence[Any] | None = None,
+        ret: Mapping[str, Any] | None = None,
     ) -> "NamedServiceResponse":
-        return cls(
-            ok=True,
-            provider=dict(provider or {}),
-            namespace=namespace,
-            object_ref=object_ref,
-            data=ensure_json_object(data, field_name="data"),
-            **kwargs,
-        )
+        payload = ensure_json_object(ret, field_name="ret")
+        if object is not None:
+            payload["object"] = ensure_json_object(object, field_name="ret.object")
+        if items is not None:
+            payload["items"] = ensure_json_list(items, field_name="ret.items")
+        attrs_payload = ensure_json_object(payload.get("attrs"), field_name="ret.attrs")
+        attrs_payload.update(ensure_json_object(attrs, field_name="attrs"))
+        if provider:
+            attrs_payload["provider"] = dict(provider)
+        if namespace is not None:
+            attrs_payload["namespace"] = namespace
+        if object_ref is not None:
+            attrs_payload["object_ref"] = object_ref
+        if next_cursor is not None:
+            attrs_payload["next_cursor"] = next_cursor
+        if revision is not None:
+            attrs_payload["revision"] = revision
+        if capabilities is not None:
+            attrs_payload["capabilities"] = ensure_json_object(capabilities, field_name="capabilities")
+        if relations is not None:
+            attrs_payload["relations"] = ensure_json_list(relations, field_name="relations")
+        if warnings is not None:
+            attrs_payload["warnings"] = ensure_json_list(warnings, field_name="warnings")
+        if attrs_payload:
+            payload["attrs"] = attrs_payload
+        if extra is not None:
+            payload["extra"] = ensure_json_object(extra, field_name="ret.extra")
+        if ui_event is not None:
+            payload["ui_event"] = ensure_json_object(ui_event, field_name="ret.ui_event")
+        return cls(ok=True, ret=payload, error=None, status=200)
 
     @classmethod
     def error_response(
@@ -517,18 +563,29 @@ class NamedServiceResponse:
         namespace: str | None = None,
         object_ref: str | None = None,
     ) -> "NamedServiceResponse":
+        error_details = dict(details or {})
+        error_details.setdefault("status", status)
         return cls(
             ok=False,
             status=status,
-            provider=dict(provider or {}),
-            namespace=namespace,
-            object_ref=object_ref,
-            error=NamedServiceError(code=code, message=message, details=dict(details or {})),
+            ret={
+                "attrs": {
+                    key: value
+                    for key, value in {
+                        "provider": dict(provider or {}),
+                        "namespace": namespace,
+                        "object_ref": object_ref,
+                    }.items()
+                    if value not in (None, "", {})
+                }
+            },
+            error=NamedServiceError(code=code, message=message, details=error_details),
         )
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "NamedServiceResponse":
         data = dict(value or {})
+        ret = ensure_json_object(data.get("ret"), field_name="ret")
         error_payload = data.get("error")
         error = None
         if isinstance(error_payload, Mapping):
@@ -538,46 +595,69 @@ class NamedServiceResponse:
                 details=ensure_json_object(error_payload.get("details"), field_name="error.details"),
             )
         return cls(
-            schema=str(data.get("schema") or NAMED_SERVICE_RESPONSE_SCHEMA),
             ok=bool(data.get("ok")),
             status=int(data.get("status") or (200 if data.get("ok") else 400)),
-            provider=ensure_json_object(data.get("provider"), field_name="provider"),
-            namespace=normalize_optional_string(data.get("namespace")),
-            object_ref=normalize_optional_string(data.get("object_ref")),
-            object=ensure_json_object(data.get("object"), field_name="object"),
-            items=ensure_json_list(data.get("items"), field_name="items"),
-            next_cursor=normalize_optional_string(data.get("next_cursor")),
-            revision=normalize_optional_string(data.get("revision")),
-            capabilities=ensure_json_object(data.get("capabilities"), field_name="capabilities"),
-            relations=ensure_json_list(data.get("relations"), field_name="relations"),
-            ui_event=(
-                ensure_json_object(data.get("ui_event"), field_name="ui_event")
-                if data.get("ui_event") is not None
-                else None
-            ),
-            data=ensure_json_object(data.get("data"), field_name="data"),
-            warnings=ensure_json_list(data.get("warnings"), field_name="warnings"),
+            ret=ret,
             error=error,
-            processed_at=str(data.get("processed_at") or utc_now_iso()),
         )
+
+    @property
+    def attrs(self) -> dict[str, Any]:
+        return ensure_json_object((self.ret or {}).get("attrs"), field_name="ret.attrs")
+
+    @property
+    def extra(self) -> dict[str, Any]:
+        return ensure_json_object((self.ret or {}).get("extra"), field_name="ret.extra")
+
+    @property
+    def object(self) -> dict[str, Any]:
+        return ensure_json_object((self.ret or {}).get("object"), field_name="ret.object")
+
+    @property
+    def items(self) -> list[Any]:
+        return ensure_json_list((self.ret or {}).get("items"), field_name="ret.items")
+
+    @property
+    def provider(self) -> dict[str, Any]:
+        return ensure_json_object(self.attrs.get("provider"), field_name="ret.attrs.provider")
+
+    @property
+    def namespace(self) -> str | None:
+        return normalize_optional_string(self.attrs.get("namespace"))
+
+    @property
+    def object_ref(self) -> str | None:
+        return normalize_optional_string(self.attrs.get("object_ref"))
+
+    @property
+    def next_cursor(self) -> str | None:
+        return normalize_optional_string(self.attrs.get("next_cursor"))
+
+    @property
+    def revision(self) -> str | None:
+        return normalize_optional_string(self.attrs.get("revision"))
+
+    @property
+    def capabilities(self) -> dict[str, Any]:
+        return ensure_json_object(self.attrs.get("capabilities"), field_name="ret.attrs.capabilities")
+
+    @property
+    def relations(self) -> list[Any]:
+        return ensure_json_list(self.attrs.get("relations"), field_name="ret.attrs.relations")
+
+    @property
+    def warnings(self) -> list[Any]:
+        return ensure_json_list(self.attrs.get("warnings"), field_name="ret.attrs.warnings")
+
+    @property
+    def ui_event(self) -> dict[str, Any] | None:
+        if "ui_event" not in (self.ret or {}):
+            return None
+        return ensure_json_object((self.ret or {}).get("ui_event"), field_name="ret.ui_event")
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "schema": self.schema,
             "ok": self.ok,
-            "status": self.status,
-            "provider": dict(self.provider or {}),
-            "namespace": self.namespace,
-            "object_ref": self.object_ref,
-            "object": dict(self.object or {}),
-            "items": list(self.items or []),
-            "next_cursor": self.next_cursor,
-            "revision": self.revision,
-            "capabilities": dict(self.capabilities or {}),
-            "relations": list(self.relations or []),
-            "ui_event": dict(self.ui_event or {}) if self.ui_event is not None else None,
-            "data": dict(self.data or {}),
-            "warnings": list(self.warnings or []),
+            "ret": dict(self.ret or {}),
             "error": self.error.to_dict() if self.error else None,
-            "processed_at": self.processed_at,
         }

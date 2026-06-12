@@ -1,15 +1,15 @@
 ---
-id: ks:docs/sdk/storage/git-store-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/storage/git-store-README.md
 title: "Git Store"
 summary: "Shared git subprocess transport helper: descriptor-backed auth, remote normalization, and the environment boundary used by platform workspaces and session stores."
 tags: ["sdk", "storage", "git", "workspace", "session-store", "auth"]
 keywords: ["git store", "git auth", "workspace repo", "claude session store", "GIT_HTTP_TOKEN", "GIT_SSH_COMMAND", "normalize git remote"]
 see_also:
-  - ks:docs/sdk/storage/sdk-store-README.md
-  - ks:docs/sdk/storage/cache-README.md
-  - ks:docs/sdk/bundle/bundle-developer-guide-README.md
-  - ks:docs/sdk/bundle/bundle-storage-and-cache-README.md
-  - ks:docs/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/storage/sdk-store-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/storage/cache-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-developer-guide-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-storage-and-cache-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/README.md
 ---
 # Git Store
 

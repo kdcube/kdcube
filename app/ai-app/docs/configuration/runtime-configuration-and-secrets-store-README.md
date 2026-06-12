@@ -1,18 +1,18 @@
 ---
-id: ks:docs/configuration/runtime-configuration-and-secrets-store-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/configuration/runtime-configuration-and-secrets-store-README.md
 title: "Runtime Configuration and Secrets Store"
 summary: "Detailed runtime storage model behind settings, props, and secrets helpers: authoritative stores by mode, Redis cache behavior, PostgreSQL user props, provider-backed secrets, and export boundaries."
 tags: ["service", "configuration", "runtime", "storage", "secrets", "helpers"]
 keywords: ["authoritative configuration stores", "redis bundle props cache", "postgres user bundle properties", "provider backed user secrets", "bundle prop persistence path", "bundle secret persistence path", "grouped aws secrets layout", "descriptor authority by mode", "exportable versus non exportable state", "runtime storage model"]
 see_also:
-  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
-  - ks:docs/configuration/runtime-read-write-contract-README.md
-  - ks:docs/configuration/service-runtime-configuration-mapping-README.md
-  - ks:docs/configuration/assembly-descriptor-README.md
-  - ks:docs/configuration/bundles-descriptor-README.md
-  - ks:docs/configuration/bundles-secrets-descriptor-README.md
-  - ks:docs/configuration/secrets-descriptor-README.md
-  - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/runtime-read-write-contract-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/assembly-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-secrets-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/secrets-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md
 ---
 # Runtime Configuration and Secrets Store
 

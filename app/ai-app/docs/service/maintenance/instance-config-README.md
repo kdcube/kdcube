@@ -1,13 +1,13 @@
 ---
-id: ks:docs/service/maintenance/instance-config-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/maintenance/instance-config-README.md
 title: "Instance Config"
 summary: "Instance configuration for workers, capacity, and DB pools."
 tags: ["service", "maintenance", "instance", "capacity"]
 keywords: ["workers", "processes_per_instance", "pg_max_connections", "capacity settings"]
 see_also:
-  - ks:docs/service/maintenance/connection-pooling-README.md
-  - ks:docs/service/maintenance/requests-monitoring-README.md
-  - ks:docs/configuration/service-runtime-configuration-mapping-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/maintenance/connection-pooling-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/maintenance/requests-monitoring-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
 ---
 # Instance Config Maintenance
 

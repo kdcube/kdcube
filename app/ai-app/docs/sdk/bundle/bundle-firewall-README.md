@@ -1,13 +1,13 @@
 ---
-id: ks:docs/sdk/bundle/bundle-firewall-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-firewall-README.md
 title: "Bundle Outbound Firewall"
 summary: "Bundle-level outbound event filtering for comm events: where to enforce allow or deny rules before bundle-emitted events leave the runtime."
 tags: ["sdk", "bundle", "comm", "security", "firewall"]
 keywords: ["outbound event policy", "comm event filtering", "bundle to client event control", "event allow deny rules", "communicator security boundary", "bundle event firewall"]
 see_also:
-  - ks:docs/service/comm/comm-system.md
-  - ks:docs/service/comm/README-comm.md
-  - ks:docs/sdk/bundle/bundle-interfaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/comm-system.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/README-comm.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-interfaces-README.md
 ---
 # Bundle Outbound Firewall (Event Filter)
 

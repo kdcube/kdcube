@@ -1,14 +1,14 @@
 ---
-id: ks:docs/sdk/memory/conversational-memory-search-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/conversational-memory-search-README.md
 title: "Conversational Memory Search (react.memsearch)"
 summary: "Cross-conversation searchable memory of agent activity: what is indexed, how `react.memsearch` scopes and ranks it, the hybrid semantic+lexical+recency retrieval, and the Retrieval-anchors contract that makes literal phrasings findable."
 tags: ["sdk", "memory", "memsearch", "retrieval", "hybrid-search", "bm25", "rrf", "pgvector"]
 keywords: ["react.memsearch", "conversational memory", "cross-conversation search", "hybrid retrieval", "BM25F", "Reciprocal Rank Fusion", "Retrieval-anchors", "search_tsv", "ts_rank_cd", "scope user", "working summary", "turn catalog"]
 see_also:
-  - ks:docs/sdk/memory/how-react-remembers-README.md
-  - ks:docs/sdk/memory/user-memories-overview-README.md
-  - ks:docs/sdk/memory/user-memories-react-integration-README.md
-  - ks:docs/sdk/agents/react/react-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/how-react-remembers-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/user-memories-overview-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/user-memories-react-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-tools-README.md
 ---
 # Conversational Memory Search
 

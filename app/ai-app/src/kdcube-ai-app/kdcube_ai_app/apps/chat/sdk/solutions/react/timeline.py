@@ -5423,6 +5423,7 @@ class Timeline:
             render_forces_sanitize = bool(force_sanitize)
             sanitize_trigger_reasons: List[str] = ["forced"] if force_sanitize else []
             rendered_tokens: Optional[int] = None
+            prompt_rendered_tokens: Optional[int] = None
             trigger_visible_block_count: Optional[int] = None
             try:
                 visible_probe = self._prepare_visible_blocks_for_render(

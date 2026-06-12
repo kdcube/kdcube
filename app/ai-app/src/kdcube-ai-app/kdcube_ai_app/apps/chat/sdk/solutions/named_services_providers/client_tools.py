@@ -58,14 +58,21 @@ def named_service_namespace_config(
     return raw if isinstance(raw, Mapping) else {}
 
 
-def named_service_namespace_provider_config(
+def named_service_namespace_provider_configs_from_config(namespace_cfg: Mapping[str, Any] | None) -> list[Mapping[str, Any]]:
+    raw = (namespace_cfg or {}).get("providers") if isinstance(namespace_cfg, Mapping) else None
+    if isinstance(raw, list):
+        return [dict(item) for item in raw if isinstance(item, Mapping)]
+    return []
+
+
+def named_service_namespace_provider_configs(
     bundle_props: Mapping[str, Any] | None,
     *,
     namespace: str,
-) -> Mapping[str, Any]:
-    namespace_cfg = named_service_namespace_config(bundle_props, namespace=namespace)
-    raw = namespace_cfg.get("provider")
-    return raw if isinstance(raw, Mapping) else {}
+) -> list[Mapping[str, Any]]:
+    return named_service_namespace_provider_configs_from_config(
+        named_service_namespace_config(bundle_props, namespace=namespace)
+    )
 
 
 def named_service_namespace_client_tools_config(
@@ -82,6 +89,23 @@ def named_service_namespace_client_tools_config(
         raw = clients.get(key)
         if isinstance(raw, Mapping) and isinstance(raw.get("tools"), Mapping):
             return raw["tools"]
+    return {}
+
+
+def named_service_namespace_client_resolver_config(
+    bundle_props: Mapping[str, Any] | None,
+    *,
+    namespace: str,
+    client_id: Any,
+) -> Mapping[str, Any]:
+    namespace_cfg = named_service_namespace_config(bundle_props, namespace=namespace)
+    clients = namespace_cfg.get("clients")
+    if not isinstance(clients, Mapping):
+        return {}
+    for key in client_config_keys(client_id):
+        raw = clients.get(key)
+        if isinstance(raw, Mapping) and isinstance(raw.get("resolver"), Mapping):
+            return raw["resolver"]
     return {}
 
 
@@ -131,8 +155,10 @@ __all__ = [
     "client_has_named_service_tools",
     "extend_tool_specs_for_named_services",
     "named_service_namespace_client_tools_config",
+    "named_service_namespace_client_resolver_config",
     "named_service_namespace_config",
-    "named_service_namespace_provider_config",
+    "named_service_namespace_provider_configs",
+    "named_service_namespace_provider_configs_from_config",
     "named_service_namespaces",
     "named_services_config",
     "named_service_tool_spec",

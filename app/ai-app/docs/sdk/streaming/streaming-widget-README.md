@@ -1,13 +1,13 @@
 ---
-id: ks:docs/sdk/streaming/streaming-widget-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/streaming/streaming-widget-README.md
 title: "Streaming Widget"
 summary: "Live exec streaming widget used by ReAct for code execution status and output."
 tags: ["sdk", "streaming", "widgets", "exec", "react"]
 keywords: ["live exec widget", "code execution status", "react", "streamer channels", "status events"]
 see_also:
-  - ks:docs/sdk/streaming/channeled-streamer-README.md
-  - ks:docs/README.md
-  - ks:docs/sdk/agents/react/external-exec-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/streaming/channeled-streamer-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/external-exec-README.md
 ---
 # Streaming Exec Widget (Live Code + Execution Status)
 

@@ -229,3 +229,160 @@ class TestBuildPortableSpecEnvPassthrough:
 
         resolved = sdk_config._resolve_current_bundle_id()
         assert resolved == _BUNDLE_ID
+
+
+class TestToolSubsystemPortableContext:
+    def _patch_snapshot(self, monkeypatch):
+        from kdcube_ai_app.apps.chat.sdk.runtime import snapshot as snap_mod
+
+        class _MockSettings:
+            STORAGE_PATH = None
+
+            def __getattr__(self, name):
+                return None
+
+        monkeypatch.setattr(snap_mod, "_config_to_model_config_spec", lambda cfg: ModelConfigSpec())
+        monkeypatch.setattr(snap_mod, "get_settings", lambda: _MockSettings())
+        monkeypatch.setattr(snap_mod, "snapshot_all_contextvars", lambda: {"entries": []})
+
+    def _make_stub_svc(self):
+        from kdcube_ai_app.infra.service_hub.inventory import ModelServiceBase
+
+        svc = object.__new__(ModelServiceBase)
+        svc.config = type("Config", (), {"tenant": "tenant-a", "project": "project-a"})()
+        return svc
+
+    def _make_request_context(self):
+        from kdcube_ai_app.apps.chat.sdk.protocol import (
+            ExternalEventActor,
+            ExternalEventPayload,
+            ExternalEventRouting,
+            ExternalEventUser,
+        )
+
+        return ExternalEventPayload(
+            routing=ExternalEventRouting(
+                bundle_id="versatile@2026-03-31-13-36",
+                session_id="session-1",
+                conversation_id="conversation-1",
+                turn_id="turn-1",
+            ),
+            actor=ExternalEventActor(tenant_id="tenant-a", project_id="project-a"),
+            user=ExternalEventUser(
+                user_type="user",
+                user_id="user-1",
+                username="Elena",
+                email="elena@example.test",
+                fingerprint="fp-1",
+                roles=["kdcube:role:user"],
+                permissions=["task:read"],
+            ),
+        )
+
+    def _make_tool_subsystem(self, monkeypatch, *, bundle_props):
+        from kdcube_ai_app.apps.chat.sdk.runtime import tool_subsystem as tool_subsystem_mod
+        from kdcube_ai_app.apps.chat.sdk.runtime.tool_subsystem import ToolSubsystem
+        from kdcube_ai_app.infra.plugin.bundle_registry import BundleSpec
+
+        monkeypatch.setattr(tool_subsystem_mod, "create_kv_cache", lambda: None)
+        return ToolSubsystem(
+            service=self._make_stub_svc(),
+            comm=None,
+            logger=None,
+            bundle_spec=BundleSpec(id="versatile@2026-03-31-13-36", path="", module=""),
+            context_rag_client=None,
+            registry={
+                "bundle_props": bundle_props,
+                "comm_context": self._make_request_context(),
+                "redis": object(),
+                "client_id": "main",
+            },
+            tools_specs=[],
+        )
+
+    def test_tool_subsystem_portable_spec_carries_user_identity_and_discovery_scope(self, monkeypatch):
+        self._patch_snapshot(monkeypatch)
+        tool_subsystem = self._make_tool_subsystem(
+            monkeypatch,
+            bundle_props={
+                "named_services": {
+                    "namespaces": {
+                        "task": {
+                            "clients": {
+                                "main": {
+                                    "tools": {
+                                        "allowed_operations": ["object.get"],
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        )
+
+        spec = tool_subsystem.build_portable_spec()
+        comm_ctx = spec.contextvars["comm_ctx"]
+
+        assert comm_ctx["REQUEST_CONTEXT"]["user"]["user_id"] == "user-1"
+        assert comm_ctx["REQUEST_CONTEXT"]["user"]["roles"] == ["kdcube:role:user"]
+        assert comm_ctx["REQUEST_CONTEXT"]["user"]["permissions"] == ["task:read"]
+        assert comm_ctx["NAMED_SERVICE_DISCOVERY"] == {
+            "schema": "kdcube.named_service.discovery.v1",
+            "backend": "redis",
+            "tenant": "tenant-a",
+            "project": "project-a",
+        }
+
+    def test_tool_subsystem_context_manager_binds_live_identity_and_discovery(self, monkeypatch):
+        self._patch_snapshot(monkeypatch)
+        tool_subsystem = self._make_tool_subsystem(
+            monkeypatch,
+            bundle_props={
+                "named_services": {
+                    "namespaces": {
+                        "task": {
+                            "clients": {
+                                "main": {
+                                    "tools": {
+                                        "allowed_operations": ["object.get"],
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        )
+
+        from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import get_current_request_context
+        from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import get_current_named_service_discovery
+
+        with tool_subsystem.bind_portable_runtime_context():
+            request_context = get_current_request_context()
+            discovery = get_current_named_service_discovery()
+
+        assert request_context.user.user_id == "user-1"
+        assert discovery.tenant == "tenant-a"
+        assert discovery.project == "project-a"
+
+    def test_tool_subsystem_does_not_bind_discovery_when_named_service_tools_are_not_configured(self, monkeypatch):
+        self._patch_snapshot(monkeypatch)
+        tool_subsystem = self._make_tool_subsystem(
+            monkeypatch,
+            bundle_props={
+                "named_services": {
+                    "namespaces": {
+                        "task": {
+                            "clients": {},
+                        },
+                    },
+                },
+            },
+        )
+
+        spec = tool_subsystem.build_portable_spec()
+        comm_ctx = spec.contextvars["comm_ctx"]
+
+        assert comm_ctx["REQUEST_CONTEXT"]["user"]["user_id"] == "user-1"
+        assert comm_ctx["NAMED_SERVICE_DISCOVERY"] == {}

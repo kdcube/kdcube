@@ -1,19 +1,19 @@
 ---
-id: ks:docs/sdk/tools/tool-subsystem-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/tool-subsystem-README.md
 title: "Tool Subsystem"
 summary: "Canonical runtime flow for tool descriptors: resolution, dynamic loading, binding, and execution in in-memory and isolated modes."
 tags: ["sdk", "tools", "subsystem", "runtime", "descriptor", "isolation", "mcp", "binding"]
 keywords: ["tools_descriptor.py", "TOOLS_SPECS", "MCP_TOOL_SPECS", "TOOL_RUNTIME", "ToolSubsystem", "resolve_codegen_tools_specs", "io_tools.tool_call", "ToolStub", "py_code_exec_entry.py", "rewrite_runtime_globals_for_bundle", "bind_module_target", "_SERVICE", "_INTEGRATIONS"]
 see_also:
-  - ks:docs/sdk/tools/custom-tools-README.md
-  - ks:docs/sdk/tools/mcp-README.md
-  - ks:docs/sdk/events/event-subsystem-README.md
-  - ks:docs/sdk/agents/react/event-source/event-source-README.md
-  - ks:docs/sdk/agents/react/event-source/block-production-README.md
-  - ks:docs/sdk/bundle/bundle-runtime-README.md
-  - ks:docs/exec/README-runtime-modes-builtin-tools.md
-  - ks:docs/exec/README-iso-runtime.md
-  - ks:docs/sdk/agents/react/react-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/custom-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/mcp-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/block-production-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-runtime-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/README-runtime-modes-builtin-tools.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/README-iso-runtime.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-tools-README.md
 ---
 # Tool Subsystem
 

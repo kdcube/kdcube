@@ -1,13 +1,13 @@
 ---
-id: ks:docs/sdk/skills/skills-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/skills/skills-README.md
 title: "Skills"
 summary: "Skills subsystem reference: format, discovery roots, per-consumer visibility filtering, and exact runtime enforcement paths."
 tags: ["sdk", "skills", "subsystem", "runtime", "descriptor", "agents_config", "react", "codegen", "citations", "solutions"]
 keywords: ["skills_registry.py", "skills_descriptor.py", "AGENTS_CONFIG", "consumer id", "solution skills", "skills_for_consumer", "build_skill_short_id_map", "import_skillset", "build_skills_instruction_block", "react.read", "llm_generator.py", "codegen_tools.py"]
 see_also:
-  - ks:docs/sdk/skills/custom-skills-README.md
-  - ks:docs/sdk/skills/skills-infra-README.md
-  - ks:docs/sdk/agents/react/react-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/skills/custom-skills-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/skills/skills-infra-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-tools-README.md
 ---
 # Skills Subsystem
 

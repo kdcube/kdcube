@@ -1,15 +1,15 @@
 ---
-id: ks:docs/ops/ops-overview-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/ops/ops-overview-README.md
 title: "Ops Overview"
 summary: "Primary operations entry point for deployment modes, runtime service topology, health surfaces, and the practical split between EC2, ECS, and local environments."
 tags: ["ops", "overview", "deployment", "topology", "services", "ecs", "ec2"]
 keywords: ["operations overview", "deployment topology", "runtime services", "ecs and ec2 operations", "local versus cloud environments", "health and deployment guides", "service layout for operators"]
 see_also:
-  - ks:docs/ops/local/local-setup-README.md
-  - ks:docs/service/environment/setup-for-dockercompose-README.md
-  - ks:docs/ops/deployment-options-index-README.md
-  - ks:docs/ops/ecs/ecs-deployment-README.md
-  - ks:docs/ops/health-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/ops/local/local-setup-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/environment/setup-for-dockercompose-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/ops/deployment-options-index-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/ops/ecs/ecs-deployment-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/ops/health-README.md
 ---
 # Ops Overview
 

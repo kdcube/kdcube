@@ -1,12 +1,12 @@
 ---
-id: ks:docs/sdk/integrations/email/email-external-prereq-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/email/email-external-prereq-README.md
 title: "Email External Prerequisites"
 summary: "External provider and deployment setup required before KDCube Email SDK integrations can work."
 tags: ["sdk", "integrations", "email", "gmail", "icloud", "oauth", "prerequisites"]
 keywords: ["email prerequisites", "gmail oauth setup", "gmail api", "icloud app password", "email deployment secrets"]
 see_also:
-  - ks:docs/sdk/integrations/email/email-README.md
-  - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/email/email-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-external-prereq-README.md
 ---
 
 # Email External Prerequisites

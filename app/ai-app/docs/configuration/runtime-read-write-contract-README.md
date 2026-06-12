@@ -1,17 +1,17 @@
 ---
-id: ks:docs/configuration/runtime-read-write-contract-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/configuration/runtime-read-write-contract-README.md
 title: "Runtime Read/Write Contract Compatibility Entry"
 summary: "Compatibility entry for older helper-contract links: redirects readers to the canonical bundle configuration API guide and the detailed runtime storage model."
 tags: ["service", "configuration", "runtime", "helpers", "contract"]
 keywords: ["helper api compatibility entry", "get_settings helper", "get_plain helper", "get_secret helper", "bundle_prop helper", "bundle secret write helper", "user prop helper", "user secret helper", "authoritative configuration reference"]
 see_also:
-  - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
-  - ks:docs/configuration/runtime-configuration-and-secrets-store-README.md
-  - ks:docs/configuration/service-runtime-configuration-mapping-README.md
-  - ks:docs/configuration/assembly-descriptor-README.md
-  - ks:docs/configuration/bundles-descriptor-README.md
-  - ks:docs/configuration/bundles-secrets-descriptor-README.md
-  - ks:docs/configuration/secrets-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/runtime-configuration-and-secrets-store-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/assembly-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-secrets-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/secrets-descriptor-README.md
 ---
 # Runtime Read/Write Contract Compatibility Entry
 

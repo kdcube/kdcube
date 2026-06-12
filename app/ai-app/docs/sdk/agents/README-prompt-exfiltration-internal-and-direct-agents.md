@@ -1,13 +1,13 @@
 ---
-id: ks:docs/sdk/agents/README-prompt-exfiltration-internal-and-direct-agents.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/README-prompt-exfiltration-internal-and-direct-agents.md
 title: "Prompt Exfiltration Internal And Direct Agents"
 summary: "Security guide on prompt exfiltration risks for direct vs internal agents."
 tags: ["sdk", "agents", "security", "prompting"]
 keywords: ["prompt injection", "exfiltration", "direct agents", "internal agents", "exposure surfaces"]
 see_also:
-  - ks:docs/sdk/agents/react/flow-README.md
-  - ks:docs/sdk/agents/react/react-context-README.md
-  - ks:docs/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/flow-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-context-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/README.md
 ---
 # Prompt Exfiltration in Direct vs Internal Agents
 

@@ -166,7 +166,9 @@ def test_tool_call_block_caps_large_payload_text_but_keeps_recoverable_payload(c
     content_marker = rendered_payload["params"]["content"]
     assert content_marker["truncated"] is True
     assert content_marker["text_symbols"] == len(large_content)
-    assert "ranged react.read items" in content_marker["recover_with"]
+    assert content_marker["full_value_ref"] == "tc:turn_test.tc_big.call"
+    assert content_marker["full_value_field"] == "params.content"
+    assert "saved full tool-call payload" in content_marker["recover_with"]
     assert large_content not in caplog.text
 
     resolved = resolve_artifact_from_timeline({"blocks": ctx.blocks, "sources_pool": []}, "tc:turn_test.tc_big.call")

@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/solutions/canvas/pin-operations-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/pin-operations-README.md
 title: "Canvas Pin Operations"
 summary: "Defines the object-level operation contract for canvas pins: one canonical object ref, resolver-owned preview/open/download/rehost behavior, and board-owned drag/drop/layout."
 status: active
@@ -20,10 +20,10 @@ keywords:
     "mem refs",
   ]
 see_also:
-  - ks:docs/sdk/solutions/canvas/canvas-module-guide-README.md
-  - ks:docs/sdk/solutions/canvas/pin-integration-README.md
-  - ks:docs/sdk/solutions/canvas/external-subsystem-event-source-products-pins-README.md
-  - ks:docs/sdk/events/namespaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/canvas-module-guide-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/pin-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/external-subsystem-event-source-products-pins-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
 ---
 # Canvas Pin Operations
 
@@ -105,7 +105,7 @@ This makes duplicate prevention deterministic:
 - dragging the same `task:issues/<id>` again updates/restores the existing pin;
 - dragging the same `fi:` again updates/restores the existing pin;
 - dragging the same `mem:` again updates/restores the existing pin;
-- dragging the same `ks:` or `so:` again updates/restores the existing pin.
+- dragging the same `repo:` or `so:` ref again updates/restores the existing pin.
 
 Canvas-owned objects are the exception because the user creates a new object
 first. Their ids are minted by the canvas-owned object host:

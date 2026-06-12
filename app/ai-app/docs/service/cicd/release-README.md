@@ -1,14 +1,14 @@
 ---
-id: ks:docs/service/cicd/release-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/cicd/release-README.md
 title: "Release"
 summary: "Monorepo release guide driven by assembly.yaml + bundles.yaml: CI build/publish and deployment-time descriptor usage."
 tags: ["service", "cicd", "release", "versioning", "git", "images", "bundles", "registry"]
 keywords: ["assembly.yaml", "bundles.yaml", "platform.ref", "git tag", "image tags", "BUNDLES_FORCE_ENV_ON_STARTUP", "BUNDLE_GIT_REDIS_LOCK", "monorepo versioning", "PyPI"]
 see_also:
-  - ks:docs/service/cicd/release-bundle-README.md
-  - ks:docs/configuration/assembly-descriptor-README.md
-  - ks:docs/service/cicd/custom-cicd-README.md
-  - ks:docs/service/cicd/cli-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/release-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/assembly-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/custom-cicd-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/cli-README.md
 ---
 # Release + Versioning
 

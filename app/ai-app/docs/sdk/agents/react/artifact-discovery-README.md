@@ -1,16 +1,16 @@
 ---
-id: ks:docs/sdk/agents/react/artifact-discovery-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-discovery-README.md
 title: "Artifact Discovery"
 summary: "How artifacts are discovered from timeline blocks and how logical/physical paths resolve for tools."
 tags: ["sdk", "agents", "react", "artifacts", "paths"]
 keywords: ["logical paths", "physical paths", "react.read", "attachments", "artifact resolution", "timeline blocks"]
 see_also:
-  - ks:docs/sdk/events/namespaces-README.md
-  - ks:docs/sdk/agents/react/artifact-storage-README.md
-  - ks:docs/sdk/agents/react/react-tools-README.md
-  - ks:docs/sdk/agents/react/timeline-README.md
-  - ks:docs/sdk/agents/react/files-vs-outputs-README.md
-  - ks:docs/sdk/agents/react/memory-recovery-path-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-storage-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/timeline-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/files-vs-outputs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/memory-recovery-path-README.md
 ---
 # Artifact Discovery (Logical/Physical Paths)
 
@@ -25,9 +25,10 @@ Important distinction:
 - it is not the contract for bundle namespace resolution inside isolated exec
 - it describes the current artifact path model, including the phase-1 `files/...` vs `outputs/...` namespace split
 
-For bundle namespace browsing such as `ks:` via generated exec code, the relevant model is:
-- a bundle may expose an exec-only namespace resolver tool
-- that tool returns an exec-visible path contract for code
+For owner namespace browsing via generated exec code, the relevant model is:
+- an owner may expose an exec-only namespace resolver, rehoster, or service
+  operation
+- that surface returns an exec-visible path or byte stream scoped to the request
 - this is separate from timeline artifact discovery
 
 ## Key Concepts
@@ -170,7 +171,10 @@ The rewrite is recorded as a **protocol notice** in the timeline so the agent ca
 
 **react.rg**
 - Searches files already materialized under the artifact root and returns discovery metadata plus optional line-numbered content matches.
-- It does not search hidden/pruned timeline, unpulled historical snapshots, or `ks:`. Use visible refs or `react.memsearch` to identify older `fi:` refs, then `react.pull` them before local search. Checkout only when you need an editable current-turn copy.
+- It does not search hidden/pruned timeline, unpulled historical snapshots, or
+  owner namespaces. Use visible refs or `react.memsearch` to identify older
+  `fi:` refs, then `react.pull` them before local search. Checkout only when
+  you need an editable current-turn copy.
 - `fi:conv_<conversation_id>.turn_<id>...` roots are cross-conversation refs and
   are resolved with that conversation scope after materialization.
 - Result shape is `{root, hits}`.
@@ -212,11 +216,8 @@ The rewrite is recorded as a **protocol notice** in the timeline so the agent ca
   - `physical_path: str | null`
   - `access: 'r' | 'rw'`
   - `browseable: bool`
-- Use the resolver input logical_ref itself as the logical base if generated code wants the agent to follow up later with `react.read(...)`.
-- Example:
-  - set `logical_base = "ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk"` and resolve it
-  - code inspects files under the returned `physical_path`
-  - if code finds `runtime/execution.py`, it should emit logical ref `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/execution.py` in an `OUTPUT_DIR` file or short `user.log` note
+- If generated code wants the agent to follow up later, emit a normal hosted
+  `fi:` artifact ref or an owner ref that the owner service can resolve.
 - The returned `physical_path` is an exec-runtime path only.
 - It is not an artifact `physical_path`, not artifact-root-relative, and not a valid input to normal react tools.
 - Generated code must respect `access` exactly; for example, `access='r'` means browse/read only.

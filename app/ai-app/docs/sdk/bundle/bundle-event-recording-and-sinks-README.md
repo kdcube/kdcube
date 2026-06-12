@@ -1,18 +1,18 @@
 ---
-id: ks:docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
 title: "Bundle Event Recording And Sinks"
 summary: "Bundle-facing guide for recording selected comm events, configuring event sinks, and sending recorded batches from workflows, APIs, MCP endpoints, jobs, and tools across host and isolated runtimes."
 tags: ["sdk", "bundle", "comm", "recording", "event-sinks", "tools", "runtime", "mcp", "api", "jobs"]
 keywords: ["bundle event recording", "comm record", "send recorded events", "set event sink", "bundle telemetry sink", "tool comm recording", "isolated runtime recorded events"]
 see_also:
-  - ks:docs/service/comm/comm-recording-event-sinks-README.md
-  - ks:docs/sdk/bundle/bundle-runtime-README.md
-  - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
-  - ks:docs/sdk/bundle/bundle-agent-integration-README.md
-  - ks:docs/sdk/bundle/bundle-platform-integration-README.md
-  - ks:docs/service/comm/bus-routing-and-partitioning-README.md
-  - ks:docs/sdk/bundle/bundle-scheduled-jobs-README.md
-  - ks:docs/exec/README-iso-runtime.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/comm-recording-event-sinks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-runtime-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-chat-stream-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-agent-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/bus-routing-and-partitioning-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-scheduled-jobs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/README-iso-runtime.md
 ---
 # Bundle Event Recording And Sinks
 

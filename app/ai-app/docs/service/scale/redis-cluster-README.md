@@ -1,13 +1,13 @@
 ---
-id: ks:docs/service/scale/redis-cluster-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/scale/redis-cluster-README.md
 title: "Redis Cluster Readiness"
 summary: "Scale notes for Redis Cluster compatibility, including multi-key Lua boundaries and the gateway capacity index."
 tags: ["service", "scale", "redis", "redis-cluster", "lua", "gateway", "backpressure"]
 keywords: ["redis cluster", "hash tags", "multi-key lua", "gateway capacity index", "queue admission", "redis streams"]
 see_also:
-  - ks:docs/service/maintenance/gateway-control-README.md
-  - ks:docs/service/maintenance/requests-monitoring-README.md
-  - ks:docs/service/comm/conversation-event-bus-orchestrator-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/maintenance/gateway-control-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/maintenance/requests-monitoring-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/conversation-event-bus-orchestrator-README.md
 ---
 # Redis Cluster Readiness
 

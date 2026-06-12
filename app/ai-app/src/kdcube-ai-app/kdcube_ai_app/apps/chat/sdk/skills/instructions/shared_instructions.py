@@ -242,7 +242,7 @@ physical path, for example exec code, `react.patch`, and rendering writes:
 use logical refs such as `fi:turn_<id>.files/<workspace_scope>/app.py`.
 
 The diagram below shows the local `OUTPUT_DIR` surface, versioned artifact refs,
-external owner refs, and knowledge refs. When code, rendering, local search,
+and registered owner refs. When code, rendering, local search,
 or file inspection needs artifact bytes, materialize the visible ref with
 `react.pull` and continue from the returned paths.
 
@@ -274,8 +274,6 @@ or file inspection needs artifact bytes, materialize the visible ref with
    ev:turn_<id>.events/<event_path>
    ev:conv_<conversation_id>.turn_<id>.events/<event_path>
 
-5) BUNDLE KNOWLEDGE SPACE `ks:` (logical; read-only virtual folder)
-   ks:<bundle-defined-path>/...
 ```
 
 - `fi:` is the versioned file/artifact namespace. It is the main way to refer to older workspace files, non-workspace outputs, snapshots, and attachments.
@@ -329,7 +327,7 @@ or file inspection needs artifact bytes, materialize the visible ref with
 - To continue a previous workspace path as the active workspace, use its `fi:` form and follow the two-step pattern: first `react.pull(paths=["fi:turn_<id>.files/<path_under_files>"])`, then `react.checkout(mode="replace", paths=["fi:turn_<id>.files/<path_under_files>"])`, then write into current-turn `turn_<current>/files/<path_under_files>/...`.
 - `react.rg` searches readable local artifact files already materialized on this worker and returns file metadata plus line-numbered regex matches. Use roots that match visible paths: omit `root`, use canonical physical `turn_<id>/...` roots, or matching `fi:` artifact paths.
 - For conversation history and hidden/pruned blocks, use visible refs, `react.memsearch`, and `react.read`; then `react.pull` the artifact before local search. If you need to edit it, checkout the pulled `files/...` ref into the current turn first.
-- Access `ks:` with `react.read` or bundle-specific tools; it is outside the `OUTPUT_DIR` filesystem.
+- Owner-defined namespaces are not built-in readable paths. If exact content is needed, use the configured namespace/service tool or `react.pull` when the runtime exposes a rehoster, then continue from the returned paths.
 """
 
 WORKSPACE_IMPLEMENTATION_GUIDE_GIT = """
@@ -341,7 +339,7 @@ physical path, for example exec code, `react.patch`, and rendering writes:
 use logical refs such as `fi:turn_<id>.files/<workspace_scope>/app.py`.
 
 The diagram below shows the local `OUTPUT_DIR` surface, versioned artifact refs,
-external owner refs, and knowledge refs. When code, rendering, local search,
+and registered owner refs. When code, rendering, local search,
 or file inspection needs artifact bytes, materialize the visible ref with
 `react.pull` and continue from the returned paths.
 
@@ -374,8 +372,6 @@ or file inspection needs artifact bytes, materialize the visible ref with
    ev:turn_<id>.events/<event_path>
    ev:conv_<conversation_id>.turn_<id>.events/<event_path>
 
-5) BUNDLE KNOWLEDGE SPACE `ks:` (logical; read-only virtual folder)
-   ks:<bundle-defined-path>/...
 ```
 
 - The current turn root `turn_<current>/` is bootstrapped as a sparse local git repo in `OUTPUT_DIR`.
@@ -444,7 +440,7 @@ or file inspection needs artifact bytes, materialize the visible ref with
 - Local git inspection/diff/status/commit commands are allowed when useful. Runtime synchronization owns network git operations.
 - `react.rg` searches readable local artifact files already materialized on this worker and returns file metadata plus line-numbered regex matches. Use roots that match visible paths: omit `root`, use canonical physical `turn_<id>/...` roots, or matching `fi:` artifact paths.
 - For conversation history and hidden/pruned blocks, use visible refs, `react.memsearch`, and `react.read`; then `react.pull` the artifact before local search. If you need to edit it, checkout the pulled `files/...` ref into the current turn first.
-- Access `ks:` with `react.read` or bundle-specific tools; it is outside the `OUTPUT_DIR` filesystem.
+- Owner-defined namespaces are not built-in readable paths. If exact content is needed, use the configured namespace/service tool or `react.pull` when the runtime exposes a rehoster, then continue from the returned paths.
 """
 
 def get_workspace_implementation_guide(implementation: str | None = None) -> str:
@@ -522,10 +518,6 @@ Physical → Logical mapping:
   physical: (none)
   logical : su:turn_<id>.conv.range.summary
   meaning : conversation summary artifact
-- Knowledge space (react.read only):
-  physical: (not a normal tool path)
-  logical : ks:<relpath> (reads from system-prepared knowledge space; not supported by fetch_ctx)
-  meaning : read-only bundle knowledge content
 - External owner ref (react.pull only):
   physical: (none until pulled)
   logical : <namespace>:<external-key>
@@ -541,7 +533,7 @@ HARD:
 - If you need several exact objects, pass all known paths in one react.read call instead of spending one round per path.
 - Large/capped data handling is defined in the extended guide. Treat rendered previews as inspection aids, not proof of full content.
 - `react.read` caps apply per path, not across the whole path list. For cheap discovery without content, use `stats_only:true`; it returns size/mime/token metadata in the status block and does not add content blocks.
-- `ctx_tools.fetch_ctx` expects LOGICAL paths, but only supports `ar:`, `tc:`, `so:` namespaces. `fi:`, `ks:`, `sk:`, or `su:` are not supported.
+- `ctx_tools.fetch_ctx` expects LOGICAL paths, but only supports `ar:`, `tc:`, `so:` namespaces. `fi:`, `sk:`, or `su:` are not supported.
 - `ctx_tools.fetch_ctx` returns artifact fields `path`, `mime`, and `payload`. For JSON mime, `payload` is parsed JSON. Compatibility fields such as `text` or `base64` may also be present.
 - For `so:sources_pool[...]`, `react.read` and `ctx_tools.fetch_ctx` return a list of source rows, not an artifact dict.
 - For `so:conv_<conversation_id>.sources_pool[...]`, use `react.read`; this reads another conversation's persisted source pool. `ctx_tools.fetch_ctx` is current-timeline only.
@@ -550,7 +542,7 @@ HARD:
 - Exec code reads and writes PHYSICAL OUTPUT_DIR-relative paths.
 - Runtime namespace resolvers used inside exec return exec-local physical paths plus access mode. Those physical paths are not valid inputs to react.read or other normal react tools.
 - If exec code browses a resolved namespace root and finds useful descendants, this is discovery only. Emit logical refs by combining the original resolver input logical_ref with the discovered relative path; then use react.read on those logical refs to bring content into visible context.
-- Example: resolve `ks:<bundle-defined-root>`, inspect the returned directory in exec, find `foo/bar.py`, then emit `ks:<bundle-defined-root>/foo/bar.py` in an OUTPUT_DIR file or short user.log note so the agent can later call `react.read(paths=["ks:<bundle-defined-root>/foo/bar.py"])`.
+- Example: resolve a runtime-declared owner namespace, inspect the returned directory in exec, find `foo/bar.py`, then emit the namespace-owned logical ref in an OUTPUT_DIR file or short user.log note so the agent can later use the configured namespace/service retrieval path.
 - If you have a physical path, derive logical as above before calling react.read.
 - If you have an external owner ref and exact content is needed, call `react.pull(paths=[...])` first. The pull result tells you the resolved/rehosted `fi:` logical path and physical path; use those returned paths for reading, local search, or exec code. Unsupported namespaces are reported by the pull result.
 - react.rg returns `root` plus hits with `path`, `size_bytes`, optional `text_symbols`/`line_count`/`logical_path`, and content `matches` with `read_item` ranges.
@@ -593,8 +585,6 @@ PATHS_EXTENDED_GUIDE = """
     - `su:turn_<id>.conv.range.summary` (loads a saved conversation summary into visible context; not supported by fetch_ctx)
 - Skills (react.read only):
   - `sk:<skill_id>` (loads a skill into visible timeline; not supported by fetch_ctx)
-- Knowledge space (react.read only):
-  - `ks:<relpath>` (reads from system-prepared knowledge space; not supported by fetch_ctx)
 - Tool calls:
     - `tc:turn_<id>.<tool_call_id>.call` (tool call input: tool id + params; bindings already resolved in the saved view)
     - `tc:turn_<id>.<tool_call_id>.result` (rendered tool result block: status/errors + artifact metadata; inline output only for non‑file tools)
@@ -621,14 +611,14 @@ Using unsupported logical namespaces with fetch_ctx returns an error rather than
 - Keep the original resolver input `logical_ref` as the logical base.
 - If code browses descendants under the returned `physical_path`, emit follow-up logical refs by combining that original `logical_ref` with the discovered relative path.
 - Example:
-  - input `logical_ref = "ks:<bundle-defined-root>"`
+  - input `logical_ref = "<namespace>:<bundle-defined-root>"`
   - discovered relative path `foo/bar.py`
-  - emit logical ref `ks:<bundle-defined-root>/foo/bar.py`
+  - emit logical ref `<namespace>:<bundle-defined-root>/foo/bar.py`
 - Emit those logical refs in an `OUTPUT_DIR` file or short `user.log` note so the agent can later use `react.read(paths=[...])`.
 
 #### react.rg results
 - `react.rg` does not load full file contents into context.
-- `react.rg` searches only files already materialized under the local artifact workspace. It is not a search over the whole conversation timeline, hidden/pruned blocks, unmaterialized artifact history, or `ks:`. Materialize needed older files first with `react.pull`; if the goal is editing, then checkout the pulled `files/...` ref into the current turn. Use roots that match visible paths: fully qualified `turn_<id>/files/...`, `turn_<id>/outputs/...`, `turn_<id>/attachments/...`, or `fi:...`.
+- `react.rg` searches only files already materialized under the local artifact workspace. It is not a search over the whole conversation timeline, hidden/pruned blocks, or unmaterialized artifact history. Materialize needed older files first with `react.pull`; if the goal is editing, then checkout the pulled `files/...` ref into the current turn. Use roots that match visible paths: fully qualified `turn_<id>/files/...`, `turn_<id>/outputs/...`, `turn_<id>/attachments/...`, or `fi:...`.
 - Each hit returns:
   - `path`: relative to the searched root
   - `size_bytes`
@@ -642,13 +632,13 @@ Using unsupported logical namespaces with fetch_ctx returns an error rather than
 
 #### Large/capped data operating procedure
 - Work from the rendered timeline surface: paths, metadata, previews, source rows, and explicit truncation/cap markers. Do not reason from internal artifact fields.
-- First identify the object and path namespace: `tc:` tool call/result, `fi:` file/artifact, `so:` source rows, `ar:` generated context, `sk:` skill, `ks:` knowledge, or `su:` summary. For files, note `mime`, `size_bytes`, `text_symbols`, `line_count`, and any physical path shown.
+- First identify the object and path namespace: `tc:` tool call/result, `fi:` file/artifact, `so:` source rows, `ar:` generated context, `sk:` skill, `su:` summary, or a runtime-declared owner namespace. For files, note `mime`, `size_bytes`, `text_symbols`, `line_count`, and any physical path shown.
 - Model-visible text artifact previews are rendered with line numbers when shown on the timeline. These line numbers are viewing prefixes, not file content. Use them to choose `react.read` ranges and patch locations; do not copy the prefixes into full-file replacements or patch content.
 - Use a preview directly only when it is sufficient for the current decision and it does not show truncation/omission/cap markers. If you see `[TOOL RESULT PREVIEW TRUNCATED]`, `[TEXT FILE PREVIEW TRUNCATED]`, `[READ PREVIEW TRUNCATED]`, `omitted`, `capped`, or line windows like `[1-40]/180`, treat the visible text as incomplete.
-- Skills are not read-capped. `ks:` knowledge-space articles are uncapped only when no explicit `knowledge_read_visible_*` caps are configured; capped `ks:` behaves like capped text and must be recovered by ranges.
-- For large text artifacts, do not edit or judge the whole file from the initial preview. Use this loop: `react.read(paths=[path],stats_only=true)` for size/line metadata -> `react.rg` when the file is searchable, or known anchors when it is `ks:` -> `react.read(items=[{"path":path,"line_start":...,"line_count":...}, ...])` to inspect exact line ranges -> repeat for every affected region -> edit/process only after the needed regions are visible.
+- Skills are not read-capped. Owner-defined namespace content is not a built-in readable path; use the configured namespace/service retrieval path and follow its returned refs.
+- For large text artifacts, do not edit or judge the whole file from the initial preview. Use this loop: `react.read(paths=[path],stats_only=true)` for size/line metadata -> `react.rg` when the file is searchable -> `react.read(items=[{"path":path,"line_start":...,"line_count":...}, ...])` to inspect exact line ranges -> repeat for every affected region -> edit/process only after the needed regions are visible.
 - For source rows, use `react.read(paths=["so:sources_pool[...]"])`. Web rows use `content` for fetched page body and `text` for search preview/snippet; use `content` first when you need evidence.
-- If your answer or edit depends on a file/article as evidence, read the needed evidence into visible context. Skills must be read in full. `ks:` articles are read in full only when no explicit `knowledge_read_visible_*` cap is configured; if a deployment caps `ks:`, treat it like capped text. For capped text files/articles, use `react.read` range items to recover content by parts. For searchable `fi:` files, `react.rg` can supply ready-made `read_item` ranges. For capped `ks:` articles, start with `stats_only:true`, then request line windows by `line_start`/`line_count`.
+- If your answer or edit depends on a file/article as evidence, read the needed evidence into visible context. Skills must be read in full. For capped text files/articles, use `react.read` range items to recover content by parts. For searchable `fi:` files, `react.rg` can supply ready-made `read_item` ranges.
 - Ranged reads always materialize the requested range even if the same logical path is already visible as a full file or preview block.
 - If the whole text must be visible and `text_symbols` is within visible caps, request `max_text_symbols >= text_symbols` and verify the returned status is not truncated. If it is over caps, read consecutive line or symbol ranges until the needed content is visible.
 - For large `tc:` tool results, use the rendered shape/sample to plan and `react.read` for another bounded visible preview. Do not assume exec/fetch output is an uncapped route back into model context.
@@ -799,7 +789,7 @@ CODEGEN_BEST_PRACTICES_V2 = """
   make sure the needed, for code generation, artifacts are visible in the context so you can properly write the needed content in code.
 - For programmatic access inside the snippet, use ctx_tools.fetch_ctx only for the logical context objects it supports:
   ar:turn_<id>.user.prompt, ar:turn_<id>.assistant.completion, ar:turn_<id>.assistant.completion.<n>, ar:plan.latest:<plan_id>, tc:turn_<id>.<call_id>.call, tc:turn_<id>.<call_id>.result, and so:sources_pool[...].
-  It does NOT support fi:, ks:, sk:, or su:.
+  It does NOT support fi:, sk:, or su:.
   ar:turn_<id>.assistant.completion is the latest completion in that turn; numbered paths address earlier visible completions from the same turn.
   fetch_ctx returns a canonical artifact dict for ar:/tc: paths: {path, kind, mime, payload, text?, base64?}.
   Use payload; for JSON mime it is parsed JSON. For so:sources_pool[...] it returns source rows; for web rows use content first, text second.
@@ -906,7 +896,7 @@ EXEC_SNIPPET_RULES = f"""
   direct renderer tool calls or complete with the artifacts already produced.
 [ ctx_tools.fetch_ctx or read file?]
 - You MAY use ctx_tools.fetch_ctx inside your snippet to load context (generated code only; never in tool_call rounds).
-- fetch_ctx only supports ar:, tc:, so: paths. It does NOT support fi: or ks:. For files/attachments use physical OUTPUT_DIR paths.
+- fetch_ctx only supports ar:, tc:, so: paths. It does NOT support fi:. For files/attachments use physical OUTPUT_DIR paths.
 - fetch_ctx returns {{path, mime, sources_used, payload, text/base64}} for ar:/tc: artifacts. Use payload; for JSON mime it is parsed JSON.
   For so:sources_pool[...] it returns source rows. In web rows, `text` is the preview and `content` is full fetched page text when available; use `content or text`.
   If you need files, you access them directly with OUTPUT_DIR-relative paths.
@@ -1037,7 +1027,7 @@ Timeline and recovery entries show logical paths as the primary artifact identit
 | `fi:turn_<id>.user.attachments/<rel>` | `turn_<id>/attachments/<rel>` |
 | `fi:turn_<id>.external.<event_kind>.attachments/<event_id>/<rel>` | `turn_<id>/external/<event_kind>/attachments/<event_id>/<rel>` |
 
-- `ar:`, `tc:`, `so:`, `su:`, `ks:`, and `sk:` are logical context refs, not filesystem paths.
+- `ar:`, `tc:`, `so:`, `su:`, and `sk:` are logical context refs, not filesystem paths.
 - The current runtime may also show namespace refs whose resolvers are connected by the runtime. Runtime instructions or ANNOUNCE may name those namespaces and explain what their refs mean.
 - When a rendered event/object shows `object_ref: <namespace>:...`, that object ref is the owner object identity. If exact content is needed, pass the `object_ref` to `react.pull`; do not pull the event's `ev:` path.
 - If an `fi:` path starts `fi:conv_<conversation_id>.turn_<id>...`, the `conv_` segment is the conversation scope and the file/artifact is from another conversation. When materialized, its physical path starts with `conv_<conversation_id>/turn_<id>/...`. Current-conversation `fi:` paths do not have this segment. Use scoped paths exactly as supplied with `react.read`, `react.pull`, `react.checkout`, or `react.rg`.
@@ -1050,7 +1040,7 @@ All physical file paths in tool params and exec code are OUTPUT_DIR-relative and
 
 | Intent | Path kind | Use this form |
 | --- | --- | --- |
-| Read visible context/artifact content | logical | `ar:turn_<id>...`, `fi:turn_<id>...`, `tc:turn_<id>...`, `so:...`, `su:...`, `ks:...`, `sk:...` |
+| Read visible context/artifact content | logical | `ar:turn_<id>...`, `fi:turn_<id>...`, `tc:turn_<id>...`, `so:...`, `su:...`, `sk:...` |
 | Pull historical files into local execution workspace | logical | `react.pull(paths=["fi:turn_<id>.files/<workspace_scope>/<path>"])` |
 | Resolve and rehost an external owner ref | logical | `react.pull(paths=["<namespace>:<key>"])`, then use returned `logical_path` / `physical_path` |
 | Write or patch current durable workspace state | physical | `turn_<current>/files/<workspace_scope>/<path>` |
@@ -1402,11 +1392,11 @@ You have following tools to capture content which you produce in the named and d
   Do NOT use react.memsearch if the needed artifact or text is already visible in the current context.
   If you can see the needed content (or its logical path), use it directly or call react.read on that path.
   Only use react.memsearch when you cannot identify a path and suspect the info exists in older turns.
-- react.hide: hide a large snippet by logical path (ar:/fi:/tc:/so:/ks:), not a query. Use only when the large barely useful snippet is near the tail of your visible context, and clearly no longer needed. The original content remains retrievable via react.read(path).
+- react.hide: hide a large snippet by logical path (ar:/fi:/tc:/so:), not a query. Use only when the large barely useful snippet is near the tail of your visible context, and clearly no longer needed. The original content remains retrievable via react.read(path).
   This is very useful tool when results retrieved by react.read, react.memsearch or web_tools.web_search / web_tools/web_fetch are irrelevant. In that case you can hide the, to avoid spending tokens, and provide the replacement which explains the irrelevance and helps later to correlate the retrieval query (path or semantic query)
   to result it returned so do not repeat the same irrelevant retrieval later. This is also useful when you have already seen the content but it is far in the tail of your visible context and you want to keep the context clean and focused on more relevant content.
 - react.rg: safe ripgrep-like file/region search over files already materialized on this worker (no shell). Use it to locate readable files by name or regex content before reading/editing. Prefer roots that match visible paths: omit `root`, or use fully qualified `turn_<id>/files/...`, `turn_<id>/outputs/...`, `turn_<id>/attachments/...`, or matching `fi:` artifact paths.
-  It does not search hidden/pruned timeline, unmaterialized artifact history, or bundle knowledge space. If the target is from an older turn, identify the `fi:` ref from visible context or `react.memsearch`, then `react.pull` it before local search. If you need to modify it, checkout the pulled `files/...` ref into the current turn.
+  It does not search hidden/pruned timeline, unmaterialized artifact history, or bundle-owned service namespaces. If the target is from an older turn, identify the `fi:` ref from visible context or `react.memsearch`, then `react.pull` it before local search. If you need to modify it, checkout the pulled `files/...` ref into the current turn.
   It returns discovery metadata (`size_bytes`, `text_symbols`, `line_count`, `logical_path`) and, for content matches, line-numbered previews plus `read_item` ranges. For large text artifacts, search first, then follow up with react.read using `items`/`read_items` for the exact regions you need.
 
 - Use rendering_tools.write_* to render and write the special formats (pdf, pptx, docx, png).
@@ -1446,7 +1436,7 @@ still valid when needed; do not mix inline content and `ref:` in the same
   files or create smaller derived artifacts, but it is not a substitute for
   visible evidence; inspect the derived result or the needed source ranges
   before relying on them.
-- Before editing or building from an artifact/source/attachment, inspect enough of it for the task. If the rendered preview is capped or incomplete, follow the Large/capped data operating procedure in the shared path guide: use `stats_only` + ranged `react.read` for text files and `ks:` articles, `react.rg` when searchable, and source-row reads for sources. Exec output is capped and is not an uncapped read channel.
+- Before editing or building from an artifact/source/attachment, inspect enough of it for the task. If the rendered preview is capped or incomplete, follow the Large/capped data operating procedure in the shared path guide: use `stats_only` + ranged `react.read` for text files, `react.rg` when searchable, and source-row reads for sources. Exec output is capped and is not an uncapped read channel.
 - If your work depends on skills, load them first with react.read and read them before acting.
 - Keep the visible artifacts/skills space sane: load what you need, unload what you no longer need (unload works only for recent blocks).
 - You may only refer to artifacts/skills that are visible in context. Binding or reading a non-existent artifact/skill is an error.
@@ -1497,7 +1487,7 @@ still valid when needed; do not mix inline content and `ref:` in the same
 - Use react.read(paths=[...]) to control what artifacts/skills are visible in your context so you can refer to them.
   If the artifacts are already visible in the timeline, you do not need to read them again. This is for artifacts which content is not visible.
 - External owner refs are imported with `react.pull` when exact content is needed. If a rendered event/object shows `object_ref`, pull that ref. After pull, use the returned `fi:` logical path or physical path with `react.read`, `react.rg`, or exec/code.
-- Skills are never read-capped. `ks:` articles are read in full only when no explicit `knowledge_read_visible_*` caps are configured; capped `ks:` behaves like capped text.
+- Skills are never read-capped. Owner-defined namespace content is retrieved through its configured service or rehoster, then inspected through returned refs.
 - For large/capped data, follow the Large/capped data operating procedure in the shared path guide. In short: `react.read` is visible-context retrieval, `react.rg` locates searchable text ranges, `so:sources_pool[...]` returns source rows, and capped text files/articles are recovered into context by bounded `react.read` ranges. Exec can compute or create smaller artifacts, but it is not an uncapped way to show full content to the model.
 - For large text artifacts, do not edit from a capped preview. Use `stats_only:true` to get line metadata, use `react.rg` to find anchors when searchable, pass returned or manual `read_item` ranges to `react.read(items=[...])`, repeat until every affected region is visible, then edit/process.
 - Example tool_call (load sources + artifact + skill):

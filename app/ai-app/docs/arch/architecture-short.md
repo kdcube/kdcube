@@ -1,15 +1,15 @@
 ---
-id: ks:docs/arch/architecture-short.md
+id: repo:kdcube-ai-app/app/ai-app/docs/arch/architecture-short.md
 title: "Architecture Short"
 summary: "Concise system architecture overview with key components and integrations."
 tags: ["arch", "architecture", "overview"]
 keywords: ["high-level architecture", "ingress", "proc", "gateway", "SSE", "redis"]
 see_also:
-  - ks:docs/arch/architecture-long.md
-  - ks:docs/service/comm/README-comm.md
-  - ks:docs/service/comm/conversation-event-bus-and-data-bus-README.md
-  - ks:docs/service/comm/data-bus-README.md
-  - ks:docs/hosting/attachments-system.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/architecture-long.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/README-comm.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/conversation-event-bus-and-data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/hosting/attachments-system.md
 ---
 # KDCube AI App — System Architecture (Short)
 

@@ -1,12 +1,12 @@
 ---
-id: ks:docs/sdk/integrations/linkedin/linkedin-external-prereq-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/linkedin/linkedin-external-prereq-README.md
 title: "LinkedIn External Prerequisites"
 summary: "External provider and deployment setup required before KDCube LinkedIn SDK integrations can work."
 tags: ["sdk", "integrations", "linkedin", "oauth", "prerequisites"]
 keywords: ["linkedin prerequisites", "linkedin developer app", "linkedin oauth setup", "linkedin redirect uri", "linkedin deployment secrets"]
 see_also:
-  - ks:docs/sdk/integrations/linkedin/linkedin-README.md
-  - ks:docs/sdk/integrations/email/email-external-prereq-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/linkedin/linkedin-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/email/email-external-prereq-README.md
 ---
 
 # LinkedIn External Prerequisites

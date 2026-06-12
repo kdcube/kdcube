@@ -1,15 +1,15 @@
 ---
-id: ks:docs/service/comm/CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/comm/CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md
 title: "Chat Relay Session Subscr SSE Socketio Funout"
 summary: "SSE/Socket.IO relay design: session subscriptions, tenant/project SSE subscriptions, and fan-out via Redis."
 tags: ["service", "comm", "relay", "sse", "redis"]
 keywords: ["session subscription", "project subscription", "fanout", "redis pubsub", "SSE relay", "Socket.IO"]
 see_also:
-  - ks:docs/service/comm/comm-system.md
-  - ks:docs/service/comm/README-comm.md
-  - ks:docs/service/comm/conversation-event-bus-and-data-bus-README.md
-  - ks:docs/service/comm/data-bus-README.md
-  - ks:docs/service/README-monitoring-observability.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/comm-system.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/README-comm.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/conversation-event-bus-and-data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/README-monitoring-observability.md
 ---
 # Redis-based Chat Relay & SSE Fan-Out
 

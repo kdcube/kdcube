@@ -1,13 +1,13 @@
 ---
-id: ks:docs/ops/ecs/components/metric-server-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/ops/ecs/components/metric-server-README.md
 title: "ECS Metric Server"
 summary: "How the metrics service is deployed on ECS and how it feeds CloudWatch autoscaling metrics."
 tags: ["ops", "ecs", "metrics", "cloudwatch", "autoscaling"]
 keywords: ["metrics service", "metric server", "CloudWatch", "ECS", "autoscaling", "kdcube-metrics"]
 see_also:
-  - ks:docs/service/scale/metric-server-README.md
-  - ks:docs/service/scale/metrics-README.md
-  - ks:docs/ops/ecs/ecs-deployment-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/scale/metric-server-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/scale/metrics-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/ops/ecs/ecs-deployment-README.md
 ---
 # ECS Metric Server
 

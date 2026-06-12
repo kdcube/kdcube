@@ -1,13 +1,13 @@
 ---
-id: ks:docs/service/maintenance/connection-pooling-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/maintenance/connection-pooling-README.md
 title: "Connection Pooling"
 summary: "Connection pooling guidance for Redis and Postgres in chat services."
 tags: ["service", "maintenance", "pools", "redis", "postgres"]
 keywords: ["pool size", "max connections", "health", "pool limits"]
 see_also:
-  - ks:docs/service/maintenance/requests-monitoring-README.md
-  - ks:docs/service/maintenance/instance-config-README.md
-  - ks:docs/arch/architecture-long.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/maintenance/requests-monitoring-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/maintenance/instance-config-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/architecture-long.md
 ---
 **Connection Pooling (Chat Services)**
 

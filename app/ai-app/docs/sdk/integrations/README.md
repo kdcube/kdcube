@@ -1,13 +1,13 @@
 ---
-id: ks:docs/sdk/integrations/README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/README.md
 title: "SDK Integrations"
 summary: "Index of reusable KDCube SDK integration packages that bundles can import instead of reimplementing provider or transport mechanics."
 tags: ["sdk", "integrations", "email", "telegram", "bundles"]
 keywords: ["sdk integrations", "email integration", "telegram integration", "bundle building blocks"]
 see_also:
-  - ks:docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
-  - ks:docs/sdk/integrations/email/README.md
-  - ks:docs/sdk/integrations/telegram/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/email/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/README.md
 ---
 # SDK Integrations
 

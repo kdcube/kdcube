@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/bundle/bundle-subsystem-integration-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-subsystem-integration-README.md
 title: "Bundle Subsystem Integration"
 summary: "Concrete checklist for mounting reusable SDK subsystems inside a bundle: entrypoint mixins, APIs, widgets, tools, event policies, object resolvers, named service providers, config, visibility, storage, and runtime verification."
 tags: ["sdk", "bundle", "subsystem", "integration", "memory", "canvas", "widgets", "tools", "events", "resolvers", "named-service-provider"]
@@ -15,18 +15,18 @@ keywords:
   ]
 updated_at: 2026-06-08
 see_also:
-  - ks:docs/sdk/namespace-services/providers-README.md
-  - ks:docs/sdk/bundle/bundle-entrypoint-classes-README.md
-  - ks:docs/sdk/bundle/bundle-widget-integration-README.md
-  - ks:docs/sdk/bundle/ui-components-lifecycle-README.md
-  - ks:docs/sdk/bundle/bundle-agent-integration-README.md
-  - ks:docs/sdk/bundle/bundle-events-README.md
-  - ks:docs/sdk/bundle/bundle-platform-integration-README.md
-  - ks:docs/sdk/bundle/bundle-client-communication-README.md
-  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
-  - ks:docs/sdk/memory/user-memories-overview-README.md
-  - ks:docs/sdk/solutions/canvas/canvas-sdk-solution-README.md
-  - ks:docs/sdk/solutions/event-hub/resolver-and-policy-registration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/providers-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-entrypoint-classes-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/ui-components-lifecycle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-agent-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-communication-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/user-memories-overview-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/canvas-sdk-solution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/event-hub/resolver-and-policy-registration-README.md
 ---
 # Bundle Subsystem Integration
 
@@ -450,7 +450,7 @@ Resolvers belong to the subsystem that owns the object namespace.
 | `fi:` | ReAct artifact/event layer | `sdk/solutions/react/events/resolver.py` |
 | `task:` | task/issue subsystem | the task subsystem package |
 | `cnv:` | canvas module | `sdk/solutions/canvas/events/resolver.py` |
-| `ks:` | knowledge subsystem | knowledge bundle/module |
+| provider-defined refs | named-service provider, MCP/search surface, or explicit rehoster | the owning subsystem package |
 
 Canvas cards store only the canonical object ref. They do not store download
 URLs, `rn:` handles, or transport-specific second links. When the user clicks

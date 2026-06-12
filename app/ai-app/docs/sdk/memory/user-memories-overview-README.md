@@ -1,15 +1,15 @@
 ---
-id: ks:docs/sdk/memory/user-memories-overview-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/user-memories-overview-README.md
 title: "User Memories Overview"
 summary: "Overview of SDK cross-conversation user memory: durable Postgres storage, event-backed updates, search modes, visibility, tools, compact agent rendering, and serving hotsets."
 tags: ["sdk", "memory", "user-memory", "postgres", "pgvector", "bundle-tools"]
 keywords: ["cross-conversation memory", "user_memory_entries", "user_memory_events", "user_memory_aliases", "MemorySignal", "MemoryScope", "hotset", "semantic memory search", "me memory id", "memory rendering"]
 see_also:
-  - ks:docs/sdk/bundle/bundle-subsystem-integration-README.md
-  - ks:docs/sdk/memory/how-react-remembers-README.md
-  - ks:docs/sdk/memory/user-memories-operational-README.md
-  - ks:docs/sdk/memory/user-memories-react-integration-README.md
-  - ks:docs/sdk/memory/user-memories-reconcilation-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-subsystem-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/how-react-remembers-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/user-memories-operational-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/user-memories-react-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/user-memories-reconcilation-README.md
 ---
 # SDK Cross-Conversation Memory
 

@@ -1,13 +1,13 @@
 ---
-id: ks:docs/sdk/agents/react/plan-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/plan-README.md
 title: "Plan"
 summary: "How React v2 stores plans, shows them to the model, and lets the model create, supersede, close, and reread them."
 tags: ["sdk", "agents", "react", "plan"]
 keywords: ["plan_id", "announce", "snapshot_ref", "superseded", "close", "notes acknowledgements"]
 see_also:
-  - ks:docs/sdk/agents/react/react-announce-README.md
-  - ks:docs/sdk/agents/react/timeline-README.md
-  - ks:docs/sdk/agents/react/context-caching-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-announce-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/timeline-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-caching-README.md
 ---
 # React Plan Model
 

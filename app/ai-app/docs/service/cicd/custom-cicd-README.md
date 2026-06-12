@@ -1,17 +1,17 @@
 ---
-id: ks:docs/service/cicd/custom-cicd-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/cicd/custom-cicd-README.md
 title: "Custom CICD"
 summary: "Two‑repo CI/CD plan covering build outputs, image mapping, assembly.yaml + bundles.yaml flow, and ECS/EC2 deployment steps."
 tags: ["service", "cicd", "deployment", "ecs", "ec2", "docker-compose", "images", "bundles", "release", "frontend"]
 keywords: ["two-repo", "platform repo", "custom app repo", "assembly.yaml", "bundles.yaml", "bundle packaging", "image mapping", "ecs task definitions", "compose envs", "BUNDLES_YAML_DESCRIPTOR_PATH"]
 see_also:
-  - ks:docs/service/cicd/cli-README.md
-  - ks:docs/service/cicd/release-bundle-README.md
-  - ks:docs/service/cicd/descriptors-README.md
-  - ks:docs/configuration/assembly-descriptor-README.md
-  - ks:docs/configuration/secrets-descriptor-README.md
-  - ks:docs/service/cicd/release-README.md
-  - ks:docs/configuration/service-runtime-configuration-mapping-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/cli-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/release-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/descriptors-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/assembly-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/secrets-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/release-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
 ---
 # Custom CI/CD (Open Source + Custom App Repo)
 

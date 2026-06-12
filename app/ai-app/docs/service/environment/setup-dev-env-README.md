@@ -1,13 +1,13 @@
 ---
-id: ks:docs/service/environment/setup-dev-env-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/environment/setup-dev-env-README.md
 title: "Setup Dev Env"
 summary: "Minimal env and SSH setup to load bundles from bundles.yaml in local dev."
 tags: ["service", "environment", "setup", "dev", "git"]
 keywords: ["bundles.yaml", "BUNDLES_YAML_DESCRIPTOR_PATH", "GIT_SSH_KEY_PATH", "known_hosts"]
 see_also:
-  - ks:docs/service/environment/setup-for-dockercompose-README.md
-  - ks:docs/configuration/service-runtime-configuration-mapping-README.md
-  - ks:docs/service/environment/setup-for-ecs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/environment/setup-for-dockercompose-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/environment/setup-for-ecs-README.md
 ---
 # Setup Dev Env (Bundles from Descriptor)
 

@@ -1,21 +1,21 @@
 ---
-id: ks:docs/sdk/agents/react/system-instruction-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/system-instruction-README.md
 title: "React System Instruction"
 summary: "How React decision system instructions are composed, how to use extended and lite instruction bodies, and how to audit signal coverage."
 tags: ["sdk", "agents", "react", "instructions", "system-prompt", "lite", "configuration"]
 keywords: ["React system instruction", "React lite instructions", "instruction_body", "instruction_blocks", "default_lite_system_instruction", "React prompt composition", "signal coverage"]
 updated_at: 2026-05-17
 see_also:
-  - ks:docs/sdk/agents/react/context-caching-README.md
-  - ks:docs/sdk/agents/react/react-round-README.md
-  - ks:docs/sdk/agents/react/react-tools-README.md
-  - ks:docs/sdk/agents/react/context-layout.md
-  - ks:docs/sdk/agents/react/context-progression.md
-  - ks:docs/sdk/agents/react/micro-agents-and-subagents-README.md
-  - ks:docs/sdk/agents/react/react-announce-README.md
-  - ks:docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
-  - ks:docs/sdk/agents/react/memory-recovery-path-README.md
-  - ks:docs/sdk/agents/react/external-exec-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-caching-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-round-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-layout.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-progression.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/micro-agents-and-subagents-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-announce-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/memory-recovery-path-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/external-exec-README.md
 ---
 # React System Instruction
 
@@ -254,7 +254,7 @@ signals and tools exposed to the agent.
 | Decision loop | One useful next action; inspect tool results before advancing dependent actions. | `REACT_DECISION_SHARED_OPERATING_GUIDE`. | `REACT_LITE_DECISION_LOOP`; all profiles. |
 | Base tool behavior | Tools perform state changes; final answers do not. Use only visible tool ids. | Operating guide plus tool catalog. | `REACT_LITE_TOOL_USE_BASE`; all profiles. |
 | Root `notes` visibility | Notes may be user-visible and must not expose internal/protocol mechanics. | Operating guide, internal notes blocks. | `REACT_LITE_TOOL_USE_BASE`, `REACT_LITE_INTERNAL_NOTES` when internal notes are enabled. |
-| Logical namespaces | `ar:`, `fi:`, `tc:`, `so:`, `su:`, `ws:`, `ks:`, `sk:` path contracts. | `PATHS_EXTENDED_GUIDE`, `MEMORY_RECOVERY_GUIDE`. | `REACT_LITE_PATHS_AND_NAMESPACES`; all profiles. |
+| Logical namespaces | `ar:`, `fi:`, `tc:`, `so:`, `su:`, `ws:`, `sk:` path contracts plus owner namespace handoff rules. | `PATHS_EXTENDED_GUIDE`, `MEMORY_RECOVERY_GUIDE`. | `REACT_LITE_PATHS_AND_NAMESPACES`; all profiles. |
 | `react.read` recovery | Exact logical-path reads, stats-only reads, ranged reads, turn index reads. | `PATHS_EXTENDED_GUIDE`, `MEMORY_RECOVERY_GUIDE`. | `REACT_LITE_REACT_READ_RECOVERY`; all profiles. |
 | `react.memsearch` recovery | Find prior conversation material when the exact path is unknown. | `MEMORY_RECOVERY_GUIDE`. | `REACT_LITE_MEMORY_SEARCH_RECOVERY`; `workspace`, `workspace_exec`, `document`, `web`, `all_capabilities`. |
 | `react.rg` local search | Search materialized local artifact-root files, not hidden timeline or unpulled history. | Workspace guide plus path guidance. | `REACT_LITE_LOCAL_ARTIFACT_SEARCH`; `workspace`, `workspace_exec`, `document`, `web`, `all_capabilities`. |

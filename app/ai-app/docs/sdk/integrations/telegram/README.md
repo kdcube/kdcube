@@ -1,13 +1,13 @@
 ---
-id: ks:docs/sdk/integrations/telegram/README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/README.md
 title: "Telegram Integration Docs"
 summary: "Index for the KDCube Telegram SDK integration docs."
 tags: ["sdk", "integrations", "telegram"]
 keywords: ["telegram integration", "telegram bot", "telegram webhook", "telegram mini app"]
 see_also:
-  - ks:docs/sdk/integrations/telegram/telegram-README.md
-  - ks:docs/sdk/integrations/telegram/telegram-external-prereq-README.md
-  - ks:docs/sdk/integrations/email/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-external-prereq-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/email/README.md
 ---
 
 # Telegram Integration Docs

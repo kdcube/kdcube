@@ -1,16 +1,16 @@
 ---
-id: ks:docs/sdk/agents/react/compaction-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/compaction-README.md
 title: "Compaction"
 summary: "Context hard‑ceiling behavior: compaction blocks and visibility rules."
 tags: ["sdk", "agents", "react", "compaction", "context"]
 keywords: ["conv.range.summary", "hard ceiling", "visible stream", "context length", "pruning"]
 see_also:
-  - ks:docs/sdk/agents/react/feedback-README.md
-  - ks:docs/sdk/agents/react/context-caching-README.md
-  - ks:docs/sdk/agents/react/context-layout.md
-  - ks:docs/sdk/agents/react/session-view-README.md
-  - ks:docs/sdk/agents/react/memory-recovery-path-README.md
-  - ks:docs/sdk/agents/react/event-source/compaction-projection-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/feedback-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-caching-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-layout.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/session-view-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/memory-recovery-path-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/compaction-projection-README.md
 ---
 # Context Compaction (v2)
 
@@ -160,7 +160,7 @@ next:
 recovery_plan:
 - first: "Use this visible reminder and retained suffix before searching."
 - if_needed: "Use react.memsearch with the exact phrase/entity anchors above."
-- then_read: "Use react.read(read_refs) for old content. Skills read in full. ks: reads in full only when no knowledge_read_visible_* cap is configured; capped text uses stats_only and line ranges. Exec stdout is not an uncapped read channel."
+- then_read: "Use react.read(read_refs) for old content. Skills read in full. Capped text uses stats_only and line ranges. Exec stdout is not an uncapped read channel."
 
 <rest of model-generated summary text>
 [END COMPACTED PRIOR CONVERSATION MEMORY]
@@ -236,7 +236,7 @@ TURN <turn_id> (started at ...)
 turn_id: <turn_id>
 position: current-turn prefix compacted here; newer timeline blocks below are normal
 use: continue from the timeline below; this is not prior conversation memory
-recovery: exact source blocks remain recoverable by logical path; use react.read(path). Skills read in full. ks: reads in full only when uncapped; capped text uses stats_only and line ranges.
+recovery: exact source blocks remain recoverable by logical path; use react.read(path). Skills read in full. Capped text uses stats_only and line ranges.
 
 semantic_progress:
 active_request:
@@ -255,7 +255,7 @@ next:
 - <immediate next action>
 recovery_plan:
 - first: "Continue from the retained suffix and this reminder."
-- then_read: "Use react.read(path) for large results. Skills read in full. ks: reads in full only when uncapped; capped text recovers by stats_only plus line ranges."
+- then_read: "Use react.read(path) for large results. Skills read in full. Capped text recovers by stats_only plus line ranges."
 original_request:
 - <full user ask that started the turn>
 early_progress:

@@ -1,13 +1,13 @@
 ---
-id: ks:docs/ops/ecs/components/proc-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/ops/ecs/components/proc-README.md
 title: "ECS Proc Component"
 summary: "How chat-proc is deployed on ECS, what host/runtime prerequisites it has, and how it behaves during deploy, scale-in, and shutdown."
 tags: ["ops", "ecs", "proc", "deployment", "shutdown", "task-protection"]
 keywords: ["chat-proc", "ecs proc", "task scale-in protection", "docker-in-docker", "proc drain", "proc ec2"]
 see_also:
-  - ks:docs/arch/proc/processor-arch-README.md
-  - ks:docs/arch/proc/longrun-protection-README.md
-  - ks:docs/arch/ecs-service-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/processor-arch-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/longrun-protection-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/ecs-service-README.md
 ---
 # ECS Proc Component
 

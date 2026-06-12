@@ -1,20 +1,20 @@
 ---
-id: ks:docs/sdk/tools/mcp-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/mcp-README.md
 title: "MCP"
 summary: "MCP tool integration: descriptor allow-lists, bundle-props MCP service config, named-secret auth, and runtime execution flow (host + isolated)."
 tags: ["sdk", "tools", "mcp", "runtime", "descriptor", "transport", "auth"]
 keywords: ["MCP_TOOL_SPECS", "MCP_SERVICES", "MCPToolsSubsystem", "mcp.<alias>.<tool>", "stdio", "http", "streamable-http", "sse", "oauth_gui", "tool_call"]
 see_also:
-  - ks:docs/sdk/tools/tool-subsystem-README.md
-  - ks:docs/sdk/tools/custom-tools-README.md
-  - ks:docs/sdk/events/event-subsystem-README.md
-  - ks:docs/sdk/agents/react/event-source/event-source-README.md
-  - ks:docs/sdk/agents/react/event-source/block-production-README.md
-  - ks:docs/sdk/agents/react/react-tools-README.md
-  - ks:docs/sdk/bundle/bundle-agent-integration-README.md
-  - ks:docs/sdk/bundle/bundle-transports-README.md
-  - ks:docs/sdk/agents/claude/claude-code-README.md
-  - ks:docs/exec/README-iso-runtime.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/tool-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/custom-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/block-production-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-agent-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-transports-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/claude/claude-code-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/README-iso-runtime.md
 ---
 # MCP Integration
 

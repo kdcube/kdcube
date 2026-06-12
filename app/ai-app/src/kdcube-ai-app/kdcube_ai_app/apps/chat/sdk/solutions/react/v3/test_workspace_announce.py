@@ -106,12 +106,10 @@ def test_build_announce_text_includes_context_caps(tmp_path):
 
     assert "[CONTEXT CAPS]" in announce_text
     assert "read text=48000 tok=12000 bytes=10MB ctx_frac=0.15" in announce_text
-    assert "ks_read text=none tok=none bytes=none" in announce_text
     assert "tool_result_preview=12000" in announce_text
     assert "exec_file_preview=8000" in announce_text
     assert "regular text" in announce_text
     assert "skills are always uncapped" in announce_text
-    assert "ks: is uncapped unless knowledge_read_visible_* caps are configured" in announce_text
     assert "ranged react.read items" in announce_text
     assert "exec_stdout=capped" in announce_text
 

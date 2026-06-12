@@ -1,15 +1,15 @@
 ---
-id: ks:docs/sdk/bundle/build/design/bundle-loader-import-isolation-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/design/bundle-loader-import-isolation-README.md
 title: "Bundle Loader Import Isolation"
 summary: "Design note for in-process bundle loading, package-relative bundle-local imports, and why the loader does not make top-level bundle package names globally safe."
 tags: ["sdk", "bundle", "loader", "imports", "runtime", "design"]
 keywords: ["bundle loader import isolation", "sys.modules bundle collision", "package relative imports", "in process bundle loading", "bundle suite import lint"]
 updated_at: 2026-05-21
 see_also:
-  - ks:docs/sdk/bundle/bundle-runtime-README.md
-  - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
-  - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
-  - ks:docs/service/maintenance/connection-pooling-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-runtime-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-write-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-test-bundle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/maintenance/connection-pooling-README.md
 ---
 # Bundle Loader Import Isolation
 

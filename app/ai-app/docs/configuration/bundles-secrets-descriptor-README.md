@@ -1,16 +1,16 @@
 ---
-id: ks:docs/configuration/bundles-secrets-descriptor-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-secrets-descriptor-README.md
 title: "Bundles Secrets Descriptor"
 summary: "Deployment-scoped bundle secret configuration in bundles.secrets.yaml: per-bundle credentials, integration tokens, provider service key overrides, and bundle secrets across local file mode and AWS."
 tags: ["service", "configuration", "bundle", "secrets", "deployment", "descriptor"]
 keywords: ["bundle secret inventory", "per-bundle credentials", "integration tokens", "bundle api keys", "deployment-scoped bundle secrets", "local secrets file mode", "aws secrets manager bundle secrets", "bundle secret provider", "bundle secret export path", "service key override", "per-bundle provider key", "get_secret", "bundle openai key", "bundle anthropic key", "bundle stripe key", "bundle git token", "services namespace override"]
 see_also:
-  - ks:docs/service/cicd/descriptors-README.md
-  - ks:docs/configuration/bundles-descriptor-README.md
-  - ks:docs/configuration/secrets-descriptor-README.md
-  - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
-  - ks:docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
-  - ks:docs/configuration/runtime-configuration-and-secrets-store-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/descriptors-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/secrets-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/runtime-configuration-and-secrets-store-README.md
 ---
 # Bundles Secrets Descriptor
 

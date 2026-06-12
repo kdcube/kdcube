@@ -1,13 +1,13 @@
 ---
-id: ks:docs/sdk/memory/user-memories-reconcilation-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/user-memories-reconcilation-README.md
 title: "User Memories Reconciliation"
 summary: "Design contract and SDK agent for user-memory reconciliation: widget-triggered analysis, dry-run proposal jobs, export/review snapshots, versatile-streamer validation, and later transactional application/restore."
 tags: ["sdk", "memory", "reconciliation", "maintenance", "versatile-streamer", "postgres"]
 keywords: ["memory reconciliation", "duplicate memories", "semantic merge", "stream_with_channels", "ChannelSpec", "structured output", "memory maintenance job"]
 see_also:
-  - ks:docs/sdk/memory/user-memories-overview-README.md
-  - ks:docs/sdk/memory/user-memories-operational-README.md
-  - ks:docs/sdk/streaming/channeled-streamer-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/user-memories-overview-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/memory/user-memories-operational-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/streaming/channeled-streamer-README.md
 ---
 # User Memories Reconciliation
 

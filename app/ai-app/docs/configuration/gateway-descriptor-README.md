@@ -1,14 +1,14 @@
 ---
-id: ks:docs/configuration/gateway-descriptor-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/configuration/gateway-descriptor-README.md
 title: "Gateway Policy Descriptor"
 summary: "Gateway runtime policy configuration in gateway.yaml: guarded and bypassed routes, rate limits, Data Bus publish limits, backpressure, capacity, pools, and circuit-breaker behavior for ingress and proc."
 tags: ["service", "configuration", "gateway", "policy", "deployment", "descriptor"]
 keywords: ["gateway admission control", "guarded routes", "bypass routes", "rate limiting policy", "backpressure thresholds", "service capacity", "connection pool sizing", "circuit breaker settings", "monitoring flags", "ingress and processor policy"]
 see_also:
-  - ks:docs/service/cicd/descriptors-README.md
-  - ks:docs/configuration/service-runtime-configuration-mapping-README.md
-  - ks:docs/service/gateway-README.md
-  - ks:docs/configuration/assembly-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/descriptors-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/gateway-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/configuration/assembly-descriptor-README.md
 ---
 # Gateway Policy Descriptor
 

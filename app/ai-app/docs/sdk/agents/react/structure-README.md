@@ -1,15 +1,15 @@
 ---
-id: ks:docs/sdk/agents/react/structure-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/structure-README.md
 title: "Structure"
 summary: "Module layout of the shared React runtime surface, production v2 implementation, and experimental v3 implementation."
 tags: ["sdk", "agents", "react", "structure"]
 keywords: ["react/v2", "react/v3", "modules", "runtime layout", "core files", "workspace docs", "rationale docs"]
 see_also:
-  - ks:docs/sdk/agents/react/timeline-README.md
-  - ks:docs/sdk/agents/react/runtime-configuration-README.md
-  - ks:docs/sdk/agents/react/flow-README.md
-  - ks:docs/sdk/agents/react/workspace/git-based-isolated-workspace-README.md
-  - ks:docs/sdk/agents/react/why/why-not-simply-tool-calling-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/timeline-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/runtime-configuration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/flow-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/workspace/git-based-isolated-workspace-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/why/why-not-simply-tool-calling-README.md
 ---
 # React Structure
 

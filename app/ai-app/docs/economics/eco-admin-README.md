@@ -1,13 +1,13 @@
 ---
-id: ks:docs/economics/eco-admin-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/economics/eco-admin-README.md
 title: "Eco Admin"
 summary: "Economics admin dashboard capabilities and how actions affect the control plane."
 tags: ["economics", "admin", "control-plane", "subscriptions", "budgets"]
 keywords: ["admin UI", "plans", "quotas", "limits", "wallets", "subscriptions"]
 see_also:
-  - ks:docs/economics/eco-kickoff-README.md
-  - ks:docs/economics/eco-test-README.md
-  - ks:docs/economics/stripe-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/eco-kickoff-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/eco-test-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/stripe-README.md
 ---
 # Economics Admin UI Guide
 

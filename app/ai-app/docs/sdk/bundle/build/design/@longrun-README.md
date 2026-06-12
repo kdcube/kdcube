@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/bundle/build/design/@longrun-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/design/@longrun-README.md
 title: "Bundle Longrun Design"
 summary: "Design proposal for bundle-owned long-running runtime tasks, cooperative cancellation, future stream/channel consumption, concurrent listeners, and durable aggregation patterns."
 status: proposal
@@ -7,12 +7,12 @@ updated_at: 2026-05-20
 tags: ["sdk", "bundle", "design", "longrun", "streams", "telemetry", "lifecycle"]
 keywords: ["bundle longrun", "bundle listener", "stream subscription", "telemetry consumer", "cooperative cancellation", "bundle lifecycle", "durable aggregation", "concurrent workers"]
 see_also:
-  - ks:docs/sdk/bundle/bundle-lifecycle-README.md
-  - ks:docs/sdk/bundle/bundle-node-backend-bridge-README.md
-  - ks:docs/sdk/node/node-backend-sidecar-README.md
-  - ks:docs/service/streams/README.md
-  - ks:docs/service/streams/telemetry-README.md
-  - ks:docs/service/streams/background-jobs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-lifecycle-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-node-backend-bridge-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/node/node-backend-sidecar-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/streams/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/streams/telemetry-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/streams/background-jobs-README.md
 ---
 # Bundle Longrun Design
 

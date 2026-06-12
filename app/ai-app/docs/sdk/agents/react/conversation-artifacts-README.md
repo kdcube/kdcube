@@ -1,14 +1,14 @@
 ---
-id: ks:docs/sdk/agents/react/conversation-artifacts-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/conversation-artifacts-README.md
 title: "Conversation Artifacts"
 summary: "Artifacts persisted in conversation storage for v2 flow."
 tags: ["sdk", "agents", "react", "artifacts", "conversation"]
 keywords: ["ContextRAGClient", "save_artifact", "save_turn_log_artifact", "conversation store"]
 see_also:
-  - ks:docs/sdk/agents/react/turn-data-README.md
-  - ks:docs/sdk/agents/react/turn-log-README.md
-  - ks:docs/sdk/agents/react/artifact-discovery-README.md
-  - ks:docs/sdk/agents/react/react-turn-workspace-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/turn-data-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/turn-log-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-discovery-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-turn-workspace-README.md
 ---
 # Conversation Artifacts (v2)
 

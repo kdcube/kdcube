@@ -1,13 +1,13 @@
 ---
-id: ks:docs/service/servicing-interfaces-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/service/servicing-interfaces-README.md
 title: "Service-Facing Chat Interfaces"
 summary: "How bundle webhooks and service code submit chat events through the shared ingestion core, and how to mint short-lived signed links for direct artifact downloads."
 tags: ["service", "chat", "webhooks", "bundles", "signed-links", "artifacts"]
 keywords: ["chat submitter", "webhook chat ingress", "service-facing interface", "signed download link", "short-lived artifact link", "followup", "steer"]
 see_also:
-  - ks:docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
-  - ks:docs/sdk/bundle/bundle-transports-README.md
-  - ks:docs/service/gateway-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-transports-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/gateway-README.md
 ---
 
 # Service-Facing Chat Interfaces

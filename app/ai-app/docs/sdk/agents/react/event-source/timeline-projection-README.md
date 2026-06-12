@@ -1,13 +1,13 @@
 ---
-id: ks:docs/sdk/agents/react/event-source/timeline-projection-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/timeline-projection-README.md
 title: "Timeline Projection Phase"
 summary: "ReAct event-source phase for mutating produced timeline blocks before visible render and cache marker assignment."
 tags: ["sdk", "agents", "react", "event-source", "timeline-projection"]
 keywords: ["timeline_projection", "hidden", "replacement_text", "cache markers", "timeline segment"]
 see_also:
-  - ks:docs/sdk/agents/react/event-source/event-source-README.md
-  - ks:docs/sdk/agents/react/event-source/events-blocks-and-rendering-README.md
-  - ks:docs/sdk/agents/react/context-caching-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/events-blocks-and-rendering-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-caching-README.md
 ---
 # Timeline Projection Phase
 

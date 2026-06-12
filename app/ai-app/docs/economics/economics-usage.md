@@ -1,13 +1,13 @@
 ---
-id: ks:docs/economics/economics-usage.md
+id: repo:kdcube-ai-app/app/ai-app/docs/economics/economics-usage.md
 title: "Economics Usage"
 summary: "Economics subsystem behavior: rate limiting, charging, budgets, and overrides."
 tags: ["economics", "usage", "rate-limits", "charging", "budgets"]
 keywords: ["rate limiting", "user credits", "project budget", "redis keys", "overrides"]
 see_also:
-  - ks:docs/economics/eco-admin-README.md
-  - ks:docs/economics/eco-test-README.md
-  - ks:docs/economics/economic-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/eco-admin-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/eco-test-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/economics/economic-README.md
 ---
 # Economics subsystem
 

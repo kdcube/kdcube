@@ -1,14 +1,16 @@
 ---
-id: ks:docs/exec/README-iso-runtime.md
+id: repo:kdcube-ai-app/app/ai-app/docs/exec/README-iso-runtime.md
 title: "ISO Runtime"
 summary: "Design and operations of the ISO runtime: docker executor wiring, data paths, and isolation model."
 tags: ["exec", "iso-runtime", "runtime", "docker", "architecture", "operations"]
 keywords: ["ISO runtime", "executor container", "out_dir", "exec-workspace", "network isolation", "privilege separation"]
 see_also:
-  - ks:docs/exec/runtime-README.md
-  - ks:docs/exec/run-py-README.md
-  - ks:docs/exec/README-runtime-modes-builtin-tools.md
-  - ks:docs/service/comm/comm-recording-event-sinks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/runtime/cross-runtime-context-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/runtime-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/run-py-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/exec/README-runtime-modes-builtin-tools.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/comm/comm-recording-event-sinks-README.md
 ---
 # Isolated Runtime (ISO) - Design and Operations
 

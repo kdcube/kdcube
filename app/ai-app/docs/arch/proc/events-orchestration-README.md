@@ -1,5 +1,5 @@
 ---
-id: ks:docs/arch/proc/events-orchestration-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/arch/proc/events-orchestration-README.md
 title: "Proc Events Orchestration"
 summary: "Processor-side orchestration for external events: ready-queue wakeups, lane payload resolution, lane-state scheduling, and boundaries with ReAct timeline folding."
 status: active
@@ -15,12 +15,12 @@ keywords:
     "conversation event lane state",
   ]
 see_also:
-  - ks:docs/arch/proc/processor-arch-README.md
-  - ks:docs/arch/ingress/events-inception-README.md
-  - ks:docs/sdk/events/conversation-event-lane-state-README.md
-  - ks:docs/sdk/events/external-events-README.md
-  - ks:docs/sdk/events/external-events-journey-and-handling-README.md
-  - ks:docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/processor-arch-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/ingress/events-inception-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/conversation-event-lane-state-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-journey-and-handling-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
 ---
 
 # Proc Events Orchestration

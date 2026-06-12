@@ -1,15 +1,15 @@
 ---
-id: ks:docs/sdk/bundle/ui-components-lifecycle-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/ui-components-lifecycle-README.md
 title: "UI Components Lifecycle"
 summary: "How KDCube discovers, builds, caches, serves, and reloads bundle UI components in single-process and concurrent proc deployments."
 tags: ["sdk", "bundle", "ui", "widget", "main-view", "lifecycle", "preload", "concurrency", "efs", "iframe"]
 keywords: ["bundle ui lifecycle", "bundle widget lifecycle", "ui.widgets", "ui.main_view", "ui_widget decorator", "shared storage ui build", "bundle ui preload", "request triggered widget build", "bundle ui locks", "bundle ui signatures", "static widget route", "concurrent proc workers", "ui source edit auto-rebuild", "signature aware coalescing"]
 updated_at: 2026-05-23
 see_also:
-  - ks:docs/sdk/bundle/bundle-widget-integration-README.md
-  - ks:docs/sdk/bundle/bundle-interfaces-README.md
-  - ks:docs/sdk/bundle/bundle-platform-integration-README.md
-  - ks:docs/sdk/bundle/bundle-client-ui-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-interfaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-ui-README.md
 ---
 # UI Components Lifecycle
 

@@ -1,15 +1,15 @@
 ---
-id: ks:docs/arch/proc/design/longrun-protection-for-cron-README.md
+id: repo:kdcube-ai-app/app/ai-app/docs/arch/proc/design/longrun-protection-for-cron-README.md
 title: "Long-Run Protection For Cron Jobs"
 summary: "Design note for bringing bundle @cron executions into the same useful-activity heartbeat and long-run protection model as processor queue tasks."
 status: draft
 tags: ["architecture", "processor", "cron", "scheduler", "longrun-protection", "heartbeat"]
 updated_at: 2026-06-10
 see_also:
-  - ks:docs/arch/proc/longrun-protection-README.md
-  - ks:docs/arch/proc/processor-arch-README.md
-  - ks:docs/sdk/bundle/bundle-scheduled-jobs-README.md
-  - ks:docs/sdk/events/conversation-event-lane-state-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/longrun-protection-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/processor-arch-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-scheduled-jobs-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/conversation-event-lane-state-README.md
 ---
 # Long-Run Protection For Cron Jobs
 
