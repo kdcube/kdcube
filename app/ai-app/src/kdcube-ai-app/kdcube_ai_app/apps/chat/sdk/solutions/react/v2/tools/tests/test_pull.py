@@ -2,6 +2,7 @@
 
 import base64
 import json
+from datetime import datetime, timezone
 from types import ModuleType
 
 import pytest
@@ -121,6 +122,9 @@ async def test_pull_materializes_registered_namespace_ref(tmp_path):
                 "logical_path": physical_path_to_logical_path(physical_path),
                 "physical_path": physical_path,
                 "namespace": "snapshots",
+                "metadata": {
+                    "updated_at": datetime(2026, 6, 12, 20, 39, tzinfo=timezone.utc),
+                },
             }]
         }
 
@@ -148,6 +152,9 @@ async def test_pull_materializes_registered_namespace_ref(tmp_path):
         "logical_path": "fi:turn_pull.snapshots/nmsp/draft_1/issue-draft.yaml",
         "physical_path": "turn_pull/snapshots/nmsp/draft_1/issue-draft.yaml",
         "namespace": "snapshots",
+        "metadata": {
+            "updated_at": "2026-06-12T20:39:00+00:00",
+        },
         "file_count": 1,
     }]
     assert "invalid" not in payload

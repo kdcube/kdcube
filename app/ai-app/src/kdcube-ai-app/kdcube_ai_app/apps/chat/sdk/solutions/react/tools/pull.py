@@ -6,7 +6,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Dict, List
 
-import json
+import logging
 import pathlib
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.solution_workspace import (
@@ -25,8 +25,11 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.common import (
     tool_call_block,
     add_block,
     tc_result_path,
+    _safe_json,
 )
+from kdcube_ai_app.tools.serialization import json_safe as _json_safe_value
 
+LOGGER = logging.getLogger("kdcube.react.pull")
 
 TOOL_SPEC = {
     "id": "react.pull",
@@ -190,7 +193,7 @@ async def handle_react_pull(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
     namespace_materialized: List[Dict[str, Any]] = []
     namespace_rehosted: List[str] = []
     namespace_missing: List[Dict[str, Any]] = []
-    namespace_errors: List[str] = []
+    namespace_errors: List[Any] = []
     accepted_by_conversation: Dict[str, List[str]] = {}
     seen_physical: set[tuple[str, str]] = set()
     workspace_impl = get_workspace_implementation(getattr(ctx_browser, "runtime_ctx", None))
@@ -203,10 +206,29 @@ async def handle_react_pull(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             namespace = raw.partition(":")[0].strip() if ":" in raw else ""
             rehoster = getattr(event_sources, "namespace_rehoster", lambda _namespace: None)(namespace) if namespace else None
             if rehoster is None:
+                registered_namespaces: List[str] = []
+                try:
+                    registered_namespaces = [
+                        str(item.get("namespace") or "").strip()
+                        for item in (event_sources.list_namespace_rehosters() if event_sources is not None else [])
+                        if str(item.get("namespace") or "").strip()
+                    ]
+                except Exception:
+                    registered_namespaces = []
+                LOGGER.warning(
+                    "react.pull namespace rehoster missing: path=%s namespace=%s event_sources_bound=%s registered_namespaces=%s",
+                    raw,
+                    namespace or "<missing>",
+                    event_sources is not None,
+                    registered_namespaces,
+                )
                 invalid.append({
                     "path": raw,
                     **({"conversation_id": source_conversation_id} if source_conversation_id else {}),
                     "reason": "react.pull accepts fi: refs or registered artifact namespaces",
+                    "namespace": namespace,
+                    "event_sources_bound": event_sources is not None,
+                    "registered_namespaces": registered_namespaces,
                 })
                 continue
             if not outdir:
@@ -230,7 +252,11 @@ async def handle_react_pull(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 for path in (result.get("rehosted") or [])
                 if str(path or "").strip()
             )
-            namespace_errors.extend(str(item) for item in (result.get("errors") or []) if str(item))
+            for item in result.get("errors") or []:
+                if isinstance(item, Mapping):
+                    namespace_errors.append(dict(item))
+                elif item:
+                    namespace_errors.append(str(item))
             for item in result.get("missing") or []:
                 if isinstance(item, Mapping):
                     namespace_missing.append(dict(item))
@@ -348,16 +374,17 @@ async def handle_react_pull(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
     errors = list(namespace_errors) + list(rehost_result.get("errors") or [])
     if errors:
         payload["errors"] = errors
+    payload = _json_safe_value(payload)
     add_block(ctx_browser, {
         "turn": turn_id,
         "type": "react.tool.result",
         "call_id": tool_call_id,
         "mime": "application/json",
         "path": tc_result_path(turn_id=turn_id, call_id=tool_call_id),
-        "text": json.dumps(payload, ensure_ascii=False, indent=2),
+        "text": _safe_json(payload),
         "meta": {
             "tool_call_id": tool_call_id,
         },
     })
-    state["last_tool_result"] = pulled
+    state["last_tool_result"] = payload.get("pulled", []) if isinstance(payload, dict) else []
     return state
