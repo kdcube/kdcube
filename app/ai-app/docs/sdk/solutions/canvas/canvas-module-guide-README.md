@@ -23,23 +23,20 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/pin-operations-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/pin-integration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/external-subsystem-event-source-products-pins-README.md
-  - repo:kdcube-applications/playground/bundles/task-tracker@1-0/doc/storage/README.md
-  - repo:kdcube-applications/playground/bundles/task-tracker@1-0/doc/design/canvas.md
-  - repo:kdcube-applications/playground/bundles/task-tracker@1-0/doc/design/ui-surfaces.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/events-blocks-and-rendering-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-event-envelope-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/comm/data-bus-README.md
 ---
 # Canvas Module Guide
 
-This document describes the SDK canvas module contract. It started in the
-task-tracker pilot, but the mechanics now belong to the reusable canvas
-solution.
+This document describes the SDK canvas module contract. The mechanics belong
+to the reusable canvas solution; product/domain behavior belongs to provider
+bundles that mount canvas.
 
 The canvas is a named, versioned, collaborative board of pins. It is not a
-ticket, not a conversation, and not a timeline summary. A ticket, memory, file,
-search result, user note, user upload, or assistant-produced object can be
-pinned on the board as a card. The board gives the user a visual way to collect
+domain object, not a conversation, and not a timeline summary. A provider
+object, memory, file, search result, user note, user upload, or
+assistant-produced object can be pinned on the board as a card. The board gives the user a visual way to collect
 context, share a selected subset as canvas focus, attach individual proxied
 objects into chat, and receive assistant outputs back as suggested cards.
 
@@ -82,7 +79,7 @@ Canvas and snapshot are deliberately different:
 | Object | Direction | Editable by agent | Purpose |
 |---|---|---:|---|
 | Canvas | collaborative | yes, only through `canvas.patch` | Working board of pins and suggestions |
-| Snapshot | external state -> model | no | Read-only view of a wizard/task/state surface |
+| Snapshot | external state -> model | no | Read-only view of a provider/UI state surface |
 | Chat prompt | user -> model | no | Reactive wake-up request |
 | Chat attachment | user -> model/platform | no | Platform conversation attachment, usually `fi:` |
 
@@ -114,10 +111,10 @@ If a canvas-owned card is attached into chat, it remains a `cnv:` ref. Attaching
 does not convert it into a chat prompt, chat attachment, or `fi:` artifact.
 
 Cards are proxies to objects. For resolver-backed pins, the card id is the
-original resolver URI itself: `task:...`, `fi:...`, `mem:...`, `so:...`, etc.
+original resolver URI itself: `acme:...`, `fi:...`, `mem:...`, `so:...`, etc.
 One object has one proxy on a canvas:
 
-- dragging the same `task:issues/<id>` again does not create another card;
+- dragging the same `acme:ticket:<id>` again does not create another card;
 - dragging the same `fi:`, `cnv:`, `mem:`, `so:`, or other resolver-backed ref
   again does not create another card;
 - if that proxy is already in the bin, dragging the same object back onto the
@@ -134,17 +131,17 @@ ua_<timestamp>  user.attachment hosted by canvas
 at_<timestamp>  agent.text hosted by canvas
 ```
 
-The compact `U1`, `A1`, `T1` labels shown in ReAct ANNOUNCE are render-time map
+The compact `U1`, `A1`, `O1` labels shown in ReAct ANNOUNCE are render-time map
 labels for spatial reasoning. They are not durable card ids. When patching an
 existing card, use the `card_id` value from the legend, such as
 `ut_2026-06-07-10-20-30_k3f9` for canvas-owned text or
-`task:issues/ticket_2026-06-07-10-19-00-123456789` for a task pin.
+`acme:ticket:ticket_2026-06-07-10-19-00-123456789` for a provider object pin.
 
-Host applications may add more card kinds. The task-tracker bundle currently
-adds `issue.ref` and may later add `story.ref`; those are documented in
-`external-subsystem-event-source-products-pins-README.md`. The canvas module should not hardcode the meaning of
-host-app refs such as `task:` beyond preserving them as pins and exposing them
-in the legend.
+Host applications may add provider-owned object refs, but the reusable canvas
+kind remains `object.ref`. Those pins are documented in
+`external-subsystem-event-source-products-pins-README.md`. The canvas module
+should not hardcode the meaning of host-app refs such as `acme:` beyond
+preserving them as pins and exposing them in the legend.
 
 ## Storage
 
@@ -155,18 +152,18 @@ behind the configured artifact storage adapter.
 Board revision paths:
 
 ```text
-task-tracker/users/<user_id>/canvases/index.json
-task-tracker/users/<user_id>/canvases/<safe_canvas_id>/latest.json
-task-tracker/users/<user_id>/canvases/<safe_canvas_id>/revisions/000001.json
-task-tracker/users/<user_id>/canvases/<safe_canvas_id>/revisions/000002.json
+<bundle-storage-prefix>/users/<user_id>/canvases/index.json
+<bundle-storage-prefix>/users/<user_id>/canvases/<safe_canvas_id>/latest.json
+<bundle-storage-prefix>/users/<user_id>/canvases/<safe_canvas_id>/revisions/000001.json
+<bundle-storage-prefix>/users/<user_id>/canvases/<safe_canvas_id>/revisions/000002.json
 ```
 
 Canvas-owned object paths:
 
 ```text
-task-tracker/users/<user_id>/canvases/<safe_canvas_id>/objects/user-text/<card_id>/v000001.md
-task-tracker/users/<user_id>/canvases/<safe_canvas_id>/objects/user-attachments/<card_id>/v000001.<ext>
-task-tracker/users/<user_id>/canvases/<safe_canvas_id>/objects/agent-text/<card_id>/v000001.md
+<bundle-storage-prefix>/users/<user_id>/canvases/<safe_canvas_id>/objects/user-text/<card_id>/v000001.md
+<bundle-storage-prefix>/users/<user_id>/canvases/<safe_canvas_id>/objects/user-attachments/<card_id>/v000001.<ext>
+<bundle-storage-prefix>/users/<user_id>/canvases/<safe_canvas_id>/objects/agent-text/<card_id>/v000001.md
 ```
 
 Persisted cards should store metadata and refs, not large inline content:
@@ -222,7 +219,7 @@ sends `external_events[]` before the reactive prompt. Typical order:
 ```text
 event.canvas          latest board revision, non-reactive
 event.canvas.focus    selected/multi-selected cards on that board, non-reactive
-event.snapshot        read-only task/wizard state when attached, non-reactive
+event.snapshot        read-only provider/UI state when attached, non-reactive
 event.user.prompt     chat request, reactive
 ```
 
@@ -259,13 +256,13 @@ Declared canvas event sources today:
 
 | Event source | Type | Reactive | Meaning |
 |---|---|---:|---|
-| `task_tracker.canvas.opened` | generic external | no | Named board became active context |
-| `task_tracker.canvas.state` | `event.canvas` | no | Current canvas revision occurrence |
-| `task_tracker.canvas.focus` | focus external event | no | User attached selected canvas cards/refs to chat |
-| `task_tracker.canvas.saved` | generic external | no | Canvas state was saved |
-| `task_tracker.canvas.file.uploaded` | generic external | no | Canvas-owned user attachment was uploaded |
-| `task_tracker.canvas.file.deleted` | generic external | no | Canvas-owned attachment/card was removed |
-| `task_tracker.canvas.file.annotated` | generic external | no | Canvas-owned attachment/card received label/annotation |
+| `my_bundle.canvas.opened` | generic external | no | Named board became active context |
+| `my_bundle.canvas.state` | `event.canvas` | no | Current canvas revision occurrence |
+| `my_bundle.canvas.focus` | focus external event | no | User attached selected canvas cards/refs to chat |
+| `my_bundle.canvas.saved` | generic external | no | Canvas state was saved |
+| `my_bundle.canvas.file.uploaded` | generic external | no | Canvas-owned user attachment was uploaded |
+| `my_bundle.canvas.file.deleted` | generic external | no | Canvas-owned attachment/card was removed |
+| `my_bundle.canvas.file.annotated` | generic external | no | Canvas-owned attachment/card received label/annotation |
 
 Canvas-owned card creation is represented by the new board revision and history
 entry. The semantic object kind lives on the card:
@@ -275,7 +272,7 @@ new user note          -> card kind user.text, hosted cnv: object
 new canvas upload      -> card kind user.attachment, hosted cnv: object
 new assistant text     -> card kind agent.text, hosted cnv: object
 new assistant file     -> card kind file, usually fi: or cnv:
-new task pin           -> host-app card kind issue.ref, task: ref
+new provider object pin -> card kind object.ref, provider-owned ref such as acme:ticket:<id>
 ```
 
 Do not model every card kind as a separate reactive event. The canvas state
@@ -314,7 +311,7 @@ Agent rules:
 
 - Do not edit/re-save canvas JSON directly.
 - Do not move, resize, or arrange existing cards. Positioning is user/UI work.
-- Do not mutate proxy refs such as `mem:`, `fi:`, `task:`, or `so:`. You may
+- Do not mutate proxy refs such as `mem:`, `fi:`, `acme:`, or `so:`. You may
   update the canvas-owned description/comments for those cards.
 - `user.text` content may be updated when the user asks.
 - Generated files are not pinned automatically. Produce the file, then call
@@ -335,14 +332,14 @@ revision: 27
 
 spatial_map:
 U1 U1 A1 A1 .. ..
-U1 U1 A1 A1 T1 ..
-.. .. R1 R1 T1 ..
+U1 U1 A1 A1 O1 ..
+.. .. R1 R1 O1 ..
 
 legend:
 - U1 user.text card_id=ut_2026-06-07-10-20-30_k3f9 title=Observed behavior mime=text/markdown ref=cnv:...
   visible: Attachment disappears before submit...
 - A1 user.attachment card_id=ua_2026-06-07-10-21-00_q8m2 title=trace.pdf mime=application/pdf ref=cnv:...
-- T1 issue.ref card_id=task:issues/ticket_2026-06-07-10-19-00-123456789 title=Upload fails after selecting screenshot ref=task:issues/ticket_2026-06-07-10-19-00-123456789
+- O1 object.ref card_id=acme:ticket:ticket_2026-06-07-10-19-00-123456789 title=Upload fails after selecting screenshot ref=acme:ticket:ticket_2026-06-07-10-19-00-123456789
 - R1 agent.text card_id=at_2026-06-07-10-23-00_h7pn suggested title=Suggested repro steps ref=cnv:...
 
 canvas_read: react.pull(paths=["cnv:main@27"]) returns a workspace artifact with exact JSON plus agent_view.
@@ -351,7 +348,7 @@ canvas_write: collaborate only through canvas.patch with base_revision=revision.
 
 Map labels are for spatial reasoning and are assigned by the ANNOUNCE renderer.
 Canvas-owned durable card ids are timestamp-bearing (`ut_...`, `ua_...`,
-`at_...`). Proxy card ids are the original resolver refs (`task:...`, `fi:...`,
+`at_...`). Proxy card ids are the original resolver refs (`acme:...`, `fi:...`,
 `mem:...`, etc.). The legend's `card_id` is the value to use in `canvas.patch`.
 
 `[CANVAS FOCUSED CONTEXT]` is separate and turn-local. It represents the user's
@@ -369,7 +366,7 @@ priority: inspect selected cards before broader canvas context unless the user a
 ```
 
 Dragging an individual pin to chat is different. The chat context for that pin
-uses the proxied object ref (`task:`, `mem:`, `fi:`, `cnv:`, etc.) and may carry
+uses the proxied object ref (`acme:`, `mem:`, `fi:`, `cnv:`, etc.) and may carry
 canvas provenance in metadata, but it is not a canvas-focus event by itself.
 
 ## Collaboration, Versioning, And Conflicts
@@ -414,18 +411,17 @@ The canvas module supports external event integration in two ways:
 2. It can host app-specific pins by preserving their `kind`, `logical_path`,
    MIME, preview, descriptions, and comments.
 
-Task-tracker tasks are the first host-app extension. The task tracker UI can
-pin an issue as:
+Provider objects are host-app extensions. A provider UI can pin an object as:
 
 ```json
 {
-  "kind": "issue.ref",
+  "kind": "object.ref",
   "title": "Upload fails after selecting screenshot",
   "mime": "application/json",
-  "logical_path": "task:issues/BUG-123"
+  "logical_path": "acme:ticket:BUG-123"
 }
 ```
 
 The canvas module should show that card spatially and preserve its ref, but
-the task-tracker domain owns what `task:issues/BUG-123` means and how ReAct can
-read the task snapshot.
+the provider domain owns what `acme:ticket:BUG-123` means and how ReAct can
+read the provider snapshot.

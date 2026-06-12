@@ -518,13 +518,20 @@ Do not add fallback top-level imports such as `from services...`,
 `from apps...`, or `import tools` for bundle-local code. They can collide with
 other bundles in the same processor process.
 
-The same rule applies to tools. In `tools_descriptor.py`, register
-bundle-local tools with file-based `ref` entries:
+The same rule applies to tools. In `surfaces.as_consumer.agents.<agent>.tools`,
+declare bundle-local tools with file-based `ref` entries:
 
-```python
-TOOLS_SPECS = [
-    {"ref": "tools/user_memory_tools.py", "alias": "user_memory", "use_sk": True},
-]
+```yaml
+surfaces:
+  as_consumer:
+    agents:
+      main:
+        tools:
+          - id: user_memory
+            kind: python
+            ref: tools/user_memory_tools.py
+            alias: user_memory
+            allowed: [search_memo]
 ```
 
 Inside `tools/user_memory_tools.py`, import same-bundle helpers through the
@@ -536,10 +543,17 @@ from ..services.storage import UserMemoryStorage
 
 Use `module` entries only for installed SDK or external modules:
 
-```python
-TOOLS_SPECS = [
-    {"module": "kdcube_ai_app.apps.chat.sdk.tools.web_tools", "alias": "web_tools", "use_sk": True},
-]
+```yaml
+surfaces:
+  as_consumer:
+    agents:
+      main:
+        tools:
+          - id: web
+            kind: python
+            module: kdcube_ai_app.apps.chat.sdk.tools.web_tools
+            alias: web_tools
+            allowed: [web_search, web_fetch]
 ```
 
 For the canonical runtime rationale and testing rule, see
@@ -547,6 +561,8 @@ For the canonical runtime rationale and testing rule, see
 For tool-specific details, see
 [custom-tools-README.md#bundle-local-imports-from-ref-tools](../../tools/custom-tools-README.md#bundle-local-imports-from-ref-tools)
 and [tool-subsystem-README.md#relative-imports-inside-ref-tools](../../tools/tool-subsystem-README.md#relative-imports-inside-ref-tools).
+`tools_descriptor.py` should adapt `surfaces.as_consumer` into runtime specs; it
+should not be the policy source for which agent can call which tool.
 
 ## 1B.3 Bundle Identity Rule
 
@@ -954,9 +970,13 @@ Workflow responsibilities:
 - call `react.persist_workspace()`
 - call `finish_turn(...)`
 
-Descriptor rules:
+Descriptor and consumer-surface rules:
 
-- expose bundle-local tools through `tools_descriptor.py`
+- expose bundle-local tools through
+  `surfaces.as_consumer.agents.<agent>.tools`; keep `tools_descriptor.py` as a
+  thin adapter that resolves the active agent config into `TOOLS_SPECS`,
+  `MCP_TOOL_SPECS`, `TOOL_RUNTIME`, `allowed_plugins`, and
+  `allowed_tool_names_by_alias`
 - expose skill prompts through `skills_descriptor.py`
 - remember that skill discovery is registry-wide: core SDK skills, SDK solution
   skills, and bundle `CUSTOM_SKILLS_ROOT` are all loaded before
@@ -983,13 +1003,24 @@ Descriptor rules:
   id/import but must not be advertised; use `AGENTS_CONFIG` to disable a skill
   for a consumer
 
-Example split:
+Example consumer surface:
 
-```python
-TOOLS_SPECS = [
-    {"module": "kdcube_ai_app.apps.chat.sdk.solutions.tasks.tools", "alias": "tasks", "use_sk": True},
-    {"ref": "tools/user_memory_tools.py", "alias": "user_memory", "use_sk": True},
-]
+```yaml
+surfaces:
+  as_consumer:
+    agents:
+      main:
+        tools:
+          - id: tasks
+            kind: python
+            module: kdcube_ai_app.apps.chat.sdk.solutions.tasks.tools
+            alias: tasks
+            allowed: [list_tasks, search_tasks, create_task]
+          - id: user_memory
+            kind: python
+            ref: tools/user_memory_tools.py
+            alias: user_memory
+            allowed: [search_memo, create_memo]
 ```
 
 Use `module` for installed SDK/external modules and `ref` for bundle-local

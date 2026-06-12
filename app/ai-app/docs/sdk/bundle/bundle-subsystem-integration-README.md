@@ -67,7 +67,7 @@ For each subsystem, answer these questions:
 | Visibility | Which `visibility.*`, `enabled.*`, and decorator defaults control access? | Route returns "not visible to this user" or appears for the wrong users. |
 | UI source | Is this a method-rendered widget, source-folder widget, or shared SDK source? | Widget route returns placeholder JSON/HTML or blank static assets. |
 | APIs | Which operation aliases does the UI call? Are those aliases declared by the subsystem? | Widget loads but all operations fail with undefined/hidden operation. |
-| Agent tools | Which tool modules must be included in `tools_descriptor.py`? | Agent sees context but cannot act on it. |
+| Agent tools | Which `surfaces.as_consumer.agents.<agent>.tools` entries must be enabled and adapted by `tools_descriptor.py`? | Agent sees context but cannot act on it. |
 | Instructions/skills | Which stable instructions and skills describe the subsystem object model? | Agent guesses wrong operations or edits the wrong owner. |
 | Event policies | Which event source modules render timeline/ANNOUNCE/compaction blocks? | Context is lost or appears as generic JSON. |
 | Namespace rehosters | Which namespace rehosters are registered for `react.pull` on owner refs such as `mem:` or `cnv:`? | Agent sees refs but cannot import exact content into its workspace. |
@@ -304,7 +304,7 @@ should use the subsystem, mount the agent surface too.
 
 Checklist:
 
-- add SDK tool modules in `tools_descriptor.py`
+- add SDK tool modules under `surfaces.as_consumer.agents.<agent>.tools`
 - add local or SDK skills in `skills_descriptor.py`
 - add stable additional instructions from the subsystem, not ad hoc prompt text
 - keep mutable per-turn data in ANNOUNCE/timeline policies, not cached system
@@ -327,14 +327,22 @@ Canvas example:
 from kdcube_ai_app.apps.chat.sdk.solutions.canvas.instructions import (
     CANVAS_REACT_ADDITIONAL_INSTRUCTIONS,
 )
+```
 
-TOOLS_SPECS = [
-    {
-        "module": "kdcube_ai_app.apps.chat.sdk.solutions.canvas.tools",
-        "class": "CanvasToolsPlugin",
-    },
-]
+```yaml
+surfaces:
+  as_consumer:
+    agents:
+      main:
+        tools:
+          - id: canvas
+            kind: python
+            module: kdcube_ai_app.apps.chat.sdk.solutions.canvas.tools
+            alias: canvas
+            allowed: [read_board, patch_board]
+```
 
+```python
 ADDITIONAL_INSTRUCTIONS = (
     PRODUCT_REACT_ADDITIONAL_INSTRUCTIONS
     + "\n\n"
@@ -355,7 +363,7 @@ Do not conflate tools and events.
 
 | Surface | Descriptor | Meaning |
 | --- | --- | --- |
-| Tool visibility | `tools_descriptor.py` / `TOOLS_SPECS` | Callable functions the model may invoke. |
+| Tool visibility | `surfaces.as_consumer.agents.<agent>.tools` resolved by `tools_descriptor.py` / `TOOLS_SPECS` | Callable functions the model may invoke. |
 | Event visibility | `events_descriptor.py` / `EVENT_SOURCE_SPECS` | Event sources, policies, event-source readers, and namespace rehosters the runtime may use. |
 
 These surfaces are cumulative. Tool modules are also scanned for their own
@@ -366,8 +374,9 @@ they do not expose new model-callable tools.
 If one Python module contains both callable tools and event decorators, choose
 the descriptor based on the intended surface:
 
-- list it in `TOOLS_SPECS` only when the model should be able to call its
-  tools;
+- list it under `surfaces.as_consumer.agents.<agent>.tools` only when the model
+  should be able to call its tools; `tools_descriptor.py` should adapt that
+  config into `TOOLS_SPECS`;
 - list it in `EVENT_SOURCE_SPECS` when the runtime only needs its event
   declarations, policies, readers, or rehosters.
 

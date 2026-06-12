@@ -60,7 +60,7 @@ When the user attaches the whole board, the scene sends
 scene sends `kdcube-context-focus`.
 
 Dragging a card from canvas to chat always passes the proxied object context
-(`task:`, `mem:`, `fi:`, `cnv:`, etc.). If the user also attaches the whole
+(`crm:`, `mem:`, `fi:`, `cnv:`, etc.). If the user also attaches the whole
 canvas, the timeline receives both the canvas state event and the focused
 object events.
 
@@ -88,7 +88,7 @@ The backend registers resolvers for namespaces the scene can display:
 | `fi:` | ReAct event/artifact resolver |
 | `mem:` | memory subsystem resolver |
 | `cnv:` | canvas-owned object resolver |
-| configured namespaces, for example `task:` | named-service provider resolver |
+| configured namespaces, for example `crm:` | named-service provider resolver |
 
 The canvas card stores one canonical object ref. The resolver owns preview,
 download, open, and rehost behavior.
@@ -96,32 +96,52 @@ download, open, and rehost behavior.
 Configured named-service resolvers are read from bundle props:
 
 ```yaml
-named_services:
-  namespaces:
-    task:
-      clients:
-        default_client:
-          tools:
-            allowed_operations: [provider.about, object.list, object.search, object.get, object.schema, object.upsert, object.delete]
-        canvas:
-          resolver:
-            enabled: true
+surfaces:
+  as_consumer:
+    agents:
+      main:
+        event_sources:
+        - kind: named_service
+          namespace: crm
+          policies:
+            block_production:
+              mode: provider
+              operation: block.produce
+            pull:
+              mode: provider
+              operation: object.get
+    ui:
+      canvas:
+        resolvers:
+        - kind: named_service
+          namespace: crm
+          allowed: [object.action]
+      scene:
+        external_panels:
+        - id: crm_panel
+          label: CRM
+          bundle_id: crm@1-0
+          widget_alias: crm_objects
+          widget_message_type: crm-widget-command
+          surfaces:
+            crm.object.editor:
+              expanded: true
+              command_from_open: provider_surface_open
 ```
 
 The SDK helper `register_configured_named_service_canvas_resolvers(...)`
-registers `named_services.namespaces` into the canvas object resolver registry.
+registers configured named-service canvas resolvers into the canvas object resolver registry.
 The same registry backs the scene canvas and the chat widget object-action path
 through `canvas_object_action`.
 
-The `default_client.tools.allowed_operations` list controls model-callable
-tools. The `canvas.resolver.enabled` switch only enables generic canvas/chat
-resolution for that namespace. Canvas still sends generic actions such as
-`open`, `preview`, `describe`, and `capabilities` through the resolver; the
-owning provider decides whether each action is valid.
+Agent tool configuration controls model-callable tools. The
+`ui.canvas.resolvers` list only enables generic canvas/chat resolution for that
+namespace. Canvas still sends generic actions such as `open`, `preview`,
+`describe`, and `capabilities` through the resolver; the owning provider
+decides whether each action is valid.
 
-For the task-tracker provider, `object.action(open)` returns
-`target_surface = "task_tracker.issue_editor"`. The versatile scene maps that
-surface to the `task_tracker_tasks` iframe from `task-tracker@1-0`, switches it
-to expanded form, and posts an `open` command with the issue id/ref. The same
-widget can be opened as `task_tracker.issue_list` in compact form from the
-scene rail.
+For `open`, providers return a `ui_event.target_surface`. The scene maps that
+surface through `ui.scene.external_panels`, opens the configured iframe, and
+posts either the configured static command or the generic provider surface
+command. The scene does not parse provider object refs or hard-code provider
+widget ids.

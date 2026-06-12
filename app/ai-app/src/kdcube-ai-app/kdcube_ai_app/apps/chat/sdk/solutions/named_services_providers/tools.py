@@ -5,10 +5,14 @@ from __future__ import annotations
 
 import json
 import logging
+import mimetypes
+import pathlib
 import sys
 from typing import Annotated, Any, Dict, Mapping
+from urllib.parse import unquote, urlparse
 
 from kdcube_ai_app.apps.chat.sdk.event_identity import DEFAULT_REACT_AGENT_ID, normalize_agent_id
+from kdcube_ai_app.apps.chat.sdk.runtime.workdir_discovery import resolve_output_dir, resolve_workdir
 
 from .client_tools import (
     named_service_namespace_client_tools_config,
@@ -21,6 +25,7 @@ from .types import (
     OBJECT_ACTION,
     OBJECT_DELETE,
     OBJECT_GET,
+    OBJECT_HOST_FILE,
     OBJECT_LIST,
     OBJECT_SCHEMA,
     OBJECT_SEARCH,
@@ -45,6 +50,7 @@ _TOOL_OPERATIONS = {
     "list_objects": OBJECT_LIST,
     "search_objects": OBJECT_SEARCH,
     "get_object": OBJECT_GET,
+    "host_file": OBJECT_HOST_FILE,
     "object_schema": OBJECT_SCHEMA,
     "object_action": OBJECT_ACTION,
     "upsert_object": OBJECT_UPSERT,
@@ -114,6 +120,102 @@ def _json_list(value: Any, *, field_name: str) -> list[Any]:
     raise ValueError(f"{field_name} must be a JSON list")
 
 
+def _safe_filename(value: str, fallback: str = "attachment.bin") -> str:
+    name = pathlib.PurePosixPath(str(value or "").replace("\\", "/")).name
+    return name.strip() or fallback
+
+
+def _is_nonlocal_ref(value: str) -> bool:
+    raw = str(value or "").strip()
+    if not raw or raw.startswith("file:"):
+        return False
+    scheme, sep, _ = raw.partition(":")
+    if not sep:
+        return False
+    return scheme.isidentifier() and scheme.lower() == scheme
+
+
+def _is_within(path: pathlib.Path, roots: list[pathlib.Path]) -> bool:
+    try:
+        resolved = path.resolve()
+    except Exception:
+        return False
+    for root in roots:
+        try:
+            resolved.relative_to(root.resolve())
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _runtime_roots() -> list[pathlib.Path]:
+    roots: list[pathlib.Path] = []
+    for resolver in (resolve_output_dir, resolve_workdir):
+        try:
+            root = resolver()
+        except Exception:
+            continue
+        if root not in roots:
+            roots.append(root)
+    return roots
+
+
+def _host_file_payload(
+    *,
+    file_ref: str,
+    filename: str = "",
+    mime: str = "",
+    description: str = "",
+    extra_payload: Mapping[str, Any] | None = None,
+) -> Dict[str, Any]:
+    raw_ref = str(file_ref or "").strip()
+    if not raw_ref:
+        raise ValueError("file_ref is required")
+    raw_filename = _safe_filename(filename or raw_ref)
+    raw_mime = str(mime or "").strip()
+    file_payload: Dict[str, Any] = {
+        "ref": raw_ref,
+        "filename": raw_filename,
+        "mime": raw_mime,
+        "description": str(description or "").strip(),
+    }
+    if _is_nonlocal_ref(raw_ref):
+        return {"file": file_payload, **dict(extra_payload or {})}
+
+    parsed = urlparse(raw_ref)
+    if parsed.scheme == "file":
+        candidate = pathlib.Path(unquote(parsed.path or ""))
+    else:
+        candidate = pathlib.Path(raw_ref)
+
+    roots = _runtime_roots()
+    if not roots:
+        raise ValueError("local file refs require a bound ReAct output/workdir context")
+
+    candidates: list[pathlib.Path]
+    if candidate.is_absolute():
+        candidates = [candidate]
+    else:
+        candidates = [root / candidate for root in roots]
+
+    selected = next((path.resolve() for path in candidates if path.exists() and path.is_file()), None)
+    if selected is None:
+        raise FileNotFoundError(f"local file ref was not found in the runtime output/workdir: {raw_ref}")
+    if not _is_within(selected, roots):
+        raise PermissionError("local file refs must resolve under the current ReAct output/workdir roots")
+
+    detected_mime = raw_mime or mimetypes.guess_type(selected.name)[0] or "application/octet-stream"
+    file_payload.update({
+        "local_path": str(selected),
+        "filename": _safe_filename(filename or selected.name),
+        "mime": detected_mime,
+        "size_bytes": selected.stat().st_size,
+        "source": "local_path",
+    })
+    return {"file": file_payload, **dict(extra_payload or {})}
+
+
 def _normalize_namespace(namespace: Any) -> str:
     return str(namespace or "").strip().lower().rstrip(":")
 
@@ -152,6 +254,15 @@ def _operation_allowed(namespace: str, operation: str) -> bool:
     return "*" in allowed or operation in allowed
 
 
+def _operation_applicable_namespaces(namespaces: list[str], operation: str) -> list[str]:
+    applicable: list[str] = []
+    for namespace in namespaces:
+        ns = _normalize_namespace(namespace)
+        if ns and _operation_allowed(ns, operation) and ns not in applicable:
+            applicable.append(ns)
+    return applicable
+
+
 def _action_allowed(namespace: str, action: str) -> bool:
     del namespace, action
     return True
@@ -182,6 +293,7 @@ def _endpoint(namespace: str) -> NamedServiceEndpoint | Dict[str, Any]:
 async def _call(
     *,
     namespace: str,
+    tool_name: str,
     operation: str,
     object_ref: str | None = None,
     object_id: str | None = None,
@@ -203,10 +315,10 @@ async def _call(
         return _error("named_service_namespace_required", "namespace is required")
     if not _operation_allowed(ns, operation):
         return _error(
-            "named_service_operation_not_allowed_for_client",
-            f"Client {_client_id()!r} is not configured to call {operation} on namespace {ns!r}.",
+            "named_service_tool_not_allowed_for_client",
+            f"Client {_client_id()!r} is not configured to call tool {tool_name!r} on namespace {ns!r}.",
             namespace=ns,
-            operation=operation,
+            tool=tool_name,
             client_id=_client_id(),
         )
     if action and not _action_allowed(ns, action):
@@ -317,7 +429,7 @@ async def provider_about(
 ) -> Annotated[Dict[str, Any], "Named service response envelope."]:
     """Describe a configured named-service provider."""
 
-    return await _call(namespace=namespace, operation=PROVIDER_ABOUT)
+    return await _call(namespace=namespace, tool_name="provider_about", operation=PROVIDER_ABOUT)
 
 
 async def list_objects(
@@ -335,6 +447,7 @@ async def list_objects(
         return _error("named_service_tool_params_invalid", str(exc))
     return await _call(
         namespace=namespace,
+        tool_name="list_objects",
         operation=OBJECT_LIST,
         collection=collection,
         cursor=cursor,
@@ -358,6 +471,7 @@ async def search_objects(
         return _error("named_service_tool_params_invalid", str(exc))
     return await _call(
         namespace=namespace,
+        tool_name="search_objects",
         operation=OBJECT_SEARCH,
         query=query,
         cursor=cursor,
@@ -368,7 +482,7 @@ async def search_objects(
 
 async def get_object(
     namespace: Annotated[str, "Configured named-service namespace, for example 'task'."],
-    object_ref: Annotated[str, "Canonical object ref, for example 'task:issues/BUG-123'."] = "",
+    object_ref: Annotated[str, "Canonical object ref, for example 'task:issue:BUG-123'."] = "",
     object_id: Annotated[str, "Owner-local object id when object_ref is not known."] = "",
     include: Annotated[str, "Optional JSON list of extra fields or relations to include."] = "",
 ) -> Annotated[Dict[str, Any], "Named service response envelope with object."]:
@@ -380,10 +494,44 @@ async def get_object(
         return _error("named_service_tool_params_invalid", str(exc))
     return await _call(
         namespace=namespace,
+        tool_name="get_object",
         operation=OBJECT_GET,
         object_ref=object_ref,
         object_id=object_id,
         include=parsed_include,
+    )
+
+
+async def host_file(
+    namespace: Annotated[str, "Configured named-service namespace, for example 'task'."],
+    file_ref: Annotated[str, "A fi:/ef: artifact ref or a local file path under the current ReAct output/workdir."],
+    object_ref: Annotated[str, "Optional provider object/container ref, for example 'task:issue:BUG-123'."] = "",
+    object_id: Annotated[str, "Optional provider object/container id when object_ref is not known."] = "",
+    filename: Annotated[str, "Optional filename override for the hosted file."] = "",
+    mime: Annotated[str, "Optional MIME type override."] = "",
+    description: Annotated[str, "Optional provider-visible file description."] = "",
+    payload: Annotated[str, "Optional JSON object with provider-specific hosting options."] = "",
+) -> Annotated[Dict[str, Any], "Named service response envelope with the provider-owned hosted object/ref."]:
+    """Host one runtime file/ref in a configured named-service namespace."""
+
+    try:
+        parsed_payload = _json_object(payload, field_name="payload")
+        hosting_payload = _host_file_payload(
+            file_ref=file_ref,
+            filename=filename,
+            mime=mime,
+            description=description,
+            extra_payload=parsed_payload,
+        )
+    except Exception as exc:
+        return _error("named_service_tool_params_invalid", str(exc))
+    return await _call(
+        namespace=namespace,
+        tool_name="host_file",
+        operation=OBJECT_HOST_FILE,
+        object_ref=object_ref,
+        object_id=object_id,
+        payload=hosting_payload,
     )
 
 
@@ -401,6 +549,7 @@ async def object_schema(
         payload["object_ref"] = object_ref
     return await _call(
         namespace=namespace,
+        tool_name="object_schema",
         operation=OBJECT_SCHEMA,
         object_ref=object_ref,
         payload=payload,
@@ -409,7 +558,7 @@ async def object_schema(
 
 async def object_action(
     namespace: Annotated[str, "Configured named-service namespace, for example 'task'."],
-    object_ref: Annotated[str, "Canonical object ref, for example 'task:issues/BUG-123'."],
+    object_ref: Annotated[str, "Canonical object ref, for example 'task:issue:BUG-123'."],
     action: Annotated[str, "Bounded provider action, for example preview, open, or describe."] = "preview",
     payload: Annotated[str, "Optional JSON object with provider-specific action payload."] = "",
 ) -> Annotated[Dict[str, Any], "Named service response envelope with ret.object, ret.extra, or ret.ui_event."]:
@@ -421,6 +570,7 @@ async def object_action(
         return _error("named_service_tool_params_invalid", str(exc))
     return await _call(
         namespace=namespace,
+        tool_name="object_action",
         operation=OBJECT_ACTION,
         object_ref=object_ref,
         action=action or "preview",
@@ -444,6 +594,7 @@ async def upsert_object(
         return _error("named_service_tool_params_invalid", str(exc))
     return await _call(
         namespace=namespace,
+        tool_name="upsert_object",
         operation=OBJECT_UPSERT,
         object_ref=object_ref,
         object_id=object_id,
@@ -467,6 +618,7 @@ async def delete_object(
         return _error("named_service_tool_params_invalid", str(exc))
     return await _call(
         namespace=namespace,
+        tool_name="delete_object",
         operation=OBJECT_DELETE,
         object_ref=object_ref,
         base_revision=base_revision,
@@ -491,6 +643,10 @@ def list_tools() -> Dict[str, Dict[str, Any]]:
         "get_object": {
             "callable": get_object,
             "description": "Read one object from a configured named-service namespace by object_ref or object_id.",
+        },
+        "host_file": {
+            "callable": host_file,
+            "description": "Host one runtime file/ref in a configured named-service namespace and return the provider-owned file object/ref.",
         },
         "object_schema": {
             "callable": object_schema,
@@ -518,9 +674,17 @@ def list_tools() -> Dict[str, Dict[str, Any]]:
         return {}
     visible: Dict[str, Dict[str, Any]] = {}
     for tool_name, meta in tools.items():
+        if tool_name == "object_action":
+            continue
         operation = _TOOL_OPERATIONS.get(tool_name)
-        if operation and any(_operation_allowed(namespace, operation) for namespace in namespaces):
-            visible[tool_name] = meta
+        if not operation:
+            continue
+        applicable_namespaces = _operation_applicable_namespaces(namespaces, operation)
+        if applicable_namespaces:
+            visible[tool_name] = {
+                **meta,
+                "namespaces_applicable": applicable_namespaces,
+            }
     return visible
 
 

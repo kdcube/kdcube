@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, MutableMapping
 from typing import Any
 
@@ -16,7 +17,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.events.policies.rendering_commo
 
 DEFAULT_CANVAS_FOCUS_SOURCE_ID = "canvas.focus"
 DEFAULT_CANVAS_FOCUS_ANNOUNCE_PATH_PREFIX = "announce:canvas-focus"
-RESOLVER_REF_PREFIXES = ("cnv:", "fi:", "mem:", "so:", "task:", "ar:", "ev:", "tc:")
+RESOLVER_REF_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]*:")
 
 
 def _block_meta(block: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -129,7 +130,7 @@ def _card_line(card: Mapping[str, Any]) -> str:
     if mime:
         bits.append(f"mime={mime}")
     preview = _compact(card.get("content_preview") or card.get("summary") or "", max_chars=180)
-    if preview and preview != ref and not preview.startswith(RESOLVER_REF_PREFIXES):
+    if preview and preview != ref and not RESOLVER_REF_RE.match(preview):
         bits.append(f"preview={preview}")
     return " ".join(bits)
 

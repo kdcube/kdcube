@@ -12,6 +12,7 @@ from .types import (
     OBJECT_ACTION,
     OBJECT_DELETE,
     OBJECT_GET,
+    OBJECT_HOST_FILE,
     OBJECT_LIST,
     OBJECT_SCHEMA,
     OBJECT_RESOLVE,
@@ -177,6 +178,9 @@ class NamedServiceClient:
 
     async def get(self, **kwargs: Any) -> NamedServiceResponse:
         return await self.call(self._request(OBJECT_GET, **kwargs))
+
+    async def host_file(self, **kwargs: Any) -> NamedServiceResponse:
+        return await self.call(self._request(OBJECT_HOST_FILE, **kwargs))
 
     async def schema(self, **kwargs: Any) -> NamedServiceResponse:
         object_kind = kwargs.pop("object_kind", None)

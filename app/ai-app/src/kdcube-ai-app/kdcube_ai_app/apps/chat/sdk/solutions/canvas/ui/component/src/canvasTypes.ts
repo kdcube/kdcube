@@ -13,8 +13,7 @@
  *   - `memory`             memory store result (mem: ref)
  *   - `source`             source-pool row (so: ref)
  *   - `search.result`      generic search result with whatever resolver-backed ref
- *   - `issue.ref`          issue/task pin (for example task:issues/<issue_id>)
- *   - `story.ref`          story pin
+ *   - `object.ref`         opaque resolver-backed namespace ref
  *   - `note`               free-form authored note
  */
 
@@ -26,8 +25,6 @@ export type CanvasCardKind =
   | 'memory'
   | 'source'
   | 'search.result'
-  | 'issue.ref'
-  | 'story.ref'
   | 'note'
   | 'object.ref'
   | 'conversation'
@@ -54,6 +51,13 @@ export interface CanvasNewCardInput {
   kind: CanvasCardKind
   title: string
   mime: string
+  /** Optional owner namespace for resolver-backed refs. When omitted, the
+   *  UI derives it from `logical_path` by reading the prefix before `:`. */
+  namespace?: string
+  /** Optional provider-owned object kind/subnamespace hint such as
+   *  `<namespace>.<kind>`. Canvas uses it only for presentation;
+   *  resolver dispatch still uses the URI root namespace before `:`. */
+  object_kind?: string
   /** Versioned ref to existing content. Mutually exclusive with `content`
    *  for cards the bundle rehosts. */
   logical_path?: string
@@ -277,8 +281,8 @@ export interface CanvasObjectActionResponse {
   content_base64?: string
   filename?: string
   size?: number
-  issue?: unknown
   memory?: unknown
+  [key: string]: unknown
   ui_event?: {
     type?: string
     subject?: string
@@ -287,7 +291,6 @@ export interface CanvasObjectActionResponse {
     object_ref?: string
     target_surface?: string
     mode?: string
-    issue_id?: string
     memory_id?: string
     conversation_id?: string
     tenant?: string
@@ -296,6 +299,7 @@ export interface CanvasObjectActionResponse {
     bundle_id?: string
     agent?: string
     title?: string
+    [key: string]: unknown
   }
   error?: string
   message?: string

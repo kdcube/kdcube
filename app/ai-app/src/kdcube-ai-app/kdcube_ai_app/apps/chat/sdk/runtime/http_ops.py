@@ -20,6 +20,7 @@ class BundleBinaryResponse:
     media_type: str = "application/octet-stream"
     headers: Dict[str, str] = field(default_factory=dict)
     status_code: int = 200
+    response: Dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,7 @@ class BundleFileResponse:
     media_type: Optional[str] = None
     headers: Dict[str, str] = field(default_factory=dict)
     status_code: int = 200
+    response: Dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -38,3 +40,4 @@ class BundleStreamResponse:
     media_type: Optional[str] = "application/octet-stream"
     headers: Dict[str, str] = field(default_factory=dict)
     status_code: int = 200
+    response: Dict[str, Any] | None = None

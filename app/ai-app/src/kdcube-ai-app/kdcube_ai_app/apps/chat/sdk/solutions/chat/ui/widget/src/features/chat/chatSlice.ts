@@ -54,34 +54,22 @@ function contextStringData(context: AttachedContext, key: string): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
-function taskIssueIdFromRef(ref: string): string {
-  const normalized = ref.trim()
-  if (normalized.startsWith('task:issues/')) {
-    return normalized.slice('task:issues/'.length).split(/[/?#]/, 1)[0]
-  }
-  if (normalized.startsWith('task:issue:')) {
-    return normalized.slice('task:issue:'.length).split(/[/?#]/, 1)[0]
-  }
-  return ''
-}
-
 function contextRef(context: AttachedContext): string {
   return context.logicalPath || context.ref || ''
 }
 
-function issueStoryKey(context: AttachedContext): string {
-  const storyId = contextStringData(context, 'story_id')
+function contextStoryKey(context: AttachedContext): string {
+  const storyId = contextStringData(context, 'story_id') || contextStringData(context, 'storyId')
   if (storyId) return storyId
-  const issueId = contextStringData(context, 'issue_id') || taskIssueIdFromRef(contextRef(context))
-  return issueId ? `issue:${issueId}` : ''
+  return ''
 }
 
 function isWizardContext(context: AttachedContext): boolean {
   return context.kind === 'wizard' || context.kind === 'wizard.snapshot'
 }
 
-function isIssueContext(context: AttachedContext): boolean {
-  return context.kind === 'issue' || context.kind === 'issue.ref' || context.kind === 'story' || context.kind === 'story.ref'
+function hasStoryContext(context: AttachedContext): boolean {
+  return Boolean(contextStoryKey(context)) || context.kind === 'story' || context.kind === 'story.ref'
 }
 
 function contextMergeKey(context: AttachedContext): string {
@@ -89,8 +77,8 @@ function contextMergeKey(context: AttachedContext): string {
   if (context.kind === 'canvas') {
     return `surface:canvas:${context.canvasId || context.canvasName || context.id}`
   }
-  if (isIssueContext(context)) {
-    const storyKey = issueStoryKey(context)
+  if (hasStoryContext(context)) {
+    const storyKey = contextStoryKey(context)
     if (storyKey) return `story:${storyKey}`
   }
   const ref = contextRef(context)
@@ -104,16 +92,16 @@ function mergeComposerContexts(
   let out = current.slice()
   for (const context of incoming) {
     const key = contextMergeKey(context)
-    const storyKey = issueStoryKey(context)
+    const storyKey = contextStoryKey(context)
 
     if (isWizardContext(context)) {
       out = out.filter((existing) => {
         if (isWizardContext(existing)) return false
-        return !(storyKey && isIssueContext(existing) && issueStoryKey(existing) === storyKey)
+        return !(storyKey && hasStoryContext(existing) && contextStoryKey(existing) === storyKey)
       })
-    } else if (isIssueContext(context) && storyKey) {
+    } else if (hasStoryContext(context) && storyKey) {
       const alreadyCoveredByWizard = out.some((existing) => (
-        isWizardContext(existing) && issueStoryKey(existing) === storyKey
+        isWizardContext(existing) && contextStoryKey(existing) === storyKey
       ))
       if (alreadyCoveredByWizard) continue
     }

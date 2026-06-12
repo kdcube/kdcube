@@ -48,8 +48,8 @@ placement — read first:
 - `repo:applications/packages/kdcube-copilot/docs/instructions/widget-builder.md`
 - `repo:applications/packages/kdcube-copilot/docs/instructions/quality-gates.md`
 
-Even when the assigned task sounds UI-specific, this is a KDCube bundle
-task. The agent is expected to understand the bundle runtime, the
+Even when the assigned work sounds UI-specific, this is KDCube bundle
+work. The agent is expected to understand the bundle runtime, the
 entrypoint contract, configured aliases, widget and main-view serving
 paths, ReAct workflow shape, economics/quotas, staged descriptors, reload
 flow, and test/release expectations before claiming the surface is done.
@@ -96,7 +96,7 @@ When scripting CLI checks, prefer machine-readable modes where available:
 If JSON output is consumed by another tool, validate it as real JSON
 rather than relying on visual output.
 
-Read these first for any task:
+Read these first for any work item:
 
 - [README.md](README.md)
 - [entrypoint.py](entrypoint.py)

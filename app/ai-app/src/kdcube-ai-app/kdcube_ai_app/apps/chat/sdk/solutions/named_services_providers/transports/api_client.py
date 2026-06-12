@@ -26,7 +26,7 @@ from ..client import NamedServiceClient
 from ..discovery import ConfiguredNamedServiceDiscovery, get_current_named_service_discovery
 from ..provider import NamedServiceProvider
 from ..registry import NamedServiceRegistry
-from ..types import NamedServiceRequest, NamedServiceResponse
+from ..types import NamedServiceRequest, NamedServiceResponse, NamedServiceStreamResult
 
 LOGGER = logging.getLogger("kdcube.sdk.named_services.endpoint")
 
@@ -163,7 +163,7 @@ async def _call_module_endpoint_raw(
 async def _call_bundle_registry_endpoint(
     endpoint: NamedServiceEndpoint,
     request: NamedServiceRequest,
-) -> NamedServiceResponse | BundleStreamResponse | BundleFileResponse | BundleBinaryResponse:
+) -> NamedServiceResponse | NamedServiceStreamResult | BundleStreamResponse | BundleFileResponse | BundleBinaryResponse:
     if not endpoint.bundle_id:
         raise RuntimeError("bundle_registry named-service endpoint requires bundle_id")
     result = await call_bundle_named_service(
@@ -412,13 +412,167 @@ async def call_named_service_endpoint(
     return response
 
 
+def _endpoint_provider_identity(endpoint: NamedServiceEndpoint) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in {
+            "provider_id": endpoint.provider,
+            "bundle_id": endpoint.bundle_id,
+        }.items()
+        if value
+    }
+
+
+async def _empty_chunks():
+    if False:  # pragma: no cover - keeps this an async generator
+        yield b""
+
+
+def _error_stream_result(
+    *,
+    endpoint: NamedServiceEndpoint,
+    req: NamedServiceRequest,
+    code: str,
+    message: str,
+    status: int,
+    details: Mapping[str, Any] | None = None,
+) -> NamedServiceStreamResult:
+    response = NamedServiceResponse.error_response(
+        code=code,
+        message=message,
+        status=status,
+        details=dict(details or {}),
+        provider=_endpoint_provider_identity(endpoint),
+        namespace=req.namespace or endpoint.namespace,
+        object_ref=req.object_ref,
+    )
+    return NamedServiceStreamResult(
+        response=response,
+        chunks=_empty_chunks(),
+        filename=None,
+        media_type=None,
+        headers={},
+        status_code=status,
+    )
+
+
+def _stream_sidecar_response(
+    raw: Any,
+    *,
+    endpoint: NamedServiceEndpoint,
+    req: NamedServiceRequest,
+) -> NamedServiceResponse:
+    sidecar = getattr(raw, "response", None)
+    if isinstance(sidecar, NamedServiceResponse):
+        return sidecar
+    if isinstance(sidecar, Mapping):
+        return NamedServiceResponse.from_dict(_unwrap_operation_response(sidecar, endpoint.operation))
+    return NamedServiceResponse.ok_response(
+        provider=_endpoint_provider_identity(endpoint),
+        namespace=req.namespace or endpoint.namespace,
+        object_ref=req.object_ref,
+        attrs={
+            "stream": {
+                key: value
+                for key, value in {
+                    "filename": getattr(raw, "filename", None),
+                    "media_type": getattr(raw, "media_type", None),
+                    "status_code": getattr(raw, "status_code", None),
+                }.items()
+                if value not in (None, "")
+            }
+        },
+        warnings=["named_service_stream_response_missing"],
+    )
+
+
+def _coerce_stream_endpoint_result(
+    raw: Any,
+    *,
+    endpoint: NamedServiceEndpoint,
+    req: NamedServiceRequest,
+    chunk_size: int,
+) -> NamedServiceStreamResult:
+    if isinstance(raw, NamedServiceStreamResult):
+        return raw
+    if isinstance(raw, BundleOperationStreamResult):
+        return NamedServiceStreamResult(
+            response=_stream_sidecar_response(raw, endpoint=endpoint, req=req),
+            chunks=raw.chunks,
+            filename=raw.filename,
+            media_type=raw.media_type,
+            headers=dict(raw.headers or {}),
+            status_code=raw.status_code,
+        )
+    if isinstance(raw, BundleStreamResponse):
+        return NamedServiceStreamResult(
+            response=_stream_sidecar_response(raw, endpoint=endpoint, req=req),
+            chunks=raw.chunks,
+            filename=raw.filename,
+            media_type=raw.media_type,
+            headers=dict(raw.headers or {}),
+            status_code=raw.status_code,
+        )
+    if isinstance(raw, BundleFileResponse):
+        return NamedServiceStreamResult(
+            response=_stream_sidecar_response(raw, endpoint=endpoint, req=req),
+            chunks=_file_response_chunks(raw, chunk_size=chunk_size),
+            filename=raw.filename,
+            media_type=raw.media_type or "application/octet-stream",
+            headers=dict(raw.headers or {}),
+            status_code=raw.status_code,
+        )
+    if isinstance(raw, BundleBinaryResponse):
+        return NamedServiceStreamResult(
+            response=_stream_sidecar_response(raw, endpoint=endpoint, req=req),
+            chunks=_single_chunk(bytes(raw.content or b"")),
+            filename=raw.filename,
+            media_type=raw.media_type or "application/octet-stream",
+            headers=dict(raw.headers or {}),
+            status_code=raw.status_code,
+        )
+    try:
+        response = NamedServiceResponse.coerce(raw)
+    except TypeError:
+        response = None
+    if response is not None:
+        if not response.ok:
+            return NamedServiceStreamResult(
+                response=response,
+                chunks=_empty_chunks(),
+                filename=None,
+                media_type=None,
+                headers={},
+                status_code=response.status,
+            )
+        return _error_stream_result(
+            endpoint=endpoint,
+            req=req,
+            code="named_service_stream_body_missing",
+            message="Named-service stream endpoint returned a JSON response without streamed bytes",
+            status=500,
+            details={"response": response.to_dict()},
+        )
+    if isinstance(raw, Mapping):
+        message = str(raw.get("error") or raw.get("message") or "Named-service stream endpoint returned JSON")
+    else:
+        message = f"Named-service endpoint returned unsupported stream response type {type(raw).__name__}"
+    return _error_stream_result(
+        endpoint=endpoint,
+        req=req,
+        code="named_service_stream_endpoint_invalid_response",
+        message=message,
+        status=500,
+    )
+
+
 async def call_named_service_endpoint_stream(
     endpoint: NamedServiceEndpoint,
     request: NamedServiceRequest | Mapping[str, Any],
     *,
     chunk_size: int = 1024 * 1024,
-) -> BundleOperationStreamResult:
-    """Call a named-service provider endpoint that returns bytes as a stream."""
+) -> NamedServiceStreamResult:
+    """Call a named-service provider endpoint that returns response metadata plus bytes."""
 
     req = NamedServiceRequest.coerce(request)
     payload = req.to_dict()
@@ -426,6 +580,7 @@ async def call_named_service_endpoint_stream(
         payload["provider"] = endpoint.provider
     if endpoint.namespace and not payload.get("namespace"):
         payload["namespace"] = endpoint.namespace
+    payload["response_mode"] = "stream"
     req = NamedServiceRequest.from_dict(payload)
     endpoint = await _resolve_endpoint_from_discovery(endpoint, req)
     payload = req.to_dict()
@@ -433,83 +588,41 @@ async def call_named_service_endpoint_stream(
         payload["provider"] = endpoint.provider
     if endpoint.namespace and not payload.get("namespace"):
         payload["namespace"] = endpoint.namespace
+    payload["response_mode"] = "stream"
     req = NamedServiceRequest.from_dict(payload)
     if endpoint.transport == ENDPOINT_TRANSPORT_BUNDLE_REGISTRY and not endpoint.bundle_id:
-        raise RuntimeError("No named-service stream provider is configured or discovered for this request")
+        return _error_stream_result(
+            endpoint=endpoint,
+            req=req,
+            code="named_service_provider_not_found",
+            message="No named-service provider is configured or discovered for this request",
+            status=404,
+        )
     if endpoint.transport == ENDPOINT_TRANSPORT_MODULE:
-        raw = await _call_module_endpoint_raw(endpoint, req)
-        if isinstance(raw, BundleStreamResponse):
-            return BundleOperationStreamResult(
-                chunks=raw.chunks,
-                filename=raw.filename,
-                media_type=raw.media_type,
-                headers=dict(raw.headers or {}),
-                status_code=raw.status_code,
-            )
-        if isinstance(raw, BundleFileResponse):
-            return BundleOperationStreamResult(
-                chunks=_file_response_chunks(raw, chunk_size=chunk_size),
-                filename=raw.filename,
-                media_type=raw.media_type or "application/octet-stream",
-                headers=dict(raw.headers or {}),
-                status_code=raw.status_code,
-            )
-        if isinstance(raw, BundleBinaryResponse):
-            return BundleOperationStreamResult(
-                chunks=_single_chunk(bytes(raw.content or b"")),
-                filename=raw.filename,
-                media_type=raw.media_type or "application/octet-stream",
-                headers=dict(raw.headers or {}),
-                status_code=raw.status_code,
-            )
         try:
-            response = NamedServiceResponse.coerce(raw)
-        except TypeError:
-            response = None
-        if response is not None:
-            message = response.error.message if response.error else "Named-service module stream endpoint returned an error"
-            raise RuntimeError(message)
-        raise RuntimeError(f"Named-service module endpoint returned unsupported stream response type {type(raw).__name__}")
+            raw = await _call_module_endpoint_raw(endpoint, req)
+        except Exception as exc:
+            return _error_stream_result(
+                endpoint=endpoint,
+                req=req,
+                code="named_service_api_endpoint_unavailable",
+                message=str(exc),
+                status=503,
+            )
+        return _coerce_stream_endpoint_result(raw, endpoint=endpoint, req=req, chunk_size=chunk_size)
     if endpoint.transport == ENDPOINT_TRANSPORT_BUNDLE_REGISTRY:
         try:
             raw = await _call_bundle_registry_endpoint(endpoint, req)
-            if isinstance(raw, BundleStreamResponse):
-                return BundleOperationStreamResult(
-                    chunks=raw.chunks,
-                    filename=raw.filename,
-                    media_type=raw.media_type,
-                    headers=dict(raw.headers or {}),
-                    status_code=raw.status_code,
-                )
-            if isinstance(raw, BundleFileResponse):
-                return BundleOperationStreamResult(
-                    chunks=raw.iter_bytes(chunk_size=chunk_size) if hasattr(raw, "iter_bytes") else _file_response_chunks(raw, chunk_size=chunk_size),
-                    filename=raw.filename,
-                    media_type=raw.media_type or "application/octet-stream",
-                    headers=dict(raw.headers or {}),
-                    status_code=raw.status_code,
-                )
-            if isinstance(raw, BundleBinaryResponse):
-                return BundleOperationStreamResult(
-                    chunks=_single_chunk(bytes(raw.content or b"")),
-                    filename=raw.filename,
-                    media_type=raw.media_type or "application/octet-stream",
-                    headers=dict(raw.headers or {}),
-                    status_code=raw.status_code,
-                )
-            try:
-                response = NamedServiceResponse.coerce(raw)
-            except TypeError:
-                response = None
-            if response is not None:
-                message = response.error.message if response.error else "Named-service stream endpoint returned an error"
-                raise RuntimeError(message)
-            if isinstance(raw, Mapping):
-                raise RuntimeError(str(raw.get("error") or raw.get("message") or "Named-service stream endpoint returned JSON"))
-            raise RuntimeError(f"Named-service endpoint returned unsupported stream response type {type(raw).__name__}")
+            return _coerce_stream_endpoint_result(raw, endpoint=endpoint, req=req, chunk_size=chunk_size)
         except RuntimeError as exc:
             if "No request-bound bundle named-service caller" not in str(exc):
-                raise
+                return _error_stream_result(
+                    endpoint=endpoint,
+                    req=req,
+                    code="named_service_api_endpoint_unavailable",
+                    message=str(exc),
+                    status=503,
+                )
             LOGGER.debug(
                 "Named-service bundle_registry stream caller unavailable; falling back to bundle_operation: bundle=%s provider=%s namespace=%s",
                 endpoint.bundle_id or "",
@@ -517,36 +630,56 @@ async def call_named_service_endpoint_stream(
                 endpoint.namespace or "",
             )
     LOGGER.info(
-        "Named-service stream call start: transport=%s bundle=%s operation=%s provider=%s namespace=%s request_operation=%s action=%s",
+        "Named-service stream call start: transport=%s bundle=%s operation=%s provider=%s namespace=%s request_operation=%s",
         endpoint.transport,
         endpoint.bundle_id or "",
         endpoint.operation,
         endpoint.provider or "",
         endpoint.namespace or req.namespace or "",
         req.operation,
-        req.action or "",
     )
-    result = await call_bundle_operation_stream(
-        tenant=endpoint.tenant,
-        project=endpoint.project,
-        bundle_id=endpoint.bundle_id,
-        operation=endpoint.operation,
-        route=endpoint.route,
-        data=payload,
-        chunk_size=chunk_size,
-    )
+    try:
+        result = await call_bundle_operation_stream(
+            tenant=endpoint.tenant,
+            project=endpoint.project,
+            bundle_id=endpoint.bundle_id,
+            operation=endpoint.operation,
+            route=endpoint.route,
+            data=payload,
+            chunk_size=chunk_size,
+        )
+    except Exception as exc:
+        LOGGER.warning(
+            "Named-service stream call failed: transport=%s bundle=%s operation=%s provider=%s namespace=%s request_operation=%s error=%s",
+            endpoint.transport,
+            endpoint.bundle_id or "",
+            endpoint.operation,
+            endpoint.provider or "",
+            endpoint.namespace or req.namespace or "",
+            req.operation,
+            exc,
+        )
+        return _error_stream_result(
+            endpoint=endpoint,
+            req=req,
+            code="named_service_api_endpoint_unavailable",
+            message=str(exc),
+            status=503,
+        )
+    stream_result = _coerce_stream_endpoint_result(result, endpoint=endpoint, req=req, chunk_size=chunk_size)
     LOGGER.info(
-        "Named-service stream call accepted: transport=%s bundle=%s operation=%s provider=%s namespace=%s request_operation=%s filename=%s media_type=%s",
+        "Named-service stream call accepted: transport=%s bundle=%s operation=%s provider=%s namespace=%s request_operation=%s ok=%s filename=%s media_type=%s",
         endpoint.transport,
         endpoint.bundle_id or "",
         endpoint.operation,
         endpoint.provider or "",
         endpoint.namespace or req.namespace or "",
         req.operation,
-        result.filename or "",
-        result.media_type or "",
+        stream_result.response.ok,
+        stream_result.filename or "",
+        stream_result.media_type or "",
     )
-    return result
+    return stream_result
 
 
 async def _single_chunk(data: bytes):

@@ -7,6 +7,7 @@ keywords: ["sdk tools", "rendering_tools", "web_tools", "sources_pool", "citatio
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/custom-tools-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/tool-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/named-services-tools-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/block-production-README.md
@@ -33,6 +34,59 @@ They are part of the trusted runtime surface:
 - Tool calls remain observable and can participate in provenance, artifacts, and citations.
 
 In practice, the built-in tools are how the runtime exposes common capabilities without forcing each app to reimplement them.
+
+## Connecting SDK tools to agents
+
+Built-in SDK tools are connected per agent through bundle props:
+
+```yaml
+surfaces:
+  as_consumer:
+    agents:
+      main:
+        tools:
+          - id: web
+            kind: python
+            module: kdcube_ai_app.apps.chat.sdk.tools.web_tools
+            alias: web_tools
+            allowed: [web_search, web_fetch]
+          - id: exec
+            kind: python
+            module: kdcube_ai_app.apps.chat.sdk.tools.exec_tools
+            alias: exec_tools
+            allowed: [execute_code_python]
+```
+
+The same bundle can have more than one agent surface:
+
+```yaml
+surfaces:
+  as_consumer:
+    agents:
+      main:
+        tools:
+          - id: tasks
+            kind: python
+            module: kdcube_ai_app.apps.chat.sdk.solutions.tasks.tools
+            alias: tasks
+            allowed: [list_tasks, search_tasks, create_task]
+      task_job:
+        tools:
+          - id: task_job
+            kind: python
+            module: kdcube_ai_app.apps.chat.sdk.solutions.tasks.job_tools
+            alias: task_job
+            allowed: [get_current_task, update_execution_journal]
+```
+
+This makes tool exposure explicit and keeps job/regular assistant tool surfaces
+separate. `tools_descriptor.py` should adapt this config into runtime specs; it
+should not be the place where the bundle's agent tool policy is hidden.
+
+The built-in SDK tool modules still define the callable implementations and
+Semantic Kernel metadata. They are not, by themselves, a declaration that every
+agent may call those tools. Visibility comes from the active agent's
+`surfaces.as_consumer` tool list.
 
 ## File Artifacts From Tools
 

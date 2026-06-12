@@ -269,6 +269,32 @@ class ToolSubsystem:
             return build_portable_spec(svc=self.svc, chat_comm=self.comm)
 
     # ---------- public surface used by manager + react solver ----------
+    @staticmethod
+    def _doc_for_prompt(entry: Mapping[str, Any]) -> Dict[str, Any]:
+        source = entry.get("doc") if isinstance(entry.get("doc"), Mapping) else {}
+        doc: Dict[str, Any] = {
+            "purpose": source.get("purpose", ""),
+            "args": source.get("args", {}),
+            "returns": source.get("returns", ""),
+        }
+        if isinstance(source.get("metadata"), Mapping):
+            metadata = {
+                key: value
+                for key, value in source["metadata"].items()
+                if key != "named_service_operation" and value not in (None, "", [])
+            }
+            if metadata:
+                doc["metadata"] = metadata
+        for key in (
+            "constraints",
+            "examples",
+            "namespaces_applicable",
+            "tool_trait",
+        ):
+            if source.get(key) not in (None, "", []):
+                doc[key] = source.get(key)
+        return doc
+
     def get_tool_runtime(self, tool_id: str) -> Optional[str]:
         if not tool_id:
             return None
@@ -436,38 +462,53 @@ class ToolSubsystem:
 
     def tool_catalog_for_prompt(self, *, allowed_plugins: Optional[List[str]] = None,
                                 allowed_ids: Optional[List[str]] = None,
-                                include_mcp: bool = True) -> List[Dict[str, Any]]:
+                                include_mcp: bool = True,
+                                allowed_tool_names_by_alias: Optional[Mapping[str, Optional[List[str]]]] = None) -> List[Dict[str, Any]]:
         return [
-            {"id": e["id"], "doc": {"purpose": e["doc"]["purpose"], "args": e["doc"]["args"], "returns": e["doc"]["returns"]}}
-            for e in self._filter_entries(allowed_plugins, allowed_ids, include_mcp=include_mcp)
+            {"id": e["id"], "doc": self._doc_for_prompt(e)}
+            for e in self._filter_entries(
+                allowed_plugins,
+                allowed_ids,
+                include_mcp=include_mcp,
+                allowed_tool_names_by_alias=allowed_tool_names_by_alias,
+            )
         ]
 
     async def tool_catalog_for_prompt_async(self, *, allowed_plugins: Optional[List[str]] = None,
                                             allowed_ids: Optional[List[str]] = None,
-                                            include_mcp: bool = True) -> List[Dict[str, Any]]:
+                                            include_mcp: bool = True,
+                                            allowed_tool_names_by_alias: Optional[Mapping[str, Optional[List[str]]]] = None) -> List[Dict[str, Any]]:
         if include_mcp:
             try:
                 await self.ensure_mcp_entries()
             except Exception:
                 pass
-        return self.tool_catalog_for_prompt(allowed_plugins=allowed_plugins, allowed_ids=allowed_ids, include_mcp=include_mcp)
+        return self.tool_catalog_for_prompt(
+            allowed_plugins=allowed_plugins,
+            allowed_ids=allowed_ids,
+            include_mcp=include_mcp,
+            allowed_tool_names_by_alias=allowed_tool_names_by_alias,
+        )
 
     def adapters_for_codegen(self, *,
                              allowed_plugins: Optional[List[str]] = None,
                              allowed_ids: Optional[List[str]] = None,
-                             denied_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+                             denied_ids: Optional[List[str]] = None,
+                             allowed_tool_names_by_alias: Optional[Mapping[str, Optional[List[str]]]] = None) -> List[Dict[str, Any]]:
         # Deprecated: use react_tools()/react_tools_cached()
         return self.react_tools_cached(
             allowed_plugins=allowed_plugins,
             allowed_ids=allowed_ids,
             denied_ids=denied_ids,
+            allowed_tool_names_by_alias=allowed_tool_names_by_alias,
         )
 
     async def react_tools(self, *,
                           allowed_plugins: Optional[List[str]] = None,
                           allowed_ids: Optional[List[str]] = None,
                           denied_ids: Optional[List[str]] = None,
-                          include_mcp: bool = True) -> List[Dict[str, Any]]:
+                          include_mcp: bool = True,
+                          allowed_tool_names_by_alias: Optional[Mapping[str, Optional[List[str]]]] = None) -> List[Dict[str, Any]]:
         if include_mcp:
             try:
                 await self.ensure_mcp_entries()
@@ -478,16 +519,19 @@ class ToolSubsystem:
             allowed_ids=allowed_ids,
             denied_ids=denied_ids,
             include_mcp=include_mcp,
+            allowed_tool_names_by_alias=allowed_tool_names_by_alias,
         )
 
     def react_tools_cached(self, *,
                            allowed_plugins: Optional[List[str]] = None,
                            allowed_ids: Optional[List[str]] = None,
                            denied_ids: Optional[List[str]] = None,
-                           include_mcp: bool = True) -> List[Dict[str, Any]]:
-        # ensure io/ctx are always present
+                           include_mcp: bool = True,
+                           allowed_tool_names_by_alias: Optional[Mapping[str, Optional[List[str]]]] = None) -> List[Dict[str, Any]]:
         ap = set(allowed_plugins or [])
-        ap.update({"io_tools", "ctx_tools"})
+        if allowed_tool_names_by_alias is None:
+            # Legacy callers expect io/ctx to be available even when omitted.
+            ap.update({"io_tools", "ctx_tools"})
         allowed_plugins = list(ap)
         return [{
             "id": e["id"],
@@ -495,7 +539,13 @@ class ToolSubsystem:
             "call_template": e["call_template"],
             "is_async": bool(e.get("is_async")),
             "doc": e["doc"],
-        } for e in self._filter_entries(allowed_plugins, allowed_ids, denied_ids, include_mcp=include_mcp)]
+        } for e in self._filter_entries(
+            allowed_plugins,
+            allowed_ids,
+            denied_ids,
+            include_mcp=include_mcp,
+            allowed_tool_names_by_alias=allowed_tool_names_by_alias,
+        )]
 
     def get_alias_maps(self) -> Tuple[Dict[str, str], Dict[str, Optional[str]]]:
         """Returns (alias->dyn_module_name, alias->file_path)."""
@@ -655,7 +705,8 @@ class ToolSubsystem:
     def _filter_entries(self, allowed_plugins: Optional[List[str]] = None,
                         allowed_ids: Optional[List[str]] = None,
                         denied_ids: Optional[List[str]] = None,
-                        include_mcp: bool = True) -> List[Dict[str, Any]]:
+                        include_mcp: bool = True,
+                        allowed_tool_names_by_alias: Optional[Mapping[str, Optional[List[str]]]] = None) -> List[Dict[str, Any]]:
         ents = list(self.tools_info)
         if include_mcp and self._mcp_entries:
             ents = ents + list(self._mcp_entries)
@@ -663,6 +714,8 @@ class ToolSubsystem:
         if allowed_plugins:
             allow = set(p.strip() for p in allowed_plugins if p and str(p).strip())
             ents = [e for e in ents if (e.get("plugin_alias") or "") in allow]
+        if allowed_tool_names_by_alias is not None:
+            ents = [e for e in ents if self._entry_allowed_by_alias_names(e, allowed_tool_names_by_alias)]
         if allowed_ids:
             allow_ids = set(allowed_ids)
             ents = [e for e in ents if system_tool(e) or e["id"] in allow_ids]
@@ -670,6 +723,23 @@ class ToolSubsystem:
             deny_ids = set(denied_ids)
             ents = [e for e in ents if e["id"] not in deny_ids]
         return ents
+
+    @staticmethod
+    def _entry_allowed_by_alias_names(
+        entry: Mapping[str, Any],
+        allowed_tool_names_by_alias: Mapping[str, Optional[List[str]]],
+    ) -> bool:
+        tool_id = str(entry.get("id") or "")
+        alias = str(entry.get("plugin_alias") or "")
+        _, provider, tool_name = parse_tool_id(tool_id)
+        alias = alias or provider
+        if not alias or alias not in allowed_tool_names_by_alias:
+            return False
+        allowed_names = allowed_tool_names_by_alias.get(alias)
+        if allowed_names is None:
+            return True
+        allowed = {str(item).strip() for item in allowed_names if str(item or "").strip()}
+        return tool_name in allowed or tool_id in allowed
 
     def _introspect_module(self, mod, mod_name: str, alias: str, use_sk: bool) -> List[Dict[str, Any]]:
         if use_sk and hasattr(mod, "kernel"):
@@ -849,6 +919,16 @@ class ToolSubsystem:
             },
             "raw": raw or {},
         }
+        if isinstance(raw, dict):
+            metadata: Dict[str, Any] = {}
+            for key in ("namespaces_applicable", "tool_trait"):
+                if raw.get(key) not in (None, "", []):
+                    metadata[key] = raw.get(key)
+            if metadata:
+                entry["metadata"] = metadata
+                entry["doc"]["metadata"] = metadata
+                for key, value in metadata.items():
+                    entry["doc"][key] = value
         if "plugin" not in entry: entry["plugin"] = (raw or {}).get("plugin_name", "") or ""
         if "plugin_alias" not in entry: entry["plugin_alias"] = alias
         return entry

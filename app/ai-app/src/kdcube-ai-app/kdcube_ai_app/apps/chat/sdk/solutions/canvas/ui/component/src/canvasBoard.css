@@ -586,7 +586,7 @@ button {
   --pin-ink: #604aa8;
 }
 
-.canvas-card.issue-ref {
+.canvas-card.object-ref {
   --pin-bg: linear-gradient(180deg, rgba(237, 244, 255, 0.82), rgba(255, 255, 255, 0.96));
   --pin-border: rgba(67, 114, 195, 0.26);
   --pin-focus: rgba(67, 114, 195, 0.15);

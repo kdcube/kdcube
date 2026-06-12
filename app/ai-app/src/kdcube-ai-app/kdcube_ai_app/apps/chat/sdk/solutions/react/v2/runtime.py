@@ -1508,6 +1508,7 @@ class ReactSolverV2:
         self,
         *,
         allowed_plugins: List[str],
+        allowed_tool_names_by_alias: Dict[str, Any] | None = None,
     ) -> ReactStateV2:
         outdir = pathlib.Path(self.ctx_browser.runtime_ctx.outdir or "")
         workdir = pathlib.Path(self.ctx_browser.runtime_ctx.workdir or "")
@@ -1525,6 +1526,7 @@ class ReactSolverV2:
         adapters = await self.tools_subsystem.react_tools(
             allowed_plugins=allowed_plugins,
             allowed_ids=None,
+            allowed_tool_names_by_alias=allowed_tool_names_by_alias,
         )
 
         plan_steps: List[str] = []
@@ -1568,14 +1570,19 @@ class ReactSolverV2:
         self,
         *,
         allowed_plugins: List[str],
+        allowed_tool_names_by_alias: Dict[str, Any] | None = None,
     ):
         with self._bind_runtime_role_models():
-            return await self._run_impl(allowed_plugins=allowed_plugins)
+            return await self._run_impl(
+                allowed_plugins=allowed_plugins,
+                allowed_tool_names_by_alias=allowed_tool_names_by_alias,
+            )
 
     async def _run_impl(
         self,
         *,
         allowed_plugins: List[str],
+        allowed_tool_names_by_alias: Dict[str, Any] | None = None,
     ):
         turn_status = ConversationTurnWorkStatus(
             emit_delta=self.comm.delta,
@@ -1585,6 +1592,7 @@ class ReactSolverV2:
 
         state = await self.prepare_session(
             allowed_plugins=allowed_plugins,
+            allowed_tool_names_by_alias=allowed_tool_names_by_alias,
         )
         self._steer_interrupt_requested = False
         self._latest_steer_seq_seen = 0

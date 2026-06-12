@@ -1,12 +1,13 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/custom-tools-README.md
 title: "Custom Tools"
-summary: "How to author bundle-local tools and register them in tools_descriptor.py with module/ref entries and consumer runtime wiring."
+summary: "How to author bundle-local tools and expose them through agent-scoped surfaces.as_consumer config with module/ref entries and runtime wiring."
 tags: ["sdk", "tools", "custom", "bundle", "descriptor", "semantic-kernel", "authoring", "runtime"]
-keywords: ["tools_descriptor.py", "TOOLS_SPECS", "module", "ref", "alias", "kernel_function", "create_tool_subsystem_with_mcp", "tool_call", "TOOL_RUNTIME", "MCP_TOOL_SPECS", "_SERVICE", "_INTEGRATIONS", "KV_CACHE", "get_comm"]
+keywords: ["surfaces.as_consumer", "agent tool config", "tools_descriptor.py", "TOOLS_SPECS", "module", "ref", "alias", "kernel_function", "create_tool_subsystem_with_mcp", "tool_call", "TOOL_RUNTIME", "MCP_TOOL_SPECS", "_SERVICE", "_INTEGRATIONS", "KV_CACHE", "get_comm"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/tool-subsystem-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/mcp-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/named-services-tools-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/block-production-README.md
@@ -38,19 +39,69 @@ async def search(query: Annotated[str, "Search query"], n: Annotated[int, "Max r
     ...
 ```
 
-## 2) Register tools in `tools_descriptor.py`
+## 2) Connect tools to an agent
 
-```python
-TOOLS_SPECS = [
-    {"module": "kdcube_ai_app.apps.chat.sdk.tools.web_tools", "alias": "web_tools", "use_sk": True},
-    {"ref": "tools/local_tools.py", "alias": "doc", "use_sk": True},
-]
+Declare the model-facing tool connection under bundle props:
+
+```yaml
+surfaces:
+  as_consumer:
+    agents:
+      main:
+        tools:
+          - id: docs
+            kind: python
+            ref: tools/local_tools.py
+            alias: doc
+            discovery: semantic_kernel
+            allowed:
+              - search
+```
+
+For a bundle with multiple agents, give each agent its own list:
+
+```yaml
+surfaces:
+  as_consumer:
+    agents:
+      main:
+        tools:
+          - id: tasks
+            kind: python
+            module: kdcube_ai_app.apps.chat.sdk.solutions.tasks.tools
+            alias: tasks
+            allowed: [list_tasks, search_tasks, get_task, create_task]
+      task_job:
+        tools:
+          - id: task_job
+            kind: python
+            module: kdcube_ai_app.apps.chat.sdk.solutions.tasks.job_tools
+            alias: task_job
+            allowed: [get_current_task, update_execution_journal]
 ```
 
 Notes:
 - `module` points to installed Python modules.
 - `ref` is relative to bundle root (portable across host and isolated runtimes).
 - `alias` becomes the tool ID prefix.
+- `allowed` is the exact callable allow-list for that agent.
+- `discovery` defaults to `semantic_kernel`; only `@kernel_function` tools
+  should be published to the model catalog for Python sources.
+
+`tools_descriptor.py` remains as a thin runtime adapter around this config. It
+should not be the policy source for which tools an agent sees:
+
+```python
+from kdcube_ai_app.apps.chat.sdk.runtime.tool_config import agent_tool_config_from_bundle_props
+
+def config_for_agent(agent_id, *, bundle_props=None):
+    return agent_tool_config_from_bundle_props(bundle_props or {}, agent_id, bundle_root=BUNDLE_ROOT)
+```
+
+Code defaults may seed `surfaces.as_consumer` when no deployment config exists,
+but new bundle descriptors and `bundles.yaml` entries should put the agent tool
+policy under `surfaces.as_consumer.agents.<agent_id>.tools`. Legacy
+`tools.agents` is still read for old bundles only.
 
 ### Bundle-local imports from `ref` tools
 
@@ -86,11 +137,14 @@ The `ref` loader preserves this package context in normal in-process execution
 and in isolated supervisor execution. Use `module` only for installed Python
 modules outside the bundle.
 
-## 3) Wire descriptor in workflow
+## 3) Wire resolved config in workflow
 
-Your workflow must pass descriptor values into subsystem creation:
+Your workflow must resolve the active agent config, pass specs into subsystem
+creation, and pass both alias and per-tool allow-lists to ReAct:
 
 ```python
+tool_config = tools_descriptor.config_for_agent(agent_id, bundle_props=self.bundle_props)
+
 tool_subsystem, _ = create_tool_subsystem_with_mcp(
     service=self.model_service,
     comm=self.comm,
@@ -98,10 +152,15 @@ tool_subsystem, _ = create_tool_subsystem_with_mcp(
     bundle_spec=self.config.ai_bundle_spec,
     context_rag_client=self.ctx_client,
     registry={"kb_client": self.kb},
-    raw_tool_specs=tools_descriptor.TOOLS_SPECS,
-    tool_runtime=getattr(tools_descriptor, "TOOL_RUNTIME", None),
-    mcp_tool_specs=getattr(tools_descriptor, "MCP_TOOL_SPECS", []),
+    raw_tool_specs=tool_config.tool_specs,
+    tool_runtime=tool_config.tool_runtime,
+    mcp_tool_specs=tool_config.mcp_tool_specs,
     mcp_env_json=os.environ.get("MCP_SERVICES") or "",
+)
+
+sr = await react.run(
+    allowed_plugins=tool_config.allowed_plugins,
+    allowed_tool_names_by_alias=tool_config.allowed_tool_names_by_alias,
 )
 ```
 

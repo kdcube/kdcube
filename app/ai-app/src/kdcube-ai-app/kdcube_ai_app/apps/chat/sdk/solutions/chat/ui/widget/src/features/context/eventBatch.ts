@@ -73,11 +73,11 @@ export function contextRef(ctx: AttachedContext): string | undefined {
 }
 
 export function isCanvasContext(ctx: AttachedContext): boolean {
-  return ctx.kind === 'canvas' || ctx.kind === 'event.canvas' || ctx.kind === 'task_tracker.canvas'
+  return ctx.kind === 'canvas' || ctx.kind === 'event.canvas'
 }
 
 export function isWizardContext(ctx: AttachedContext): boolean {
-  return ctx.kind === 'wizard' || ctx.kind === 'snapshot' || ctx.kind === 'event.snapshot' || ctx.kind === 'task_tracker.wizard'
+  return ctx.kind === 'wizard' || ctx.kind === 'snapshot' || ctx.kind === 'event.snapshot'
 }
 
 function defaultEventId(prefix: string): string {
@@ -85,15 +85,15 @@ function defaultEventId(prefix: string): string {
 }
 
 const DEFAULT_EVENT_SOURCES: Required<ChatEventSourceDefaults> = {
-  userEventSourceId: 'task_tracker.main.chat.user',
-  attachmentEventSourceId: 'task_tracker.main.chat.attachment',
-  contextEventSourceId: 'task_tracker.context.focus',
-  chatSurface: 'task_tracker_chat',
-  canvasStateEventSourceId: 'task_tracker.canvas.state',
-  canvasFocusEventSourceId: 'task_tracker.canvas.focus',
-  canvasSurface: 'task_tracker_canvas',
-  snapshotEventSourceId: 'task_tracker.task.snapshot',
-  snapshotSurface: 'task_tracker_wizard',
+  userEventSourceId: 'chat.main.user',
+  attachmentEventSourceId: 'chat.main.attachment',
+  contextEventSourceId: 'chat.context.focus',
+  chatSurface: 'chat',
+  canvasStateEventSourceId: 'chat.canvas.state',
+  canvasFocusEventSourceId: 'chat.canvas.focus',
+  canvasSurface: 'canvas',
+  snapshotEventSourceId: 'chat.snapshot',
+  snapshotSurface: 'snapshot',
 }
 
 function eventSources(defaults?: ChatEventSourceDefaults): Required<ChatEventSourceDefaults> {
@@ -247,7 +247,7 @@ function snapshotEvent(ctx: AttachedContext, options: { agentId: string; eventId
   const contextData = ctx.data && typeof ctx.data === 'object' ? ctx.data : {}
   const contextRole = typeof contextData.context_role === 'string' && contextData.context_role.trim()
     ? contextData.context_role
-    : 'issue_snapshot'
+    : 'snapshot'
   return {
     ...contextBase(ctx, { agentId, eventId }),
     type: 'event.snapshot',

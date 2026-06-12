@@ -470,19 +470,29 @@ The canvas event source ids are generic protocol names: `canvas.state` and
 
 The `canvas_object_action` operation also hosts configured named-service
 namespace resolvers for both canvas and chat object actions. For example,
-`task:` refs can be delegated to a task-tracker owner bundle:
+`crm:` refs can be delegated to a CRM owner bundle:
 
 ```yaml
-named_services:
-  namespaces:
-    task:
-      clients:
-        default_client:
-          tools:
-            allowed_operations: [provider.about, object.list, object.search, object.get, object.schema, object.upsert, object.delete]
-        canvas:
-          resolver:
-            enabled: true
+surfaces:
+  as_consumer:
+    agents:
+      main:
+        event_sources:
+        - kind: named_service
+          namespace: crm
+          policies:
+            block_production:
+              mode: provider
+              operation: block.produce
+            pull:
+              mode: provider
+              operation: object.get
+    ui:
+      canvas:
+        resolvers:
+        - kind: named_service
+          namespace: crm
+          allowed: [object.action]
 ```
 
 The configured resolver resolves the owner through Named Service Discovery and

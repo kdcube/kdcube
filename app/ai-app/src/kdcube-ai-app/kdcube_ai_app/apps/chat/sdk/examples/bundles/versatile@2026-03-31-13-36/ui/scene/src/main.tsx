@@ -39,14 +39,11 @@ const CHAT_CONFIG_IDENTITY = 'BUNDLE_VERSATILE_CHAT_VIEW'
 const CHAT_WIDGET_ALIAS = 'versatile_chat'
 const MEMORY_WIDGET_ALIAS = 'memories'
 const USAGE_CARD_WIDGET_ALIAS = 'usage_card'
-const TASK_TRACKER_BUNDLE_ID = 'task-tracker@1-0'
-const TASKS_WIDGET_ALIAS = 'task_tracker_tasks'
 // Debounce burst-y accounting.usage broadcasts so a chatty turn does not
 // hammer /api/economics/me/budget-breakdown. 800 ms catches the typical
 // trailing accounting event after the final delta without feeling stale.
 const USAGE_REFRESH_DEBOUNCE_MS = 800
 const USAGE_REFRESH_MESSAGE_TYPE = 'kdcube-usage-card-refresh'
-const TASK_CHANGED_MESSAGE_TYPE = 'kdcube-task-tracker-task-changed'
 const CANVAS_STORY_ID = 'versatile:main'
 const CANVAS_SUBJECT = 'canvas.patch'
 const DEFAULT_CHAT_WIDTH = 460
@@ -78,6 +75,30 @@ interface RuntimeConfig {
   idToken?: string | null
 }
 
+interface SceneExternalPanelSurfaceConfig {
+  label?: string
+  expanded?: boolean
+  command?: Record<string, unknown>
+  command_from_open?: 'provider_surface_open' | string
+}
+
+interface SceneExternalPanelConfig {
+  id: string
+  label: string
+  title?: string
+  bundle_id: string
+  widget_alias: string
+  widget_message_type?: string
+  service_event_type?: string
+  service_forward_message_type?: string
+  open_message_types?: string[]
+  surfaces?: Record<string, SceneExternalPanelSurfaceConfig>
+}
+
+interface SceneConfig {
+  external_panels: SceneExternalPanelConfig[]
+}
+
 interface DataBusMessageInput {
   message_id: string
   subject: string
@@ -99,7 +120,7 @@ interface DataBusServiceEnvelope {
   }
 }
 
-type ScenePanelId = 'chat' | 'memory' | 'tasks' | 'usage'
+type ScenePanelId = 'chat' | 'memory' | 'external' | 'usage'
 
 interface SceneSurfaceOpenRequest {
   targetSurface: string
@@ -236,8 +257,8 @@ function usageCardWidgetUrl(ctx: RouteContext): string {
   return widgetUrl(ctx, USAGE_CARD_WIDGET_ALIAS)
 }
 
-function tasksWidgetUrl(ctx: RouteContext, expanded: boolean): string {
-  return widgetUrlForBundle(ctx, TASK_TRACKER_BUNDLE_ID, TASKS_WIDGET_ALIAS, {
+function externalWidgetUrl(ctx: RouteContext, panel: SceneExternalPanelConfig, expanded: boolean): string {
+  return widgetUrlForBundle(ctx, panel.bundle_id, panel.widget_alias, {
     view: expanded ? 'expanded' : 'compact',
   })
 }
@@ -400,18 +421,28 @@ function memoryIdFromSurfaceOpenRequest(request: SceneSurfaceOpenRequest): strin
   return ref.startsWith('mem:') ? ref.slice(4).split(/[?#]/, 1)[0].replace(/^\/+/, '') : ''
 }
 
-function taskIssueIdFromSurfaceOpenRequest(request: SceneSurfaceOpenRequest): string {
-  const eventIssueId = request.uiEvent.issue_id
-  if (typeof eventIssueId === 'string' && eventIssueId.trim()) return eventIssueId.trim()
-  const issue = request.response.issue
-  if (issue && typeof issue === 'object') {
-    const id = (issue as { id?: unknown }).id
-    if (typeof id === 'string' && id.trim()) return id.trim()
+function objectRefFromSurfaceOpenRequest(request: SceneSurfaceOpenRequest): string {
+  return String(
+    request.uiEvent.object_ref ||
+    request.response.object_ref ||
+    request.response.ref ||
+    request.sourceCard.ref ||
+    request.sourceCard.logical_path ||
+    '',
+  ).trim()
+}
+
+function providerSurfaceCommand(request: SceneSurfaceOpenRequest): Record<string, unknown> | null {
+  const objectRef = objectRefFromSurfaceOpenRequest(request)
+  const command: Record<string, unknown> = {
+    ...request.uiEvent,
+    action: 'open',
+    view: request.uiEvent.mode || 'expanded',
   }
-  const ref = String(request.uiEvent.object_ref || request.response.object_ref || request.response.ref || '').trim()
-  if (ref.startsWith('task:issues/')) return ref.slice('task:issues/'.length).split(/[?#]/, 1)[0].replace(/^\/+/, '')
-  if (ref.startsWith('task:issue:')) return ref.slice('task:issue:'.length).split(/[?#]/, 1)[0].replace(/^\/+/, '')
-  return ''
+  if (objectRef) command.object_ref = objectRef
+  if (request.response.object) command.object = request.response.object
+  if (request.response.title && !command.title) command.title = request.response.title
+  return objectRef || Object.keys(command).length > 2 ? command : null
 }
 
 function memoryPanelSize(expanded: boolean) {
@@ -465,7 +496,7 @@ function usagePanelSize() {
   }
 }
 
-function tasksPanelSize(expanded: boolean) {
+function externalPanelSize(expanded: boolean) {
   return {
     width: expanded ? Math.min(760, window.innerWidth - 72) : Math.min(410, window.innerWidth - 72),
     height: expanded ? Math.min(680, window.innerHeight - 92) : Math.min(540, window.innerHeight - 110),
@@ -481,8 +512,8 @@ function defaultUsageFrame(chatWidth: number, chatOpen: boolean) {
   }
 }
 
-function defaultTasksFrame(chatWidth: number, chatOpen: boolean, expanded: boolean) {
-  const panel = tasksPanelSize(expanded)
+function defaultExternalFrame(chatWidth: number, chatOpen: boolean, expanded: boolean) {
+  const panel = externalPanelSize(expanded)
   const rightEdge = chatOpen ? Math.max(64, window.innerWidth - chatWidth - 18) : window.innerWidth - 62
   return {
     x: clamp(rightEdge - panel.width - 12, 8, Math.max(8, window.innerWidth - panel.width - 8)),
@@ -724,8 +755,6 @@ const CANVAS_CONTEXT_CARD_KINDS = new Set([
   'memory',
   'source',
   'search.result',
-  'issue.ref',
-  'story.ref',
   'note',
   'object.ref',
   'conversation',
@@ -789,6 +818,65 @@ function requestRuntimeConfig(): Promise<RuntimeConfig | null> {
   })
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function asString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function normalizeExternalPanelConfig(value: unknown): SceneExternalPanelConfig | null {
+  const record = asRecord(value)
+  const id = asString(record.id)
+  const bundleId = asString(record.bundle_id)
+  const widgetAlias = asString(record.widget_alias)
+  if (!id || !bundleId || !widgetAlias) return null
+  const surfacesRaw = asRecord(record.surfaces)
+  const surfaces: Record<string, SceneExternalPanelSurfaceConfig> = {}
+  Object.entries(surfacesRaw).forEach(([surface, surfaceValue]) => {
+    const surfaceRecord = asRecord(surfaceValue)
+    const command = asRecord(surfaceRecord.command)
+    surfaces[surface] = {
+      label: asString(surfaceRecord.label) || undefined,
+      expanded: typeof surfaceRecord.expanded === 'boolean' ? surfaceRecord.expanded : undefined,
+      command: Object.keys(command).length ? command : undefined,
+      command_from_open: asString(surfaceRecord.command_from_open) || undefined,
+    }
+  })
+  return {
+    id,
+    label: asString(record.label) || id,
+    title: asString(record.title) || asString(record.label) || id,
+    bundle_id: bundleId,
+    widget_alias: widgetAlias,
+    widget_message_type: asString(record.widget_message_type) || undefined,
+    service_event_type: asString(record.service_event_type) || undefined,
+    service_forward_message_type: asString(record.service_forward_message_type) || undefined,
+    open_message_types: Array.isArray(record.open_message_types)
+      ? record.open_message_types.map(asString).filter(Boolean)
+      : [],
+    surfaces,
+  }
+}
+
+async function loadSceneConfig(ctx: RouteContext): Promise<SceneConfig> {
+  try {
+    const payload = await postOperation<Record<string, never>, { ok?: boolean; external_panels?: unknown[] }>(
+      ctx,
+      'scene_surface_config',
+      {},
+    )
+    const externalPanels = Array.isArray(payload?.external_panels)
+      ? payload.external_panels.map(normalizeExternalPanelConfig).filter((panel): panel is SceneExternalPanelConfig => Boolean(panel))
+      : []
+    return { external_panels: externalPanels }
+  } catch (error) {
+    console.warn('[versatile-scene] scene surface config unavailable', error)
+    return { external_panels: [] }
+  }
+}
+
 function App() {
   const fallback = useMemo(() => routeContext(), [])
   const chatSizing = useMemo(() => sceneChatSizing(), [])
@@ -808,9 +896,10 @@ function App() {
   // the iframe overlay, so we render an explicit handle on top of the
   // iframe and drive width/height from this state.
   const [memorySize, setMemorySize] = useState(() => memoryPanelSize(false))
-  const [tasksOpen, setTasksOpen] = useState(false)
-  const [tasksExpanded, setTasksExpanded] = useState(false)
-  const [tasksFrame, setTasksFrame] = useState(() => defaultTasksFrame(chatSizing.width, true, false))
+  const [sceneConfig, setSceneConfig] = useState<SceneConfig>({ external_panels: [] })
+  const [externalOpen, setExternalOpen] = useState(false)
+  const [externalExpanded, setExternalExpanded] = useState(false)
+  const [externalFrame, setExternalFrame] = useState(() => defaultExternalFrame(chatSizing.width, true, false))
   const [usageOpen, setUsageOpen] = useState(false)
   const [usageFrame, setUsageFrame] = useState(() => defaultUsageFrame(chatSizing.width, true))
   const [userType, setUserType] = useState<string | null>(null)
@@ -818,7 +907,7 @@ function App() {
   const [panelZ, setPanelZ] = useState<Record<ScenePanelId, number>>({
     chat: FLOATING_PANEL_BASE_Z,
     memory: FLOATING_PANEL_BASE_Z + 1,
-    tasks: FLOATING_PANEL_BASE_Z + 2,
+    external: FLOATING_PANEL_BASE_Z + 2,
     usage: FLOATING_PANEL_BASE_Z + 3,
   })
   const [activeCanvasName, setActiveCanvasName] = useState('main')
@@ -827,12 +916,13 @@ function App() {
   const [notice, setNotice] = useState('')
   const chatFrameRef = useRef<HTMLIFrameElement | null>(null)
   const memoryFrameRef = useRef<HTMLIFrameElement | null>(null)
-  const tasksFrameRef = useRef<HTMLIFrameElement | null>(null)
+  const externalFrameRef = useRef<HTMLIFrameElement | null>(null)
   const usageFrameRef = useRef<HTMLIFrameElement | null>(null)
   const usageRefreshTimerRef = useRef<number | null>(null)
   const pendingSurfaceCommandsRef = useRef<Record<string, Record<string, unknown>>>({})
   const panelZCursorRef = useRef(FLOATING_PANEL_BASE_Z + 4)
   const isRegistered = userType != null && userType !== 'anonymous'
+  const externalPanel = sceneConfig.external_panels[0] ?? null
 
   const activeCanvas = useMemo(
     () => canvases.find((canvas) => canvas.name === activeCanvasName) ?? emptyCanvasDefinition(activeCanvasName),
@@ -860,13 +950,14 @@ function App() {
     }, '*')
   }, [])
 
-  const syncTasksWidgetView = useCallback((view: 'compact' | 'expanded') => {
-    tasksFrameRef.current?.contentWindow?.postMessage({
+  const syncExternalWidgetView = useCallback((view: 'compact' | 'expanded') => {
+    if (!externalPanel) return
+    externalFrameRef.current?.contentWindow?.postMessage({
       type: 'kdcube-set-view',
-      widget: TASKS_WIDGET_ALIAS,
+      widget: externalPanel.widget_alias,
       view,
     }, '*')
-  }, [])
+  }, [externalPanel])
 
   // Wake the iframe's scroll after a JS-driven resize. Parent-side this
   // toggles pointer-events (forces the compositor to rebuild the iframe
@@ -928,31 +1019,34 @@ function App() {
     return true
   }, [])
 
-  const sendTasksWidgetCommand = useCallback((command: Record<string, unknown>) => {
-    const target = tasksFrameRef.current?.contentWindow
+  const sendExternalWidgetCommand = useCallback((command: Record<string, unknown>) => {
+    if (!externalPanel) return false
+    const target = externalFrameRef.current?.contentWindow
     if (!target) return false
     target.postMessage({
-      type: 'kdcube-task-tracker-widget-command',
-      widget: TASKS_WIDGET_ALIAS,
+      type: externalPanel.widget_message_type || 'kdcube-widget-command',
+      widget: externalPanel.widget_alias,
       ...command,
     }, '*')
     return true
-  }, [])
+  }, [externalPanel])
 
-  const openTasksWidget = useCallback((expanded = false) => {
-    bringPanelToFront('tasks')
-    setTasksOpen(true)
-    setTasksExpanded(expanded)
-    const panel = tasksPanelSize(expanded)
-    setTasksFrame((frame) => ({
+  const openExternalWidget = useCallback((expanded = false) => {
+    if (!externalPanel) return
+    bringPanelToFront('external')
+    setExternalOpen(true)
+    setExternalExpanded(expanded)
+    const panel = externalPanelSize(expanded)
+    setExternalFrame((frame) => ({
       x: clamp(frame.x, 8, Math.max(8, window.innerWidth - panel.width - 8)),
       y: clamp(frame.y, 62, Math.max(62, window.innerHeight - panel.height - 8)),
     }))
-    window.setTimeout(() => syncTasksWidgetView(expanded ? 'expanded' : 'compact'), 0)
-  }, [bringPanelToFront, syncTasksWidgetView])
+    window.setTimeout(() => syncExternalWidgetView(expanded ? 'expanded' : 'compact'), 0)
+  }, [bringPanelToFront, externalPanel, syncExternalWidgetView])
 
-  const surfaceRegistry = useMemo<Record<string, SceneSurfaceRegistration>>(() => ({
-    'sdk.memory.viewer': {
+  const surfaceRegistry = useMemo<Record<string, SceneSurfaceRegistration>>(() => {
+    const registry: Record<string, SceneSurfaceRegistration> = {
+      'sdk.memory.viewer': {
       label: 'memory viewer',
       ensureOpen: () => openMemoryWidget(true),
       postCommand: sendMemoryWidgetCommand,
@@ -965,8 +1059,8 @@ function App() {
           memory_id: memoryId,
         }
       },
-    },
-    'sdk.chat.viewer': {
+      },
+      'sdk.chat.viewer': {
       label: 'chat',
       ensureOpen: () => {
         // Open + front, but keep the pane's current compact/expanded form —
@@ -989,30 +1083,31 @@ function App() {
           agent: ev.agent,
         }
       },
-    },
-    'task_tracker.issue_list': {
-      label: 'task list',
-      ensureOpen: () => openTasksWidget(false),
-      postCommand: sendTasksWidgetCommand,
-      commandFromOpen: () => ({ action: 'refresh' }),
-    },
-    'task_tracker.issue_editor': {
-      label: 'task editor',
-      ensureOpen: () => openTasksWidget(true),
-      postCommand: sendTasksWidgetCommand,
-      commandFromOpen: (request) => {
-        const issueId = taskIssueIdFromSurfaceOpenRequest(request)
-        if (!issueId) return null
-        return {
-          action: 'open',
-          issue_id: issueId,
-          object_ref: request.uiEvent.object_ref || request.response.object_ref || request.response.ref || `task:issues/${issueId}`,
-          issue: request.response.issue,
-          view: 'expanded',
-        }
       },
-    },
-  }), [openMemoryWidget, sendMemoryWidgetCommand, sendChatWidgetCommand, bringPanelToFront, openTasksWidget, sendTasksWidgetCommand])
+    }
+    if (externalPanel) {
+      Object.entries(externalPanel.surfaces || {}).forEach(([targetSurface, surface]) => {
+        registry[targetSurface] = {
+          label: surface.label || externalPanel.label,
+          ensureOpen: () => openExternalWidget(Boolean(surface.expanded)),
+          postCommand: sendExternalWidgetCommand,
+          commandFromOpen: (request) => {
+            if (surface.command) return { ...surface.command }
+            return providerSurfaceCommand(request)
+          },
+        }
+      })
+    }
+    return registry
+  }, [
+    bringPanelToFront,
+    externalPanel,
+    openExternalWidget,
+    openMemoryWidget,
+    sendChatWidgetCommand,
+    sendExternalWidgetCommand,
+    sendMemoryWidgetCommand,
+  ])
 
   const flushSurfaceCommand = useCallback((targetSurface: string) => {
     const command = pendingSurfaceCommandsRef.current[targetSurface]
@@ -1216,9 +1311,9 @@ function App() {
     window.addEventListener('blur', finish, { once: true })
   }, [bringPanelToFront, usageFrame])
 
-  const startTasksDrag = useCallback((event: React.PointerEvent<HTMLElement>) => {
+  const startExternalDrag = useCallback((event: React.PointerEvent<HTMLElement>) => {
     if ((event.target as HTMLElement).closest('button')) return
-    bringPanelToFront('tasks')
+    bringPanelToFront('external')
     event.preventDefault()
     const dragTarget = event.currentTarget
     try {
@@ -1226,13 +1321,13 @@ function App() {
     } catch {
       // Some embedded browsers do not expose pointer capture consistently.
     }
-    document.body.classList.add('scene-moving-tasks')
+    document.body.classList.add('scene-moving-external')
     const startX = event.clientX
     const startY = event.clientY
-    const startFrame = tasksFrame
-    const panel = tasksPanelSize(tasksExpanded)
+    const startFrame = externalFrame
+    const panel = externalPanelSize(externalExpanded)
     const onMove = (move: PointerEvent) => {
-      setTasksFrame({
+      setExternalFrame({
         x: clamp(startFrame.x + move.clientX - startX, 8, Math.max(8, window.innerWidth - panel.width - 8)),
         y: clamp(startFrame.y + move.clientY - startY, 62, Math.max(62, window.innerHeight - panel.height - 8)),
       })
@@ -1243,7 +1338,7 @@ function App() {
       } catch {
         // The pointer may already have been released by the browser.
       }
-      document.body.classList.remove('scene-moving-tasks')
+      document.body.classList.remove('scene-moving-external')
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', finish)
       window.removeEventListener('pointercancel', finish)
@@ -1253,7 +1348,7 @@ function App() {
     window.addEventListener('pointerup', finish, { once: true })
     window.addEventListener('pointercancel', finish, { once: true })
     window.addEventListener('blur', finish, { once: true })
-  }, [bringPanelToFront, tasksExpanded, tasksFrame])
+  }, [bringPanelToFront, externalExpanded, externalFrame])
 
   // Debounced usage-card refresh nudge. Burst-y accounting.usage broadcasts
   // collapse to a single postMessage so the widget makes one round trip
@@ -1282,6 +1377,17 @@ function App() {
       cancelled = true
     }
   }, [ctx])
+
+  useEffect(() => {
+    if (!ready) return
+    let cancelled = false
+    void loadSceneConfig(ctx).then((config) => {
+      if (!cancelled) setSceneConfig(config)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [ctx, ready])
 
   // Subscribe to broadcast accounting.usage envelopes on the chat_service
   // socket. The data-bus socket is the same singleton used for canvas
@@ -1319,10 +1425,10 @@ function App() {
     }
   }, [ctx, isRegistered, scheduleUsageRefresh])
 
-  // Task changes are project-level service events. The scene host keeps that
-  // relay subscription and forwards a neutral message to mounted task widgets.
+  // Configured provider widgets may publish project-level service events. The
+  // scene forwards only the configured event type to the mounted widget.
   useEffect(() => {
-    if (!isRegistered || !tasksOpen) return undefined
+    if (!isRegistered || !externalOpen || !externalPanel?.service_event_type || !externalPanel?.service_forward_message_type) return undefined
     let cancelled = false
     let detach: (() => void) | undefined
     void (async () => {
@@ -1332,23 +1438,23 @@ function App() {
         if (cancelled) return
         const onService = (payload: unknown) => {
           const env = (payload ?? {}) as { type?: string, data?: Record<string, unknown> }
-          if (env.type !== 'task_tracker.task.changed') return
-          tasksFrameRef.current?.contentWindow?.postMessage({
-            type: TASK_CHANGED_MESSAGE_TYPE,
+          if (env.type !== externalPanel.service_event_type) return
+          externalFrameRef.current?.contentWindow?.postMessage({
+            type: externalPanel.service_forward_message_type,
             data: env.data ?? {},
           }, '*')
         }
         socket.on('chat_service', onService)
         detach = () => socket.off('chat_service', onService)
       } catch {
-        // The task widget can still refresh manually or when opened.
+        // The configured widget can still refresh manually or when opened.
       }
     })()
     return () => {
       cancelled = true
       if (detach) detach()
     }
-  }, [ctx, isRegistered, tasksOpen])
+  }, [ctx, externalOpen, externalPanel, isRegistered])
 
   const startChatDrag = useCallback((event: React.PointerEvent<HTMLElement>) => {
     if (chatExpanded || (event.target as HTMLElement).closest('button')) return
@@ -1675,7 +1781,7 @@ function App() {
       const childWindows = [
         chatFrameRef.current?.contentWindow,
         memoryFrameRef.current?.contentWindow,
-        tasksFrameRef.current?.contentWindow,
+        externalFrameRef.current?.contentWindow,
         usageFrameRef.current?.contentWindow,
       ].filter(Boolean)
 
@@ -1701,10 +1807,10 @@ function App() {
             setMemoryExpanded(data.view === 'expanded')
             return
           }
-          if (data.widget === TASKS_WIDGET_ALIAS) {
-            bringPanelToFront('tasks')
-            setTasksOpen(true)
-            setTasksExpanded(data.view === 'expanded')
+          if (externalPanel && data.widget === externalPanel.widget_alias) {
+            bringPanelToFront('external')
+            setExternalOpen(true)
+            setExternalExpanded(data.view === 'expanded')
             return
           }
           return
@@ -1712,7 +1818,7 @@ function App() {
         if (data.type === 'kdcube-widget-focus') {
           if (data.widget === CHAT_WIDGET_ALIAS) bringPanelToFront('chat')
           if (data.widget === MEMORY_WIDGET_ALIAS) bringPanelToFront('memory')
-          if (data.widget === TASKS_WIDGET_ALIAS) bringPanelToFront('tasks')
+          if (externalPanel && data.widget === externalPanel.widget_alias) bringPanelToFront('external')
           return
         }
         if (data.type === 'kdcube-memory-widget-status' && data.widget === MEMORY_WIDGET_ALIAS) {
@@ -1726,24 +1832,21 @@ function App() {
             setMemoryExpanded(data.view === 'expanded')
             return
           }
-          if (data.widget === TASKS_WIDGET_ALIAS) {
-            setTasksExpanded(data.view === 'expanded')
+          if (externalPanel && data.widget === externalPanel.widget_alias) {
+            setExternalExpanded(data.view === 'expanded')
             return
           }
           setChatExpanded(data.view === 'expanded')
           return
         }
-        if (data.type === 'kdcube-task-tracker-open-issue' && data.widget === TASKS_WIDGET_ALIAS) {
-          bringPanelToFront('tasks')
-          setTasksOpen(true)
-          setTasksExpanded(true)
-          return
-        }
-        if (data.type === 'kdcube-task-tracker-create-issue' && data.widget === TASKS_WIDGET_ALIAS) {
-          bringPanelToFront('tasks')
-          setTasksOpen(true)
-          setTasksExpanded(true)
-          setNotice('Task editor requested from task list.')
+        if (
+          externalPanel &&
+          data.widget === externalPanel.widget_alias &&
+          externalPanel.open_message_types?.includes(String(data.type || ''))
+        ) {
+          bringPanelToFront('external')
+          setExternalOpen(true)
+          setExternalExpanded(true)
           return
         }
         if (['kdcube-context-attach', 'kdcube-context-focus', 'kdcube-context-remove'].includes(data.type)) {
@@ -1773,7 +1876,7 @@ function App() {
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [bringPanelToFront, flushSurfaceCommand, pinIngressPayloadToCanvas, pinConversationToCanvas, sendToChat])
+  }, [bringPanelToFront, externalPanel, flushSurfaceCommand, pinIngressPayloadToCanvas, pinConversationToCanvas, sendToChat])
 
   useEffect(() => {
     syncChatWidgetView(chatExpanded ? 'expanded' : 'compact')
@@ -1782,6 +1885,10 @@ function App() {
   useEffect(() => {
     syncMemoryWidgetView(memoryExpanded ? 'expanded' : 'compact')
   }, [memoryExpanded, syncMemoryWidgetView])
+
+  useEffect(() => {
+    syncExternalWidgetView(externalExpanded ? 'expanded' : 'compact')
+  }, [externalExpanded, syncExternalWidgetView])
 
   if (!ready) {
     return <div className="boot">Loading versatile scene...</div>
@@ -1893,27 +2000,29 @@ function App() {
           >
             <Archive size={21} strokeWidth={2.1} />
           </button>
-          <button
-            type="button"
-            className="scene-rail-button tasks-shortcut"
-            title={tasksOpen ? 'Hide tasks' : 'Open tasks'}
-            aria-label={tasksOpen ? 'Hide tasks' : 'Open tasks'}
-            aria-pressed={tasksOpen}
-            onClick={() => {
-              bringPanelToFront('tasks')
-              setTasksOpen((open) => {
-                const next = !open
-                if (!next) {
-                  setTasksExpanded(false)
-                } else {
-                  setTasksFrame(defaultTasksFrame(chatWidth, chatOpen, tasksExpanded))
-                }
-                return next
-              })
-            }}
-          >
-            <ListTodo size={21} strokeWidth={2.1} />
-          </button>
+          {externalPanel ? (
+            <button
+              type="button"
+              className="scene-rail-button external-shortcut"
+              title={externalOpen ? `Hide ${externalPanel.label}` : `Open ${externalPanel.label}`}
+              aria-label={externalOpen ? `Hide ${externalPanel.label}` : `Open ${externalPanel.label}`}
+              aria-pressed={externalOpen}
+              onClick={() => {
+                bringPanelToFront('external')
+                setExternalOpen((open) => {
+                  const next = !open
+                  if (!next) {
+                    setExternalExpanded(false)
+                  } else {
+                    setExternalFrame(defaultExternalFrame(chatWidth, chatOpen, externalExpanded))
+                  }
+                  return next
+                })
+              }}
+            >
+              <ListTodo size={21} strokeWidth={2.1} />
+            </button>
+          ) : null}
           {isRegistered ? (
             <button
               type="button"
@@ -2075,66 +2184,65 @@ function App() {
           />
         </section>
       ) : null}
-      {tasksOpen ? (
+      {externalOpen && externalPanel ? (
         <section
-          className={`tasks-pane${tasksExpanded ? ' expanded' : ''}`}
+          className={`external-pane${externalExpanded ? ' expanded' : ''}`}
           style={{
-            left: tasksFrame.x,
-            top: tasksFrame.y,
-            width: tasksPanelSize(tasksExpanded).width,
-            height: tasksPanelSize(tasksExpanded).height,
-            zIndex: panelZ.tasks,
+            left: externalFrame.x,
+            top: externalFrame.y,
+            width: externalPanelSize(externalExpanded).width,
+            height: externalPanelSize(externalExpanded).height,
+            zIndex: panelZ.external,
           } as CSSProperties}
-          aria-label="Tasks"
-          onPointerDownCapture={() => bringPanelToFront('tasks')}
+          aria-label={externalPanel.label}
+          onPointerDownCapture={() => bringPanelToFront('external')}
         >
-          <header onPointerDown={startTasksDrag}>
-            <span className="tasks-pane-title">
-              <strong>Tasks</strong>
-              <small>{tasksExpanded ? 'expanded' : 'compact'}</small>
+          <header onPointerDown={startExternalDrag}>
+            <span className="external-pane-title">
+              <strong>{externalPanel.title || externalPanel.label}</strong>
+              <small>{externalExpanded ? 'expanded' : 'compact'}</small>
             </span>
             <div>
               <button
                 type="button"
                 onClick={() => {
-                  setTasksExpanded((value) => {
+                  setExternalExpanded((value) => {
                     const next = !value
-                    const panel = tasksPanelSize(next)
-                    setTasksFrame((frame) => ({
+                    const panel = externalPanelSize(next)
+                    setExternalFrame((frame) => ({
                       x: clamp(frame.x, 8, Math.max(8, window.innerWidth - panel.width - 8)),
                       y: clamp(frame.y, 62, Math.max(62, window.innerHeight - panel.height - 8)),
                     }))
-                    window.setTimeout(() => syncTasksWidgetView(next ? 'expanded' : 'compact'), 0)
+                    window.setTimeout(() => syncExternalWidgetView(next ? 'expanded' : 'compact'), 0)
                     return next
                   })
                 }}
-                title={tasksExpanded ? 'Compact tasks' : 'Enlarge tasks'}
-                aria-label={tasksExpanded ? 'Compact tasks' : 'Enlarge tasks'}
+                title={externalExpanded ? `Compact ${externalPanel.label}` : `Enlarge ${externalPanel.label}`}
+                aria-label={externalExpanded ? `Compact ${externalPanel.label}` : `Enlarge ${externalPanel.label}`}
               >
-                {tasksExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                {externalExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
               </button>
               <button
                 type="button"
                 onClick={() => {
-                  setTasksOpen(false)
-                  setTasksExpanded(false)
+                  setExternalOpen(false)
+                  setExternalExpanded(false)
                 }}
-                title="Close tasks"
-                aria-label="Close tasks"
+                title={`Close ${externalPanel.label}`}
+                aria-label={`Close ${externalPanel.label}`}
               >
                 <X size={14} />
               </button>
             </div>
           </header>
           <iframe
-            ref={tasksFrameRef}
-            className="tasks-frame"
-            title="Task tracker tasks"
-            src={tasksWidgetUrl(ctx, false)}
+            ref={externalFrameRef}
+            className="external-frame"
+            title={externalPanel.title || externalPanel.label}
+            src={externalWidgetUrl(ctx, externalPanel, false)}
             onLoad={() => {
-              syncTasksWidgetView(tasksExpanded ? 'expanded' : 'compact')
-              flushSurfaceCommand('task_tracker.issue_list')
-              flushSurfaceCommand('task_tracker.issue_editor')
+              syncExternalWidgetView(externalExpanded ? 'expanded' : 'compact')
+              Object.keys(externalPanel.surfaces || {}).forEach((surface) => flushSurfaceCommand(surface))
             }}
           />
         </section>

@@ -235,7 +235,8 @@ class CanvasObjectResolver:
     """Namespace-owned object resolver used by the canvas registry.
 
     Canvas owns board state and dispatch. The resolver implementation owns the
-    semantics of the underlying object namespace (`task:`, `fi:`, `mem:`, etc.).
+    semantics of the underlying object namespace (`fi:`, `mem:`, provider-owned
+    refs, etc.).
     See repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-subsystem-integration-README.md
     and repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/pin-integration-README.md.
     """
@@ -322,15 +323,24 @@ class CallableCanvasObjectResolver(CanvasObjectResolver):
 
 
 class CanvasArtifactResolver(CanvasObjectResolver):
-    """Resolver for canvas-owned `cnv:` artifact refs."""
+    """Resolver for storage-backed artifact refs."""
 
     namespace = "cnv"
     resolver = "sdk.canvas.artifact_storage"
     resolver_status = "implemented"
 
-    def __init__(self, store: CanvasStore) -> None:
+    def __init__(
+        self,
+        store: CanvasStore,
+        *,
+        namespace: str = "cnv",
+        resolver: str = "",
+        read_behavior: str = "",
+    ) -> None:
         self.store = store
-        self.resolver = str(getattr(store, "artifact_resolver_name", None) or self.resolver)
+        self.namespace = str(namespace or self.namespace).strip().lower()
+        self.resolver = str(resolver or getattr(store, "artifact_resolver_name", None) or self.resolver)
+        self._read_behavior = str(read_behavior or "Storage-backed refs are previewed here and can be imported into ReAct with react.pull.").strip()
 
     def capabilities_for_ref(self, ref: str) -> Dict[str, bool]:
         return {"preview": True, "open": False, "download": True, "rehost": False}
@@ -361,7 +371,7 @@ class CanvasArtifactResolver(CanvasObjectResolver):
     def read_ref(self, ref: str, *, mime: str = "", max_text_chars: int = 20000) -> Dict[str, Any]:
         key = ref.split(":", 1)[1].strip()
         if not key:
-            return {"ok": False, "error": "empty_cnv_ref", "ref": ref, "namespace": "cnv"}
+            return {"ok": False, "error": f"empty_{self.namespace}_ref", "ref": ref, "namespace": self.namespace}
         try:
             raw = self.store.artifacts.read(key)
         except Exception as exc:
@@ -370,9 +380,9 @@ class CanvasArtifactResolver(CanvasObjectResolver):
                 "resolved": False,
                 "ref": ref,
                 "object_ref": ref,
-                "namespace": "cnv",
+                "namespace": self.namespace,
                 "key": key,
-                "error": "cnv_ref_not_found",
+                "error": f"{self.namespace}_ref_not_found",
                 "message": str(exc),
             }
         data = raw if isinstance(raw, bytes) else str(raw).encode("utf-8")
@@ -380,7 +390,7 @@ class CanvasArtifactResolver(CanvasObjectResolver):
         out: Dict[str, Any] = {
             **self.base_response(ref=ref, action="preview"),
             "resolved": True,
-            "read_behavior": "Canvas-owned refs are previewed here and can be imported into ReAct with react.pull.",
+            "read_behavior": self._read_behavior,
             "key": key,
             "size": len(data),
             "mime": mime or "",
@@ -402,7 +412,7 @@ class CanvasArtifactResolver(CanvasObjectResolver):
     def download_ref(self, ref: str, *, mime: str = "") -> Dict[str, Any]:
         key = ref.split(":", 1)[1].strip()
         if not key:
-            return {"ok": False, "error": "empty_cnv_ref", "ref": ref, "namespace": "cnv"}
+            return {"ok": False, "error": f"empty_{self.namespace}_ref", "ref": ref, "namespace": self.namespace}
         try:
             raw = self.store.artifacts.read(key)
         except Exception as exc:
@@ -411,9 +421,9 @@ class CanvasArtifactResolver(CanvasObjectResolver):
                 "resolved": False,
                 "ref": ref,
                 "object_ref": ref,
-                "namespace": "cnv",
+                "namespace": self.namespace,
                 "key": key,
-                "error": "cnv_ref_not_found",
+                "error": f"{self.namespace}_ref_not_found",
                 "message": str(exc),
             }
         data = raw if isinstance(raw, bytes) else str(raw).encode("utf-8")
@@ -589,14 +599,20 @@ def default_handoff_resolvers(*, resolver_names: Mapping[str, str] | None = None
             read_behavior="Use only for provenance/event inspection, not as normal card content.",
         ),
     ]
-    task_resolver = str(resolver_names.get("task") or "").strip()
-    if task_resolver:
+    for namespace, resolver_name in sorted(resolver_names.items()):
+        namespace_value = str(namespace or "").strip().lower()
+        resolver_value = str(resolver_name or "").strip()
+        if not namespace_value or namespace_value in {"fi", "mem", "so", "su", "ev", "cnv"}:
+            continue
         resolvers.append(NamespaceHandoffResolver(
-            namespace="task",
-            resolver=task_resolver,
+            namespace=namespace_value,
+            resolver=resolver_value or f"{namespace_value}.resolver",
             resolver_status="registered_elsewhere",
             capabilities={"preview": True, "open": True, "download": False, "rehost": False},
-            read_behavior="Use the task resolver or task.read/task.patch for task objects; task-owned attachment refs are handled by task tools.",
+            read_behavior=(
+                f"{namespace_value}: refs are owned by {resolver_value or 'the configured namespace resolver'}; "
+                "use that provider's resolver/tools for object reads, opens, and mutations."
+            ),
         ))
     return resolvers
 
@@ -604,6 +620,11 @@ def default_handoff_resolvers(*, resolver_names: Mapping[str, str] | None = None
 def build_default_canvas_resolver_registry(store: CanvasStore) -> CanvasObjectResolverRegistry:
     return CanvasObjectResolverRegistry([
         CanvasArtifactResolver(store),
+        CanvasArtifactResolver(
+            store,
+            namespace="ext",
+            read_behavior="Bundle-owned external refs are previewed here and can be imported into ReAct with react.pull ext:<path>.",
+        ),
         *default_handoff_resolvers(resolver_names=getattr(store, "handoff_resolver_names", None)),
     ])
 

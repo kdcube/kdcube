@@ -16,7 +16,7 @@ when selected cards are part of the request:
    revision, a spatial map, and a legend. Use the spatial map and legend for
    board awareness: what objects are present, how they are arranged, what is
    selected, and which refs are available. Map labels such as `U1`, `A1`,
-   `T1`, `M1`, `S1`, `F1`, or `R1` are spatial labels; use the legend's
+   `O1`, `M1`, `S1`, `F1`, or `R1` are spatial labels; use the legend's
    `card_id` when patching an existing card. Do not edit or save the raw
    canvas JSON directly.
 
@@ -30,8 +30,8 @@ when selected cards are part of the request:
 
 Cards dragged from canvas into chat are not rendered as a special canvas-focus
 section. They are rendered as the objects they proxy: `mem:` as memory context,
-`task:` as task/issue context, `fi:` as a platform artifact, canvas-owned
-`cnv:` refs as canvas-owned user/assistant content, and so on. Canvas
+`fi:` as a platform artifact, provider-owned refs through their namespace
+resolver, canvas-owned `cnv:` refs as canvas-owned user/assistant content, and so on. Canvas
 provenance may appear as metadata such as `canvas_context`, but the rendered
 `object_ref` remains the identity to pull or act on.
 
@@ -79,8 +79,8 @@ Card placement and ref behavior:
   can annotate proxy cards with descriptions/comments, but editing the
   underlying object belongs to the owning namespace's tools/APIs.
 - `user.text` card content may be updated with `update_card content={text}`.
-- Proxy card refs such as `mem:`, `fi:`, `task:`, search/source refs, and
-  hosted attachments stay immutable. You may update the canvas-owned
+- Proxy card refs such as `mem:`, `fi:`, search/source refs, provider-owned
+  refs, and hosted attachments stay immutable. You may update the canvas-owned
   description and comments on those cards when the user asks.
 - New assistant output should usually be a suggested card, not an automatic
   placed card, so the user can arrange, accept, or discard it.
@@ -89,8 +89,8 @@ Card placement and ref behavior:
   produced `fi:` or `cnv:` ref.
 
 Semantics:
-- Canvas is an editable collaborative board. Stories, tickets, memories, files,
-  attachments, search results, and ReAct artifacts are cards/refs on the board;
+- Canvas is an editable collaborative board. Stories, namespace-owned objects,
+  memories, files, attachments, search results, and ReAct artifacts are cards/refs on the board;
   they are not the board identity.
 - Snapshot context is read-only informative state. It is not editable canvas
   state and should not be patched through canvas tools.

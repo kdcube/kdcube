@@ -20,7 +20,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
 
 from .client_tools import named_service_namespace_provider_configs_from_config
 from .transports.api_client import NamedServiceEndpoint, call_named_service_endpoint_stream
-from .types import OBJECT_ACTION, NamedServiceRequest
+from .types import OBJECT_GET, NamedServiceRequest
 
 LOGGER = logging.getLogger("kdcube.sdk.named_services.artifact_rehoster")
 
@@ -55,6 +55,11 @@ class NamedServiceArtifactNamespaceRehoster:
         self.provider_config = dict(provider_config or {})
         self.tenant = str(tenant or "").strip()
         self.project = str(project or "").strip()
+        pull = self.provider_config.get("pull")
+        self.operation = str(
+            (pull.get("operation") if isinstance(pull, Mapping) else "")
+            or OBJECT_GET
+        ).strip() or OBJECT_GET
 
     def _endpoint(self, runtime: Any) -> NamedServiceEndpoint | None:
         provider_config = dict(self.provider_config)
@@ -81,30 +86,76 @@ class NamedServiceArtifactNamespaceRehoster:
             return {"missing": [{"source_ref": ref, "reason": "missing_turn_id"}]}
 
         LOGGER.info(
-            "Named-service artifact rehost start: namespace=%s provider=%s bundle=%s source_ref=%s",
+            "Named-service artifact rehost start: namespace=%s operation=%s provider=%s bundle=%s source_ref=%s",
             self.namespace,
+            self.operation,
             endpoint.provider or "",
             endpoint.bundle_id,
             ref,
         )
-        stream = await call_named_service_endpoint_stream(
-            endpoint,
-            NamedServiceRequest(
-                operation=OBJECT_ACTION,
-                provider=endpoint.provider,
-                namespace=self.namespace,
-                object_ref=str(ref or "").strip() or None,
-                action="rehost",
-                context={
-                    "source": "react.pull",
-                    "namespace": self.namespace,
-                    "turn_id": turn_id,
-                    "tool_id": context.get("tool_id"),
-                    "tool_call_id": context.get("tool_call_id"),
-                },
-                payload={"key": str(key or "").strip()},
-            ),
-        )
+        try:
+            stream = await call_named_service_endpoint_stream(
+                endpoint,
+                NamedServiceRequest(
+                    operation=self.operation,
+                    provider=endpoint.provider,
+                    namespace=self.namespace,
+                    object_ref=str(ref or "").strip() or None,
+                    response_mode="stream",
+                    context={
+                        "source": "react.pull",
+                        "materialize": True,
+                        "namespace": self.namespace,
+                        "turn_id": turn_id,
+                        "tool_id": context.get("tool_id"),
+                        "tool_call_id": context.get("tool_call_id"),
+                    },
+                    payload={"key": str(key or "").strip()},
+                ),
+            )
+        except Exception as exc:
+            LOGGER.warning(
+                "Named-service artifact rehost failed before provider response: namespace=%s operation=%s provider=%s bundle=%s source_ref=%s error=%s",
+                self.namespace,
+                self.operation,
+                endpoint.provider or "",
+                endpoint.bundle_id,
+                ref,
+                exc,
+            )
+            return {
+                "errors": [{
+                    "source_ref": ref,
+                    "error": {
+                        "code": type(exc).__name__,
+                        "message": str(exc),
+                        "details": {},
+                    },
+                }]
+            }
+        response = stream.response
+        if not response.ok:
+            LOGGER.warning(
+                "Named-service artifact rehost provider error: namespace=%s operation=%s provider=%s bundle=%s source_ref=%s status=%s error=%s",
+                self.namespace,
+                self.operation,
+                endpoint.provider or "",
+                endpoint.bundle_id,
+                ref,
+                response.status,
+                response.error.code if response.error else "",
+            )
+            return {
+                "errors": [{
+                    "source_ref": ref,
+                    "error": response.error.to_dict() if response.error else {
+                        "code": "named_service_stream_failed",
+                        "message": "Named-service stream request failed",
+                        "details": {"status": response.status},
+                    },
+                    "response": response.to_dict(),
+                }]
+            }
         filename = _safe_filename(
             stream.filename
             or pathlib.PurePosixPath(str(key or "").strip()).name
@@ -125,17 +176,39 @@ class NamedServiceArtifactNamespaceRehoster:
         target = resolve_artifact_path(pathlib.Path(outdir), physical_path, prefer_existing=False)
         target.parent.mkdir(parents=True, exist_ok=True)
         size_bytes = 0
-        with target.open("wb") as fh:
-            async for chunk in stream.chunks:
-                payload = bytes(chunk or b"")
-                if not payload:
-                    continue
-                size_bytes += len(payload)
-                await asyncio.to_thread(fh.write, payload)
+        try:
+            with target.open("wb") as fh:
+                async for chunk in stream.chunks:
+                    payload = bytes(chunk or b"")
+                    if not payload:
+                        continue
+                    size_bytes += len(payload)
+                    await asyncio.to_thread(fh.write, payload)
+        except Exception as exc:
+            LOGGER.warning(
+                "Named-service artifact rehost stream copy failed: namespace=%s operation=%s source_ref=%s target=%s error=%s",
+                self.namespace,
+                self.operation,
+                ref,
+                target,
+                exc,
+            )
+            return {
+                "errors": [{
+                    "source_ref": ref,
+                    "error": {
+                        "code": type(exc).__name__,
+                        "message": str(exc),
+                        "details": {"phase": "stream_copy", "bytes_written": size_bytes},
+                    },
+                    "response": response.to_dict(),
+                }]
+            }
         logical_path = physical_path_to_logical_path(physical_path)
         LOGGER.info(
-            "Named-service artifact rehost complete: namespace=%s provider=%s bundle=%s source_ref=%s logical_path=%s bytes=%s",
+            "Named-service artifact rehost complete: namespace=%s operation=%s provider=%s bundle=%s source_ref=%s logical_path=%s bytes=%s",
             self.namespace,
+            self.operation,
             endpoint.provider or "",
             endpoint.bundle_id,
             ref,
@@ -152,6 +225,7 @@ class NamedServiceArtifactNamespaceRehoster:
                 "mime": mime,
                 "size_bytes": size_bytes,
                 "file_count": 1,
+                "response": response.to_dict(),
             }]
         }
 
@@ -198,7 +272,10 @@ def register_configured_named_service_artifact_rehosters(
             namespace,
             NamedServiceArtifactNamespaceRehoster(
                 namespace=namespace,
-                provider_config={"providers": list(provider_configs)},
+                provider_config={
+                    "providers": list(provider_configs),
+                    "pull": dict(raw_config.get("pull") or {}) if isinstance(raw_config.get("pull"), Mapping) else {},
+                },
                 tenant=tenant,
                 project=project,
             ),

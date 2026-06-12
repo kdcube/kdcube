@@ -16,7 +16,7 @@ import base64
 import time
 from datetime import datetime, timezone
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from kdcube_ai_app.apps.chat.ids import new_exec_id
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger, ModelServiceBase
@@ -795,6 +795,24 @@ class ContextBrowser:
             except Exception:
                 self.log.log(f"[timeline.external]: hook failure {traceback.format_exc()}", "ERROR")
 
+    @staticmethod
+    def _owner_ref_from_external_target(target: Mapping[str, Any]) -> str:
+        for key in ("object_ref", "logical_path", "hosted_uri", "path", "ref"):
+            text = str(target.get(key) or "").strip()
+            if ":" in text:
+                return text
+        event = target.get("event") if isinstance(target.get("event"), Mapping) else {}
+        meta = target.get("meta") if isinstance(target.get("meta"), Mapping) else {}
+        payload = meta.get("payload") if isinstance(meta.get("payload"), Mapping) else {}
+        accepted_event = meta.get("event") if isinstance(meta.get("event"), Mapping) else {}
+        meta_target = meta.get("target") if isinstance(meta.get("target"), Mapping) else {}
+        for source in (event, accepted_event, payload, meta, meta_target):
+            for key in ("object_ref", "hosted_uri", "logical_path", "path", "ref"):
+                text = str(source.get(key) or "").strip()
+                if ":" in text:
+                    return text
+        return ""
+
     async def _produce_external_event_blocks(
         self,
         *,
@@ -802,6 +820,7 @@ class ContextBrowser:
         target: Dict[str, Any],
     ) -> List[Dict[str, Any]]:
         event_sources = getattr(self._runtime_ctx, "event_sources", None)
+        tried_source_ids: set[str] = set()
         source = None
         if event_sources is not None:
             by_event_source_id = getattr(event_sources, "by_event_source_id", None)
@@ -811,6 +830,7 @@ class ContextBrowser:
                 except Exception:
                     source = None
         if source is not None:
+            tried_source_ids.add(event_source_id)
             try:
                 await event_sources.apply_react_phase_policies_async(
                     "block_production",
@@ -825,6 +845,47 @@ class ContextBrowser:
                     f"[timeline.external]: event block-production policy failure source={event_source_id!r}\n{traceback.format_exc()}",
                     "ERROR",
                 )
+        if not target.get("blocks") and not target.get("blocks_produced") and event_sources is not None:
+            owner_ref = self._owner_ref_from_external_target(target)
+            resolve_event_source_id = getattr(event_sources, "resolve_event_source_id_for_ref", None)
+            if owner_ref and callable(resolve_event_source_id):
+                try:
+                    resolved_source_id = str(
+                        await resolve_event_source_id(
+                            owner_ref,
+                            ctx_browser=self,
+                            runtime_ctx=self._runtime_ctx,
+                            timeline=self._timeline,
+                            target=target,
+                        )
+                        or ""
+                    ).strip()
+                except Exception:
+                    resolved_source_id = ""
+                    self.log.log(
+                        f"[timeline.external]: event source resolver failure ref={owner_ref!r}\n{traceback.format_exc()}",
+                        "ERROR",
+                    )
+                if resolved_source_id and resolved_source_id not in tried_source_ids:
+                    target.setdefault("meta", {})
+                    if isinstance(target["meta"], dict):
+                        target["meta"]["resolved_event_source_id"] = resolved_source_id
+                        target["meta"]["resolved_from_ref"] = owner_ref
+                    tried_source_ids.add(resolved_source_id)
+                    try:
+                        await event_sources.apply_react_phase_policies_async(
+                            "block_production",
+                            resolved_source_id,
+                            target,
+                            runtime_ctx=self._runtime_ctx,
+                            ctx_browser=self,
+                            timeline=self._timeline,
+                        )
+                    except Exception:
+                        self.log.log(
+                            f"[timeline.external]: resolved event block-production policy failure source={resolved_source_id!r} ref={owner_ref!r}\n{traceback.format_exc()}",
+                            "ERROR",
+                        )
         if not target.get("blocks") and not target.get("blocks_produced"):
             try:
                 from kdcube_ai_app.apps.chat.sdk.solutions.react.events.policies import (

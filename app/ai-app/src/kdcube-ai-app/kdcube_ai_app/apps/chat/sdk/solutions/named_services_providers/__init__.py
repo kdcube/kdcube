@@ -17,6 +17,9 @@ from .client_tools import (
     NAMED_SERVICE_TOOLS_MODULE,
     client_has_named_service_tools,
     extend_tool_specs_for_named_services,
+    named_service_agent_event_source_namespaces,
+    named_service_agent_pull_namespaces,
+    named_service_canvas_resolver_namespaces,
     named_service_namespace_client_resolver_config,
     named_service_namespace_client_tools_config,
     named_service_namespace_config,
@@ -50,6 +53,7 @@ from .discovery import (
     get_current_named_service_discovery,
 )
 from .client import NamedServiceClient
+from .instructions import NAMED_SERVICES_REACT_ADDITIONAL_INSTRUCTIONS
 from .provider import NamedServiceProvider, named_service_provider
 from .registry import NamedServiceRegistry
 from .transports.api_client import (
@@ -76,6 +80,7 @@ from .types import (
     BLOCK_RENDER,
     EVENT_ACTION,
     EVENT_RESOLVE,
+    OBJECT_HOST_FILE,
     OBJECT_SCHEMA,
     NamedServiceContext,
     NamedServiceError,
@@ -83,11 +88,13 @@ from .types import (
     NamedServiceProviderSpec,
     NamedServiceRequest,
     NamedServiceResponse,
+    NamedServiceStreamResult,
     build_default_operations,
     namespace_for_ref,
 )
 
 __all__ = [
+    "NAMED_SERVICES_REACT_ADDITIONAL_INSTRUCTIONS",
     "NAMED_SERVICE_REQUEST_SCHEMA",
     "NAMED_SERVICE_RESPONSE_SCHEMA",
     "NAMED_SERVICE_TOOLS_ALIAS",
@@ -107,6 +114,7 @@ __all__ = [
     "BLOCK_RENDER",
     "EVENT_ACTION",
     "EVENT_RESOLVE",
+    "OBJECT_HOST_FILE",
     "OBJECT_SCHEMA",
     "AuthContext",
     "NamedServiceApiTransport",
@@ -124,6 +132,7 @@ __all__ = [
     "NamedServiceRegistry",
     "NamedServiceRequest",
     "NamedServiceResponse",
+    "NamedServiceStreamResult",
     "build_default_operations",
     "call_named_service_endpoint",
     "call_named_service_endpoint_stream",
@@ -131,6 +140,9 @@ __all__ = [
     "dispatch_named_service_api_request",
     "dispatch_named_service_api_stream_request",
     "extend_tool_specs_for_named_services",
+    "named_service_agent_event_source_namespaces",
+    "named_service_agent_pull_namespaces",
+    "named_service_canvas_resolver_namespaces",
     "named_service_provider",
     "named_service_event_source_id",
     "named_service_namespace_client_tools_config",

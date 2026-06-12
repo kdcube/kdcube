@@ -7,7 +7,7 @@ import fnmatch
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Mapping, Sequence
+from typing import Any, AsyncIterable, Mapping, Sequence
 
 from kdcube_ai_app.apps.chat.sdk.infra.auth_context import AuthContext
 
@@ -27,6 +27,7 @@ PROVIDER_OPERATION = "provider.operation"
 OBJECT_LIST = "object.list"
 OBJECT_SEARCH = "object.search"
 OBJECT_GET = "object.get"
+OBJECT_HOST_FILE = "object.host_file"
 OBJECT_SCHEMA = "object.schema"
 OBJECT_UPSERT = "object.upsert"
 OBJECT_DELETE = "object.delete"
@@ -46,6 +47,7 @@ STANDARD_OPERATIONS = (
     OBJECT_LIST,
     OBJECT_SEARCH,
     OBJECT_GET,
+    OBJECT_HOST_FILE,
     OBJECT_SCHEMA,
     OBJECT_UPSERT,
     OBJECT_DELETE,
@@ -288,7 +290,7 @@ def build_default_operations(
     )
     operations = {op: NamedServiceOperationSpec(op, normalize_tuple(transports)) for op in read_ops}
     if include_mutations:
-        for op in (PROVIDER_OPERATION, OBJECT_UPSERT, OBJECT_DELETE):
+        for op in (PROVIDER_OPERATION, OBJECT_HOST_FILE, OBJECT_UPSERT, OBJECT_DELETE):
             operations[op] = NamedServiceOperationSpec(op, normalize_tuple(transports))
     return operations
 
@@ -412,6 +414,7 @@ class NamedServiceRequest:
     object: dict[str, Any] = field(default_factory=dict)
     base_revision: str | None = None
     idempotency_key: str | None = None
+    response_mode: str | None = None
     context: dict[str, Any] = field(default_factory=dict)
     payload: dict[str, Any] = field(default_factory=dict)
     schema: str = NAMED_SERVICE_REQUEST_SCHEMA
@@ -454,6 +457,7 @@ class NamedServiceRequest:
             object=ensure_json_object(data.get("object"), field_name="object"),
             base_revision=normalize_optional_string(data.get("base_revision")),
             idempotency_key=normalize_optional_string(data.get("idempotency_key")),
+            response_mode=normalize_optional_string(data.get("response_mode")),
             context=ensure_json_object(data.get("context"), field_name="context"),
             payload=ensure_json_object(data.get("payload"), field_name="payload"),
         )
@@ -478,6 +482,7 @@ class NamedServiceRequest:
             "object": dict(self.object or {}),
             "base_revision": self.base_revision,
             "idempotency_key": self.idempotency_key,
+            "response_mode": self.response_mode,
             "context": dict(self.context or {}),
             "payload": dict(self.payload or {}),
         }
@@ -661,3 +666,20 @@ class NamedServiceResponse:
             "ret": dict(self.ret or {}),
             "error": self.error.to_dict() if self.error else None,
         }
+
+
+@dataclass(frozen=True)
+class NamedServiceStreamResult:
+    """Structured named-service response plus streamed object bytes.
+
+    The response carries the same JSON contract returned by normal provider
+    calls. Bytes stay on the async stream, so large files do not need base64 or
+    a fully materialized in-memory payload.
+    """
+
+    response: NamedServiceResponse
+    chunks: AsyncIterable[bytes]
+    filename: str | None = None
+    media_type: str | None = "application/octet-stream"
+    headers: dict[str, str] = field(default_factory=dict)
+    status_code: int = 200

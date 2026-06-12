@@ -1,3 +1,4 @@
+import logging
 from typing import Any, Dict
 
 from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
@@ -9,7 +10,15 @@ from kdcube_ai_app.apps.chat.sdk.retrieval.kb_client import KBClient
 from kdcube_ai_app.apps.chat.sdk.runtime.scratchpad import CTurnScratchpad
 from kdcube_ai_app.apps.chat.sdk.solutions.canvas.instructions import CANVAS_REACT_ADDITIONAL_INSTRUCTIONS
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.base_workflow import BaseWorkflow
-from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import named_service_namespaces
+from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
+    NAMED_SERVICES_REACT_ADDITIONAL_INSTRUCTIONS,
+    named_service_agent_event_source_namespaces,
+    named_service_agent_pull_namespaces,
+    named_service_namespace_client_tools_config,
+    named_service_namespaces,
+    register_configured_named_service_artifact_rehosters,
+    register_configured_named_service_event_sources,
+)
 from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore
 from kdcube_ai_app.apps.chat.sdk.util import _tend, _tstart
 from kdcube_ai_app.apps.chat.sdk.viz import logging_helpers
@@ -21,6 +30,7 @@ from .. import events_descriptor, skills_descriptor, tools_descriptor
 from ..agents.gate import GateOut as MinimalGateOut, gate_stream
 from ..resources.service_messages.resources import get_friendly_error_message
 
+LOGGER = logging.getLogger(__name__)
 
 # Channel-conditional ReAct instructions: the bundle decides at agent-construction
 # time which surface the user is reaching us through, and passes the matching
@@ -64,8 +74,19 @@ def _resolve_react_ui_instructions(comm_context: ExternalEventPayload) -> str:
     return _WEB_CHAT_REACT_INSTRUCTIONS
 
 
-def _resolve_named_service_react_instructions(bundle_props: Dict[str, Any] | None) -> str:
-    namespaces = named_service_namespaces(bundle_props or {})
+def _resolve_named_service_react_instructions(bundle_props: Dict[str, Any] | None, *, client_id: Any = None) -> str:
+    all_namespaces = named_service_namespaces(bundle_props or {})
+    event_namespaces = named_service_agent_event_source_namespaces(bundle_props or {}, client_id=client_id or "main")
+    pull_namespaces = named_service_agent_pull_namespaces(bundle_props or {}, client_id=client_id or "main")
+    namespaces = {}
+    for namespace, cfg in all_namespaces.items():
+        tool_cfg = named_service_namespace_client_tools_config(
+            bundle_props or {},
+            namespace=str(namespace),
+            client_id=client_id or "main",
+        )
+        if tool_cfg or namespace in event_namespaces or namespace in pull_namespaces:
+            namespaces[namespace] = cfg
     if not namespaces:
         return ""
     rows = []
@@ -76,26 +97,26 @@ def _resolve_named_service_react_instructions(bundle_props: Dict[str, Any] | Non
         label = f"- `{namespace}`"
         details = ", ".join(str(value) for value in (provider_id, bundle_id) if value)
         rows.append(f"{label}: {details}" if details else label)
-    return """\
-Named services available to this agent:
-{rows}
-
-When a timeline event, canvas object, artifact ref, or user request mentions one of these namespaces, use the `named_services` tools instead of guessing the entity shape. Call `named_services.provider_about(namespace=...)` to understand the service and base objects. Call `named_services.object_schema(namespace=..., object_kind=... or object_ref=...)` before create/update/delete or whenever the object payload shape is unclear.
-
-Use `named_services.object_action` only for non-mutating presentation or resolution actions such as preview, open, describe, or rehost. Do not use object_action for mutations. Create/update/delete requests, including adding file refs or attachment refs to an object, must use the schema's upsert/delete tools.
-""".format(rows="\n".join(rows))
+    # Static ecosystem/workflow teaching + the per-agent namespace roster. The
+    # teaching block is the single source of truth (no provider operation ids,
+    # only visible tool ids); this function just appends which namespaces this
+    # agent may pass as the `namespace` argument. The tool catalog stays
+    # authoritative for which named_services.* tools are actually callable.
+    roster = "Named-service namespaces available to this agent (pass one as the `namespace` argument):\n" + "\n".join(rows)
+    return f"{NAMED_SERVICES_REACT_ADDITIONAL_INSTRUCTIONS}\n\n{roster}"
 
 
 def _resolve_react_additional_instructions(
     comm_context: ExternalEventPayload,
     *,
     bundle_props: Dict[str, Any] | None = None,
+    client_id: Any = None,
 ) -> str:
     blocks = [
         _resolve_react_ui_instructions(comm_context),
         MEMORY_REACT_ADDITIONAL_INSTRUCTIONS,
         CANVAS_REACT_ADDITIONAL_INSTRUCTIONS,
-        _resolve_named_service_react_instructions(bundle_props),
+        _resolve_named_service_react_instructions(bundle_props, client_id=client_id),
     ]
     return "\n\n".join(block.strip() for block in blocks if str(block or "").strip())
 
@@ -143,6 +164,54 @@ class VersatileWorkflow(BaseWorkflow):
         scratchpad = await super().construct_turn_and_scratchpad(payload)
         scratchpad.gate_out_class = MinimalGateOut
         return scratchpad
+
+    def _register_named_service_react_surfaces(self, *, client_id: Any = None) -> None:
+        event_sources = getattr(getattr(self, "runtime_ctx", None), "event_sources", None)
+        if event_sources is None:
+            return
+        actor = getattr(self.comm_context, "actor", None) if self.comm_context is not None else None
+        tenant = str(
+            getattr(getattr(self, "runtime_ctx", None), "tenant", None)
+            or getattr(actor, "tenant_id", None)
+            or ""
+        )
+        project = str(
+            getattr(getattr(self, "runtime_ctx", None), "project", None)
+            or getattr(actor, "project_id", None)
+            or ""
+        )
+        effective_client_id = client_id or getattr(getattr(self, "runtime_ctx", None), "agent_id", None) or "main"
+        pull_namespaces = named_service_agent_pull_namespaces(
+            self.bundle_props or {},
+            client_id=effective_client_id,
+        )
+        event_namespaces = named_service_agent_event_source_namespaces(
+            self.bundle_props or {},
+            client_id=effective_client_id,
+        )
+        rehoster_count = register_configured_named_service_artifact_rehosters(
+            event_sources,
+            namespaces=pull_namespaces,
+            tenant=tenant,
+            project=project,
+            logger=LOGGER,
+        )
+        register_configured_named_service_event_sources(
+            event_sources,
+            namespaces=event_namespaces,
+            logger=LOGGER,
+        )
+        try:
+            self.logger.log(
+                "[named_services.react_surfaces] "
+                f"client_id={effective_client_id} "
+                f"pull_namespaces={list(pull_namespaces.keys())} "
+                f"event_namespaces={list(event_namespaces.keys())} "
+                f"rehosters_registered={rehoster_count}",
+                level="INFO",
+            )
+        except Exception:
+            pass
 
     async def process(self, payload: dict) -> Dict[str, Any]:
         scratchpad = await self.construct_turn_and_scratchpad(payload)
@@ -225,13 +294,14 @@ class VersatileWorkflow(BaseWorkflow):
 
             async def _react_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 client_id = getattr(getattr(self, "runtime_ctx", None), "agent_id", None)
-                mod_tools_spec = tools_descriptor.tools_for_client(
+                tool_config = tools_descriptor.config_for_agent(
                     client_id,
                     bundle_props=self.bundle_props,
-                ) if hasattr(tools_descriptor, "tools_for_client") else tools_descriptor.TOOLS_SPECS
-                mcp_tools_spec = getattr(tools_descriptor, "MCP_TOOL_SPECS", None) or []
+                ) if hasattr(tools_descriptor, "config_for_agent") else None
+                mod_tools_spec = tool_config.tool_specs if tool_config else tools_descriptor.TOOLS_SPECS
+                mcp_tools_spec = tool_config.mcp_tool_specs if tool_config else (getattr(tools_descriptor, "MCP_TOOL_SPECS", None) or [])
                 react = self.build_react(
-                    tools_runtime=getattr(tools_descriptor, "TOOL_RUNTIME", None),
+                    tools_runtime=tool_config.tool_runtime if tool_config else getattr(tools_descriptor, "TOOL_RUNTIME", None),
                     mod_tools_spec=mod_tools_spec,
                     mcp_tools_spec=mcp_tools_spec,
                     event_source_specs=getattr(events_descriptor, "EVENT_SOURCE_SPECS", None) or [],
@@ -241,20 +311,30 @@ class VersatileWorkflow(BaseWorkflow):
                     additional_instructions=_resolve_react_additional_instructions(
                         self.comm_context,
                         bundle_props=self.bundle_props,
+                        client_id=client_id,
                     ),
                 )
-                allowed_plugins = [
-                    spec.get("alias")
-                    for spec in (mod_tools_spec or [])
-                    if spec.get("alias")
-                ]
-                for spec in (mcp_tools_spec or []):
-                    alias = spec.get("alias") or f"mcp_{spec.get('server_id')}"
-                    if alias:
-                        allowed_plugins.append(alias)
-                allowed_plugins = list(dict.fromkeys([alias for alias in allowed_plugins if alias]))
+                self._register_named_service_react_surfaces(client_id=client_id)
+                if tool_config:
+                    allowed_plugins = tool_config.allowed_plugins
+                    allowed_tool_names_by_alias = tool_config.allowed_tool_names_by_alias
+                else:
+                    allowed_plugins = [
+                        spec.get("alias")
+                        for spec in (mod_tools_spec or [])
+                        if spec.get("alias")
+                    ]
+                    for spec in (mcp_tools_spec or []):
+                        alias = spec.get("alias") or f"mcp_{spec.get('server_id')}"
+                        if alias:
+                            allowed_plugins.append(alias)
+                    allowed_plugins = list(dict.fromkeys([alias for alias in allowed_plugins if alias]))
+                    allowed_tool_names_by_alias = None
 
-                sr = await react.run(allowed_plugins=allowed_plugins)
+                sr = await react.run(
+                    allowed_plugins=allowed_plugins,
+                    allowed_tool_names_by_alias=allowed_tool_names_by_alias,
+                )
                 try:
                     await react.persist_workspace()
                 except Exception:

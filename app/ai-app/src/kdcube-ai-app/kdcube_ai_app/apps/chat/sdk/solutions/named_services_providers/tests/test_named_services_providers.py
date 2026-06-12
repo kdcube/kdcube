@@ -44,6 +44,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
     dispatch_named_service_api_request,
     build_default_operations,
     extend_tool_specs_for_named_services,
+    named_service_agent_event_source_namespaces,
+    named_service_agent_pull_namespaces,
+    named_service_canvas_resolver_namespaces,
     named_service_provider,
     named_service_namespaces,
     register_configured_named_service_artifact_rehosters,
@@ -90,8 +93,8 @@ class FakeDiscoveryRedis:
         return True
 
 
-def _canonical_issue_object(ref: str = "task:issues/BUG-123", title: str = "Issue") -> dict[str, Any]:
-    issue_id = ref.rsplit("/", 1)[-1]
+def _canonical_issue_object(ref: str = "task:issue:BUG-123", title: str = "Issue") -> dict[str, Any]:
+    issue_id = ref.rsplit(":", 1)[-1]
     return {
         "schema": "kdcube.named_service.object.v1",
         "identity": {
@@ -123,14 +126,14 @@ def test_named_service_request_coerce_accepts_equivalent_request_object():
                 "schema": "kdcube.named_service.request.v1",
                 "operation": "object.get",
                 "namespace": "task",
-                "object_ref": "task:issues/BUG-123",
+                "object_ref": "task:issue:BUG-123",
             }
 
     request = NamedServiceRequest.coerce(ForeignNamedServiceRequest())
 
     assert request.operation == "object.get"
     assert request.namespace == "task"
-    assert request.object_ref == "task:issues/BUG-123"
+    assert request.object_ref == "task:issue:BUG-123"
 
 
 def test_named_service_response_coerce_accepts_equivalent_response_object():
@@ -141,7 +144,7 @@ def test_named_service_response_coerce_accepts_equivalent_response_object():
                 "ret": {
                     "attrs": {
                         "namespace": "task",
-                        "object_ref": "task:issues/BUG-123",
+                        "object_ref": "task:issue:BUG-123",
                     },
                     "object": _canonical_issue_object(),
                 },
@@ -151,8 +154,8 @@ def test_named_service_response_coerce_accepts_equivalent_response_object():
 
     assert response.ok is True
     assert response.namespace == "task"
-    assert response.object_ref == "task:issues/BUG-123"
-    assert response.object["identity"]["object_ref"] == "task:issues/BUG-123"
+    assert response.object_ref == "task:issue:BUG-123"
+    assert response.object["identity"]["object_ref"] == "task:issue:BUG-123"
     assert response.object["body"]["title"] == "Issue"
 
 
@@ -160,7 +163,7 @@ def test_named_service_response_coerce_accepts_equivalent_response_object():
     provider_id="task.issue",
     bundle_id="task-tracker@1-0",
     namespace="task",
-    refs=("task:issues/*",),
+    refs=("task:issue:*",),
     object_kinds=("task.issue",),
     operations=build_default_operations(("local", "api", "mcp", "data_bus")),
 )
@@ -229,7 +232,7 @@ async def test_client_routes_by_object_ref_and_preserves_context():
         context=NamedServiceContext(tenant="t", project="p", user_id="u1", roles=("kdcube:role:operator",)),
     )
 
-    response = await client.action(object_ref="task:issues/BUG-123", action="open")
+    response = await client.action(object_ref="task:issue:BUG-123", action="open")
 
     assert response.ok is True
     assert response.provider["provider_id"] == "task.issue"
@@ -293,7 +296,7 @@ async def test_api_transport_accepts_wrapped_request_payload():
         {
             "data": {
                 "operation": "object.action",
-                "object_ref": "task:issues/BUG-123",
+                "object_ref": "task:issue:BUG-123",
                 "action": "open",
             }
         },
@@ -399,7 +402,7 @@ async def test_bundle_registry_endpoint_accepts_equivalent_response_object():
                     "attrs": {
                         "provider": {"provider_id": "task.issue"},
                         "namespace": "task",
-                        "object_ref": "task:issues/BUG-123",
+                        "object_ref": "task:issue:BUG-123",
                     },
                     "object": _canonical_issue_object(),
                 },
@@ -419,14 +422,14 @@ async def test_bundle_registry_endpoint_accepts_equivalent_response_object():
     with bind_bundle_named_service_caller(_named_service_caller):
         response = await call_named_service_endpoint(
             endpoint,
-            NamedServiceRequest(operation="object.get", namespace="task", object_ref="task:issues/BUG-123"),
+            NamedServiceRequest(operation="object.get", namespace="task", object_ref="task:issue:BUG-123"),
         )
 
     assert response.ok is True
     assert response.provider == {"provider_id": "task.issue"}
     assert response.namespace == "task"
-    assert response.object_ref == "task:issues/BUG-123"
-    assert response.object["identity"]["object_ref"] == "task:issues/BUG-123"
+    assert response.object_ref == "task:issue:BUG-123"
+    assert response.object["identity"]["object_ref"] == "task:issue:BUG-123"
     assert response.object["body"]["title"] == "Issue"
 
 
@@ -439,7 +442,7 @@ async def test_discovery_routes_one_namespace_to_multiple_provider_bundles_by_op
             provider_id="task.issue.crud",
             bundle_id="task-crud@1-0",
             namespace="task",
-            refs=("task:issues/*",),
+            refs=("task:issue:*",),
             object_kinds=("task.issue",),
             operations={"object.get": {"transports": ["local"]}},
         ),
@@ -450,9 +453,9 @@ async def test_discovery_routes_one_namespace_to_multiple_provider_bundles_by_op
             provider_id="task.attachment.bytes",
             bundle_id="task-files@1-0",
             namespace="task",
-            refs=("task:issues/*/attachments/*",),
+            refs=("task:issue:attachment:*/attachments/*",),
             object_kinds=("task.attachment",),
-            operations={"object.action": {"transports": ["local"]}},
+            operations={"object.get": {"transports": ["local"]}},
         ),
         bundle_id="task-files@1-0",
     )
@@ -473,15 +476,14 @@ async def test_discovery_routes_one_namespace_to_multiple_provider_bundles_by_op
     with bind_named_service_discovery(discovery), bind_bundle_named_service_caller(_named_service_caller):
         issue = await call_named_service_endpoint(
             endpoint,
-            NamedServiceRequest(operation="object.get", namespace="task", object_ref="task:issues/BUG-123"),
+            NamedServiceRequest(operation="object.get", namespace="task", object_ref="task:issue:BUG-123"),
         )
         attachment = await call_named_service_endpoint(
             endpoint,
             NamedServiceRequest(
-                operation="object.action",
+                operation="object.get",
                 namespace="task",
-                object_ref="task:issues/BUG-123/attachments/a1/v000001/evidence.md",
-                action="rehost",
+                object_ref="task:issue:attachment:BUG-123/attachments/a1/v000001/evidence.md",
                 payload={"object_kind": "task.attachment"},
             ),
         )
@@ -491,8 +493,8 @@ async def test_discovery_routes_one_namespace_to_multiple_provider_bundles_by_op
     assert attachment.ok is True
     assert attachment.extra["bundle"] == "task-files@1-0"
     assert calls == [
-        ("task-crud@1-0", "object.get", "task:issues/BUG-123"),
-        ("task-files@1-0", "object.action", "task:issues/BUG-123/attachments/a1/v000001/evidence.md"),
+        ("task-crud@1-0", "object.get", "task:issue:BUG-123"),
+        ("task-files@1-0", "object.get", "task:issue:attachment:BUG-123/attachments/a1/v000001/evidence.md"),
     ]
 
 
@@ -506,7 +508,7 @@ async def test_discovery_registration_is_persistent_by_default():
             provider_id="task.issue",
             bundle_id="task-tracker@1-0",
             namespace="task",
-            refs=("task:issues/*",),
+            refs=("task:issue:*",),
             operations={"provider.about": {"transports": ["local"]}},
         ),
         bundle_id="task-tracker@1-0",
@@ -579,7 +581,7 @@ async def test_discovery_backed_client_tools_do_not_require_provider_config():
             provider_id="task.issue",
             bundle_id="task-tracker@1-0",
             namespace="task",
-            refs=("task:issues/*",),
+            refs=("task:issue:*",),
             object_kinds=("task.issue",),
             operations={
                 "provider.about": {"transports": ["local"]},
@@ -636,13 +638,17 @@ async def test_endpoint_streams_direct_bundle_registry_bytes_when_bound():
 
     async def _named_service_caller(call):
         assert call.bundle_id == "task-tracker@1-0"
-        assert call.request.operation == "object.action"
-        assert call.request.action == "rehost"
+        assert call.request.operation == "object.get"
+        assert call.request.response_mode == "stream"
         return BundleNamedServiceResult(
             BundleStreamResponse(
                 chunks=_chunks(),
                 filename="evidence.md",
                 media_type="text/markdown",
+                response=NamedServiceResponse.ok_response(
+                    namespace="task",
+                    object_ref="task:issue:attachment:BUG-123/attachments/ta_1/v000001/evidence.md",
+                ).to_dict(),
             )
         )
 
@@ -656,9 +662,8 @@ async def test_endpoint_streams_direct_bundle_registry_bytes_when_bound():
         result = await call_named_service_endpoint_stream(
             endpoint,
             NamedServiceRequest(
-                operation="object.action",
-                object_ref="task:issues/BUG-123/attachments/ta_1/v000001/evidence.md",
-                action="rehost",
+                operation="object.get",
+                object_ref="task:issue:attachment:BUG-123/attachments/ta_1/v000001/evidence.md",
             ),
         )
 
@@ -668,13 +673,15 @@ async def test_endpoint_streams_direct_bundle_registry_bytes_when_bound():
     assert data == b"onetwo"
     assert result.filename == "evidence.md"
     assert result.media_type == "text/markdown"
+    assert result.response.ok is True
+    assert result.response.object_ref == "task:issue:attachment:BUG-123/attachments/ta_1/v000001/evidence.md"
 
 
 @pytest.mark.asyncio
 async def test_canvas_resolver_maps_named_service_object_action():
     async def _caller(call):
         assert call.data["operation"] == "object.action"
-        assert call.data["object_ref"] == "task:issues/BUG-123"
+        assert call.data["object_ref"] == "task:issue:BUG-123"
         assert call.data["action"] == "open"
         assert call.data["context"]["source"] == "canvas.object_action"
         return {
@@ -684,13 +691,13 @@ async def test_canvas_resolver_maps_named_service_object_action():
                     "attrs": {
                         "provider": {"provider_id": "task.issue"},
                         "namespace": "task",
-                        "object_ref": "task:issues/BUG-123",
+                        "object_ref": "task:issue:BUG-123",
                     },
                     "object": _canonical_issue_object(title="Broken auth flow"),
                     "ui_event": {
                         "type": "kdcube.ui.object.open.requested",
                         "target_surface": "task_tracker.issue_editor",
-                        "object_ref": "task:issues/BUG-123",
+                        "object_ref": "task:issue:BUG-123",
                     },
                     "extra": {"action": "open"},
                 },
@@ -709,7 +716,7 @@ async def test_canvas_resolver_maps_named_service_object_action():
 
     with bind_bundle_operation_caller(_caller):
         result = await resolver.object_action(
-            {"object_ref": "task:issues/BUG-123"},
+            {"object_ref": "task:issue:BUG-123"},
             user_id="user-1",
             story_id="story-1",
             action="open",
@@ -771,7 +778,7 @@ async def test_configured_canvas_resolver_helper_registers_namespace_resolver():
     assert count == 1
     with bind_bundle_operation_caller(_caller):
         result = await registry.object_action(
-            {"object_ref": "task:issues/BUG-123", "action": "preview"},
+            {"object_ref": "task:issue:BUG-123", "action": "preview"},
             user_id="user-1",
             story_id="story-1",
         )
@@ -804,14 +811,87 @@ def test_configured_canvas_resolver_helper_requires_canvas_resolver_enabled():
     assert count == 0
 
 
+def test_as_consumer_surface_selects_agent_event_pull_and_canvas_namespaces():
+    props = {
+        "surfaces": {
+            "as_consumer": {
+                "agents": {
+                    "main": {
+                        "tools": [
+                            {
+                                "kind": "named_service",
+                                "alias": "named_services",
+                                "namespaces": {
+                                    "task": {
+                                        "allowed": [
+                                            "provider.about",
+                                            "object.search",
+                                            "object.schema",
+                                            "object.upsert",
+                                            "object.delete",
+                                        ],
+                                    },
+                                },
+                            },
+                        ],
+                        "event_sources": [
+                            {
+                                "kind": "named_service",
+                                "namespace": "task",
+                                "enabled": True,
+                                "policies": {
+                                    "block_production": {"mode": "provider", "operation": "block.produce"},
+                                    "pull": {"mode": "provider", "operation": "object.get"},
+                                },
+                            },
+                            {
+                                "kind": "named_service",
+                                "namespace": "memo",
+                                "enabled": True,
+                                "policies": {
+                                    "block_production": {"mode": "default"},
+                                    "pull": {"mode": "default"},
+                                },
+                            },
+                        ],
+                    },
+                },
+                "ui": {
+                    "canvas": {
+                        "resolvers": [
+                            {
+                                "kind": "named_service",
+                                "namespace": "task",
+                                "enabled": True,
+                                "allowed": ["object.resolve", "object.action"],
+                            },
+                        ],
+                    },
+                },
+            },
+        },
+    }
+
+    assert list(named_service_agent_event_source_namespaces(props, client_id="default.react.agent")) == ["task"]
+    assert list(named_service_agent_pull_namespaces(props, client_id="default.react.agent")) == ["task"]
+    canvas_namespaces = named_service_canvas_resolver_namespaces(props)
+    assert list(canvas_namespaces) == ["task"]
+    assert canvas_namespaces["task"]["clients"]["canvas"]["resolver"]["enabled"] is True
+    assert canvas_namespaces["task"]["clients"]["canvas"]["resolver"]["allowed_operations"] == [
+        "object.resolve",
+        "object.action",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_configured_canvas_resolver_delegates_capabilities_to_provider():
     calls = []
 
     async def _caller(call):
         calls.append(call)
-        assert call.data["operation"] == "object.action"
+        assert call.data["operation"] == "object.resolve"
         assert call.data["action"] == "capabilities"
+        assert call.data["context"]["source"] == "canvas.object_resolve"
         return {
             "named_service": {
                 "ok": True,
@@ -819,7 +899,7 @@ async def test_configured_canvas_resolver_delegates_capabilities_to_provider():
                     "attrs": {
                         "namespace": "task",
                         "object_ref": call.data["object_ref"],
-                        "capabilities": {"preview": True, "open": True, "download": False, "rehost": True},
+                        "capabilities": {"preview": True, "open": True, "download": False},
                     },
                 },
             }
@@ -827,6 +907,81 @@ async def test_configured_canvas_resolver_delegates_capabilities_to_provider():
 
     registry = CanvasObjectResolverRegistry()
     count = register_configured_named_service_canvas_resolvers(
+        registry,
+        tenant="tenant-a",
+        project="project-a",
+        namespaces={
+            "task": {
+                "clients": {
+                    "canvas": {
+                        "resolver": {
+                            "enabled": True,
+                            "allowed_operations": ["object.resolve", "object.action"],
+                        },
+                    },
+                },
+                "providers": [
+                    {
+                        "transport": "bundle_operation",
+                        "bundle_id": "task-tracker@1-0",
+                        "provider": "task.issue",
+                        "operations": ["object.resolve", "object.action"],
+                    }
+                ],
+            }
+        },
+    )
+
+    assert count == 1
+    with bind_bundle_operation_caller(_caller):
+        result = await registry.object_action(
+            {"object_ref": "task:issue:BUG-123", "action": "capabilities"},
+            user_id="user-1",
+            story_id="story-1",
+        )
+
+    assert calls
+    assert result["ok"] is True
+    assert result["capabilities"]["open"] is True
+
+
+@pytest.mark.asyncio
+async def test_configured_canvas_resolver_promotes_provider_download_fields():
+    async def _caller(call):
+        assert call.data["operation"] == "object.action"
+        assert call.data["action"] == "download"
+        return {
+            "named_service": {
+                "ok": True,
+                "ret": {
+                    "attrs": {
+                        "namespace": "task",
+                        "object_ref": call.data["object_ref"],
+                        "capabilities": {"preview": True, "open": True, "download": True},
+                    },
+                    "object": {
+                        "identity": {
+                            "object_ref": call.data["object_ref"],
+                            "object_kind": "task.attachment",
+                            "namespace": "task",
+                        },
+                        "body": {
+                            "filename": "evidence.md",
+                            "mime": "text/markdown",
+                        },
+                    },
+                    "extra": {
+                        "content_base64": "IyBFdmlkZW5jZQo=",
+                        "filename": "evidence.md",
+                        "mime": "text/markdown",
+                        "size_bytes": 11,
+                    },
+                },
+            }
+        }
+
+    registry = CanvasObjectResolverRegistry()
+    register_configured_named_service_canvas_resolvers(
         registry,
         tenant="tenant-a",
         project="project-a",
@@ -851,17 +1006,22 @@ async def test_configured_canvas_resolver_delegates_capabilities_to_provider():
         },
     )
 
-    assert count == 1
     with bind_bundle_operation_caller(_caller):
         result = await registry.object_action(
-            {"object_ref": "task:issues/BUG-123", "action": "capabilities"},
+            {
+                "object_ref": "task:issue:attachment:BUG-123/attachments/ta_1/v000001/evidence.md",
+                "action": "download",
+            },
             user_id="user-1",
             story_id="story-1",
         )
 
-    assert calls
     assert result["ok"] is True
-    assert result["capabilities"]["open"] is True
+    assert result["content_base64"] == "IyBFdmlkZW5jZQo="
+    assert result["filename"] == "evidence.md"
+    assert result["mime"] == "text/markdown"
+    assert result["title"] == "evidence.md"
+    assert result["capabilities"]["download"] is True
 
 
 @pytest.mark.asyncio
@@ -873,13 +1033,19 @@ async def test_configured_artifact_rehoster_streams_named_service_bytes(tmp_path
     async def _stream_caller(call):
         assert call.bundle_id == "task-tracker@1-0"
         assert call.operation == "named_service"
-        assert call.data["operation"] == "object.action"
-        assert call.data["action"] == "rehost"
-        assert call.data["object_ref"] == "task:issues/BUG-123/attachments/ta_1/v000001/evidence.md"
+        assert call.data["operation"] == "object.get"
+        assert call.data["response_mode"] == "stream"
+        assert call.data["context"]["source"] == "react.pull"
+        assert call.data["context"]["materialize"] is True
+        assert call.data["object_ref"] == "task:issue:attachment:BUG-123/attachments/ta_1/v000001/evidence.md"
         return BundleOperationStreamResult(
             chunks=_chunks(),
             filename="evidence.md",
             media_type="text/markdown",
+            response=NamedServiceResponse.ok_response(
+                namespace="task",
+                object_ref="task:issue:attachment:BUG-123/attachments/ta_1/v000001/evidence.md",
+            ).to_dict(),
         )
 
     event_sources = EventSourceSubsystem()
@@ -889,12 +1055,13 @@ async def test_configured_artifact_rehoster_streams_named_service_bytes(tmp_path
         project="project-a",
         namespaces={
             "task": {
+                "pull": {"operation": "object.get"},
                 "providers": [
                     {
                         "transport": "bundle_operation",
                         "bundle_id": "task-tracker@1-0",
                         "provider": "task.issue",
-                        "operations": ["object.action"],
+                        "operations": ["object.get"],
                     }
                 ],
             }
@@ -902,12 +1069,14 @@ async def test_configured_artifact_rehoster_streams_named_service_bytes(tmp_path
     )
 
     assert count == 1
-    assert event_sources.namespace_rehoster("task") is not None
+    rehoster = event_sources.namespace_rehoster("task")
+    assert rehoster is not None
+    assert getattr(rehoster.handler, "operation", None) == "object.get"
     runtime = SimpleNamespace(turn_id="turn_rehost")
     ctx_browser = SimpleNamespace(runtime_ctx=runtime)
     with bind_bundle_operation_stream_caller(_stream_caller):
         result = await event_sources.rehost_namespace_ref(
-            "task:issues/BUG-123/attachments/ta_1/v000001/evidence.md",
+            "task:issue:attachment:BUG-123/attachments/ta_1/v000001/evidence.md",
             ctx_browser=ctx_browser,
             outdir=tmp_path,
         )
@@ -917,8 +1086,114 @@ async def test_configured_artifact_rehoster_streams_named_service_bytes(tmp_path
     assert result["materialized"][0]["logical_path"].startswith("fi:")
     assert result["materialized"][0]["mime"] == "text/markdown"
     assert result["materialized"][0]["size_bytes"] == len(b"alphabeta")
+    assert result["materialized"][0]["response"]["ok"] is True
+    assert result["materialized"][0]["response"]["ret"]["attrs"]["object_ref"] == "task:issue:attachment:BUG-123/attachments/ta_1/v000001/evidence.md"
     target = tmp_path / "workdir" / result["materialized"][0]["physical_path"]
     assert target.read_bytes() == b"alphabeta"
+
+
+@pytest.mark.asyncio
+async def test_configured_artifact_rehoster_surfaces_provider_error(tmp_path):
+    async def _stream_caller(call):
+        assert call.data["operation"] == "object.get"
+        assert call.data["response_mode"] == "stream"
+        return BundleOperationStreamResult(
+            chunks=_chunks_empty(),
+            filename=None,
+            media_type=None,
+            response=NamedServiceResponse.error_response(
+                code="task_issue_attachment_read_denied",
+                message="not allowed",
+                status=403,
+                namespace="task",
+                object_ref="task:issue:attachment:BUG-123/attachments/ta_1/v000001/evidence.md",
+            ).to_dict(),
+        )
+
+    async def _chunks_empty():
+        if False:
+            yield b""
+
+    event_sources = EventSourceSubsystem()
+    register_configured_named_service_artifact_rehosters(
+        event_sources,
+        tenant="tenant-a",
+        project="project-a",
+        namespaces={
+            "task": {
+                "pull": {"operation": "object.get"},
+                "providers": [
+                    {
+                        "transport": "bundle_operation",
+                        "bundle_id": "task-tracker@1-0",
+                        "provider": "task.issue",
+                        "operations": ["object.get"],
+                    }
+                ],
+            }
+        },
+    )
+
+    runtime = SimpleNamespace(turn_id="turn_rehost")
+    ctx_browser = SimpleNamespace(runtime_ctx=runtime)
+    with bind_bundle_operation_stream_caller(_stream_caller):
+        result = await event_sources.rehost_namespace_ref(
+            "task:issue:attachment:BUG-123/attachments/ta_1/v000001/evidence.md",
+            ctx_browser=ctx_browser,
+            outdir=tmp_path,
+        )
+
+    assert result["materialized"] == []
+    assert result["errors"][0]["error"]["code"] == "task_issue_attachment_read_denied"
+    assert result["errors"][0]["response"]["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_configured_event_source_resolver_calls_named_service_event_resolve():
+    async def _caller(call):
+        assert call.bundle_id == "task-tracker@1-0"
+        assert call.data["operation"] == "event.resolve"
+        assert call.data["object_ref"] == "task:issue:BUG-123"
+        return {
+            "named_service": {
+                "ok": True,
+                "ret": {
+                    "attrs": {
+                        "namespace": "task",
+                        "object_ref": "task:issue:BUG-123",
+                    },
+                    "extra": {
+                        "event_source_id": "named_services.task",
+                        "object_ref": "task:issue:BUG-123",
+                        "object_kind": "task.issue",
+                    },
+                },
+            }
+        }
+
+    event_sources = EventSourceSubsystem()
+    register_configured_named_service_event_sources(
+        event_sources,
+        namespaces={
+            "task": {
+                "providers": [
+                    {
+                        "transport": "bundle_operation",
+                        "bundle_id": "task-tracker@1-0",
+                        "provider": "task.issue",
+                        "operations": ["event.resolve"],
+                    }
+                ],
+            }
+        },
+    )
+
+    with bind_bundle_operation_caller(_caller):
+        resolved = await event_sources.resolve_event_source_for_ref("task:issue:BUG-123")
+
+    assert resolved["ok"] is True
+    assert resolved["event_source_id"] == "named_services.task"
+    assert resolved["extra"]["object_kind"] == "task.issue"
 
 
 @pytest.mark.asyncio
@@ -926,21 +1201,21 @@ async def test_configured_event_source_delegates_block_production_to_named_servi
     async def _caller(call):
         assert call.bundle_id == "task-tracker@1-0"
         assert call.data["operation"] == "block.produce"
-        assert call.data["object_ref"] == "task:issues/BUG-123"
+        assert call.data["object_ref"] == "task:issue:BUG-123"
         return {
             "named_service": {
                 "ok": True,
                 "ret": {
                     "attrs": {
                         "namespace": "task",
-                        "object_ref": "task:issues/BUG-123",
+                        "object_ref": "task:issue:BUG-123",
                     },
                     "extra": {
                         "blocks": [
                             {
                                 "type": "named_service.object",
                                 "event_source_id": "named_services.task",
-                                "object_ref": "task:issues/BUG-123",
+                                "object_ref": "task:issue:BUG-123",
                                 "markdown": "Task block",
                             }
                         ]
@@ -967,7 +1242,7 @@ async def test_configured_event_source_delegates_block_production_to_named_servi
     )
     target = {
         "event_source_id": "named_services.task",
-        "logical_path": "task:issues/BUG-123",
+        "logical_path": "task:issue:BUG-123",
         "blocks": [],
     }
 
@@ -979,7 +1254,7 @@ async def test_configured_event_source_delegates_block_production_to_named_servi
         )
 
     assert target["blocks_produced"] is True
-    assert target["blocks"][0]["object_ref"] == "task:issues/BUG-123"
+    assert target["blocks"][0]["object_ref"] == "task:issue:BUG-123"
 
 
 @pytest.mark.asyncio
@@ -994,7 +1269,7 @@ async def test_client_supports_headless_bundle_job_context():
         job_alias="nightly-index",
     )
 
-    response = await client.action(object_ref="task:issues/BUG-123", action="open")
+    response = await client.action(object_ref="task:issue:BUG-123", action="open")
 
     assert response.ok is True
     assert response.extra["actor"] is None
@@ -1052,7 +1327,7 @@ async def test_client_routes_by_namespace_for_search():
     response = await client.search(namespace="task", query="blocked auth")
 
     assert response.ok is True
-    assert response.items[0]["identity"]["object_ref"] == "task:issues/BUG-123"
+    assert response.items[0]["identity"]["object_ref"] == "task:issue:BUG-123"
     assert response.items[0]["body"]["title"] == "blocked auth"
 
 
@@ -1060,12 +1335,12 @@ async def test_client_routes_by_namespace_for_search():
 async def test_unknown_provider_returns_bounded_error_response():
     client = NamedServiceClient(NamedServiceRegistry())
 
-    response = await client.get(object_ref="task:issues/BUG-404")
+    response = await client.get(object_ref="task:issue:BUG-404")
 
     assert response.ok is False
     assert response.status == 404
     assert response.error.code == "named_service_provider_not_found"
-    assert response.object_ref == "task:issues/BUG-404"
+    assert response.object_ref == "task:issue:BUG-404"
 
 
 @pytest.mark.asyncio
@@ -1073,7 +1348,7 @@ async def test_transport_must_be_declared_for_operation():
     spec = NamedServiceProviderSpec(
         provider_id="task.issue",
         namespace="task",
-        refs=("task:issues/*",),
+        refs=("task:issue:*",),
         operations=build_default_operations(("local",)),
     )
     registry = NamedServiceRegistry()
@@ -1133,6 +1408,55 @@ def test_named_service_tools_are_added_only_for_configured_client():
     assert "main" in named_service_namespaces(props)["task"]["clients"]
     assert any(spec["alias"] == "named_services" for spec in specs)
     assert not any(spec["alias"] == "named_services" for spec in disabled_specs)
+
+
+def test_named_service_tools_read_agent_scoped_tool_config():
+    props = {
+        "named_services": {
+            "namespaces": {
+                "task": {},
+            },
+        },
+        "tools": {
+            "agents": {
+                "main": [
+                    {
+                        "kind": "named_service",
+                        "alias": "named_services",
+                        "namespaces": {
+                            "task": {
+                                "allowed_operations": ["object.get", "object.schema"],
+                            },
+                        },
+                    },
+                ],
+            },
+        },
+    }
+
+    specs = extend_tool_specs_for_named_services(
+        [{"module": "kdcube_ai_app.apps.chat.sdk.tools.io_tools", "alias": "io_tools"}],
+        bundle_props=props,
+        client_id="main",
+    )
+    disabled_specs = extend_tool_specs_for_named_services(
+        [{"module": "kdcube_ai_app.apps.chat.sdk.tools.io_tools", "alias": "io_tools"}],
+        bundle_props=props,
+        client_id="reviewer",
+    )
+
+    named_service_client_tools.bind_registry({"bundle_props": props, "client_id": "main"})
+    try:
+        catalog = named_service_client_tools.list_tools()
+    finally:
+        named_service_client_tools.bind_registry({})
+
+    assert any(spec["alias"] == "named_services" for spec in specs)
+    assert not any(spec["alias"] == "named_services" for spec in disabled_specs)
+    assert "get_object" in catalog
+    assert "object_schema" in catalog
+    assert "object_action" not in catalog
+    assert "upsert_object" not in catalog
 
 
 def test_named_service_tools_support_default_client_policy():
@@ -1202,6 +1526,47 @@ def test_named_service_tool_catalog_hides_operations_not_allowed_for_client():
     assert "delete_object" not in catalog
 
 
+def test_named_service_tool_catalog_marks_applicable_namespaces():
+    props = {
+        "surfaces": {
+            "as_consumer": {
+                "agents": {
+                    "main": {
+                        "tools": [
+                            {
+                                "kind": "named_service",
+                                "alias": "named_services",
+                                "namespaces": {
+                                    "task": {
+                                        "allowed": ["provider.about", "object.search", "object.schema", "object.host_file"],
+                                    },
+                                    "memo": {
+                                        "allowed": ["provider.about", "object.list"],
+                                    },
+                                },
+                            },
+                        ],
+                    },
+                },
+            },
+        },
+    }
+
+    named_service_client_tools.bind_registry({"bundle_props": props, "client_id": "main"})
+    try:
+        catalog = named_service_client_tools.list_tools()
+    finally:
+        named_service_client_tools.bind_registry({})
+
+    assert "named_service_operation" not in catalog["provider_about"]
+    assert catalog["provider_about"]["namespaces_applicable"] == ["task", "memo"]
+    assert catalog["search_objects"]["namespaces_applicable"] == ["task"]
+    assert catalog["object_schema"]["namespaces_applicable"] == ["task"]
+    assert catalog["host_file"]["namespaces_applicable"] == ["task"]
+    assert catalog["list_objects"]["namespaces_applicable"] == ["memo"]
+    assert "get_object" not in catalog
+
+
 def test_named_service_tool_catalog_defaults_do_not_expose_object_action():
     props = {
         "named_services": {
@@ -1233,6 +1598,38 @@ def test_named_service_tool_catalog_defaults_do_not_expose_object_action():
     assert "provider_about" in catalog
     assert "get_object" in catalog
     assert "object_schema" in catalog
+    assert "object_action" not in catalog
+
+
+def test_named_service_tool_catalog_never_exposes_object_action_to_model_clients():
+    props = {
+        "named_services": {
+            "namespaces": {
+                "task": {
+                    "clients": {
+                        "default_client": {
+                            "tools": {
+                                "allowed_operations": [
+                                    "provider.about",
+                                    "object.get",
+                                    "object.action",
+                                ],
+                            },
+                        },
+                    },
+                }
+            },
+        }
+    }
+
+    named_service_client_tools.bind_registry({"bundle_props": props, "client_id": "solver.react.v2.decision.v2.strong"})
+    try:
+        catalog = named_service_client_tools.list_tools()
+    finally:
+        named_service_client_tools.bind_registry({})
+
+    assert "provider_about" in catalog
+    assert "get_object" in catalog
     assert "object_action" not in catalog
 
 
@@ -1323,7 +1720,119 @@ async def test_named_service_client_tool_denies_unconfigured_mutation():
     )
 
     assert result["ok"] is False
-    assert result["error"] == "named_service_operation_not_allowed_for_client"
+    assert result["error"] == "named_service_tool_not_allowed_for_client"
+    assert result["details"]["tool"] == "upsert_object"
+
+
+@pytest.mark.asyncio
+async def test_named_service_client_tool_denies_unconfigured_host_file():
+    props = {
+        "named_services": {
+            "namespaces": {
+                "task": {
+                    "clients": {
+                        "main": {
+                            "tools": {
+                                "allowed_operations": ["object.search", "object.get"],
+                            },
+                        },
+                    },
+                }
+            },
+        }
+    }
+
+    named_service_client_tools.bind_registry({"bundle_props": props, "client_id": "main"})
+    result = await named_service_client_tools.host_file(
+        namespace="task",
+        object_ref="task:issue:BUG-123",
+        file_ref="fi:turn_1.files/report.md",
+        filename="report.md",
+        mime="text/markdown",
+    )
+
+    assert result["ok"] is False
+    assert result["error"] == "named_service_tool_not_allowed_for_client"
+    assert result["details"]["tool"] == "host_file"
+
+
+@pytest.mark.asyncio
+async def test_named_service_client_tool_hosts_nonlocal_file_ref():
+    props = {
+        "named_services": {
+            "namespaces": {
+                "task": {
+                    "providers": [
+                        {
+                            "transport": "bundle_operation",
+                            "bundle_id": "task-tracker@1-0",
+                            "provider": "task.issue",
+                            "operations": ["object.host_file"],
+                        }
+                    ],
+                    "clients": {
+                        "main": {
+                            "tools": {
+                                "allowed_operations": ["object.host_file"],
+                            },
+                        },
+                    },
+                }
+            },
+        }
+    }
+    calls = []
+
+    async def _caller(call):
+        calls.append(call)
+        assert call.data["operation"] == "object.host_file"
+        assert call.data["provider"] == "task.issue"
+        assert call.data["namespace"] == "task"
+        assert call.data["object_ref"] == "task:issue:BUG-123"
+        assert call.data["payload"]["file"] == {
+            "ref": "fi:turn_1.files/report.md",
+            "filename": "report.md",
+            "mime": "text/markdown",
+            "description": "Investigation note",
+        }
+        return {
+            "named_service": {
+                "ok": True,
+                "ret": {
+                    "attrs": {
+                        "namespace": "task",
+                        "object_ref": "task:issue:attachment:BUG-123/attachments/ta_1/v000001/report.md",
+                    },
+                    "object": {
+                        "schema": "kdcube.named_service.object.v1",
+                        "identity": {
+                            "object_ref": "task:issue:attachment:BUG-123/attachments/ta_1/v000001/report.md",
+                            "object_id": "ta_1",
+                            "object_kind": "task.attachment",
+                            "namespace": "task",
+                        },
+                        "meta": {"mime": "application/vnd.kdcube.task.attachment+json;version=1"},
+                        "body": {"filename": "report.md", "mime": "text/markdown"},
+                    },
+                },
+            }
+        }
+
+    named_service_client_tools.bind_registry({"bundle_props": props, "client_id": "main"})
+    with bind_bundle_operation_caller(_caller):
+        result = await named_service_client_tools.host_file(
+            namespace="task",
+            object_ref="task:issue:BUG-123",
+            file_ref="fi:turn_1.files/report.md",
+            filename="report.md",
+            mime="text/markdown",
+            description="Investigation note",
+        )
+
+    assert result["ok"] is True
+    assert result["ret"]["attrs"]["object_ref"] == "task:issue:attachment:BUG-123/attachments/ta_1/v000001/report.md"
+    assert result["ret"]["object"]["identity"]["object_kind"] == "task.attachment"
+    assert calls
 
 
 @pytest.mark.asyncio

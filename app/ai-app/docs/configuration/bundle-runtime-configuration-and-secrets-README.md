@@ -354,6 +354,8 @@ Common reserved paths:
 | `react.default_agent.event_source_pipeline.enabled` | ReAct runtime | default-agent opt-in for the alternate event-source policy pipeline; global/default value is `false`; use `react.<agent_key>.*` or `react.agents.<agent_key>.*` for additional agents |
 | `execution.runtime` | runtime/exec subsystem | bundle-level execution routing and per-run ISO limits |
 | `exec_runtime` | runtime/exec subsystem | legacy alias for `execution.runtime` |
+| `surfaces.as_consumer` | SDK tool, event-source, pull, and UI resolver subsystems | bundle consumer wiring: per-agent tools, external object/event-source policies, and UI resolvers |
+| `tools.agents` | SDK tool subsystem / ReAct runtime | legacy per-agent model-callable tool connections and allow-lists; prefer `surfaces.as_consumer.agents.*.tools` for new descriptors |
 | `mcp.services` | MCP runtime/bootstrap | MCP transport/auth config |
 
 Use the detailed page for those reserved paths:
@@ -371,6 +373,124 @@ For Docker/Fargate exec supervisors, descriptor payloads are full by default.
 Set `execution.runtime.descriptor_payload_scope: active_bundle` to filter only
 `bundles.yaml` and `bundles.secrets.yaml` to the active bundle before transport.
 Platform/global descriptors and global secrets stay deployment-scoped.
+
+### Consumer surfaces
+
+`surfaces.as_consumer` is deployment-scoped bundle configuration. It belongs in
+`bundles.yaml` or bundle `configuration_defaults()`, not in user-scoped props.
+Use it to describe what this bundle consumes from the platform and from other
+bundles:
+
+- agent model-callable tools
+- event-source policies for external object refs
+- pull/materialization policy for external objects
+- UI resolver wiring such as canvas object actions
+
+Example:
+
+```yaml
+surfaces:
+  as_consumer:
+    default_agent: main
+    agents:
+      main:
+        tools:
+          - id: web
+            kind: python
+            module: kdcube_ai_app.apps.chat.sdk.tools.web_tools
+            alias: web_tools
+            allowed: [web_search, web_fetch]
+          - id: docs
+            kind: mcp
+            server_id: docs
+            alias: docs
+            allowed: [search, fetch]
+          - id: task_service
+            kind: named_service
+            alias: named_services
+            namespaces:
+              task:
+                allowed:
+                  - provider.about
+                  - object.list
+                  - object.search
+                  - object.schema
+                  - object.host_file
+                  - object.upsert
+                  - object.delete
+        event_sources:
+          - kind: named_service
+            namespace: task
+            enabled: true
+            discovery:
+              mode: service_discovery
+            policies:
+              block_production:
+                mode: provider
+                operation: block.produce
+              pull:
+                mode: provider
+                operation: object.get
+    ui:
+      canvas:
+        resolvers:
+          - kind: named_service
+            namespace: task
+            enabled: true
+            discovery:
+              mode: service_discovery
+            allowed: [object.resolve, object.action]
+```
+
+This config controls visibility, not secrets:
+
+- Python sources use `module` or bundle-local `ref`.
+- MCP sources reference `server_id`; transport/auth still live in
+  `mcp.services`.
+- Named-service agent tools are configured with provider operation ids, then
+  exposed to ReAct as concrete `named_services.*` tools. ReAct catalog entries
+  render only `namespaces applicable`, so the model sees which namespaces may
+  use each generic tool without seeing provider protocol ids.
+- Existing external object refs should normally be materialized with
+  `react.pull`; the pull policy calls provider `object.get` and writes an `fi:`
+  artifact with provider-selected MIME.
+- Agent-owned runtime files can be hosted into a provider namespace only when
+  the namespace allows `object.host_file`; ReAct then sees
+  `named_services.host_file` for that namespace and receives a provider-owned
+  ref to cite through the provider's object schema.
+- Canvas object actions belong under
+  `surfaces.as_consumer.ui.canvas.resolvers`; the owning provider decides what
+  each resolver action may do.
+
+Different agents can expose different tools:
+
+```yaml
+surfaces:
+  as_consumer:
+    agents:
+      main:
+        tools:
+          - id: tasks
+            kind: python
+            module: kdcube_ai_app.apps.chat.sdk.solutions.tasks.tools
+            alias: tasks
+            allowed: [list_tasks, search_tasks, create_task]
+      task_job:
+        tools:
+          - id: task_job
+            kind: python
+            module: kdcube_ai_app.apps.chat.sdk.solutions.tasks.job_tools
+            alias: task_job
+            allowed: [get_current_task, update_execution_journal]
+```
+
+`tools.agents` remains a legacy fallback for older bundles. Do not use both
+shapes for the same agent in new descriptors; `surfaces.as_consumer` is the
+canonical surface.
+
+Use this split when a bundle has both an interactive assistant and a scheduled
+job executor. The job executor should not inherit write tools merely because the
+interactive assistant has them.
 
 ## User-scoped bundle props and secrets
 

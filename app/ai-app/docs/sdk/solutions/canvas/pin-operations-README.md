@@ -16,7 +16,7 @@ keywords:
     "rehost",
     "canonical ref",
     "fi refs",
-    "task refs",
+    "provider refs",
     "mem refs",
   ]
 see_also:
@@ -66,10 +66,11 @@ prefix:
 
 - **Owned** (`cnv:`, `conv:`, `mem:`) — a concrete resolver on this surface
   knows the kind, preview, and open semantics directly.
-- **Foreign** (a namespace another bundle owns, e.g. `task:`) — the generic
+- **Foreign** (a namespace another bundle owns, for example `acme:`) — the generic
   `NamedServiceCanvasObjectResolver` treats the ref as opaque and asks the owner
   bundle over the in-runtime bridge. It is additive (registered after the
-  concrete resolvers, only for namespaces in `named_services.namespaces`) and
+  concrete resolvers, only for namespaces configured under
+  `surfaces.as_consumer.ui.canvas.resolvers`) and
   never shadows owned refs.
 
 See [Namespace Services](../../namespace-services/README.md) for the
@@ -77,7 +78,7 @@ provider/consumer contract behind foreign refs.
 
 ## Pin Shape
 
-Current task-tracker fields still use `logical_path`/`storage_ref` in places.
+Some legacy provider fields still use `logical_path`/`storage_ref` in places.
 The SDK-level contract should converge on `object_ref`; the old field names are
 compatibility aliases for the same canonical resolver URI.
 
@@ -102,7 +103,7 @@ compatibility aliases for the same canonical resolver URI.
 For resolver-backed objects, the card id should be the canonical object ref.
 This makes duplicate prevention deterministic:
 
-- dragging the same `task:issues/<id>` again updates/restores the existing pin;
+- dragging the same `acme:ticket:<id>` again updates/restores the existing pin;
 - dragging the same `fi:` again updates/restores the existing pin;
 - dragging the same `mem:` again updates/restores the existing pin;
 - dragging the same `repo:` or `so:` ref again updates/restores the existing pin.
@@ -166,7 +167,7 @@ class CanvasObjectResolver:
 If a resolver implements `download`, the UI can show download. If it does not,
 download is hidden. Same for `open`, `preview`, and `rehost`.
 
-Current task-tracker exposes the operation as:
+The host exposes the operation as:
 
 ```text
 canvas_object_action({object_ref, action, card_id?, canvas_id?, canvas_name?, story_id?, mime?})
@@ -197,16 +198,16 @@ canvas server calls fi resolver download(ref)
 fi resolver returns a response usable by the browser
 ```
 
-For a task attachment target, the flow is:
+For a provider attachment target, the flow is:
 
 ```text
 canvas/chat source has object_ref=fi:...
-user drops it on task attachments
-task subsystem calls fi resolver rehost(ref, target=task:issues/<id>)
-task subsystem writes task-owned bytes and returns task:... attachment ref
+user drops it on provider attachments
+provider subsystem calls fi resolver rehost(ref, target=acme:ticket:<id>)
+provider subsystem writes provider-owned bytes and returns acme:... attachment ref
 ```
 
-The resulting task attachment is not a canvas link. It is a new task-owned
+The resulting provider attachment is not a canvas link. It is a new provider-owned
 object.
 
 ## Ownership Rules
@@ -234,8 +235,8 @@ The source subsystem owns:
 This split matters for collaboration. An assistant may suggest new cards,
 suggest content edits for canvas-owned text, or suggest description/comment
 updates on proxy cards. It should not mutate the underlying object through the
-canvas unless it calls that object's own subsystem tool, such as task tools for
-`task:` objects.
+canvas unless it calls that object's own subsystem tool, such as provider tools for
+`acme:` objects.
 
 ## Unknown Refs
 
@@ -254,6 +255,33 @@ cards:
 
 The board can move, resize, focus, comment, and delete the card. Object-level
 actions are hidden until a resolver for `abc:` is registered.
+
+## Namespace Resolver Contract
+
+For namespace-owned refs, canvas is only the proxy host. The resolver/provider
+owns object semantics:
+
+```text
+Canvas.card.object_ref
+  -> namespace resolver capabilities for that exact ref
+  -> canvas renders buttons from capabilities
+  -> user clicks a button
+  -> canvas calls object_action({object_ref, action, ...})
+  -> resolver/provider executes action against that same object_ref
+```
+
+Resolvers must make capabilities specific to the full URI, not only the
+namespace. A namespace can contain subnamespaces and object kinds:
+
+```text
+task:issue:<issue_id>                         -> issue object actions
+task:issue:attachment:<issue_id>/attachments/... -> attachment object actions
+```
+
+The provider decides that the first ref can open the issue editor while the
+second can download bytes or open the parent issue focused on the attachment.
+Canvas does not infer this from `task`; it only forwards the full ref and renders
+the returned capabilities.
 
 ## Error Handling
 

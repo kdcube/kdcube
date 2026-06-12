@@ -10,6 +10,8 @@ import pytest
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v3.runtime import ReactSolverV2
 from kdcube_ai_app.apps.chat.sdk.solutions.react.round import ReactRound
+from kdcube_ai_app.apps.chat.sdk.solutions.react.layout import build_tool_catalog, build_tools_block
+from kdcube_ai_app.apps.chat.sdk.runtime.tool_subsystem import ToolSubsystem
 
 
 class _LogStub:
@@ -54,6 +56,42 @@ def _solver_stub() -> ReactSolverV2:
 
 async def _noop_async(*args, **kwargs):
     return None
+
+
+def test_tool_catalog_renders_named_service_namespace_scope():
+    subsystem = ToolSubsystem.__new__(ToolSubsystem)
+    entry = subsystem._mk_entry(
+        "named_services",
+        "search_objects",
+        "from named_services import tools as named_services",
+        "named_services.search_objects(namespace={namespace}, query={query})",
+        "Search objects from a configured named-service namespace.",
+        [{"name": "namespace", "annotation": "str"}, {"name": "query", "annotation": "str"}],
+        raw={
+            "named_service_operation": "object.search",
+            "namespaces_applicable": ["task", "memo"],
+        },
+        is_async=True,
+        return_annotation="JSON",
+    )
+    catalog = build_tool_catalog([entry])
+    rendered = build_tools_block(catalog, header="[AVAILABLE COMMON TOOLS]")
+    subsystem.tools_info = [entry]
+    subsystem._mcp_entries = []
+    prompt_catalog = subsystem.tool_catalog_for_prompt(
+        allowed_plugins=["named_services"],
+        include_mcp=False,
+    )
+
+    assert "named_service_operation" not in entry["doc"]
+    assert entry["doc"]["namespaces_applicable"] == ["task", "memo"]
+    assert "named_service_operation" not in catalog[0]
+    assert catalog[0]["namespaces_applicable"] == ["task", "memo"]
+    assert "named_service_operation" not in prompt_catalog[0]["doc"]
+    assert prompt_catalog[0]["doc"]["namespaces_applicable"] == ["task", "memo"]
+    assert "named service operation" not in rendered
+    assert "object.search" not in rendered
+    assert "namespaces applicable: task, memo" in rendered
 
 
 def test_validate_decision_rejects_tool_call_with_final_answer():

@@ -29,6 +29,7 @@ import {
   type CanvasContextItem,
   type CanvasDefinition,
   type CanvasIngressPayload,
+  type CanvasNamespaceStyle,
   type CanvasObjectActionName,
   type CanvasObjectActionResponse,
   type CanvasPatchInput,
@@ -72,8 +73,6 @@ const CANVAS_CONTEXT_CARD_KINDS = new Set([
   'memory',
   'source',
   'search.result',
-  'issue.ref',
-  'story.ref',
   'note',
   'object.ref',
   'conversation',
@@ -360,6 +359,7 @@ export default function App() {
         onDropContext={onDropContext}
         onDropIngress={onDropIngress}
         onObjectAction={onObjectAction}
+        namespaceStyles={settings.getCanvasNamespaceStyles() as Record<string, CanvasNamespaceStyle | string>}
       />
     </div>
   )

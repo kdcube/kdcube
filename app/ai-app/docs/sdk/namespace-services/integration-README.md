@@ -496,3 +496,55 @@ entity shape.
 For canvas/chat resolution, the client only enables the namespace resolver.
 The provider remains the authority for concrete resolver actions and returns a
 normal named-service response or rejection for each request.
+
+## Canvas Proxy Resolve And Action Flow
+
+Canvas stores a proxy card with `Canvas.card.object_ref`. The card does not own
+the external object actions. The namespace provider owns the URI grammar,
+object-kind split, capabilities, auth checks, and action result.
+
+```text
+User opens card drawer
+  -> Canvas.card.object_ref = task:issue:attachment:<issue_id>/attachments/<attachment_id>/v<version>/<filename>
+  -> Canvas server calls Provider.object.resolve(object_ref=Canvas.card.object_ref)
+  -> Provider resolves Provider.ref:
+       Provider.ref.object_kind = task.attachment
+       Provider.ref.parent = task:issue:<issue_id>
+       Provider.ref.capabilities = {preview, open, download, ...}
+  -> Canvas stores the resolver result on the card UI state only
+
+User clicks card action
+  -> Canvas server calls Provider.object.action(action=<clicked>, object_ref=Canvas.card.object_ref)
+  -> Provider parses Provider.ref again
+  -> Provider enforces Provider.auth policy
+  -> Provider returns one bounded result:
+       preview: Provider.object metadata/short text
+       open: Provider.ui_event target surface command
+       download: Provider.bytes encoded for browser download or an explicit provider download handle
+       error: Provider.error with status/message
+```
+
+`object.resolve` is the lightweight `uri -> resolution info` contract for
+canvas/chat affordance discovery. It must not read a large object body or stream
+bytes. `object.action` is used after the user chooses a concrete action such as
+`preview`, `open`, or `download`.
+
+For example, a task issue and a task attachment share the `task` namespace but
+resolve differently:
+
+```text
+task:issue:<issue_id>
+  Provider.object_kind = task.issue
+  Provider.actions = preview, open
+  Provider.download = false
+
+task:issue:attachment:<issue_id>/attachments/<attachment_id>/v<version>/<filename>
+  Provider.object_kind = task.attachment
+  Provider.parent = task:issue:<issue_id>
+  Provider.actions = preview, open, download
+  Provider.download = true when Provider.auth allows read
+```
+
+No canvas code should special-case `task`, `memo`, `file`, or any other
+namespace-owned object kind. Canvas chooses visible buttons from the resolver
+capabilities returned by the owner provider.

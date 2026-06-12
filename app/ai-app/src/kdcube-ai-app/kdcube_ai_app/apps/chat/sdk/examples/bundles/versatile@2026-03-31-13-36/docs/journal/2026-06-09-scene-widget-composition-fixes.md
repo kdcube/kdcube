@@ -19,7 +19,7 @@ can compose reusable SDK components:
 Initial testing showed the scene mounted the pieces, but the UX was not stable:
 the memory widget could collapse into a tiny line, expanded memories stretched
 like a page instead of a useful panel, the scene had a redundant reconnect
-button, canvas and chat controls did not match the task-tracker pattern, and
+button, canvas and chat controls did not match the shared workbench pattern, and
 chat width could not be resized.
 
 ## Fixes Made
@@ -51,7 +51,7 @@ scene host controls panel size and placement
 
 ### Right Rail Controls
 
-The scene now follows the task-tracker interaction model:
+The scene now follows the shared workbench interaction model:
 
 - chat button on the right rail;
 - canvas button on the right rail;
@@ -77,7 +77,7 @@ The chat panel has:
 - fullscreen behavior delegated by scene state and synchronized to the chat
   iframe through `kdcube-set-view`.
 
-Resize follows the task-tracker direction:
+Resize follows the shared workbench direction:
 
 ```text
 drag chat left edge left  -> wider chat
@@ -154,7 +154,7 @@ This keeps the default expanded view focused on:
 
 The memory detail/editor panel is now conditional. It is rendered only when a
 memory is selected or an editor is active. Without that guard, the shared memory
-widget reserved an empty right-side panel and made both the task-tracker and
+widget reserved an empty right-side panel and made both the legacy workbench and
 Versatile expanded memory views look like they had a large dead area.
 
 The memory widget emits memory-owned drag lifecycle events
@@ -336,7 +336,7 @@ A scene that composes widgets should provide:
 | Requirement | Reason |
 | --- | --- |
 | owned geometry for every panel | Prevent iframe resize feedback loops. |
-| right rail as a real layout column | Consistent with task-tracker UI; prevents overlap with movable panels. |
+| right rail as a real layout column | Consistent with workbench UI; prevents overlap with movable panels. |
 | draggable overlays for transient tools | Memory/canvas helpers should not permanently consume layout. |
 | explicit fullscreen/expanded handling | Widget requests state; host applies state. |
 | stable message broker | Context, view, and auth messages move between iframes and platform. |
@@ -397,7 +397,7 @@ The scene now reads chat sizing from query parameters:
 
 The host clamps these values to the current viewport. This keeps the SDK chat
 widget reusable on a landing-page scene where the desired default is narrower
-than the control-plane task-tracker layout.
+than the control-plane workbench layout.
 
 ### Memory Widget Layout
 

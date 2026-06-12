@@ -176,6 +176,100 @@ route; the memory mixin supplies the default source folder/build command.
 SDK UI source into that widget build workspace; this is useful for external-git
 bundles that want to mount platform widgets as direct React components.
 
+`config.surfaces.as_consumer` is the reserved consumer wiring section. It
+controls which platform or bundle-provided surfaces this bundle consumes:
+model-callable tools, named-service event-source policies, pull/materialization
+policy, and UI resolvers.
+
+Example:
+
+```yaml
+bundles:
+  items:
+    - id: "my.bundle@1-0"
+      config:
+        surfaces:
+          as_consumer:
+            default_agent: main
+            agents:
+              main:
+                tools:
+                  - id: web
+                    kind: python
+                    module: kdcube_ai_app.apps.chat.sdk.tools.web_tools
+                    alias: web_tools
+                    allowed: [web_search, web_fetch]
+                  - id: knowledge
+                    kind: mcp
+                    server_id: knowledge
+                    alias: knowledge
+                    allowed: ["*"]
+                  - id: task_service
+                    kind: named_service
+                    alias: named_services
+                    namespaces:
+                      task:
+                        allowed:
+                          - provider.about
+                          - object.list
+                          - object.search
+                          - object.schema
+                          - object.host_file
+                          - object.upsert
+                          - object.delete
+                event_sources:
+                  - kind: named_service
+                    namespace: task
+                    enabled: true
+                    discovery:
+                      mode: service_discovery
+                    policies:
+                      block_production:
+                        mode: provider
+                        operation: block.produce
+                      pull:
+                        mode: provider
+                        operation: object.get
+            ui:
+              canvas:
+                resolvers:
+                  - kind: named_service
+                    namespace: task
+                    enabled: true
+                    discovery:
+                      mode: service_discovery
+                    allowed: [object.resolve, object.action]
+```
+
+Rules:
+
+- `surfaces.as_consumer.agents.<agent_id>.tools` is a list; each entry is one
+  connected tool source for that agent.
+- This is the consumer-side surface: it says what that bundle/agent may call or
+  resolve. Provider registration remains separate and is currently discovered
+  from provider code.
+- `kind: python` loads a platform module or bundle-local `ref`; `allowed`
+  names are Python callable names.
+- `kind: mcp` connects a server declared under `mcp.services`; `allowed`
+  names are MCP tool names, or `["*"]`.
+- `kind: named_service` exposes namespace operations through the generic
+  `named_services.*` tool family. ReAct catalog entries render only
+  `namespaces applicable`, so an agent can see which configured namespaces may
+  use each generic tool without seeing provider protocol ids.
+- UI object actions belong under
+  `surfaces.as_consumer.ui.<surface>.resolvers`; the remote provider enforces
+  what each resolver action may do.
+- For existing external refs, prefer pull/read over a normal model-callable
+  `object.get`. The event-source `pull` policy calls provider `object.get` and
+  stores an `fi:` artifact with provider-selected MIME, so large JSON or bytes
+  can be read in ranges.
+- For agent-owned runtime files that must become provider-owned refs, allow
+  `object.host_file` and use `named_services.host_file`; the returned provider
+  ref can then be cited in a provider-declared `object.upsert` payload.
+
+`config.tools.agents` is still recognized as a legacy fallback for older
+bundles. New descriptors should use `config.surfaces.as_consumer`.
+
 `config.events` overrides the platform event recording defaults for this bundle.
 Platform defaults come from `assembly.yaml -> events.record.*`. Bundle-level
 fields are merged on top of assembly defaults field-by-field: a bundle can

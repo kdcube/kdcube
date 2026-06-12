@@ -34,6 +34,12 @@ type RuntimeConfigPayload = {
   tenant_id?: string;
   project?: string;
   project_id?: string;
+  canvas?: {
+    namespace_styles?: Record<string, unknown>;
+    namespaceStyles?: Record<string, unknown>;
+  };
+  namespace_styles?: Record<string, unknown>;
+  namespaceStyles?: Record<string, unknown>;
 };
 
 function isPlaceholder(value: string | null | undefined): boolean {
@@ -75,6 +81,7 @@ class Settings {
     tenant: PLACEHOLDER_TENANT,
     project: PLACEHOLDER_PROJECT,
     bundleId: PLACEHOLDER_BUNDLE_ID,
+    canvasNamespaceStyles: {} as Record<string, unknown>,
   };
 
   getBaseUrl(): string {
@@ -107,10 +114,20 @@ class Settings {
     return isPlaceholder(this.values.idToken) ? null : (this.values.idToken || null);
   }
 
+  getCanvasNamespaceStyles(): Record<string, unknown> {
+    return { ...this.values.canvasNamespaceStyles };
+  }
+
   private applyRuntimeConfig(config: RuntimeConfigPayload): boolean {
     const tenant = config.defaultTenant || config.tenant || config.tenant_id;
     const project = config.defaultProject || config.project || config.project_id;
     const idTokenHeader = config.idTokenHeader || config.idTokenHeaderName || config.auth?.idTokenHeaderName;
+    const canvasNamespaceStyles = (
+      config.canvas?.namespace_styles ||
+      config.canvas?.namespaceStyles ||
+      config.namespace_styles ||
+      config.namespaceStyles
+    );
     this.values = {
       ...this.values,
       baseUrl: config.baseUrl || this.values.baseUrl,
@@ -120,8 +137,9 @@ class Settings {
       tenant: tenant || this.values.tenant,
       project: project || this.values.project,
       bundleId: config.defaultAppBundleId || this.values.bundleId,
+      canvasNamespaceStyles: canvasNamespaceStyles || this.values.canvasNamespaceStyles,
     };
-    return Boolean(tenant || project || config.baseUrl || config.accessToken !== undefined || config.idToken !== undefined || idTokenHeader || config.defaultAppBundleId);
+    return Boolean(tenant || project || config.baseUrl || config.accessToken !== undefined || config.idToken !== undefined || idTokenHeader || config.defaultAppBundleId || canvasNamespaceStyles);
   }
 
   private needsRuntimeConfig(): boolean {
@@ -178,7 +196,7 @@ class Settings {
           type: 'CONFIG_REQUEST',
           data: {
             identity: WIDGET_IDENTITY,
-            requestedFields: ['baseUrl', 'accessToken', 'idToken', 'idTokenHeader', 'defaultTenant', 'defaultProject', 'defaultAppBundleId'],
+            requestedFields: ['baseUrl', 'accessToken', 'idToken', 'idTokenHeader', 'defaultTenant', 'defaultProject', 'defaultAppBundleId', 'namespaceStyles', 'namespace_styles', 'canvas'],
           },
         }, '*');
         window.setTimeout(() => finish(true), 3000);

@@ -174,24 +174,13 @@ def _string_card_value(card: Mapping[str, Any], key: str) -> str:
     return str(value or "").strip()
 
 
-def _task_issue_ref(ref: str) -> str:
-    normalized = ref.strip()
-    if normalized.startswith("task:issues/"):
-        issue_id = normalized[len("task:issues/"):].split("?", 1)[0].split("#", 1)[0].strip("/")
-        return f"task:issues/{issue_id}" if issue_id else ""
-    if normalized.startswith("task:issue:"):
-        issue_id = normalized[len("task:issue:"):].split("?", 1)[0].split("#", 1)[0].strip("/")
-        return f"task:issues/{issue_id}" if issue_id else ""
-    return ""
-
-
 def _card_identity_ref(card: Mapping[str, Any]) -> str:
     """Stable identity for proxy/ref cards.
 
-    For proxy cards the target object ref is also the durable card id:
-    `task:issues/<id>`, `fi:...`, `cnv:...`, `mem:...`, `so:...`, etc. Inline
-    `content` cards intentionally return empty here because they create new
-    canvas-hosted objects on write.
+    For proxy cards the target object ref is also the durable card id. Canvas
+    stores opaque namespace refs verbatim; the owning namespace decides how to
+    canonicalize and resolve them. Inline `content` cards intentionally return
+    empty here because they create new canvas-hosted objects on write.
     """
 
     if "content" in card:
@@ -200,16 +189,13 @@ def _card_identity_ref(card: Mapping[str, Any]) -> str:
         ref = _string_card_value(card, key)
         if not ref:
             continue
-        task_ref = _task_issue_ref(ref)
-        return task_ref or ref
+        return ref
     source_refs = card.get("source_refs") if isinstance(card.get("source_refs"), list) else []
     for raw_ref in source_refs:
         ref = str(raw_ref or "").strip()
         if not ref:
             continue
-        task_ref = _task_issue_ref(ref)
-        if task_ref:
-            return task_ref
+        return ref
     return ""
 
 
@@ -233,8 +219,6 @@ def _card_id_prefix(kind: Any) -> str:
         return "M"
     if value in {"source", "search.result"}:
         return "S"
-    if value in {"issue.ref", "story.ref", "task.ref"}:
-        return "T"
     return "O"
 
 
@@ -720,7 +704,7 @@ class CanvasStore:
         default_id = _new_card_id(card.get("kind"))
         if identity_ref and not canvas_owned:
             # Proxy pins are identified by the original resolver URI. This keeps
-            # ownership with the source subsystem: task:, fi:, mem:, so:, etc.
+            # ownership with the namespace that minted the ref.
             card["id"] = identity_ref
             if not str(card.get("logical_path") or "").strip():
                 card["logical_path"] = identity_ref

@@ -15,7 +15,7 @@ def _load_bundle_module(name: str):
     return module
 
 
-def test_canvas_namespace_visibility_is_not_tool_visibility():
+def test_canvas_event_source_visibility_is_separate_from_named_service_actions():
     tools_descriptor = _load_bundle_module("tools_descriptor.py")
     events_descriptor = _load_bundle_module("events_descriptor.py")
 
@@ -24,7 +24,13 @@ def test_canvas_namespace_visibility_is_not_tool_visibility():
         for spec in (tools_descriptor.TOOLS_SPECS or [])
         if isinstance(spec, dict)
     }
-    assert "canvas" not in tool_aliases
+    assert "canvas" in tool_aliases
+
+    tool_config = tools_descriptor.config_for_agent(
+        "default_agent",
+        bundle_props=tools_descriptor.default_tools_props(),
+    )
+    assert "object_action" not in (tool_config.allowed_tool_names_by_alias.get("named_services") or [])
 
     event_sources = EventSourceSubsystem(
         event_specs=events_descriptor.EVENT_SOURCE_SPECS,

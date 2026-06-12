@@ -42,6 +42,7 @@ TaskIssueNamedServiceProvider
   +-- object.get
   +-- object.schema
   +-- object.host_file when callers need provider-owned file refs
+  +-- object.resolve for cheap URI-to-capabilities/metadata resolution
   +-- object.action(open/preview)
   +-- object.upsert / delete when allowed
   +-- block.produce / block.render when the namespace owns ReAct projection

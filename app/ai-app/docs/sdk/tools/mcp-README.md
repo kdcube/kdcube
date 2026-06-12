@@ -1,12 +1,13 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/mcp-README.md
 title: "MCP"
-summary: "MCP tool integration: descriptor allow-lists, bundle-props MCP service config, named-secret auth, and runtime execution flow (host + isolated)."
+summary: "MCP tool integration: agent-scoped allow-lists, bundle-props MCP service config, named-secret auth, and runtime execution flow (host + isolated)."
 tags: ["sdk", "tools", "mcp", "runtime", "descriptor", "transport", "auth"]
-keywords: ["MCP_TOOL_SPECS", "MCP_SERVICES", "MCPToolsSubsystem", "mcp.<alias>.<tool>", "stdio", "http", "streamable-http", "sse", "oauth_gui", "tool_call"]
+keywords: ["surfaces.as_consumer", "MCP_TOOL_SPECS", "MCP_SERVICES", "MCPToolsSubsystem", "mcp.<alias>.<tool>", "stdio", "http", "streamable-http", "sse", "oauth_gui", "tool_call"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/tool-subsystem-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/custom-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/named-services-tools-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/block-production-README.md
@@ -25,27 +26,45 @@ For shared tool-subsystem behavior (`TOOLS_SPECS`, alias resolution, isolated su
 ## What you configure
 
 You configure MCP in two places:
-1. `MCP_TOOL_SPECS` in bundle `tools_descriptor.py` (what is visible/exposed).
+1. `surfaces.as_consumer.agents.<agent_id>.tools` in bundle props (what is visible/exposed to that agent).
 2. Bundle props `mcp.services` (how to connect and authenticate).
 
 `MCP_SERVICES` env JSON is still supported as a legacy / local-dev fallback, but
 it is not the preferred platform contract.
 
-### 1) Descriptor: `MCP_TOOL_SPECS`
+### 1) Agent tool connection
 
-```python
-MCP_TOOL_SPECS = [
-    {"server_id": "web_search", "alias": "web_search", "tools": ["web_search"]},
-    {"server_id": "stack", "alias": "stack", "tools": ["*"]},
-    {"server_id": "docs", "alias": "docs", "tools": ["*"]},
-]
+```yaml
+surfaces:
+  as_consumer:
+    agents:
+      main:
+        tools:
+          - id: knowledge
+            kind: mcp
+            server_id: knowledge
+            alias: knowledge
+            allowed: ["*"]
+
+          - id: docs
+            kind: mcp
+            server_id: docs
+            alias: docs
+            allowed:
+              - search
+              - fetch
 ```
 
 Rules:
 - `server_id` must match an entry in bundle props `mcp.services` (or legacy `MCP_SERVICES` fallback).
 - `alias` is used in tool IDs: `mcp.<alias>.<tool_id>`.
-- `tools` omitted or `["*"]` exposes all server tools.
+- `allowed` omitted or `["*"]` exposes all server tools.
 - A concrete list is an allow-list.
+- Multiple agents can connect to the same MCP server with different allow-lists.
+
+`tools_descriptor.py` may still expose `MCP_TOOL_SPECS` as a resolved runtime
+adapter, but it should be derived from `surfaces.as_consumer` rather than being
+the authoritative source. `tools.agents` is a legacy fallback for old bundles.
 
 ### 2) Bundle props: `mcp.services`
 
@@ -97,8 +116,9 @@ Minimum checklist:
 
 - the server is configured in bundle props `mcp.services` or in a generated MCP
   client config owned by the caller
-- the visible tools are allow-listed through `MCP_TOOL_SPECS` or the client
-  runtime's equivalent allow-list
+- the visible tools are allow-listed through
+  `surfaces.as_consumer.agents.<agent_id>.tools` or the client runtime's
+  equivalent allow-list
 - every tool name is stable and has a bounded input schema
 - every tool returns bounded structured data; large files or artifacts should be
   returned as references, not huge inline payloads

@@ -586,7 +586,7 @@ surfaces:
             enabled: true
             discovery:
               mode: service_discovery
-            allowed: [object.action]
+            allowed: [object.resolve, object.action]
 ```
 
 `surfaces.as_consumer` declares which namespaces this bundle consumes and which
@@ -635,8 +635,9 @@ namespace may be split across providers by operation, ref, or object kind.
 In that `providers` list, `operations` is the provider capability contract. In
 an agent tool item, `allowed` controls the model-callable tool surface for that
 agent. `surfaces.as_consumer.ui.canvas.resolvers` lets the canvas resolver call
-the provider for object refs; provider code decides which concrete
-`object.action` values are accepted.
+the provider for object refs. Canvas uses `object.resolve` to discover cheap
+metadata/capabilities, then uses `object.action` for explicit UI commands;
+provider code decides which concrete action values are accepted.
 
 | `transport` | Runtime path | Use when |
 | --- | --- | --- |
@@ -921,7 +922,7 @@ surfaces:
             enabled: true
             discovery:
               mode: service_discovery
-            allowed: [object.action]
+            allowed: [object.resolve, object.action]
 ```
 
 In the bundle entrypoint:
@@ -1004,6 +1005,14 @@ When introducing a named service provider:
 - define `object.schema` for each object kind that agents may create, update,
   delete, render, or pull from;
 - define object operations and action names;
+- define `object.resolve` as lightweight URI resolution. It should parse the
+  provider-owned ref and return canonical `object_ref`, `object_kind`, parent
+  refs, capabilities/actions, and cheap display metadata. It must not read large
+  object bodies or stream bytes.
+- implement `object.action` as `action(object_ref, action, payload)`. The
+  provider must parse `object_ref` on every call, branch by object kind, enforce
+  auth, and return a bounded result. Do not let an attachment ref fall through to
+  parent issue update/delete behavior.
 - define streamed `object.get` with `response_mode: stream` for large
   attachment refs that must become `fi:` artifacts;
 - define `block.produce` / `block.render` when ReAct should project

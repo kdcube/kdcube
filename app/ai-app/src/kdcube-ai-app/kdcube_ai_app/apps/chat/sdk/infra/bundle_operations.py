@@ -86,6 +86,7 @@ class BundleOperationStreamResult:
     media_type: str | None = "application/octet-stream"
     headers: dict[str, str] = field(default_factory=dict)
     status_code: int = 200
+    response: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -507,6 +508,7 @@ def _coerce_stream_result(result: Any, *, chunk_size: int) -> BundleOperationStr
             media_type=result.media_type,
             headers=dict(result.headers or {}),
             status_code=result.status_code,
+            response=dict(result.response or {}) if isinstance(result.response, Mapping) else None,
         )
     if isinstance(result, BundleFileResponse):
         return BundleOperationStreamResult(
@@ -515,6 +517,7 @@ def _coerce_stream_result(result: Any, *, chunk_size: int) -> BundleOperationStr
             media_type=result.media_type or "application/octet-stream",
             headers=dict(result.headers or {}),
             status_code=result.status_code,
+            response=dict(result.response or {}) if isinstance(result.response, Mapping) else None,
         )
     if isinstance(result, BundleBinaryResponse):
         return BundleOperationStreamResult(
@@ -523,6 +526,19 @@ def _coerce_stream_result(result: Any, *, chunk_size: int) -> BundleOperationStr
             media_type=result.media_type or "application/octet-stream",
             headers=dict(result.headers or {}),
             status_code=result.status_code,
+            response=dict(result.response or {}) if isinstance(result.response, Mapping) else None,
+        )
+    response = getattr(result, "response", None)
+    chunks = getattr(result, "chunks", None)
+    if response is not None and chunks is not None:
+        response_payload = response.to_dict() if callable(getattr(response, "to_dict", None)) else response
+        return BundleOperationStreamResult(
+            chunks=chunks,
+            filename=getattr(result, "filename", None),
+            media_type=getattr(result, "media_type", None) or "application/octet-stream",
+            headers=dict(getattr(result, "headers", {}) or {}),
+            status_code=int(getattr(result, "status_code", 200) or 200),
+            response=dict(response_payload or {}) if isinstance(response_payload, Mapping) else None,
         )
     if isinstance(result, (bytes, bytearray, memoryview)):
         return BundleOperationStreamResult(
@@ -573,7 +589,11 @@ async def invoke_local_bundle_named_service(
     )
     from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client import NamedServiceClient
     from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.registry import NamedServiceRegistry
-    from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import NamedServiceRequest, NamedServiceResponse
+    from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import (
+        NamedServiceRequest,
+        NamedServiceResponse,
+        NamedServiceStreamResult,
+    )
     from kdcube_ai_app.infra.plugin.bundle_loader import BundleSpec, get_workflow_instance_async
     from kdcube_ai_app.infra.plugin.bundle_store import get_bundle_props, resolve_bundle_spec_from_store
     from kdcube_ai_app.infra.service_hub.inventory import ConfigRequest, create_workflow_config, resolve_config_request_secrets
@@ -659,7 +679,7 @@ async def invoke_local_bundle_named_service(
         bind_bundle_named_service_caller(nested_named_service_caller),
     ):
         raw, entry, req = await client.call_raw(request)
-    if entry is None or isinstance(raw, NamedServiceResponse):
+    if entry is None or isinstance(raw, (NamedServiceResponse, NamedServiceStreamResult)):
         value = raw
     elif isinstance(raw, (BundleStreamResponse, BundleFileResponse, BundleBinaryResponse)):
         value = raw

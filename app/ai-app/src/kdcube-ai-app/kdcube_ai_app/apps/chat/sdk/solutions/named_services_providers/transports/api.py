@@ -55,7 +55,7 @@ class NamedServiceApiTransport:
         self,
         payload: Mapping[str, Any] | NamedServiceRequest | None = None,
         **request_fields: Any,
-    ) -> dict[str, Any]:
+    ) -> Any:
         try:
             request = _coerce_api_request(payload, request_fields)
         except Exception as exc:
@@ -75,6 +75,12 @@ class NamedServiceApiTransport:
                 self.registry,
                 auth_context=self.auth_context,
                 transport=TRANSPORT_API,
+            )
+        if str(request.response_mode or "").strip().lower() == "stream":
+            return await dispatch_named_service_api_stream_request(
+                self.registry,
+                request,
+                client=client,
             )
         LOGGER.info(
             "Named-service API dispatch start: provider=%s namespace=%s operation=%s object_ref=%s",
@@ -103,7 +109,7 @@ async def dispatch_named_service_api_request(
     auth_context: AuthContext | None = None,
     client: NamedServiceClient | None = None,
     **request_fields: Any,
-) -> dict[str, Any]:
+) -> Any:
     """Dispatch one API request to an in-process named service provider.
 
     Bundle `@api(...)` methods should call this helper after platform ingress

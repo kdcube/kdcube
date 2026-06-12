@@ -28,10 +28,10 @@ function configValue(envName: string, queryName: string, fallback: string): stri
   return (typeof envValue === 'string' && envValue.trim()) || queryValue(queryName) || fallback
 }
 
-export const CHAT_WIDGET_ID = configValue('VITE_CHAT_WIDGET_ID', 'chat_widget_id', 'task_tracker_chat')
-export const CHAT_CONFIG_IDENTITY = configValue('VITE_CHAT_CONFIG_IDENTITY', 'chat_config_identity', 'BUNDLE_TASK_TRACKER_CHAT_VIEW')
-export const CHAT_BRAND_LABEL = configValue('VITE_CHAT_BRAND_LABEL', 'chat_brand_label', 'Task Tracker')
-export const CHAT_EVENT_PREFIX = configValue('VITE_CHAT_EVENT_PREFIX', 'chat_event_prefix', 'task_tracker')
+export const CHAT_WIDGET_ID = configValue('VITE_CHAT_WIDGET_ID', 'chat_widget_id', 'chat_widget')
+export const CHAT_CONFIG_IDENTITY = configValue('VITE_CHAT_CONFIG_IDENTITY', 'chat_config_identity', 'BUNDLE_CHAT_VIEW')
+export const CHAT_BRAND_LABEL = configValue('VITE_CHAT_BRAND_LABEL', 'chat_brand_label', 'Chat')
+export const CHAT_EVENT_PREFIX = configValue('VITE_CHAT_EVENT_PREFIX', 'chat_event_prefix', 'chat')
 export const CHAT_SURFACE = configValue('VITE_CHAT_SURFACE', 'chat_surface', `${CHAT_EVENT_PREFIX}_chat`)
 export const CHAT_CANVAS_SURFACE = configValue('VITE_CHAT_CANVAS_SURFACE', 'chat_canvas_surface', `${CHAT_EVENT_PREFIX}_canvas`)
 export const CHAT_SNAPSHOT_SURFACE = configValue('VITE_CHAT_SNAPSHOT_SURFACE', 'chat_snapshot_surface', `${CHAT_EVENT_PREFIX}_wizard`)
@@ -40,16 +40,16 @@ export const CHAT_ATTACHMENT_EVENT_SOURCE_ID = configValue('VITE_CHAT_ATTACHMENT
 export const CHAT_CONTEXT_EVENT_SOURCE_ID = configValue('VITE_CHAT_CONTEXT_EVENT_SOURCE_ID', 'chat_context_event_source_id', `${CHAT_EVENT_PREFIX}.context.focus`)
 export const CHAT_CANVAS_STATE_EVENT_SOURCE_ID = configValue('VITE_CHAT_CANVAS_STATE_EVENT_SOURCE_ID', 'chat_canvas_state_event_source_id', `${CHAT_EVENT_PREFIX}.canvas.state`)
 export const CHAT_CANVAS_FOCUS_EVENT_SOURCE_ID = configValue('VITE_CHAT_CANVAS_FOCUS_EVENT_SOURCE_ID', 'chat_canvas_focus_event_source_id', `${CHAT_EVENT_PREFIX}.canvas.focus`)
-export const CHAT_SNAPSHOT_EVENT_SOURCE_ID = configValue('VITE_CHAT_SNAPSHOT_EVENT_SOURCE_ID', 'chat_snapshot_event_source_id', `${CHAT_EVENT_PREFIX}.task.snapshot`)
-export const CHAT_CONTEXT_ATTACH_MESSAGE = configValue('VITE_CHAT_CONTEXT_ATTACH_MESSAGE', 'chat_context_attach_message', 'task-tracker-context-attach')
-export const CHAT_CONTEXT_FOCUS_MESSAGE = configValue('VITE_CHAT_CONTEXT_FOCUS_MESSAGE', 'chat_context_focus_message', 'task-tracker-context-focus')
-export const CHAT_CONTEXT_REMOVE_MESSAGE = configValue('VITE_CHAT_CONTEXT_REMOVE_MESSAGE', 'chat_context_remove_message', 'task-tracker-context-remove')
-export const CHAT_CONTEXT_REFRESH_SOURCE = configValue('VITE_CHAT_CONTEXT_REFRESH_SOURCE', 'chat_context_refresh_source', 'task-tracker-context-refresh')
+export const CHAT_SNAPSHOT_EVENT_SOURCE_ID = configValue('VITE_CHAT_SNAPSHOT_EVENT_SOURCE_ID', 'chat_snapshot_event_source_id', `${CHAT_EVENT_PREFIX}.snapshot`)
+export const CHAT_CONTEXT_ATTACH_MESSAGE = configValue('VITE_CHAT_CONTEXT_ATTACH_MESSAGE', 'chat_context_attach_message', 'kdcube.context.attach')
+export const CHAT_CONTEXT_FOCUS_MESSAGE = configValue('VITE_CHAT_CONTEXT_FOCUS_MESSAGE', 'chat_context_focus_message', 'kdcube.context.focus')
+export const CHAT_CONTEXT_REMOVE_MESSAGE = configValue('VITE_CHAT_CONTEXT_REMOVE_MESSAGE', 'chat_context_remove_message', 'kdcube.context.remove')
+export const CHAT_CONTEXT_REFRESH_SOURCE = configValue('VITE_CHAT_CONTEXT_REFRESH_SOURCE', 'chat_context_refresh_source', 'kdcube.context.refresh')
 export const CHAT_CANVAS_PATCH_STEP = configValue('VITE_CHAT_CANVAS_PATCH_STEP', 'chat_canvas_patch_step', `${CHAT_EVENT_PREFIX}.canvas.patch`)
-export const CHAT_CANVAS_PATCH_MESSAGE = configValue('VITE_CHAT_CANVAS_PATCH_MESSAGE', 'chat_canvas_patch_message', 'task-tracker-canvas-patch')
-export const CHAT_CANVAS_PATCH_SOURCE = configValue('VITE_CHAT_CANVAS_PATCH_SOURCE', 'chat_canvas_patch_source', 'task-tracker-chat')
-export const CHAT_CANVAS_INGRESS_MESSAGE = configValue('VITE_CHAT_CANVAS_INGRESS_MESSAGE', 'chat_canvas_ingress_message', 'task-tracker-canvas-ingress')
-export const BUILT_BUNDLE_ID = configValue('VITE_BUNDLE_ID', 'bundle_id', 'task-tracker@1-0')
+export const CHAT_CANVAS_PATCH_MESSAGE = configValue('VITE_CHAT_CANVAS_PATCH_MESSAGE', 'chat_canvas_patch_message', 'kdcube.canvas.patch')
+export const CHAT_CANVAS_PATCH_SOURCE = configValue('VITE_CHAT_CANVAS_PATCH_SOURCE', 'chat_canvas_patch_source', 'chat-widget')
+export const CHAT_CANVAS_INGRESS_MESSAGE = configValue('VITE_CHAT_CANVAS_INGRESS_MESSAGE', 'chat_canvas_ingress_message', 'kdcube.canvas.ingress')
+export const BUILT_BUNDLE_ID = configValue('VITE_BUNDLE_ID', 'bundle_id', '')
 
 interface RouteContext {
   tenant: string

@@ -1,6 +1,5 @@
 import {
   Archive,
-  ClipboardPenLine,
   Download,
   ExternalLink,
   FileText,
@@ -21,7 +20,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import type { CanvasObjectActionName, CanvasObjectActionResponse, CanvasPatchInput, CanvasPatchOp, CanvasPatchResponse, CanvasReadInput, CanvasReadResponse } from './canvasTypes'
 import { normalizeContext, normalizeContextMessage, type CanvasContextItem } from './contextTypes'
 import { parseIngressMessage, type CanvasIngressPayload } from './ingressBridge'
@@ -32,11 +31,22 @@ import {
   cardContext,
   canvasFromReadResponse,
   findCanvas,
+  namespaceFromRef,
+  ownerKeyFromRef,
   normalizeCanvasPatchEvent,
   type CanvasCard,
   type CanvasDefinition,
   type CanvasPatchUiEvent,
 } from './canvasModel'
+
+export interface CanvasNamespaceStyle {
+  label?: string
+  color?: string
+  ink?: string
+  border?: string
+  focus?: string
+  background?: string
+}
 
 export interface CanvasBoardProps {
   activeCanvasName: string
@@ -57,6 +67,7 @@ export interface CanvasBoardProps {
   onDropContext: (context: CanvasContextItem, rect: CanvasCard['rect']) => void
   onDropIngress: (payload: CanvasIngressPayload, rect: CanvasCard['rect']) => void
   onObjectAction?: (card: CanvasCard, action: CanvasObjectActionName) => Promise<CanvasObjectActionResponse>
+  namespaceStyles?: Record<string, CanvasNamespaceStyle | string>
 }
 
 interface DragState {
@@ -97,7 +108,7 @@ function iconForKind(kind: string) {
   if (kind === 'memory') return Search
   if (kind === 'agent.text') return Sparkles
   if (kind === 'file') return FileText
-  if (kind === 'issue.ref') return ClipboardPenLine
+  if (kind === 'object.ref') return ExternalLink
   if (kind === 'conversation') return MessageSquare
   return Pin
 }
@@ -110,15 +121,42 @@ const NAMESPACE_BY_KIND: Record<string, string> = {
   'memory': 'mem',
   'source': 'src',
   'search.result': 'sr',
-  'issue.ref': 'iss',
-  'story.ref': 'sty',
   'note': 'note',
   'object.ref': 'obj',
   'conversation': 'conv',
 }
 
-function namespaceForKind(kind: string): string {
-  return NAMESPACE_BY_KIND[kind] || kind.replace(/\./g, '-').slice(0, 4)
+function namespaceForCard(card: CanvasCard): string {
+  return card.namespace || ownerKeyFromRef(card.ref) || namespaceFromRef(card.ref) || NAMESPACE_BY_KIND[card.kind] || card.kind.replace(/\./g, '-').slice(0, 4)
+}
+
+function namespaceLabelForCard(card: CanvasCard, namespaceStyles?: Record<string, CanvasNamespaceStyle | string>): string {
+  const namespace = namespaceForCard(card)
+  const style = namespaceStyles?.[namespace]
+  if (style && typeof style === 'object' && typeof style.label === 'string' && style.label.trim()) {
+    return style.label.trim()
+  }
+  return namespace
+}
+
+function namespaceCssForCard(
+  card: CanvasCard,
+  namespaceStyles?: Record<string, CanvasNamespaceStyle | string>,
+): CSSProperties {
+  const namespace = namespaceForCard(card)
+  const raw = namespaceStyles?.[namespace]
+  if (!raw) return {}
+  const style: CanvasNamespaceStyle = typeof raw === 'string' ? { color: raw } : raw
+  const ink = style.ink || style.color
+  const border = style.border || style.color
+  const focus = style.focus
+  const background = style.background
+  const vars: CSSProperties & Record<string, string> = {}
+  if (ink) vars['--pin-ink'] = ink
+  if (border) vars['--pin-border'] = border
+  if (focus) vars['--pin-focus'] = focus
+  if (background) vars['--pin-bg'] = background
+  return vars
 }
 
 function formatCardAdded(value?: string | null): string {
@@ -302,6 +340,7 @@ export function CanvasBoard({
   onDropContext,
   onDropIngress,
   onObjectAction,
+  namespaceStyles,
 }: CanvasBoardProps) {
   const boardRef = useRef<HTMLDivElement | null>(null)
   const attachmentInputRef = useRef<HTMLInputElement | null>(null)
@@ -649,12 +688,12 @@ export function CanvasBoard({
     })
     const counts: Record<string, number> = {}
     for (const card of sorted) {
-      const ns = namespaceForKind(card.kind)
+      const ns = namespaceLabelForCard(card, namespaceStyles)
       counts[ns] = (counts[ns] || 0) + 1
       out[card.id] = `${ns}:${String(counts[ns]).padStart(2, '0')}`
     }
     return out
-  }, [cards])
+  }, [cards, namespaceStyles])
   const canvasStats = useMemo(() => {
     const created = cards
       .map((card) => parseCardTime(card.createdAt || card.updatedAt))
@@ -1345,7 +1384,7 @@ export function CanvasBoard({
           [card.id]: text || 'Preview resolved.',
         }))
       } else if (action === 'open') {
-        const opened = Boolean(result.ui_event || result.issue || result.memory || result.resolved)
+        const opened = Boolean(result.ui_event || result.resolved)
         setResolverNoticeByCard((current) => ({
           ...current,
           [card.id]: opened ? 'Open request sent.' : (result.message || 'Resolver returned no open target.'),
@@ -1537,7 +1576,7 @@ export function CanvasBoard({
         <div
           ref={boardRef}
           className={`canvas-board ${externalDropReady ? 'external-drop-ready' : ''}`}
-          aria-label="Task tracker canvas board"
+          aria-label="Canvas board"
           onPointerDown={startBoardGesture}
           onDragOver={(event) => {
             if (dragState) {
@@ -1630,9 +1669,10 @@ export function CanvasBoard({
               pinned ? 'Click to release the drawer.' : 'Click to pin the drawer open.',
             ].join('\n')
             const kind = card.kind
-            const wantsDownload = kind === 'file' || kind === 'user.attachment'
-            const wantsOpen = kind === 'memory' || kind === 'source' || kind === 'search.result' || kind === 'issue.ref' || kind === 'story.ref' || kind === 'object.ref' || kind === 'conversation'
             const capabilities = resolverState?.capabilities
+            const wantsDownload = capabilities?.download === true || kind === 'file' || kind === 'user.attachment'
+            const wantsOpen = kind === 'memory' || kind === 'source' || kind === 'search.result' || kind === 'object.ref' || kind === 'conversation' || Boolean(namespaceFromRef(card.ref))
+            const namespaceLabel = namespaceLabelForCard(card, namespaceStyles)
             return (
               <article
                 key={card.id}
@@ -1654,12 +1694,13 @@ export function CanvasBoard({
                   top: card.rect.y,
                   width: card.rect.w,
                   height: card.rect.h,
+                  ...namespaceCssForCard(card, namespaceStyles),
                 }}
               >
                 <div className="canvas-card-top">
-                  <span className="canvas-card-origin" title={card.kind}>
+                  <span className="canvas-card-origin" title={card.ref ? `${namespaceLabel} · ${card.kind}` : card.kind}>
                     <Icon size={13} />
-                    <span className="canvas-card-origin-label">{card.kind}</span>
+                    <span className="canvas-card-origin-label">{namespaceLabel}</span>
                   </span>
                   {enumTag ? <span className="canvas-card-enum" title={`${enumTag} — pin position in this kind on the board`}>{enumTag}</span> : null}
                   <span className="canvas-card-buttons">
@@ -1750,7 +1791,7 @@ export function CanvasBoard({
                 </div>
                 <span className="canvas-card-kind">
                   <Grip size={12} />
-                  {pendingSuggestion ? 'pending suggestion · ' : ''}{card.kind}
+                  {pendingSuggestion ? 'pending suggestion · ' : ''}{card.ref ? 'object.ref' : card.kind}
                 </span>
                 <button
                   type="button"

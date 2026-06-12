@@ -12,7 +12,7 @@
  *     text). The storage layer replaces `content` with a `logical_path` on
  *     write.
  *   - `logical_path`: the UI pins an existing resolver-backed ref
- *     (search results, chat artifacts, issue refs) without rehosting.
+ *     (search results, chat artifacts, foreign namespace refs) without rehosting.
  *     This preserves cross-conversation `fi:conv_<id>...` refs verbatim.
  *
  * The CanvasBoard wiring (drop zones, drag images, selection state) lives
@@ -153,33 +153,10 @@ export function cardFromSelectedText(
   }
 }
 
-/** User dragged an issue row onto the canvas. The card is a ref-only pin —
- *  the issue bytes stay in the issue catalog, accessible through the task:
- *  resolver/tools registered by the host bundle. */
-export function cardFromIssueRef(
-  issue: { id: string; title: string; state?: string; story_id?: string },
-  options: CardOptions = {},
-): CanvasNewCardInput {
-  const storyId = issue.story_id || `issue:${issue.id}`
-  const taskRef = `task:issues/${issue.id}`
-  return {
-    id: options.id ?? taskRef,
-    kind: 'issue.ref',
-    title: options.title ?? issue.title,
-    mime: 'application/json',
-    logical_path: taskRef,
-    placement: options.placement ?? 'floating',
-    rect: options.rect,
-    source_card_ids: options.source_card_ids,
-    source_refs: options.source_refs ?? [taskRef, storyId],
-    created_by: 'user',
-  }
-}
-
 /** Generic search result drag (memory, source pool, future subsystem
  *  search). The caller supplies the already-resolver-backed `ref` — this
- *  normalizer does NOT rewrite the namespace, so `mem:`, `so:`, `fi:`,
- *  `task:` and `cnv:` all flow through verbatim. */
+ *  normalizer does NOT rewrite the namespace; resolver-backed refs flow
+ *  through verbatim and are resolved by the host/provider configuration. */
 export function cardFromSearchResult(
   hit: {
     ref: string
@@ -193,9 +170,10 @@ export function cardFromSearchResult(
   assertCanvasLogicalPath(hit.ref, 'cardFromSearchResult')
   return {
     id: options.id ?? hit.ref,
-    kind: hit.kind ?? 'search.result',
+    kind: hit.kind ?? 'object.ref',
     title: options.title ?? hit.title,
     mime: hit.mime ?? 'application/json',
+    namespace: ownerKeyFromLogicalPath(hit.ref),
     logical_path: hit.ref,
     placement: options.placement ?? 'floating',
     rect: options.rect,
@@ -203,6 +181,18 @@ export function cardFromSearchResult(
     source_refs: options.source_refs,
     created_by: 'user',
   }
+}
+
+function namespaceFromLogicalPath(ref: string): string | undefined {
+  const match = String(ref || '').trim().match(/^([A-Za-z][A-Za-z0-9_.-]*):/)
+  return match?.[1]?.toLowerCase()
+}
+
+function ownerKeyFromLogicalPath(ref: string): string | undefined {
+  const value = String(ref || '').trim()
+  const index = value.lastIndexOf(':')
+  if (index <= 0) return namespaceFromLogicalPath(value)
+  return value.slice(0, index).trim().toLowerCase() || namespaceFromLogicalPath(value)
 }
 
 /** User dragged an agent-produced file from the chat iframe onto canvas.

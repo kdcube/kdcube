@@ -77,7 +77,7 @@ surfaces:
             enabled: true
             discovery:
               mode: service_discovery
-            allowed: [object.action]
+            allowed: [object.resolve, object.action]
 ```
 
 The namespace key declares that this bundle may consume refs in that namespace.
@@ -227,10 +227,12 @@ render" means canvas/chat/timeline preview, open, and block projection. Those
 paths may resolve metadata or model-visible blocks, but they do not copy
 provider-owned bytes into ReAct's `fi:` workspace.
 The client bundle does not configure provider-specific resolver semantics here:
-`surfaces.as_consumer.ui.canvas.resolvers` only opts the namespace and
-operation family into resolution. The owning provider decides whether generic
-requests such as `open`, `preview`, `describe`, or `capabilities` are accepted
-for the concrete object ref.
+`surfaces.as_consumer.ui.canvas.resolvers` only opts the namespace and canvas
+operation families into use. `object.resolve` resolves a concrete ref into
+metadata, parent refs, capabilities, and cheap display information.
+`object.action` runs explicit UI actions such as `open`, `preview`, or
+`download`. The owning provider decides which actions are accepted for the
+concrete object ref.
 
 ### Consumer-Owned Versus Provider-Owned Values
 

@@ -69,7 +69,7 @@ kdcube_ai_app.apps.chat.sdk.solutions.canvas
   ui/component/src        Reusable React canvas board component source
 ```
 
-The SDK package does not know task-tracker issue semantics, memory semantics,
+The SDK package does not know provider object semantics, memory semantics,
 or ReAct artifact download transport details. It only stores canonical refs and
 routes object actions through registered resolvers. Bundles configure storage
 names, event ids, and Data Bus subject names through `bundle_props.canvas`; the
@@ -95,9 +95,9 @@ A canvas document is a versioned board state:
       "rect": {"x": 40, "y": 40, "w": 238, "h": 112}
     },
     {
-      "id": "T_2026-06-08-09-12-02_cd34",
-      "kind": "issue.ref",
-      "logical_path": "task:issues/issue_2026-06-08-09-01-20",
+      "id": "O_2026-06-08-09-12-02_cd34",
+      "kind": "object.ref",
+      "logical_path": "acme:ticket:ticket_2026-06-08-09-01-20",
       "rect": {"x": 320, "y": 120, "w": 260, "h": 120}
     }
   ]
@@ -113,13 +113,13 @@ namespace when pinned:
 | --- | --- | --- |
 | ReAct/chat artifact | `fi:conv_<conversation>/turn_.../outputs/file.md` | ReAct artifact layer |
 | Memory | `mem:<memory-id>` | Memory module |
-| Task issue | `task:issues/<issue-id>` | Task subsystem |
+| Provider object | `acme:ticket:<object-id>` | Provider subsystem |
 | Canvas user text/upload | `cnv:<canvas-object>` | Canvas storage owner |
 | Knowledge/source row | `repo:<repo>/<path>` or `so:<source>` | Knowledge/source subsystem |
 
 Canvas does not rehost external objects just because they are pinned. Rehosting
 is an explicit action owned by the target subsystem, for example attaching a
-chat file to a task.
+chat file to a provider-owned object.
 
 ## Configuring Storage
 
@@ -138,7 +138,7 @@ store = CanvasStore.from_scope(
     ui_event_type="my_bundle.canvas.patch.applied",
     artifact_resolver_name="sdk.canvas.artifact_storage",
     handoff_resolver_names={
-        "task": "my_bundle.issue_story",
+        "acme": "my_bundle.provider_objects",
     },
 )
 ```
@@ -161,11 +161,16 @@ Canvas has a resolver registry because pins are object proxies. The resolver
 for a ref namespace owns object actions:
 
 ```text
-canvas.object_action(ref="task:issues/...", action="open")
-  -> namespace_for_ref("task:issues/...") == "task"
-  -> task resolver handles open
-  -> task widget decides dirty-state behavior
+canvas.object_action(ref="acme:ticket:...", action="open")
+  -> namespace_for_ref("acme:ticket:...") == "acme"
+  -> owner_key_from_ref("acme:ticket:...") == "acme:ticket"
+  -> provider resolver handles open
+  -> provider widget decides dirty-state behavior
 ```
+
+The first URI segment before `:` is the routing namespace. Everything before
+the last `:` is the provider-owned owner key/subnamespace. Canvas may display
+that owner key, but it dispatches resolver calls by the root namespace only.
 
 Core contract:
 
@@ -190,10 +195,10 @@ Composition bundles can register named-service resolvers from bundle config:
 ```yaml
 named_services:
   namespaces:
-    task:
+    acme:
       provider:
-        bundle_id: task-tracker@1-0
-        provider: task.issue
+        bundle_id: acme-provider@1-0
+        provider: acme.ticket
         operation: named_service
 ```
 
@@ -233,7 +238,7 @@ The instructions explain:
 - `[CANVAS FOCUSED CONTEXT]` is turn-local selected/multi-selected card
   context for batch operations on the attached board.
 - Individual pins dragged from canvas into chat render as their proxied objects
-  (`task:`, `mem:`, `fi:`, `cnv:`, etc.), not as canvas-focus events.
+  (`acme:`, `mem:`, `fi:`, `cnv:`, etc.), not as canvas-focus events.
 - `react.pull(paths=["cnv:<name>@<revision>"])` imports exact hidden board
   state into the ReAct workspace; inspect the returned `fi:` or physical path.
 - `canvas.patch` is the only agent write path.
@@ -323,7 +328,7 @@ This is the intended SDK boundary:
 | --- | --- |
 | Canvas SDK policies | Text shape for `[CANVAS STATE]`, `[CANVAS BOARD]`, `[CANVAS FOCUS]`, and `[CANVAS FOCUSED CONTEXT]`. Focus means selected/multi-selected cards on a board. |
 | Composition bundle wrappers | Event-source ids, event-policy ids, storage prefixes, and compatibility metadata keys. |
-| Domain resolvers | Object-specific previews, open/download/rehost actions for refs such as `task:`, `mem:`, `fi:`, and `repo:`. |
+| Domain resolvers | Object-specific previews, open/download/rehost actions for refs such as `acme:`, `mem:`, `fi:`, and `repo:`. |
 
 ## Data Bus Integration
 
@@ -371,27 +376,27 @@ type CanvasPatch = (payload: CanvasPatchInput) => Promise<CanvasPatchResponse>
 />
 ```
 
-The UI component does not know how to download a `fi:` file or open a
-`task:` issue. It sends object actions to the bundle, and the bundle dispatches
+The UI component does not know how to download a `fi:` file or open an
+`acme:` object. It sends object actions to the bundle, and the bundle dispatches
 through the resolver registry.
 
-## Task-Tracker Adapter Pattern
+## Provider Adapter Pattern
 
-Task-tracker currently keeps thin adapter modules:
+Provider bundles should keep thin adapter modules:
 
 ```text
-task-tracker@1-0/canvas/storage.py          -> SDK CanvasStore with task-tracker defaults
-task-tracker@1-0/canvas/api.py              -> SDK canvas API re-exports
-task-tracker@1-0/canvas/events/resolver.py  -> SDK resolver registry plus task handoff
-task-tracker@1-0/canvas/tools.py            -> local SK decorators, SDK tool core execution
-task-tracker@1-0/events/canvas_policies.py  -> task ids wrapping SDK canvas policy helpers
-task-tracker@1-0/events/canvas_focus_policies.py
-                                             -> task ids wrapping SDK focus helpers
+provider@1-0/canvas/storage.py          -> SDK CanvasStore with provider defaults
+provider@1-0/canvas/api.py              -> SDK canvas API re-exports
+provider@1-0/canvas/events/resolver.py  -> SDK resolver registry plus provider handoffs
+provider@1-0/canvas/tools.py            -> local SK decorators, SDK tool core execution
+provider@1-0/events/canvas_policies.py  -> provider ids wrapping SDK canvas policy helpers
+provider@1-0/events/canvas_focus_policies.py
+                                      -> provider ids wrapping SDK focus helpers
 ```
 
-This lets existing task-tracker routes and tests stay stable while the reusable
-canvas code moves to the SDK. Task-specific object resolvers remain in
-task-tracker because `task:` is owned by the task subsystem, not by canvas.
+This lets provider routes and tests stay stable while the reusable canvas code
+lives in the SDK. Provider-specific object resolvers remain in the provider
+bundle because `acme:` is owned by the provider subsystem, not by canvas.
 
 ## Integration Checklist
 

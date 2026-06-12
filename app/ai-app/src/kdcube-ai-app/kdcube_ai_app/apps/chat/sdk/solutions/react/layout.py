@@ -1604,6 +1604,10 @@ def build_tool_catalog(adapters: Optional[List[Dict[str, Any]]] = None,
             "args": doc.get("args", {}),
             "returns": doc.get("returns", ""),
         }
+        metadata = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+        namespaces_applicable = doc.get("namespaces_applicable") or metadata.get("namespaces_applicable")
+        if namespaces_applicable:
+            item["namespaces_applicable"] = list(namespaces_applicable)
         if "constraints" in doc:
             item["constraints"] = doc["constraints"]
         if "examples" in doc:
@@ -1637,6 +1641,7 @@ def build_tools_block(
         returns = tool.get("returns", "")
         examples = tool.get("examples", [])
         constraints = tool.get("constraints", [])
+        namespaces_applicable = tool.get("namespaces_applicable")
 
         async_txt = " [async]" if is_async else ""
         lines.append(f"🔧 [{idx}] {tid}{async_txt}")
@@ -1644,6 +1649,11 @@ def build_tools_block(
 
         if purpose:
             lines.extend(_wrap_lines(purpose, indent="   "))
+            lines.append("")
+
+        if namespaces_applicable:
+            lines.append("   Scope:")
+            lines.append(f"       • namespaces applicable: {', '.join(str(ns) for ns in namespaces_applicable)}")
             lines.append("")
 
         if args:

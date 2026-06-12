@@ -528,8 +528,6 @@ def _card_prefix(kind: Any) -> str:
         return "M"
     if value in {"source", "search.result"}:
         return "S"
-    if value in {"issue.ref", "story.ref", "task.ref"}:
-        return "T"
     return "O"
 
 

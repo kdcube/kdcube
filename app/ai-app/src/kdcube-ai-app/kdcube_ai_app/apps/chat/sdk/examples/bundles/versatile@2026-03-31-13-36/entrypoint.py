@@ -45,6 +45,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.chat.events.resolver import (
     resolve_conversation_ref_action,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
+    named_service_agent_event_source_namespaces,
+    named_service_agent_pull_namespaces,
+    named_service_canvas_resolver_namespaces,
     register_configured_named_service_artifact_rehosters,
     register_configured_named_service_event_sources,
     register_configured_named_service_canvas_resolvers,
@@ -55,6 +58,7 @@ from kdcube_ai_app.infra.service_hub.inventory import BundleState, Config
 
 from .event_filter import BundleEventFilter
 from .orchestrator.workflow import VersatileWorkflow
+from . import tools_descriptor
 
 BUNDLE_ID = "versatile@2026-03-31-13-36"
 WORKFLOW_NAME = "versatile"
@@ -393,6 +397,9 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
             return str(comm_user_id).strip()
         return "anonymous"
 
+    def _consumer_agent_id(self) -> str:
+        return str(self.bundle_prop("surfaces.as_consumer.default_agent", "main") or "main").strip() or "main"
+
     def _react_event_sources(self):
         from . import events_descriptor
         from kdcube_ai_app.apps.chat.sdk.context.memory import tools as memory_tools
@@ -421,14 +428,20 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
         ident = self.runtime_identity()
         register_configured_named_service_artifact_rehosters(
             subsystem,
-            namespaces=self.bundle_prop("named_services.namespaces", {}) or {},
+            namespaces=named_service_agent_pull_namespaces(
+                self.bundle_props,
+                client_id=self._consumer_agent_id(),
+            ),
             tenant=str(ident.get("tenant") or ""),
             project=str(ident.get("project") or ""),
             logger=_log,
         )
         register_configured_named_service_event_sources(
             subsystem,
-            namespaces=self.bundle_prop("named_services.namespaces", {}) or {},
+            namespaces=named_service_agent_event_source_namespaces(
+                self.bundle_props,
+                client_id=self._consumer_agent_id(),
+            ),
             logger=_log,
         )
         return subsystem
@@ -567,7 +580,7 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
     def _register_named_service_canvas_resolvers(self, registry: Any, *, tenant: str, project: str) -> None:
         register_configured_named_service_canvas_resolvers(
             registry,
-            namespaces=self.bundle_prop("named_services.namespaces", {}) or {},
+            namespaces=named_service_canvas_resolver_namespaces(self.bundle_props),
             tenant=tenant,
             project=project,
             logger=_log,
@@ -745,6 +758,22 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
             "Usage card is served from sdk://infra/economics/ui/widget/usage-card after build."
             "</div>"
         ]
+
+    @api(
+        method="POST",
+        alias="scene_surface_config",
+        route="operations",
+        **_api_visibility("scene_surface_config"),
+    )
+    async def scene_surface_config(self, **kwargs) -> Dict[str, Any]:
+        del kwargs
+        scene_config = self.bundle_prop("surfaces.as_consumer.ui.scene", {}) or {}
+        if not isinstance(scene_config, Mapping):
+            scene_config = {}
+        external_panels = scene_config.get("external_panels")
+        if not isinstance(external_panels, list):
+            external_panels = []
+        return {"ok": True, "external_panels": external_panels}
 
     @api(
         alias="pinboard_widget",
@@ -1477,6 +1506,7 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
             "named_services": {
                 "namespaces": {},
             },
+            "tools": tools_descriptor.default_tools_props().get("tools", {}),
             "memory": {
                 "enabled": True,
                 "announce": {

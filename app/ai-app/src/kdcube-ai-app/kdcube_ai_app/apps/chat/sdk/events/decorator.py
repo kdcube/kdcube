@@ -11,6 +11,7 @@ from typing import Any, Callable, TypeVar
 EVENT_SOURCE_ATTR = "__kdcube_event_source__"
 ARTIFACT_NAMESPACE_REHOSTER_ATTR = "__kdcube_artifact_namespace_rehoster__"
 EVENT_SOURCE_READER_ATTR = "__kdcube_event_source_reader__"
+EVENT_SOURCE_RESOLVER_ATTR = "__kdcube_event_source_resolver__"
 
 T = TypeVar("T")
 
@@ -69,6 +70,21 @@ class EventSourceReaderDeclaration:
 
     namespace: str
     event_source_id: str
+    description: str = ""
+    version: str = ""
+
+
+@dataclass(frozen=True)
+class EventSourceResolverDeclaration:
+    """Callable metadata for lightweight URI-to-event-source resolution.
+
+    A resolver belongs to the namespace owner. It receives a canonical URI such
+    as ``task:issue:...`` and returns routing metadata such as
+    ``{"event_source_id": "..."}``. Resolvers must not read or materialize the
+    object; content access remains the responsibility of readers/rehosters.
+    """
+
+    namespace: str
     description: str = ""
     version: str = ""
 
@@ -138,6 +154,24 @@ def event_source_reader_declaration(
     )
 
 
+def event_source_resolver_declaration(
+    *,
+    namespace: str,
+    description: str = "",
+    version: str = "",
+) -> EventSourceResolverDeclaration:
+    namespace = str(namespace or "").strip().rstrip(":")
+    if not namespace:
+        raise ValueError("namespace must be non-empty")
+    if any(ch.isspace() for ch in namespace) or "/" in namespace or "\\" in namespace:
+        raise ValueError("namespace must be a compact URI-style prefix such as 'task'")
+    return EventSourceResolverDeclaration(
+        namespace=namespace,
+        description=str(description or "").strip(),
+        version=str(version or "").strip(),
+    )
+
+
 def artifact_namespace_rehoster(
     *,
     namespace: str,
@@ -190,6 +224,27 @@ def event_source_reader(
 
     def _decorate(obj: T) -> T:
         setattr(obj, EVENT_SOURCE_READER_ATTR, declaration)
+        return obj
+
+    return _decorate
+
+
+def event_source_resolver(
+    *,
+    namespace: str,
+    description: str = "",
+    version: str = "",
+) -> Callable[[T], T]:
+    """Mark a callable as the lightweight URI resolver for a namespace."""
+
+    declaration = event_source_resolver_declaration(
+        namespace=namespace,
+        description=description,
+        version=version,
+    )
+
+    def _decorate(obj: T) -> T:
+        setattr(obj, EVENT_SOURCE_RESOLVER_ATTR, declaration)
         return obj
 
     return _decorate
@@ -251,6 +306,22 @@ def get_event_source_reader_declaration(obj: Any) -> EventSourceReaderDeclaratio
     if isinstance(declaration, Mapping):
         try:
             return event_source_reader_declaration(**declaration)
+        except Exception:
+            return None
+    return None
+
+
+def get_event_source_resolver_declaration(obj: Any) -> EventSourceResolverDeclaration | None:
+    if obj is None:
+        return None
+    declaration = getattr(obj, EVENT_SOURCE_RESOLVER_ATTR, None)
+    if declaration is None and hasattr(obj, "__func__"):
+        declaration = getattr(getattr(obj, "__func__", None), EVENT_SOURCE_RESOLVER_ATTR, None)
+    if isinstance(declaration, EventSourceResolverDeclaration):
+        return declaration
+    if isinstance(declaration, Mapping):
+        try:
+            return event_source_resolver_declaration(**declaration)
         except Exception:
             return None
     return None

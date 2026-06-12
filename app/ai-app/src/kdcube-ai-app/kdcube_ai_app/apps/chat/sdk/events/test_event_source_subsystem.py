@@ -9,6 +9,7 @@ from kdcube_ai_app.apps.chat.sdk.events import (
     artifact_namespace_rehoster,
     event_source,
     event_source_declaration,
+    event_source_resolver,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.live_events import resolve_reactive_iteration_credit
 from kdcube_ai_app.apps.chat.sdk.solutions.react.events import (
@@ -72,6 +73,31 @@ def test_decorator_discovers_metadata_only_source():
     blocks = [{"id": 1}, {"id": 2}, {"id": 3}, {"id": 4}]
     subsystem.apply_react_phase_policies("timeline_projection", "bundle.demo.event", blocks)
     assert blocks == [{"id": 2}, {"id": 3}, {"id": 4}]
+
+
+@pytest.mark.asyncio
+async def test_event_source_resolver_decorator_routes_ref_without_reader():
+    calls = []
+
+    @event_source_resolver(namespace="task")
+    async def resolve_task_ref(ref, namespace, key, **_):
+        calls.append({"ref": ref, "namespace": namespace, "key": key})
+        return {
+            "event_source_id": "named_services.task",
+            "object_ref": ref,
+            "object_kind": "task.issue",
+        }
+
+    subsystem = EventSourceSubsystem(modules=[{
+        "mod": _module("task_resolver_events", resolve_task_ref=resolve_task_ref),
+    }])
+
+    resolved = await subsystem.resolve_event_source_for_ref("task:issue:BUG-123")
+
+    assert calls == [{"ref": "task:issue:BUG-123", "namespace": "task", "key": "issue:BUG-123"}]
+    assert resolved["ok"] is True
+    assert resolved["event_source_id"] == "named_services.task"
+    assert resolved["object_kind"] == "task.issue"
 
 
 @pytest.mark.asyncio

@@ -1,12 +1,13 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/tool-subsystem-README.md
 title: "Tool Subsystem"
-summary: "Canonical runtime flow for tool descriptors: resolution, dynamic loading, binding, and execution in in-memory and isolated modes."
+summary: "Canonical runtime flow for agent-scoped tool wiring: surfaces.as_consumer config, descriptor adapters, dynamic loading, binding, and execution in in-memory and isolated modes."
 tags: ["sdk", "tools", "subsystem", "runtime", "descriptor", "isolation", "mcp", "binding"]
-keywords: ["tools_descriptor.py", "TOOLS_SPECS", "MCP_TOOL_SPECS", "TOOL_RUNTIME", "ToolSubsystem", "resolve_codegen_tools_specs", "io_tools.tool_call", "ToolStub", "py_code_exec_entry.py", "rewrite_runtime_globals_for_bundle", "bind_module_target", "_SERVICE", "_INTEGRATIONS"]
+keywords: ["surfaces.as_consumer", "agent tool config", "tools_descriptor.py", "TOOLS_SPECS", "MCP_TOOL_SPECS", "TOOL_RUNTIME", "ToolSubsystem", "resolve_codegen_tools_specs", "io_tools.tool_call", "ToolStub", "py_code_exec_entry.py", "rewrite_runtime_globals_for_bundle", "bind_module_target", "_SERVICE", "_INTEGRATIONS"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/custom-tools-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/mcp-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/named-services-tools-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/block-production-README.md
@@ -19,7 +20,90 @@ see_also:
 
 This is the canonical reference for how tool descriptors are consumed and how tool calls execute.
 
-## Descriptor wiring
+## Agent-scoped tool wiring
+
+The preferred bundle contract for model-callable tools is:
+
+```yaml
+surfaces:
+  as_consumer:
+    default_agent: main
+    agents:
+      main:
+        tools:
+          - id: web
+            kind: python
+            module: kdcube_ai_app.apps.chat.sdk.tools.web_tools
+            alias: web_tools
+            discovery: semantic_kernel
+            allowed: [web_search, web_fetch]
+            runtime:
+              web_search: local
+              web_fetch: local
+
+          - id: knowledge
+            kind: mcp
+            server_id: knowledge
+            alias: knowledge
+            allowed: ["*"]
+
+          - id: task_service
+            kind: named_service
+            alias: named_services
+            namespaces:
+              task:
+                allowed:
+                  - provider.about
+                  - object.list
+                  - object.search
+                  - object.schema
+                  - object.upsert
+                  - object.delete
+```
+
+`surfaces.as_consumer.agents.<agent_id>.tools` is a list. Each list item is one
+source connected to that agent. There is no second `tools:` level under the
+agent.
+
+This is the consumer-side surface: it says what an agent may call. A bundle that
+publishes tools for other consumers should use a separate provider/publication
+surface, not an entry under one agent.
+
+Supported `kind` values:
+
+| kind | Meaning |
+|---|---|
+| `python` | Load a Python tool module or bundle-local `ref`; only Semantic Kernel-decorated tools are intended for model catalogs. |
+| `mcp` | Connect a configured MCP server as a tool source. |
+| `named_service` | Expose configured named-service operations as generic namespace tools. |
+
+`allowed` is an allow-list of callable names for `python` and `mcp` sources.
+For MCP, `["*"]` exposes all tools returned by the server. For Python sources,
+prefer explicit callable names.
+
+For `named_service`, `allowed` uses named-service operation ids such as
+`object.search` and `object.upsert`; `allowed_operations` remains accepted for
+older descriptors. Canvas-only presentation resolution stays under
+`surfaces.as_consumer.ui.canvas.resolvers`, not under the agent tool connection.
+`object.action` is not exposed to ReAct agents as a normal tool.
+Named-service catalog entries render only `namespaces applicable`, so ReAct can
+see which configured namespaces support each generic tool without seeing
+provider protocol operation ids.
+
+At runtime, `agent_tool_config_from_bundle_props(...)` converts this descriptor
+into:
+
+- module tool specs
+- MCP tool specs
+- `TOOL_RUNTIME` overrides
+- allowed aliases
+- per-alias allowed tool names
+
+ReAct passes both allowed aliases and per-alias allowed tool names to
+`ToolSubsystem`. That means a source can be loaded for one agent while another
+agent in the same bundle sees a different subset.
+
+## Descriptor adapter wiring
 
 `tools_descriptor.py` is imported by bundle code and passed to `create_tool_subsystem_with_mcp(...)` as data:
 
@@ -39,6 +123,13 @@ tool_subsystem, _ = create_tool_subsystem_with_mcp(
 ```
 
 The subsystem does not auto-scan `tools_descriptor.py` on disk. The workflow decides what is loaded.
+
+New bundles should keep `tools_descriptor.py` thin: read
+`surfaces.as_consumer.agents.<agent_id>.tools` with
+`agent_tool_config_from_bundle_props(...)`, then pass the resolved specs to the
+runtime. This keeps tool exposure configuration-driven while preserving one code
+path for in-process and isolated execution. `tools.agents` is a legacy fallback
+for older bundles, not the preferred policy surface.
 
 ## `module` vs `ref` resolution
 
@@ -137,8 +228,17 @@ descriptor.
 Tool IDs:
 - Module tools: `<alias>.<tool_name>`
 - MCP tools: `mcp.<alias>.<tool_name>`
+- Named-service tools: `<alias>.<generic_tool_name>`, normally
+  `named_services.search_objects`
 
 `ToolSubsystem` introspects loaded modules and builds the catalog used by planner/generator prompts.
+Dynamic tool metadata is preserved into that catalog. Named-service tools use
+this to render scope:
+
+```text
+Scope:
+    • namespaces applicable: task, memo
+```
 
 ## Event-source discovery for ReAct
 

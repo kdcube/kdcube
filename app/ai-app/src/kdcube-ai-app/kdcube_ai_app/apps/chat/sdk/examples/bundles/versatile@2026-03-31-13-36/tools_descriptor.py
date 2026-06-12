@@ -1,96 +1,161 @@
 from __future__ import annotations
 
 import pathlib
-from typing import Any, Dict, List, Mapping
+from typing import Any, Dict, Mapping
 
-from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
-    extend_tool_specs_for_named_services,
+from kdcube_ai_app.apps.chat.sdk.runtime.tool_config import (
+    DEFAULT_AGENT_ID,
+    AgentToolConfig,
+    agent_tool_config_from_bundle_props,
 )
 
 BUNDLE_ROOT = pathlib.Path(__file__).resolve().parent
 
-BASE_TOOLS_SPECS: List[Dict[str, Any]] = [
+DEFAULT_AGENT_TOOL_CONNECTIONS: list[dict[str, Any]] = [
     {
+        "name": "io",
+        "kind": "python",
         "module": "kdcube_ai_app.apps.chat.sdk.tools.io_tools",
         "alias": "io_tools",
-        "use_sk": True,
+        "allowed": ["tool_call"],
     },
     {
+        "name": "context",
+        "kind": "python",
         "module": "kdcube_ai_app.apps.chat.sdk.tools.ctx_tools",
         "alias": "ctx_tools",
-        "use_sk": True,
+        "allowed": ["merge_sources", "fetch_ctx"],
     },
     {
+        "name": "memory",
+        "kind": "python",
         "module": "kdcube_ai_app.apps.chat.sdk.context.memory.tools",
         "alias": "memory",
-        "use_sk": True,
+        "allowed": [
+            "search_memory",
+            "recent_memories",
+            "read_memory",
+            "record_memory",
+            "confirm_memory",
+            "retire_memory",
+        ],
     },
     {
-        # Exposes the single canvas tool `canvas.patch` (the pin tool): the
-        # Agent pins a produced/identified ref onto the board via a new_card
-        # op. The canvas event-source resolver (events_descriptor) stays loaded
-        # for cnv: rehosting; this adds the explicit, model-callable pin path.
+        "name": "canvas",
+        "kind": "python",
         "module": "kdcube_ai_app.apps.chat.sdk.solutions.canvas.tools",
         "alias": "canvas",
-        "use_sk": True,
+        "allowed": ["patch"],
     },
     {
+        "name": "exec",
+        "kind": "python",
         "module": "kdcube_ai_app.apps.chat.sdk.tools.exec_tools",
         "alias": "exec_tools",
-        "use_sk": True,
+        "allowed": ["execute_code_python"],
     },
     {
+        "name": "web",
+        "kind": "python",
         "module": "kdcube_ai_app.apps.chat.sdk.tools.web_tools",
         "alias": "web_tools",
-        "use_sk": True,
+        "allowed": ["web_search", "web_fetch"],
+        "runtime": {
+            "web_search": "local",
+            "web_fetch": "local",
+        },
     },
     {
+        "name": "rendering",
+        "kind": "python",
         "module": "kdcube_ai_app.apps.chat.sdk.tools.rendering_tools",
         "alias": "rendering_tools",
-        "use_sk": True,
+        "allowed": ["write_pptx", "write_png", "write_pdf", "write_docx"],
     },
     {
+        "name": "browser",
+        "kind": "python",
         "module": "kdcube_ai_app.apps.chat.sdk.tools.browser_tools",
         "alias": "browser_tools",
-        "use_sk": True,
+        "allowed": ["open_page", "click", "fill", "scroll", "status", "close"],
+        "runtime": {
+            "open_page": "none",
+            "click": "none",
+            "fill": "none",
+            "scroll": "none",
+            "status": "none",
+            "close": "none",
+        },
     },
-]
-
-TOOLS_SPECS: List[Dict[str, Any]] = list(BASE_TOOLS_SPECS)
-
-MCP_TOOL_SPECS: List[Dict[str, Any]] = [
-    {"server_id": "web_search", "alias": "web_search", "tools": ["web_search"]},
-    {"server_id": "deepwiki", "alias": "deepwiki", "tools": ["*"]},
-    {"server_id": "stack", "alias": "stack", "tools": ["*"]},
-    {"server_id": "docs", "alias": "docs", "tools": ["*"]},
-    {"server_id": "local", "alias": "local", "tools": ["*"]},
-    {"server_id": "firecrawl", "alias": "firecrawl", "tools": ["*"]},
     {
+        "name": "knowledge",
+        "kind": "mcp",
         "server_id": "knowledge",
         "alias": "knowledge",
-        "tools": ["*"],
+        "allowed": ["*"],
     },
 ]
 
-TOOL_RUNTIME: Dict[str, str] = {
-    "web_tools.web_search": "local",
-    "web_tools.fetch_url_contents": "local",
-    "browser_tools.open_page": "none",
-    "browser_tools.click": "none",
-    "browser_tools.fill": "none",
-    "browser_tools.scroll": "none",
-    "browser_tools.status": "none",
-    "browser_tools.close": "none",
-}
+
+def default_tools_props() -> dict[str, Any]:
+    return {
+        "tools": {
+            "agents": {
+                DEFAULT_AGENT_ID: list(DEFAULT_AGENT_TOOL_CONNECTIONS),
+            },
+        },
+    }
+
+
+def _with_default_tools(bundle_props: Mapping[str, Any] | None) -> dict[str, Any]:
+    props = dict(bundle_props or {})
+    tools = props.get("tools")
+    if not isinstance(tools, Mapping) or not isinstance(tools.get("agents"), Mapping):
+        merged = default_tools_props()
+        merged.update(props)
+        if isinstance(tools, Mapping):
+            merged["tools"] = {**merged["tools"], **dict(tools)}
+        return merged
+    return props
+
+
+def config_for_agent(
+    agent_id: str | None,
+    *,
+    bundle_props: Mapping[str, Any] | None = None,
+) -> AgentToolConfig:
+    return agent_tool_config_from_bundle_props(
+        _with_default_tools(bundle_props),
+        agent_id or DEFAULT_AGENT_ID,
+        bundle_root=BUNDLE_ROOT,
+    )
 
 
 def tools_for_client(
-    client_id: str,
+    client_id: str | None,
     *,
     bundle_props: Mapping[str, Any] | None = None,
-) -> List[Dict[str, Any]]:
-    return extend_tool_specs_for_named_services(
-        BASE_TOOLS_SPECS,
-        bundle_props=bundle_props,
-        client_id=client_id,
-    )
+) -> list[dict[str, Any]]:
+    return config_for_agent(client_id, bundle_props=bundle_props).tool_specs
+
+
+def mcp_tools_for_client(
+    client_id: str | None,
+    *,
+    bundle_props: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    return config_for_agent(client_id, bundle_props=bundle_props).mcp_tool_specs
+
+
+def tool_runtime_for_client(
+    client_id: str | None,
+    *,
+    bundle_props: Mapping[str, Any] | None = None,
+) -> dict[str, str]:
+    return config_for_agent(client_id, bundle_props=bundle_props).tool_runtime
+
+
+_DEFAULT_CONFIG = config_for_agent(DEFAULT_AGENT_ID, bundle_props=default_tools_props())
+TOOLS_SPECS: list[Dict[str, Any]] = _DEFAULT_CONFIG.tool_specs
+MCP_TOOL_SPECS: list[Dict[str, Any]] = _DEFAULT_CONFIG.mcp_tool_specs
+TOOL_RUNTIME: dict[str, str] = _DEFAULT_CONFIG.tool_runtime
