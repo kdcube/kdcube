@@ -119,51 +119,49 @@ const UsageWindow: React.FC<UsageWindowProps> = ({ title, resetAt, children }) =
   );
 };
 
-interface CompactMetricDef {
-  label: string;
-  used: number | null | undefined;
-  limit: number | null | undefined;
-  usd?: boolean;
+function formatTokens(value: number | null | undefined): string {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n)) return '0';
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1).replace(/\.0$/, '')}K`;
+  return String(Math.round(n));
 }
 
-const CompactMetric: React.FC<CompactMetricDef> = ({ label, used, limit, usd }) => {
-  const u = Number(used || 0);
-  const hasLimit = limit != null && limit > 0;
-  const pct = hasLimit ? Math.min(100, Math.max(0, Math.round((u / (limit as number)) * 100))) : 0;
-  const usedText = usd ? formatUsd(used) : formatCount(used);
-  const limitText = usd ? formatUsdLimit(limit) : formatCount(limit);
+interface UsageBlockDef {
+  label: string;
+  resetAt?: string | null;
+  costUsed: number | null | undefined;
+  costQuota: number | null | undefined;
+  tokUsed: number | null | undefined;
+  tokQuota: number | null | undefined;
+}
+
+// One time-window in the super-compact view: dollar spent / quota as the
+// headline (colored by how close it is to the cap), tokens spent / quota
+// alongside, and when the window resets. Quota reads ∞ on an unlimited plan.
+const UsageBlock: React.FC<UsageBlockDef> = ({ label, resetAt, costUsed, costQuota, tokUsed, tokQuota }) => {
+  const reset = formatRelativeReset(resetAt);
+  const hasCostQuota = costQuota != null && costQuota > 0;
+  const pct = hasCostQuota
+    ? Math.min(100, Math.max(0, Math.round((Number(costUsed || 0) / (costQuota as number)) * 100)))
+    : 0;
+  const state = pct >= 100 ? 'full' : pct >= 80 ? 'high' : 'normal';
+  const hasTokQuota = tokQuota != null && tokQuota > 0;
   return (
-    <div className="uc-metric" data-pct={pct >= 100 ? 'full' : pct >= 80 ? 'high' : 'normal'}>
-      <div className="uc-metric-top">
-        <span className="uc-metric-label">{label}</span>
-        <span className="uc-metric-value">
-          {usedText} <span className="uc-metric-sep">/</span> {limitText}
+    <section className="uc-blk">
+      <div className="uc-blk-head">
+        <span className="uc-blk-label">{label}</span>
+        {reset ? <span className="uc-blk-reset">resets in {reset}</span> : null}
+      </div>
+      <div className="uc-blk-row">
+        <span className="uc-blk-cost money" data-pct={state}>
+          {formatUsd(costUsed)} <span className="uc-q">/ {hasCostQuota ? formatUsd(costQuota) : '∞'}</span>
+        </span>
+        <span className="uc-blk-tok money">
+          {formatTokens(tokUsed)} <span className="uc-q">/ {hasTokQuota ? formatTokens(tokQuota) : '∞'}</span>
+          <span className="uc-u">tokens</span>
         </span>
       </div>
-      <div className="uc-bar" aria-hidden>
-        <div className="uc-bar-fill" style={{ width: `${pct}%` }} />
-      </div>
-    </div>
-  );
-};
-
-interface CompactWindowDef {
-  title: string;
-  resetAt?: string | null;
-  metrics: CompactMetricDef[];
-}
-
-const CompactWindow: React.FC<CompactWindowDef> = ({ title, resetAt, metrics }) => {
-  const reset = formatRelativeReset(resetAt);
-  return (
-    <section className="uc-win">
-      <div className="uc-win-head">
-        <span className="uc-win-title">{title}</span>
-        {reset ? <span className="uc-win-reset">resets {reset}</span> : null}
-      </div>
-      {metrics.map((metric) => (
-        <CompactMetric key={metric.label} {...metric} />
-      ))}
     </section>
   );
 };
@@ -193,6 +191,7 @@ export const App: React.FC = () => {
   const [status, setStatus] = useState<CardStatus>({ loading: false, error: null, ready: false });
   const inFlightRef = useRef<Promise<void> | null>(null);
   const debounceRef = useRef<number | null>(null);
+  const shellRef = useRef<HTMLDivElement | null>(null);
 
   const load = useCallback(async () => {
     if (inFlightRef.current) return inFlightRef.current;
@@ -257,8 +256,36 @@ export const App: React.FC = () => {
     return () => window.removeEventListener('message', onMessage);
   }, [scheduleRefresh]);
 
+  // Report the rendered content height so a summoned compact panel fits to
+  // content (no empty space or cutoff). Mirrors the memory/tasks widgets;
+  // measuring the lowest child bottom is correct even when the shell fills
+  // the iframe.
+  useEffect(() => {
+    const el = shellRef.current;
+    if (!el || typeof window === 'undefined' || window.parent === window) return;
+    let raf = 0;
+    const measure = () => {
+      raf = 0;
+      const top = el.getBoundingClientRect().top;
+      let bottom = top;
+      Array.from(el.children).forEach((child) => {
+        const r = (child as HTMLElement).getBoundingClientRect();
+        if (r.bottom > bottom) bottom = r.bottom;
+      });
+      const height = Math.max(0, Math.ceil(bottom - top) + 12);
+      window.parent.postMessage({ type: 'kdcube-usage-resize', widget: 'usage_card', height, compact }, '*');
+    };
+    const schedule = () => { if (!raf) raf = window.requestAnimationFrame(measure); };
+    const ro = new ResizeObserver(schedule);
+    ro.observe(el);
+    const mo = new MutationObserver(schedule);
+    mo.observe(el, { childList: true, subtree: true });
+    schedule();
+    return () => { ro.disconnect(); mo.disconnect(); if (raf) window.cancelAnimationFrame(raf); };
+  }, [compact, breakdown]);
+
   return (
-    <div className={`usage-card-shell${compact ? ' usage-compact' : ''}${status.loading ? ' is-loading' : ''}`}>
+    <div ref={shellRef} className={`usage-card-shell${compact ? ' usage-compact' : ''}${status.loading ? ' is-loading' : ''}`}>
       <header className="usage-card-header">
         {compact ? (
           <p className="uc-plan-line" title={`${breakdown?.plan_id || 'Plan'}${accountIdentity(profile) ? ' · ' + accountIdentity(profile) : ''}`}>
@@ -306,28 +333,28 @@ export const App: React.FC = () => {
       {breakdown ? (
         compact ? (
           <div className="usage-body usage-compact-body">
-            <CompactWindow
-              title="This month"
-              resetAt={breakdown.reset_windows?.month_reset_at}
-              metrics={[
-                { label: 'Cost', usd: true, used: breakdown.current_usage.tokens_this_month_usd, limit: breakdown.effective_policy.usd_per_month },
-                { label: 'Requests', used: breakdown.current_usage.requests_this_month, limit: breakdown.effective_policy.requests_per_month },
-              ]}
-            />
-            <CompactWindow
-              title="Today"
-              metrics={[
-                { label: 'Cost', usd: true, used: breakdown.current_usage.tokens_today_usd, limit: breakdown.effective_policy.usd_per_day },
-                { label: 'Requests', used: breakdown.current_usage.requests_today, limit: breakdown.effective_policy.requests_per_day },
-              ]}
-            />
-            <CompactWindow
-              title="Last hour"
+            <UsageBlock
+              label="Last hour"
               resetAt={breakdown.reset_windows?.hour_reset_at}
-              metrics={[
-                { label: 'Cost', usd: true, used: breakdown.current_usage.tokens_this_hour_usd, limit: breakdown.effective_policy.usd_per_hour },
-                { label: 'Tokens', used: breakdown.current_usage.tokens_this_hour, limit: breakdown.effective_policy.tokens_per_hour },
-              ]}
+              costUsed={breakdown.current_usage.tokens_this_hour_usd}
+              costQuota={breakdown.effective_policy.usd_per_hour}
+              tokUsed={breakdown.current_usage.tokens_this_hour}
+              tokQuota={breakdown.effective_policy.tokens_per_hour}
+            />
+            <UsageBlock
+              label="Today"
+              costUsed={breakdown.current_usage.tokens_today_usd}
+              costQuota={breakdown.effective_policy.usd_per_day}
+              tokUsed={breakdown.current_usage.tokens_today}
+              tokQuota={breakdown.effective_policy.tokens_per_day}
+            />
+            <UsageBlock
+              label="This month"
+              resetAt={breakdown.reset_windows?.month_reset_at}
+              costUsed={breakdown.current_usage.tokens_this_month_usd}
+              costQuota={breakdown.effective_policy.usd_per_month}
+              tokUsed={breakdown.current_usage.tokens_this_month}
+              tokQuota={breakdown.effective_policy.tokens_per_month}
             />
           </div>
         ) : (

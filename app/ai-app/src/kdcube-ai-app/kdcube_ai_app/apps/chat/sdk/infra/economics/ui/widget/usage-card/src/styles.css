@@ -312,75 +312,73 @@ p {
 .usage-compact-body {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 0;
   padding: 0;
 }
-.uc-win {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  padding: 7px 9px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface-2);
+.uc-blk {
+  padding: 9px 0;
+  border-top: 1px solid var(--line-soft);
 }
-.uc-win-head {
+.uc-blk:first-child {
+  border-top: 0;
+  padding-top: 2px;
+}
+.uc-blk-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
 }
-.uc-win-title {
+.uc-blk-label {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--muted);
 }
-.uc-win-reset {
-  font-size: 9px;
+.uc-blk-reset {
+  font-size: 9.5px;
+  font-weight: 600;
   color: var(--muted);
 }
-.uc-metric {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.uc-metric-top {
+.uc-blk-row {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 8px;
+  gap: 10px;
+  margin-top: 4px;
 }
-.uc-metric-label {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--text-2);
-}
-.uc-metric-value {
-  font-size: 11px;
-  font-weight: 700;
+.uc-blk-cost {
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
   color: var(--ink);
-  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
-.uc-metric-sep {
+.uc-blk-cost[data-pct='high'] {
+  color: var(--gold-dark, #c89a10);
+}
+.uc-blk-cost[data-pct='full'] {
+  color: var(--red);
+}
+.uc-blk-cost .uc-q {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.uc-blk-tok {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.uc-blk-tok .uc-q {
   color: var(--muted);
   font-weight: 600;
 }
-.uc-bar {
-  height: 3px;
-  border-radius: 999px;
-  background: var(--line-soft);
-  overflow: hidden;
-}
-.uc-bar-fill {
-  height: 100%;
-  background: var(--teal);
-  transition: width 0.18s ease;
-}
-.uc-metric[data-pct='high'] .uc-bar-fill {
-  background: var(--gold);
-}
-.uc-metric[data-pct='full'] .uc-bar-fill {
-  background: var(--red);
+.uc-blk-tok .uc-u {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 9.5px;
+  margin-left: 3px;
 }
