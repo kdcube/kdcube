@@ -2,7 +2,7 @@
 title: Versatile Runtime Scenarios
 kind: scenarios
 bundle_id: versatile@2026-03-31-13-36
-updated_at: 2026-06-09
+updated_at: 2026-06-13
 ---
 
 # Versatile Runtime Scenarios
@@ -149,47 +149,30 @@ KDCube iframe    -> operations/* APIs with KDCube auth
 Telegram Mini App -> public/telegram_* APIs with signed initData
 ```
 
-## Scenario 5: Bundle-Authenticated MCP Endpoint
+## Scenario 5: Agent Consumer Surfaces
 
 ```text
-MCP client
+bundles.yaml
   |
   v
-operations/mcp/preferences_tools
-  header: X-Versatile-Preferences-MCP-Token
+surfaces.as_consumer.agents.main.tools
   |
-  v
-bundle checks shared token from bundle secrets
+  +-- python tools -> SDK/local tool modules
+  +-- mcp tools -> configured MCP servers
+  +-- named_service tools -> namespace-owned provider operations
   |
+  +-- event_sources/pull -> react.pull can materialize external refs
+  +-- ui.canvas.resolvers -> canvas object cards delegate actions
   v
-preference CRUD tools
+VersatileWorkflow builds ReAct catalog and runtime event-source bridges
 ```
 
-This demonstrates bundle-owned MCP auth. The shared token is a bundle secret;
-the header name is bundle config.
+This demonstrates the current consumer-side configuration surface. Tool
+connections are agent-scoped. Named-service refs are not native ReAct files;
+configured pull policies materialize them into `fi:` artifacts and configured
+canvas resolvers delegate UI object actions to the owning provider.
 
-## Scenario 6: Isolated Exec Report From Bundle API
-
-```text
-widget button / operations call
-  |
-  v
-preferences_exec_report
-  |
-  v
-read preference snapshot from bundle storage
-  |
-  v
-run isolated exec
-  |
-  v
-produce markdown report artifact
-```
-
-This demonstrates invoking isolated exec from bundle backend code. The report
-is generated from bundle-owned storage and returned as operation metadata.
-
-## Scenario 7: Widget Build And Serving
+## Scenario 6: Widget Build And Serving
 
 ```text
 first request for versatile_webapp

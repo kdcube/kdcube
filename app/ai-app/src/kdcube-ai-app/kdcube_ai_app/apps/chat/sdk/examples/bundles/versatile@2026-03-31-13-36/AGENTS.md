@@ -427,8 +427,9 @@ Keep these invariants:
   Patch values through `kdcube bundle … --set-config / --set-secret`,
   not by hand-editing staged YAML.
 - Bundle-local tools and skills are reached through
-  `tools_descriptor.py` / `skills_descriptor.py`. MCP endpoints are
-  exposed through entrypoint decorators (e.g. `preferences_tools_mcp`).
+  `surfaces.as_consumer.agents.<agent>.tools` in config, resolved by
+  `tools_descriptor.py`, and bundle-local skills remain in
+  `skills_descriptor.py`.
 - `preferences_store.py` is the shared bundle storage adapter; do not
   duplicate its access pattern in tools or skills.
 - Do not store real API keys, git tokens, or Claude Code secrets in
@@ -445,8 +446,7 @@ Implemented:
 - Bundle-local tools (`tools/preference_tools.py`) + skills
   (`skills/product/preferences/`)
 - Shared bundle storage (`preferences_store.py`)
-- MCP endpoint (`entrypoint.py:preferences_tools_mcp`)
-- Isolated exec entrypoint (`entrypoint.py:preferences_exec_report`)
+- Agent-scoped SDK/MCP/named-service consumer tool wiring
 - Source-folder widget (`ui/widgets/versatile_webapp/`)
 - Custom iframe chat main view (`ui/main/`) — modular RTK architecture
   across Waves 1-4:
@@ -578,8 +578,9 @@ When local KDCube is available, load the bundle and verify:
   `hydrateConversation`, the conversation title binds, the composer
   clears, and the per-turn tabs render
 - the `versatile_webapp` widget is discoverable in widget surfaces
-- preference tools fire via MCP from a chat that triggers them
-- isolated exec returns a result for the preferences exec report
+- configured consumer tools appear in the ReAct catalog for the active agent
+- named-service pull/canvas resolver policies remain separate from
+  model-callable tools
 
 ## Handoff
 

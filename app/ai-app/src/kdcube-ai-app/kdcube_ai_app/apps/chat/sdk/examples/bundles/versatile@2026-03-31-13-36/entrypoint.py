@@ -1480,11 +1480,26 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
                 "bundle": {
                     "allowed_roles": [],
                 },
+                "api": {
+                    "telegram_user_admin_data": {
+                        "user_types": [],
+                        "roles": [TELEGRAM_ADMIN_ROLE],
+                    },
+                    "telegram_user_admin_upsert": {
+                        "user_types": [],
+                        "roles": [TELEGRAM_ADMIN_ROLE],
+                    },
+                    "telegram_user_admin_delete": {
+                        "user_types": [],
+                        "roles": [TELEGRAM_ADMIN_ROLE],
+                    },
+                },
                 "widget": {
-                    "memories": {"user_types": []},
-                    "versatile_chat": {"user_types": []},
-                    "versatile_webapp": {"user_types": []},
-                    "usage_card": {"user_types": []},
+                    "memories": {"user_types": [], "roles": []},
+                    "pinboard": {"user_types": [], "roles": []},
+                    "usage_card": {"user_types": [], "roles": []},
+                    "versatile_chat": {"user_types": [], "roles": []},
+                    "versatile_webapp": {"user_types": [], "roles": []},
                 },
             },
             "integrations": {
@@ -1505,10 +1520,11 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
                 "data_bus_subject": CANVAS_DATA_BUS_SUBJECT,
                 "revision_retention": 80,
             },
-            "named_services": {
-                "namespaces": {},
+            "surfaces": tools_descriptor.default_tools_props().get("surfaces", {}),
+            "telemetry_sink": {
+                "endpoint_url": "",
+                "auth_header": "",
             },
-            "tools": tools_descriptor.default_tools_props().get("tools", {}),
             "memory": {
                 "enabled": True,
                 "announce": {
@@ -1530,6 +1546,16 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
                 },
             },
             "ui": {
+                "main_view": {
+                    "src_folder": "ui/scene",
+                    "build_command": "npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build",
+                    "shared_sources": {
+                        "canvas_component": {
+                            "src_folder": "sdk://solutions/canvas/ui/component",
+                            "target": "_shared/canvas-component",
+                        },
+                    },
+                },
                 "widgets": {
                     "versatile_chat": chat_widget_ui_config(),
                     "memories": {

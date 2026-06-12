@@ -2,7 +2,7 @@
 title: Versatile Reference Bundle
 kind: reference-bundle
 bundle_id: versatile@2026-03-31-13-36
-updated_at: 2026-05-12
+updated_at: 2026-06-13
 ---
 
 # versatile bundle
@@ -23,9 +23,8 @@ It intentionally demonstrates the main SDK bundle surfaces together in one place
 | Bundle-local tools                     | `tools/preference_tools.py`                                                                |
 | Bundle-local skills                    | `skills/product/preferences/SKILL.md`                                                      |
 | Shared bundle storage backend          | `preferences_store.py`, `entrypoint.py`, `orchestrator/workflow.py`, `tools/preference_tools.py` |
-| MCP tools                              | `tools_descriptor.py`                                                                      |
-| Bundle-authenticated MCP endpoint      | `entrypoint.py:preferences_tools_mcp`, `tools/preference_tools.py:build_preferences_mcp_app` |
-| Direct isolated exec from bundle code  | `entrypoint.py:preferences_exec_report`                                                    |
+| Agent tool consumers                   | `tools_descriptor.py`, `config/bundles.template.yaml`                                      |
+| MCP tool consumers                     | `surfaces.as_consumer.agents.main.tools`                                                   |
 | Source-folder webapp widget            | `ui/widgets/versatile_webapp`, `entrypoint.py:versatile_webapp_widget`                     |
 | Active iframe main view                | `ui/scene`, `entrypoint.py` main-view config                                               |
 | Legacy custom iframe main view         | `ui/main/src/App.tsx`, `ui/main/src/settings.ts` retained for comparison                    |
@@ -64,8 +63,8 @@ documentation expected from real bundles:
   - KDCube widget
   - Telegram bot chat
   - Telegram Mini App
-  - bundle-authenticated MCP
-  - isolated exec report
+  - consumer-surface tool wiring
+  - named-service canvas/ReAct integration
   - widget build/serve flow
 - `docs/design/telegram-webapp.md`
   - frontend/backend contract for the dual KDCube iframe and Telegram Mini App widget
@@ -87,11 +86,6 @@ documentation expected from real bundles:
 - A storage-backend snapshot can be exported through:
   - `preferences.export_preferences_snapshot(filename)`
   - when secret `bundles.<bundle_id>.secrets.preferences.snapshot_hmac_key` is configured, the export is also signed and a `.sig.json` sidecar is written
-- The bundle also exposes a bundle-authenticated MCP endpoint for preference CRUD:
-  - alias: `preferences_tools`
-  - route family: `/api/integrations/bundles/{tenant}/{project}/{bundle_id}/mcp/preferences_tools`
-  - implemented in `entrypoint.py:preferences_tools_mcp`
-  - backed by `tools/preference_tools.py:build_preferences_mcp_app`
 - The bundle demonstrates the reusable Telegram bot transport:
   - `telegram_webhook` receives Bot API updates through a public route guarded
     by Telegram's webhook secret header
@@ -298,62 +292,6 @@ Important:
 - `bundles.yaml` env reset is authoritative; `bundles.secrets.yaml` is currently upsert-only
 - admin UI for bundle secrets is write-only for values; it shows known keys but not secret contents
 
-### Bundle-authenticated MCP contract
-
-This bundle intentionally demonstrates bundle-owned MCP auth rather than proc-side MCP auth.
-
-Configured keys:
-
-- bundle prop:
-  - `config.mcp.preferences.auth.header_name`
-- bundle secret:
-  - `secrets.mcp.preferences.auth.shared_token`
-
-The entrypoint reads them as:
-
-```python
-header_name = self.bundle_prop("mcp.preferences.auth.header_name", "X-Versatile-Preferences-MCP-Token")
-expected_token = get_secret("b:mcp.preferences.auth.shared_token")
-```
-
-Client call shape:
-
-```bash
-curl -X POST \
-  "http://localhost:5173/api/integrations/bundles/<tenant>/<project>/<bundle_id>/mcp/preferences_tools" \
-  -H "X-Versatile-Preferences-MCP-Token: <shared-token>" \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":"1","method":"tools/list"}'
-```
-
-Concrete local example:
-
-```bash
-curl -X POST \
-  "http://localhost:5173/api/integrations/bundles/demo-tenant/demo-project/versatile@2026-03-31-13-36/mcp/preferences_tools" \
-  -H "X-Versatile-Preferences-MCP-Token: <shared-token>" \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":"1","method":"tools/list"}'
-```
-
-Share with clients:
-
-- the operations MCP route for alias `preferences_tools`
-- the header name from bundle props:
-  - `config.mcp.preferences.auth.header_name`
-- the token provisioned in bundle secrets:
-  - `secrets.mcp.preferences.auth.shared_token`
-
-What this MCP app exposes:
-
-- `get_preferences`
-- `capture_preferences`
-- `set_preference`
-- `delete_preference`
-- `export_preferences_snapshot`
-
-The MCP tools accept an optional `user_id` argument. If omitted, the bundle falls back to the current runtime user when available, otherwise `anonymous`.
-
 ## Widget + operations
 
 This bundle exposes both authenticated `operations` APIs and anonymous `public`
@@ -433,11 +371,6 @@ This bundle also exposes widget and notebook operations:
 - `preferences_canvas_import_excel`
   - accepts an uploaded `.xlsx` workbook from the widget
   - imports notebook rows and rewrites them as fresh user-authored entries
-- `preferences_exec_report`
-  - runs a tiny report job through the isolated exec runtime
-  - writes a markdown report artifact from shared bundle preference content
-  - is wired to the widget's `Run Exec Report` button through the same integrations
-operations API
 
 ## Main View UI
 
@@ -501,11 +434,12 @@ preserves the current tenant/project/user session without making an HTTP
 callback. A concrete `providers` list may be added only when this bundle must
 pin one or more provider endpoints instead of using discovery.
 
-The `default_client.tools.allowed_operations` list controls model-callable
-named-service tools. The `canvas.resolver.enabled` switch only enables generic
-canvas/chat resolution for the namespace; concrete resolver actions such as
-`open` and `preview` are accepted or rejected by the owning provider at call
-time.
+The `surfaces.as_consumer.agents.<agent>.tools` list controls model-callable
+named-service tools. The `surfaces.as_consumer.agents.<agent>.event_sources`
+pull policy controls whether ReAct can materialize external refs through
+`react.pull`. The `surfaces.as_consumer.ui.canvas.resolvers` list controls
+canvas/chat object-card delegation; concrete resolver actions are accepted or
+rejected by the owning provider at call time.
 
 Detailed scene wiring is documented in `docs/design/scene-sdk-components.md`.
 
@@ -536,7 +470,6 @@ The widget uses the platform iframe config handshake and then calls:
 - `POST /api/integrations/bundles/{tenant}/{project}/{bundle_id}/operations/preferences_canvas_save`
 - `POST /api/integrations/bundles/{tenant}/{project}/{bundle_id}/operations/preferences_canvas_export_excel`
 - `POST /api/integrations/bundles/{tenant}/{project}/{bundle_id}/operations/preferences_canvas_import_excel`
-- `POST /api/integrations/bundles/{tenant}/{project}/{bundle_id}/operations/preferences_exec_report`
 - `GET /api/integrations/bundles/{tenant}/{project}/{bundle_id}/public/preferences_public_info`
 
 The custom main view follows the same handshake and auth model, but it talks to the
@@ -571,8 +504,6 @@ method. In this bundle:
 - `preferences_canvas_export_excel(...)` returns a base64 `.xlsx` payload for download
 - `preferences_canvas_import_excel(content_b64=...)` imports uploaded `.xlsx` rows
   and rewrites them into the notebook
-- `preferences_exec_report(recency=..., kwords=...)` consumes forwarded values
-  and falls back to defaults when they are absent
 
 ## Tool surface
 
@@ -587,12 +518,7 @@ The bundle includes:
 - Bundle-local tools:
   - `preferences`
 - MCP connectors:
-  - `web_search`
-  - `deepwiki`
-  - `stack`
-  - `docs`
-  - `local`
-  - `firecrawl`
+  - `knowledge`
 
 ## Skills
 
@@ -611,10 +537,9 @@ The bundle ships one bundle-local skill:
 | Custom skills | optional | yes |
 | Bundle secrets via `get_secret(...)` | optional | yes |
 | Economics | optional | yes |
-| MCP | optional | yes |
+| MCP tool consumers | optional | yes |
 | Shared bundle storage backend | optional | yes |
 | Storage backend snapshot/export | optional | yes |
-| Direct isolated exec from bundle code | optional | yes |
 | Widget / operations | optional | yes |
 | Custom main view UI | optional | yes |
 

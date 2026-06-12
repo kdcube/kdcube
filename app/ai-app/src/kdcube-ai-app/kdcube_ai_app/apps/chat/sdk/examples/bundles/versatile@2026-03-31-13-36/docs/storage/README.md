@@ -166,9 +166,10 @@ temporary execution workspaces are cleaned.
 | Canvas state | `$B/canvas/users/<user_id>/canvases/...` | Yes | Versioned board state and canvas-owned objects for the active scene. |
 | Chat widget static output | `$B/ui/widgets/versatile_chat/...` | No | Built from `sdk://solutions/chat/ui/widget`. |
 | Memory widget static output | `$B/ui/widgets/memories/...` | No | Built from `sdk://context/memory/ui/widget/memories`. |
+| Usage-card widget static output | `$B/ui/widgets/usage_card/...` | No | Built from `sdk://infra/economics/ui/widget/usage-card`. |
+| Pinboard widget static output | `$B/ui/widgets/pinboard/...` | No | Built from `sdk://solutions/canvas/ui/widget/pinboard`. |
 | Widget static output | `$B/ui/widgets/versatile_webapp/...` | No | Built from `ui/widgets/versatile_webapp`. |
 | Main view static output | bundle UI build output | No | Built from `ui/scene`. |
-| Exec report artifact | platform turn artifacts | No | Created by `preferences_exec_report` and hosted by the platform if needed. |
 | Chat timeline/files | platform conversation store | Yes, platform-owned | Normal KDCube conversation persistence. |
 
 ## Debugging

@@ -99,9 +99,23 @@ DEFAULT_AGENT_TOOL_CONNECTIONS: list[dict[str, Any]] = [
 
 def default_tools_props() -> dict[str, Any]:
     return {
-        "tools": {
-            "agents": {
-                DEFAULT_AGENT_ID: list(DEFAULT_AGENT_TOOL_CONNECTIONS),
+        "surfaces": {
+            "as_consumer": {
+                "default_agent": "main",
+                "agents": {
+                    "main": {
+                        "tools": list(DEFAULT_AGENT_TOOL_CONNECTIONS),
+                        "event_sources": [],
+                    },
+                },
+                "ui": {
+                    "canvas": {
+                        "resolvers": [],
+                    },
+                    "scene": {
+                        "external_panels": [],
+                    },
+                },
             },
         },
     }
@@ -109,14 +123,17 @@ def default_tools_props() -> dict[str, Any]:
 
 def _with_default_tools(bundle_props: Mapping[str, Any] | None) -> dict[str, Any]:
     props = dict(bundle_props or {})
+    surfaces = props.get("surfaces") if isinstance(props.get("surfaces"), Mapping) else {}
+    as_consumer = surfaces.get("as_consumer") if isinstance(surfaces.get("as_consumer"), Mapping) else {}
+    surfaces_agents = as_consumer.get("agents")
+    if isinstance(surfaces_agents, Mapping):
+        return props
     tools = props.get("tools")
-    if not isinstance(tools, Mapping) or not isinstance(tools.get("agents"), Mapping):
-        merged = default_tools_props()
-        merged.update(props)
-        if isinstance(tools, Mapping):
-            merged["tools"] = {**merged["tools"], **dict(tools)}
-        return merged
-    return props
+    if isinstance(tools, Mapping) and isinstance(tools.get("agents"), Mapping):
+        return props
+    merged = default_tools_props()
+    merged.update(props)
+    return merged
 
 
 def config_for_agent(

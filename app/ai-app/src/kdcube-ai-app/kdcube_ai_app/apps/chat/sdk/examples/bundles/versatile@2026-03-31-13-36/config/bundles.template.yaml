@@ -27,8 +27,119 @@ bundles:
           artifact_resolver_name: canvas.bundle_artifact_storage
           data_bus_subject: canvas.patch
           revision_retention: 80
-        named_services:
-          namespaces: {}
+        surfaces:
+          as_consumer:
+            default_agent: main
+            agents:
+              main:
+                tools:
+                  - name: io
+                    kind: python
+                    module: kdcube_ai_app.apps.chat.sdk.tools.io_tools
+                    alias: io_tools
+                    allowed: [tool_call]
+                  - name: context
+                    kind: python
+                    module: kdcube_ai_app.apps.chat.sdk.tools.ctx_tools
+                    alias: ctx_tools
+                    allowed: [merge_sources, fetch_ctx]
+                  - name: memory
+                    kind: python
+                    module: kdcube_ai_app.apps.chat.sdk.context.memory.tools
+                    alias: memory
+                    allowed:
+                      - search_memory
+                      - recent_memories
+                      - read_memory
+                      - record_memory
+                      - confirm_memory
+                      - retire_memory
+                  - name: canvas
+                    kind: python
+                    module: kdcube_ai_app.apps.chat.sdk.solutions.canvas.tools
+                    alias: canvas
+                    allowed: [patch]
+                  - name: exec
+                    kind: python
+                    module: kdcube_ai_app.apps.chat.sdk.tools.exec_tools
+                    alias: exec_tools
+                    allowed: [execute_code_python]
+                  - name: web
+                    kind: python
+                    module: kdcube_ai_app.apps.chat.sdk.tools.web_tools
+                    alias: web_tools
+                    allowed: [web_search, web_fetch]
+                    runtime:
+                      web_search: local
+                      web_fetch: local
+                  - name: rendering
+                    kind: python
+                    module: kdcube_ai_app.apps.chat.sdk.tools.rendering_tools
+                    alias: rendering_tools
+                    allowed: [write_pptx, write_png, write_pdf, write_docx]
+                  - name: browser
+                    kind: python
+                    module: kdcube_ai_app.apps.chat.sdk.tools.browser_tools
+                    alias: browser_tools
+                    allowed: [open_page, click, fill, scroll, status, close]
+                    runtime:
+                      open_page: none
+                      click: none
+                      fill: none
+                      scroll: none
+                      status: none
+                      close: none
+                  - name: knowledge
+                    kind: mcp
+                    server_id: knowledge
+                    alias: knowledge
+                    allowed: ["*"]
+                  # Add namespace-owned provider tools here when this agent
+                  # should read or mutate external objects. Keep object.get
+                  # out of the agent-facing tool set when pull is configured;
+                  # ReAct should materialize external refs through react.pull.
+                  # - name: task_service
+                  #   kind: named_service
+                  #   alias: named_services
+                  #   namespaces:
+                  #     task:
+                  #       allowed:
+                  #         - provider.about
+                  #         - object.search
+                  #         - object.schema
+                  #         - object.upsert
+                  #         - object.delete
+                # Add namespace event-source policies here when external refs
+                # should render into the ReAct timeline and be pullable.
+                # Example:
+                # event_sources:
+                #   - kind: named_service
+                #     namespace: task
+                #     enabled: true
+                #     policies:
+                #       block_production:
+                #         mode: provider
+                #         operation: block.produce
+                #       pull:
+                #         mode: provider
+                #         operation: object.get
+                event_sources: []
+            ui:
+              canvas:
+                # Add namespace resolver operations here when canvas or chat
+                # object cards should delegate open/preview/download-style
+                # actions to the owning provider.
+                # Example:
+                # resolvers:
+                #   - kind: named_service
+                #     namespace: task
+                #     enabled: true
+                #     allowed:
+                #       - object.resolve
+                #       - object.action
+                resolvers: []
+              scene:
+                external_panels: []
         execution:
           runtime:
             mode: docker
@@ -52,6 +163,35 @@ bundles:
         visibility:
           bundle:
             allowed_roles: []
+          api:
+            telegram_user_admin_data:
+              user_types: []
+              roles:
+                - kdcube:role:super-admin
+            telegram_user_admin_upsert:
+              user_types: []
+              roles:
+                - kdcube:role:super-admin
+            telegram_user_admin_delete:
+              user_types: []
+              roles:
+                - kdcube:role:super-admin
+          widget:
+            memories:
+              user_types: []
+              roles: []
+            pinboard:
+              user_types: []
+              roles: []
+            usage_card:
+              user_types: []
+              roles: []
+            versatile_chat:
+              user_types: []
+              roles: []
+            versatile_webapp:
+              user_types: []
+              roles: []
         ui:
           main_view:
             src_folder: ui/scene
@@ -66,6 +206,9 @@ bundles:
               build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
             memories:
               src_folder: sdk://context/memory/ui/widget/memories
+              build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
+            usage_card:
+              src_folder: sdk://infra/economics/ui/widget/usage-card
               build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
             pinboard:
               src_folder: sdk://solutions/canvas/ui/widget/pinboard

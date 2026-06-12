@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import base64
 import importlib.util
 import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
-from starlette.requests import Request
 
 from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
 from kdcube_ai_app.apps.chat.sdk.runtime.dynamic_module_loader import load_dynamic_module_for_path
@@ -55,30 +52,6 @@ def _make_storage(tmp_path: Path) -> AIBundleStorage:
         project="demo-project",
         ai_bundle_id="versatile@2026-03-31-13-36",
         storage_uri=tmp_path.resolve().as_uri(),
-    )
-
-
-def _request(*, header_name: str, header_value: str | None) -> Request:
-    headers = []
-    if header_value is not None:
-        headers.append((header_name.lower().encode("utf-8"), header_value.encode("utf-8")))
-
-    async def _receive():
-        return {"type": "http.request", "body": b"", "more_body": False}
-
-    return Request(
-        {
-            "type": "http",
-            "method": "GET",
-            "path": "/api/integrations/bundles/demo-tenant/demo-project/versatile@2026-03-31-13-36/mcp/preferences_tools",
-            "query_string": b"",
-            "headers": headers,
-            "scheme": "http",
-            "server": ("testserver", 80),
-            "client": ("127.0.0.1", 12345),
-            "http_version": "1.1",
-        },
-        receive=_receive,
     )
 
 
@@ -210,6 +183,12 @@ def test_telegram_bot_transport_manifest_and_defaults():
         "user_types": [],
         "roles": [],
     }
+    assert "tools" not in defaults
+    assert "named_services" not in defaults
+    assert defaults["surfaces"]["as_consumer"]["default_agent"] == "main"
+    assert defaults["surfaces"]["as_consumer"]["agents"]["main"]["event_sources"] == []
+    assert defaults["surfaces"]["as_consumer"]["ui"]["canvas"]["resolvers"] == []
+    assert defaults["telemetry_sink"] == {"endpoint_url": "", "auth_header": ""}
     assert defaults["integrations"]["telegram"] == {
         "enabled": False,
         "webhook_url": "",
@@ -539,11 +518,10 @@ async def test_export_preferences_snapshot_uses_bundle_secret_for_signature(tmp_
         get_preferences_snapshot = staticmethod(prefs.get_preferences_snapshot)
 
     monkeypatch.setattr(tools_mod, "store_mod", _StoreModule)
-    monkeypatch.setattr(
-        tools_mod,
-        "get_secret",
-        lambda key, default=None: "snapshot-secret" if key.endswith(".preferences.snapshot_hmac_key") else default,
-    )
+    async def _get_secret(key, default=None):
+        return "snapshot-secret" if key.endswith(".preferences.snapshot_hmac_key") else default
+
+    monkeypatch.setattr(tools_mod, "get_secret", _get_secret)
     _bind_tool_subsystem(tools_mod, user_id=None, service_user="fp-user-1")
 
     result = await tools_mod.PreferenceTools().export_preferences_snapshot(filename="user-preferences.json")
@@ -614,44 +592,6 @@ def test_build_preferences_mcp_app_returns_streamable_http_app(tmp_path):
     assert app.streamable_http_app() is not None
 
 
-def test_preferences_tools_mcp_auth_uses_bundle_prop_and_bundle_secret(monkeypatch):
-    entrypoint_mod = _load_entrypoint_module()
-    entrypoint = object.__new__(entrypoint_mod.VersatileEntrypoint)
-    entrypoint.bundle_prop = lambda key, default=None: (
-        "X-Test-Preferences-MCP-Token" if key == "mcp.preferences.auth.header_name" else default
-    )
-    monkeypatch.setattr(
-        entrypoint_mod,
-        "get_secret",
-        lambda key, default=None: "shared-token" if key == "b:mcp.preferences.auth.shared_token" else default,
-    )
-
-    entrypoint._require_preferences_mcp_auth(
-        _request(header_name="X-Test-Preferences-MCP-Token", header_value="shared-token")
-    )
-
-
-def test_preferences_tools_mcp_auth_rejects_invalid_header(monkeypatch):
-    entrypoint_mod = _load_entrypoint_module()
-    entrypoint = object.__new__(entrypoint_mod.VersatileEntrypoint)
-    entrypoint.bundle_prop = lambda key, default=None: (
-        "X-Test-Preferences-MCP-Token" if key == "mcp.preferences.auth.header_name" else default
-    )
-    monkeypatch.setattr(
-        entrypoint_mod,
-        "get_secret",
-        lambda key, default=None: "shared-token" if key == "b:mcp.preferences.auth.shared_token" else default,
-    )
-
-    with pytest.raises(HTTPException) as exc:
-        entrypoint._require_preferences_mcp_auth(
-            _request(header_name="X-Test-Preferences-MCP-Token", header_value="wrong-token")
-        )
-
-    assert exc.value.status_code == 401
-    assert exc.value.detail == "Missing or invalid X-Test-Preferences-MCP-Token"
-
-
 @pytest.mark.asyncio
 async def test_event_recording_configures_react_scope_from_endpoint_and_secret(monkeypatch):
     entrypoint_mod = _load_entrypoint_module()
@@ -659,6 +599,7 @@ async def test_event_recording_configures_react_scope_from_endpoint_and_secret(m
     entrypoint._comm = _comm()
     entrypoint.logger = _Logger()
     entrypoint.config = SimpleNamespace(ai_bundle_spec=SimpleNamespace(id="versatile@2026-03-31-13-36"))
+    entrypoint.bundle_props = {"events": {"record": {"telemetry": {"enabled": True}}}}
     entrypoint.bundle_prop = lambda key, default=None: (
         "http://stats.local/public/ingest" if key == "telemetry_sink.endpoint_url" else default
     )
@@ -687,6 +628,7 @@ async def test_event_recording_sends_chat_message_and_turn_metrics(monkeypatch):
     entrypoint._comm = _comm()
     entrypoint.logger = _Logger()
     entrypoint.config = SimpleNamespace(ai_bundle_spec=SimpleNamespace(id="versatile@2026-03-31-13-36"))
+    entrypoint.bundle_props = {"events": {"record": {"telemetry": {"enabled": True}}}}
     sent_batches = []
 
     async def sink(batch, **kwargs):
@@ -737,45 +679,3 @@ async def test_event_recording_sends_chat_message_and_turn_metrics(monkeypatch):
     ]
     assert kwargs["filter"] == entrypoint_mod.STATS_COMM_EVENT_SELECTOR
     assert entrypoint.comm.export_recorded_events() == []
-
-
-@pytest.mark.asyncio
-async def test_preferences_exec_report_returns_downloadable_report_content(tmp_path, monkeypatch):
-    entrypoint_mod = _load_entrypoint_module()
-
-    async def _fake_run_exec_tool(**kwargs):
-        report_path = kwargs["outdir"] / "turn_preferences_exec/files/preferences_exec_report.md"
-        report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text("# Preferences Exec Report\n\n- location: Wuppertal\n", encoding="utf-8")
-        return {
-            "ok": True,
-            "report_text": "Status: success",
-            "items": [],
-            "out_dyn": {},
-            "error": None,
-        }
-
-    monkeypatch.setattr(entrypoint_mod, "run_exec_tool", _fake_run_exec_tool)
-    monkeypatch.setattr(entrypoint_mod, "create_tool_subsystem_with_mcp", lambda **_: (object(), None))
-    monkeypatch.setattr(entrypoint_mod, "get_preferences_snapshot", lambda **_: {"current": {}, "items": []})
-    monkeypatch.setattr(entrypoint_mod, "normalize_exec_runtime_config", lambda value: value)
-
-    entrypoint = object.__new__(entrypoint_mod.VersatileEntrypoint)
-    entrypoint.models_service = object()
-    entrypoint._comm = SimpleNamespace(user_id="user-1")
-    entrypoint._comm_cv = SimpleNamespace(get=lambda: entrypoint._comm)
-    entrypoint.ctx_client = None
-    entrypoint.logger = SimpleNamespace(log=lambda *args, **kwargs: None)
-    entrypoint.config = SimpleNamespace(ai_bundle_spec=SimpleNamespace(id="versatile@2026-03-31-13-36"))
-    entrypoint.bundle_prop = lambda *args, **kwargs: {"mode": "docker"}
-    entrypoint.bundle_storage_root = lambda: None
-    entrypoint._preferences_storage = lambda: _make_storage(tmp_path)
-
-    result = await entrypoint.preferences_exec_report(user_id="user-1")
-
-    assert result["ok"] is True
-    assert result["report_filename"] == "preferences_exec_report.md"
-    assert result["report_mime"] == "text/markdown"
-    assert base64.b64decode(result["report_content_b64"]).decode("utf-8") == (
-        "# Preferences Exec Report\n\n- location: Wuppertal\n"
-    )

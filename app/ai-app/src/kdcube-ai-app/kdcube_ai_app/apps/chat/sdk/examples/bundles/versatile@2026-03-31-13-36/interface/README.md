@@ -220,6 +220,85 @@ JWT, set `config.telemetry_sink.auth_header` to a dedicated ingest header such
 as `X-Telemetry-Token`. In that mode the SDK sends the raw token under that
 header and avoids gateway JWT parsing.
 
+## Consumer Surfaces
+
+The reference bundle declares what it consumes under
+`config.surfaces.as_consumer`. This is the current owner for agent-facing tool
+connections, external namespace event-source policies, canvas resolvers, and
+scene panel glue.
+
+Agent tool wiring lives at:
+
+```yaml
+surfaces:
+  as_consumer:
+    default_agent: main
+    agents:
+      main:
+        tools:
+          - name: web
+            kind: python
+            module: kdcube_ai_app.apps.chat.sdk.tools.web_tools
+            alias: web_tools
+            allowed: [web_search, web_fetch]
+          - name: knowledge
+            kind: mcp
+            server_id: knowledge
+            alias: knowledge
+            allowed: ["*"]
+```
+
+Namespace-owned services are connected in the same agent block. The configured
+namespace determines which `named_services.*` tools list that namespace in the
+ReAct tool catalog. Keep `object.get` out of this agent-facing list when pull
+is configured; ReAct should inspect external refs by materializing them through
+`react.pull`.
+
+```yaml
+surfaces:
+  as_consumer:
+    agents:
+      main:
+        tools:
+          - name: task_service
+            kind: named_service
+            alias: named_services
+            namespaces:
+              task:
+                allowed:
+                  - provider.about
+                  - object.search
+                  - object.schema
+                  - object.upsert
+                  - object.delete
+        event_sources:
+          - kind: named_service
+            namespace: task
+            enabled: true
+            policies:
+              block_production:
+                mode: provider
+                operation: block.produce
+              pull:
+                mode: provider
+                operation: object.get
+    ui:
+      canvas:
+        resolvers:
+          - kind: named_service
+            namespace: task
+            enabled: true
+            allowed:
+              - object.resolve
+              - object.action
+```
+
+The agent tool surface is model-facing. The `event_sources` pull policy is the
+runtime bridge that lets `react.pull(task:...)` materialize provider-owned refs
+into `fi:` artifacts. The canvas resolver surface is UI-facing and delegates
+canvas/chat object-card actions to the owning provider; it does not publish
+extra ReAct tools.
+
 ## Common Calls
 
 Bootstrap or refresh the app:
@@ -359,5 +438,3 @@ have role `admin`.
 - `telegram_user_admin_*` from non-admin users: the operation route is for
   KDCube admins; the public facade is for signed Telegram users with role
   `admin`.
-- `preferences_tools` MCP endpoint: this is an MCP protocol endpoint protected
-  by a bundle-owned shared token, not a browser widget REST API.
