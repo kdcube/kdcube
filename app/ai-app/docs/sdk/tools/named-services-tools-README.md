@@ -9,6 +9,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/custom-tools-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/sdk-tools-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/mcp-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/multi-action/tool-strategy-traits-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-agent-integration-README.md
@@ -41,6 +42,21 @@ surfaces:
                   - object.host_file
                   - object.upsert
                   - object.delete
+            tool_traits:
+              provider_about:
+                strategy: [exploration]
+              list_objects:
+                strategy: [exploration]
+              search_objects:
+                strategy: [exploration]
+              object_schema:
+                strategy: [exploration]
+              host_file:
+                strategy: [exploitation]
+              upsert_object:
+                strategy: [exploitation]
+              delete_object:
+                strategy: [exploitation]
               memo:
                 allowed:
                   - provider.about
@@ -51,6 +67,9 @@ surfaces:
 `kind: named_service` does not name a provider bundle. Provider location comes
 from service discovery or explicit provider config on the namespace. The
 consumer config says which namespace operations this agent is allowed to call.
+`tool_traits` is keyed by the concrete ReAct-facing named-service tool names,
+not by provider operation ids. The strategy trait is used by ReAct multi-action
+policy.
 
 ## Catalog Shape
 
@@ -75,6 +94,7 @@ Example rendered catalog entry:
 
    Scope:
        • namespaces applicable: task, memo
+       • strategy: exploration
 
    📥 Parameters:
        • namespace: typing.Annotated[str

@@ -2139,6 +2139,7 @@ class BaseWorkflow():
                     mod_tools_spec: Optional[List[Dict[str, Any]]] = None,
                     mcp_tools_spec: Optional[List[Dict[str, Any]]] = None,
                     tools_runtime: Optional[Dict[str, str]] = None,
+                    tool_traits: Optional[Dict[str, Dict[str, Any]]] = None,
                     custom_skills_root: Optional[str] = None,
                     skills_visibility_agents_config: Optional[Dict[str, Dict[str, Any]]] = None,
                     additional_instructions: Optional[str] = None,
@@ -2181,6 +2182,7 @@ class BaseWorkflow():
             },
             raw_tool_specs=mod_tools_spec,
             tool_runtime=tools_runtime,
+            tool_traits=tool_traits,
             event_specs=event_source_specs,
             mcp_tool_specs=mcp_tools_spec or [],
             mcp_services_config=self._resolve_mcp_services_config(),
@@ -2205,6 +2207,7 @@ class BaseWorkflow():
             },
             mcp_subsystem=mcp_subsystem,
             tool_runtime=tools_runtime,
+            tool_traits=tool_traits,
             event_specs=event_source_specs,
             hosting_service=self.hosting_service,
         )

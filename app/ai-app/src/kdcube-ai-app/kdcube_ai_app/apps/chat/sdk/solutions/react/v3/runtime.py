@@ -56,6 +56,15 @@ from kdcube_ai_app.apps.chat.sdk.solutions.widgets.canvas import (
     TimelineStreamer,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_subsystem import ToolSubsystem
+from kdcube_ai_app.apps.chat.sdk.runtime.tool_traits import (
+    UNKNOWN_STRATEGY,
+    strategies_compatible,
+    strategy_values,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.react.v3.action_overseer import (
+    RoundActionOverseer,
+)
+from kdcube_ai_app.apps.chat.sdk.streaming.stream_policy import StreamPolicyViolation
 from kdcube_ai_app.infra.accounting import with_accounting
 from kdcube_ai_app.apps.chat.sdk.viz import logging_helpers
 
@@ -75,16 +84,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.proto import ReactStateSnapshot
 
 class ReactSolverV2:
     MODULE_AGENT_NAME = "solver.react.v2"
-    SAFE_MULTI_ACTION_TOOL_IDS = {
-        "react.read",
-        "react.write",
-        "react.memsearch",
-        "react.rg",
-    }
-    SAFE_MULTI_ACTION_TOOL_PREFIXES = (
-        "web_tools.",
-        "rendering_tools.write_",
-    )
+    MAX_ACTIONS_PER_ROUND = 2
 
     @property
     def external_event_source(self):
@@ -904,6 +904,7 @@ class ReactSolverV2:
         phase: str,
         idx: int,
         execution_id: Optional[str] = None,
+        emit_delta: Optional[Callable[..., Awaitable[None]]] = None,
     ) -> tuple[Callable[[str], Awaitable[None]], DecisionExecCodeStreamer]:
         artifact_suffix = execution_id or str(idx)
         turn_id = ""
@@ -918,7 +919,7 @@ class ReactSolverV2:
             except Exception:
                 turn_id = ""
         streamer = DecisionExecCodeStreamer(
-            emit_delta=self.comm.delta,
+            emit_delta=emit_delta or self.comm.delta,
             agent=f"{self.MODULE_AGENT_NAME}.{phase}",
             artifact_name=f"react.exec.{artifact_suffix}",
             execution_id=execution_id,
@@ -932,13 +933,14 @@ class ReactSolverV2:
         *,
         sources_list: Optional[List[Dict[str, object]]] = None,
         artifact_name: Optional[str] = None,
+        emit_delta: Optional[Callable[..., Awaitable[None]]] = None,
     ) -> tuple[List[Callable[[str], Awaitable[None]]], List[Any]]:
         safe_name = artifact_name or f"react.record.{uuid.uuid4().hex[:8]}"
         sources_getter = None
         if self.ctx_browser:
             sources_getter = lambda: list(self.ctx_browser.sources_pool or [])
         base_args = {
-            "emit_delta": self.comm.delta,
+            "emit_delta": emit_delta or self.comm.delta,
             "agent": f"{self.MODULE_AGENT_NAME}.{phase}",
             "artifact_name": safe_name,
             "sources_list": sources_list or [],
@@ -1007,6 +1009,8 @@ class ReactSolverV2:
         final_answer_artifact_name: Optional[str] = None,
         plan_artifact_name: Optional[str] = None,
         iteration: Optional[int] = None,
+        emit_delta: Optional[Callable[..., Awaitable[None]]] = None,
+        on_action_identity: Optional[Callable[[str, str], Awaitable[None]]] = None,
     ) -> tuple[Callable[[str], Awaitable[None]], TimelineStreamer]:
         sources_getter = None
         if self.ctx_browser:
@@ -1058,7 +1062,7 @@ class ReactSolverV2:
                 by_iteration.setdefault(int(iteration), started_at)
                 if not getattr(self.scratchpad, "_latest_streamed_notes_started_at", None):
                     self.scratchpad._latest_streamed_notes_started_at = started_at
-            await self.comm.delta(**kwargs)
+            await (emit_delta or self.comm.delta)(**kwargs)
 
         streamer = TimelineStreamer(
             emit_delta=emit_timeline_delta,
@@ -1070,6 +1074,7 @@ class ReactSolverV2:
             final_answer_artifact_name=final_answer_artifact_name or "react.final_answer",
             final_answer_start_index=final_answer_start_index,
             plan_artifact_name=plan_artifact_name or "timeline_text.react.plan",
+            on_action_identity=on_action_identity,
         )
         return self._wrap_json_streamer(streamer, sources_list=sources_list), streamer
 
@@ -1222,7 +1227,7 @@ class ReactSolverV2:
         if code == "final_answer_with_tool_call":
             return (
                 "You used `action=call_tool` and also attached `final_answer` text. `final_answer` closes the turn — but the tool has not run yet, so the answer would be a guess. "
-                "No tool was run. Next: emit the tool alone with `final_answer` empty; complete after the tool result is visible."
+                "The tool action is kept, but the `final_answer` text is suppressed and not shown. Next: complete only after the tool result is visible."
             )
         if code == "tool_call_with_final_answer":
             return (
@@ -1264,8 +1269,8 @@ class ReactSolverV2:
                 or unsafe_tool.endswith((".record_memory", ".confirm_memory", ".retire_memory"))
             ):
                 return (
-                    f"You bundled `{unsafe_tool}` with other actions. Memory writes are state changes and must run alone — anything depending on the write needs to see its real outcome first. "
-                    f"That action was not run. Next: emit `{unsafe_tool}` alone; complete after the result is visible."
+                    f"You bundled `{unsafe_tool}` with other actions, but this catalog did not expose its neutral strategy trait. "
+                    f"That action was not run because the runtime could not prove same-round compatibility. Next: retry after the current action results are visible."
                 )
             if tools_insights.is_exec_tool(unsafe_tool):
                 return (
@@ -1275,6 +1280,39 @@ class ReactSolverV2:
             return (
                 f"You bundled `{unsafe_tool}` with other actions. Its result is not visible until the next round, so any sibling that depends on it would be guessing. "
                 f"That action was not run. Next: emit `{unsafe_tool}` alone; depend on it next round."
+            )
+        if code == "multi_action_bundle_strategy_incompatible":
+            rejected_tool = str((extra or {}).get("tool_id") or tool_id or "that tool").strip()
+            first_tool = str((extra or {}).get("first_tool_id") or "the earlier action").strip()
+            strategy = ", ".join(str(item) for item in ((extra or {}).get("strategy") or []) if str(item or "").strip())
+            first_strategy = ", ".join(str(item) for item in ((extra or {}).get("first_strategy") or []) if str(item or "").strip())
+            return (
+                f"You bundled `{rejected_tool}` with `{first_tool}`, but their action strategies are incompatible for one ReAct round "
+                f"({first_strategy or 'unknown'} vs {strategy or 'unknown'}). Tool results are only trustworthy after the round completes. "
+                f"The incompatible action was not shown or run. Next: run one strategy group now, then use the result in a later round."
+            )
+        if code == "multi_action_bundle_final_answer_after_non_neutral":
+            first_tool = str((extra or {}).get("first_tool_id") or "the earlier tool").strip()
+            first_strategy = ", ".join(str(item) for item in ((extra or {}).get("first_strategy") or []) if str(item or "").strip())
+            return (
+                f"You emitted a final answer after `{first_tool}` in the same round, but that tool is non-neutral "
+                f"({first_strategy or 'unknown'}). Its result is not available yet. "
+                "The final answer was not shown. Next: run the tool now; answer after the result is visible."
+            )
+        if code == "multi_action_bundle_too_many_actions":
+            max_actions = int((extra or {}).get("max_actions") or self.MAX_ACTIONS_PER_ROUND)
+            return (
+                f"You emitted more than {max_actions} actions in one ReAct round. "
+                f"Action #{int((extra or {}).get('index') or 0) + 1} and any later actions were not shown or run. "
+                f"Next: emit at most {max_actions} compatible actions in one round; continue with another round after their results are visible."
+            )
+        if code == "multi_action_bundle_non_neutral_after_final_answer":
+            rejected_tool = str((extra or {}).get("tool_id") or tool_id or "that tool").strip()
+            strategy = ", ".join(str(item) for item in ((extra or {}).get("strategy") or []) if str(item or "").strip())
+            return (
+                f"You emitted `{rejected_tool}` after a final-answer action in the same round, but that tool is non-neutral "
+                f"({strategy or 'unknown'}). A non-neutral action would invalidate the answer already being closed. "
+                "The tool action was not shown or run. Next: choose either the tool action, or finish with the final answer."
             )
         if code == "multi_action_bundle_mixed_actions":
             rejected_action = str((extra or {}).get("action") or "").strip() or "a non-tool action"
@@ -1507,6 +1545,134 @@ class ReactSolverV2:
             except Exception:
                 pass
 
+    def _record_suppressed_final_answer_items(
+        self,
+        *,
+        iteration: int,
+        parent_tool_call_id: str,
+        suppressed: List[Dict[str, Any]],
+        decision_bundle: List[Dict[str, Any]],
+        state: Dict[str, Any],
+    ) -> None:
+        if not self.ctx_browser or not suppressed:
+            return
+        for item in suppressed:
+            if not isinstance(item, dict):
+                continue
+            try:
+                idx = int(item.get("index") or 0)
+            except Exception:
+                idx = 0
+            code = str(item.get("code") or "final_answer_with_tool_call").strip()
+            decision = decision_bundle[idx] if 0 <= idx < len(decision_bundle) and isinstance(decision_bundle[idx], dict) else {}
+            extra = item.get("extra") if isinstance(item.get("extra"), dict) else {}
+            if item.get("tool_id") and "tool_id" not in extra:
+                extra = {**extra, "tool_id": item.get("tool_id")}
+            notice_message = self._protocol_violation_message(
+                code=code,
+                decision=decision,
+                state=state,
+                extra={**extra, "index": idx},
+            )
+            try:
+                self.ctx_browser.contribute_notice(
+                    code=f"protocol_violation.{code}",
+                    message=f"Action #{idx + 1} still ran. {notice_message}",
+                    extra={
+                        "index": idx,
+                        "parent_tool_call_id": parent_tool_call_id,
+                        "suppressed_field": "final_answer",
+                        **({"tool_id": item.get("tool_id")} if item.get("tool_id") else {}),
+                        **({"details": extra} if extra else {}),
+                    },
+                    call_id=parent_tool_call_id,
+                    meta={
+                        "rel": "call",
+                        "iteration": iteration,
+                        "partial_multi_action": True,
+                        "field_suppressed": True,
+                    },
+                )
+            except Exception:
+                pass
+
+    def _suppress_tool_call_final_answer(
+        self,
+        decision: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        if not isinstance(decision, dict):
+            return None
+        if (decision.get("action") or "").strip() != "call_tool":
+            return None
+        final_answer = (decision.get("final_answer") or "").strip()
+        if not final_answer:
+            return None
+        tool_call = decision.get("tool_call") if isinstance(decision.get("tool_call"), dict) else {}
+        tool_id = (tool_call.get("tool_id") or "").strip() if isinstance(tool_call, dict) else ""
+        decision["final_answer"] = ""
+        return {
+            "code": "final_answer_with_tool_call",
+            **({"tool_id": tool_id} if tool_id else {}),
+            "extra": {
+                "suppressed_field": "final_answer",
+                "suppressed_text_symbols": len(final_answer),
+                **({"tool_id": tool_id} if tool_id else {}),
+            },
+        }
+
+    def _record_suppressed_single_final_answer(
+        self,
+        *,
+        iteration: int,
+        tool_call_id: str,
+        decision: Dict[str, Any],
+        suppressed: Dict[str, Any],
+        state: Dict[str, Any],
+    ) -> None:
+        if not self.ctx_browser or not tool_call_id:
+            return
+        extra = suppressed.get("extra") if isinstance(suppressed.get("extra"), dict) else {}
+        code = str(suppressed.get("code") or "final_answer_with_tool_call").strip()
+        tool_id = str(suppressed.get("tool_id") or extra.get("tool_id") or "").strip()
+        try:
+            self.ctx_browser.contribute_notice(
+                code=f"protocol_violation.{code}",
+                message=self._protocol_violation_message(
+                    code=code,
+                    decision=decision,
+                    state=state,
+                    extra=extra,
+                ),
+                extra={
+                    "suppressed_field": "final_answer",
+                    **({"tool_id": tool_id} if tool_id else {}),
+                    **extra,
+                },
+                call_id=tool_call_id,
+                meta={
+                    "rel": "call",
+                    "iteration": iteration,
+                    "field_suppressed": True,
+                    "tool_action_kept": True,
+                },
+            )
+        except Exception:
+            pass
+        try:
+            ReactRound.note(
+                ctx_browser=self.ctx_browser,
+                notes=(
+                    "Protocol notice: final_answer text was suppressed because this round runs a tool. "
+                    "The tool action is still executing; complete after the result is visible."
+                ),
+                tool_call_id=tool_call_id,
+                tool_id=tool_id or "__protocol_violation__",
+                action="call_tool",
+                iteration=iteration,
+            )
+        except Exception:
+            pass
+
     def _record_dropped_action_parse_items(
         self,
         *,
@@ -1633,13 +1799,65 @@ class ReactSolverV2:
             return [single]
         return []
 
-    def _is_safe_multi_action_tool(self, tool_id: str) -> bool:
-        tool_id = (tool_id or "").strip()
-        if not tool_id:
-            return False
-        if tool_id in self.SAFE_MULTI_ACTION_TOOL_IDS:
-            return True
-        return any(tool_id.startswith(prefix) for prefix in self.SAFE_MULTI_ACTION_TOOL_PREFIXES)
+    @staticmethod
+    def _adapter_tool_traits(adapter: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(adapter, dict):
+            return {}
+        for source in (
+            adapter.get("tool_traits"),
+            (adapter.get("doc") or {}).get("tool_traits") if isinstance(adapter.get("doc"), dict) else None,
+            (adapter.get("metadata") or {}).get("tool_traits") if isinstance(adapter.get("metadata"), dict) else None,
+            ((adapter.get("doc") or {}).get("metadata") or {}).get("tool_traits")
+            if isinstance(adapter.get("doc"), dict) and isinstance((adapter.get("doc") or {}).get("metadata"), dict)
+            else None,
+        ):
+            if isinstance(source, dict) and source:
+                return dict(source)
+        return {}
+
+    @staticmethod
+    def _react_native_tool_traits(tool_id: str) -> Dict[str, Any]:
+        tid = str(tool_id or "").strip()
+        if not tid:
+            return {}
+        try:
+            for spec in get_react_tools_catalog():
+                if str(spec.get("id") or "").strip() == tid and isinstance(spec.get("tool_traits"), dict):
+                    return dict(spec.get("tool_traits") or {})
+        except Exception:
+            return {}
+        return {}
+
+    def _tool_traits_for_id(
+        self,
+        tool_id: str,
+        *,
+        adapters_by_id: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        tid = str(tool_id or "").strip()
+        if not tid:
+            return {}
+        adapter_traits = self._adapter_tool_traits((adapters_by_id or {}).get(tid) or {})
+        if adapter_traits:
+            return adapter_traits
+        return self._react_native_tool_traits(tid)
+
+    def _tool_strategy_values(
+        self,
+        tool_id: str,
+        *,
+        adapters_by_id: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> Set[str]:
+        return set(strategy_values(self._tool_traits_for_id(tool_id, adapters_by_id=adapters_by_id)))
+
+    def _is_known_multi_action_tool(
+        self,
+        tool_id: str,
+        *,
+        adapters_by_id: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> bool:
+        strategies = self._tool_strategy_values(tool_id, adapters_by_id=adapters_by_id)
+        return bool(strategies)
 
     @staticmethod
     def _bundle_collision_key(raw: str) -> str:
@@ -1786,7 +2004,11 @@ class ReactSolverV2:
         accepted: List[Dict[str, Any]] = []
         accepted_idxs: List[int] = []
         rejected: List[Dict[str, Any]] = []
+        suppressed: List[Dict[str, Any]] = []
+        final_decision: Optional[Dict[str, Any]] = None
+        final_idx: Optional[int] = None
         exec_indices = self._exec_indices_in_bundle(bundle)
+        max_actions = int(getattr(self, "MAX_ACTIONS_PER_ROUND", 2) or 2)
 
         def _reject(idx: int, code: str, extra: Optional[Dict[str, Any]] = None, decision: Optional[Dict[str, Any]] = None) -> None:
             tool_call = (decision or {}).get("tool_call") if isinstance(decision, dict) else {}
@@ -1803,28 +2025,53 @@ class ReactSolverV2:
             if not isinstance(decision, dict):
                 _reject(idx, "multi_action_bundle_invalid_item")
                 continue
+            if idx >= max_actions:
+                _reject(
+                    idx,
+                    "multi_action_bundle_too_many_actions",
+                    {"index": idx, "max_actions": max_actions},
+                    decision,
+                )
+                continue
             action = (decision.get("action") or "").strip()
+            if action in {"complete", "exit"}:
+                validation_error = self._validate_decision(decision)
+                if validation_error:
+                    _reject(idx, validation_error, None, decision)
+                    continue
+                if final_decision is None:
+                    final_decision = decision
+                    final_idx = idx
+                else:
+                    _reject(idx, "multi_action_bundle_mixed_actions", {"action": action}, decision)
+                continue
             if action != "call_tool":
                 _reject(idx, "multi_action_bundle_mixed_actions", {"action": action}, decision)
                 continue
-            if (decision.get("final_answer") or "").strip():
-                _reject(idx, "multi_action_bundle_final_answer_not_allowed", None, decision)
-                continue
+            suppressed_item = self._suppress_tool_call_final_answer(decision)
+            if suppressed_item is not None:
+                suppressed.append({"index": idx, **suppressed_item})
             validation_error = self._validate_decision(decision)
             if validation_error:
                 _reject(idx, validation_error, None, decision)
                 continue
             tool_call = decision.get("tool_call") or {}
             tool_id = (tool_call.get("tool_id") or "").strip()
-            if not self._is_safe_multi_action_tool(tool_id):
-                if not (
-                    allow_single_exec_with_code
-                    and len(exec_indices) == 1
-                    and idx == exec_indices[0]
-                    and tools_insights.is_exec_tool(tool_id)
-                ):
-                    _reject(idx, "multi_action_bundle_unsafe_tool", {"tool_id": tool_id}, decision)
-                    continue
+            exec_complete_in_bundle = (
+                allow_single_exec_with_code
+                and len(exec_indices) == 1
+                and idx == exec_indices[0]
+                and tools_insights.is_exec_tool(tool_id)
+            )
+            if tools_insights.is_exec_tool(tool_id) and not exec_complete_in_bundle:
+                _reject(idx, "multi_action_bundle_unsafe_tool", {"tool_id": tool_id}, decision)
+                continue
+            if accepted and not self._is_known_multi_action_tool(tool_id, adapters_by_id=adapters_by_id):
+                _reject(idx, "multi_action_bundle_unsafe_tool", {
+                    "tool_id": tool_id,
+                    "strategy": sorted(self._tool_strategy_values(tool_id, adapters_by_id=adapters_by_id) or {UNKNOWN_STRATEGY}),
+                }, decision)
+                continue
             verdict = self._validate_tool_call_protocol(
                 tool_call=tool_call,
                 adapters_by_id=adapters_by_id,
@@ -1856,6 +2103,54 @@ class ReactSolverV2:
                 decision["tool_call"] = tool_call
             accepted.append(decision)
             accepted_idxs.append(idx)
+
+        # --- Strategy compatibility checks ---
+        if len(accepted) > 1:
+            drop_idxs: Set[int] = set()
+            decisions_by_idx = {
+                a_idx: a_decision
+                for a_idx, a_decision in zip(accepted_idxs, accepted)
+            }
+            for pos, (a_idx, a_decision) in enumerate(zip(accepted_idxs, accepted)):
+                if a_idx in drop_idxs:
+                    continue
+                tc = a_decision.get("tool_call") if isinstance(a_decision.get("tool_call"), dict) else {}
+                tool_id = str(tc.get("tool_id") or "").strip()
+                traits = self._tool_traits_for_id(tool_id, adapters_by_id=adapters_by_id)
+                strategies = sorted(strategy_values(traits) or {UNKNOWN_STRATEGY})
+                for prev_idx, prev_decision in zip(accepted_idxs[:pos], accepted[:pos]):
+                    if prev_idx in drop_idxs:
+                        continue
+                    prev_tc = prev_decision.get("tool_call") if isinstance(prev_decision.get("tool_call"), dict) else {}
+                    prev_tool_id = str(prev_tc.get("tool_id") or "").strip()
+                    prev_traits = self._tool_traits_for_id(prev_tool_id, adapters_by_id=adapters_by_id)
+                    if strategies_compatible(prev_traits, traits):
+                        continue
+                    drop_idxs.add(a_idx)
+                    _reject(
+                        a_idx,
+                        "multi_action_bundle_strategy_incompatible",
+                        {
+                            "tool_id": tool_id,
+                            "strategy": strategies,
+                            "first_index": prev_idx,
+                            "first_tool_id": prev_tool_id,
+                            "first_strategy": sorted(strategy_values(prev_traits) or {UNKNOWN_STRATEGY}),
+                        },
+                        decisions_by_idx.get(a_idx),
+                    )
+                    break
+            if drop_idxs:
+                accepted = [
+                    a_decision
+                    for a_idx, a_decision in zip(accepted_idxs, accepted)
+                    if a_idx not in drop_idxs
+                ]
+                accepted_idxs = [
+                    a_idx
+                    for a_idx in accepted_idxs
+                    if a_idx not in drop_idxs
+                ]
 
         # --- Cross-action causality checks ---
         # Catch (a) two accepted actions targeting the same file (collision), and
@@ -1926,11 +2221,82 @@ class ReactSolverV2:
                 accepted = new_accepted
                 accepted_idxs = new_accepted_idxs
 
-        if accepted:
-            return accepted, None, ({"rejected": rejected} if rejected else None)
+        final_extra: Dict[str, Any] = {}
+        if final_decision is not None and final_idx is not None:
+            if any(a_idx > final_idx for a_idx in accepted_idxs):
+                drop_idxs: Set[int] = set()
+                decisions_by_idx = {
+                    a_idx: a_decision
+                    for a_idx, a_decision in zip(accepted_idxs, accepted)
+                }
+                for a_idx, a_decision in zip(accepted_idxs, accepted):
+                    if a_idx <= final_idx:
+                        continue
+                    tc = a_decision.get("tool_call") if isinstance(a_decision.get("tool_call"), dict) else {}
+                    tid = str(tc.get("tool_id") or "").strip()
+                    strategies = self._tool_strategy_values(tid, adapters_by_id=adapters_by_id)
+                    if strategies == {"neutral"}:
+                        continue
+                    drop_idxs.add(a_idx)
+                    _reject(
+                        a_idx,
+                        "multi_action_bundle_non_neutral_after_final_answer",
+                        {
+                            "tool_id": tid,
+                            "strategy": sorted(strategies or {UNKNOWN_STRATEGY}),
+                            "first_index": final_idx,
+                            "first_action": str(final_decision.get("action") or "complete").strip() or "complete",
+                        },
+                        decisions_by_idx.get(a_idx),
+                    )
+                if drop_idxs:
+                    accepted = [
+                        a_decision
+                        for a_idx, a_decision in zip(accepted_idxs, accepted)
+                        if a_idx not in drop_idxs
+                    ]
+                    accepted_idxs = [
+                        a_idx
+                        for a_idx in accepted_idxs
+                        if a_idx not in drop_idxs
+                    ]
+
+            non_neutral: Optional[tuple[int, str, Set[str]]] = None
+            for a_idx, a_decision in zip(accepted_idxs, accepted):
+                if a_idx > final_idx:
+                    continue
+                tc = a_decision.get("tool_call") if isinstance(a_decision.get("tool_call"), dict) else {}
+                tid = str(tc.get("tool_id") or "").strip()
+                strategies = self._tool_strategy_values(tid, adapters_by_id=adapters_by_id)
+                if strategies != {"neutral"}:
+                    non_neutral = (a_idx, tid, strategies or {UNKNOWN_STRATEGY})
+                    break
+            if non_neutral is not None:
+                _reject(
+                    final_idx,
+                    "multi_action_bundle_final_answer_after_non_neutral",
+                    {
+                        "first_index": non_neutral[0],
+                        "first_tool_id": non_neutral[1],
+                        "first_strategy": sorted(non_neutral[2]),
+                    },
+                    final_decision,
+                )
+            else:
+                final_extra = {"final_decision": final_decision, "final_index": final_idx}
+
+        if accepted or final_extra:
+            extra: Dict[str, Any] = {}
+            if rejected:
+                extra["rejected"] = rejected
+            if suppressed:
+                extra["suppressed"] = suppressed
+            extra.update(final_extra)
+            return accepted, None, (extra or None)
         first = rejected[0] if rejected else {}
         return [], str(first.get("code") or "multi_action_bundle_no_valid_actions"), {
             "rejected": rejected,
+            **({"suppressed": suppressed} if suppressed else {}),
         }
 
     def _validate_tool_call_protocol(
@@ -2404,11 +2770,6 @@ class ReactSolverV2:
             pathlib.Path(state["outdir"]),
             "exec_tools.execute_code_python",
         )
-        exec_streamer_fn, exec_streamer_widget = self._mk_exec_code_streamer(
-            f"decision ({iteration})",
-            exec_streamer_idx,
-            execution_id=exec_id,
-        )
         sources_list = []
         try:
             if self.ctx_browser:
@@ -2428,6 +2789,40 @@ class ReactSolverV2:
             "bound_exec_instance": None,
             "code_started": False,
         }
+        adapters_by_id_for_stream = self._adapters_index(state.get("adapters") or [])
+        action_overseer = RoundActionOverseer(
+            resolve_traits=lambda tool_id: self._tool_traits_for_id(
+                tool_id,
+                adapters_by_id=adapters_by_id_for_stream,
+            ),
+            max_actions=self.MAX_ACTIONS_PER_ROUND,
+        )
+
+        async def _exec_emit_delta(**kwargs: Any) -> None:
+            instance_state = code_stream_state.get("bound_exec_instance")
+            if not isinstance(instance_state, dict):
+                instance_state = code_stream_state.get("pending_exec_instance")
+            gate = instance_state.get("gate") if isinstance(instance_state, dict) else None
+            if gate is not None and hasattr(gate, "emit_delta"):
+                await gate.emit_delta(**kwargs)
+                return
+            await self.comm.delta(**kwargs)
+
+        try:
+            exec_streamer_fn, exec_streamer_widget = self._mk_exec_code_streamer(
+                f"decision ({iteration})",
+                exec_streamer_idx,
+                execution_id=exec_id,
+                emit_delta=_exec_emit_delta,
+            )
+        except TypeError as exc:
+            if "emit_delta" not in str(exc):
+                raise
+            exec_streamer_fn, exec_streamer_widget = self._mk_exec_code_streamer(
+                f"decision ({iteration})",
+                exec_streamer_idx,
+                execution_id=exec_id,
+            )
 
         async def _attach_exec_json_if_ready(instance_state: Dict[str, Any]) -> bool:
             if exec_streamer_widget is None or code_stream_state["blocked"]:
@@ -2462,11 +2857,40 @@ class ReactSolverV2:
                 return existing
 
             artifact_suffix = f"{pending_tool_call_id}.i{safe_idx}"
-            record_streamer_fns, instance_record_streamers = self._mk_content_streamers(
-                f"decision.record ({iteration}).{safe_idx}",
-                sources_list=sources_list,
-                artifact_name=f"react.record.{artifact_suffix}",
-            )
+            action_gate = action_overseer.gate_for(action_index=safe_idx, emit_delta=self.comm.delta, lane="action")
+            answer_gate = action_overseer.gate_for(action_index=safe_idx, emit_delta=self.comm.delta, lane="final_answer")
+
+            async def _timeline_emit_delta(**kwargs: Any) -> None:
+                marker = str(kwargs.get("marker") or "")
+                if marker == "answer":
+                    await answer_gate.emit_delta(**kwargs)
+                    return
+                await action_gate.emit_delta(**kwargs)
+
+            async def _report_action_identity(action: str, tool_id: str) -> None:
+                await action_overseer.observe_action_signal(
+                    action_index=safe_idx,
+                    action=action,
+                    tool_id=tool_id,
+                    action_gate=action_gate,
+                    answer_gate=answer_gate,
+                )
+
+            try:
+                record_streamer_fns, instance_record_streamers = self._mk_content_streamers(
+                    f"decision.record ({iteration}).{safe_idx}",
+                    sources_list=sources_list,
+                    artifact_name=f"react.record.{artifact_suffix}",
+                    emit_delta=action_gate.emit_delta,
+                )
+            except TypeError as exc:
+                if "emit_delta" not in str(exc):
+                    raise
+                record_streamer_fns, instance_record_streamers = self._mk_content_streamers(
+                    f"decision.record ({iteration}).{safe_idx}",
+                    sources_list=sources_list,
+                    artifact_name=f"react.record.{artifact_suffix}",
+                )
             timeline_streamer_fn, instance_timeline_streamer = self._mk_timeline_streamer(
                 f"decision.timeline ({iteration}).{safe_idx}",
                 sources_list=sources_list,
@@ -2476,9 +2900,13 @@ class ReactSolverV2:
                 final_answer_artifact_name=f"react.final_answer.{iteration}.{safe_idx}",
                 plan_artifact_name=f"timeline_text.react.plan.{iteration}.{safe_idx}",
                 iteration=iteration,
+                emit_delta=_timeline_emit_delta,
+                on_action_identity=_report_action_identity,
             )
             instance_state: Dict[str, Any] = {
                 "instance_idx": safe_idx,
+                "gate": action_gate,
+                "answer_gate": answer_gate,
                 "record_streamers": instance_record_streamers,
                 "timeline_streamer": instance_timeline_streamer,
                 "raw_chunks": [],
@@ -2657,6 +3085,7 @@ class ReactSolverV2:
             )
         except Exception:
             pass
+        stream_policy_violation: Optional[StreamPolicyViolation] = None
         try:
             async with with_accounting(
                 self.ctx_browser.runtime_ctx.bundle_id,
@@ -2680,10 +3109,59 @@ class ReactSolverV2:
                     agent_fn=_decision_agent,
                     emit_status=None,
                 )
+        except StreamPolicyViolation as exc:
+            stream_policy_violation = exc
+            self._stash_interrupted_generation_snapshot()
         finally:
             if self._active_phase_cancelled_by_steer or self._steer_interrupt_requested:
                 self._stash_interrupted_generation_snapshot()
             self._clear_active_generation_capture()
+        if stream_policy_violation is not None:
+            code = stream_policy_violation.code
+            extra = dict(stream_policy_violation.extra or {})
+            try:
+                self._persist_interrupted_generation(
+                    state=state,
+                    checkpoint="decision.stream_policy",
+                    cancelled_phase="decision",
+                )
+            except Exception:
+                pass
+            notice_message = self._protocol_violation_message(
+                code=code,
+                decision={},
+                state=state,
+                extra=extra,
+            )
+            try:
+                self._record_failed_decision_attempt(
+                    iteration=iteration,
+                    tool_call_id=pending_tool_call_id,
+                    code=code,
+                    notice_code=f"protocol_violation.{code}",
+                    notice_message=notice_message,
+                    decision_packet=None,
+                    reason=code,
+                    notice_extra=extra,
+                )
+            except Exception:
+                pass
+            retries = int(state.get("decision_retries") or 0)
+            if retries < int(state.get("max_iterations") or 0):
+                state["decision_retries"] = retries + 1
+                state["retry_decision"] = True
+                state["force_compaction_next_decision"] = False
+                decision = {"action": "call_tool", "notes": f"{code}; retry decision"}
+                state["session_log"].append({
+                    "type": "decision_invalid",
+                    "iteration": iteration,
+                    "timestamp": time.time(),
+                    "error": code,
+                    "extra": extra,
+                })
+                state["last_decision"] = decision
+                return state
+            decision = {"action": "exit", "final_answer": "Decision validation failed."}
         try:
             for instance_state in decision_stream_instances.values():
                 instance_timeline_streamer = instance_state.get("timeline_streamer")
@@ -2905,7 +3383,9 @@ class ReactSolverV2:
                     state["invalid_action_retries"] = 0
                     state["force_compaction_next_decision"] = False
                     state["retry_decision"] = False
+                    final_decision = (bundle_extra or {}).get("final_decision") if isinstance(bundle_extra, dict) else None
                     rejected_items = (bundle_extra or {}).get("rejected") if isinstance(bundle_extra, dict) else None
+                    suppressed_items = (bundle_extra or {}).get("suppressed") if isinstance(bundle_extra, dict) else None
                     if isinstance(rejected_items, list) and rejected_items:
                         self._record_dropped_multi_action_items(
                             iteration=iteration,
@@ -2914,7 +3394,30 @@ class ReactSolverV2:
                             decision_bundle=decision_bundle,
                             state=state,
                         )
-                    decision = accepted_bundle[0]
+                    if isinstance(suppressed_items, list) and suppressed_items:
+                        self._record_suppressed_final_answer_items(
+                            iteration=iteration,
+                            parent_tool_call_id=pending_tool_call_id,
+                            suppressed=suppressed_items,
+                            decision_bundle=decision_bundle,
+                            state=state,
+                        )
+                    accepted_for_log = list(accepted_bundle)
+                    if isinstance(final_decision, dict):
+                        accepted_for_log.append(final_decision)
+                        if accepted_bundle:
+                            state["pending_final_answer_after_bundle"] = final_decision
+                        else:
+                            state.pop("pending_final_answer_after_bundle", None)
+                    else:
+                        state.pop("pending_final_answer_after_bundle", None)
+                    if accepted_bundle:
+                        decision = accepted_bundle[0]
+                    elif isinstance(final_decision, dict):
+                        decision = final_decision
+                        bundle_mode = False
+                    else:
+                        decision = {"action": "exit", "final_answer": "Decision validation failed."}
                     state["pending_tool_bundle"] = [
                         {
                             "decision": item,
@@ -2923,11 +3426,29 @@ class ReactSolverV2:
                         }
                         for item in accepted_bundle
                     ]
-                    state["last_decision_bundle"] = accepted_bundle
+                    state["last_decision_bundle"] = accepted_for_log
             else:
                 decision = decision_packet.get("agent_response") or {}
                 if not isinstance(decision, dict):
                     decision = {}
+
+                suppressed_single = self._suppress_tool_call_final_answer(decision)
+                if suppressed_single is not None:
+                    self._record_suppressed_single_final_answer(
+                        iteration=iteration,
+                        tool_call_id=pending_tool_call_id,
+                        decision=decision,
+                        suppressed=suppressed_single,
+                        state=state,
+                    )
+                    state["session_log"].append({
+                        "type": "decision_field_suppressed",
+                        "iteration": iteration,
+                        "timestamp": time.time(),
+                        "code": suppressed_single.get("code") or "final_answer_with_tool_call",
+                        "field": "final_answer",
+                        **({"tool_id": suppressed_single.get("tool_id")} if suppressed_single.get("tool_id") else {}),
+                    })
 
                 validation_error = self._validate_decision(decision)
                 if validation_error:
@@ -3525,6 +4046,13 @@ class ReactSolverV2:
                     return state
             state["pending_tool_call_id"] = None
             state.pop("pending_tool_origin_iteration", None)
+            pending_final = state.pop("pending_final_answer_after_bundle", None)
+            if isinstance(pending_final, dict):
+                final_action = str(pending_final.get("action") or "complete").strip() or "complete"
+                state["last_decision"] = pending_final
+                state["exit_reason"] = final_action
+                state["final_answer"] = str(pending_final.get("final_answer") or "").strip()
+                state["suggested_followups"] = pending_final.get("suggested_followups") or []
             return state
 
         if await self._apply_steer_interrupt_if_requested(state, checkpoint="tool.before_execute"):

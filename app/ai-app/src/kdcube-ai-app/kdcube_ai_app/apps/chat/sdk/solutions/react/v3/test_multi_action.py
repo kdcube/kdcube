@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from kdcube_ai_app.apps.chat.sdk.runtime.tool_traits import STRATEGY_COMPATIBILITY_MATRIX
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v3.agents.decision import (
     parse_react_decision_bundle_from_raw,
     react_decision_stream_v2,
@@ -26,6 +27,30 @@ class _ExecStreamerStub:
 
     def is_complete(self):
         return self.complete
+
+
+def _adapter_with_strategy(*strategies: str):
+    return {"doc": {"tool_traits": {"strategy": list(strategies)}}}
+
+
+def _matrix_tool(strategy: str, index: int) -> dict:
+    return {
+        "action": "call_tool",
+        "notes": f"{strategy} {index}",
+        "tool_call": {
+            "tool_id": f"matrix_tools.{strategy}_{index}",
+            "params": {},
+        },
+    }
+
+
+def _matrix_adapters(*strategies: str) -> dict:
+    return {
+        f"matrix_tools.{strategy}_{index}": (
+            {} if strategy == "unknown" else _adapter_with_strategy(strategy)
+        )
+        for index, strategy in enumerate(strategies)
+    }
 
 
 def _solver_stub() -> ReactSolverV2:
@@ -324,7 +349,41 @@ async def test_decision_stream_keeps_valid_repeated_action_and_reports_malformed
 
 
 @pytest.mark.asyncio
-async def test_prepare_safe_multi_action_bundle_accepts_safe_tools():
+async def test_prepare_safe_multi_action_bundle_accepts_strategy_compatible_exploration_tools():
+    solver = _solver_stub()
+    bundle = [
+        {
+            "action": "call_tool",
+            "notes": "search",
+            "tool_call": {
+                "tool_id": "web_tools.web_search",
+                "params": {"q": "one"},
+            },
+        },
+        {
+            "action": "call_tool",
+            "notes": "read",
+            "tool_call": {
+                "tool_id": "react.read",
+                "params": {"paths": ["so:sources_pool[1]"]},
+            },
+        },
+    ]
+    accepted, error, extra = await solver._prepare_safe_multi_action_bundle(
+        bundle=bundle,
+        adapters_by_id={"web_tools.web_search": _adapter_with_strategy("exploration")},
+    )
+
+    assert error is None
+    assert [d["tool_call"]["tool_id"] for d in accepted] == [
+        "web_tools.web_search",
+        "react.read",
+    ]
+    assert extra is None
+
+
+@pytest.mark.asyncio
+async def test_prepare_safe_multi_action_bundle_rejects_third_action_even_when_strategy_compatible():
     solver = _solver_stub()
     bundle = [
         {
@@ -345,25 +404,357 @@ async def test_prepare_safe_multi_action_bundle_accepts_safe_tools():
         },
         {
             "action": "call_tool",
-            "notes": "write",
+            "notes": "inspect",
             "tool_call": {
-                "tool_id": "react.write",
-                "params": {"path": "outputs/brief.md", "channel": "canvas", "content": "Brief.", "kind": "display"},
+                "tool_id": "custom_tools.inspect",
+                "params": {},
             },
         },
     ]
     accepted, error, extra = await solver._prepare_safe_multi_action_bundle(
         bundle=bundle,
-        adapters_by_id={"web_tools.web_search": {}},
+        adapters_by_id={
+            "web_tools.web_search": _adapter_with_strategy("exploration"),
+            "custom_tools.inspect": {},
+        },
     )
 
     assert error is None
-    assert extra is None
     assert [d["tool_call"]["tool_id"] for d in accepted] == [
         "web_tools.web_search",
         "react.read",
-        "react.write",
     ]
+    assert extra == {
+        "rejected": [
+            {
+                "index": 2,
+                "code": "multi_action_bundle_too_many_actions",
+                "tool_id": "custom_tools.inspect",
+                "extra": {
+                    "index": 2,
+                    "max_actions": 2,
+                },
+            }
+        ]
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "first_strategy,later_strategy",
+    [
+        (first, later)
+        for first, row in STRATEGY_COMPATIBILITY_MATRIX.items()
+        for later in row
+    ],
+)
+async def test_prepare_safe_multi_action_bundle_applies_ordered_strategy_matrix(
+    first_strategy: str,
+    later_strategy: str,
+):
+    solver = _solver_stub()
+    expected_pair_allowed = STRATEGY_COMPATIBILITY_MATRIX[first_strategy][later_strategy]
+    bundle = [
+        _matrix_tool(first_strategy, 0),
+        _matrix_tool(later_strategy, 1),
+    ]
+
+    accepted, error, extra = await solver._prepare_safe_multi_action_bundle(
+        bundle=bundle,
+        adapters_by_id=_matrix_adapters(first_strategy, later_strategy),
+    )
+
+    assert error is None
+    assert [item["tool_call"]["tool_id"] for item in accepted] == [
+        f"matrix_tools.{first_strategy}_0",
+        *([f"matrix_tools.{later_strategy}_1"] if expected_pair_allowed else []),
+    ]
+    if expected_pair_allowed:
+        assert extra is None
+    else:
+        assert extra == {
+            "rejected": [
+                {
+                    "index": 1,
+                    "code": "multi_action_bundle_strategy_incompatible",
+                    "tool_id": f"matrix_tools.{later_strategy}_1",
+                    "extra": {
+                        "tool_id": f"matrix_tools.{later_strategy}_1",
+                        "strategy": [later_strategy],
+                        "first_index": 0,
+                        "first_tool_id": f"matrix_tools.{first_strategy}_0",
+                        "first_strategy": [first_strategy],
+                    },
+                }
+            ]
+        }
+
+
+@pytest.mark.asyncio
+async def test_prepare_safe_multi_action_bundle_checks_candidate_against_all_prior_accepted_actions():
+    solver = _solver_stub()
+    solver.MAX_ACTIONS_PER_ROUND = 3
+    bundle = [
+        {
+            "action": "call_tool",
+            "notes": "search",
+            "tool_call": {
+                "tool_id": "web_tools.web_search",
+                "params": {"q": "one"},
+            },
+        },
+        {
+            "action": "call_tool",
+            "notes": "record memory",
+            "tool_call": {
+                "tool_id": "memory.record_memory",
+                "params": {"text": "prefers short answers"},
+            },
+        },
+        {
+            "action": "call_tool",
+            "notes": "write",
+            "tool_call": {
+                "tool_id": "react.write",
+                "params": {
+                    "path": "outputs/brief.md",
+                    "channel": "canvas",
+                    "content": "Brief.",
+                    "kind": "display",
+                },
+            },
+        },
+    ]
+
+    accepted, error, extra = await solver._prepare_safe_multi_action_bundle(
+        bundle=bundle,
+        adapters_by_id={
+            "web_tools.web_search": _adapter_with_strategy("exploration"),
+            "memory.record_memory": _adapter_with_strategy("neutral"),
+        },
+    )
+
+    assert error is None
+    assert [d["tool_call"]["tool_id"] for d in accepted] == [
+        "web_tools.web_search",
+        "memory.record_memory",
+    ]
+    assert extra == {
+        "rejected": [
+            {
+                "index": 2,
+                "code": "multi_action_bundle_strategy_incompatible",
+                "tool_id": "react.write",
+                "extra": {
+                    "tool_id": "react.write",
+                    "strategy": ["exploitation"],
+                    "first_index": 0,
+                    "first_tool_id": "web_tools.web_search",
+                    "first_strategy": ["exploration"],
+                },
+            }
+        ]
+    }
+
+
+@pytest.mark.asyncio
+async def test_prepare_safe_multi_action_bundle_rejects_unknown_with_exploration():
+    solver = _solver_stub()
+    bundle = [
+        {
+            "action": "call_tool",
+            "notes": "search",
+            "tool_call": {
+                "tool_id": "web_tools.web_search",
+                "params": {},
+            },
+        },
+        {
+            "action": "call_tool",
+            "notes": "unmarked inspect",
+            "tool_call": {
+                "tool_id": "custom_tools.inspect",
+                "params": {},
+            },
+        },
+    ]
+
+    accepted, error, extra = await solver._prepare_safe_multi_action_bundle(
+        bundle=bundle,
+        adapters_by_id={
+            "web_tools.web_search": _adapter_with_strategy("exploration"),
+            "custom_tools.inspect": {},
+        },
+    )
+
+    assert error is None
+    assert [d["tool_call"]["tool_id"] for d in accepted] == ["web_tools.web_search"]
+    assert extra == {
+        "rejected": [
+            {
+                "index": 1,
+                "code": "multi_action_bundle_strategy_incompatible",
+                "tool_id": "custom_tools.inspect",
+                "extra": {
+                    "tool_id": "custom_tools.inspect",
+                    "strategy": ["unknown"],
+                    "first_index": 0,
+                    "first_tool_id": "web_tools.web_search",
+                    "first_strategy": ["exploration"],
+                },
+            }
+        ]
+    }
+
+
+@pytest.mark.asyncio
+async def test_prepare_safe_multi_action_bundle_rejects_unknown_with_neutral():
+    solver = _solver_stub()
+    bundle = [
+        {
+            "action": "call_tool",
+            "notes": "record note",
+            "tool_call": {
+                "tool_id": "memory.record_memory",
+                "params": {},
+            },
+        },
+        {
+            "action": "call_tool",
+            "notes": "unmarked inspect",
+            "tool_call": {
+                "tool_id": "custom_tools.inspect",
+                "params": {},
+            },
+        },
+    ]
+
+    accepted, error, extra = await solver._prepare_safe_multi_action_bundle(
+        bundle=bundle,
+        adapters_by_id={
+            "memory.record_memory": _adapter_with_strategy("neutral"),
+            "custom_tools.inspect": {},
+        },
+    )
+
+    assert error is None
+    assert [d["tool_call"]["tool_id"] for d in accepted] == ["memory.record_memory"]
+    assert extra == {
+        "rejected": [
+            {
+                "index": 1,
+                "code": "multi_action_bundle_strategy_incompatible",
+                "tool_id": "custom_tools.inspect",
+                "extra": {
+                    "tool_id": "custom_tools.inspect",
+                    "strategy": ["unknown"],
+                    "first_index": 0,
+                    "first_tool_id": "memory.record_memory",
+                    "first_strategy": ["neutral"],
+                },
+            }
+        ]
+    }
+
+
+@pytest.mark.asyncio
+async def test_prepare_safe_multi_action_bundle_rejects_unknown_with_exploitation():
+    solver = _solver_stub()
+    bundle = [
+        {
+            "action": "call_tool",
+            "notes": "render",
+            "tool_call": {
+                "tool_id": "rendering_tools.write_pptx",
+                "params": {},
+            },
+        },
+        {
+            "action": "call_tool",
+            "notes": "unmarked inspect",
+            "tool_call": {
+                "tool_id": "custom_tools.inspect",
+                "params": {},
+            },
+        },
+    ]
+
+    accepted, error, extra = await solver._prepare_safe_multi_action_bundle(
+        bundle=bundle,
+        adapters_by_id={
+            "rendering_tools.write_pptx": _adapter_with_strategy("exploitation"),
+            "custom_tools.inspect": {},
+        },
+    )
+
+    assert error is None
+    assert [d["tool_call"]["tool_id"] for d in accepted] == ["rendering_tools.write_pptx"]
+    assert extra == {
+        "rejected": [
+            {
+                "index": 1,
+                "code": "multi_action_bundle_strategy_incompatible",
+                "tool_id": "custom_tools.inspect",
+                "extra": {
+                    "tool_id": "custom_tools.inspect",
+                    "strategy": ["unknown"],
+                    "first_index": 0,
+                    "first_tool_id": "rendering_tools.write_pptx",
+                    "first_strategy": ["exploitation"],
+                },
+            }
+        ]
+    }
+
+
+@pytest.mark.asyncio
+async def test_prepare_safe_multi_action_bundle_rejects_unknown_with_unknown():
+    solver = _solver_stub()
+    bundle = [
+        {
+            "action": "call_tool",
+            "notes": "unmarked one",
+            "tool_call": {
+                "tool_id": "custom_tools.one",
+                "params": {},
+            },
+        },
+        {
+            "action": "call_tool",
+            "notes": "unmarked two",
+            "tool_call": {
+                "tool_id": "custom_tools.two",
+                "params": {},
+            },
+        },
+    ]
+
+    accepted, error, extra = await solver._prepare_safe_multi_action_bundle(
+        bundle=bundle,
+        adapters_by_id={
+            "custom_tools.one": {},
+            "custom_tools.two": {},
+        },
+    )
+
+    assert error is None
+    assert [d["tool_call"]["tool_id"] for d in accepted] == ["custom_tools.one"]
+    assert extra == {
+        "rejected": [
+            {
+                "index": 1,
+                "code": "multi_action_bundle_strategy_incompatible",
+                "tool_id": "custom_tools.two",
+                "extra": {
+                    "tool_id": "custom_tools.two",
+                    "strategy": ["unknown"],
+                    "first_index": 0,
+                    "first_tool_id": "custom_tools.one",
+                    "first_strategy": ["unknown"],
+                },
+            }
+        ]
+    }
 
 
 @pytest.mark.asyncio
@@ -398,9 +789,23 @@ async def test_prepare_safe_multi_action_bundle_allows_skill_read_with_independe
     )
 
     assert error is None
-    assert error is None
-    assert [d["tool_call"]["tool_id"] for d in accepted] == ["react.read", "react.write"]
-    assert extra is None
+    assert [d["tool_call"]["tool_id"] for d in accepted] == ["react.read"]
+    assert extra == {
+        "rejected": [
+            {
+                "index": 1,
+                "code": "multi_action_bundle_strategy_incompatible",
+                "tool_id": "react.write",
+                "extra": {
+                    "tool_id": "react.write",
+                    "strategy": ["exploitation"],
+                    "first_index": 0,
+                    "first_tool_id": "react.read",
+                    "first_strategy": ["exploration"],
+                },
+            }
+        ]
+    }
 
 
 @pytest.mark.asyncio
@@ -433,8 +838,8 @@ async def test_prepare_safe_multi_action_bundle_accepts_renderer_fanout():
     accepted, error, extra = await solver._prepare_safe_multi_action_bundle(
         bundle=bundle,
         adapters_by_id={
-            "rendering_tools.write_pptx": {},
-            "rendering_tools.write_docx": {},
+            "rendering_tools.write_pptx": _adapter_with_strategy("exploitation"),
+            "rendering_tools.write_docx": _adapter_with_strategy("exploitation"),
         },
     )
 
@@ -469,7 +874,7 @@ async def test_prepare_safe_multi_action_bundle_drops_unsafe_tool_but_keeps_vali
     ]
     accepted, error, extra = await solver._prepare_safe_multi_action_bundle(
         bundle=bundle,
-        adapters_by_id={"web_tools.web_search": {}},
+        adapters_by_id={"web_tools.web_search": _adapter_with_strategy("exploration")},
     )
 
     assert error is None
@@ -513,7 +918,7 @@ async def test_prepare_safe_multi_action_bundle_allows_single_complete_exec_with
 
     accepted, error, extra = await solver._prepare_safe_multi_action_bundle(
         bundle=bundle,
-        adapters_by_id={"exec_tools.execute_code_python": {}},
+        adapters_by_id={"exec_tools.execute_code_python": _adapter_with_strategy("exploration", "exploitation")},
         allow_single_exec_with_code=True,
     )
 
@@ -523,6 +928,290 @@ async def test_prepare_safe_multi_action_bundle_allows_single_complete_exec_with
         "exec_tools.execute_code_python",
         "react.write",
     ]
+
+
+@pytest.mark.asyncio
+async def test_prepare_safe_multi_action_bundle_allows_complete_exec_with_neutral_tool():
+    solver = _solver_stub()
+    bundle = [
+        {
+            "action": "call_tool",
+            "notes": "exec",
+            "tool_call": {
+                "tool_id": "exec_tools.execute_code_python",
+                "params": {
+                    "contract": [{"filename": "outputs/out.txt", "description": "output"}],
+                    "prog_name": "demo.py",
+                },
+            },
+        },
+        {
+            "action": "call_tool",
+            "notes": "record memory",
+            "tool_call": {
+                "tool_id": "memory.record_memory",
+                "params": {"text": "prefers short answers"},
+            },
+        },
+    ]
+
+    accepted, error, extra = await solver._prepare_safe_multi_action_bundle(
+        bundle=bundle,
+        adapters_by_id={
+            "exec_tools.execute_code_python": _adapter_with_strategy("exploration", "exploitation"),
+            "memory.record_memory": _adapter_with_strategy("neutral"),
+        },
+        allow_single_exec_with_code=True,
+    )
+
+    assert error is None
+    assert extra is None
+    assert [d["tool_call"]["tool_id"] for d in accepted] == [
+        "exec_tools.execute_code_python",
+        "memory.record_memory",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_prepare_safe_multi_action_bundle_carries_final_answer_after_neutral_tool():
+    solver = _solver_stub()
+    final_decision = {
+        "action": "complete",
+        "final_answer": "Saved.",
+        "suggested_followups": [],
+    }
+    bundle = [
+        {
+            "action": "call_tool",
+            "notes": "record memory",
+            "tool_call": {
+                "tool_id": "memory.record_memory",
+                "params": {"text": "prefers short answers"},
+            },
+        },
+        final_decision,
+    ]
+
+    accepted, error, extra = await solver._prepare_safe_multi_action_bundle(
+        bundle=bundle,
+        adapters_by_id={"memory.record_memory": _adapter_with_strategy("neutral")},
+    )
+
+    assert error is None
+    assert [d["tool_call"]["tool_id"] for d in accepted] == ["memory.record_memory"]
+    assert extra == {"final_decision": final_decision, "final_index": 1}
+
+
+@pytest.mark.asyncio
+async def test_prepare_safe_multi_action_bundle_allows_neutral_tool_after_final_answer():
+    solver = _solver_stub()
+    final_decision = {
+        "action": "complete",
+        "final_answer": "Saved.",
+        "suggested_followups": [],
+    }
+    bundle = [
+        final_decision,
+        {
+            "action": "call_tool",
+            "notes": "record memory",
+            "tool_call": {
+                "tool_id": "memory.record_memory",
+                "params": {"text": "prefers short answers"},
+            },
+        },
+    ]
+
+    accepted, error, extra = await solver._prepare_safe_multi_action_bundle(
+        bundle=bundle,
+        adapters_by_id={"memory.record_memory": _adapter_with_strategy("neutral")},
+    )
+
+    assert error is None
+    assert [d["tool_call"]["tool_id"] for d in accepted] == ["memory.record_memory"]
+    assert extra == {"final_decision": final_decision, "final_index": 0}
+
+
+@pytest.mark.asyncio
+async def test_prepare_safe_multi_action_bundle_drops_final_answer_after_non_neutral_tool():
+    solver = _solver_stub()
+    bundle = [
+        {
+            "action": "call_tool",
+            "notes": "search",
+            "tool_call": {
+                "tool_id": "web_tools.web_search",
+                "params": {"q": "one"},
+            },
+        },
+        {
+            "action": "complete",
+            "final_answer": "Done.",
+            "suggested_followups": [],
+        },
+    ]
+
+    accepted, error, extra = await solver._prepare_safe_multi_action_bundle(
+        bundle=bundle,
+        adapters_by_id={"web_tools.web_search": _adapter_with_strategy("exploration")},
+    )
+
+    assert error is None
+    assert [d["tool_call"]["tool_id"] for d in accepted] == ["web_tools.web_search"]
+    assert extra == {
+        "rejected": [
+            {
+                "index": 1,
+                "code": "multi_action_bundle_final_answer_after_non_neutral",
+                "extra": {
+                    "first_index": 0,
+                    "first_tool_id": "web_tools.web_search",
+                    "first_strategy": ["exploration"],
+                },
+            }
+        ]
+    }
+
+
+@pytest.mark.asyncio
+async def test_prepare_safe_multi_action_bundle_drops_non_neutral_tool_after_final_answer():
+    solver = _solver_stub()
+    final_decision = {
+        "action": "complete",
+        "final_answer": "Done.",
+        "suggested_followups": [],
+    }
+    bundle = [
+        final_decision,
+        {
+            "action": "call_tool",
+            "notes": "search",
+            "tool_call": {
+                "tool_id": "web_tools.web_search",
+                "params": {"q": "one"},
+            },
+        },
+    ]
+
+    accepted, error, extra = await solver._prepare_safe_multi_action_bundle(
+        bundle=bundle,
+        adapters_by_id={"web_tools.web_search": _adapter_with_strategy("exploration")},
+    )
+
+    assert error is None
+    assert accepted == []
+    assert extra == {
+        "rejected": [
+            {
+                "index": 1,
+                "code": "multi_action_bundle_non_neutral_after_final_answer",
+                "tool_id": "web_tools.web_search",
+                "extra": {
+                    "tool_id": "web_tools.web_search",
+                    "strategy": ["exploration"],
+                    "first_index": 0,
+                    "first_action": "complete",
+                },
+            }
+        ],
+        "final_decision": final_decision,
+        "final_index": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_prepare_safe_multi_action_bundle_suppresses_tool_final_answer_but_keeps_tool():
+    solver = _solver_stub()
+    bundle = [
+        {
+            "action": "call_tool",
+            "notes": "search",
+            "tool_call": {
+                "tool_id": "web_tools.web_search",
+                "params": {"q": "one"},
+            },
+            "final_answer": "done",
+        },
+        {
+            "action": "call_tool",
+            "notes": "search again",
+            "tool_call": {
+                "tool_id": "web_tools.web_search",
+                "params": {"q": "two"},
+            },
+        },
+    ]
+
+    accepted, error, extra = await solver._prepare_safe_multi_action_bundle(
+        bundle=bundle,
+        adapters_by_id={"web_tools.web_search": _adapter_with_strategy("exploration")},
+    )
+
+    assert error is None
+    assert [d["tool_call"]["params"]["q"] for d in accepted] == ["one", "two"]
+    assert accepted[0]["final_answer"] == ""
+    assert extra == {
+        "suppressed": [
+            {
+                "index": 0,
+                "code": "final_answer_with_tool_call",
+                "tool_id": "web_tools.web_search",
+                "extra": {
+                    "suppressed_field": "final_answer",
+                    "suppressed_text_symbols": 4,
+                    "tool_id": "web_tools.web_search",
+                },
+            }
+        ]
+    }
+
+
+@pytest.mark.asyncio
+async def test_prepare_safe_multi_action_bundle_keeps_two_explorations_and_drops_later_final_answer():
+    solver = _solver_stub()
+    bundle = [
+        {
+            "action": "call_tool",
+            "notes": "search",
+            "tool_call": {
+                "tool_id": "web_tools.web_search",
+                "params": {"q": "one"},
+            },
+        },
+        {
+            "action": "call_tool",
+            "notes": "search again",
+            "tool_call": {
+                "tool_id": "web_tools.web_search",
+                "params": {"q": "two"},
+            },
+        },
+        {
+            "action": "complete",
+            "final_answer": "done",
+            "suggested_followups": [],
+        },
+    ]
+
+    accepted, error, extra = await solver._prepare_safe_multi_action_bundle(
+        bundle=bundle,
+        adapters_by_id={"web_tools.web_search": _adapter_with_strategy("exploration")},
+    )
+
+    assert error is None
+    assert [d["tool_call"]["params"]["q"] for d in accepted] == ["one", "two"]
+    assert extra == {
+        "rejected": [
+            {
+                "index": 2,
+                "code": "multi_action_bundle_too_many_actions",
+                "extra": {
+                    "index": 2,
+                    "max_actions": 2,
+                },
+            }
+        ]
+    }
 
 
 def test_validate_decision_packet_channel_consistency_allows_multi_action_with_stray_code_for_per_item_handling():

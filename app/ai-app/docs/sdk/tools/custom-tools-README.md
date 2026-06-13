@@ -8,6 +8,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/tool-subsystem-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/mcp-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/named-services-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/multi-action/tool-strategy-traits-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/block-production-README.md
@@ -85,6 +86,11 @@ Notes:
 - `ref` is relative to bundle root (portable across host and isolated runtimes).
 - `alias` becomes the tool ID prefix.
 - `allowed` is the exact callable allow-list for that agent.
+- `tool_traits` can attach per-agent runtime traits such as
+  `strategy: [exploration]`, `strategy: [exploitation]`, or
+  `strategy: [neutral]`. ReAct uses the `strategy` trait for multi-action
+  compatibility. See
+  [Tool Strategy Traits](../solutions/multi-action/tool-strategy-traits-README.md).
 - `discovery` defaults to `semantic_kernel`; only `@kernel_function` tools
   should be published to the model catalog for Python sources.
 

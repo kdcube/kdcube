@@ -22,6 +22,11 @@ from kdcube_ai_app.apps.chat.sdk.runtime.dynamic_module_loader import (
     load_dynamic_module_from_file,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_module_bindings import bind_module_target
+from kdcube_ai_app.apps.chat.sdk.runtime.tool_traits import (
+    configured_tool_traits,
+    get_tool_traits,
+    normalize_tool_traits,
+)
 from kdcube_ai_app.infra.plugin.bundle_registry import BundleSpec
 from kdcube_ai_app.infra.service_hub.inventory import ModelServiceBase, AgentLogger
 from kdcube_ai_app.infra.service_hub.cache import create_kv_cache
@@ -78,6 +83,7 @@ class ToolSubsystem:
             tools_specs: Optional[List[Dict[str, Any]]] = None,  # [{"module"| "ref", "alias", "use_sk": bool}]
             raw_tool_specs: Optional[List[Dict[str, Any]]] = None,
             tool_runtime: Optional[Dict[str, str]] = None,
+            tool_traits: Optional[Dict[str, Dict[str, Any]]] = None,
             event_specs: Optional[List[Dict[str, Any]]] = None,
             mcp_subsystem: Optional[Any] = None,
             hosting_service: Optional[Any] = None,
@@ -94,6 +100,11 @@ class ToolSubsystem:
             self.kv_cache = None
         self.raw_tool_specs = raw_tool_specs or []
         self._tool_runtime = tool_runtime or {}
+        self._tool_traits: Dict[str, Dict[str, Any]] = {
+            str(tool_id or "").strip(): normalize_tool_traits(traits)
+            for tool_id, traits in (tool_traits or {}).items()
+            if str(tool_id or "").strip() and normalize_tool_traits(traits)
+        }
         self.raw_event_specs = event_specs or []
         self.mcp_subsystem = mcp_subsystem
         self.hosting_service = hosting_service
@@ -289,7 +300,7 @@ class ToolSubsystem:
             "constraints",
             "examples",
             "namespaces_applicable",
-            "tool_trait",
+            "tool_traits",
         ):
             if source.get(key) not in (None, "", []):
                 doc[key] = source.get(key)
@@ -566,9 +577,9 @@ class ToolSubsystem:
         except Exception:
             entries = []
         if entries:
-            self._mcp_entries = entries
+            self._mcp_entries = [self._apply_entry_tool_traits(e) for e in entries]
             # merge into by_id so validation works
-            for e in entries:
+            for e in self._mcp_entries:
                 tid = e.get("id")
                 if tid:
                     self._by_id[tid] = e
@@ -760,7 +771,10 @@ class ToolSubsystem:
                              else self._annot_from_sig_return(fn))
                 entries.append(self._mk_entry(
                     alias, fn_name, import_stmt, call_template, desc, params,
-                    raw=meta, is_async=asyncio.iscoroutinefunction(fn), return_annotation=ret_annot
+                    raw=meta,
+                    is_async=asyncio.iscoroutinefunction(fn),
+                    return_annotation=ret_annot,
+                    callable_obj=fn,
                 ))
             return entries
 
@@ -782,7 +796,10 @@ class ToolSubsystem:
             ret_annot = self._annot_from_sig_return(fn)
             entries.append(self._mk_entry(
                 alias, name, import_stmt, call_template, desc, params,
-                raw=None, is_async=is_async, return_annotation=ret_annot
+                raw=None,
+                is_async=is_async,
+                return_annotation=ret_annot,
+                callable_obj=fn,
             ))
         return entries
 
@@ -802,6 +819,7 @@ class ToolSubsystem:
 
         entries: List[Dict[str, Any]] = []
         import_stmt = f"from {mod_name} import tools as {alias}"
+        owner = getattr(mod, "tools", mod)
 
         for fm in dict_metas:
             fn_name = fm.get("name")
@@ -827,9 +845,13 @@ class ToolSubsystem:
             call_template = self._make_call_template(alias, fn_name, params)
             is_async = bool(fm.get("is_asynchronous"))
             ret_annot = self._annot_from_sk_return(fm)
+            fn = getattr(owner, fn_name, None)
             entry = self._mk_entry(
                 alias, fn_name, import_stmt, call_template, desc, params,
-                raw=fm, is_async=is_async, return_annotation=ret_annot
+                raw=fm,
+                is_async=is_async,
+                return_annotation=ret_annot,
+                callable_obj=fn,
             )
             entry["plugin"] = plugin
             entry["plugin_alias"] = alias
@@ -895,6 +917,7 @@ class ToolSubsystem:
             raw: Optional[Dict[str, Any]] = None,
             is_async: bool = False,
             return_annotation: Optional[str] = None,
+            callable_obj: Optional[Any] = None,
     ) -> Dict[str, Any]:
         args_doc = {}
         for p in params:
@@ -903,8 +926,9 @@ class ToolSubsystem:
                 type_hint += f" (default={p['default']})"
             args_doc[p["name"]] = type_hint
         returns_doc = (return_annotation or "").strip() or "str or JSON (tool-specific)"
+        tool_id = f"{alias}.{fn_name}"
         entry = {
-            "id": f"{alias}.{fn_name}",
+            "id": tool_id,
             "desc": (desc or "").strip(),
             "params": params,
             "import": import_stmt,
@@ -921,7 +945,7 @@ class ToolSubsystem:
         }
         if isinstance(raw, dict):
             metadata: Dict[str, Any] = {}
-            for key in ("namespaces_applicable", "tool_trait"):
+            for key in ("namespaces_applicable",):
                 if raw.get(key) not in (None, "", []):
                     metadata[key] = raw.get(key)
             if metadata:
@@ -929,8 +953,72 @@ class ToolSubsystem:
                 entry["doc"]["metadata"] = metadata
                 for key, value in metadata.items():
                     entry["doc"][key] = value
+        entry = self._apply_entry_tool_traits(
+            entry,
+            alias=alias,
+            tool_name=fn_name,
+            raw=raw,
+            callable_obj=callable_obj,
+        )
         if "plugin" not in entry: entry["plugin"] = (raw or {}).get("plugin_name", "") or ""
         if "plugin_alias" not in entry: entry["plugin_alias"] = alias
+        return entry
+
+    def _configured_traits_for(self, *, tool_id: str, alias: str, tool_name: str) -> Dict[str, Any]:
+        candidates = [
+            tool_id,
+            f"{alias}.{tool_name}" if alias and tool_name else "",
+            f"{alias}.*" if alias else "",
+            "*",
+        ]
+        if tool_id.startswith("mcp."):
+            parts = tool_id.split(".", 2)
+            if len(parts) == 3:
+                candidates.insert(1, f"mcp.{parts[1]}.*")
+        out: Dict[str, Any] = {}
+        configured = getattr(self, "_tool_traits", {}) or {}
+        for key in candidates:
+            if key and key in configured:
+                out = configured_tool_traits(out, configured.get(key))
+        return out
+
+    def _apply_entry_tool_traits(
+        self,
+        entry: Dict[str, Any],
+        *,
+        alias: Optional[str] = None,
+        tool_name: Optional[str] = None,
+        raw: Optional[Dict[str, Any]] = None,
+        callable_obj: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        tool_id = str(entry.get("id") or "").strip()
+        if not tool_id:
+            return entry
+        _origin, provider, parsed_tool_name = parse_tool_id(tool_id)
+        resolved_alias = str(alias or entry.get("plugin_alias") or provider or "").strip()
+        resolved_tool_name = str(tool_name or parsed_tool_name or "").strip()
+        raw_traits = {}
+        if isinstance(raw, dict):
+            raw_traits = normalize_tool_traits(raw.get("tool_traits") or raw.get("tool_trait") or {})
+        callable_traits = get_tool_traits(callable_obj)
+        configured_traits = self._configured_traits_for(
+            tool_id=tool_id,
+            alias=resolved_alias,
+            tool_name=resolved_tool_name,
+        )
+        traits = configured_tool_traits(configured_tool_traits(raw_traits, callable_traits), configured_traits)
+        if not traits:
+            return entry
+        metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+        metadata = dict(metadata)
+        metadata["tool_traits"] = traits
+        entry["metadata"] = metadata
+        doc = entry.get("doc") if isinstance(entry.get("doc"), dict) else {}
+        doc = dict(doc)
+        doc["tool_traits"] = traits
+        doc["metadata"] = metadata
+        entry["doc"] = doc
+        entry["tool_traits"] = traits
         return entry
 
     def export_runtime_globals(self) -> Dict[str, Any]:
@@ -961,6 +1049,8 @@ class ToolSubsystem:
             "BUNDLE_SPEC": bundle_dict,
             "BUNDLE_ROOT_HOST": str(self.bundle_root) if self.bundle_root else None,
             "RAW_TOOL_SPECS": self.raw_tool_specs or [],
+            "TOOL_RUNTIME": self._tool_runtime or {},
+            "TOOL_TRAITS": self._tool_traits or {},
             "EVENT_SOURCE_SPECS": self.raw_event_specs or [],
             "MCP_TOOL_SPECS": [
                 {"server_id": s.server_id, "alias": s.alias, "tools": s.tools}
@@ -1009,6 +1099,7 @@ def create_tool_subsystem_with_mcp(
         tools_specs: Optional[List[Dict[str, Any]]] = None,
         raw_tool_specs: Optional[List[Dict[str, Any]]] = None,
         tool_runtime: Optional[Dict[str, str]] = None,
+        tool_traits: Optional[Dict[str, Dict[str, Any]]] = None,
         event_specs: Optional[List[Dict[str, Any]]] = None,
         mcp_tool_specs: Optional[List[Dict[str, Any]]] = None,
         mcp_services_config: Optional[Any] = None,
@@ -1042,6 +1133,7 @@ def create_tool_subsystem_with_mcp(
         tools_specs=tools_specs,
         raw_tool_specs=raw_tool_specs,
         tool_runtime=tool_runtime,
+        tool_traits=tool_traits,
         event_specs=event_specs,
         mcp_subsystem=mcp_subsystem,
         hosting_service=hosting_service,

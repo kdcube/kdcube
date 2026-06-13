@@ -37,6 +37,11 @@ surfaces:
             alias: web_tools
             discovery: semantic_kernel
             allowed: [web_search, web_fetch]
+            tool_traits:
+              web_search:
+                strategy: [exploration]
+              web_fetch:
+                strategy: [exploration]
             runtime:
               web_search: local
               web_fetch: local
@@ -46,6 +51,9 @@ surfaces:
             server_id: knowledge
             alias: knowledge
             allowed: ["*"]
+            tool_traits:
+              "*":
+                strategy: [exploration]
 
           - id: task_service
             kind: named_service
@@ -59,6 +67,17 @@ surfaces:
                   - object.schema
                   - object.upsert
                   - object.delete
+            tool_traits:
+              provider_about:
+                strategy: [exploration]
+              search_objects:
+                strategy: [exploration]
+              object_schema:
+                strategy: [exploration]
+              upsert_object:
+                strategy: [exploitation]
+              delete_object:
+                strategy: [exploitation]
 ```
 
 `surfaces.as_consumer.agents.<agent_id>.tools` is a list. Each list item is one
@@ -90,12 +109,21 @@ Named-service catalog entries render only `namespaces applicable`, so ReAct can
 see which configured namespaces support each generic tool without seeing
 provider protocol operation ids.
 
+`tool_traits` is per connection and keyed by that connection's callable names.
+The runtime qualifies those names with the connection alias and stores them in
+tool metadata. The `strategy` trait drives ReAct multi-action compatibility:
+`exploration`, `exploitation`, `neutral`, or `unknown` when no trait is present.
+MCP connections may use `"*"` as a wildcard trait for all tools from that
+server. See
+`repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/multi-action/tool-strategy-traits-README.md`.
+
 At runtime, `agent_tool_config_from_bundle_props(...)` converts this config
 into:
 
 - module tool specs
 - MCP tool specs
 - tool runtime overrides
+- tool traits
 - allowed aliases
 - per-alias allowed tool names
 
@@ -131,6 +159,7 @@ tool_subsystem, _ = create_tool_subsystem_with_mcp(
     tool_runtime=tool_config.tool_runtime,
     mcp_tool_specs=tool_config.mcp_tool_specs,
     mcp_env_json=os.environ.get("MCP_SERVICES") or "",
+    tool_traits=tool_config.tool_traits,
 )
 ```
 

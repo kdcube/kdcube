@@ -68,9 +68,15 @@ def test_agent_tool_config_reads_as_consumer_surface_tools() -> None:
                                                 "object.search",
                                                 "object.schema",
                                                 "object.upsert",
+                                                "object.host_file",
                                                 "object.delete",
                                             ],
                                         },
+                                    },
+                                    "tool_traits": {
+                                        "search_objects": {"strategy": ["exploration"]},
+                                        "upsert_object": {"strategy": ["exploitation"]},
+                                        "host_file": {"strategy": ["exploitation"]},
                                     },
                                 },
                             ],
@@ -88,9 +94,15 @@ def test_agent_tool_config_reads_as_consumer_surface_tools() -> None:
         "search_objects",
         "object_schema",
         "upsert_object",
+        "host_file",
         "delete_object",
     ]
     assert "get_object" not in cfg.allowed_tool_names_by_alias["named_services"]
+    assert cfg.tool_traits == {
+        "named_services.search_objects": {"strategy": ["exploration"]},
+        "named_services.upsert_object": {"strategy": ["exploitation"]},
+        "named_services.host_file": {"strategy": ["exploitation"]},
+    }
 
 
 def test_alias_tool_filter_keeps_exact_agent_surface() -> None:

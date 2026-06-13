@@ -650,10 +650,13 @@ class TimelineStreamer:
         plan_marker: str = "timeline_text",
         plan_format: str = "markdown",
         plan_artifact_name: str = "timeline_text.react.plan",
+        on_action_identity: Optional[Callable[[str, str], Awaitable[None]]] = None,
     ) -> None:
         self.emit_delta = emit_delta
         self.agent = agent
         self.sources_getter = sources_getter
+        self.on_action_identity = on_action_identity
+        self.action_identity_reported = False
 
         self.targets: List[Dict[str, Any]] = []
         if stream_notes:
@@ -729,6 +732,18 @@ class TimelineStreamer:
             if t.get("use_citations"):
                 self.citation_states[t["name"]] = citations_module.CitationStreamState()
         self._sources_sig = self._sources_signature(sources_list or [])
+
+    async def _maybe_report_action_identity(self) -> None:
+        if self.action_identity_reported or self.on_action_identity is None:
+            return
+        action = (self.action_value or "").strip()
+        if not action:
+            return
+        tool_id = (self.tool_id_value or "").strip()
+        if action == "call_tool" and not tool_id:
+            return
+        self.action_identity_reported = True
+        await self.on_action_identity(action, tool_id)
 
     def _sources_signature(self, sources_list: List[Dict[str, object]]) -> tuple[int, int, int]:
         if not sources_list:
@@ -1063,8 +1078,10 @@ class TimelineStreamer:
                         self.pending_string_quote_ws = ""
                         if self._matches_action_path():
                             self.action_value = self.active_value_buf.strip()
+                            await self._maybe_report_action_identity()
                         if self._matches_tool_id_path():
                             self.tool_id_value = self.active_value_buf.strip()
+                            await self._maybe_report_action_identity()
                         if self.streaming_target and self.active_value_buf:
                             await self._emit_chunk(self.active_value_buf)
                         self.active_value_buf = ""
@@ -1138,8 +1155,10 @@ class TimelineStreamer:
                         self.in_string = False
                         if self._matches_action_path():
                             self.action_value = self.active_value_buf.strip()
+                            await self._maybe_report_action_identity()
                         if self._matches_tool_id_path():
                             self.tool_id_value = self.active_value_buf.strip()
+                            await self._maybe_report_action_identity()
                         if self.streaming_target and self.active_value_buf:
                             await self._emit_chunk(self.active_value_buf)
                         self.active_value_buf = ""
@@ -1218,8 +1237,10 @@ class TimelineStreamer:
             self.pending_string_quote_ws = ""
             if self._matches_action_path():
                 self.action_value = self.active_value_buf.strip()
+                await self._maybe_report_action_identity()
             if self._matches_tool_id_path():
                 self.tool_id_value = self.active_value_buf.strip()
+                await self._maybe_report_action_identity()
             if self.streaming_target and self.active_value_buf:
                 await self._emit_chunk(self.active_value_buf)
             self.active_value_buf = ""

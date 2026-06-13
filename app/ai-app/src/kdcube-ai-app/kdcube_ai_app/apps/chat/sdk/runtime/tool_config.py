@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
 from kdcube_ai_app.apps.chat.sdk.event_identity import normalize_agent_id
+from kdcube_ai_app.apps.chat.sdk.runtime.tool_traits import normalize_tool_traits
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client_tools import (
     NAMED_SERVICE_TOOLS_ALIAS,
     named_service_tool_spec,
@@ -15,6 +16,8 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client_tools
 
 
 DEFAULT_AGENT_ID = "default_agent"
+ToolTraits = dict[str, Any]
+ToolTraitsById = dict[str, ToolTraits]
 
 _NAMED_SERVICE_OPERATION_TO_TOOL = {
     "provider.about": "provider_about",
@@ -24,6 +27,7 @@ _NAMED_SERVICE_OPERATION_TO_TOOL = {
     "object.get": "get_object",
     "object.schema": "object_schema",
     "object.upsert": "upsert_object",
+    "object.host_file": "host_file",
     "object.delete": "delete_object",
 }
 
@@ -35,6 +39,7 @@ class AgentToolConfig:
     tool_specs: list[dict[str, Any]] = field(default_factory=list)
     mcp_tool_specs: list[dict[str, Any]] = field(default_factory=list)
     tool_runtime: dict[str, str] = field(default_factory=dict)
+    tool_traits: ToolTraitsById = field(default_factory=dict)
     allowed_plugins: list[str] = field(default_factory=list)
     allowed_tool_names_by_alias: dict[str, list[str] | None] = field(default_factory=dict)
 
@@ -192,6 +197,41 @@ def _merge_runtime(
         target[full_id] = mode
 
 
+def _trait_tool_id(alias: str, tool_name: str, *, kind: str) -> str:
+    name = str(tool_name or "").strip()
+    if not name:
+        return ""
+    if name == "*":
+        return f"{alias}.*"
+    if kind == "mcp":
+        if name.startswith("mcp."):
+            return name
+        if name.startswith(f"{alias}."):
+            name = name[len(alias) + 1:]
+        return f"mcp.{alias}.{name}"
+    if "." in name:
+        return name
+    return f"{alias}.{name}"
+
+
+def _merge_tool_traits(
+    target: dict[str, dict[str, Any]],
+    *,
+    alias: str,
+    kind: str,
+    raw: Any,
+) -> None:
+    if not alias or not isinstance(raw, Mapping):
+        return
+    for tool_name, traits_raw in raw.items():
+        full_id = _trait_tool_id(alias, str(tool_name or ""), kind=kind)
+        if not full_id:
+            continue
+        traits = normalize_tool_traits(traits_raw)
+        if traits:
+            target[full_id] = traits
+
+
 def _named_service_tools_for_connection(connection: Mapping[str, Any]) -> list[str]:
     namespaces = connection.get("namespaces")
     if not isinstance(namespaces, Mapping):
@@ -222,6 +262,7 @@ def agent_tool_config_from_bundle_props(
     tool_specs: list[dict[str, Any]] = []
     mcp_tool_specs: list[dict[str, Any]] = []
     tool_runtime: dict[str, str] = {}
+    tool_traits: dict[str, dict[str, Any]] = {}
     allowed_plugins: list[str] = []
     allowed_tool_names_by_alias: dict[str, list[str] | None] = {}
 
@@ -252,6 +293,12 @@ def agent_tool_config_from_bundle_props(
                 allowed=_string_list(connection.get("allowed")),
             )
             _merge_runtime(tool_runtime, alias=alias, runtime=connection.get("runtime"))
+            _merge_tool_traits(
+                tool_traits,
+                alias=alias,
+                kind="python",
+                raw=connection.get("tool_traits"),
+            )
             continue
 
         if kind == "mcp":
@@ -269,6 +316,12 @@ def agent_tool_config_from_bundle_props(
             _append_unique(allowed_plugins, alias)
             _merge_allowed(allowed_tool_names_by_alias, alias=alias, allowed=allowed or ["*"])
             _merge_runtime(tool_runtime, alias=alias, runtime=connection.get("runtime"))
+            _merge_tool_traits(
+                tool_traits,
+                alias=alias,
+                kind="mcp",
+                raw=connection.get("tool_traits"),
+            )
             continue
 
         if kind == "named_service":
@@ -281,12 +334,19 @@ def agent_tool_config_from_bundle_props(
             _append_unique(allowed_plugins, alias)
             _merge_allowed(allowed_tool_names_by_alias, alias=alias, allowed=allowed_tools)
             _merge_runtime(tool_runtime, alias=alias, runtime=connection.get("runtime"))
+            _merge_tool_traits(
+                tool_traits,
+                alias=alias,
+                kind="python",
+                raw=connection.get("tool_traits"),
+            )
             continue
 
     return AgentToolConfig(
         tool_specs=tool_specs,
         mcp_tool_specs=mcp_tool_specs,
         tool_runtime=tool_runtime,
+        tool_traits=tool_traits,
         allowed_plugins=allowed_plugins,
         allowed_tool_names_by_alias=allowed_tool_names_by_alias,
     )

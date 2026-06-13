@@ -1608,6 +1608,9 @@ def build_tool_catalog(adapters: Optional[List[Dict[str, Any]]] = None,
         namespaces_applicable = doc.get("namespaces_applicable") or metadata.get("namespaces_applicable")
         if namespaces_applicable:
             item["namespaces_applicable"] = list(namespaces_applicable)
+        tool_traits = doc.get("tool_traits") or metadata.get("tool_traits")
+        if isinstance(tool_traits, dict) and tool_traits:
+            item["tool_traits"] = dict(tool_traits)
         if "constraints" in doc:
             item["constraints"] = doc["constraints"]
         if "examples" in doc:
@@ -1642,6 +1645,7 @@ def build_tools_block(
         examples = tool.get("examples", [])
         constraints = tool.get("constraints", [])
         namespaces_applicable = tool.get("namespaces_applicable")
+        tool_traits = tool.get("tool_traits") if isinstance(tool.get("tool_traits"), dict) else {}
 
         async_txt = " [async]" if is_async else ""
         lines.append(f"🔧 [{idx}] {tid}{async_txt}")
@@ -1651,9 +1655,16 @@ def build_tools_block(
             lines.extend(_wrap_lines(purpose, indent="   "))
             lines.append("")
 
-        if namespaces_applicable:
+        if namespaces_applicable or tool_traits:
             lines.append("   Scope:")
-            lines.append(f"       • namespaces applicable: {', '.join(str(ns) for ns in namespaces_applicable)}")
+            if namespaces_applicable:
+                lines.append(f"       • namespaces applicable: {', '.join(str(ns) for ns in namespaces_applicable)}")
+            if tool_traits:
+                for trait_name, trait_value in tool_traits.items():
+                    values = trait_value if isinstance(trait_value, list) else [trait_value]
+                    text = ", ".join(str(item) for item in values if str(item or "").strip())
+                    if text:
+                        lines.append(f"       • {trait_name}: {text}")
             lines.append("")
 
         if args:

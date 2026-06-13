@@ -199,11 +199,19 @@ bundles:
                     module: kdcube_ai_app.apps.chat.sdk.tools.web_tools
                     alias: web_tools
                     allowed: [web_search, web_fetch]
+                    tool_traits:
+                      web_search:
+                        strategy: [exploration]
+                      web_fetch:
+                        strategy: [exploration]
                   - id: knowledge
                     kind: mcp
                     server_id: knowledge
                     alias: knowledge
                     allowed: ["*"]
+                    tool_traits:
+                      "*":
+                        strategy: [exploration]
                   - id: task_service
                     kind: named_service
                     alias: named_services
@@ -217,6 +225,21 @@ bundles:
                           - object.host_file
                           - object.upsert
                           - object.delete
+                    tool_traits:
+                      provider_about:
+                        strategy: [exploration]
+                      list_objects:
+                        strategy: [exploration]
+                      search_objects:
+                        strategy: [exploration]
+                      object_schema:
+                        strategy: [exploration]
+                      host_file:
+                        strategy: [exploitation]
+                      upsert_object:
+                        strategy: [exploitation]
+                      delete_object:
+                        strategy: [exploitation]
                 event_sources:
                   - kind: named_service
                     namespace: task
@@ -252,6 +275,9 @@ Rules:
   names are Python callable names.
 - `kind: mcp` connects a server declared under `mcp.services`; `allowed`
   names are MCP tool names, or `["*"]`.
+- `tool_traits` is keyed by the callable names for that connection. The
+  `strategy` trait is used by ReAct multi-action policy and may be
+  `exploration`, `exploitation`, `neutral`, or omitted/`unknown`.
 - `kind: named_service` exposes namespace operations through the generic
   `named_services.*` tool family. ReAct catalog entries render only
   `namespaces applicable`, so an agent can see which configured namespaces may

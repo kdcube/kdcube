@@ -14,6 +14,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, Union
 from pydantic import BaseModel
 
 from kdcube_ai_app.apps.chat.sdk.streaming.artifacts_channeled_streaming import CompositeJsonArtifactStreamer
+from kdcube_ai_app.apps.chat.sdk.streaming.stream_policy import StreamPolicyViolation
 from kdcube_ai_app.apps.chat.sdk.tools import citations as citations_module
 from kdcube_ai_app.apps.chat.sdk.util import _json_loads_loose_with_err
 from kdcube_ai_app.infra.service_hub.inventory import ModelServiceBase
@@ -367,6 +368,8 @@ async def stream_with_channels(
         for fn in subs:
             try:
                 await fn(channel_instance=channel_instance, **kwargs)
+            except StreamPolicyViolation:
+                raise
             except Exception:
                 continue
 

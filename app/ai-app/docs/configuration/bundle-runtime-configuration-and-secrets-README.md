@@ -400,11 +400,21 @@ surfaces:
             module: kdcube_ai_app.apps.chat.sdk.tools.web_tools
             alias: web_tools
             allowed: [web_search, web_fetch]
+            tool_traits:
+              web_search:
+                strategy: [exploration]
+              web_fetch:
+                strategy: [exploration]
           - id: docs
             kind: mcp
             server_id: docs
             alias: docs
             allowed: [search, fetch]
+            tool_traits:
+              search:
+                strategy: [exploration]
+              fetch:
+                strategy: [exploration]
           - id: task_service
             kind: named_service
             alias: named_services
@@ -418,6 +428,21 @@ surfaces:
                   - object.host_file
                   - object.upsert
                   - object.delete
+            tool_traits:
+              provider_about:
+                strategy: [exploration]
+              list_objects:
+                strategy: [exploration]
+              search_objects:
+                strategy: [exploration]
+              object_schema:
+                strategy: [exploration]
+              host_file:
+                strategy: [exploitation]
+              upsert_object:
+                strategy: [exploitation]
+              delete_object:
+                strategy: [exploitation]
         event_sources:
           - kind: named_service
             namespace: task
@@ -447,6 +472,8 @@ This config controls visibility, not secrets:
 - Python sources use `module` or bundle-local `ref`.
 - MCP sources reference `server_id`; transport/auth still live in
   `mcp.services`.
+- `tool_traits` is consumer-side metadata for this agent's tool policy. The
+  first runtime trait is `strategy`, used by ReAct multi-action compatibility.
 - Named-service agent tools are configured with provider operation ids, then
   exposed to ReAct as concrete `named_services.*` tools. ReAct catalog entries
   render only `namespaces applicable`, so the model sees which namespaces may

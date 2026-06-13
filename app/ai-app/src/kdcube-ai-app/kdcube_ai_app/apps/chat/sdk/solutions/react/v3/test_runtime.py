@@ -70,6 +70,7 @@ def test_tool_catalog_renders_named_service_namespace_scope():
         raw={
             "named_service_operation": "object.search",
             "namespaces_applicable": ["task", "memo"],
+            "tool_traits": {"strategy": ["exploration"]},
         },
         is_async=True,
         return_annotation="JSON",
@@ -89,9 +90,11 @@ def test_tool_catalog_renders_named_service_namespace_scope():
     assert catalog[0]["namespaces_applicable"] == ["task", "memo"]
     assert "named_service_operation" not in prompt_catalog[0]["doc"]
     assert prompt_catalog[0]["doc"]["namespaces_applicable"] == ["task", "memo"]
+    assert prompt_catalog[0]["doc"]["tool_traits"] == {"strategy": ["exploration"]}
     assert "named service operation" not in rendered
     assert "object.search" not in rendered
     assert "namespaces applicable: task, memo" in rendered
+    assert "strategy: exploration" in rendered
 
 
 def test_validate_decision_rejects_tool_call_with_final_answer():
@@ -109,8 +112,33 @@ def test_validate_decision_rejects_tool_call_with_final_answer():
         state={},
         decision=decision,
     )
-    assert "No tool was run" in message
+    assert "The tool action is kept" in message
+    assert "suppressed" in message
     assert "after the tool result is visible" in message
+
+
+def test_tool_call_final_answer_is_sanitized_before_execution_validation():
+    solver = _solver_stub()
+    decision = {
+        "action": "call_tool",
+        "tool_call": {"tool_id": "web_tools.web_search", "params": {"q": "kdcube"}},
+        "final_answer": "done",
+        "notes": "",
+    }
+
+    suppressed = solver._suppress_tool_call_final_answer(decision)
+
+    assert suppressed == {
+        "code": "final_answer_with_tool_call",
+        "tool_id": "web_tools.web_search",
+        "extra": {
+            "suppressed_field": "final_answer",
+            "suppressed_text_symbols": 4,
+            "tool_id": "web_tools.web_search",
+        },
+    }
+    assert decision["final_answer"] == ""
+    assert solver._validate_decision(decision) is None
 
 
 def test_validate_decision_rejects_final_answer_with_notes():
@@ -131,7 +159,7 @@ def test_validate_decision_rejects_final_answer_with_notes():
     assert "notes empty" in message
 
 
-def test_memory_write_multi_action_violation_message_requires_isolated_round():
+def test_memory_write_multi_action_violation_message_reports_missing_neutral_trait():
     solver = _solver_stub()
 
     message = solver._protocol_violation_message(
@@ -141,8 +169,8 @@ def test_memory_write_multi_action_violation_message_requires_isolated_round():
         extra={"tool_id": "memory.record_memory"},
     )
 
-    assert "must run alone" in message
-    assert "after the result is visible" in message
+    assert "did not expose its neutral strategy trait" in message
+    assert "could not prove same-round compatibility" in message
 
 
 @pytest.mark.asyncio
@@ -315,11 +343,14 @@ async def test_decision_node_feeds_exec_contract_when_decision_channel_closes(mo
         "iteration": 0,
         "max_iterations": 15,
         "adapters": [
-            {
-                "id": "exec_tools.execute_code_python",
-                "doc": {"args": {"contract": {}, "prog_name": {}}},
-            }
-        ],
+                {
+                    "id": "exec_tools.execute_code_python",
+                    "doc": {
+                        "args": {"contract": {}, "prog_name": {}},
+                        "tool_traits": {"strategy": ["exploration", "exploitation"]},
+                    },
+                }
+            ],
         "outdir": "/tmp/out",
         "workdir": "/tmp/work",
         "turn_id": "turn-1",
@@ -529,7 +560,10 @@ async def test_decision_node_binds_code_to_immediately_preceding_exec_decision(m
         "adapters": [
             {
                 "id": "exec_tools.execute_code_python",
-                "doc": {"args": {"contract": {}, "prog_name": {}}},
+                "doc": {
+                    "args": {"contract": {}, "prog_name": {}},
+                    "tool_traits": {"strategy": ["exploration", "exploitation"]},
+                },
             }
         ],
         "outdir": "/tmp/out",
@@ -549,7 +583,6 @@ async def test_decision_node_binds_code_to_immediately_preceding_exec_decision(m
     assert [item["decision"]["tool_call"]["tool_id"] for item in out["pending_tool_bundle"]] == [
         "react.write",
         "exec_tools.execute_code_python",
-        "react.read",
     ]
 
 

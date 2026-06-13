@@ -8,6 +8,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/tool-subsystem-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/custom-tools-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/named-services-tools-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/multi-action/tool-strategy-traits-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/block-production-README.md
@@ -45,6 +46,9 @@ surfaces:
             server_id: knowledge
             alias: knowledge
             allowed: ["*"]
+            tool_traits:
+              "*":
+                strategy: [exploration]
 
           - id: docs
             kind: mcp
@@ -53,6 +57,11 @@ surfaces:
             allowed:
               - search
               - fetch
+            tool_traits:
+              search:
+                strategy: [exploration]
+              fetch:
+                strategy: [exploration]
 ```
 
 Rules:
@@ -60,6 +69,9 @@ Rules:
 - `alias` is used in tool IDs: `mcp.<alias>.<tool_id>`.
 - `allowed` omitted or `["*"]` exposes all server tools.
 - A concrete list is an allow-list.
+- `tool_traits` is consumer-side metadata. Use it to mark MCP tools with
+  strategy traits for ReAct multi-action policy; `"*"` applies one trait block
+  to all tools from that server connection.
 - Multiple agents can connect to the same MCP server with different allow-lists.
 
 The runtime resolves MCP entries from `surfaces.as_consumer` into MCP tool specs

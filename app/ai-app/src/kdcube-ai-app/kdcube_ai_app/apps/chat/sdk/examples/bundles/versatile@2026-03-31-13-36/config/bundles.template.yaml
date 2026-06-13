@@ -54,21 +54,45 @@ bundles:
                       - record_memory
                       - confirm_memory
                       - retire_memory
+                    tool_traits:
+                      search_memory:
+                        strategy: [exploration]
+                      recent_memories:
+                        strategy: [exploration]
+                      read_memory:
+                        strategy: [exploration]
+                      record_memory:
+                        strategy: [neutral]
+                      confirm_memory:
+                        strategy: [neutral]
+                      retire_memory:
+                        strategy: [neutral]
                   - name: canvas
                     kind: python
                     module: kdcube_ai_app.apps.chat.sdk.solutions.canvas.tools
                     alias: canvas
                     allowed: [patch]
+                    tool_traits:
+                      patch:
+                        strategy: [exploitation]
                   - name: exec
                     kind: python
                     module: kdcube_ai_app.apps.chat.sdk.tools.exec_tools
                     alias: exec_tools
                     allowed: [execute_code_python]
+                    tool_traits:
+                      execute_code_python:
+                        strategy: [exploration, exploitation]
                   - name: web
                     kind: python
                     module: kdcube_ai_app.apps.chat.sdk.tools.web_tools
                     alias: web_tools
                     allowed: [web_search, web_fetch]
+                    tool_traits:
+                      web_search:
+                        strategy: [exploration]
+                      web_fetch:
+                        strategy: [exploration]
                     runtime:
                       web_search: local
                       web_fetch: local
@@ -77,11 +101,33 @@ bundles:
                     module: kdcube_ai_app.apps.chat.sdk.tools.rendering_tools
                     alias: rendering_tools
                     allowed: [write_pptx, write_png, write_pdf, write_docx]
+                    tool_traits:
+                      write_pptx:
+                        strategy: [exploitation]
+                      write_png:
+                        strategy: [exploitation]
+                      write_pdf:
+                        strategy: [exploitation]
+                      write_docx:
+                        strategy: [exploitation]
                   - name: browser
                     kind: python
                     module: kdcube_ai_app.apps.chat.sdk.tools.browser_tools
                     alias: browser_tools
                     allowed: [open_page, click, fill, scroll, status, close]
+                    tool_traits:
+                      open_page:
+                        strategy: [exploration]
+                      click:
+                        strategy: [exploration, exploitation]
+                      fill:
+                        strategy: [exploration, exploitation]
+                      scroll:
+                        strategy: [exploration]
+                      status:
+                        strategy: [exploration]
+                      close:
+                        strategy: [neutral]
                     runtime:
                       open_page: none
                       click: none
@@ -94,6 +140,9 @@ bundles:
                     server_id: knowledge
                     alias: knowledge
                     allowed: ["*"]
+                    tool_traits:
+                      "*":
+                        strategy: [exploration]
                   # Add namespace-owned provider tools here when this agent
                   # should read or mutate external objects. Keep object.get
                   # out of the agent-facing tool set when pull is configured;
@@ -111,6 +160,21 @@ bundles:
                   #         - object.upsert
                   #         - object.host_file
                   #         - object.delete
+                  #   tool_traits:
+                  #     provider_about:
+                  #       strategy: [exploration]
+                  #     list_objects:
+                  #       strategy: [exploration]
+                  #     search_objects:
+                  #       strategy: [exploration]
+                  #     object_schema:
+                  #       strategy: [exploration]
+                  #     upsert_object:
+                  #       strategy: [exploitation]
+                  #     host_file:
+                  #       strategy: [exploitation]
+                  #     delete_object:
+                  #       strategy: [exploitation]
                 # Add namespace event-source policies here when external refs
                 # should render into the ReAct timeline and be pullable.
                 # Example:

@@ -311,6 +311,7 @@ class VersatileWorkflow(BaseWorkflow):
                 )
                 react = self.build_react(
                     tools_runtime=tool_config.tool_runtime,
+                    tool_traits=tool_config.tool_traits,
                     mod_tools_spec=tool_config.tool_specs,
                     mcp_tools_spec=tool_config.mcp_tool_specs,
                     event_source_specs=default_canvas_event_source_specs(),

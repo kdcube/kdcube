@@ -7,6 +7,7 @@ keywords: ["sdk tools", "rendering_tools", "web_tools", "sources_pool", "citatio
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/custom-tools-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/tool-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/multi-action/tool-strategy-traits-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/named-services-tools-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
@@ -50,11 +51,19 @@ surfaces:
             module: kdcube_ai_app.apps.chat.sdk.tools.web_tools
             alias: web_tools
             allowed: [web_search, web_fetch]
+            tool_traits:
+              web_search:
+                strategy: [exploration]
+              web_fetch:
+                strategy: [exploration]
           - id: exec
             kind: python
             module: kdcube_ai_app.apps.chat.sdk.tools.exec_tools
             alias: exec_tools
             allowed: [execute_code_python]
+            tool_traits:
+              execute_code_python:
+                strategy: [exploration, exploitation]
 ```
 
 The same bundle can have more than one agent surface:
@@ -88,6 +97,11 @@ The built-in SDK tool modules still define the callable implementations and
 Semantic Kernel metadata. They are not, by themselves, a declaration that every
 agent may call those tools. Visibility comes from the active agent's
 `surfaces.as_consumer` tool list.
+
+SDK tools that participate in ReAct multi-action mode should carry a
+consumer-side `tool_traits.strategy` value in the bundle config. The runtime
+also supports decorator-provided traits, but the active agent config is the
+deployment policy for which strategy applies to this agent.
 
 ## File Artifacts From Tools
 
