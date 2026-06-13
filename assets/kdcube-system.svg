@@ -1,0 +1,226 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 952" font-family="Inter, -apple-system, 'Segoe UI', Roboto, sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10z" fill="#93A6B3"/>
+    </marker>
+  </defs>
+
+  <!-- self-contained card background (readable on dark GitHub) -->
+  <rect x="0.5" y="0.5" width="1119" height="951" rx="6" fill="#FFFFFF" stroke="#E3E9EC"/>
+
+  <!-- ======================= clients / channels ======================= -->
+  <g font-size="12.5" font-weight="700">
+    <rect x="80" y="20" width="222" height="44" rx="3" fill="#F0F7F9" stroke="#A3CCD6"/>
+    <text x="191" y="38" text-anchor="middle" fill="#3D6B77">Browsers</text>
+    <text x="191" y="55" text-anchor="middle" font-size="10" font-weight="400" fill="#5A7184">scenes · embedded widgets</text>
+
+    <rect x="326" y="20" width="222" height="44" rx="3" fill="#F3F2FB" stroke="#B3AEE3"/>
+    <text x="437" y="38" text-anchor="middle" fill="#57519E">MCP clients</text>
+    <text x="437" y="55" text-anchor="middle" font-size="10" font-weight="400" fill="#5A7184">coding agents · assistants</text>
+
+    <rect x="572" y="20" width="222" height="44" rx="3" fill="#FBF6E9" stroke="#DCC489"/>
+    <text x="683" y="38" text-anchor="middle" fill="#8A6D1F">APIs · webhooks</text>
+    <text x="683" y="55" text-anchor="middle" font-size="10" font-weight="400" fill="#5A7184">integrations · schedules</text>
+
+    <rect x="818" y="20" width="222" height="44" rx="3" fill="#EEF3FB" stroke="#AEC2E2"/>
+    <text x="929" y="38" text-anchor="middle" fill="#3F5E8C">Telegram</text>
+    <text x="929" y="55" text-anchor="middle" font-size="10" font-weight="400" fill="#5A7184">bot webhook · Mini App</text>
+  </g>
+  <line x1="191" y1="64" x2="191" y2="110" stroke="#93A6B3" stroke-width="1.4" marker-end="url(#arr)"/>
+  <line x1="437" y1="64" x2="437" y2="110" stroke="#93A6B3" stroke-width="1.4" marker-end="url(#arr)"/>
+  <line x1="683" y1="64" x2="683" y2="110" stroke="#93A6B3" stroke-width="1.4" marker-end="url(#arr)"/>
+  <line x1="929" y1="64" x2="929" y2="110" stroke="#93A6B3" stroke-width="1.4" marker-end="url(#arr)"/>
+
+  <!-- ======================= trust boundary ======================= -->
+  <rect x="28" y="100" width="1064" height="816" rx="4" fill="none" stroke="#8FC7C1" stroke-width="1.6" stroke-dasharray="6 5"/>
+  <rect x="322" y="91" width="476" height="18" fill="#FFFFFF"/>
+  <text x="560" y="105" text-anchor="middle" font-size="10.5" font-weight="700" letter-spacing="1.2" fill="#2F7A72">YOUR INFRASTRUCTURE — EVERYTHING BELOW STAYS INSIDE</text>
+
+  <!-- ======================= ingress transports ======================= -->
+  <rect x="60" y="114" width="1000" height="22" rx="3" fill="#F4F7F8" stroke="#C9D6DB"/>
+  <text x="560" y="129" text-anchor="middle" font-size="10.5" fill="#5A7184">ingress transports — REST · SSE / Socket.IO streaming · conversation event bus · Data Bus · MCP</text>
+  <line x1="200" y1="136" x2="200" y2="150" stroke="#93A6B3" stroke-width="1.4" marker-end="url(#arr)"/>
+  <line x1="500" y1="136" x2="500" y2="150" stroke="#93A6B3" stroke-width="1.4" marker-end="url(#arr)"/>
+  <line x1="872" y1="136" x2="872" y2="150" stroke="#93A6B3" stroke-width="1.4" marker-end="url(#arr)"/>
+
+  <!-- ======================= control plane ======================= -->
+  <rect x="60" y="152" width="1000" height="54" rx="3" fill="#EDF7F6" stroke="#8FC7C1"/>
+  <text x="560" y="173" text-anchor="middle" font-size="14" font-weight="800" fill="#33475A">KDCube Control Plane</text>
+  <text x="560" y="192" text-anchor="middle" font-size="11.5" fill="#41776F">RBAC &amp; surface visibility · budgets &amp; accounting · rate limits · outbound event firewall · enable / gate / reload / apply</text>
+
+  <line x1="200" y1="206" x2="200" y2="224" stroke="#93A6B3" stroke-width="1.4" marker-end="url(#arr)"/>
+  <line x1="500" y1="206" x2="500" y2="224" stroke="#93A6B3" stroke-width="1.4" marker-end="url(#arr)"/>
+  <line x1="872" y1="206" x2="872" y2="224" stroke="#93A6B3" stroke-width="1.4" marker-end="url(#arr)"/>
+
+  <!-- ======================= app anatomy (left) ======================= -->
+  <rect x="70" y="238" width="592" height="534" rx="3" fill="#F4F7F8" stroke="#E0E7EA"/>
+  <rect x="65" y="233" width="592" height="534" rx="3" fill="#F9FBFB" stroke="#E0E7EA"/>
+  <rect x="60" y="228" width="592" height="534" rx="3" fill="#FFFFFF" stroke="#C9D6DB"/>
+  <rect x="60" y="228" width="592" height="28" rx="3" fill="#EDF7F6"/>
+  <rect x="60" y="250" width="592" height="6" fill="#EDF7F6"/>
+  <text x="74" y="247" font-size="12.5" font-weight="800" fill="#33475A">app — one deployable AI application · versatile</text>
+  <text x="638" y="247" text-anchor="end" font-size="10" fill="#7E93A0">from local folder or Git ref · one per app</text>
+
+  <!-- provided surfaces -->
+  <text x="76" y="272" font-size="9.5" font-weight="700" letter-spacing="1" fill="#93A6B3">PROVIDED SURFACES</text>
+  <g font-size="11" font-weight="600">
+    <rect x="76" y="278" width="44" height="22" rx="3" fill="#F4F7F8" stroke="#C4CFD2"/>
+    <text x="98" y="293" text-anchor="middle" fill="#4A6472">@api</text>
+    <rect x="124" y="278" width="48" height="22" rx="3" fill="#F4F7F8" stroke="#C4CFD2"/>
+    <text x="148" y="293" text-anchor="middle" fill="#4A6472">@mcp</text>
+    <rect x="176" y="278" width="80" height="22" rx="3" fill="#F4F7F8" stroke="#C4CFD2"/>
+    <text x="216" y="293" text-anchor="middle" fill="#4A6472">@ui_widget</text>
+    <rect x="260" y="278" width="52" height="22" rx="3" fill="#F4F7F8" stroke="#C4CFD2"/>
+    <text x="286" y="293" text-anchor="middle" fill="#4A6472">@cron</text>
+    <rect x="316" y="278" width="124" height="22" rx="3" fill="#F4F7F8" stroke="#C4CFD2"/>
+    <text x="378" y="293" text-anchor="middle" fill="#4A6472">@data_bus_handler</text>
+
+    <rect x="76" y="304" width="78" height="22" rx="3" fill="#F4F7F8" stroke="#C4CFD2"/>
+    <text x="115" y="319" text-anchor="middle" fill="#4A6472">event bus</text>
+    <rect x="158" y="304" width="74" height="22" rx="3" fill="#F4F7F8" stroke="#C4CFD2"/>
+    <text x="195" y="319" text-anchor="middle" fill="#4A6472">Data Bus</text>
+    <rect x="236" y="304" width="108" height="22" rx="3" fill="#F4F7F8" stroke="#C4CFD2"/>
+    <text x="290" y="319" text-anchor="middle" fill="#4A6472">SSE / Socket.IO</text>
+    <rect x="348" y="304" width="170" height="22" rx="3" fill="#EEF3FB" stroke="#AEC2E2"/>
+    <text x="433" y="319" text-anchor="middle" fill="#3F5E8C">OAuth login + callbacks</text>
+  </g>
+
+  <!-- consumed surfaces -->
+  <text x="76" y="346" font-size="9.5" font-weight="700" letter-spacing="1" fill="#93A6B3">CONSUMED SURFACES · surfaces.as_consumer.agents.&lt;agent&gt;</text>
+  <g font-size="11" font-weight="600">
+    <rect x="76" y="352" width="50" height="22" rx="3" fill="#F4F7F8" stroke="#C4CFD2"/>
+    <text x="101" y="367" text-anchor="middle" fill="#4A6472">tools</text>
+    <rect x="134" y="352" width="50" height="22" rx="3" fill="#F4F7F8" stroke="#C4CFD2"/>
+    <text x="159" y="367" text-anchor="middle" fill="#4A6472">skills</text>
+    <rect x="192" y="352" width="110" height="22" rx="3" fill="#F4F7F8" stroke="#C4CFD2"/>
+    <text x="247" y="367" text-anchor="middle" fill="#4A6472">named services</text>
+    <rect x="310" y="352" width="118" height="22" rx="3" fill="#F4F7F8" stroke="#C4CFD2"/>
+    <text x="369" y="367" text-anchor="middle" fill="#4A6472">other apps' @api</text>
+    <rect x="434" y="352" width="152" height="22" rx="3" fill="#F4F7F8" stroke="#C4CFD2"/>
+    <text x="510" y="367" text-anchor="middle" fill="#4A6472">external MCP servers</text>
+  </g>
+
+  <!-- agent runtimes -->
+  <rect x="76" y="384" width="560" height="120" rx="3" fill="#FAFBFC" stroke="#E0E7EA"/>
+  <text x="90" y="400" font-size="9.5" font-weight="700" letter-spacing="1" fill="#93A6B3">AGENT RUNTIMES</text>
+  <rect x="90" y="406" width="312" height="90" rx="3" fill="#EDF7F6" stroke="#8FC7C1"/>
+  <text x="104" y="424" font-size="12" font-weight="800" fill="#2F7A72">ReAct — reference agent runtime · isolated</text>
+  <text x="104" y="441" font-size="10" fill="#5A7184">timeline-driven loop · per-turn git workspace</text>
+  <text x="104" y="456" font-size="10" fill="#5A7184">conv events via event bus: message · attachment</text>
+  <text x="104" y="471" font-size="10" fill="#5A7184">steer (interrupt) · followup (extends the turn)</text>
+  <text x="104" y="486" font-size="10" fill="#5A7184">subagents · compaction · ANNOUNCE rendering</text>
+  <g font-size="11" font-weight="600">
+    <rect x="412" y="406" width="216" height="42" rx="3" fill="#FFFFFF" stroke="#C9D6DB"/>
+    <text x="520" y="425" text-anchor="middle" fill="#4A6472">Claude Code</text>
+    <text x="520" y="440" text-anchor="middle" font-size="9.5" fill="#7E93A0">owner / admin coding flows</text>
+    <rect x="412" y="454" width="216" height="42" rx="3" fill="#FFFFFF" stroke="#C9D6DB"/>
+    <text x="520" y="473" text-anchor="middle" fill="#4A6472">custom Python agents</text>
+    <text x="520" y="488" text-anchor="middle" font-size="9.5" fill="#7E93A0">domain-specific flows</text>
+  </g>
+
+  <!-- isolated execution (featured) -->
+  <rect x="76" y="512" width="560" height="100" rx="3" fill="#F6F2FA" stroke="#C5B3DC"/>
+  <text x="90" y="528" font-size="9.5" font-weight="700" letter-spacing="1" fill="#6E5694">ISOLATED EXECUTION — UNTRUSTED &amp; MODEL-GENERATED CODE · @venv(...)</text>
+  <rect x="90" y="534" width="206" height="46" rx="3" fill="#FFFFFF" stroke="#C5B3DC"/>
+  <text x="193" y="552" text-anchor="middle" font-size="11" font-weight="700" fill="#6E5694">Supervisor</text>
+  <text x="193" y="568" text-anchor="middle" font-size="9.5" fill="#7E93A0">network + settings / secrets provider</text>
+  <line x1="298" y1="557" x2="324" y2="557" stroke="#93A6B3" stroke-width="1.4" marker-end="url(#arr)"/>
+  <rect x="326" y="534" width="300" height="46" rx="3" fill="#FFFFFF" stroke="#C5B3DC"/>
+  <text x="476" y="552" text-anchor="middle" font-size="11" font-weight="700" fill="#6E5694">Executor — runs the untrusted code</text>
+  <text x="476" y="568" text-anchor="middle" font-size="9.5" fill="#7E93A0">separate UID · NO network (unshare CLONE_NEWNET)</text>
+  <text x="90" y="600" font-size="10" fill="#5A7184">modes: in-proc · local subprocess · Docker (production) · Fargate / ECS (distributed exec)</text>
+
+  <!-- named service provider -->
+  <rect x="76" y="620" width="560" height="92" rx="3" fill="#FBF6E9" stroke="#DCC489"/>
+  <text x="90" y="636" font-size="9.5" font-weight="700" letter-spacing="1" fill="#8A6D1F">NAMED SERVICE PROVIDER — OWN A NAMESPACE · yourns:</text>
+  <g font-size="10.5" font-weight="600">
+    <rect x="90" y="642" width="104" height="22" rx="3" fill="#FFFFFF" stroke="#DCC489"/>
+    <text x="142" y="657" text-anchor="middle" fill="#8A6D1F">refs &amp; schemas</text>
+    <rect x="202" y="642" width="128" height="22" rx="3" fill="#FFFFFF" stroke="#DCC489"/>
+    <text x="266" y="657" text-anchor="middle" fill="#8A6D1F">previews &amp; actions</text>
+    <rect x="338" y="642" width="90" height="22" rx="3" fill="#FFFFFF" stroke="#DCC489"/>
+    <text x="383" y="657" text-anchor="middle" fill="#8A6D1F">file hosting</text>
+    <rect x="436" y="642" width="100" height="22" rx="3" fill="#FFFFFF" stroke="#DCC489"/>
+    <text x="486" y="657" text-anchor="middle" fill="#8A6D1F">URI resolution</text>
+
+    <rect x="90" y="672" width="142" height="22" rx="3" fill="#FFFFFF" stroke="#DCC489"/>
+    <text x="161" y="687" text-anchor="middle" fill="#8A6D1F">event source policies</text>
+    <rect x="240" y="672" width="112" height="22" rx="3" fill="#FFFFFF" stroke="#DCC489"/>
+    <text x="296" y="687" text-anchor="middle" fill="#8A6D1F">event resolvers</text>
+    <rect x="360" y="672" width="108" height="22" rx="3" fill="#FFFFFF" stroke="#DCC489"/>
+    <text x="414" y="687" text-anchor="middle" fill="#8A6D1F">ontologic tools</text>
+  </g>
+
+  <!-- auth + config & secrets -->
+  <rect x="76" y="720" width="560" height="42" rx="3" fill="#F4F7F8" stroke="#E0E7EA"/>
+  <text x="356" y="736" text-anchor="middle" font-size="10" fill="#5A7184">custom auth — public OAuth start/callback · per-user token storage · federated scoped tokens</text>
+  <text x="356" y="753" text-anchor="middle" font-size="10" fill="#5A7184">config &amp; secrets — per-app props · secret templates · per-agent role models &amp; tool grants</text>
+
+  <!-- ======================= reusable components cloud (right) ======================= -->
+  <rect x="684" y="228" width="376" height="196" rx="3" fill="#FFFFFF" stroke="#C9D6DB" stroke-dasharray="5 4"/>
+  <text x="700" y="250" font-size="9.5" font-weight="700" letter-spacing="1" fill="#93A6B3">REUSABLE SDK COMPONENTS</text>
+  <text x="700" y="266" font-size="10.5" fill="#7E93A0">mounted into any app by config — not rewritten</text>
+  <g font-size="11.5" font-weight="700">
+    <rect x="700" y="280" width="170" height="30" rx="3" fill="#F3F2FB" stroke="#B3AEE3"/>
+    <text x="785" y="299" text-anchor="middle" fill="#57519E">chat</text>
+    <rect x="882" y="280" width="170" height="30" rx="3" fill="#FBF1F5" stroke="#E0AFC4"/>
+    <text x="967" y="299" text-anchor="middle" fill="#A4537A">canvas board</text>
+    <rect x="700" y="318" width="170" height="30" rx="3" fill="#F6F2FA" stroke="#C5B3DC"/>
+    <text x="785" y="337" text-anchor="middle" fill="#6E5694">memories</text>
+    <rect x="882" y="318" width="170" height="30" rx="3" fill="#FBF6E9" stroke="#DCC489"/>
+    <text x="967" y="337" text-anchor="middle" fill="#8A6D1F">usage</text>
+  </g>
+  <text x="872" y="372" text-anchor="middle" font-size="10.5" fill="#93A6B3">integrations: Telegram · email · browser · rendering · tasks</text>
+  <text x="872" y="402" text-anchor="middle" font-size="10.5" fill="#93A6B3">each arrives with its UI, APIs, events &amp; agent tools</text>
+  <line x1="682" y1="330" x2="658" y2="330" stroke="#93A6B3" stroke-width="1.4" marker-end="url(#arr)"/>
+
+  <!-- ======================= namespace consumers (right, below) ======================= -->
+  <rect x="684" y="436" width="376" height="246" rx="3" fill="#FFFFFF" stroke="#C9D6DB"/>
+  <text x="700" y="458" font-size="9.5" font-weight="700" letter-spacing="1" fill="#93A6B3">NAMESPACE SERVICES — CONSUMERS</text>
+  <text x="700" y="474" font-size="10.5" fill="#7E93A0">resolve refs, render blocks, call actions — via the owner</text>
+  <g font-size="11" font-weight="600">
+    <rect x="700" y="488" width="104" height="24" rx="3" fill="#F4F7F8" stroke="#C4CFD2"/>
+    <text x="752" y="504" text-anchor="middle" fill="#4A6472">other apps</text>
+    <rect x="812" y="488" width="64" height="24" rx="3" fill="#F4F7F8" stroke="#C4CFD2"/>
+    <text x="844" y="504" text-anchor="middle" fill="#4A6472">agents</text>
+    <rect x="884" y="488" width="106" height="24" rx="3" fill="#F4F7F8" stroke="#C4CFD2"/>
+    <text x="937" y="504" text-anchor="middle" fill="#4A6472">chat &amp; canvas</text>
+    <rect x="700" y="520" width="70" height="24" rx="3" fill="#F4F7F8" stroke="#C4CFD2"/>
+    <text x="735" y="536" text-anchor="middle" fill="#4A6472">widgets</text>
+    <rect x="778" y="520" width="94" height="24" rx="3" fill="#F4F7F8" stroke="#C4CFD2"/>
+    <text x="825" y="536" text-anchor="middle" fill="#4A6472">MCP clients</text>
+    <rect x="880" y="520" width="110" height="24" rx="3" fill="#F4F7F8" stroke="#C4CFD2"/>
+    <text x="935" y="536" text-anchor="middle" fill="#4A6472">scheduled jobs</text>
+  </g>
+  <text x="700" y="570" font-size="9.5" font-weight="700" letter-spacing="1" fill="#93A6B3">OBJECTS TRAVEL AS REFS</text>
+  <g font-size="10.5" font-weight="600">
+    <rect x="700" y="578" width="100" height="22" rx="3" fill="#F1F8EF" stroke="#A8CFA1"/>
+    <text x="750" y="593" text-anchor="middle" fill="#4A7C42">task:issues/42</text>
+    <rect x="808" y="578" width="88" height="22" rx="3" fill="#F6F2FA" stroke="#C5B3DC"/>
+    <text x="852" y="593" text-anchor="middle" fill="#6E5694">mem:profile</text>
+    <rect x="904" y="578" width="98" height="22" rx="3" fill="#F4F7F8" stroke="#C4CFD2"/>
+    <text x="953" y="593" text-anchor="middle" fill="#4A6472">yourns:case/7</text>
+    <rect x="700" y="608" width="106" height="22" rx="3" fill="#FBF1F5" stroke="#E0AFC4"/>
+    <text x="753" y="623" text-anchor="middle" fill="#A4537A">cnv:board/main</text>
+    <rect x="814" y="608" width="92" height="22" rx="3" fill="#FBF6E9" stroke="#DCC489"/>
+    <text x="860" y="623" text-anchor="middle" fill="#8A6D1F">fi:report.pdf</text>
+  </g>
+  <text x="872" y="662" text-anchor="middle" font-size="10.5" fill="#93A6B3">schemas, previews &amp; actions stay with the owner</text>
+  <line x1="656" y1="560" x2="682" y2="560" stroke="#93A6B3" stroke-width="1.4" marker-start="url(#arr)" marker-end="url(#arr)"/>
+
+  <!-- ======================= infrastructure ======================= -->
+  <line x1="560" y1="772" x2="560" y2="798" stroke="#93A6B3" stroke-width="1.4" marker-end="url(#arr)"/>
+  <g font-size="11.5" font-weight="600">
+    <rect x="223" y="804" width="200" height="38" rx="3" fill="#F4F7F8" stroke="#E0E7EA"/>
+    <text x="323" y="828" text-anchor="middle" fill="#5A7184">Docker Compose · EC2 · ECS</text>
+    <rect x="435" y="804" width="90" height="38" rx="3" fill="#F4F7F8" stroke="#E0E7EA"/>
+    <text x="480" y="828" text-anchor="middle" fill="#5A7184">Postgres</text>
+    <rect x="537" y="804" width="76" height="38" rx="3" fill="#F4F7F8" stroke="#E0E7EA"/>
+    <text x="575" y="828" text-anchor="middle" fill="#5A7184">Redis</text>
+    <rect x="625" y="804" width="110" height="38" rx="3" fill="#F4F7F8" stroke="#E0E7EA"/>
+    <text x="680" y="828" text-anchor="middle" fill="#5A7184">blob storage</text>
+    <rect x="747" y="804" width="150" height="38" rx="3" fill="#F4F7F8" stroke="#E0E7EA"/>
+    <text x="822" y="828" text-anchor="middle" fill="#5A7184">Git app sources</text>
+  </g>
+  <text x="560" y="872" text-anchor="middle" font-size="10.5" fill="#93A6B3">one machine to start — the same environment model on EC2-style and ECS deployments</text>
+</svg>
