@@ -282,6 +282,67 @@ def test_parse_react_decision_bundle_from_multiple_fenced_blocks_in_single_chann
     ]
 
 
+def test_stream_policy_recovery_keeps_accepted_search_and_drops_later_final_answer():
+    solver = _solver_stub()
+    search_decision = {
+        "action": "call_tool",
+        "notes": "Attempting forbidden pair",
+        "tool_call": {
+            "tool_id": "web_tools.web_search",
+            "params": {"queries": ["kdcube"], "n": 3},
+        },
+    }
+    denied_final = {
+        "action": "complete",
+        "notes": "",
+        "final_answer": "done",
+    }
+    raw_search = "```json\n" + json.dumps(search_decision) + "\n```"
+    packet = {
+        "agent_response": denied_final,
+        "agent_response_bundle": [search_decision, denied_final],
+        "log": {"error": None},
+    }
+
+    recovered = solver._stream_policy_recovery_packet(
+        decision_packet=packet,
+        decision_stream_instances={0: {"raw_chunks": [raw_search]}},
+        accepted_actions=[SimpleNamespace(index=0)],
+        rejected_items=[
+            {
+                "index": 1,
+                "action": "complete",
+                "code": "multi_action_bundle_final_answer_after_non_neutral",
+                "extra": {
+                    "first_index": 0,
+                    "first_tool_id": "web_tools.web_search",
+                    "first_strategy": ["exploration"],
+                },
+            }
+        ],
+    )
+
+    assert recovered is not None
+    assert recovered["agent_response"]["tool_call"]["tool_id"] == "web_tools.web_search"
+    assert len(recovered["agent_response_bundle"]) == 1
+    assert recovered["agent_response_bundle"][0]["action"] == "call_tool"
+    assert recovered["agent_response_bundle"][0]["tool_call"]["params"]["queries"] == ["kdcube"]
+    assert recovered["log"]["error"] is None
+    assert recovered["log"]["stream_policy_recovered"] is True
+    assert recovered["log"]["stream_policy_rejected_items"] == [
+        {
+            "index": 1,
+            "action": "complete",
+            "code": "multi_action_bundle_final_answer_after_non_neutral",
+            "extra": {
+                "first_index": 0,
+                "first_tool_id": "web_tools.web_search",
+                "first_strategy": ["exploration"],
+            },
+        }
+    ]
+
+
 @pytest.mark.asyncio
 async def test_decision_stream_recovers_repeated_action_channels_as_bundle():
     raw = """

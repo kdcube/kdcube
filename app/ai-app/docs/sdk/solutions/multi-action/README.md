@@ -201,9 +201,16 @@ When the overseer denies an action:
 1. The denied gate drops all buffered output for that lane.
 2. `StreamPolicyViolation` is raised from the subscriber path.
 3. The channeled streamer re-raises the policy exception.
-4. ReAct stashes the interrupted generation snapshot.
-5. ReAct writes a protocol-violation timeline block.
-6. ReAct retries the decision if retry budget remains.
+4. ReAct treats the overseer's accepted/rejected table as authoritative. If a
+   lower model-service wrapper still returns full raw text, any later denied
+   parsed action is ignored for routing.
+5. ReAct stashes the interrupted generation snapshot when the policy exception
+   propagates to the decision phase.
+6. ReAct writes a protocol-violation timeline block.
+7. Accepted earlier actions still run; denied later actions do not run and do
+   not close the turn.
+8. If no accepted action can be recovered, ReAct uses the decision retry budget
+   to ask for a corrected round.
 
 This prevents the UI from showing streamed output that the runtime later
 invalidates.

@@ -1799,6 +1799,56 @@ class ReactSolverV2:
             return [single]
         return []
 
+    def _stream_policy_recovery_packet(
+        self,
+        *,
+        decision_packet: Optional[Dict[str, Any]],
+        decision_stream_instances: Dict[int, Dict[str, Any]],
+        accepted_actions: List[Any],
+        rejected_items: List[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        """Recover a safe decision packet after online policy rejected a later action.
+
+        Some model providers log callback failures but keep streaming. In that
+        case the post-stream parser may see the later denied `complete` action
+        and return it as the final structured response. The overseer is the
+        authoritative ordered-policy state, so rebuild the packet from actions
+        it already accepted and attach denied items to packet.log.
+        """
+        if not rejected_items or not accepted_actions:
+            return None
+
+        accepted_bundle: List[Dict[str, Any]] = []
+        for observed in accepted_actions:
+            try:
+                idx = int(getattr(observed, "index", None))
+            except Exception:
+                continue
+            instance_state = decision_stream_instances.get(idx)
+            if not isinstance(instance_state, dict):
+                continue
+            parsed_decision = instance_state.get("parsed_decision")
+            if not isinstance(parsed_decision, dict):
+                raw_text = "".join(instance_state.get("raw_chunks") or [])
+                parsed_decision, parse_error = parse_single_react_decision_from_channel_text(raw_text)
+                instance_state["parsed_decision"] = parsed_decision
+                instance_state["parse_error"] = parse_error
+            if isinstance(parsed_decision, dict):
+                accepted_bundle.append(copy.deepcopy(parsed_decision))
+
+        if not accepted_bundle:
+            return None
+
+        packet = copy.deepcopy(decision_packet) if isinstance(decision_packet, dict) else {}
+        log = copy.deepcopy(packet.get("log")) if isinstance(packet.get("log"), dict) else {}
+        log["error"] = None
+        log["stream_policy_rejected_items"] = list(rejected_items)
+        log["stream_policy_recovered"] = True
+        packet["agent_response"] = accepted_bundle[0]
+        packet["agent_response_bundle"] = accepted_bundle
+        packet["log"] = log
+        return packet
+
     @staticmethod
     def _adapter_tool_traits(adapter: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(adapter, dict):
@@ -3085,6 +3135,7 @@ class ReactSolverV2:
             )
         except Exception:
             pass
+        decision: Dict[str, Any] = {}
         stream_policy_violation: Optional[StreamPolicyViolation] = None
         try:
             async with with_accounting(
@@ -3116,6 +3167,19 @@ class ReactSolverV2:
             if self._active_phase_cancelled_by_steer or self._steer_interrupt_requested:
                 self._stash_interrupted_generation_snapshot()
             self._clear_active_generation_capture()
+
+        policy_rejected_items = action_overseer.rejected_actions()
+        if policy_rejected_items:
+            recovered_packet = self._stream_policy_recovery_packet(
+                decision_packet=decision if isinstance(decision, dict) else {},
+                decision_stream_instances=decision_stream_instances,
+                accepted_actions=action_overseer.accepted_actions(),
+                rejected_items=policy_rejected_items,
+            )
+            if recovered_packet is not None:
+                decision = recovered_packet
+                stream_policy_violation = None
+
         if stream_policy_violation is not None:
             code = stream_policy_violation.code
             extra = dict(stream_policy_violation.extra or {})
@@ -3215,13 +3279,18 @@ class ReactSolverV2:
         )
         decision_bundle = self._decision_bundle_from_packet(decision_packet)
         decision_parse_error_items = []
+        stream_policy_rejected_items = []
         try:
             packet_log = decision_packet.get("log") if isinstance(decision_packet, dict) else {}
             maybe_items = packet_log.get("bundle_error_items") if isinstance(packet_log, dict) else None
             if isinstance(maybe_items, list):
                 decision_parse_error_items = [item for item in maybe_items if isinstance(item, dict)]
+            maybe_rejected = packet_log.get("stream_policy_rejected_items") if isinstance(packet_log, dict) else None
+            if isinstance(maybe_rejected, list):
+                stream_policy_rejected_items = [item for item in maybe_rejected if isinstance(item, dict)]
         except Exception:
             decision_parse_error_items = []
+            stream_policy_rejected_items = []
         bundle_mode = False
         error = (decision_packet.get("log") or {}).get("error")
         if decision_bundle and self._multi_action_enabled():
@@ -3335,6 +3404,15 @@ class ReactSolverV2:
                     iteration=iteration,
                     parent_tool_call_id=pending_tool_call_id,
                     parse_errors=decision_parse_error_items,
+                )
+
+            if stream_policy_rejected_items and decision_bundle:
+                self._record_dropped_multi_action_items(
+                    iteration=iteration,
+                    parent_tool_call_id=pending_tool_call_id,
+                    rejected=stream_policy_rejected_items,
+                    decision_bundle=decision_bundle,
+                    state=state,
                 )
 
             if len(decision_bundle) > 1 and self._multi_action_enabled():

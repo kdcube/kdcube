@@ -105,7 +105,44 @@ async def test_final_answer_gate_is_denied_after_non_neutral_tool():
         )
 
     assert exc.value.code == "multi_action_bundle_final_answer_after_non_neutral"
+    assert overseer.accepted_actions()[0].tool_id == "web_tools.web_search"
+    assert overseer.rejected_actions() == [
+        {
+            "index": 1,
+            "action": "complete",
+            "code": "multi_action_bundle_final_answer_after_non_neutral",
+            "extra": {
+                "index": 1,
+                "action": "complete",
+                "first_index": 0,
+                "first_tool_id": "web_tools.web_search",
+                "first_strategy": ["exploration"],
+            },
+        }
+    ]
     assert {"marker": "answer", "text": "Premature."} not in emitted
+
+
+@pytest.mark.asyncio
+async def test_final_action_is_classified_as_exploitation_but_may_follow_neutral():
+    emitted = []
+
+    async def emit_delta(**kwargs):
+        emitted.append(kwargs)
+
+    overseer = RoundActionOverseer(resolve_traits=_traits)
+    final_gate = overseer.gate_for(action_index=0, emit_delta=emit_delta)
+    final_answer_gate = overseer.gate_for(action_index=0, emit_delta=emit_delta, lane="final_answer")
+
+    observed = await overseer.observe_action_signal(
+        action_index=0,
+        action="complete",
+        tool_id="",
+        action_gate=final_gate,
+        answer_gate=final_answer_gate,
+    )
+
+    assert observed.strategies == {"exploitation"}
 
 
 @pytest.mark.asyncio

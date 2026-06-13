@@ -92,6 +92,24 @@ class ObservedAction:
         return False
 
 
+@dataclass(frozen=True)
+class RejectedAction:
+    index: int
+    action: str
+    tool_id: str
+    code: str
+    extra: dict[str, Any]
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "index": self.index,
+            "action": self.action,
+            **({"tool_id": self.tool_id} if self.tool_id else {}),
+            "code": self.code,
+            **({"extra": dict(self.extra)} if self.extra else {}),
+        }
+
+
 class RoundActionOverseer:
     """External per-round compatibility policy for streamed action instances."""
 
@@ -99,6 +117,7 @@ class RoundActionOverseer:
         self._resolve_traits = resolve_traits
         self._max_actions = max(1, int(max_actions or DEFAULT_MAX_ACTIONS_PER_ROUND))
         self._observed: list[ObservedAction] = []
+        self._rejected: list[RejectedAction] = []
         self._lock = asyncio.Lock()
 
     def gate_for(self, *, action_index: int, emit_delta: EmitDelta, lane: str = "action") -> ActionStreamGate:
@@ -150,11 +169,27 @@ class RoundActionOverseer:
             await answer_gate.deny()
         assert violation is not None
         code, extra = violation
+        async with self._lock:
+            previous_rejected = next((item for item in self._rejected if item.index == observed.index), None)
+            if previous_rejected is None:
+                self._rejected.append(RejectedAction(
+                    index=observed.index,
+                    action=observed.action,
+                    tool_id=observed.tool_id,
+                    code=code,
+                    extra=dict(extra or {}),
+                ))
         raise StreamPolicyViolation(code=code, extra=extra)
+
+    def accepted_actions(self) -> list[ObservedAction]:
+        return list(self._observed)
+
+    def rejected_actions(self) -> list[dict[str, Any]]:
+        return [item.as_dict() for item in self._rejected]
 
     def _traits_for(self, action: str, tool_id: str) -> dict[str, Any]:
         if action in {"complete", "exit"}:
-            return {STRATEGY_TRAIT: ["neutral"]}
+            return {STRATEGY_TRAIT: ["exploitation"]}
         if action == "call_tool" and tool_id:
             return dict(self._resolve_traits(tool_id) or {})
         return {}
@@ -242,4 +277,10 @@ class RoundActionOverseer:
         return True
 
 
-__all__ = ["ActionStreamGate", "DEFAULT_MAX_ACTIONS_PER_ROUND", "ObservedAction", "RoundActionOverseer"]
+__all__ = [
+    "ActionStreamGate",
+    "DEFAULT_MAX_ACTIONS_PER_ROUND",
+    "ObservedAction",
+    "RejectedAction",
+    "RoundActionOverseer",
+]
