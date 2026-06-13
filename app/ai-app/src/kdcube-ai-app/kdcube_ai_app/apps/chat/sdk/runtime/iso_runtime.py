@@ -15,6 +15,7 @@ import tokenize
 import errno
 import platform
 import ctypes
+import keyword
 from typing import Dict, Any, List, Tuple, Optional, Literal, Mapping
 
 from kdcube_ai_app.apps.chat.ids import new_exec_id
@@ -556,13 +557,47 @@ def _max_sid_from_context(outdir: pathlib.Path) -> int:
     except Exception:
         return 0
 
+def _import_root_for_module_file(path: pathlib.Path) -> str:
+    """
+    Return a PYTHONPATH entry for a module file without exposing leaf package
+    directories as top-level import roots.
+
+    Adding a package leaf such as ``.../named_services_providers`` to
+    PYTHONPATH makes sibling files like ``types.py`` shadow stdlib modules.
+    Package-backed SDK tools should therefore contribute the parent of the
+    top-most importable package. Bundle directories may intentionally have
+    non-importable names such as ``task-and-memo-app@1-0``; for those, the
+    bundle directory itself is the useful import root so ``tools.common`` works
+    without exposing ``tools/common.py`` as top-level ``common``.
+    """
+    resolved = pathlib.Path(path).resolve()
+    cur = resolved.parent
+    top_pkg = None
+    first_non_importable_pkg = None
+    while (cur / "__init__.py").exists():
+        top_pkg = cur
+        if first_non_importable_pkg is None and (
+            not cur.name.isidentifier() or keyword.iskeyword(cur.name)
+        ):
+            first_non_importable_pkg = cur
+        parent = cur.parent
+        if parent == cur:
+            break
+        cur = parent
+    if first_non_importable_pkg is not None:
+        return str(first_non_importable_pkg)
+    if top_pkg is not None:
+        return str(top_pkg.parent)
+    return str(resolved.parent)
+
+
 def _module_parent_dirs(tool_modules: List[Tuple[str, object]]) -> List[str]:
     paths = []
     for name, mod in tool_modules or []:
         try:
             p = pathlib.Path(getattr(mod, "__file__", "")).resolve()
             if p.exists():
-                paths.append(str(p.parent))
+                paths.append(_import_root_for_module_file(p))
         except Exception:
             pass
     # de-dup while preserving order
@@ -2614,7 +2649,7 @@ class _InProcessRuntime:
         alias_files = g.get("TOOL_MODULE_FILES") or {}
         for _p in (alias_files or {}).values():
             if _p:
-                file_parents.append(str(pathlib.Path(_p).resolve().parent))
+                file_parents.append(_import_root_for_module_file(pathlib.Path(_p).resolve()))
 
         seen = set()
         extra_paths: List[str] = []

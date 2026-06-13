@@ -315,27 +315,34 @@ def test_ensure_dynamic_package_chain_creates_parent_packages(tmp_path):
     assert pathlib.Path(sys.modules[tools_name].__path__[0]).resolve() == tools_dir.resolve()  # type: ignore[attr-defined]
 
 
-def test_load_dynamic_bundle_tool_supports_same_bundle_relative_imports():
-    bundle_root = (
-        pathlib.Path(__file__).resolve().parents[2]
-        / "examples"
-        / "bundles"
-        / "kdcube.copilot@2026-04-03-19-05"
+def test_load_dynamic_bundle_tool_supports_same_bundle_relative_imports(tmp_path):
+    bundle_root = tmp_path / "demo.bundle@1-0"
+    tools_root = bundle_root / "tools"
+    knowledge_root = bundle_root / "knowledge"
+    tools_root.mkdir(parents=True)
+    knowledge_root.mkdir(parents=True)
+    (bundle_root / "__init__.py").write_text("", encoding="utf-8")
+    (tools_root / "__init__.py").write_text("", encoding="utf-8")
+    (knowledge_root / "__init__.py").write_text("", encoding="utf-8")
+    (knowledge_root / "resolver.py").write_text("VALUE = 'resolver'\n", encoding="utf-8")
+    (tools_root / "react_tools.py").write_text(
+        "from ..knowledge import resolver as knowledge_resolver\n",
+        encoding="utf-8",
     )
     tool_file = bundle_root / "tools" / "react_tools.py"
-    module_name = "dynpkg_test_copilot.tools.react_tools"
+    module_name = "dynpkg_test_bundle.tools.react_tools"
 
     for name in [
-        "dynpkg_test_copilot",
-        "dynpkg_test_copilot.tools",
-        "dynpkg_test_copilot.knowledge",
-        "dynpkg_test_copilot.knowledge.resolver",
+        "dynpkg_test_bundle",
+        "dynpkg_test_bundle.tools",
+        "dynpkg_test_bundle.knowledge",
+        "dynpkg_test_bundle.knowledge.resolver",
         module_name,
     ]:
         sys.modules.pop(name, None)
 
     mod = load_dynamic_module_from_file(module_name, tool_file)
-    resolver = importlib.import_module("dynpkg_test_copilot.knowledge.resolver")
+    resolver = importlib.import_module("dynpkg_test_bundle.knowledge.resolver")
 
     assert mod.knowledge_resolver is resolver
 
@@ -422,13 +429,14 @@ def test_build_executor_runtime_globals_strips_privileged_paths_and_descriptors(
     assert "PORTABLE_SPEC_JSON" not in sanitized
 
 
-def test_restore_bundle_prefers_mounted_bundle_root(monkeypatch, tmp_path):
+@pytest.mark.asyncio
+async def test_restore_bundle_prefers_mounted_bundle_root(monkeypatch, tmp_path):
     mounted_root = tmp_path / "mounted-bundle"
     mounted_root.mkdir()
     logger = _CaptureLogger()
     monkeypatch.setenv("EXEC_BUNDLE_ROOT", str(mounted_root))
 
-    restored = _restore_bundle_if_present(
+    restored = await _restore_bundle_if_present(
         {
             "BUNDLE_SPEC": {
                 "id": "demo",

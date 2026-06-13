@@ -18,6 +18,81 @@ def test_exec_limit_bytes_supports_units_and_disable():
     assert iso_runtime._as_limit_bytes("", default=123) == 123
 
 
+def test_module_parent_dirs_use_package_root_not_leaf_package(tmp_path):
+    package_root = tmp_path / "pkg"
+    leaf = package_root / "subpkg"
+    leaf.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (leaf / "__init__.py").write_text("", encoding="utf-8")
+    tool_file = leaf / "tools.py"
+    tool_file.write_text("", encoding="utf-8")
+    (leaf / "types.py").write_text("", encoding="utf-8")
+
+    mod = SimpleNamespace(__file__=str(tool_file))
+
+    assert iso_runtime._module_parent_dirs([("tools", mod)]) == [str(tmp_path)]
+
+
+def test_module_parent_dirs_use_bundle_root_for_non_importable_bundle_name(tmp_path):
+    bundle_root = tmp_path / "task-and-memo-app@1-0"
+    leaf = bundle_root / "tools"
+    leaf.mkdir(parents=True)
+    (bundle_root / "__init__.py").write_text("", encoding="utf-8")
+    (leaf / "__init__.py").write_text("", encoding="utf-8")
+    tool_file = leaf / "delivery_tools.py"
+    tool_file.write_text("", encoding="utf-8")
+    (leaf / "common.py").write_text("", encoding="utf-8")
+
+    mod = SimpleNamespace(__file__=str(tool_file))
+
+    assert iso_runtime._module_parent_dirs([("delivery_tools", mod)]) == [str(bundle_root)]
+
+
+@pytest.mark.asyncio
+async def test_local_subprocess_runtime_uses_bundle_root_for_tool_module_pythonpath(tmp_path, monkeypatch):
+    bundle_root = tmp_path / "task-and-memo-app@1-0"
+    tools_root = bundle_root / "tools"
+    tools_root.mkdir(parents=True)
+    (bundle_root / "__init__.py").write_text("", encoding="utf-8")
+    (tools_root / "__init__.py").write_text("", encoding="utf-8")
+    tool_file = tools_root / "delivery_tools.py"
+    tool_file.write_text("", encoding="utf-8")
+    (tools_root / "common.py").write_text("", encoding="utf-8")
+    (tools_root / "types.py").write_text("", encoding="utf-8")
+
+    workdir = tmp_path / "work"
+    outdir = tmp_path / "out"
+    workdir.mkdir()
+    outdir.mkdir()
+    (workdir / "main.py").write_text("print('ok')\n", encoding="utf-8")
+    captured = {}
+
+    async def _fake_run_subprocess(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True, "returncode": 0}
+
+    monkeypatch.setattr(iso_runtime, "_run_subprocess", _fake_run_subprocess)
+
+    runtime = iso_runtime._InProcessRuntime(logger=SimpleNamespace(log=lambda *_args, **_kwargs: None))
+    await runtime.execute_py_code(
+        workdir=workdir,
+        output_dir=outdir,
+        bundle_root=str(bundle_root),
+        tool_modules=[("dynpkg_demo.tools.delivery_tools", SimpleNamespace(__file__=str(tool_file)))],
+        globals={
+            "TOOL_ALIAS_MAP": {"delivery_tools": "dynpkg_demo.tools.delivery_tools"},
+            "TOOL_MODULE_FILES": {"delivery_tools": str(tool_file)},
+        },
+        isolation="local",
+        timeout_s=1,
+    )
+
+    pythonpath = str((captured.get("env") or {}).get("PYTHONPATH") or "")
+    entries = [entry for entry in pythonpath.split(iso_runtime.os.pathsep) if entry]
+    assert str(bundle_root) in entries
+    assert str(tools_root) not in entries
+
+
 def test_drop_executor_identity_clears_root_supplementary_group(monkeypatch):
     calls = []
 
