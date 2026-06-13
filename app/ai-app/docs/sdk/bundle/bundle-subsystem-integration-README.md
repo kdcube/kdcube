@@ -99,7 +99,7 @@ The composition bundle should:
 - set safe `configuration_defaults()`
 - add deployment-visible config/secrets templates when operators must choose
   values
-- include SDK tool/event/skill modules by descriptor
+- include SDK tool, event, and skill surfaces through `surfaces.as_consumer`
 - register object resolvers from the subsystem that owns each namespace
 - register named service providers when the subsystem is meant to be called by
   canvas, chat, widgets, agents, MCP clients, scheduled jobs, or other bundles
@@ -306,7 +306,7 @@ should use the subsystem, mount the agent surface too.
 Checklist:
 
 - add SDK tool modules under `surfaces.as_consumer.agents.<agent>.tools`
-- add local or SDK skills in `skills_descriptor.py`
+- add local or SDK skills through `surfaces.as_consumer.agents.<agent>.skills`
 - add stable additional instructions from the subsystem, not ad hoc prompt text
 - keep mutable per-turn data in ANNOUNCE/timeline policies, not cached system
   instructions
@@ -599,7 +599,7 @@ Validation:
 | Widget route returns placeholder JSON/HTML | `ui.widgets.<alias>` missing or disabled; static app not configured | Effective `ui.widgets`, widget build logs |
 | Widget icon missing | `@ui_widget` surface missing, `enabled.widget.<alias>: false`, or bundle manifest stale | Manifest widgets, bundle reload |
 | Widget loads but API calls fail | UI operation aliases not declared or hidden by API visibility | Manifest API endpoints and effective props |
-| Agent sees context but cannot act | Tool config or skill missing | `surfaces.as_consumer`, `skills_descriptor.py`, tool catalog |
+| Agent sees context but cannot act | Tool config or skill missing | `surfaces.as_consumer`, agent skill config, tool catalog |
 | Timeline shows raw JSON | Event policy module not loaded or wrong `event_source_id` | `event_source_specs`, event policy ids |
 | Canvas pin cannot open/download | Resolver for the ref namespace not registered | Resolver registry, canonical `object_ref` namespace |
 | Same SDK component works in one bundle but not another | One bundle copied UI/config but not entrypoint/API/tool/event/resolver layers | Run this checklist layer by layer |

@@ -33,7 +33,7 @@ This is the bundle to study first.
 | React workflow orchestration | `agents/main.py` |
 | Economics + cross-conversation memory entrypoint | `entrypoint.py` via `BaseEntrypointWithEconomicsAndMemory` |
 | Agent and UI consumer surfaces | `config/bundles.template.yaml` under `surfaces.as_consumer` |
-| Bundle-local skills | `skills_descriptor.py` and bundle `skills/` tree |
+| Bundle-local skills | `surfaces.as_consumer.agents.main.skills` and bundle `skills/` tree |
 | Effective bundle props and defaults | `entrypoint.py`, `config/bundles.template.yaml` |
 | Bundle secrets; prefer `await get_secret("b:...")` in async code | `config/bundles.secrets.template.yaml`, `entrypoint.py` |
 | Canvas and telemetry service helpers | `services/canvas.py`, `services/telemetry.py` |
@@ -76,7 +76,7 @@ subagent integration:
 8. `docs/storage/README.md`
 9. `services/canvas.py`
 10. `services/telemetry.py`
-11. `skills_descriptor.py`
+11. `skills/product/preferences/SKILL.md`
 12. bundle-local tests under `tests/`
 
 ## Config Surfaces Used by This Bundle

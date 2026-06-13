@@ -15,7 +15,7 @@ It intentionally demonstrates the main SDK bundle surfaces together in one place
 
 | Capability                             | Where to look                                                                              |
 |----------------------------------------|--------------------------------------------------------------------------------------------|
-| Minimal bundle contract                | `entrypoint.py`, `agents/main.py`, `skills_descriptor.py`                        |
+| Minimal bundle contract                | `entrypoint.py`, `agents/main.py`, `config/bundles.template.yaml`                |
 | React workflow                         | `entrypoint.py`, `agents/main.py`, `agents/gate.py`                              |
 | Economics / quotas                     | `entrypoint.py` via `BaseEntrypointWithEconomics` and `app_quota_policies`                 |
 | Bundle props / effective config        | `entrypoint.py`, `agents/main.py`                                                |
@@ -400,7 +400,7 @@ The bundle ships one bundle-local skill:
 
 | Shape | Required to pass the basic suite | Demonstrated here |
 | --- | --- | --- |
-| Minimal bundle | entrypoint, compiled graph, role models, tools descriptor, skills descriptor | yes |
+| Minimal bundle | entrypoint, compiled graph, role models, config-driven tools and skills | yes |
 | Bundle props / effective config | required for real deployments | yes |
 | Custom tools | optional | yes |
 | Custom skills | optional | yes |

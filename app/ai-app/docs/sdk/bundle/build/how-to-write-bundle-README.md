@@ -812,11 +812,10 @@ Recommended layout:
 ```text
 my_bundle/
   entrypoint.py
-  orchestrator/
-    workflow.py
+  agents/
+    main.py
   config/
-    bundles.template.yaml # default consumer/tool/UI policy
-  skills_descriptor.py
+    bundles.template.yaml # default consumer tool/skill/event/UI policy
   requirements.txt    # optional, but required when bundle-local venv code needs Python deps
   tools/
   skills/
@@ -835,8 +834,8 @@ Required in practice:
 Usually present:
 
 - `agents/main.py`
-- `config/bundles.template.yaml` for default consumer/tool/UI policy
-- `skills_descriptor.py`
+- `config/bundles.template.yaml` for default consumer tool/skill/event/UI policy
+- `skills/` when the bundle has local skills
 - `requirements.txt` when bundle-local Python deps are installed through `@venv(...)`
 
 If the bundle ships a full main UI app:
@@ -893,7 +892,7 @@ Study in this order:
 3. `config/bundles.template.yaml`
 4. `services/canvas.py`
 5. `services/telemetry.py`
-6. `skills_descriptor.py`
+6. `skills/product/.../SKILL.md`
 7. `ui/scene`
 8. `ui/widgets/telegram_miniapp`
 9. `tests/`
@@ -928,21 +927,19 @@ For the full integration map across React tool config, bundle-served MCP, MCP
 client config, and Claude Code subagents, read
 [bundle-agent-integration-README.md](../bundle-agent-integration-README.md).
 
-Canonical examples:
+Canonical example:
 
-- `versatile@2026-03-31-13-36` for the general descriptor/workflow pattern
-- `kdcube.copilot@2026-04-03-19-05` for a production-style React workflow
+- `versatile@2026-03-31-13-36` for the general config-first workflow pattern
 
 Minimal shape:
 
 ```text
 my.bundle@1-0/
   entrypoint.py
-  orchestrator/
-    workflow.py
+  agents/
+    main.py
   config/
     bundles.template.yaml
-  skills_descriptor.py
   tools/
     task_tools.py
     user_memory_tools.py
@@ -970,8 +967,10 @@ Workflow responsibilities:
 - call `start_turn(...)`
 - persist the user message
 - resolve `surfaces.as_consumer` with SDK `tool_config.py`
+- resolve `surfaces.as_consumer.agents.<agent>.skills` with SDK
+  `skill_config.py`
 - call `build_react(...)` with resolved tool specs, event-source specs, and
-  `skills_descriptor`
+  resolved skill config
 - run `react.run(...)`
 - call `react.persist_workspace()`
 - call `finish_turn(...)`
@@ -983,12 +982,12 @@ Descriptor and consumer-surface rules:
   with `agent_tool_config_from_bundle_props(...)` into Python specs, MCP specs,
   tool runtime overrides, `allowed_plugins`, and
   `allowed_tool_names_by_alias`
-- expose skill prompts through `skills_descriptor.py`
+- expose skill prompts through `surfaces.as_consumer.agents.<agent>.skills`
 - remember that skill discovery is registry-wide: core SDK skills, SDK solution
-  skills, and bundle `CUSTOM_SKILLS_ROOT` are all loaded before
-  `AGENTS_CONFIG` filtering
+  skills, and bundle `custom_root` are all loaded before configured consumer
+  filtering
 - skills that declare required tools disappear automatically when those tools
-  are not present in the active tool catalog; use `AGENTS_CONFIG` only for
+  are not present in the active tool catalog; use `consumers` only for
   policy-level allow-lists or hard denies
 - if a skill is valid only when specific tools are present, mark those entries
   with `required: true` in the skill's `tools.yaml`; ReAct removes the skill

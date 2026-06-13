@@ -1,135 +1,134 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/skills/custom-skills-README.md
 title: "Custom Skills"
-summary: "Bundle-local skills guide: descriptor setup, SDK solution skill interaction, AGENTS_CONFIG visibility filters, and where consumer-scoped filtering is enforced."
-tags: ["sdk", "skills", "custom", "descriptor", "agents_config", "react", "llm-generator", "visibility", "control", "solutions"]
-keywords: ["skills_descriptor.py", "CUSTOM_SKILLS_ROOT", "AGENTS_CONFIG", "solution skills", "consumer id", "solver.react.v2.decision.v2.strong", "react.read", "SKx", "llm_generator.py", "skill catalog", "skill visibility", "skill visibility control", "concerns separation"]
+summary: "Bundle-local skills guide: config-first skill roots, per-agent skill visibility, SDK solution skill interaction, and tool eligibility."
+tags: ["sdk", "skills", "custom", "configuration", "as_consumer", "react", "visibility", "tool-eligibility", "solutions"]
+keywords: ["surfaces.as_consumer.agents.<agent>.skills", "custom_root", "consumers", "enabled", "disabled", "solver.react.v2.decision.v2.strong", "react.read", "SKx", "skill catalog", "skill visibility", "agent_disclosure"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/skills/skills-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/skills/skills-infra-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/source-pool-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-agent-integration-README.md
 ---
-# Custom Skills (Bundle‑Local)
+# Custom Skills
 
-This is a quick guide to defining **bundle‑local skills**.
+Bundle-local skills are configured next to the consuming agent, the same way
+tools are configured. Do not add a bundle `skills_descriptor.py` for new
+bundles.
 
-Bundle-local skills are only one discovery layer. The registry also loads core
-SDK skills and SDK solution skills, such as `task.tasks` and `task.job` from
-the reusable tasks solution.
+The registry still loads three skill layers:
+- core SDK skills
+- SDK solution skills, such as task solution skills
+- bundle-local skills from the configured `custom_root`
 
-For full details, see:
-- [docs/sdk/skills/skills-README.md](skills-README.md)
-- [docs/sdk/skills/skills-infra-README.md](skills-infra-README.md)
+## Minimal Pattern
 
----
+1. Create a `skills/` folder in your bundle.
+2. Put skills under `<namespace>/<skill_id>/SKILL.md`.
+3. Declare the bundle-local skill root under the consuming agent:
 
-## Minimal pattern
+```yaml
+surfaces:
+  as_consumer:
+    default_agent: main
+    agents:
+      main:
+        tools:
+          - kind: python
+            module: kdcube_ai_app.apps.chat.sdk.context.memory.tools
+            alias: memory
+            allowed:
+              - search_memory
+              - recent_memories
+              - record_memory
+        skills:
+          custom_root: skills
+          consumers: {}
+```
 
-1. Create a skills folder in your bundle.
-2. Add a `skills_descriptor.py` to register skills.
-3. Use `AGENTS_CONFIG` to decide which core, solution, and bundle-local skills
-   each agent can see.
+`custom_root` is relative to the bundle root unless it is absolute.
 
-Example bundle:
-- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react@2026-02-10-02-44`
+## Per-Agent And Per-Consumer Visibility
 
-Files:
-- `skills/product`
-- `skills_descriptor.py`
+Skills are configured per consuming agent:
 
----
+```yaml
+surfaces.as_consumer.agents.main.skills
+```
 
-## What a skill can include
+ReAct also has internal skill consumers, for example the decision prompt. Put
+consumer-specific allow/deny lists under `consumers`:
+
+```yaml
+surfaces:
+  as_consumer:
+    agents:
+      main:
+        skills:
+          custom_root: skills
+          consumers:
+            solver.react.v2.decision.v2.strong:
+              enabled:
+                - public.*
+                - product.preferences
+            solver.react.v2.decision.v2.regular:
+              disabled:
+                - task.*
+```
+
+Rules:
+- Missing `consumers` means no visibility filter for loaded skills.
+- `enabled` is an allow-list.
+- `disabled` is a deny-list.
+- Wildcards are supported, for example `public.*`, `public.docx-*`, and `*`.
+- `enabled: []` behaves like no allow-list.
+- Match is by exact skill consumer id.
+
+Top-level `enabled` or `disabled` under `skills` applies to the outer agent id
+itself. Use `consumers` for ReAct decision/generator consumers.
+
+To explicitly disable bundle-local skill discovery for an agent:
+
+```yaml
+surfaces:
+  as_consumer:
+    agents:
+      main:
+        skills:
+          enabled: false
+```
+
+This does not remove core SDK or SDK solution skills from the registry. Use
+consumer visibility filters if those also need to be hidden.
+
+## Skill Files
 
 Inside a skill folder you can include:
-- `SKILL.md` (required) with front‑matter fields:
-  - `name`, `id`, `description`, `version`, `namespace`, `tags`, `when_to_use`, `imports`
-  - `agent_disclosure` (optional): set to `hidden` for operational guidance that can be loaded by exact id but must not be advertised in the skill catalog
-- `compact.md` (optional): compact instruction variant
-- `sources.yaml` (optional): sources injected into `sources_pool` when the skill is loaded
-- `tools.yaml` (optional): recommended or required tools for the skill
+- `SKILL.md` with YAML front matter
+- `tools.yaml` with recommended or required tool ids
+- `sources.yaml` with sources merged into `sources_pool` when the skill is read
+- optional compact instruction files where supported by the loader
 
-Both `SKILL.md` and `skill.yml` are supported.
+Required front matter fields:
 
+```yaml
 ---
-
-## Descriptor example
-
-```python
-# skills_descriptor.py
-import pathlib
-
-BUNDLE_ROOT = pathlib.Path(__file__).resolve().parent
-
-# Bundle-local skills root (expected layout: <root>/<namespace>/<skill_id>/SKILL.md)
-CUSTOM_SKILLS_ROOT = BUNDLE_ROOT / "skills"
-
-AGENTS_CONFIG = {
-    # Exact consumer id match
-    "solver.react.v2.decision.v2.strong": {
-        # Explicit allow-list (fully qualified skill ids)
-        "enabled": [
-            "product.kdcube",
-        ]
-    },
-
-    # Agent-specific overrides (use the agent id)
-    "answer.generator.strong": {
-        # Example: disable a namespace for this agent only
-        "disabled": ["public.*"],
-    },
-}
+name: preferences
+id: preferences
+description: Use durable user preferences before personalizing answers.
+namespace: product
+version: 1.0.0
+tags: [preferences, personalization]
+when_to_use:
+  - The user asks for a personalized answer
+---
 ```
 
-SDK solution skills do not need a bundle `CUSTOM_SKILLS_ROOT`. They are already
-discoverable by the SDK registry. A bundle enables or hides them with
-`AGENTS_CONFIG` just like core SDK and bundle-local skills:
+The fully qualified skill id is `<namespace>.<id>`, for example
+`product.preferences`.
 
-```python
-AGENTS_CONFIG = {
-    "solver.react.v2.decision.v2.strong": {
-        "enabled": [
-            "public.*",
-            "task.tasks",
-        ]
-    },
-    "solver.react.v2.decision.v2.regular": {
-        "enabled": [
-            "public.*",
-            "task.tasks",
-        ]
-    },
-}
-```
+## Tool Eligibility
 
-A saved-job bundle entry can use a separate `job_skills_descriptor.py` with the
-same consumer ids but a different allowed set:
-
-```python
-AGENTS_CONFIG = {
-    "solver.react.v2.decision.v2.strong": {
-        "enabled": [
-            "public.*",
-            "task.job",
-        ]
-    },
-    "solver.react.v2.decision.v2.regular": {
-        "enabled": [
-            "public.*",
-            "task.job",
-        ]
-    },
-}
-```
-
-If the skill tells the agent to use tools, the bundle must also expose the
-matching tool module. For the tasks solution, that means registering
-`kdcube_ai_app.apps.chat.sdk.solutions.tasks.tools` and/or
-`kdcube_ai_app.apps.chat.sdk.solutions.tasks.job_tools` in the bundle tool
-descriptor.
-
-If a skill is meaningless or misleading without specific tools, mark those
-tool refs as required in the skill's `tools.yaml`:
+Skills can mention tools in `tools.yaml`:
 
 ```yaml
 tools:
@@ -141,128 +140,73 @@ tools:
     required: true
 ```
 
-Required tool refs are evaluated against the active tool catalog for the current
-agent/turn. If any required tool is unavailable, the skill is skipped from the
-catalog, `SKx` short ids, imports, and `react.read(sk:...)`. Optional tool refs
-remain documentation only.
+When `required: true` is present, the active tool catalog must contain that
+tool id. If a required tool is not exposed for the current agent/turn, the skill
+is omitted from:
+- the visible skill catalog
+- `SK1`, `SK2`, ... short ids
+- imports
+- `react.read(sk:...)` loading for that runtime context
 
-When a parent skill imports a required-tool skill, keep the optional subsystem
-instructions inside the imported skill. Do not duplicate those tool-specific
-steps in the parent body, because the registry can skip an ineligible import
-but it cannot rewrite arbitrary text inside a different skill.
+Optional tool refs remain documentation.
 
-### Important: `CUSTOM_SKILLS_ROOT = None` does not currently disable bundle-local skills
+## Hidden Disclosure
 
-Today, the runtime auto-detects `<bundle_root>/skills` when `custom_skills_root` is
-missing/falsy. That means setting `CUSTOM_SKILLS_ROOT = None` in
-`skills_descriptor.py` does **not** reliably switch off bundle-local skills.
-
-Practical options today:
-- Remove or rename the bundle `skills/` folder.
-- Set `CUSTOM_SKILLS_ROOT` to a truthy non-existent path (prevents auto-discovery fallback).
-- Use `AGENTS_CONFIG` to hide skills from specific agents (visibility filter, not registry disable).
-
-### Hiding a loadable skill from skill self-description
-
-`AGENTS_CONFIG` controls whether a skill is available to a consumer at all.
-Sometimes a bundle also needs operational guidance that is available to the
-agent but must not be listed when the user asks "what skills do you have?".
-
-Use `agent_disclosure: hidden` in the skill front matter:
+`agent_disclosure: hidden` is prompt-disclosure control. It keeps a loadable
+skill out of visible catalogs and user-facing self-descriptions:
 
 ```yaml
 ---
-name: user-memory-journal
-description: Operational guidance for durable memory tools.
+name: ops-runbook
+id: ops-runbook
 namespace: product
 agent_disclosure: hidden
 ---
 ```
 
-Runtime behavior:
-- The skill remains loadable by exact id, for example `sk:product.user-memory-journal`.
-- The skill is omitted from the visible skill catalog and from `SK1`, `SK2`, ...
-  short-id mapping.
-- If the skill is explicitly loaded, the active skill block uses a redacted
-  heading plus a non-disclosure rule. It does not print the skill id/name in the
-  prompt-visible skill header.
+This is not authorization. If a consumer must not be able to load a skill at
+all, use `consumers.<consumer>.enabled` or `consumers.<consumer>.disabled`.
 
-This is prompt-disclosure control, not authorization. Use `AGENTS_CONFIG` to
-disable a skill for an agent that should not be able to load it at all.
+## Runtime Path
 
----
-
-## Sources + tools metadata
-
-Skills can include:
-- `sources.yaml` — sources added to the **sources_pool** when the skill is loaded (via `react.read`).
-- `tools.yaml` — tools recommended for this skill (used by planners/UX), plus
-  optional `required: true` gates for tools that must exist before the skill is
-  safe to expose.
-
-When a skill is loaded with `react.read("sk:<skill>")`, its sources are merged into
-`sources_pool` and can be referenced as `so:sources_pool[...]`. Citation tokens inside
-skill text are rewritten to match the merged source IDs.
-
----
-
-## AGENTS_CONFIG visibility filtering (per-agent)
-
-`AGENTS_CONFIG` controls skill visibility by consumer id (agent role). This is
-not a global disable of the skills registry. It applies to all discovered skill
-roots: core SDK skills, SDK solution skills, and bundle-local skills.
-
-Rules:
-- Match is exact by consumer id (example: `solver.react.v2.decision.v2.strong`).
-- Missing consumer entry means no filter for that consumer.
-- `enabled` means allow-list.
-- `disabled` means deny-list.
-- Wildcards are supported (`public.*`, `public.docx-*`, `*`).
-- `"default"` key is not special in current runtime.
-- `enabled: []` does not disable all.
-
-Quick disable patterns:
-- One skill: `disabled: ["product.kdcube"]`
-- Namespace: `disabled: ["public.*"]`
-- Task solution skills when the bundle does not expose task tools:
-  `disabled: ["task.*"]`
-- All for one consumer: `disabled: ["*"]`
-
-Resolution example:
+Bundle code resolves config with:
 
 ```python
-AGENTS_CONFIG = {
-    "solver.react.v2.decision.v2.strong": {"disabled": ["public.*"]},
-    "answer.generator.strong": {"enabled": ["product.kdcube", "public.docx-press"]},
+from kdcube_ai_app.apps.chat.sdk.runtime.skill_config import (
+    agent_skill_config_from_bundle_props,
+)
+
+skill_config = agent_skill_config_from_bundle_props(
+    self.bundle_props,
+    "main",
+    bundle_root=BUNDLE_ROOT,
+)
+
+react = self.build_react(
+    custom_skills_root=skill_config.custom_skills_root,
+    skills_visibility_agents_config=skill_config.agents_config,
+    scratchpad=scratchpad,
+)
+```
+
+`SkillsSubsystem` still receives an internal descriptor-shaped payload:
+
+```json
+{
+  "custom_skills_root": "/abs/bundle/skills",
+  "agents_config": {
+    "solver.react.v2.decision.v2.strong": {
+      "enabled": ["product.preferences"]
+    }
+  }
 }
 ```
 
-With registry:
-- `product.kdcube`
-- `task.tasks`
-- `public.docx-press`
-- `public.pdf-press`
-- `custom.ops-runbook`
+That internal shape is not a bundle authoring file.
 
-Result:
-- `consumer="solver.react.v2.decision.v2.strong"` -> `product.kdcube`, `task.tasks`, `custom.ops-runbook`
-- `consumer="answer.generator.strong"` -> `product.kdcube`, `public.docx-press`
-- `consumer="answer.generator.regular"` -> all skills
+## References
 
-Where this is applied:
-- ReAct decision catalog (`consumer="solver.react.v2.decision.v2.strong"`).
-- `react.read` skill resolution (`SKx` / `sk:<id>`) via short-id map.
-- Generator role consumers (example `answer.generator.strong`) when tools
-  resolve/inject skills.
-
-For exact code paths and full runtime flow, see:
-- [docs/sdk/skills/skills-README.md](skills-README.md) (section: runtime usage and enforcement)
-- [docs/sdk/skills/skills-infra-README.md](skills-infra-README.md) (runtime wiring)
-
----
-
-## References (code)
-
-- Example bundle: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react@2026-02-10-02-44`
-- Descriptor: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react@2026-02-10-02-44/skills_descriptor.py`
-- Example skill: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react@2026-02-10-02-44/skills/product`
+- Resolver: `app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/skill_config.py`
+- Registry: `app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/skills/skills_registry.py`
+- Reference bundle config: `app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/config/bundles.template.yaml`
+- Reference bundle skill: `app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/skills/product/preferences/SKILL.md`

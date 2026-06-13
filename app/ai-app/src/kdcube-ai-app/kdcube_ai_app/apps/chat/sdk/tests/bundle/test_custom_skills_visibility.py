@@ -2,8 +2,8 @@
 
 """Custom skills visibility tests.
 
-Test that AGENTS_CONFIG correctly controls which skills are visible
-to which agents.
+Test that config-first skill visibility controls which skills are visible to
+which skill consumers. Legacy AGENTS_CONFIG modules are accepted as fallback.
 
 Run with:
   BUNDLE_UNDER_TEST=/abs/path/to/bundle pytest test_custom_skills_visibility.py -v
@@ -16,12 +16,33 @@ import pytest
 
 
 def _load_agents_config(bundle_dir) -> dict:
-    """Return AGENTS_CONFIG from the bundle's skills_descriptor, or skip."""
+    """Return skill consumer visibility config from bundle config or legacy descriptor."""
     try:
+        template_path = bundle_dir / "config" / "bundles.template.yaml"
+        if template_path.exists():
+            import yaml
+
+            template = yaml.safe_load(template_path.read_text(encoding="utf-8")) or {}
+            items = ((template.get("bundles") or {}).get("items") or [])
+            for item in items:
+                if item.get("id") != bundle_dir.name:
+                    continue
+                agents = (
+                    (((item.get("config") or {}).get("surfaces") or {}).get("as_consumer") or {}).get("agents")
+                    or {}
+                )
+                if isinstance(agents, dict):
+                    for agent in agents.values():
+                        skills = agent.get("skills") if isinstance(agent, dict) else None
+                        if isinstance(skills, dict):
+                            consumers = skills.get("consumers") or {}
+                            assert isinstance(consumers, dict)
+                            return consumers
+
         import importlib.util
 
         if not (bundle_dir / "skills_descriptor.py").exists():
-            pytest.skip(f"Bundle '{bundle_dir}' has no skills_descriptor.py")
+            pytest.skip(f"Bundle '{bundle_dir}' has no config skills surface or legacy skills_descriptor.py")
 
         spec = importlib.util.spec_from_file_location(
             "skills_descriptor", bundle_dir / "skills_descriptor.py"

@@ -3,7 +3,7 @@ id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-agent-integration-READM
 title: "Bundle Agent Integration"
 summary: "Canonical bundle guide for wiring React agents, bundle-local tools and skills, MCP connectors, bundle-served MCP endpoints, and Claude Code subagents with deployable auth and network requirements."
 tags: ["sdk", "bundle", "agents", "react", "claude-code", "tools", "skills", "mcp", "deployment"]
-keywords: ["bundle agent integration", "React tool config", "skills descriptor", "event_source_reader", "bundle served MCP", "Claude Code MCP", "ClaudeCodeAgent", "mcp_base_url", "agent runtime context"]
+keywords: ["bundle agent integration", "React tool config", "skill config", "event_source_reader", "bundle served MCP", "Claude Code MCP", "ClaudeCodeAgent", "mcp_base_url", "agent runtime context"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-runtime-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
@@ -51,7 +51,7 @@ There are two different agent runtimes in this SDK surface.
 
 | Runtime | Who runs it | Tool source | Skill source | Typical use |
 | --- | --- | --- | --- | --- |
-| React | KDCube chat runtime | `surfaces.as_consumer.agents.<agent>.tools` resolved by SDK `tool_config.py`, SDK tools, MCP, named services | `skills_descriptor.py` and bundle `skills/` | normal chat turns, task execution turns, transport-backed assistant work |
+| React | KDCube chat runtime | `surfaces.as_consumer.agents.<agent>.tools` resolved by SDK `tool_config.py`, SDK tools, MCP, named services | `surfaces.as_consumer.agents.<agent>.skills` resolved by SDK `skill_config.py`, plus bundle `skills/` | normal chat turns, task execution turns, transport-backed assistant work |
 | Claude Code | `claude` CLI subprocess | Claude built-ins plus Claude MCP config written into workspace | `CLAUDE.md`, Claude settings, future custom Claude skill support | scoped code/file/research subagent work, private sub-processing, specialized tool loops |
 
 Important:
@@ -439,7 +439,7 @@ namespace rehosters. If the model should not call it, pass it through
 | namespace rehosters | loaded tool/event modules with `@artifact_namespace_rehoster` | lets `react.pull` import owner-domain refs such as `mem:` or `cnv:` into the ReAct workspace |
 | event policies | loaded tool/event modules with policy decorators plus event source declarations | renders external events, tool results, and reader results into timeline/ANNOUNCE/compaction |
 | MCP server connection config | bundle props `config.mcp.services` | controls server URLs, transports, and auth |
-| skills | `skills_descriptor.py`, `CUSTOM_SKILLS_ROOT`, `AGENTS_CONFIG` | exposes bundle skill prompts and visibility rules |
+| skills | `surfaces.as_consumer.agents.<agent>.skills` + SDK `skill_config.py` resolver | exposes bundle skill roots and consumer visibility rules |
 | skill-tool mapping | skill `tools.yaml` | tells the agent which tool ids belong to a skill; `required: true` gates the skill on active tool availability |
 | custom instructions | `additional_instructions` argument | should combine product defaults with bundle-configured instructions |
 | model/runtime version | platform/bundle config | React version is selected by platform config; bundle code should call `build_react(...)` |
@@ -450,17 +450,30 @@ namespace rehosters. If the model should not call it, pass it through
 Example:
 
 ```python
-tool_config = tools_mod.config_for_agent(
-    agent_surface,
-    bundle_props=self.bundle_props,
+from kdcube_ai_app.apps.chat.sdk.runtime.skill_config import (
+    agent_skill_config_from_bundle_props,
+)
+from kdcube_ai_app.apps.chat.sdk.runtime.tool_config import (
+    agent_tool_config_from_bundle_props,
+)
+
+tool_config = agent_tool_config_from_bundle_props(
+    self.bundle_props,
+    "main",
+    bundle_root=BUNDLE_ROOT,
+)
+skill_config = agent_skill_config_from_bundle_props(
+    self.bundle_props,
+    "main",
+    bundle_root=BUNDLE_ROOT,
 )
 
 react = self.build_react(
     tools_runtime=tool_config.tool_runtime,
     mod_tools_spec=tool_config.tool_specs,
     mcp_tools_spec=tool_config.mcp_tool_specs,
-    custom_skills_root=skills_mod.CUSTOM_SKILLS_ROOT,
-    skills_visibility_agents_config=skills_mod.AGENTS_CONFIG or {},
+    custom_skills_root=skill_config.custom_skills_root,
+    skills_visibility_agents_config=skill_config.agents_config,
     scratchpad=scratchpad,
     additional_instructions=additional_instructions,
 )
@@ -476,8 +489,8 @@ Skill discovery is intentionally wider than bundle-local files:
 ```text
 core SDK skills
   + SDK solution skills, for example task.* from the Tasks solution
-  + bundle CUSTOM_SKILLS_ROOT
-  -> AGENTS_CONFIG filter for the exact consumer id
+  + bundle custom_root
+  -> consumer filter for the exact skill consumer id
   -> tools.yaml required-tool filter against active React tool catalog
   -> visible skill catalog / SK short ids
 ```
@@ -485,21 +498,29 @@ core SDK skills
 Bundle authors can narrow this explicitly, but subsystem skills that declare
 required tools are also filtered by the active tool catalog. For example, Tasks
 solution skills are omitted automatically when `tasks.*` / `task_job.*` tools
-are not exposed. Use `AGENTS_CONFIG` when the bundle needs an explicit
+are not exposed. Use the agent skill `consumers` config when the bundle needs an explicit
 allow-list or hard deny:
 
-```python
-AGENTS_CONFIG = {
-    "solver.react.v2.decision.v2.strong": {"disabled": ["task.*"]},
-    "solver.react.v2.decision.v2.regular": {"disabled": ["task.*"]},
-}
+```yaml
+surfaces:
+  as_consumer:
+    agents:
+      main:
+        skills:
+          custom_root: skills
+          consumers:
+            solver.react.v2.decision.v2.strong:
+              disabled: ["task.*"]
+            solver.react.v2.decision.v2.regular:
+              disabled: ["task.*"]
+```
 ```
 
 Use `agent_disclosure: hidden` in `SKILL.md` only for operational guidance that
 may still be loaded by exact id or import but must not be advertised in the
 skill catalog or in user-facing self-descriptions. This is prompt-disclosure
-control, not authorization. Use `AGENTS_CONFIG` when a consumer must not be able
-to load a skill at all.
+control, not authorization. Use the agent skill `consumers` config when a
+consumer must not be able to load a skill at all.
 
 If a skill is coupled to a subsystem that may be disabled per bundle or per
 runtime surface, mark its hard tool dependencies in `tools.yaml`:
@@ -626,8 +647,8 @@ but it does not decide those values automatically.
 
 Skill rule:
 
-- React skills are first-class SDK inputs through `skills_descriptor.py`.
-- Claude Code does not consume KDCube `skills_descriptor.py`, `SKILL.md`, or
+- React skills are first-class SDK inputs through `surfaces.as_consumer.agents.<agent>.skills`.
+- Claude Code does not consume KDCube agent skill config, `SKILL.md`, or
   skill `tools.yaml` directly.
 - To use KDCube skills with Claude Code, pass fully-qualified skill ids to
   `ClaudeCodeWorkspaceConfig.skill_ids`. The SDK resolves them through the
@@ -725,11 +746,10 @@ Recommended layout:
 ```text
 my.bundle@1-0/
   entrypoint.py
-  orchestrator/
-    workflow.py
+  agents/
+    main.py
   config/
     bundles.template.yaml
-  skills_descriptor.py
   tools/
     domain_tools.py
   skills/
@@ -789,24 +809,29 @@ Keep the reference/default `surfaces.as_consumer` policy in
 surfaces such as `agents.<agent>.tools` explicitly; do not hide default tool
 connections in a Python helper.
 
-`skills_descriptor.py` exposes bundle skill roots and visibility rules:
+`surfaces.as_consumer.agents.<agent>.skills` exposes bundle skill roots and
+visibility rules:
 
-```python
-CUSTOM_SKILLS_ROOT = "skills"
-
-REACT_DECISION_SKILLS = [
-    "public.*",
-    "product.domain",
-]
-
-AGENTS_CONFIG = {
-    "solver.react.v2.decision.v2.strong": {"enabled": REACT_DECISION_SKILLS},
-    "solver.react.v2.decision.v2.regular": {"enabled": REACT_DECISION_SKILLS},
-}
+```yaml
+surfaces:
+  as_consumer:
+    agents:
+      main:
+        skills:
+          custom_root: skills
+          consumers:
+            solver.react.v2.decision.v2.strong:
+              enabled:
+                - public.*
+                - product.domain
+            solver.react.v2.decision.v2.regular:
+              enabled:
+                - public.*
+                - product.domain
 ```
 
 The skill registry loads core SDK skills, SDK solution skills, and the bundle
-`CUSTOM_SKILLS_ROOT`. Solution skills such as `task.tasks` and `task.job` are
+`custom_root`. Solution skills such as `task.tasks` and `task.job` are
 present in discovery even if the bundle does not use the Tasks solution, but
 their required tool gates remove them from the active catalog when task tools
 are absent. Use explicit `enabled` lists or `disabled: ["task.*"]` only when
@@ -822,10 +847,11 @@ Skill front matter may include `agent_disclosure: hidden`. Hidden-disclosure
 skills are excluded from the visible catalog and `SK1` short-id map. If loaded
 by exact id or import, their active instruction block is rendered with a
 redacted heading and a non-disclosure rule instead of the skill id/name. This
-does not disable the skill; combine it with `AGENTS_CONFIG` if the skill must be
-unavailable to a consumer.
+does not disable the skill; combine it with `consumers` visibility if the skill
+must be unavailable to a consumer.
 
-Each skill's `tools.yaml` should reference real tool ids from the descriptor.
+Each skill's `tools.yaml` should reference real tool ids from the active agent
+tool config.
 For example, with alias `domain`, a Python function `search_assets` becomes:
 
 ```yaml
@@ -834,7 +860,7 @@ tools:
   - domain.update_asset
 ```
 
-The workflow builds React from those descriptors:
+The workflow builds React from the resolved tool and skill config:
 
 ```python
 base_instructions = (
@@ -845,17 +871,30 @@ additional_instructions = "\n".join(
     item for item in [base_instructions, configured_instructions] if item
 )
 
-tool_config = tools_mod.config_for_agent(
+from kdcube_ai_app.apps.chat.sdk.runtime.skill_config import (
+    agent_skill_config_from_bundle_props,
+)
+from kdcube_ai_app.apps.chat.sdk.runtime.tool_config import (
+    agent_tool_config_from_bundle_props,
+)
+
+tool_config = agent_tool_config_from_bundle_props(
+    self.bundle_props,
     "main",
-    bundle_props=self.bundle_props,
+    bundle_root=BUNDLE_ROOT,
+)
+skill_config = agent_skill_config_from_bundle_props(
+    self.bundle_props,
+    "main",
+    bundle_root=BUNDLE_ROOT,
 )
 
 react = self.build_react(
     tools_runtime=tool_config.tool_runtime,
     mod_tools_spec=tool_config.tool_specs,
     mcp_tools_spec=tool_config.mcp_tool_specs,
-    custom_skills_root=skills_mod.CUSTOM_SKILLS_ROOT,
-    skills_visibility_agents_config=skills_mod.AGENTS_CONFIG or {},
+    custom_skills_root=skill_config.custom_skills_root,
+    skills_visibility_agents_config=skill_config.agents_config,
     scratchpad=scratchpad,
     additional_instructions=additional_instructions,
 )
@@ -881,7 +920,7 @@ React configuration sources:
 - named-service tool catalog entries show `namespaces applicable` so the model
   knows which namespaces support each generic `named_services.*` tool; provider
   operation ids stay in config and provider protocol, not in ReAct prompt data
-- `skills_descriptor.py` controls skill roots and visibility
+- `surfaces.as_consumer.agents.<agent>.skills` controls skill roots and visibility
 - bundle props such as `mcp.services` control MCP connection details
 - bundle props may add product-specific instructions, for example
   `react.default_agent.additional_instructions`
@@ -930,8 +969,7 @@ Multiple agent surfaces are allowed. A bundle can keep separate config entries
 for normal chat and scheduled job execution:
 
 ```text
-skills_descriptor.py
-job_skills_descriptor.py
+skills/
 ```
 
 This keeps job tools narrower and prevents the scheduled-job agent from editing

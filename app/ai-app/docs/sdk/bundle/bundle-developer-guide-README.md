@@ -58,7 +58,7 @@ Read in this order:
 6. `entrypoint.py`
 7. `agents/main.py`
 8. `config/bundles.template.yaml`
-9. `skills_descriptor.py`
+9. `skills/` plus `surfaces.as_consumer.agents.<agent>.skills` when the bundle has local skills
 10. [bundle-agent-integration-README.md](bundle-agent-integration-README.md) when the bundle has React tools/skills, MCP, or Claude Code subagents
 
 The assembly map is the fastest way to find reusable Tasks, Email, Telegram,
@@ -212,11 +212,10 @@ Recommended layout:
 ```text
 my_bundle/
   entrypoint.py
-  orchestrator/
-    workflow.py
+  agents/
+    main.py
   config/
-    bundles.template.yaml # default consumer/tool/UI policy
-  skills_descriptor.py
+    bundles.template.yaml # default consumer tool/skill/event/UI policy
   tools/
   skills/
   ui/
@@ -234,16 +233,17 @@ Required in practice:
 Usually present in real bundles:
 
 - `agents/main.py`
-- `config/bundles.template.yaml` for consumer-surface/tool/UI policy
-- `skills_descriptor.py`
+- `config/bundles.template.yaml` for consumer-surface tool, skill, event, and UI policy
+- `skills/` for bundle-local skill content when needed
 
 Skills are discovered from more than the bundle folder. The active registry
 loads core SDK skills, SDK solution skills, and then bundle-local
-`CUSTOM_SKILLS_ROOT`. Use `skills_descriptor.py` `AGENTS_CONFIG` to narrow the
-catalog for exact consumer ids such as `solver.react.v2.decision.v2.strong` and
+`custom_root` from `surfaces.as_consumer.agents.<agent>.skills`. Use
+`consumers` under that agent skill config to narrow the catalog for exact
+consumer ids such as `solver.react.v2.decision.v2.strong` and
 `solver.react.v2.decision.v2.regular`. Skills that declare required tools are
 also filtered against the active tool catalog, so solution skills disappear
-automatically when their tools are not exposed. Use `AGENTS_CONFIG` when policy
+automatically when their tools are not exposed. Use `consumers` when policy
 needs an explicit allow-list or hard deny.
 
 For skills that should exist only when their tools are available, add
@@ -253,8 +253,8 @@ from catalog/import/read paths when the corresponding tools are not exposed.
 
 Use `agent_disclosure: hidden` in a skill front matter only when the skill is
 operational guidance that may be loaded by exact id/import but must not be
-listed by the agent. It is not an authorization boundary; use `AGENTS_CONFIG`
-to make a skill unavailable.
+listed by the agent. It is not an authorization boundary; use `consumers`
+visibility to make a skill unavailable.
 
 ## Minimal Entry Pattern
 

@@ -2,8 +2,8 @@
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/skills/skills-README.md
 title: "Skills"
 summary: "Skills subsystem reference: format, discovery roots, per-consumer visibility filtering, and exact runtime enforcement paths."
-tags: ["sdk", "skills", "subsystem", "runtime", "descriptor", "agents_config", "react", "codegen", "citations", "solutions"]
-keywords: ["skills_registry.py", "skills_descriptor.py", "AGENTS_CONFIG", "consumer id", "solution skills", "skills_for_consumer", "build_skill_short_id_map", "import_skillset", "build_skills_instruction_block", "react.read", "llm_generator.py", "codegen_tools.py"]
+tags: ["sdk", "skills", "subsystem", "runtime", "configuration", "agents_config", "react", "codegen", "citations", "solutions"]
+keywords: ["skills_registry.py", "surfaces.as_consumer.agents.<agent>.skills", "custom_root", "consumers", "consumer id", "solution skills", "skills_for_consumer", "build_skill_short_id_map", "import_skillset", "build_skills_instruction_block", "react.read", "llm_generator.py", "codegen_tools.py"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/skills/custom-skills-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/skills/skills-infra-README.md
@@ -190,7 +190,7 @@ Namespaces control discoverability:
 - public: visible in skill catalogs
 - internal: not discoverable (used for internal behaviors)
 - task: SDK tasks solution skills
-- custom/product/etc.: loaded from a bundle-defined root (see SkillsSubsystem descriptor)
+- custom/product/etc.: loaded from a bundle-defined root (see `surfaces.as_consumer.agents.<agent>.skills`)
 
 Skills are referenced by fully qualified id:
   <namespace>.<skill_id>
@@ -202,35 +202,54 @@ For convenience, callers may also use:
 - short ids (SK1, SK2, ...) from the skill catalog
 
 
-## Skills descriptor (bundle plugin)
+## Skill Configuration
 
-Each bundle can provide a skills descriptor (analogous to tools_descriptor for tools).
+Bundles configure skills under the consuming agent, alongside tools:
+
+```yaml
+surfaces:
+  as_consumer:
+    agents:
+      main:
+        skills:
+          custom_root: skills
+          consumers:
+            solver.react.v2.decision.v2.strong:
+              enabled:
+                - public.url-gen
+            answer.generator.strong:
+              disabled:
+                - public.pdf-press
+                - public.*-press
+```
+
 It defines:
-- custom_skills_root: optional path for bundle-local skills
-- agents_config: per-consumer filtering (enabled/disabled lists)
+- `custom_root`: optional path for bundle-local skills
+- `consumers`: per-skill-consumer filtering, with `enabled` and `disabled` lists
 
-Example:
+The SDK resolver converts this bundle-facing config into the internal
+`SkillsSubsystem` payload:
 
-custom_skills_root = "/opt/custom_skills"
-
-agents_config = {
-  "solver.react.v2.decision.v2.strong": {
-    "enabled": ["public.url-gen"]
-  },
-  "answer.generator.strong": {
-    "disabled": ["public.pdf-press", "public.*-press"]
+```json
+{
+  "custom_skills_root": "/abs/bundle/skills",
+  "agents_config": {
+    "solver.react.v2.decision.v2.strong": {
+      "enabled": ["public.url-gen"]
+    }
   }
 }
+```
 
 Filtering logic:
-- If a consumer is present in AGENTS_CONFIG:
+- If a consumer is present in `consumers`:
   - enabled list means only those skills are visible.
   - otherwise, disabled list removes those skills.
 - You can use wildcard patterns like `public.*` or `public.*-press`.
-- If a consumer is not present in AGENTS_CONFIG:
+- If a consumer is not present in `consumers`:
   - all skills are visible (no include_for enforcement).
 - Matching is by exact consumer id.
-- After descriptor filtering, runtime tool eligibility is applied for skills
+- After visibility filtering, runtime tool eligibility is applied for skills
   whose `tools.yaml` contains `required: true` entries. If any required tool is
   missing from the active tool catalog, the skill is omitted from the visible
   catalog, short-id mapping, imports, and `react.read(sk:...)` load path for
@@ -246,7 +265,7 @@ Filtering logic:
 
 Resolution example:
 
-agents_config = {
+consumers = {
   "solver.react.v2.decision.v2.strong": {"disabled": ["public.*"]},
   "answer.generator.strong": {"enabled": ["product.kdcube", "public.docx-press"]}
 }
@@ -267,15 +286,16 @@ What this configuration achieves:
 - Per-agent resolution control: SK short ids are built from each consumer's visible set.
 - Per-agent instruction injection control: hidden skills for a consumer are not injected into that consumer's generator prompt.
 
-`agent_disclosure: hidden` is separate from `AGENTS_CONFIG`:
-- `AGENTS_CONFIG` says whether a consumer may see/load a skill at all.
+`agent_disclosure: hidden` is separate from `consumers` visibility:
+- `consumers` says whether a consumer may see/load a skill at all.
 - `agent_disclosure: hidden` says an otherwise available skill must not be
   advertised. Hidden-disclosure skills are omitted from the catalog and short-id
   map, but can still be loaded by exact id or by imports.
 - When a hidden-disclosure skill is loaded, the active instruction block uses a
   redacted heading and a non-disclosure rule instead of printing the skill name
   and fully qualified id.
-- This is not an authorization boundary. Disable the skill in `AGENTS_CONFIG`
+- This is not an authorization boundary. Disable the skill in the configured
+  consumer visibility rules
   when the agent must not be able to use it.
 
 SDK mechanisms using this:
@@ -292,7 +312,7 @@ For runtime wiring, see [docs/sdk/skills/skills-infra-README.md](skills-infra-RE
 1) Skills are loaded from:
    - core SDK skills directory: `sdk/skills/skills`
    - SDK solution skill roots, for example `sdk/solutions/tasks/skills`
-   - optional bundle `CUSTOM_SKILLS_ROOT`
+   - optional bundle `custom_root`
 
    Load order matters. Bundle-local skills are loaded last, so a bundle can
    override an SDK skill by publishing the same fully qualified skill id.
@@ -426,8 +446,8 @@ Callers should use:
                     |
                     v
           +---------------------+        +--------------------+
-          |  Skill Catalogs     |        |  skills descriptor |
-          |  (system prompt)    |        |  agents_config     |
+          |  Skill Catalogs     |        |  agent skill config|
+          |  (system prompt)    |        |  + consumers       |
           +----------+----------+        +---------+----------+
                      \                          /
                       \                        /

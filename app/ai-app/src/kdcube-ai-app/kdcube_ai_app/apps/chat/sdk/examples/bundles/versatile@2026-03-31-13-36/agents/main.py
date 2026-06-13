@@ -10,6 +10,7 @@ from kdcube_ai_app.apps.chat.sdk.protocol import ExternalEventPayload
 from kdcube_ai_app.apps.chat.sdk.context.memory.instructions import MEMORY_REACT_ADDITIONAL_INSTRUCTIONS
 from kdcube_ai_app.apps.chat.sdk.retrieval.kb_client import KBClient
 from kdcube_ai_app.apps.chat.sdk.runtime.scratchpad import CTurnScratchpad
+from kdcube_ai_app.apps.chat.sdk.runtime.skill_config import agent_skill_config_from_bundle_props
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_config import agent_tool_config_from_bundle_props
 from kdcube_ai_app.apps.chat.sdk.solutions.canvas.events.defaults import default_canvas_event_source_specs
 from kdcube_ai_app.apps.chat.sdk.solutions.canvas.instructions import CANVAS_REACT_ADDITIONAL_INSTRUCTIONS
@@ -30,7 +31,6 @@ from kdcube_ai_app.infra.accounting import with_accounting
 from kdcube_ai_app.infra.service_hub.inventory import Config, ModelServiceBase
 from langgraph.graph import END, START, StateGraph
 
-from .. import skills_descriptor
 from .gate import GateOut as MinimalGateOut, gate_stream
 from ..resources.service_messages.resources import get_friendly_error_message
 
@@ -304,13 +304,18 @@ class VersatileWorkflow(BaseWorkflow):
                     client_id,
                     bundle_root=BUNDLE_ROOT,
                 )
+                skill_config = agent_skill_config_from_bundle_props(
+                    self.bundle_props,
+                    client_id,
+                    bundle_root=BUNDLE_ROOT,
+                )
                 react = self.build_react(
                     tools_runtime=tool_config.tool_runtime,
                     mod_tools_spec=tool_config.tool_specs,
                     mcp_tools_spec=tool_config.mcp_tool_specs,
                     event_source_specs=default_canvas_event_source_specs(),
-                    custom_skills_root=skills_descriptor.CUSTOM_SKILLS_ROOT,
-                    skills_visibility_agents_config=skills_descriptor.AGENTS_CONFIG or {},
+                    custom_skills_root=skill_config.custom_skills_root,
+                    skills_visibility_agents_config=skill_config.agents_config,
                     scratchpad=scratchpad,
                     additional_instructions=_resolve_react_additional_instructions(
                         self.comm_context,

@@ -132,7 +132,7 @@ ownership.
 | PDF, DOCX, PPTX, PNG, HTML generation | `rendering_tools` plus public rendering skills | [SDK Tools](../../tools/sdk-tools-README.md) |
 | Isolated code execution and generated-code work | `exec_tools`, isolated runtime, tool bridge | [Bundle Agent Integration](../bundle-agent-integration-README.md), [SDK Tools](../../tools/sdk-tools-README.md) |
 | Context, attachments, hosted files, and conversation-scoped reads | `ctx_tools`, `io_tools`, hosting/runtime APIs | [Bundle Runtime](../bundle-runtime-README.md), [SDK Tools](../../tools/sdk-tools-README.md) |
-| ReAct agent with bundle tools and skills | `BaseWorkflow.build_react(...)`, `surfaces.as_consumer`, `skills_descriptor.py`; skills are discovered from core SDK, SDK solution roots, and bundle `CUSTOM_SKILLS_ROOT`, then filtered by exact consumer id | [Bundle Agent Integration](../bundle-agent-integration-README.md) |
+| ReAct agent with bundle tools and skills | `BaseWorkflow.build_react(...)`, `surfaces.as_consumer.agents.<agent>.tools`, `surfaces.as_consumer.agents.<agent>.skills`; skills are discovered from core SDK, SDK solution roots, and bundle `custom_root`, then filtered by exact consumer id | [Bundle Agent Integration](../bundle-agent-integration-README.md) |
 | Per-role model routing and temporary model strength selection | `config.role_models` for defaults/descriptor overrides; `bundle_call_context.role_models` for one API/MCP/cron/chat/job call | [Bundle Agent Integration](../bundle-agent-integration-README.md#model-selection-for-agent-roles), [Bundle Runtime](../bundle-runtime-README.md#request-scoped-role-model-override) |
 | Bundle-served MCP endpoint | `@mcp(...)` | [Bundle Platform Integration](../bundle-platform-integration-README.md), [MCP Tools](../../tools/mcp-README.md) |
 | Claude Code subagent with scoped MCP/tools | `ClaudeCodeAgent`, `ClaudeCodeWorkspaceConfig` | [Bundle Agent Integration](../bundle-agent-integration-README.md) |
@@ -156,7 +156,7 @@ ownership.
 | `surfaces.as_consumer` | Tool aliases for SDK tool modules and bundle-local tool modules used by the agent. Bundle-local tools should use `ref: "tools/name.py"` and package-relative imports; `module` is for installed modules. |
 | `event_source_specs` | Event-source modules loaded into ReAct, including authored UI event declarations, policies, event-source readers, and custom artifact namespace rehosters. These are runtime/event surfaces, not callable tools. |
 | `events/*.py` | Bundle-owned event-source declarations, phase policy bindings, and rehosters for domain artifact namespaces. |
-| `skills_descriptor.py` | Bundle-local skill root plus `AGENTS_CONFIG` filters for core SDK skills, SDK solution skills such as `task.*`, and bundle-local product skills. |
+| `surfaces.as_consumer.agents.<agent>.skills` | Bundle-local skill root plus `consumers` filters for core SDK skills, SDK solution skills such as `task.*`, and bundle-local product skills. |
 | skill `tools.yaml` | Tool metadata for a skill; add `required: true` for tool ids that must exist before that skill is shown or loaded. |
 | `config/bundles.template.yaml` | Deployment-scoped non-secret props that enable/configure the block. |
 | `config/bundles.secrets.template.yaml` | Deployment-scoped secrets such as bot tokens, OAuth client secrets, signing keys. |
@@ -215,7 +215,7 @@ widget composition, and route exposure.
 Tasks skills are discovered from the SDK solution root even without a
 bundle-local `skills/` folder. They declare required task tools, so they are
 normally omitted automatically when those tools are not in the active React tool
-catalog. Use `AGENTS_CONFIG` only when the bundle needs an explicit policy
+catalog. Use agent skill `consumers` only when the bundle needs an explicit policy
 override such as an allow-list or a hard deny.
 
 If multiple SDK blocks can receive background jobs, do not add multiple

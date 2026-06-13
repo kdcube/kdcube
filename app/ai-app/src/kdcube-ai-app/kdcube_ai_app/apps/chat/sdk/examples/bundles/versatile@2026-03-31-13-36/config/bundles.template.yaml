@@ -111,6 +111,14 @@ bundles:
                   #         - object.upsert
                   #         - object.host_file
                   #         - object.delete
+                skills:
+                  # Bundle-local skill root for this consuming agent. Relative
+                  # paths resolve against the bundle root.
+                  custom_root: skills
+                  # Optional ReAct sub-consumer visibility rules. Leave empty
+                  # to expose loaded skills according to their own metadata and
+                  # required tool eligibility.
+                  consumers: {}
                 # Add namespace event-source policies here when external refs
                 # should render into the ReAct timeline and be pullable.
                 # Example:

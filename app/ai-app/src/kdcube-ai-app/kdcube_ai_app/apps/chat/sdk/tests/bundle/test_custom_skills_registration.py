@@ -3,7 +3,9 @@
 """Custom skills registration tests.
 
 Test that custom skills register correctly with the Skills Subsystem.
-Bundles without a skills_descriptor or skills/ directory are skipped.
+Config-first bundles declare skills under
+`surfaces.as_consumer.agents.<agent>.skills`; legacy bundles may still expose a
+skills_descriptor module. Bundles without either declaration are skipped.
 
 Run with:
   BUNDLE_UNDER_TEST=/abs/path/to/bundle pytest test_custom_skills_registration.py -v
@@ -16,11 +18,38 @@ import pathlib
 import pytest
 
 
-def _load_skills_descriptor(bundle_dir):
-    """Return the skills_descriptor module for the bundle, or skip."""
+def _template_bundle_config(bundle_dir):
+    template_path = bundle_dir / "config" / "bundles.template.yaml"
+    if not template_path.exists():
+        return None
+    import yaml
+    template = yaml.safe_load(template_path.read_text(encoding="utf-8")) or {}
+    items = ((template.get("bundles") or {}).get("items") or [])
+    for item in items:
+        if item.get("id") == bundle_dir.name:
+            return item.get("config") or {}
+    return None
+
+
+def _load_config_skills(bundle_dir):
+    config = _template_bundle_config(bundle_dir)
+    agents = (((config or {}).get("surfaces") or {}).get("as_consumer") or {}).get("agents") or {}
+    if not isinstance(agents, dict):
+        return None
+    for agent in agents.values():
+        if not isinstance(agent, dict):
+            continue
+        skills = agent.get("skills")
+        if isinstance(skills, dict):
+            return skills
+    return None
+
+
+def _load_legacy_skills_descriptor(bundle_dir):
+    """Return the legacy skills_descriptor module for the bundle, or None."""
     try:
         if not (bundle_dir / "skills_descriptor.py").exists():
-            pytest.skip(f"Bundle '{bundle_dir}' has no skills_descriptor.py")
+            return None
 
         import importlib.util
         spec = importlib.util.spec_from_file_location(
@@ -28,35 +57,61 @@ def _load_skills_descriptor(bundle_dir):
         )
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        return mod, bundle_dir
+        return mod
     except Exception as e:
-        pytest.skip(f"Cannot load skills_descriptor: {e}")
+        pytest.skip(f"Cannot load legacy skills_descriptor: {e}")
 
 
-class TestSkillsDescriptorStructure:
-    """Verify skills_descriptor.py defines the expected attributes."""
-
-    def test_skills_descriptor_defines_custom_skills_root(self, bundle, bundle_dir):
-        """skills_descriptor.py defines CUSTOM_SKILLS_ROOT attribute."""
-        mod, _ = _load_skills_descriptor(bundle_dir)
-        assert hasattr(mod, "CUSTOM_SKILLS_ROOT"), (
-            "skills_descriptor must define CUSTOM_SKILLS_ROOT"
+def _configured_custom_skills_root(bundle_dir):
+    config_skills = _load_config_skills(bundle_dir)
+    if isinstance(config_skills, dict):
+        root = (
+            config_skills.get("custom_root")
+            if "custom_root" in config_skills
+            else config_skills.get("custom_skills_root", config_skills.get("root"))
         )
+        if root is False or root is None:
+            return None
+        path = pathlib.Path(str(root))
+        return path if path.is_absolute() else (bundle_dir / path)
+
+    mod = _load_legacy_skills_descriptor(bundle_dir)
+    if mod is not None and hasattr(mod, "CUSTOM_SKILLS_ROOT"):
+        return mod.CUSTOM_SKILLS_ROOT
+    pytest.skip(f"Bundle '{bundle_dir}' has no config skills surface or legacy skills_descriptor.py")
+
+
+def _configured_agents_config(bundle_dir) -> dict:
+    config_skills = _load_config_skills(bundle_dir)
+    if isinstance(config_skills, dict):
+        consumers = config_skills.get("consumers") or {}
+        assert isinstance(consumers, dict)
+        return consumers
+
+    mod = _load_legacy_skills_descriptor(bundle_dir)
+    if mod is not None and hasattr(mod, "AGENTS_CONFIG"):
+        return mod.AGENTS_CONFIG
+    pytest.skip(f"Bundle '{bundle_dir}' has no skill visibility config")
+
+
+class TestSkillsConfigurationStructure:
+    """Verify bundle skill configuration has the expected structure."""
+
+    def test_skill_config_defines_custom_skills_root(self, bundle, bundle_dir):
+        """Skill config defines a bundle-local root when custom skills are declared."""
+        root = _configured_custom_skills_root(bundle_dir)
+        assert root is None or isinstance(root, pathlib.Path)
 
     def test_custom_skills_root_is_path_or_none(self, bundle, bundle_dir):
-        """CUSTOM_SKILLS_ROOT is a pathlib.Path or None."""
-        mod, _ = _load_skills_descriptor(bundle_dir)
-        root = mod.CUSTOM_SKILLS_ROOT
+        """Configured custom skill root is a pathlib.Path or None."""
+        root = _configured_custom_skills_root(bundle_dir)
         assert root is None or isinstance(root, pathlib.Path), (
-            f"CUSTOM_SKILLS_ROOT must be Path or None, got {type(root)}"
+            f"custom skill root must be Path or None, got {type(root)}"
         )
 
     def test_agents_config_is_dict(self, bundle, bundle_dir):
-        """AGENTS_CONFIG is a dict when defined."""
-        mod, _ = _load_skills_descriptor(bundle_dir)
-        if not hasattr(mod, "AGENTS_CONFIG"):
-            pytest.skip("Bundle has no AGENTS_CONFIG")
-        assert isinstance(mod.AGENTS_CONFIG, dict)
+        """Skill visibility config is a dict when defined."""
+        assert isinstance(_configured_agents_config(bundle_dir), dict)
 
 
 class TestSkillsSubsystem:
@@ -94,13 +149,11 @@ class TestSkillsSubsystem:
 
     def test_bundle_skills_loaded_when_skills_dir_exists(self, bundle, bundle_dir):
         """When bundle has skills/ directory, at least one skill is registered."""
-        mod, bundle_dir = _load_skills_descriptor(bundle_dir)
-        skills_root = mod.CUSTOM_SKILLS_ROOT
+        skills_root = _configured_custom_skills_root(bundle_dir)
         if skills_root is None or not skills_root.exists():
             pytest.skip("Bundle has no skills/ directory")
 
         from kdcube_ai_app.apps.chat.sdk.skills.skills_registry import SkillsSubsystem
-        import importlib.util as ilu
 
         descriptor = {"custom_skills_root": str(skills_root)}
         subsystem = SkillsSubsystem(descriptor=descriptor, bundle_root=bundle_dir)

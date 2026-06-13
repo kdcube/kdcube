@@ -261,9 +261,9 @@ For a React-backed bundle, prove the agent surface before manual testing:
 - `surfaces.as_consumer` exposes only the tool aliases the bundle actually needs
 - bundle-local tool entries in `surfaces.as_consumer` use `ref` and the tool
   modules import same-bundle helpers with package-relative imports
-- `skills_descriptor.py` points to bundle-local skills
-- `skills_descriptor.py` / `job_skills_descriptor.py` visibility filters use
-  the real React decision ids `solver.react.v2.decision.v2.strong` and
+- `surfaces.as_consumer.agents.<agent>.skills.custom_root` points to bundle-local skills when present
+- `surfaces.as_consumer.agents.<agent>.skills.consumers` visibility filters use
+  the real React decision ids such as `solver.react.v2.decision.v2.strong` and
   `solver.react.v2.decision.v2.regular`
 - each skill has `SKILL.md`
 - each skill `tools.yaml` references real tool ids from the active agent tool config

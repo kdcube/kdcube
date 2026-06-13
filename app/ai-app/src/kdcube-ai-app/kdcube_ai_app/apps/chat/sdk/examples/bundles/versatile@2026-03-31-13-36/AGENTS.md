@@ -15,7 +15,7 @@ Important files:
 - `services/telemetry.py` - comm event recording and telemetry sink delivery.
 - `config/bundles.template.yaml` - reference consumer surfaces, UI widgets, Telegram, telemetry, memory, canvas.
 - `config/bundles.secrets.template.yaml` - reference secret keys.
-- `skills_descriptor.py` and `skills/product/preferences/SKILL.md` - skill registration and durable-memory guidance.
+- `skills/product/preferences/SKILL.md` - bundle-local durable-memory guidance, registered through `surfaces.as_consumer.agents.main.skills`.
 - `ui/scene` - active main view.
 - `ui/widgets/telegram_miniapp` - Telegram Mini App widget source.
 - `interface/README.md` and `interface/versatile.openapi.yaml` - frontend/API contract.
@@ -26,6 +26,7 @@ Removed legacy surfaces:
 - `consumer_surfaces.py`
 - `preferences_store.py`
 - `tools_descriptor.py`
+- `skills_descriptor.py`
 - `events_descriptor.py`
 - `tools/preference_tools.py`
 

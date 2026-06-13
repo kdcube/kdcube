@@ -2159,7 +2159,7 @@ class BaseWorkflow():
                 include_expired=False, providers=(providers or None)
             )
         # self.conv_memories.bind_ctx_client(self.ctx_client)
-        if not custom_skills_root:
+        if custom_skills_root is None:
             candidate = bundle_root / "skills"
             if candidate.exists():
                 custom_skills_root = candidate

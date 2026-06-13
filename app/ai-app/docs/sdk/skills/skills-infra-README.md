@@ -3,7 +3,7 @@ id: repo:kdcube-ai-app/app/ai-app/docs/sdk/skills/skills-infra-README.md
 title: "Skills Infra"
 summary: "Infrastructure wiring for core SDK skills, SDK solution skills, and bundle-local skills across React runtime and isolated execution."
 tags: ["sdk", "skills", "infra", "runtime", "react", "isolated", "solutions"]
-keywords: ["skills registry", "skill descriptors", "solution skills", "react instructions", "iso runtime", "skills loader"]
+keywords: ["skills registry", "skill config", "solution skills", "react instructions", "iso runtime", "skills loader"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/skills/custom-skills-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/skills/skills-README.md
@@ -17,31 +17,47 @@ both the ReAct runtime and isolated execution environments.
 Scope:
 - This document focuses on wiring and runtime transport.
 - For skill format and runtime behavior, see [docs/sdk/skills/skills-README.md](skills-README.md).
-- For bundle-local authoring and AGENTS_CONFIG examples, see [docs/sdk/skills/custom-skills-README.md](custom-skills-README.md).
+- For bundle-local authoring and config examples, see [docs/sdk/skills/custom-skills-README.md](custom-skills-README.md).
 
 ## Core components
 
 - `SkillsSubsystem` (`kdcube_ai_app/apps/chat/sdk/skills/skills_registry.py`)
-  - Owns the skills descriptor and resolves skills from:
+  - Owns the normalized runtime skill config and resolves skills from:
     - core SDK skills root: `kdcube_ai_app/apps/chat/sdk/skills/skills/`
     - SDK solution skills roots, currently including
       `kdcube_ai_app/apps/chat/sdk/solutions/tasks/skills/`
-    - optional bundle-local custom skills root from the descriptor
+    - optional bundle-local custom skills root from agent config
   - Provides runtime helpers (gallery text, short ids, instruction blocks)
   - Loads per-skill metadata from `tools.yaml` and `sources.yaml`
   - Applies `tools.yaml` `required: true` gates against the active tool catalog
     when a runtime context supplies tool availability
   - Applies `agent_disclosure: hidden` for skills that are loadable but must
     not appear in user-facing skill catalogs or self-descriptions
-  - Exports a portable descriptor for isolated runtimes
+  - Exports a portable descriptor-shaped payload for isolated runtimes
 
 Discovery order is core SDK skills, SDK solution skills, then bundle-local
 skills. The registry is last-one-wins by fully qualified skill id, so a bundle
 can intentionally override an SDK skill by publishing the same id.
 
-## Skills descriptor
+## Bundle Config And Runtime Payload
 
-The descriptor is a JSON-serializable dict with:
+Bundle authors configure skills under the consuming agent:
+
+```yaml
+surfaces:
+  as_consumer:
+    agents:
+      main:
+        skills:
+          custom_root: skills
+          consumers:
+            solver.react.v2.decision.v2.strong:
+              enabled:
+                - product.preferences
+```
+
+The SDK resolver converts that config to the JSON-serializable payload consumed
+by `SkillsSubsystem`:
 
 ```json
 {
@@ -53,13 +69,11 @@ The descriptor is a JSON-serializable dict with:
 }
 ```
 
-If `custom_skills_root` is relative, it is resolved against the bundle root.
-If omitted and the bundle has `skills/` under its root, the bundle can pass that path.
-SDK solution skill roots are not configured by the bundle descriptor; they are
-part of the SDK registry wiring and are filtered with the same `agents_config`
-rules as other skills.
+If `custom_root` is relative, it is resolved against the bundle root. SDK
+solution skill roots are not configured by the bundle; they are part of the SDK
+registry wiring and are filtered with the same consumer rules as other skills.
 
-Use `agents_config` to make skills unavailable to a consumer. Use
+Use `consumers` to make skills unavailable to a consumer. Use
 `agent_disclosure: hidden` in a skill's front matter only when the skill should
 remain loadable by exact id/import but must be omitted from visible catalogs.
 Hidden-disclosure skills are excluded from `SK1`, `SK2`, ... short-id mapping;
@@ -74,12 +88,12 @@ imports, short ids, and skill reads for that runtime context.
 
 ## How it is wired
 
-1) Bundle provides descriptor (plugin side)
-   - Example: `bundle_root/skills_descriptor.py`
-   - The orchestrator passes this descriptor into `SolverSystem`.
+1) Bundle provides agent skill config
+   - Example: `surfaces.as_consumer.agents.main.skills`
+   - The bundle workflow resolves it with `agent_skill_config_from_bundle_props(...)`.
 
-2) SolverSystem owns a `SkillsSubsystem`
-   - `SolverSystem.__init__` builds `SkillsSubsystem(descriptor=..., bundle_root=...)`
+2) ReAct runtime owns a `SkillsSubsystem`
+   - `BaseWorkflow.build_react(...)` builds `SkillsSubsystem(descriptor=..., bundle_root=...)`
    - The subsystem is stored on the solver instance and set active via context var.
    - The subsystem discovers core SDK skills, SDK solution skills, and the
      bundle custom root.
@@ -113,7 +127,7 @@ imports, short ids, and skill reads for that runtime context.
 ## Notes
 
 - Skills are injected into generators; they do not modify tool behavior.
-- Filtering by `agents_config` is applied per consumer (e.g. `solver.react.v2.decision.v2.strong`).
+- Filtering by the resolved consumer config is applied per consumer (e.g. `solver.react.v2.decision.v2.strong`).
 - Required-tool filtering is runtime-context-sensitive and only applies when a
   caller supplies the active tool catalog. Without a tool catalog, skills remain
   backward-compatible and are not filtered by tool refs.
