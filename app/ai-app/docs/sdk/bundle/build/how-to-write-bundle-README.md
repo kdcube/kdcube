@@ -966,9 +966,8 @@ Workflow responsibilities:
 - construct the turn scratchpad
 - call `start_turn(...)`
 - persist the user message
-- resolve `surfaces.as_consumer` with SDK `tool_config.py`
-- resolve `surfaces.as_consumer.agents.<agent>.skills` with SDK
-  `skill_config.py`
+- resolve `surfaces.as_consumer` into the active agent's tool and skill runtime
+  inputs
 - call `build_react(...)` with resolved tool specs, event-source specs, and
   resolved skill config
 - run `react.run(...)`

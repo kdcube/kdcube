@@ -51,7 +51,7 @@ There are two different agent runtimes in this SDK surface.
 
 | Runtime | Who runs it | Tool source | Skill source | Typical use |
 | --- | --- | --- | --- | --- |
-| React | KDCube chat runtime | `surfaces.as_consumer.agents.<agent>.tools` resolved by SDK `tool_config.py`, SDK tools, MCP, named services | `surfaces.as_consumer.agents.<agent>.skills` resolved by SDK `skill_config.py`, plus bundle `skills/` | normal chat turns, task execution turns, transport-backed assistant work |
+| React | KDCube chat runtime | `surfaces.as_consumer.agents.<agent>.tools`, SDK tools, MCP, named services | `surfaces.as_consumer.agents.<agent>.skills`, plus bundle `skills/` | normal chat turns, task execution turns, transport-backed assistant work |
 | Claude Code | `claude` CLI subprocess | Claude built-ins plus Claude MCP config written into workspace | `CLAUDE.md`, Claude settings, future custom Claude skill support | scoped code/file/research subagent work, private sub-processing, specialized tool loops |
 
 Important:
@@ -433,13 +433,13 @@ namespace rehosters. If the model should not call it, pass it through
 
 | Input | SDK surface | Notes |
 | --- | --- | --- |
-| local Python tools | `surfaces.as_consumer.agents.<agent>.tools` + SDK `tool_config.py` resolver | exposes bundle tool modules by alias |
-| MCP tools | `surfaces.as_consumer.agents.<agent>.tools` + SDK `tool_config.py` resolver | selects which configured MCP server tools enter the catalog |
+| local Python tools | `surfaces.as_consumer.agents.<agent>.tools` | exposes bundle tool modules by alias |
+| MCP tools | `surfaces.as_consumer.agents.<agent>.tools` | selects which configured MCP server tools enter the catalog |
 | named-service tools | `surfaces.as_consumer.agents.<agent>.tools` with `kind: named_service` | exposes only allowed generic namespace operations; catalog shows the namespaces applicable to each tool |
 | namespace rehosters | loaded tool/event modules with `@artifact_namespace_rehoster` | lets `react.pull` import owner-domain refs such as `mem:` or `cnv:` into the ReAct workspace |
 | event policies | loaded tool/event modules with policy decorators plus event source declarations | renders external events, tool results, and reader results into timeline/ANNOUNCE/compaction |
 | MCP server connection config | bundle props `config.mcp.services` | controls server URLs, transports, and auth |
-| skills | `surfaces.as_consumer.agents.<agent>.skills` + SDK `skill_config.py` resolver | exposes bundle skill roots and consumer visibility rules |
+| skills | `surfaces.as_consumer.agents.<agent>.skills` | exposes bundle skill roots and consumer visibility rules |
 | skill-tool mapping | skill `tools.yaml` | tells the agent which tool ids belong to a skill; `required: true` gates the skill on active tool availability |
 | custom instructions | `additional_instructions` argument | should combine product defaults with bundle-configured instructions |
 | model/runtime version | platform/bundle config | React version is selected by platform config; bundle code should call `build_react(...)` |
@@ -533,7 +533,7 @@ tools:
 ```
 
 When the active React tool catalog does not contain a required tool id, that
-skill is removed from the visible catalog, short-id mapping, imported skill set,
+skill is omitted from the visible catalog, short-id mapping, imported skill set,
 and `react.read(sk:...)` path for the current runtime context.
 
 #### React Tool Results That Produce Files

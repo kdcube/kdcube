@@ -168,7 +168,8 @@ all, use `consumers.<consumer>.enabled` or `consumers.<consumer>.disabled`.
 
 ## Runtime Path
 
-Bundle code resolves config with:
+Bundle code resolves the public `surfaces.as_consumer.agents.<agent>.skills`
+surface before building ReAct. The current SDK helper is:
 
 ```python
 from kdcube_ai_app.apps.chat.sdk.runtime.skill_config import (
@@ -188,24 +189,11 @@ react = self.build_react(
 )
 ```
 
-`SkillsSubsystem` still receives an internal descriptor-shaped payload:
-
-```json
-{
-  "custom_skills_root": "/abs/bundle/skills",
-  "agents_config": {
-    "solver.react.v2.decision.v2.strong": {
-      "enabled": ["product.preferences"]
-    }
-  }
-}
-```
-
-That internal shape is not a bundle authoring file.
+This passes the configured bundle-local skill root and consumer visibility
+rules into ReAct.
 
 ## References
 
-- Resolver: `app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/skill_config.py`
 - Registry: `app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/skills/skills_registry.py`
 - Reference bundle config: `app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/config/bundles.template.yaml`
 - Reference bundle skill: `app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/skills/product/preferences/SKILL.md`

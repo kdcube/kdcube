@@ -33,13 +33,13 @@ Scope:
     when a runtime context supplies tool availability
   - Applies `agent_disclosure: hidden` for skills that are loadable but must
     not appear in user-facing skill catalogs or self-descriptions
-  - Exports a portable descriptor-shaped payload for isolated runtimes
+  - Serializes the active skill registry configuration for isolated runtimes
 
 Discovery order is core SDK skills, SDK solution skills, then bundle-local
 skills. The registry is last-one-wins by fully qualified skill id, so a bundle
 can intentionally override an SDK skill by publishing the same id.
 
-## Bundle Config And Runtime Payload
+## Bundle Config And Runtime Wiring
 
 Bundle authors configure skills under the consuming agent:
 
@@ -54,19 +54,6 @@ surfaces:
             solver.react.v2.decision.v2.strong:
               enabled:
                 - product.preferences
-```
-
-The SDK resolver converts that config to the JSON-serializable payload consumed
-by `SkillsSubsystem`:
-
-```json
-{
-  "custom_skills_root": "/abs/or/bundle/relative/path",
-  "agents_config": {
-    "solver.react.v2.decision.v2.strong": { "enabled": ["public.pptx-press"] },
-    "answer.generator.strong": { "disabled": ["public.pdf-press"] }
-  }
-}
 ```
 
 If `custom_root` is relative, it is resolved against the bundle root. SDK
@@ -90,7 +77,8 @@ imports, short ids, and skill reads for that runtime context.
 
 1) Bundle provides agent skill config
    - Example: `surfaces.as_consumer.agents.main.skills`
-   - The bundle workflow resolves it with `agent_skill_config_from_bundle_props(...)`.
+   - Runtime wiring passes the configured custom root and consumer rules into
+     ReAct when the agent is built.
 
 2) ReAct runtime owns a `SkillsSubsystem`
    - `BaseWorkflow.build_react(...)` builds `SkillsSubsystem(descriptor=..., bundle_root=...)`

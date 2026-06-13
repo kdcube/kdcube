@@ -143,10 +143,9 @@ tools:
 
 `required: true` means the skill is eligible only when that tool id is present
 in the active tool catalog for the current agent/turn. Without `required: true`,
-the tool entry is advisory metadata for planners and UX only. This keeps old
-skills backward-compatible while allowing stateful or subsystem-specific skills
-to disappear automatically when their tools are not wired, disabled, or excluded
-from `allowed_plugins` / `allowed_ids`.
+the tool entry is advisory metadata for planners and UX only. Skills with
+missing required tools are omitted from active catalogs, imports, and reads for
+that agent/turn.
 
 
 ## sources.yaml
@@ -227,19 +226,8 @@ It defines:
 - `custom_root`: optional path for bundle-local skills
 - `consumers`: per-skill-consumer filtering, with `enabled` and `disabled` lists
 
-The SDK resolver converts this bundle-facing config into the internal
-`SkillsSubsystem` payload:
-
-```json
-{
-  "custom_skills_root": "/abs/bundle/skills",
-  "agents_config": {
-    "solver.react.v2.decision.v2.strong": {
-      "enabled": ["public.url-gen"]
-    }
-  }
-}
-```
+At runtime, these fields select the bundle-local skill root and the
+consumer-specific visibility filters used by ReAct.
 
 Filtering logic:
 - If a consumer is present in `consumers`:
