@@ -1,81 +1,83 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.6.13.435"
+  ref: "2026.6.14.0007"
   description: |
-    This platform release hardens the named-service integration layer, ReAct
-    external-object access, canvas object resolution, config-first agent
-    wiring, and the Versatile reference bundle. It also refreshes platform
-    positioning and bundle-builder documentation around current public
-    authoring concepts.
+    This platform release adds the first production-ready online governance
+    layer for ReAct multi-action rounds, aligns the model instructions with
+    the runtime strategy-trait harness, improves canvas pin usability, and
+    hardens isolated tool execution for configured bundle tools.
 
     Highlights
 
-    - Adds provider-owned named-service resolution for namespace refs, so
-      common chat and canvas surfaces can resolve objects through service
-      discovery instead of embedding bundle-specific behavior.
-    - Tightens named-service provider and consumer contracts for object get,
-      streamed object reads, provider metadata, schemas, canvas object actions,
-      host-file flows, and error propagation.
-    - Makes ReAct external-object access cleaner: namespace refs are handled
-      through pull/materialization, with clearer artifact records and provider
-      errors surfaced back to the agent.
-    - Updates canvas integration so object cards and actions are resolved
-      generically from namespace refs, including subnamespace-style refs such
-      as task issue and attachment objects.
-    - Moves agent tool wiring to explicit `surfaces.as_consumer` config,
-      including Python tools, MCP tools, named-service tools, event sources,
-      canvas resolvers, and namespace applicability in the ReAct tool catalog.
-    - Moves agent skill visibility to the same config-first surface and keeps
-      public documentation focused on bundle-authoring config rather than
-      internal runtime handoff shapes.
-    - Integrates the SDK economics handler path with the reference Versatile
-      bundle and aligns bundle config templates, interface docs, and local
-      runtime examples.
-    - Refactors the Versatile reference bundle toward a cleaner shape:
-      `agents/main.py`, service modules, config-owned surfaces, SDK widgets,
-      and a restored Telegram Mini App widget.
-    - Removes the Versatile bundle-local preference skill and uses the SDK
-      durable-memory tools and shared memory widget as the documented path for
-      remembered facts and preferences.
-    - Refreshes top-level README and product documentation around KDCube as a
-      self-hosted governed runtime and control plane for multiple AI
-      applications.
+    - Introduces strategy traits for tools, starting with the `strategy`
+      trait values `exploration`, `exploitation`, `neutral`, and `unknown`.
+      Traits are carried through configured tool connections and the ReAct
+      tool catalog so agents and runtime policy use the same vocabulary.
+    - Adds an ordered multi-action compatibility matrix for ReAct rounds. The
+      first action is admitted, later actions are judged against already
+      accepted actions, incompatible later actions are denied, and unknown
+      strategy tools run alone.
+    - Adds an online ReAct action overseer and stream gates. Stream sniffers
+      can detect candidate actions, buffer user-visible output, ask the
+      overseer for admission, and interrupt generation as soon as a later
+      action is known to be strategically invalid.
+    - Preserves accepted earlier actions instead of nuking the whole round.
+      For example, an allowed search can still run while a premature final
+      answer in the same round is suppressed and recorded as a protocol
+      violation.
+    - Aligns shared ReAct instructions, lite instructions, decision prompts,
+      and prompt tests with the strategy-trait contract taught by the
+      harness.
+    - Documents governed streaming and ReAct online strategic governance,
+      including how stream gates, overseer decisions, tool traits, final
+      answer gating, and interruption paths fit together.
+    - Updates custom-tool and tool-subsystem docs so bundle authors know how
+      to mark connected tools with strategy traits and why this improves
+      reactive-agent correctness, user experience, and token economics.
+    - Improves canvas pin cards with footer timestamps and a copy-URI
+      affordance for easier inspection and handoff of pinned objects.
+    - Fixes isolated/runtime tool import roots so configured SDK and bundle
+      tool packages do not shadow Python stdlib modules such as `types.py`,
+      while preserving same-bundle relative imports for bundle tool modules.
 
     Runtime and deployment notes:
 
-    - Deployments must point the platform ref at 2026.6.13.435 to receive this
+    - Deployments must point the platform ref at 2026.6.14.0007 to receive this
       update.
-    - Bundles that consume namespace-owned objects should declare tool,
-      event-source, and canvas surfaces under `surfaces.as_consumer`.
-    - ReAct-facing named-service tools should be exposed only for operations
-      and namespaces intended for the agent. UI-only canvas object actions
-      should stay in canvas resolver config.
-    - External namespace refs that need full inspection should be materialized
-      through pull so ReAct receives a local artifact path plus provider
-      metadata.
-    - Bundle-local skills are optional. If a bundle relies on SDK durable
-      memory, configure the SDK memory tools and widget instead of shipping a
-      duplicate preference skill.
+    - Tool connections that participate in ReAct multi-action governance
+      should declare the `strategy` trait in config or tool metadata. Tools
+      without a known strategy are treated as `unknown` and must run alone.
+    - The ReAct harness now admits actions in order and denies incompatible
+      later actions. Accepted earlier actions remain valid and can still run.
+    - Final-answer output is governed like other user-visible streams. It is
+      buffered until the overseer accepts the strategic shape of the round.
+    - Bundle-local tool modules with helper files named like stdlib modules
+      should continue to work in isolated execution because PYTHONPATH now
+      uses the correct package or bundle root.
 
     Validation and regression coverage:
 
-    - Focused tests were updated around tool config, skill config,
-      named-service provider behavior, ReAct pull/materialization paths,
-      canvas refs, and Versatile reference-bundle wiring during development.
-    - Task tracker and Versatile manual checks covered task refs,
-      attachment materialization, canvas actions, and memory-widget flows.
+    - Added and updated tests for tool traits, tool config trait propagation,
+      ReAct action-overseer decisions, multi-action validation, runtime prompt
+      alignment, and stream gating behavior.
+    - Focused runtime tests cover dynamic bundle-tool imports, import-root
+      selection for package-backed tools, non-importable bundle roots, and
+      subprocess PYTHONPATH construction.
+    - Manual harness checks covered search-plus-final-answer and multi-action
+      ordering behavior, including suppression of invalid later output while
+      retaining earlier accepted actions.
     - Staged release diff private-name scan passes before the release commit.
 
     Changelog
 
-    - Added named-service resolver and host-file integration surfaces.
-    - Hardened object get/stream/read contracts for JSON objects and files.
-    - Updated ReAct pull handling for namespace-owned refs.
-    - Removed task-specific behavior from common canvas components.
-    - Added config-first tool and skill wiring for reference bundles.
-    - Updated named-service, tools, skills, canvas, and bundle-builder docs.
-    - Refactored Versatile bundle layout and restored Telegram Mini App widget.
-    - Removed the Versatile local preference skill in favor of SDK memory.
-    - Refreshed README and product-positioning documentation.
+    - Added tool strategy traits and compatibility helpers.
+    - Added ReAct online action overseer and governed stream gates.
+    - Updated multi-action runtime validation and tests.
+    - Updated ReAct shared instructions and prompt tests for strategy traits.
+    - Added governed-streaming and online-strategic-governance documentation.
+    - Updated custom-tool, SDK-tool, MCP-tool, named-service-tool, and
+      bundle-agent docs with trait guidance.
+    - Improved canvas pin card footer timestamp and copy-URI UI.
+    - Fixed isolated runtime PYTHONPATH roots for package and bundle tools.
 config:
-    version: "2026.6.13.435"
+    version: "2026.6.14.0007"
