@@ -727,7 +727,8 @@ my.bundle@1-0/
   entrypoint.py
   orchestrator/
     workflow.py
-  consumer_surfaces.py
+  config/
+    bundles.template.yaml
   skills_descriptor.py
   tools/
     domain_tools.py
@@ -771,27 +772,22 @@ hardcode the agent policy:
 from pathlib import Path
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_config import (
     agent_tool_config_from_bundle_props,
-    bundle_props_with_default_agent_tools,
 )
-from .consumer_surfaces import default_as_consumer_surfaces_props
 
 BUNDLE_ROOT = Path(__file__).resolve().parent
 
-effective_props = bundle_props_with_default_agent_tools(
-    bundle_props,
-    default_bundle_props=default_as_consumer_surfaces_props(),
-)
 tool_config = agent_tool_config_from_bundle_props(
-    effective_props,
+    bundle_props,
     agent_id,
     bundle_root=BUNDLE_ROOT,
     default_agent_id="main",
 )
 ```
 
-For code defaults, seed `surfaces.as_consumer` in `configuration_defaults()` or
-a bundle-owned helper such as `consumer_surfaces.py`. Do not make a standalone
-spec list the source of truth for what the agent can call.
+Keep the reference/default `surfaces.as_consumer` policy in
+`config/bundles.template.yaml`. Deployment config can replace list-valued
+surfaces such as `agents.<agent>.tools` explicitly; do not hide default tool
+connections in a Python helper.
 
 `skills_descriptor.py` exposes bundle skill roots and visibility rules:
 

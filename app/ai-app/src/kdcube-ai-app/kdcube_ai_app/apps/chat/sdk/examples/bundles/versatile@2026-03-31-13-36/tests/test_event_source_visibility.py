@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
+
 from kdcube_ai_app.apps.chat.sdk.events import EventSourceSubsystem
-from kdcube_ai_app.apps.chat.sdk.runtime.dynamic_module_loader import load_dynamic_module_for_path
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_config import agent_tool_config_from_bundle_props
 from kdcube_ai_app.apps.chat.sdk.solutions.canvas.events.defaults import default_canvas_event_source_specs
 
@@ -12,17 +13,22 @@ def _bundle_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
-def _consumer_surfaces():
-    _mod_name, module = load_dynamic_module_for_path(_bundle_root() / "consumer_surfaces.py")
-    return module
+def _template_bundle_props() -> dict:
+    template = yaml.safe_load((_bundle_root() / "config" / "bundles.template.yaml").read_text()) or {}
+    bundle = next(
+        item
+        for item in template["bundles"]["items"]
+        if item.get("id") == "versatile@2026-03-31-13-36"
+    )
+    return bundle["config"]
 
 
 def test_canvas_event_source_visibility_is_separate_from_named_service_actions():
-    consumer_surfaces = _consumer_surfaces()
+    props = _template_bundle_props()
     tool_aliases = {
         str(spec.get("alias") or "")
         for spec in agent_tool_config_from_bundle_props(
-            consumer_surfaces.default_as_consumer_surfaces_props(),
+            props,
             "main",
             bundle_root=_bundle_root(),
         ).tool_specs
@@ -31,7 +37,7 @@ def test_canvas_event_source_visibility_is_separate_from_named_service_actions()
     assert "canvas" in tool_aliases
 
     tool_config = agent_tool_config_from_bundle_props(
-        consumer_surfaces.default_as_consumer_surfaces_props(),
+        props,
         "default_agent",
         bundle_root=_bundle_root(),
     )
@@ -47,8 +53,8 @@ def test_canvas_event_source_visibility_is_separate_from_named_service_actions()
     assert event_sources.by_event_source_id("canvas.read") is not None
 
 
-def test_reference_default_tool_config_uses_as_consumer_surface():
-    props = _consumer_surfaces().default_as_consumer_surfaces_props()
+def test_reference_template_tool_config_uses_as_consumer_surface():
+    props = _template_bundle_props()
     assert "tools" not in props
 
     as_consumer = props["surfaces"]["as_consumer"]

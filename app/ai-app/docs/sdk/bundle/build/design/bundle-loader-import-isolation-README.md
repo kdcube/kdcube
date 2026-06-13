@@ -63,16 +63,23 @@ The same rule applies to bundle tool code.
 
 It covers:
 
-- `tools_descriptor.py` when imported by the workflow
-- Python modules referenced from `TOOLS_SPECS` with `ref`
+- Python modules referenced from `surfaces.as_consumer` tool connections with
+  `ref`
 - bundle-local helpers imported by those tool modules
 
-For bundle-local tools, prefer `ref` entries:
+For bundle-local tools, prefer `ref` entries in bundle config:
 
-```python
-TOOLS_SPECS = [
-    {"ref": "tools/report_tools.py", "alias": "report", "use_sk": True},
-]
+```yaml
+surfaces:
+  as_consumer:
+    agents:
+      main:
+        tools:
+          - name: report
+            kind: python
+            ref: tools/report_tools.py
+            alias: report
+            allowed: ["*"]
 ```
 
 Then the tool module can import same-bundle helpers with package-relative

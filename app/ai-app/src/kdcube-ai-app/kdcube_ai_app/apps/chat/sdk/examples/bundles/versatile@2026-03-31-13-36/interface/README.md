@@ -28,10 +28,10 @@ KDCube control-plane widget APIs use:
 /api/integrations/bundles/{tenant}/{project}/versatile@2026-03-31-13-36/operations/{alias}
 ```
 
-The KDCube control-plane React widget entrypoint is:
+The KDCube control-plane Telegram Mini App widget entrypoint is:
 
 ```text
-/api/integrations/bundles/{tenant}/{project}/versatile@2026-03-31-13-36/widgets/versatile_webapp
+/api/integrations/bundles/{tenant}/{project}/versatile@2026-03-31-13-36/widgets/telegram_miniapp
 ```
 
 Telegram Mini App APIs use:
@@ -43,13 +43,13 @@ Telegram Mini App APIs use:
 The Telegram Mini App React entrypoint is:
 
 ```text
-/api/integrations/bundles/{tenant}/{project}/versatile@2026-03-31-13-36/public/widgets/versatile_webapp
+/api/integrations/bundles/{tenant}/{project}/versatile@2026-03-31-13-36/public/widgets/telegram_miniapp
 ```
 
 Subpaths are supported by the static widget route, for example:
 
 ```text
-/api/integrations/bundles/{tenant}/{project}/versatile@2026-03-31-13-36/public/widgets/versatile_webapp/chats
+/api/integrations/bundles/{tenant}/{project}/versatile@2026-03-31-13-36/public/widgets/telegram_miniapp/chats
 ```
 
 ## Request Envelope
@@ -138,15 +138,11 @@ const isTelegramMiniApp = telegramInitData.length > 0;
 function telegramAlias(alias: string): string {
   const map: Record<string, string> = {
     telegram_profile: "telegram_profile",
-    versatile_webapp_data: "telegram_versatile_webapp_data",
+    telegram_miniapp_data: "telegram_miniapp_data",
     conversations_list: "conversations_list",
     conversations_create: "telegram_conversations_create",
     conversations_switch: "telegram_conversations_switch",
     conversations_delete: "telegram_conversations_delete",
-    preferences_canvas_data: "telegram_memory_canvas_data",
-    preferences_canvas_save: "telegram_memory_canvas_save",
-    preferences_canvas_export_excel: "telegram_memory_canvas_export_excel",
-    preferences_canvas_import_excel: "telegram_memory_canvas_import_excel",
     telegram_user_admin_data: "telegram_webapp_user_admin_data",
     telegram_user_admin_upsert: "telegram_webapp_user_admin_upsert",
     telegram_user_admin_delete: "telegram_webapp_user_admin_delete"
@@ -304,13 +300,13 @@ extra ReAct tools.
 Bootstrap or refresh the app:
 
 ```ts
-const data = await callOperation("versatile_webapp_data", {
+const data = await callOperation("telegram_miniapp_data", {
   widget_path: "memory",
   mark_memory_seen: true
 });
 ```
 
-`versatile_webapp_widget` is only the decorated widget compatibility operation.
+`telegram_miniapp_widget` is only the decorated widget compatibility operation.
 Do not use it for React app state.
 
 List, create, switch, and delete chat conversations:
@@ -337,31 +333,9 @@ Telegram Admin mapping. If no Telegram row is linked to that KDCube user, the
 response returns `ok: false` with `error.code == "telegram_mapping_required"`.
 In the Telegram Mini App, the same logical calls use signed Telegram initData.
 
-Load and save the current memory/preferences canvas:
-
-```ts
-const canvas = await callOperation("preferences_canvas_data");
-
-await callOperation("preferences_canvas_save", {
-  document_text: canvas.document_text
-});
-```
-
-Export and import the canvas as Excel:
-
-```ts
-const exported = await callOperation("preferences_canvas_export_excel");
-
-await callOperation("preferences_canvas_import_excel", {
-  content_b64: exported.content_b64
-});
-```
-
-The current memory panel is backed by the existing preferences canvas. It is a
-temporary compatibility surface until the new cross-conversation memories
-subsystem replaces it.
-
 SDK durable memory maintenance uses the shared `memories_widget_*` operations.
+The Mini App maps those to `telegram_memories_widget_*` public operations when
+it runs inside Telegram.
 The reconciliation flow is intentionally two phase: a dry run writes a proposal
 and artifacts; a later apply call mutates memory only after explicit
 confirmation.

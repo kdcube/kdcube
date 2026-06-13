@@ -32,8 +32,8 @@ updated_at: 2026-06-13
   The reference bundle intentionally uses `canvas.*` protocol names, not
   bundle-prefixed names.
 - Updated `config/bundles.template.yaml` to show the scene main view,
-  `versatile_chat`, `memories`, the legacy `versatile_webapp`, and the shared
-  SDK canvas component source.
+  `versatile_chat`, `memories`, `telegram_miniapp`, and the shared SDK canvas
+  component source.
 - Added `docs/design/scene-sdk-components.md` to document the component wiring.
 
 ## 2026-05-16
@@ -51,7 +51,7 @@ updated_at: 2026-06-13
 ## 2026-05-12
 
 - Added Telegram bot transport to the reference bundle.
-- Added a source-folder `versatile_webapp` widget that can run in the KDCube
+- Added a source-folder `telegram_miniapp` widget that can run in the KDCube
   control plane or as a Telegram Mini App.
 - Added public Telegram WebApp APIs for profile, conversations, memory canvas,
   and admin operations.

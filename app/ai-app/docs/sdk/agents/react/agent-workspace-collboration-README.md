@@ -301,34 +301,39 @@ For the function to be discoverable, the module must be part of the
 ```text
 Pattern A: rehoster lives in a tool module
 
-tools_descriptor.py
-  TOOLS_SPECS = [
-    {"ref": "tools/my_tools.py", "alias": "my_tools"},
-  ]
+config/bundles.template.yaml
+  surfaces:
+    as_consumer:
+      agents:
+        main:
+          tools:
+            - name: my_tools
+              kind: python
+              ref: tools/my_tools.py
+              alias: my_tools
+              allowed: ["*"]
 
 tools/my_tools.py
   @artifact_namespace_rehoster(namespace="nmsp")
   async def rehost_nmsp_ref(...): ...
 
-ToolSubsystem loads tools/my_tools.py, then EventSourceSubsystem scans that
+The workflow derives `tool_config.tool_specs` from `surfaces.as_consumer`.
+ToolSubsystem loads `tools/my_tools.py`; EventSourceSubsystem can then scan the
 loaded tool module for event sources and namespace rehosters.
 ```
 
 ```text
 Pattern B: rehoster lives in an event-only module
 
-events_descriptor.py
-  EVENT_SOURCE_SPECS = [
-    {"ref": "events/my_artifacts.py", "alias": "my_artifacts"},
-  ]
-
 orchestrator/workflow.py
-  from .. import events_descriptor, tools_descriptor
+  event_source_specs = [
+      {"ref": "events/my_artifacts.py", "alias": "my_artifacts"},
+  ]
 
   react = self.build_react(
       scratchpad,
-      mod_tools_spec=tools_descriptor.TOOLS_SPECS,
-      event_source_specs=events_descriptor.EVENT_SOURCE_SPECS,
+      mod_tools_spec=tool_config.tool_specs,
+      event_source_specs=event_source_specs,
   )
 
 events/my_artifacts.py
@@ -336,9 +341,9 @@ events/my_artifacts.py
   async def rehost_nmsp_ref(...): ...
 ```
 
-`events_descriptor.py` is a descriptor, not an auto-scan root. If the workflow
-does not pass `EVENT_SOURCE_SPECS` into `build_react`, `react.pull` will not
-know that the namespace exists. A module may also define
+The event-only module is not an auto-scan root. If the workflow does not pass
+the event specs into `build_react`, `react.pull` will not know that the
+namespace exists. A module may also define
 `list_artifact_namespace_rehosters()` and return decorated callables explicitly.
 
 The rehoster must understand and apply ReAct artifact semantics:

@@ -214,7 +214,8 @@ my_bundle/
   entrypoint.py
   orchestrator/
     workflow.py
-  consumer_surfaces.py    # optional bundle-owned default tool policy
+  config/
+    bundles.template.yaml # default consumer/tool/UI policy
   skills_descriptor.py
   tools/
   skills/

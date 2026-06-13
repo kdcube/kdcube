@@ -111,15 +111,10 @@ specs to `create_tool_subsystem_with_mcp(...)`:
 ```python
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_config import (
     agent_tool_config_from_bundle_props,
-    bundle_props_with_default_agent_tools,
 )
 
-effective_props = bundle_props_with_default_agent_tools(
-    self.bundle_props,
-    default_bundle_props=default_as_consumer_surfaces_props(),
-)
 tool_config = agent_tool_config_from_bundle_props(
-    effective_props,
+    self.bundle_props,
     agent_id,
     bundle_root=BUNDLE_ROOT,
     default_agent_id="main",
@@ -141,9 +136,9 @@ tool_subsystem, _ = create_tool_subsystem_with_mcp(
 
 The subsystem does not auto-scan bundle files on disk. The workflow decides what
 is loaded. New bundles should keep the authoritative tool policy in
-`surfaces.as_consumer.agents.<agent_id>.tools`; bundle code may provide fallback
-defaults, but those defaults are input to the same resolver. `tools.agents` is a
-legacy fallback for older bundles, not the preferred policy surface.
+`surfaces.as_consumer.agents.<agent_id>.tools` in bundle config/templates.
+`tools.agents` is a legacy fallback for older bundles, not the preferred policy
+surface.
 
 ## `module` vs `ref` resolution
 
@@ -170,7 +165,6 @@ The loader creates a synthetic package context for file-based modules in both:
 That means bundle code can look natural:
 
 ```python
-from .. import preferences_store
 from ..services.storage import Store
 ```
 

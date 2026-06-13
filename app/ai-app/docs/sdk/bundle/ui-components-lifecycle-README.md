@@ -146,9 +146,9 @@ def configuration_defaults(self):
     return {
         "ui": {
             "widgets": {
-                "versatile_webapp": {
+                "telegram_miniapp": {
                     "enabled": False,
-                    "src_folder": "ui/widgets/versatile_webapp",
+                    "src_folder": "ui/widgets/telegram_miniapp",
                     "build_command": "npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build",
                     "shared_sources": {
                         "memory_widget": {
@@ -171,7 +171,7 @@ config:
       memories: false
   ui:
     widgets:
-      versatile_webapp:
+      telegram_miniapp:
         enabled: true
 ```
 
@@ -576,7 +576,7 @@ aws logs filter-log-events --region eu-west-1 \
   --log-group-name /kdcube/demo/demo-march/chat-proc \
   --start-time <epoch_ms> \
   --end-time <epoch_ms> \
-  --filter-pattern "versatile_webapp build" \
+  --filter-pattern "telegram_miniapp build" \
   --query 'events[].{ts:timestamp,msg:message}' \
   --output json
 ```

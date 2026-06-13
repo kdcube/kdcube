@@ -124,9 +124,14 @@ If a bundle does not pass custom instruction fields, React uses the extended
 default body from `shared_instructions.py`.
 
 ```python
+tool_config = agent_tool_config_from_bundle_props(
+    self.bundle_props,
+    "main",
+    bundle_root=BUNDLE_ROOT,
+)
 react = self.build_react(
     scratchpad=scratchpad,
-    mod_tools_spec=tools_descriptor,
+    mod_tools_spec=tool_config.tool_specs,
 )
 ```
 
@@ -144,9 +149,14 @@ from kdcube_ai_app.apps.chat.sdk.skills.instructions.shared_instructions_lite im
     default_lite_system_instruction,
 )
 
+tool_config = agent_tool_config_from_bundle_props(
+    self.bundle_props,
+    "main",
+    bundle_root=BUNDLE_ROOT,
+)
 react = self.build_react(
     scratchpad=scratchpad,
-    mod_tools_spec=tools_descriptor,
+    mod_tools_spec=tool_config.tool_specs,
     instruction_body=default_lite_system_instruction("workspace_exec"),
     include_tool_catalog=True,
     include_skill_gallery=True,
@@ -172,9 +182,14 @@ blocks plus custom literal blocks. Named blocks are resolved from
 instruction text.
 
 ```python
+tool_config = agent_tool_config_from_bundle_props(
+    self.bundle_props,
+    "main",
+    bundle_root=BUNDLE_ROOT,
+)
 react = self.build_react(
     scratchpad=scratchpad,
-    mod_tools_spec=tools_descriptor,
+    mod_tools_spec=tool_config.tool_specs,
     instruction_blocks=[
         "REACT_LITE_IDENTITY",
         "REACT_LITE_SECURITY_GUARD",
@@ -328,8 +343,9 @@ default body when the agent surface is narrower.
 
 ## Audit Method
 
-1. List the bundle's enabled tools from `tools_descriptor.py`, MCP tools, and
-   built-in `react.*` tools.
+1. List the bundle's enabled tools from
+   `surfaces.as_consumer.agents.<agent>.tools`, MCP tools, and built-in
+   `react.*` tools.
 2. Choose the closest lite profile.
 3. Add missing blocks for exposed capabilities.
 4. Remove blocks for unavailable capabilities.

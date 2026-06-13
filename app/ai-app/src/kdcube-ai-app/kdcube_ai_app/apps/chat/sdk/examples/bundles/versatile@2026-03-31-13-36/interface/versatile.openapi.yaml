@@ -32,7 +32,7 @@ tags:
 security:
   - PlatformAuth: []
 paths:
-  /widgets/versatile_webapp:
+  /widgets/telegram_miniapp:
     get:
       tags: [Widget]
       summary: Serve the authenticated KDCube React widget app.
@@ -44,7 +44,7 @@ paths:
               schema:
                 type: string
 
-  /widgets/versatile_webapp/{widget_path}:
+  /widgets/telegram_miniapp/{widget_path}:
     get:
       tags: [Widget]
       summary: Serve an authenticated KDCube React widget app subpath.
@@ -58,7 +58,7 @@ paths:
               schema:
                 type: string
 
-  /public/widgets/versatile_webapp:
+  /public/widgets/telegram_miniapp:
     get:
       tags: [Widget]
       summary: Serve the public Telegram React widget app.
@@ -71,7 +71,7 @@ paths:
               schema:
                 type: string
 
-  /public/widgets/versatile_webapp/{widget_path}:
+  /public/widgets/telegram_miniapp/{widget_path}:
     get:
       tags: [Widget]
       summary: Serve the Telegram React widget app subpath.
@@ -86,12 +86,12 @@ paths:
               schema:
                 type: string
 
-  /operations/versatile_webapp_data:
+  /operations/telegram_miniapp_data:
     post:
       tags: [Widget]
       summary: Bootstrap or refresh the KDCube widget payload.
-      operationId: versatile_webapp_data
-      x-kdcube-result-alias: versatile_webapp_data
+      operationId: telegram_miniapp_data
+      x-kdcube-result-alias: telegram_miniapp_data
       requestBody:
         content:
           application/json:
@@ -101,12 +101,12 @@ paths:
         "200":
           $ref: "#/components/responses/WebappDataWrapped"
 
-  /public/telegram_versatile_webapp_data:
+  /public/telegram_miniapp_data:
     post:
       tags: [Widget]
       summary: Bootstrap or refresh the Telegram Mini App payload.
-      operationId: telegram_versatile_webapp_data
-      x-kdcube-result-alias: telegram_versatile_webapp_data
+      operationId: telegram_miniapp_data_public
+      x-kdcube-result-alias: telegram_miniapp_data
       security: []
       parameters:
         - $ref: "#/components/parameters/TelegramInitData"
@@ -245,118 +245,25 @@ paths:
         "200":
           $ref: "#/components/responses/ConversationsWrapped"
 
-  /operations/preferences_canvas_data:
+  /operations/memories_widget_data:
     post:
       tags: [Memory]
-      summary: Load the current memory/preferences canvas.
-      operationId: preferences_canvas_data
-      x-kdcube-result-alias: preferences_canvas_data
+      summary: Load SDK durable-memory widget data.
+      operationId: memories_widget_data
+      x-kdcube-result-alias: memories_widget_data
       responses:
         "200":
           $ref: "#/components/responses/MemoryCanvasWrapped"
 
-  /operations/preferences_canvas_save:
+  /public/telegram_memories_widget_data:
     post:
       tags: [Memory]
-      summary: Save the current memory/preferences canvas.
-      operationId: preferences_canvas_save
-      x-kdcube-result-alias: preferences_canvas_save
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/MemoryCanvasSaveRequestEnvelope"
-      responses:
-        "200":
-          $ref: "#/components/responses/MemoryCanvasWrapped"
-
-  /operations/preferences_canvas_export_excel:
-    post:
-      tags: [Memory]
-      summary: Export the memory/preferences canvas as Excel.
-      operationId: preferences_canvas_export_excel
-      x-kdcube-result-alias: preferences_canvas_export_excel
-      responses:
-        "200":
-          $ref: "#/components/responses/ExportWrapped"
-
-  /operations/preferences_canvas_import_excel:
-    post:
-      tags: [Memory]
-      summary: Import the memory/preferences canvas from Excel.
-      operationId: preferences_canvas_import_excel
-      x-kdcube-result-alias: preferences_canvas_import_excel
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ImportExcelRequestEnvelope"
-      responses:
-        "200":
-          $ref: "#/components/responses/MemoryCanvasWrapped"
-
-  /public/telegram_memory_canvas_data:
-    post:
-      tags: [Memory]
-      summary: Load the Telegram-authenticated memory/preferences canvas.
-      operationId: telegram_memory_canvas_data
-      x-kdcube-result-alias: telegram_memory_canvas_data
+      summary: Load Telegram-authenticated SDK durable-memory widget data.
+      operationId: telegram_memories_widget_data
+      x-kdcube-result-alias: telegram_memories_widget_data
       security: []
       parameters:
         - $ref: "#/components/parameters/TelegramInitData"
-      responses:
-        "200":
-          $ref: "#/components/responses/MemoryCanvasWrapped"
-
-  /public/telegram_memory_canvas_save:
-    post:
-      tags: [Memory]
-      summary: Save the Telegram-authenticated memory/preferences canvas.
-      operationId: telegram_memory_canvas_save
-      x-kdcube-result-alias: telegram_memory_canvas_save
-      security: []
-      parameters:
-        - $ref: "#/components/parameters/TelegramInitData"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/MemoryCanvasSaveRequestEnvelope"
-      responses:
-        "200":
-          $ref: "#/components/responses/MemoryCanvasWrapped"
-
-  /public/telegram_memory_canvas_export_excel:
-    post:
-      tags: [Memory]
-      summary: Export Telegram-authenticated memory/preferences as Excel.
-      operationId: telegram_memory_canvas_export_excel
-      x-kdcube-result-alias: telegram_memory_canvas_export_excel
-      security: []
-      parameters:
-        - $ref: "#/components/parameters/TelegramInitData"
-      responses:
-        "200":
-          $ref: "#/components/responses/ExportWrapped"
-
-  /public/telegram_memory_canvas_import_excel:
-    post:
-      tags: [Memory]
-      summary: Import Telegram-authenticated memory/preferences from Excel.
-      operationId: telegram_memory_canvas_import_excel
-      x-kdcube-result-alias: telegram_memory_canvas_import_excel
-      security: []
-      parameters:
-        - $ref: "#/components/parameters/TelegramInitData"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ImportExcelRequestEnvelope"
       responses:
         "200":
           $ref: "#/components/responses/MemoryCanvasWrapped"

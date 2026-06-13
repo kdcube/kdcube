@@ -10,10 +10,7 @@ from kdcube_ai_app.apps.chat.sdk.protocol import ExternalEventPayload
 from kdcube_ai_app.apps.chat.sdk.context.memory.instructions import MEMORY_REACT_ADDITIONAL_INSTRUCTIONS
 from kdcube_ai_app.apps.chat.sdk.retrieval.kb_client import KBClient
 from kdcube_ai_app.apps.chat.sdk.runtime.scratchpad import CTurnScratchpad
-from kdcube_ai_app.apps.chat.sdk.runtime.tool_config import (
-    agent_tool_config_from_bundle_props,
-    bundle_props_with_default_agent_tools,
-)
+from kdcube_ai_app.apps.chat.sdk.runtime.tool_config import agent_tool_config_from_bundle_props
 from kdcube_ai_app.apps.chat.sdk.solutions.canvas.events.defaults import default_canvas_event_source_specs
 from kdcube_ai_app.apps.chat.sdk.solutions.canvas.instructions import CANVAS_REACT_ADDITIONAL_INSTRUCTIONS
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.base_workflow import BaseWorkflow
@@ -33,7 +30,6 @@ from kdcube_ai_app.infra.accounting import with_accounting
 from kdcube_ai_app.infra.service_hub.inventory import Config, ModelServiceBase
 from langgraph.graph import END, START, StateGraph
 
-from ..consumer_surfaces import default_as_consumer_surfaces_props
 from .. import skills_descriptor
 from ..agents.gate import GateOut as MinimalGateOut, gate_stream
 from ..resources.service_messages.resources import get_friendly_error_message
@@ -303,12 +299,8 @@ class VersatileWorkflow(BaseWorkflow):
 
             async def _react_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 client_id = getattr(getattr(self, "runtime_ctx", None), "agent_id", None)
-                effective_bundle_props = bundle_props_with_default_agent_tools(
-                    self.bundle_props,
-                    default_bundle_props=default_as_consumer_surfaces_props(agent_id="main"),
-                )
                 tool_config = agent_tool_config_from_bundle_props(
-                    effective_bundle_props,
+                    self.bundle_props,
                     client_id,
                     bundle_root=BUNDLE_ROOT,
                 )

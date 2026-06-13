@@ -73,7 +73,7 @@ export default function App() {
       } else {
         setProfile(null);
       }
-      const data = await callOperation<WebAppPayload>('versatile_webapp_data', {
+      const data = await callOperation<WebAppPayload>('telegram_miniapp_data', {
         widget_path: tab === 'conversations' ? 'chats' : tab === 'telegram_admin' ? 'telegram-admin' : 'memory',
         mark_memory_seen: tab === 'memory',
       });

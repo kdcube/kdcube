@@ -150,7 +150,7 @@ export async function sendDataBusEcho(payload: Record<string, unknown>): Promise
           idempotency_key: createLocalId('echo'),
           payload,
           client: {
-            widget: 'versatile_webapp',
+            widget: 'telegram_miniapp',
             source: 'memory_page',
           },
         },

@@ -142,12 +142,12 @@ Bundle widgets have two separate contracts that must align by alias.
    widget route resolution all start from this manifest.
 
    ```python
-   @api(alias="versatile_webapp_widget", route="operations")
+   @api(alias="telegram_miniapp_widget", route="operations")
    @ui_widget(
-       alias="versatile_webapp",
+       alias="telegram_miniapp",
        icon={"lucide": "PanelTop", "tailwind": "heroicons-outline:rectangle-group"},
    )
-   def versatile_webapp_widget(self, **kwargs):
+   def telegram_miniapp_widget(self, **kwargs):
        ...
    ```
 
@@ -160,9 +160,9 @@ Bundle widgets have two separate contracts that must align by alias.
    ```yaml
    ui:
      widgets:
-       versatile_webapp:
+       telegram_miniapp:
          enabled: true
-         src_folder: ui/widgets/versatile_webapp
+         src_folder: ui/widgets/telegram_miniapp
          build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
    ```
 
@@ -667,8 +667,8 @@ bundle defaults / descriptor props
 ```yaml
 ui:
   widgets:
-    versatile_webapp:
-      src_folder: ui/widgets/versatile_webapp
+    telegram_miniapp:
+      src_folder: ui/widgets/telegram_miniapp
       build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
       shared_sources:
         memory_widget:
@@ -766,9 +766,9 @@ Example host widget config:
 ```yaml
 ui:
   widgets:
-    versatile_webapp:
+    telegram_miniapp:
       enabled: true
-      src_folder: ui/widgets/versatile_webapp
+      src_folder: ui/widgets/telegram_miniapp
       build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
       shared_sources:
         memory_widget:

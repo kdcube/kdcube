@@ -76,9 +76,10 @@ Runtime failure recipes:
   widget visibility, live operation events, Data Bus boundaries, authored
   event-source policies, and resolver ownership, use
   [how-to-avoid-common-bundle-integration-failures-README.md](how-to-avoid-common-bundle-integration-failures-README.md)
-- after changing `events_descriptor.py`, `events/*.py`, tool
-  `@event_source(...)` declarations, or
-  `@artifact_namespace_rehoster(...)` handlers, use the normal bundle source
+- after changing configured `events/*.py` modules, tool
+  `@event_source(...)` declarations, `@artifact_namespace_rehoster(...)`
+  handlers, or the `event_source_specs` passed by the workflow,
+  use the normal bundle source
   loop: `kdcube bundle reload <bundle_id>` for a local-path bundle, or update
   the git `ref` and reload/refresh according to the descriptor flow for a git
   bundle
@@ -713,9 +714,9 @@ The required shape is:
 ```yaml
 ui:
   widgets:
-    versatile_webapp:
+    telegram_miniapp:
       enabled: true
-      src_folder: ui/widgets/versatile_webapp
+      src_folder: ui/widgets/telegram_miniapp
       build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
       shared_sources:
         memory_widget:
@@ -1204,11 +1205,12 @@ bundles:
 ```
 
 The parent-subdir shape is useful when a repo contains multiple bundles under
-one source parent. Bundle code, `tools_descriptor.py`, and bundle-local tool
-modules must use package-relative bundle-local imports and must not use
-top-level package fallbacks for bundle-local folders. Bundle-local tool specs
-should use `ref: "tools/name.py"` so the tool subsystem can keep them tied to
-the bundle root and rewrite them for isolated/distributed execution. The
+one source parent. Bundle code, configured bundle-local tool refs, and
+bundle-local tool modules must use package-relative bundle-local imports and
+must not use top-level package fallbacks for bundle-local folders.
+Bundle-local tool connections under `surfaces.as_consumer` should use
+`ref: "tools/name.py"` so the tool subsystem can keep them tied to the bundle
+root and rewrite them for isolated/distributed execution. The
 authoring rule is in
 [how-to-write-bundle-README.md#1b2-bundle-local-import-rule](how-to-write-bundle-README.md#1b2-bundle-local-import-rule),
 and the runtime rationale is in
@@ -1456,7 +1458,7 @@ kdcube bundle reload my.bundle@1-0 --workdir ~/.kdcube/kdcube-runtime/mytenant__
 
 Validate these runtime facts after reload:
 
-- the bundle imports `events_descriptor.py` with package-relative imports
+- configured event modules use package-relative imports
 - event modules are included in `event_source_specs` passed to
   `BaseWorkflow.build_react(...)`
 - authored UI events target the intended `agent_id`

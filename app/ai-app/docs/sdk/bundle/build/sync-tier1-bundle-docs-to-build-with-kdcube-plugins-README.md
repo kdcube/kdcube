@@ -250,8 +250,8 @@ The plugin should steer agents away from these recurring mistakes:
   with `ret.files[]`, or trusted tool-side `host_files(...)`
 - custom tool result handling should be expressed as event-source policies when
   the tool owns how its result becomes timeline blocks or artifact rows
-- bundles with wizard/canvas/snapshot events should include `events_descriptor.py`
-  and event modules in the implementation, docs, tests, and release scope
+- bundles with wizard/canvas/snapshot events should include their configured
+  event modules, event-source specs, docs, tests, and release scope
 - externally tracked artifact refs visible to ReAct need a namespace rehoster
   that materializes them into the appropriate `fi:` namespace
 - `host_files(...)` documentation states that it requires prepared tool context

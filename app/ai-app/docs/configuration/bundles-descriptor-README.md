@@ -159,7 +159,7 @@ bundles:
           widgets:
             memories:
               enabled: true
-            versatile_webapp:
+            telegram_miniapp:
               shared_sources:
                 memory_widget:
                   src_folder: sdk://context/memory/ui/widget/memories

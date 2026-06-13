@@ -263,7 +263,8 @@ Bundle shape:
 
 ```text
 my.bundle@1-0/
-  consumer_surfaces.py
+  config/
+    bundles.template.yaml
   events/
     my_artifacts.py
   orchestrator/

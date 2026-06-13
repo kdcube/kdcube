@@ -11,7 +11,7 @@ This page describes the main scenarios demonstrated by the reference bundle.
 It is not a product manual; it is a maintainer map for understanding which
 bundle surfaces cooperate in each runtime flow.
 
-## Scenario 1: KDCube Chat With Preference Capture
+## Scenario 1: KDCube Chat With SDK Durable Memory
 
 ```text
 user message
@@ -19,23 +19,19 @@ user message
   v
 VersatileWorkflow.process_main_turn(...)
   |
-  +-- if preferences.auto_capture=true:
-  |     auto_capture_preferences(...)
-  |       -> preferences/users/<user_id>/events.jsonl
-  |       -> preferences/users/<user_id>/current.json
-  |
   v
 gate -> React solver
   |
-  +-- preferences tools may read/write bundle storage
+  +-- memory tools may read/write SDK durable memory
   |
   v
 assistant answer
 ```
 
 This scenario demonstrates how a bundle can combine a normal React workflow
-with bundle-local durable state. The preference store is deliberately simple:
-it is a reference pattern for storage/tool/widget integration.
+with SDK durable memory. The bundle-local preference store has been removed;
+the `product.preferences` skill now steers the solver toward the SDK memory
+tools when the user reveals durable preferences or asks about remembered facts.
 
 ## Scenario 1A: KDCube Scene With SDK Components
 
@@ -58,40 +54,7 @@ The active scene is the reference for assembling reusable SDK components in one
 bundle. See `docs/design/scene-sdk-components.md` for the exact widget and
 operation wiring.
 
-## Scenario 2: KDCube Widget Preferences Canvas
-
-```text
-KDCube control plane
-  |
-  v
-iframe loads ui/widgets/versatile_webapp
-  |
-  v
-parent CONFIG_REQUEST handshake
-  |
-  v
-operations/versatile_webapp_data
-  |
-  +-- preferences canvas payload
-  +-- conversation list payload
-  +-- admin visibility based on KDCube role
-  |
-  v
-Memory / Chats / Admin tabs
-```
-
-The widget uses authenticated KDCube operations APIs. It does not use Telegram
-`initData` in this mode.
-
-The Memory tab reads and edits the preferences canvas. Saving appends events
-and rewrites the current preference view.
-
-The Chats tab uses the platform conversation integration to list, create,
-switch, and delete the active conversation for this bundle/user context.
-
-The Admin tab uses operations APIs to manage the Telegram user registry.
-
-## Scenario 3: Telegram Bot Chat
+## Scenario 2: Telegram Bot Chat
 
 ```text
 Telegram user sends message
@@ -118,16 +81,16 @@ The webhook route is public but bundle-authenticated by Telegram's webhook
 secret header. The bot token is used only by the server side to call Telegram
 for outgoing messages/files.
 
-## Scenario 4: Telegram Mini App
+## Scenario 3: Telegram Mini App
 
 ```text
-Telegram opens versatile_webapp
+Telegram opens telegram_miniapp
   |
   v
-widget detects Telegram WebApp runtime
+ui/widgets/telegram_miniapp detects Telegram WebApp runtime
   |
   v
-public/telegram_versatile_webapp_data
+public/telegram_miniapp_data
   header/body contains Telegram initData
   |
   v
@@ -137,19 +100,16 @@ bundle validates initData HMAC with bot token
 resolve Telegram registry row
   |
   +-- role anonymous -> reject
-  +-- role registered/admin -> serve Memory and Chats data
-  +-- role admin -> also serve Admin tab data
+  +-- role registered/admin -> serve SDK memory + conversations
+  +-- role admin -> also serve Telegram admin data
 ```
 
-The same source-folder widget is used for KDCube and Telegram. The difference
-is the auth lane:
+The source folder is `ui/widgets/telegram_miniapp`. It demonstrates a Telegram
+Mini App shell that embeds the SDK memory widget and the SDK Telegram widget
+panels. The same source can also be opened through the KDCube widget route for
+operator testing.
 
-```text
-KDCube iframe    -> operations/* APIs with KDCube auth
-Telegram Mini App -> public/telegram_* APIs with signed initData
-```
-
-## Scenario 5: Agent Consumer Surfaces
+## Scenario 4: Agent Consumer Surfaces
 
 ```text
 bundles.yaml
@@ -172,10 +132,10 @@ connections are agent-scoped. Named-service refs are not native ReAct files;
 configured pull policies materialize them into `fi:` artifacts and configured
 canvas resolvers delegate UI object actions to the owning provider.
 
-## Scenario 6: Widget Build And Serving
+## Scenario 5: Widget Build And Serving
 
 ```text
-first request for versatile_webapp
+first request for configured SDK widget
   |
   v
 bundle on_load / UI builder
@@ -190,10 +150,14 @@ bundle on_load / UI builder
 static widget served from bundle storage
 ```
 
-The widget source is:
+The configured widget sources are SDK sources:
 
 ```text
-ui/widgets/versatile_webapp
+sdk://solutions/chat/ui/widget
+sdk://context/memory/ui/widget/memories
+sdk://infra/economics/ui/widget/usage-card
+sdk://solutions/canvas/ui/widget/pinboard
+ui/widgets/telegram_miniapp
 ```
 
 The generated output is rebuildable and should not be treated as source.

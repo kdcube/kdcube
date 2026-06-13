@@ -48,7 +48,7 @@ export function routeContextFromLocation(): RouteContext {
       tenant: params.get('tenant') || '',
       project: params.get('project') || '',
       bundleId: params.get('bundle_id') || params.get('bundleId') || 'versatile@2026-03-31-13-36',
-      widgetAlias: params.get('widget') || 'versatile_webapp',
+      widgetAlias: params.get('widget') || 'telegram_miniapp',
       widgetPath: params.get('widget_path') || params.get('widgetPath') || '',
     };
   }
@@ -61,7 +61,7 @@ export function routeContextFromLocation(): RouteContext {
     tenant: parts[0] || '',
     project: parts[1] || '',
     bundleId: parts[2] || 'versatile@2026-03-31-13-36',
-    widgetAlias: widgetAnchor >= 0 ? parts[widgetAnchor + 1] || 'versatile_webapp' : 'versatile_webapp',
+    widgetAlias: widgetAnchor >= 0 ? parts[widgetAnchor + 1] || 'telegram_miniapp' : 'telegram_miniapp',
     widgetPath: widgetAnchor >= 0 ? parts.slice(widgetAnchor + 2).join('/') : '',
   };
 }
@@ -82,7 +82,7 @@ export function tabPath(tab: TabId): string {
   if (index < 0) return path;
   const before = path.slice(0, index + marker.length);
   const rest = path.slice(index + marker.length);
-  const alias = rest.split('/')[0] || ROUTE_CONTEXT.widgetAlias || 'versatile_webapp';
+  const alias = rest.split('/')[0] || ROUTE_CONTEXT.widgetAlias || 'telegram_miniapp';
   const segment = tab === 'telegram_admin' ? 'telegram-admin' : tab === 'conversations' ? 'chats' : 'memory';
   return `${before}${alias}/${segment}`;
 }

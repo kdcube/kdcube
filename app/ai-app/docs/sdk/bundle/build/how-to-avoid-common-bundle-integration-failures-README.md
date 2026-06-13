@@ -73,12 +73,12 @@ from issues.tools import TaskToolsPlugin
 ```
 
 Do not import bundle-local folders as top-level packages such as `services`,
-`apps`, `tools`, or `resources`. This includes `tools_descriptor.py` and
-bundle-local tool modules.
+`apps`, `tools`, or `resources`. This includes bundle-local tool modules and
+helpers loaded from configured tool refs.
 
-For tool descriptors:
+For configured tool refs:
 
-| Tool source | Descriptor shape |
+| Tool source | `surfaces.as_consumer` shape |
 | --- | --- |
 | bundle-local file | `ref: "tools/name.py"` |
 | installed SDK or external module | `module: "kdcube_ai_app...."` |

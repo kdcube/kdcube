@@ -10,7 +10,7 @@ import type {
 
 const TELEGRAM_OPERATION_ALIASES: Record<string, string> = {
   telegram_profile: 'telegram_profile',
-  versatile_webapp_data: 'telegram_versatile_webapp_data',
+  telegram_miniapp_data: 'telegram_miniapp_data',
   conversations_list: 'conversations_list',
   conversations_create: 'telegram_conversations_create',
   conversations_switch: 'telegram_conversations_switch',

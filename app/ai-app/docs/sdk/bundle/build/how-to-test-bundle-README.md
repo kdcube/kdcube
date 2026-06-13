@@ -217,9 +217,9 @@ For a brand-new bundle skeleton, prove the contract before adding product logic:
   descriptor templates
 - `docs/design/` and `docs/journal/journal.md` exist and are updated with the
   first implementation decisions
-- event modules and `events_descriptor.py` parse if the first milestone has
-  wizard/canvas/snapshot events, tool event-source policies, or custom artifact
-  namespace rehosters
+- configured event modules and event-source specs parse if the first milestone
+  has wizard/canvas/snapshot events, tool event-source policies, or custom
+  artifact namespace rehosters
 
 Do this before building UI, tools, or scheduler logic. A clean skeleton makes
 later failures narrower.

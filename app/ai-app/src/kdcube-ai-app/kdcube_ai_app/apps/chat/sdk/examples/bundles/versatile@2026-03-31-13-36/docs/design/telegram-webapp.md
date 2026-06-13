@@ -5,21 +5,21 @@ bundle_id: versatile@2026-03-31-13-36
 updated_at: 2026-05-12
 ---
 
-# Versatile Telegram WebApp Design
+# Versatile Telegram Mini App Design
 
-The source-folder widget `ui/widgets/versatile_webapp` is both a KDCube embedded
-widget and a Telegram Mini App shell.
+The source-folder widget `ui/widgets/telegram_miniapp` demonstrates a Telegram
+Mini App shell that can also be opened as a KDCube widget for operator testing.
 
 ```text
 KDCube control plane iframe
-  -> operations/versatile_webapp_data
-  -> operations/preferences_canvas_*
+  -> operations/telegram_miniapp_data
+  -> operations/memories_widget_*
   -> operations/conversations_*
   -> operations/telegram_user_admin_* (admin role)
 
 Telegram Mini App
-  -> public/telegram_versatile_webapp_data
-  -> public/telegram_memory_canvas_*
+  -> public/telegram_miniapp_data
+  -> public/telegram_memories_widget_*
   -> public/telegram_conversations_*
   -> public/telegram_webapp_user_admin_* (Telegram admin role)
 ```
@@ -56,8 +56,7 @@ the signed `initData`.
 
 Tabs:
 
-- Memory: current preferences canvas. This will be replaced by the new memory
-  subsystem later, but the webapp route contract stays stable.
+- Memory: SDK durable-memory widget embedded in the Mini App shell.
 - Chats: Telegram-linked conversation/channel selection.
 - Admin: Telegram user registry, visible to KDCube admins in the control plane
   and to Telegram users with role `admin` in the registry.
@@ -67,12 +66,8 @@ Tabs:
 The widget reads and mutates bundle storage through bundle APIs. It never writes
 directly to the storage backend from the browser.
 
-```text
-preferences/users/<user_id>/current.json
-preferences/users/<user_id>/events.jsonl
-admin/telegram-users.json
-admin/telegram-updates/...
-```
+Memory records are owned by the SDK durable-memory subsystem. Telegram registry
+and webhook idempotency state remain under the bundle storage root.
 
 The storage contract is documented in:
 

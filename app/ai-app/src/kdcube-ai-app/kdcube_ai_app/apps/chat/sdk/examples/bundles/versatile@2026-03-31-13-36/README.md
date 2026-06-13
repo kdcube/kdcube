@@ -15,19 +15,17 @@ It intentionally demonstrates the main SDK bundle surfaces together in one place
 
 | Capability                             | Where to look                                                                              |
 |----------------------------------------|--------------------------------------------------------------------------------------------|
-| Minimal bundle contract                | `entrypoint.py`, `orchestrator/workflow.py`, `consumer_surfaces.py`, `skills_descriptor.py` |
+| Minimal bundle contract                | `entrypoint.py`, `orchestrator/workflow.py`, `skills_descriptor.py`                        |
 | React workflow                         | `entrypoint.py`, `orchestrator/workflow.py`, `agents/gate.py`                              |
 | Economics / quotas                     | `entrypoint.py` via `BaseEntrypointWithEconomics` and `app_quota_policies`                 |
 | Bundle props / effective config        | `entrypoint.py`, `orchestrator/workflow.py`                                                |
 | Bundle secrets via `get_secret(...)`   | `config/bundles.secrets.template.yaml`, `entrypoint.py`                                    |
-| Bundle-owned default tool policy       | `consumer_surfaces.py`, `config/bundles.template.yaml`                                     |
+| Agent and UI consumer surfaces         | `config/bundles.template.yaml` under `surfaces.as_consumer`                                |
 | Bundle-local skills                    | `skills/product/preferences/SKILL.md`                                                      |
-| Shared bundle storage backend          | `preferences_store.py`, `entrypoint.py`, `orchestrator/workflow.py`                        |
-| Agent tool consumers                   | `surfaces.as_consumer.agents.main.tools`, `consumer_surfaces.py`                           |
+| Canvas and telemetry services          | `services/canvas.py`, `services/telemetry.py`                                               |
+| Agent tool consumers                   | `surfaces.as_consumer.agents.main.tools`                                                   |
 | MCP tool consumers                     | `surfaces.as_consumer.agents.main.tools`                                                   |
-| Source-folder webapp widget            | `ui/widgets/versatile_webapp`, `entrypoint.py:versatile_webapp_widget`                     |
 | Active iframe main view                | `ui/scene`, `entrypoint.py` main-view config                                               |
-| Legacy custom iframe main view         | `ui/main/src/App.tsx`, `ui/main/src/settings.ts` retained for comparison                    |
 | SDK chat widget mount                  | `versatile_chat`, backed by `sdk://solutions/chat/ui/widget`                               |
 | SDK durable memory widget              | shared memory widget source, inherited `memories_widget_*` operations                      |
 | Memory maintenance                     | `memories_widget_snapshot_*`, `memories_widget_reconcile_*` inherited from SDK memory mixin |
@@ -36,10 +34,7 @@ It intentionally demonstrates the main SDK bundle surfaces together in one place
 | Bundle release metadata                | `release.yaml`                                                                              |
 | Operational storage map                | `docs/storage/README.md`                                                                    |
 | Runtime scenarios                      | `docs/scenarios/README.md`                                                                  |
-| Authenticated `GET` bundle API         | `entrypoint.py:preferences_summary`                                                         |
-| Anonymous public bundle API            | `entrypoint.py:preferences_public_info`                                                     |
 | Telegram bot transport                 | `entrypoint.py:telegram_webhook`, `entrypoint.py:telegram_user_admin_*`                      |
-| Telegram WebApp / Mini App             | `ui/widgets/versatile_webapp`, `entrypoint.py:telegram_versatile_webapp_data`              |
 | Telegram operator setup                | `docs/integrations/telegram-setup.md`                                                       |
 
 ## Operational docs
@@ -59,25 +54,20 @@ documentation expected from real bundles:
   - Telegram webhook registration
   - Telegram user promotion from `anonymous` to `registered`/`admin`
 - `docs/scenarios/README.md`
-  - chat + preference capture
   - KDCube widget
   - Telegram bot chat
-  - Telegram Mini App
   - consumer-surface tool wiring
   - named-service canvas/ReAct integration
   - widget build/serve flow
-- `docs/design/telegram-webapp.md`
-  - frontend/backend contract for the dual KDCube iframe and Telegram Mini App widget
 
 ## Bundle behavior
 
 - The workflow is a normal gate → solver React loop.
 - The active main view is `ui/scene`. It is a small scene shell that embeds the
-  reusable SDK chat widget as `versatile_chat`; the previous `ui/main` source is
-  kept in the bundle for comparison while the main-view configuration points at
-  `ui/scene`.
-- The bundle heuristically captures preference statements from user messages while the chat is running.
-- Preferences are stored per user in the shared bundle storage backend (`AIBundleStorage`).
+  reusable SDK chat widget as `versatile_chat` and the shared SDK canvas
+  component as a scene surface.
+- Memory is handled by the SDK durable-memory subsystem and widget. The older
+  bundle-local preference storage and webapp widget sources have been removed.
 - The solver uses the SDK durable-memory tool surface configured under
   `surfaces.as_consumer.agents.main.tools`:
   - `memory.search_memory(...)`
@@ -93,13 +83,6 @@ documentation expected from real bundles:
   - queued Telegram turns are wrapped with
     `telegram_user_admin.run_with_queued_telegram_delivery(...)`, so the normal
     workflow result is rendered back to Telegram as text and files
-- The bundle demonstrates a source-folder Telegram WebApp:
-  - `versatile_webapp` is served as a normal KDCube widget and can also be
-    opened by Telegram as a Mini App
-  - the widget shows the current preferences canvas, Telegram-linked chat
-    channels, and Telegram user administration
-  - public `telegram_*` WebApp APIs are normal public bundle APIs; they verify
-    Telegram `initData` inside the bundle before reading or mutating data
 - The bundle inherits the SDK memory widget operations through
   `BaseEntrypointWithEconomicsAndMemory`:
   - `memories_widget_snapshot_create`, `memories_widget_snapshots`, and
@@ -125,40 +108,15 @@ the KDCube deployment through public HTTPS, provision bot/webhook secrets,
 register the webhook with Telegram, and promote Telegram users in the widget
 admin screen. See `docs/integrations/telegram-setup.md`.
 
-## Preference storage layout
+## Durable memory storage
 
-Inside the bundle storage backend root:
+Versatile now uses the SDK durable-memory subsystem for remembered user facts,
+preferences, and corrections. The older bundle-local preference notebook
+surface was removed; the remaining `product.preferences` skill teaches the
+solver when to consult or update the SDK memory tools.
 
-```text
-preferences/
-  users/
-    <user_id>/
-      current.json
-      events.jsonl
-```
-
-These bundle-storage keys stay readable for humans:
-- `current.json` is the latest materialized view
-- `events.jsonl` is the append-only observation history
-
-The widget also exposes `current.json` as a simplified collaborative notebook.
-Each preference is rendered as one editable line with:
-
-- read-only timestamp
-- author badge (`user` or `assistant`)
-- editable label
-- editable text
-
-When a user edits a line, the bundle rewrites it as a fresh user-authored entry
-with a new timestamp and appends the corresponding history events in
-`events.jsonl`.
-
-The same notebook can also be exported to Excel and imported back from Excel.
-The spreadsheet uses one row per preference line with columns like label, text,
-timestamp, author, source, origin, and evidence.
-
-The full storage map, including Telegram admin state and rebuildable UI output,
-lives in `docs/storage/README.md`.
+The full storage map, including Telegram admin state, canvas state, and
+rebuildable UI output, lives in `docs/storage/README.md`.
 
 ## Bundle props and secrets
 
@@ -261,7 +219,7 @@ Important:
 - `bundles.yaml` env reset is authoritative; `bundles.secrets.yaml` is currently upsert-only
 - admin UI for bundle secrets is write-only for values; it shows known keys but not secret contents
 
-## Widget + operations
+## Operations and UI
 
 This bundle exposes both authenticated `operations` APIs and anonymous `public`
 APIs.
@@ -283,7 +241,7 @@ For public endpoints:
 ```python
 @api(
     method="GET",
-    alias="preferences_public_info",
+    alias="telegram_profile",
     route="public",
     public_auth="none",
 )
@@ -297,72 +255,28 @@ If `route="public"` then `public_auth` is mandatory. Today the accepted forms ar
   read the inbound headers/body itself, and raise `HTTPException(401/403/...)`
   on failure
 
-This reference bundle now includes all three common shapes:
-
-- authenticated `GET`:
-  - `preferences_summary`
-- authenticated `POST`:
-  - `preferences_widget_data`
-- anonymous public `GET`:
-  - `preferences_public_info`
+This reference bundle includes common shapes such as authenticated widget
+operations, canvas operations, Telegram admin operations, and public Telegram
+webhook / Telegram-authenticated bridge operations.
 
 Concrete routes:
 
-- `GET /api/integrations/bundles/{tenant}/{project}/{bundle_id}/operations/preferences_summary`
-- `POST /api/integrations/bundles/{tenant}/{project}/{bundle_id}/operations/preferences_widget_data`
-- `GET /api/integrations/bundles/{tenant}/{project}/{bundle_id}/public/preferences_public_info`
 - `POST /api/integrations/bundles/{tenant}/{project}/{bundle_id}/public/telegram_webhook`
 - `POST /api/integrations/bundles/{tenant}/{project}/{bundle_id}/operations/telegram_user_admin_data`
 - `POST /api/integrations/bundles/{tenant}/{project}/{bundle_id}/operations/telegram_user_admin_upsert`
 - `POST /api/integrations/bundles/{tenant}/{project}/{bundle_id}/operations/telegram_user_admin_delete`
 
-This bundle also exposes widget and notebook operations:
-
-- `preferences_summary`
-  - authenticated `GET` example
-  - returns current preference/event counts for the current user
-- `preferences_public_info`
-  - anonymous `GET` public endpoint example
-  - returns a small non-sensitive bundle capabilities payload
-- `preferences_widget_data`
-  - returns the current widget payload as JSON for the authenticated iframe client
-  - is called by the widget through the integrations operations API
-- `preferences_canvas_data`
-  - returns the collaborative preferences notebook entries for the current user
-  - still exposes the bundle-storage key for the underlying `current.json`
-- `preferences_canvas_save`
-  - accepts edited notebook entries from the widget
-  - rewrites them back into the structured `current.json` store
-  - appends change/remove events so the history remains visible to the bundle
-- `preferences_canvas_export_excel`
-  - exports the current notebook as an `.xlsx` workbook
-  - returns a browser-downloadable payload for the widget
-- `preferences_canvas_import_excel`
-  - accepts an uploaded `.xlsx` workbook from the widget
-  - imports notebook rows and rewrites them as fresh user-authored entries
-
 ## Main View UI
 
 This bundle also ships a standalone main UI configured through `ui.main_view`
-in `entrypoint.py`.
+in `config/bundles.template.yaml`.
 
 The active source lives under `ui/scene/`. It is a scene shell that embeds the
 reusable SDK chat widget as `versatile_chat`, embeds the SDK memory widget as
 `memories`, and renders the SDK canvas component as the main work surface.
 
-The previous custom chat implementation remains under `ui/main/` as a legacy
-reference for comparison.
-
-It intentionally covers the minimal but real platform contract:
-
-- runtime config handshake via `CONFIG_REQUEST`
-- authenticated bootstrap via `GET /profile`
-- live streaming over `GET /sse/stream` and `POST /sse/chat`
-- bundle-scoped conversation list + historical conversation load via `/api/cb/conversations/...`
-- assistant file download resolution through `POST /api/cb/resources/by-rn`
-- attachments, rate-limit/service banners, streamed markdown, followups, tool widgets, and separate timeline/steps/downloads tabs
-
-The active scene inherits those chat behaviors from the SDK chat widget.
+The old bundle-local `ui/main/` implementation has been removed. The active
+scene inherits chat behavior from the SDK chat widget.
 
 The scene writes canvas mutations through Data Bus subject `canvas.patch` and
 keeps request/response operations such as `canvas_read`, `canvas_list`,
@@ -412,14 +326,15 @@ rejected by the owning provider at call time.
 
 Detailed scene wiring is documented in `docs/design/scene-sdk-components.md`.
 
-## Widget integration contract
+## UI integration contract
 
-The widget is not a static mockup. It follows the real platform integration pattern:
+The active scene and SDK widgets are not static mockups. They follow the real
+platform integration pattern:
 
 - it requests runtime config from the parent frame with `CONFIG_REQUEST`
 - it accepts `baseUrl`, `accessToken`, `idToken`, `idTokenHeader`, `defaultTenant`, `defaultProject`, and `defaultAppBundleId`
-- it calls the bundle backend through:
-  - `POST /api/integrations/bundles/{tenant}/{project}/{bundle_id}/operations/preferences_widget_data`
+- SDK widgets call their configured bundle/backend operations through the
+  integrations API.
 - it sends `credentials: "include"` and forwards bearer / ID-token headers when present
 
 This integration shape matters. If a bundle widget talks to bundle or platform REST APIs, keep the config/auth wiring aligned with the platform examples instead of inventing a different handshake.
@@ -431,15 +346,9 @@ Reference frontend patterns:
 Reference backend endpoint:
 - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/rest/integrations/integrations.py`
 
-The widget uses the platform iframe config handshake and then calls:
-
-- `GET /api/integrations/bundles/{tenant}/{project}/{bundle_id}/operations/preferences_summary`
-- `POST /api/integrations/bundles/{tenant}/{project}/{bundle_id}/operations/preferences_widget_data`
-- `POST /api/integrations/bundles/{tenant}/{project}/{bundle_id}/operations/preferences_canvas_data`
-- `POST /api/integrations/bundles/{tenant}/{project}/{bundle_id}/operations/preferences_canvas_save`
-- `POST /api/integrations/bundles/{tenant}/{project}/{bundle_id}/operations/preferences_canvas_export_excel`
-- `POST /api/integrations/bundles/{tenant}/{project}/{bundle_id}/operations/preferences_canvas_import_excel`
-- `GET /api/integrations/bundles/{tenant}/{project}/{bundle_id}/public/preferences_public_info`
+The scene uses the platform iframe config handshake, embeds configured SDK
+widgets, and calls canvas operations such as `canvas_read`, `canvas_write`,
+`canvas_patch`, `canvas_attachment_upload`, and `canvas_object_action`.
 
 The custom main view follows the same handshake and auth model, but it talks to the
 chat runtime directly once mounted:
@@ -464,15 +373,8 @@ Important request shape:
 ```
 
 The integrations endpoint forwards `data` as keyword arguments to the bundle
-method. In this bundle:
-- `preferences_widget_data(...)` uses the per-request `self.comm` context and
-  ignores extra params
-- `preferences_canvas_data(...)` loads the current collaborative notebook lines
-- `preferences_canvas_save(entries=...)` saves the edited notebook lines back
-  into the structured preference store
-- `preferences_canvas_export_excel(...)` returns a base64 `.xlsx` payload for download
-- `preferences_canvas_import_excel(content_b64=...)` imports uploaded `.xlsx` rows
-  and rewrites them into the notebook
+method. The canvas operation wrappers normalize the call payload and delegate
+the actual storage/action behavior to `services/canvas.py`.
 
 ## Tool surface
 
@@ -484,8 +386,6 @@ The bundle includes:
   - `exec_tools`
   - `web_tools`
   - `rendering_tools`
-- Bundle-local tools:
-  - `preferences`
 - MCP connectors:
   - `knowledge`
 

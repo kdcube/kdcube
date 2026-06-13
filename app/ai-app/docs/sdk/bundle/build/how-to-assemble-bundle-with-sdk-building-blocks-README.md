@@ -279,7 +279,7 @@ modules, but they are not required for the bot transport itself.
 The versatile reference bundle also demonstrates a Telegram Mini App style
 source-folder widget with memory canvas, chat channel selection, and Telegram
 admin routes:
-`src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/widgets/versatile_webapp`.
+`src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/widgets/telegram_miniapp`.
 
 For shared Telegram UI, do not copy admin/channel panels into every bundle.
 Use `sdk://integrations/telegram/ui/widget.telegram` as a widget

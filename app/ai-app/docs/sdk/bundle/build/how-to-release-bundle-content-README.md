@@ -101,8 +101,8 @@ For every released bundle, check these files:
 <bundle>/
   README.md
   release.yaml
-  events_descriptor.py        # when the bundle declares authored events/rehosters
   events/                     # when event sources or rehosters are bundle-owned
+  orchestrator/               # when it wires bundle event_source_specs
   config/
     bundles.template.yaml
     bundles.secrets.template.yaml
@@ -278,8 +278,8 @@ git push origin 2026.5.2.1643
 Do not stage unrelated repository changes.
 Do not put real secrets into committed bundle templates.
 When the bundle declares event sources or artifact rehosters, also stage the
-release-owned `events_descriptor.py` and `events/` files after confirming they
-exist in that bundle.
+release-owned event modules and the workflow/config that wires their
+`event_source_specs` after confirming they exist in that bundle.
 
 ## 6. Descriptor Ref Update
 

@@ -32,21 +32,19 @@ This is the bundle to study first.
 | Entry point and graph bootstrap | `entrypoint.py` |
 | React workflow orchestration | `orchestrator/workflow.py` |
 | Economics + cross-conversation memory entrypoint | `entrypoint.py` via `BaseEntrypointWithEconomicsAndMemory` |
-| Bundle-owned default ReAct tool policy | `consumer_surfaces.py`, `config/bundles.template.yaml` |
+| Agent and UI consumer surfaces | `config/bundles.template.yaml` under `surfaces.as_consumer` |
 | Bundle-local skills | `skills_descriptor.py` and bundle `skills/` tree |
 | Effective bundle props and defaults | `entrypoint.py`, `config/bundles.template.yaml` |
 | Bundle secrets; prefer `await get_secret("b:...")` in async code | `config/bundles.secrets.template.yaml`, `entrypoint.py` |
-| Bundle storage layout | `preferences_store.py`, `docs/storage/README.md` |
+| Canvas and telemetry service helpers | `services/canvas.py`, `services/telemetry.py` |
 | Active iframe main scene | `ui/scene`, `entrypoint.py`, `docs/design/scene-sdk-components.md` |
 | SDK chat widget mount | `ui.widgets.versatile_chat` in `entrypoint.py` and `config/bundles.template.yaml` |
 | SDK memory widget mount | `ui.widgets.memories` in `entrypoint.py` and `config/bundles.template.yaml` |
 | SDK canvas component mount | `ui/scene`, `sdk://solutions/canvas/ui/component`, `entrypoint.py` canvas operations |
 | SDK canvas board as a standalone widget | `ui.widgets.pinboard`, `sdk://solutions/canvas/ui/widget/pinboard`; see [Scene Composition](../solutions/scene/scene-composition-README.md#the-canvas-board-as-a-standalone-widget) |
-| Legacy custom chat main UI kept for comparison | `ui/main/src/App.tsx` |
-| Source-folder Telegram/WebApp widget with shared UI sources | `entrypoint.py`, `ui/widgets/versatile_webapp`, `config/bundles.template.yaml` |
 | Public Telegram webhook and WebApp bridge | `entrypoint.py`, `docs/integrations/telegram-setup.md`, `docs/design/telegram-webapp.md` |
 | Federated Data Bus claim for Telegram WebApp | `entrypoint.py:telegram_federated_data_bus_claim` |
-| Data Bus handler and browser probe | `entrypoint.py:data_bus_echo`, `ui/widgets/versatile_webapp/src/store/dataBusClient.ts` |
+| Data Bus handlers | `entrypoint.py:data_bus_echo`, `entrypoint.py` handler for subject `canvas.patch` |
 | Canvas Data Bus mutation path | `entrypoint.py` handler for subject `canvas.patch` |
 | MCP connector declarations | `surfaces.as_consumer.agents.main.tools` in config |
 
@@ -76,16 +74,10 @@ subagent integration:
 6. `orchestrator/workflow.py`
 7. `docs/scenarios/README.md`
 8. `docs/storage/README.md`
-9. `ui/widgets/versatile_webapp/src/App.tsx`
-10. `ui/widgets/versatile_webapp/src/store/dataBusClient.ts`
-11. `ui/main/src/App.tsx`
-12. `consumer_surfaces.py`
-13. `skills_descriptor.py`
-14. bundle-local tests under `tests/`
-
-`ui/main` is no longer the active main-view reference. Keep it in the study
-order only when comparing the older bundle-owned chat implementation with the
-new SDK chat-widget scene.
+9. `services/canvas.py`
+10. `services/telemetry.py`
+11. `skills_descriptor.py`
+12. bundle-local tests under `tests/`
 
 ## Config Surfaces Used by This Bundle
 
@@ -119,9 +111,6 @@ Non-secret props demonstrated here include:
 - `ui.widgets.versatile_chat.build_command`
 - `ui.widgets.memories.src_folder`
 - `ui.widgets.memories.build_command`
-- `ui.widgets.versatile_webapp.src_folder`
-- `ui.widgets.versatile_webapp.build_command`
-- `ui.widgets.versatile_webapp.shared_sources`
 - `mcp.services`
 
 Secret props demonstrated here include:
@@ -138,12 +127,6 @@ The active scene embeds two separately built SDK widgets:
 
 - `sdk://solutions/chat/ui/widget` as widget alias `versatile_chat`
 - `sdk://context/memory/ui/widget/memories` as widget alias `memories`
-
-The `versatile_webapp` widget remains a Telegram/WebApp reference surface. It
-imports two shared source packages during the widget build:
-
-- `sdk://context/memory/ui/widget/memories` into `_shared/memory-widget`
-- `sdk://integrations/telegram/ui/widget.telegram` into `_shared/telegram-widget`
 
 Read the exact rules here:
 
@@ -164,7 +147,6 @@ This bundle currently demonstrates:
 - canvas operations: `canvas_list`, `canvas_read`, `canvas_search`,
   `canvas_pin_read`, `canvas_write`, `canvas_patch`,
   `canvas_attachment_upload`, and `canvas_object_action`
-- a source-folder widget alias: `versatile_webapp`
 - shared source materialization for widget builds
 - Telegram webhook ingestion and Telegram WebApp operations
 - a federated Data Bus token claim endpoint for the Telegram WebApp
@@ -241,7 +223,7 @@ Detailed bundle-local notes:
 
 ## Data Bus Echo Probe
 
-The Memory tab in `versatile_webapp` includes a small Data Bus echo probe. It is
+The Memory tab in `telegram_miniapp` includes a small Data Bus echo probe. It is
 intended as a working integration example for widgets that need server-pushed
 bundle events without running a chat turn. The same probe is available from the
 normal platform widget and from the Telegram WebApp.
@@ -306,7 +288,7 @@ OUTDIR=/private/tmp/versatile-scene-build npm run build
 Legacy WebApp widget build check:
 
 ```bash
-cd app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/widgets/versatile_webapp
+cd app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/widgets/telegram_miniapp
 npm install --no-package-lock
 npm run build
 ```

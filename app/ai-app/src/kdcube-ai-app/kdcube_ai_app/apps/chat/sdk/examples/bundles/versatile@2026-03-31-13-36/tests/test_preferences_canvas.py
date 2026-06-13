@@ -1,28 +1,17 @@
 from __future__ import annotations
 
-import importlib.util
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
+from kdcube_ai_app.apps.chat.sdk.comm.sink import STATS_COMM_EVENT_SELECTOR
 from kdcube_ai_app.apps.chat.sdk.runtime.dynamic_module_loader import load_dynamic_module_for_path
-from kdcube_ai_app.apps.chat.sdk.storage.ai_bundle_storage import AIBundleStorage
 
 
 def _bundle_root() -> Path:
     return Path(__file__).resolve().parents[1]
-
-
-def _load_preferences_store_module():
-    module_path = _bundle_root() / "preferences_store.py"
-    spec = importlib.util.spec_from_file_location("versatile_preferences_store_test", module_path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec is not None and spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
 
 
 def _load_entrypoint_module():
@@ -39,15 +28,6 @@ def _discover_bundle_interface_manifest(workflow, *, bundle_id: str):
         ),
     )
     return bundle_loader.discover_bundle_interface_manifest(workflow, bundle_id=bundle_id)
-
-
-def _make_storage(tmp_path: Path) -> AIBundleStorage:
-    return AIBundleStorage(
-        tenant="demo-tenant",
-        project="demo-project",
-        ai_bundle_id="versatile@2026-03-31-13-36",
-        storage_uri=tmp_path.resolve().as_uri(),
-    )
 
 
 class _Relay:
@@ -140,25 +120,17 @@ def test_telegram_bot_transport_manifest_and_defaults():
     defaults = module.VersatileEntrypoint.configuration_defaults(workflow)
     enabled_api = defaults.get("enabled", {}).get("api", {})
     assert "telegram_webhook.POST" not in enabled_api
-    assert "telegram_versatile_webapp_data.POST" not in enabled_api
     assert "telegram_webapp_user_admin_data.POST" not in enabled_api
     assert "telegram_user_admin_data.POST" not in enabled_api
-    assert "versatile_webapp_widget.POST" not in enabled_api
     assert "widget" not in defaults.get("enabled", {})
     assert defaults["visibility"]["bundle"] == {"allowed_roles": []}
     assert defaults["visibility"]["api"]["telegram_user_admin_data"] == {
         "user_types": [],
         "roles": ["kdcube:role:super-admin"],
     }
-    assert defaults["visibility"]["widget"]["versatile_webapp"] == {
-        "user_types": [],
-        "roles": [],
-    }
     assert "tools" not in defaults
     assert "named_services" not in defaults
-    assert defaults["surfaces"]["as_consumer"]["default_agent"] == "main"
-    assert defaults["surfaces"]["as_consumer"]["agents"]["main"]["event_sources"] == []
-    assert defaults["surfaces"]["as_consumer"]["ui"]["canvas"]["resolvers"] == []
+    assert "surfaces" not in defaults
     assert defaults["telemetry_sink"] == {"endpoint_url": "", "auth_header": ""}
     assert defaults["integrations"]["telegram"] == {
         "enabled": False,
@@ -167,212 +139,8 @@ def test_telegram_bot_transport_manifest_and_defaults():
         "stream_activity": True,
         "web_app_auth_max_age_seconds": 86400,
     }
-    assert defaults["ui"]["widgets"]["versatile_webapp"]["src_folder"] == "ui/widgets/versatile_webapp"
-    assert "enabled" not in defaults["ui"]["widgets"]["versatile_webapp"]
-
-
-def test_preferences_canvas_save_normalizes_document_and_appends_events(tmp_path):
-    prefs = _load_preferences_store_module()
-    storage = _make_storage(tmp_path)
-
-    result = prefs.save_preferences_canvas_document(
-        storage,
-        "user-1",
-        document_text=json.dumps(
-            {
-                "[p]_preferred_name": "Elena",
-                "theme": "light",
-                "profile": {"likes": ["tea", "books"]},
-            }
-        ),
-    )
-
-    current = prefs.load_current_preferences(storage, "user-1")
-    assert result["changed_keys"] == ["preferred_name", "theme", "profile"]
-    assert result["removed_keys"] == []
-    assert current["preferred_name"]["value"] == "Elena"
-    assert current["preferred_name"]["source"] == "preferences_canvas"
-    assert current["preferred_name"]["origin"] == "user_canvas"
-    assert current["preferred_name"]["updated_at"]
-    assert current["theme"]["value"] == "light"
-    assert current["profile"]["value"] == {"likes": ["tea", "books"]}
-
-    events = prefs.load_preference_events(storage, "user-1")
-    assert [event["key"] for event in events] == ["preferred_name", "theme", "profile"]
-    assert all(event["origin"] == "user_canvas" for event in events)
-    assert result["path"].endswith("preferences/users/user-1/current.json")
-
-
-def test_preferences_canvas_document_is_simplified_for_human_editing(tmp_path, monkeypatch):
-    prefs = _load_preferences_store_module()
-    storage = _make_storage(tmp_path)
-    times = iter([
-        "2026-04-02T09:00:00+00:00",
-        "2026-04-02T09:01:00+00:00",
-    ])
-    monkeypatch.setattr(prefs, "_utc_now", lambda: next(times))
-
-    prefs.append_preference_event(
-        storage,
-        "user-1",
-        key="[p]_preferred_name",
-        value="Elena",
-        source="chat",
-        origin="auto_capture",
-        evidence="call me Elena",
-    )
-    prefs.append_preference_event(
-        storage,
-        "user-1",
-        key="timezone",
-        value="Europe/Berlin",
-        source="chat",
-        origin="auto_capture",
-        evidence="I am in Berlin",
-    )
-
-    doc = prefs.build_preferences_canvas_document(storage, "user-1")
-    assert doc["document_format"] == "entries"
-    assert doc["entries"][0]["label"] == "preferred_name"
-    assert doc["entries"][0]["author"] == "assistant"
-    assert doc["entries"][1]["label"] == "timezone"
-    parsed = json.loads(doc["document_text"])
-    assert parsed["preferred_name"]["value"] == "Elena"
-    assert parsed["preferred_name"]["updated_at"]
-    assert parsed["preferred_name"]["origin"] == "auto_capture"
-    assert parsed["timezone"]["value"] == "Europe/Berlin"
-    assert parsed["timezone"]["updated_at"]
-    assert doc["path"].endswith("preferences/users/user-1/current.json")
-
-
-def test_preferences_canvas_entries_present_notebook_friendly_rows(tmp_path, monkeypatch):
-    prefs = _load_preferences_store_module()
-    storage = _make_storage(tmp_path)
-    times = iter([
-        "2026-04-02T09:00:00+00:00",
-        "2026-04-02T09:02:00+00:00",
-    ])
-    monkeypatch.setattr(prefs, "_utc_now", lambda: next(times))
-
-    prefs.append_preference_event(
-        storage,
-        "user-1",
-        key="[p]_preferred_name",
-        value="Elena",
-        source="chat",
-        origin="auto_capture",
-        evidence="call me Elena",
-    )
-    prefs.append_preference_event(
-        storage,
-        "user-1",
-        key="fish_preference",
-        value={"style": "fresh", "priority": "high"},
-        source="preferences_canvas",
-        origin="user",
-        evidence="Edited in collaborative preferences notebook",
-    )
-
-    entries = prefs.build_preferences_canvas_entries(storage, "user-1")
-
-    assert [entry["label"] for entry in entries] == ["preferred_name", "fish_preference"]
-    assert entries[0]["author"] == "assistant"
-    assert entries[0]["text"] == "Elena"
-    assert entries[1]["author"] == "user"
-    assert '"priority": "high"' in entries[1]["text"]
-
-
-def test_preferences_canvas_entries_edit_rewrites_timestamp_and_origin(tmp_path, monkeypatch):
-    prefs = _load_preferences_store_module()
-    storage = _make_storage(tmp_path)
-
-    prefs.append_preference_event(
-        storage,
-        "user-1",
-        key="location",
-        value="Berlin",
-        source="chat",
-        origin="auto_capture",
-        evidence="I am in Berlin",
-    )
-
-    monkeypatch.setattr(prefs, "_utc_now", lambda: "2026-04-02T10:15:00+00:00")
-
-    result = prefs.save_preferences_canvas_entries(
-        storage,
-        "user-1",
-        entries=[
-            {
-                "key": "location",
-                "label": "city",
-                "text": "Wuppertal",
-            }
-        ],
-    )
-
-    current = prefs.load_current_preferences(storage, "user-1")
-    assert "location" not in current
-    assert current["city"]["value"] == "Wuppertal"
-    assert current["city"]["updated_at"] == "2026-04-02T10:15:00+00:00"
-    assert current["city"]["origin"] == "user"
-    assert current["city"]["source"] == "preferences_canvas"
-    assert result["changed_keys"] == ["city"]
-    assert result["removed_keys"] == ["location"]
-    assert result["entries"][0]["label"] == "city"
-    assert result["entries"][0]["author"] == "user"
-    assert result["entries"][0]["updated_at"] == "2026-04-02T10:15:00+00:00"
-
-    events = prefs.load_preference_events(storage, "user-1")
-    assert events[-2]["key"] == "city"
-    assert events[-2]["origin"] == "user"
-    assert events[-1]["key"] == "location"
-    assert events[-1]["origin"] == "user_remove"
-
-
-def test_preferences_canvas_excel_export_and_import_roundtrip(tmp_path, monkeypatch):
-    prefs = _load_preferences_store_module()
-    storage = _make_storage(tmp_path)
-    times = iter([
-        "2026-04-02T09:00:00+00:00",
-        "2026-04-02T09:02:00+00:00",
-        "2026-04-02T10:15:00+00:00",
-    ])
-    monkeypatch.setattr(prefs, "_utc_now", lambda: next(times))
-
-    prefs.append_preference_event(
-        storage,
-        "user-1",
-        key="location",
-        value="Wuppertal",
-        source="chat",
-        origin="auto_capture",
-        evidence="I am in Wuppertal",
-    )
-    prefs.append_preference_event(
-        storage,
-        "user-1",
-        key="food_preference",
-        value="fresh fish",
-        source="preferences_canvas",
-        origin="user",
-        evidence="Edited in collaborative preferences notebook",
-    )
-
-    workbook = prefs.export_preferences_canvas_xlsx(storage, "user-1")
-    imported = prefs.import_preferences_canvas_xlsx(workbook)
-
-    assert [entry["label"] for entry in imported] == ["location", "food_preference"]
-    assert imported[0]["text"] == "Wuppertal"
-    assert imported[1]["text"] == "fresh fish"
-
-    result = prefs.save_preferences_canvas_entries(storage, "user-1", entries=imported)
-    current = prefs.load_current_preferences(storage, "user-1")
-
-    assert {entry["label"] for entry in result["entries"]} == {"location", "food_preference"}
-    assert current["location"]["value"] == "Wuppertal"
-    assert current["location"]["origin"] == "user"
-    assert current["location"]["updated_at"] == "2026-04-02T10:15:00+00:00"
-    assert current["food_preference"]["value"] == "fresh fish"
+    assert defaults["ui"]["widgets"]["telegram_miniapp"]["src_folder"] == "ui/widgets/telegram_miniapp"
+    assert "versatile_webapp" not in defaults["ui"]["widgets"]
 
 
 @pytest.mark.asyncio
@@ -460,5 +228,5 @@ async def test_event_recording_sends_chat_message_and_turn_metrics(monkeypatch):
         "chat.conversation.accepted",
         "chat.conversation.turn.completed",
     ]
-    assert kwargs["filter"] == entrypoint_mod.STATS_COMM_EVENT_SELECTOR
+    assert kwargs["filter"] == STATS_COMM_EVENT_SELECTOR
     assert entrypoint.comm.export_recorded_events() == []

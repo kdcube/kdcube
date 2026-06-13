@@ -94,15 +94,10 @@ policy source for which tools an agent sees:
 ```python
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_config import (
     agent_tool_config_from_bundle_props,
-    bundle_props_with_default_agent_tools,
 )
 
-effective_props = bundle_props_with_default_agent_tools(
-    self.bundle_props,
-    default_bundle_props=default_as_consumer_surfaces_props(),
-)
 tool_config = agent_tool_config_from_bundle_props(
-    effective_props,
+    self.bundle_props,
     agent_id,
     bundle_root=BUNDLE_ROOT,
     default_agent_id="main",
@@ -154,12 +149,8 @@ Your workflow must resolve the active agent config, pass specs into subsystem
 creation, and pass both alias and per-tool allow-lists to ReAct:
 
 ```python
-effective_props = bundle_props_with_default_agent_tools(
-    self.bundle_props,
-    default_bundle_props=default_as_consumer_surfaces_props(),
-)
 tool_config = agent_tool_config_from_bundle_props(
-    effective_props,
+    self.bundle_props,
     agent_id,
     bundle_root=BUNDLE_ROOT,
     default_agent_id="main",

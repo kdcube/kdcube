@@ -814,7 +814,8 @@ my_bundle/
   entrypoint.py
   orchestrator/
     workflow.py
-  consumer_surfaces.py # optional bundle-owned default tool policy
+  config/
+    bundles.template.yaml # default consumer/tool/UI policy
   skills_descriptor.py
   requirements.txt    # optional, but required when bundle-local venv code needs Python deps
   tools/
@@ -834,7 +835,7 @@ Required in practice:
 Usually present:
 
 - `orchestrator/workflow.py`
-- bundle-owned consumer-surface defaults, when code defaults are useful
+- `config/bundles.template.yaml` for default consumer/tool/UI policy
 - `skills_descriptor.py`
 - `requirements.txt` when bundle-local Python deps are installed through `@venv(...)`
 
@@ -889,11 +890,13 @@ Study in this order:
 
 1. `entrypoint.py`
 2. `orchestrator/workflow.py`
-3. `consumer_surfaces.py`
-4. `skills_descriptor.py`
-5. `ui/PreferencesBrowser.tsx`
-6. `ui/main/src/App.tsx`
-7. `tests/`
+3. `config/bundles.template.yaml`
+4. `services/canvas.py`
+5. `services/telemetry.py`
+6. `skills_descriptor.py`
+7. `ui/scene`
+8. `ui/widgets/telegram_miniapp`
+9. `tests/`
 
 What `versatile` is good for:
 
@@ -937,7 +940,8 @@ my.bundle@1-0/
   entrypoint.py
   orchestrator/
     workflow.py
-  consumer_surfaces.py
+  config/
+    bundles.template.yaml
   skills_descriptor.py
   tools/
     task_tools.py

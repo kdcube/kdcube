@@ -29,11 +29,6 @@ storage or another configured bundle-storage backend.
 
 ```text
 $B/
-  preferences/
-    users/
-      <user_id>/
-        current.json
-        events.jsonl
   admin/
     telegram-users.json
     telegram-updates/
@@ -52,20 +47,12 @@ $B/
               ...
 ```
 
-### Preferences
+### Durable memory
 
-`preferences/users/<user_id>/current.json` is the current materialized view
-used by tools, widgets, and the chat workflow. It contains one current value per
-preference key.
-
-`preferences/users/<user_id>/events.jsonl` is the append-only observation
-history. Chat auto-capture, tool calls, canvas edits, Excel imports, and
-deletions all append events. The current view is then rewritten from the latest
-state.
-
-The current implementation is intentionally simple because this is a reference
-bundle. It demonstrates the storage and UI pattern that the SDK
-cross-conversation memory module will eventually replace.
+Remembered user facts and preferences are stored by the SDK durable-memory
+subsystem, not by a bundle-local `preferences/` tree. Versatile configures the
+SDK memory tools and widget as consumer surfaces; memory storage itself follows
+the SDK memory storage contract.
 
 ### Telegram Registry
 
@@ -117,11 +104,15 @@ $B/
       memories/
         index.html
         assets/...
-      versatile_webapp/
+      usage_card/
         index.html
         assets/...
-  .kdcube.once/
-    ui-widget-versatile_webapp.lock
+      telegram_miniapp/
+        index.html
+        assets/...
+      pinboard/
+        index.html
+        assets/...
 ```
 
 Widget output under `ui/widgets/` is generated from:
@@ -129,7 +120,9 @@ Widget output under `ui/widgets/` is generated from:
 ```text
 sdk://solutions/chat/ui/widget
 sdk://context/memory/ui/widget/memories
-ui/widgets/versatile_webapp/
+sdk://infra/economics/ui/widget/usage-card
+sdk://solutions/canvas/ui/widget/pinboard
+ui/widgets/telegram_miniapp
 ```
 
 It is safe to rebuild from source. The shared build lock under `.kdcube.once/`
@@ -142,8 +135,7 @@ The active main view is generated from:
 ui/scene/
 ```
 
-The main view output is also rebuildable from source. The previous custom chat
-implementation remains under `ui/main/` as legacy comparison source.
+The main view output is also rebuildable from source.
 
 ## Platform-Owned Conversation Data
 
@@ -159,16 +151,15 @@ temporary execution workspaces are cleaned.
 
 | Purpose | Path or owner | Canonical? | Notes |
 | --- | --- | --- | --- |
-| Current preferences | `$B/preferences/users/<user_id>/current.json` | Yes | Current key/value view used by tools and widget. |
-| Preference event history | `$B/preferences/users/<user_id>/events.jsonl` | Yes | Append-only history for preference changes. |
+| Durable memory | SDK memory storage | Yes | User facts/preferences handled by the SDK memory subsystem. |
 | Telegram user registry | `$B/admin/telegram-users.json` | Yes | Operator-managed mapping from Telegram users to KDCube users/roles/conversations. |
 | Telegram webhook update state | `$B/admin/telegram-updates/...` | Yes | Idempotency state for Bot API retries. |
 | Canvas state | `$B/canvas/users/<user_id>/canvases/...` | Yes | Versioned board state and canvas-owned objects for the active scene. |
 | Chat widget static output | `$B/ui/widgets/versatile_chat/...` | No | Built from `sdk://solutions/chat/ui/widget`. |
 | Memory widget static output | `$B/ui/widgets/memories/...` | No | Built from `sdk://context/memory/ui/widget/memories`. |
 | Usage-card widget static output | `$B/ui/widgets/usage_card/...` | No | Built from `sdk://infra/economics/ui/widget/usage-card`. |
+| Telegram Mini App static output | `$B/ui/widgets/telegram_miniapp/...` | No | Built from `ui/widgets/telegram_miniapp`. |
 | Pinboard widget static output | `$B/ui/widgets/pinboard/...` | No | Built from `sdk://solutions/canvas/ui/widget/pinboard`. |
-| Widget static output | `$B/ui/widgets/versatile_webapp/...` | No | Built from `ui/widgets/versatile_webapp`. |
 | Main view static output | bundle UI build output | No | Built from `ui/scene`. |
 | Chat timeline/files | platform conversation store | Yes, platform-owned | Normal KDCube conversation persistence. |
 
@@ -179,18 +170,6 @@ Set local roots:
 ```sh
 B=/Users/elenaviter/.kdcube/dev-workspace/data/bundle-storage/demo-tenant/demo-project/versatile-2026-03-31-13-36
 U=<user_id>
-```
-
-Inspect current preferences:
-
-```sh
-jq . "$B/preferences/users/$U/current.json"
-```
-
-Inspect preference event history:
-
-```sh
-tail -n 50 "$B/preferences/users/$U/events.jsonl"
 ```
 
 Inspect Telegram registry:

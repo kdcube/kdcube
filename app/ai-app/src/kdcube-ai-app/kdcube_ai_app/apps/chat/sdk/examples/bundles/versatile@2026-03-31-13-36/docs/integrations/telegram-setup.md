@@ -1,9 +1,9 @@
 ---
 id: ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/docs/integrations/telegram-setup.md
 title: "Versatile Telegram Setup"
-summary: "Compact operator commands for configuring the Versatile reference bundle Telegram bot webhook, Mini App menu button, bot commands, and pending user approval flow."
+summary: "Compact operator commands for configuring the Versatile reference bundle Telegram bot webhook, Telegram Mini App menu button, bot commands, and pending user approval flow."
 tags: ["bundle", "versatile", "telegram", "webhook", "mini-app", "botfather", "operator-setup"]
-keywords: ["versatile telegram setup", "telegram webhook", "setWebhook", "secret_token", "getWebhookInfo", "setChatMenuButton", "setMyCommands", "versatile_webapp", "pending telegram user", "telegram admin"]
+keywords: ["versatile telegram setup", "telegram webhook", "setWebhook", "secret_token", "getWebhookInfo", "setChatMenuButton", "setMyCommands", "telegram_miniapp", "pending telegram user", "telegram admin"]
 updated_at: 2026-05-16
 see_also:
   - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
@@ -18,7 +18,7 @@ The bundle exposes:
 
 ```text
 POST /public/telegram_webhook
-GET  /public/widgets/versatile_webapp
+GET  /public/widgets/telegram_miniapp
 POST /operations/telegram_user_admin_*
 ```
 
@@ -28,7 +28,7 @@ Set these variables:
 export TENANT="demo-tenant"
 export PROJECT="demo-project"
 export BUNDLE_ID="versatile@2026-03-31-13-36"
-export WIDGET_ALIAS="versatile_webapp"
+export WIDGET_ALIAS="telegram_miniapp"
 export PUBLIC_HOST="https://YOUR_PUBLIC_HTTPS_HOST" # no trailing slash
 export PUBLIC_HOST="${PUBLIC_HOST%/}"
 
@@ -109,13 +109,13 @@ KDCube admin widget user -> User Memory + Chats + Admin
 Widget build note:
 
 ```text
-versatile_webapp imports shared SDK UI:
+telegram_miniapp imports shared SDK UI:
 - @kdcube/memory-widget    -> sdk://context/memory/ui/widget/memories
 - @kdcube/telegram-widget  -> sdk://integrations/telegram/ui/widget.telegram
 ```
 
 These sources must be present in
-`ui.widgets.versatile_webapp.shared_sources` or in the bundle's
+`ui.widgets.telegram_miniapp.shared_sources` or in the bundle's
 configuration defaults. If the Mini App fails with
 `Could not load /integrations/telegram/ui/widget.telegram/src/index.tsx`, the
 Telegram shared widget source was not materialized into `_shared/telegram-widget`

@@ -407,16 +407,26 @@ job_memory_tools = make_user_memory_tools(
 )
 ```
 
-Bundles normally include the portable module in `tools_descriptor.py`:
+Bundles normally include the portable module in
+`surfaces.as_consumer.agents.<agent>.tools`:
 
-```python
-TOOLS_SPECS = [
-    {
-        "module": "kdcube_ai_app.apps.chat.sdk.context.memory.tools",
-        "alias": "memory",
-        "use_sk": True,
-    },
-]
+```yaml
+surfaces:
+  as_consumer:
+    agents:
+      main:
+        tools:
+          - name: memory
+            kind: python
+            module: kdcube_ai_app.apps.chat.sdk.context.memory.tools
+            alias: memory
+            allowed:
+              - search_memory
+              - recent_memories
+              - read_memory
+              - record_memory
+              - confirm_memory
+              - retire_memory
 ```
 
 This exposes the callable tools with ids:

@@ -105,9 +105,11 @@ bundles:
                   #     task:
                   #       allowed:
                   #         - provider.about
+                  #         - object.list
                   #         - object.search
                   #         - object.schema
                   #         - object.upsert
+                  #         - object.host_file
                   #         - object.delete
                 # Add namespace event-source policies here when external refs
                 # should render into the ReAct timeline and be pullable.
@@ -116,6 +118,8 @@ bundles:
                 #   - kind: named_service
                 #     namespace: task
                 #     enabled: true
+                #     discovery:
+                #       mode: service_discovery
                 #     policies:
                 #       block_production:
                 #         mode: provider
@@ -134,6 +138,8 @@ bundles:
                 #   - kind: named_service
                 #     namespace: task
                 #     enabled: true
+                #     discovery:
+                #       mode: service_discovery
                 #     allowed:
                 #       - object.resolve
                 #       - object.action
@@ -183,13 +189,13 @@ bundles:
             pinboard:
               user_types: []
               roles: []
+            telegram_miniapp:
+              user_types: []
+              roles: []
             usage_card:
               user_types: []
               roles: []
             versatile_chat:
-              user_types: []
-              roles: []
-            versatile_webapp:
               user_types: []
               roles: []
         ui:
@@ -210,15 +216,8 @@ bundles:
             usage_card:
               src_folder: sdk://infra/economics/ui/widget/usage-card
               build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
-            pinboard:
-              src_folder: sdk://solutions/canvas/ui/widget/pinboard
-              build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
-              shared_sources:
-                canvas_component:
-                  src_folder: sdk://solutions/canvas/ui/component
-                  target: _shared/canvas-component
-            versatile_webapp:
-              src_folder: ui/widgets/versatile_webapp
+            telegram_miniapp:
+              src_folder: ui/widgets/telegram_miniapp
               build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
               shared_sources:
                 memory_widget:
@@ -227,5 +226,12 @@ bundles:
                 telegram_widget:
                   src_folder: sdk://integrations/telegram/ui/widget.telegram
                   target: _shared/telegram-widget
+            pinboard:
+              src_folder: sdk://solutions/canvas/ui/widget/pinboard
+              build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
+              shared_sources:
+                canvas_component:
+                  src_folder: sdk://solutions/canvas/ui/component
+                  target: _shared/canvas-component
         mcp:
           services: {}

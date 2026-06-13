@@ -5,7 +5,6 @@ from pathlib import Path
 
 import inspect
 import logging
-import traceback
 from typing import Any, Dict, Mapping, Optional
 
 from langgraph.graph import END, START, StateGraph
@@ -13,45 +12,24 @@ from langgraph.graph import END, START, StateGraph
 from kdcube_ai_app.auth.federated import issue_federated_data_bus_token
 from kdcube_ai_app.apps.chat.sdk.config import get_secret
 from kdcube_ai_app.apps.chat.sdk.context.vector.conv_ticket_store import ConvTicketStore
-from kdcube_ai_app.apps.chat.sdk.comm.sink import (
-    STATS_COMM_EVENT_SELECTOR,
-    StatsTelemetrySink,
-    StatsTelemetryTarget,
-    configure_stats_event_recording,
-)
+from kdcube_ai_app.apps.chat.sdk.comm.sink import StatsTelemetrySink
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram import TelegramUserAdminStorage
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram import user_admin as telegram_user_admin
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram import webapp as telegram_webapp
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram import widget_auth as telegram_widget_auth
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram import widget_ops as telegram_widget_ops
-from kdcube_ai_app.apps.chat.sdk.context.memory.events.resolver import (
-    memory_ref_capabilities,
-    resolve_memory_ref_action,
-)
 from kdcube_ai_app.apps.chat.sdk.protocol import ExternalEventPayload
 from kdcube_ai_app.apps.chat.sdk.solutions.chat import chat_widget_ui_config
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_memory import (
     BaseEntrypointWithEconomicsAndMemory,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.canvas import api as canvas_api
-from kdcube_ai_app.apps.chat.sdk.solutions.canvas.events.resolver import (
-    CallableCanvasObjectResolver,
-    build_default_canvas_resolver_registry,
-)
 from kdcube_ai_app.apps.chat.sdk.solutions.canvas.events.defaults import default_canvas_event_source_specs
-from kdcube_ai_app.apps.chat.sdk.solutions.canvas.storage import CanvasStore
-from kdcube_ai_app.apps.chat.sdk.solutions.react.events.resolver import resolve_event_ref_action
-from kdcube_ai_app.apps.chat.sdk.solutions.chat.events.resolver import (
-    conversation_ref_capabilities,
-    resolve_conversation_ref_action,
-)
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
     named_service_agent_event_source_namespaces,
     named_service_agent_pull_namespaces,
-    named_service_canvas_resolver_namespaces,
     register_configured_named_service_artifact_rehosters,
     register_configured_named_service_event_sources,
-    register_configured_named_service_canvas_resolvers,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus import DataBusResult, data_bus_handler
 from kdcube_ai_app.infra.plugin.bundle_loader import bundle_entrypoint, api, on_job, ui_widget
@@ -59,7 +37,8 @@ from kdcube_ai_app.infra.service_hub.inventory import BundleState, Config
 
 from .event_filter import BundleEventFilter
 from .orchestrator.workflow import VersatileWorkflow
-from .consumer_surfaces import default_as_consumer_surfaces_props
+from .services import telemetry as telemetry_service
+from .services.canvas import CanvasRuntimeConfig, VersatileCanvasService, payload_from_call
 
 BUNDLE_ID = "versatile@2026-03-31-13-36"
 WORKFLOW_NAME = "versatile"
@@ -120,52 +99,6 @@ def _storage_root_or_error(entrypoint: Any) -> Path:
 
 def _telegram_user_admin_storage(entrypoint: Any) -> TelegramUserAdminStorage:
     return TelegramUserAdminStorage(_storage_root_or_error(entrypoint))
-
-
-def _payload(data: Optional[Mapping[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
-    if isinstance(data, Mapping):
-        return {str(k): v for k, v in data.items()}
-    return {
-        str(k): v
-        for k, v in kwargs.items()
-        if k not in {"request", "alias", "route", "endpoint_alias"} and v is not None
-    }
-
-
-def _log_canvas_failure(alias: str, payload: Mapping[str, Any], result: Mapping[str, Any]) -> Mapping[str, Any]:
-    if result.get("ok") is not False:
-        return result
-    error_text = result.get("error")
-    if error_text is None:
-        error_text = result.get("detail")
-    if error_text is None:
-        error_text = result.get("message")
-    if error_text is None:
-        error_text = "operation failed"
-    _log.warning(
-        "[canvas] operation failed alias=%s error=%s context=%s",
-        alias,
-        str(error_text)[:500],
-        {
-            "canvas_id": result.get("canvas_id") if result.get("canvas_id") is not None else payload.get("canvas_id"),
-            "canvas_name": result.get("canvas_name") if result.get("canvas_name") is not None else payload.get("canvas_name"),
-            "story_id": result.get("story_id") if result.get("story_id") is not None else payload.get("story_id"),
-            "revision": result.get("revision"),
-            "expected_revision": result.get("expected_revision"),
-            "current_revision": result.get("current_revision"),
-        },
-    )
-    return result
-
-
-def _protocol_string(payload: Mapping[str, Any], field: str, default: str = "") -> str:
-    value = payload.get(field)
-    if value is None:
-        return default
-    text = str(value).strip()
-    if text:
-        return text
-    return default
 
 
 class _VersatileTaskWidgets:
@@ -446,172 +379,35 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
         )
         return subsystem
 
-    def _canvas_store(self, payload: Mapping[str, Any], *, user_id: str | None = None) -> CanvasStore:
-        ident = self.runtime_identity()
-        tenant = _protocol_string(payload, "tenant", _protocol_string(ident, "tenant", "default"))
-        project = _protocol_string(payload, "project", _protocol_string(ident, "project", "default"))
-        revision_retention = self.bundle_prop("canvas.revision_retention", 80)
-        if revision_retention is None:
-            revision_retention = 80
-        resolved_user_id = user_id
-        if resolved_user_id is None or not str(resolved_user_id).strip():
-            resolved_user_id = self._resolve_user_id(payload)
-        return CanvasStore(
-            tenant=tenant,
-            project=project,
-            bundle_id=BUNDLE_ID,
-            user_id=resolved_user_id,
-            storage_root=_storage_root_or_error(self),
-            revision_retention=int(revision_retention),
-            artifact_prefix=CANVAS_ARTIFACT_PREFIX,
-            origin_prefix=CANVAS_ORIGIN_PREFIX,
-            state_event_source_id=CANVAS_STATE_EVENT_SOURCE_ID,
-            ui_event_type=CANVAS_UI_EVENT_TYPE,
-            artifact_resolver_name=CANVAS_ARTIFACT_RESOLVER_NAME,
-        )
+    def _canvas_service(self) -> VersatileCanvasService:
+        service = getattr(self, "_versatile_canvas_service", None)
+        if service is None:
+            service = VersatileCanvasService(
+                self,
+                config=CanvasRuntimeConfig(
+                    bundle_id=self._bundle_id(),
+                    artifact_prefix=CANVAS_ARTIFACT_PREFIX,
+                    origin_prefix=CANVAS_ORIGIN_PREFIX,
+                    state_event_source_id=CANVAS_STATE_EVENT_SOURCE_ID,
+                    ui_event_type=CANVAS_UI_EVENT_TYPE,
+                    artifact_resolver_name=CANVAS_ARTIFACT_RESOLVER_NAME,
+                ),
+                logger=_log,
+            )
+            self._versatile_canvas_service = service
+        return service
+
+    def _canvas_store(self, payload: Mapping[str, Any], *, user_id: str | None = None):
+        return self._canvas_service().store(payload, user_id=user_id)
 
     def _canvas_object_resolvers(self, payload: Mapping[str, Any], *, user_id: str):
-        store = self._canvas_store(payload, user_id=user_id)
-        registry = build_default_canvas_resolver_registry(store)
-        ident = self.runtime_identity()
-        tenant = _protocol_string(payload, "tenant", _protocol_string(ident, "tenant", "default"))
-        project = _protocol_string(payload, "project", _protocol_string(ident, "project", "default"))
-
-        async def _resolve_fi(
-            action_payload: Mapping[str, Any],
-            resolver_user_id: str,
-            resolver_story_id: str,
-            action: str,
-        ) -> Mapping[str, Any]:
-            return await resolve_event_ref_action(
-                {**dict(action_payload if action_payload is not None else {}), "action": action},
-                tenant=tenant,
-                project=project,
-                user_id=resolver_user_id,
-                storage_path=str(getattr(self.settings, "STORAGE_PATH", "")),
-                story_id=resolver_story_id,
-                require_embedded_conversation=True,
-            )
-
-        registry.register(
-            CallableCanvasObjectResolver(
-                namespace="fi",
-                resolver="react.event_ref",
-                resolver_status="implemented",
-                capabilities={"preview": False, "open": False, "download": True, "rehost": False},
-                handler=_resolve_fi,
-            )
-        )
-
-        async def _resolve_mem(
-            action_payload: Mapping[str, Any],
-            resolver_user_id: str,
-            resolver_story_id: str,
-            action: str,
-        ) -> Mapping[str, Any]:
-            del resolver_user_id, resolver_story_id
-            return await resolve_memory_ref_action(
-                {**dict(action_payload if action_payload is not None else {}), "action": action},
-                store=self._memory_store(),
-                scope=self._memory_scope(),
-                scope_filter=self._memory_scope_filter("current_bundle"),
-            )
-
-        registry.register(
-            CallableCanvasObjectResolver(
-                namespace="mem",
-                resolver="sdk.memory",
-                resolver_status="implemented",
-                capabilities=memory_ref_capabilities(),
-                handler=_resolve_mem,
-            )
-        )
-
-        # conv: pinned conversations. The chat solution owns the resolver
-        # semantics (parse, preview shape, open event); the bundle only injects
-        # the conversation-metadata fetch, mirroring how mem: is wired above.
-        async def _fetch_conversation_details(
-            fetch_user_id: str,
-            conversation_id: str,
-            bundle_id: Optional[str],
-        ) -> Optional[Mapping[str, Any]]:
-            from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_rag import ContextRAGClient
-            from kdcube_ai_app.apps.chat.sdk.context.vector.conv_index import ConvIndex
-            from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore
-
-            conv_idx = ConvIndex(pool=self.pg_pool)
-            await conv_idx.init()
-            ctx_client = ContextRAGClient(
-                conv_idx=conv_idx,
-                store=ConversationStore(self.settings.STORAGE_PATH),
-                model_service=self.models_service,
-            )
-            return await ctx_client.get_conversation_details(
-                user_id=fetch_user_id,
-                conversation_id=conversation_id,
-                bundle_id=bundle_id,
-            )
-
-        async def _resolve_conv(
-            action_payload: Mapping[str, Any],
-            resolver_user_id: str,
-            resolver_story_id: str,
-            action: str,
-        ) -> Mapping[str, Any]:
-            del resolver_story_id
-            return await resolve_conversation_ref_action(
-                {**dict(action_payload if action_payload is not None else {}), "action": action},
-                user_id=resolver_user_id,
-                fetch_details=_fetch_conversation_details,
-            )
-
-        registry.register(
-            CallableCanvasObjectResolver(
-                namespace="conv",
-                resolver="sdk.chat.conversation",
-                resolver_status="implemented",
-                capabilities=conversation_ref_capabilities(),
-                handler=_resolve_conv,
-            )
-        )
-        self._register_named_service_canvas_resolvers(registry, tenant=tenant, project=project)
-        return registry
-
-    def _register_named_service_canvas_resolvers(self, registry: Any, *, tenant: str, project: str) -> None:
-        register_configured_named_service_canvas_resolvers(
-            registry,
-            namespaces=named_service_canvas_resolver_namespaces(self.bundle_props),
-            tenant=tenant,
-            project=project,
-            logger=_log,
-        )
+        return self._canvas_service().object_resolvers(payload, user_id=user_id)
 
     def _canvas_target(self) -> Dict[str, str]:
-        return {
-            "agent_id": "canvas",
-            "surface": "canvas",
-            "story_kind": "canvas",
-            "conversation_role": "canvas",
-        }
+        return self._canvas_service().target()
 
     def _apply_canvas_patch_payload(self, payload: Mapping[str, Any]) -> Dict[str, Any]:
-        user_id = self._resolve_user_id(payload)
-        story_id = _protocol_string(payload, "story_id")
-        try:
-            store = self._canvas_store(payload, user_id=user_id)
-        except Exception as exc:
-            result = {"ok": False, "user_id": user_id, "story_id": story_id, "error": str(exc)}
-            _log_canvas_failure("canvas_patch", payload, result)
-            return result
-        result = canvas_api.patch(
-            payload=payload,
-            store=store,
-            user_id=user_id,
-            story_id=story_id,
-            target=self._canvas_target(),
-        )
-        _log_canvas_failure("canvas_patch", payload, result)
-        return result
+        return self._canvas_service().apply_patch_payload(payload)
 
     async def pre_run_hook(self, *, state: Dict[str, Any], econ_ctx: Optional[Dict[str, Any]] = None) -> None:
         await self._configure_event_recording()
@@ -632,86 +428,22 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
         return str(getattr(getattr(self.config, "ai_bundle_spec", None), "id", None) or BUNDLE_ID)
 
     async def _make_event_sink(self) -> StatsTelemetrySink | None:
-        endpoint_url = str(self.bundle_prop("telemetry_sink.endpoint_url", "") or "").strip()
-        if not endpoint_url:
-            return None
-        token = str(await get_secret(TELEMETRY_SINK_TOKEN_SECRET, bundle_id=self._bundle_id()) or "").strip()
-        if not token:
-            try:
-                self.logger.log(
-                    f"[{BUNDLE_ID}] telemetry sink endpoint is configured but secret "
-                    f"{TELEMETRY_SINK_TOKEN_SECRET} is missing; event sending disabled.",
-                    "WARNING",
-                )
-            except Exception:
-                pass
-            return None
-        auth_header = str(self.bundle_prop("telemetry_sink.auth_header", "Authorization") or "").strip() or "Authorization"
-        return StatsTelemetrySink(
-            StatsTelemetryTarget(
-                endpoint_url=endpoint_url,
-                token=token,
-                token_header=auth_header,
-            ),
-            source_bundle=self._bundle_id(),
+        return await telemetry_service.make_event_sink(
+            self,
+            bundle_id=self._bundle_id(),
+            token_secret=TELEMETRY_SINK_TOKEN_SECRET,
+            get_secret_fn=get_secret,
         )
 
     async def _configure_event_recording(self) -> None:
-        try:
-            comm = self.comm
-            sink = await self._make_event_sink()
-            telemetry_enabled = self._telemetry_events_enabled()
-            if sink is None or not telemetry_enabled:
-                comm.stop_recording()
-                comm.set_event_sink(None)
-                comm.clear_recorded_events(STATS_COMM_EVENT_SELECTOR)
-                return
-            selector = self._build_telemetry_selector()
-            configure_stats_event_recording(
-                comm,
-                sink,
-                selector=selector,
-                scope={"owner": "react", "bundle": self._bundle_id(), "runtime": "on_message"},
-                max_events=EVENT_RECORD_MAX,
-            )
-        except Exception:
-            self.logger.log(traceback.format_exc(), "WARNING")
+        await telemetry_service.configure_event_recording(
+            self,
+            bundle_id=self._bundle_id(),
+            event_record_max=EVENT_RECORD_MAX,
+        )
 
     async def _send_recorded_events(self) -> Dict[str, Any]:
-        try:
-            selector = self._build_telemetry_selector()
-            return await self.comm.send_recorded_events(selector)
-        except Exception:
-            self.logger.log(traceback.format_exc(), "WARNING")
-            return {"ok": False, "error": "Unable to flush recorded versatile events."}
-
-    @api(
-        alias="versatile_webapp_widget",
-        route="operations",
-        **_api_visibility("versatile_webapp_widget"),
-    )
-    @ui_widget(
-        icon={
-            "tailwind": "heroicons-outline:rectangle-group",
-            "lucide": "PanelTop",
-        },
-        alias="versatile_webapp",
-        **_widget_visibility("versatile_webapp"),
-    )
-    def versatile_webapp_widget(
-        self,
-        user_id: Optional[str] = None,
-        fingerprint: Optional[str] = None,
-        widget_path: str = "",
-        path: str = "",
-        **kwargs,
-    ):
-        del user_id, fingerprint, widget_path, path, kwargs
-        return [
-            "<div style=\"font-family:system-ui,sans-serif;padding:16px\">"
-            "Versatile webapp is served from the built widget source folder."
-            "</div>"
-        ]
+        return await telemetry_service.send_recorded_events(self)
 
     @api(
         alias="versatile_chat_widget",
@@ -804,183 +536,155 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
             "</div>"
         ]
 
+    @api(
+        alias="telegram_miniapp_widget",
+        route="operations",
+        **_api_visibility("telegram_miniapp_widget"),
+    )
+    @ui_widget(
+        icon={
+            "tailwind": "heroicons-outline:paper-airplane",
+            "lucide": "Send",
+        },
+        alias="telegram_miniapp",
+        **_widget_visibility("telegram_miniapp"),
+    )
+    def telegram_miniapp_widget(self, **kwargs):
+        del kwargs
+        return [
+            "<div style=\"font-family:system-ui,sans-serif;padding:16px\">"
+            "Telegram Mini App is served from ui/widgets/telegram_miniapp after build."
+            "</div>"
+        ]
+
     @api(method="POST", alias="canvas_attachment_upload", route="operations", **_api_visibility("canvas_attachment_upload"))
     async def canvas_attachment_upload(self, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
-        payload = _payload(data, **kwargs)
-        uploaded_files = list(kwargs.get("uploaded_files") or [])
-        user_id = self._resolve_user_id(payload)
-        story_id = _protocol_string(payload, "story_id")
-        try:
-            store = self._canvas_store(payload, user_id=user_id)
-            result = canvas_api.upload_attachments(
-                payload=payload,
-                uploaded_files=uploaded_files,
-                store=store,
-                user_id=user_id,
-                story_id=story_id,
-            )
-        except Exception as exc:
-            _log.exception("[canvas.attachment_upload] failed story_id=%s", story_id)
-            result = {"ok": False, "user_id": user_id, "story_id": story_id, "error": str(exc)}
-        _log_canvas_failure("canvas_attachment_upload", payload, result)
-        return result
+        payload = payload_from_call(data, **kwargs)
+        return await self._canvas_service().attachment_upload(
+            payload,
+            uploaded_files=list(kwargs.get("uploaded_files") or []),
+        )
 
     @api(method="POST", alias="canvas_pin_read", route="operations", **_api_visibility("canvas_pin_read"))
     async def canvas_pin_read(self, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
-        payload = _payload(data, **kwargs)
-        user_id = self._resolve_user_id(payload)
-        story_id = _protocol_string(payload, "story_id")
-        try:
-            result = canvas_api.read_pin(
+        payload = payload_from_call(data, **kwargs)
+        return self._canvas_service().operation(
+            "canvas_pin_read",
+            payload,
+            lambda *, user_id, story_id: canvas_api.read_pin(
                 payload=payload,
                 store=self._canvas_store(payload, user_id=user_id),
                 user_id=user_id,
                 story_id=story_id,
-            )
-        except Exception as exc:
-            result = {"ok": False, "user_id": user_id, "story_id": story_id, "error": str(exc)}
-        _log_canvas_failure("canvas_pin_read", payload, result)
-        return result
+            ),
+        )
 
     @api(method="POST", alias="canvas_object_action", route="operations", **_api_visibility("canvas_object_action"))
     async def canvas_object_action(self, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
-        payload = _payload(data, **kwargs)
-        user_id = self._resolve_user_id(payload)
-        story_id = _protocol_string(payload, "story_id")
-        try:
-            result = await canvas_api.object_action(
-                payload=payload,
-                registry=self._canvas_object_resolvers(payload, user_id=user_id),
-                user_id=user_id,
-                story_id=story_id,
-            )
-        except Exception as exc:
-            result = {"ok": False, "user_id": user_id, "story_id": story_id, "error": str(exc)}
-        _log_canvas_failure("canvas_object_action", payload, result)
-        return result
+        payload = payload_from_call(data, **kwargs)
+        return await self._canvas_service().object_action(payload)
 
     @api(method="POST", alias="canvas_search", route="operations", **_api_visibility("canvas_search"))
     async def canvas_search(self, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
-        payload = _payload(data, **kwargs)
-        user_id = self._resolve_user_id(payload)
-        story_id = _protocol_string(payload, "story_id")
-        try:
-            result = canvas_api.search(
+        payload = payload_from_call(data, **kwargs)
+        return self._canvas_service().operation(
+            "canvas_search",
+            payload,
+            lambda *, user_id, story_id: canvas_api.search(
                 payload=payload,
                 store=self._canvas_store(payload, user_id=user_id),
                 user_id=user_id,
                 story_id=story_id,
-            )
-        except Exception as exc:
-            result = {"ok": False, "user_id": user_id, "story_id": story_id, "error": str(exc)}
-        _log_canvas_failure("canvas_search", payload, result)
-        return result
+            ),
+        )
 
     @api(method="POST", alias="canvas_list", route="operations", **_api_visibility("canvas_list"))
     async def canvas_list(self, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
-        payload = _payload(data, **kwargs)
-        user_id = self._resolve_user_id(payload)
-        story_id = _protocol_string(payload, "story_id")
-        try:
-            result = canvas_api.list_canvases(
+        payload = payload_from_call(data, **kwargs)
+        return self._canvas_service().operation(
+            "canvas_list",
+            payload,
+            lambda *, user_id, story_id: canvas_api.list_canvases(
                 store=self._canvas_store(payload, user_id=user_id),
                 user_id=user_id,
                 story_id=story_id,
-            )
-        except Exception as exc:
-            result = {"ok": False, "user_id": user_id, "story_id": story_id, "error": str(exc)}
-        _log_canvas_failure("canvas_list", payload, result)
-        return result
+            ),
+        )
 
     @api(method="POST", alias="canvas_set_active", route="operations", **_api_visibility("canvas_set_active"))
     async def canvas_set_active(self, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
-        payload = _payload(data, **kwargs)
-        user_id = self._resolve_user_id(payload)
-        story_id = _protocol_string(payload, "story_id")
-        try:
-            result = canvas_api.set_active(
+        payload = payload_from_call(data, **kwargs)
+        return self._canvas_service().operation(
+            "canvas_set_active",
+            payload,
+            lambda *, user_id, story_id: canvas_api.set_active(
                 payload=payload,
                 store=self._canvas_store(payload, user_id=user_id),
                 user_id=user_id,
                 story_id=story_id,
-            )
-        except Exception as exc:
-            result = {"ok": False, "user_id": user_id, "story_id": story_id, "error": str(exc)}
-        _log_canvas_failure("canvas_set_active", payload, result)
-        return result
+            ),
+        )
 
     @api(method="POST", alias="canvas_archive", route="operations", **_api_visibility("canvas_archive"))
     async def canvas_archive(self, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
-        payload = _payload(data, **kwargs)
-        user_id = self._resolve_user_id(payload)
-        story_id = _protocol_string(payload, "story_id")
-        try:
-            result = canvas_api.archive(
+        payload = payload_from_call(data, **kwargs)
+        return self._canvas_service().operation(
+            "canvas_archive",
+            payload,
+            lambda *, user_id, story_id: canvas_api.archive(
                 payload=payload,
                 store=self._canvas_store(payload, user_id=user_id),
                 user_id=user_id,
                 story_id=story_id,
-            )
-        except Exception as exc:
-            result = {"ok": False, "user_id": user_id, "story_id": story_id, "error": str(exc)}
-        _log_canvas_failure("canvas_archive", payload, result)
-        return result
+            ),
+        )
 
     @api(method="POST", alias="canvas_delete", route="operations", **_api_visibility("canvas_delete"))
     async def canvas_delete(self, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
-        payload = _payload(data, **kwargs)
-        user_id = self._resolve_user_id(payload)
-        story_id = _protocol_string(payload, "story_id")
-        try:
-            result = canvas_api.delete(
+        payload = payload_from_call(data, **kwargs)
+        return self._canvas_service().operation(
+            "canvas_delete",
+            payload,
+            lambda *, user_id, story_id: canvas_api.delete(
                 payload=payload,
                 store=self._canvas_store(payload, user_id=user_id),
                 user_id=user_id,
                 story_id=story_id,
-            )
-        except Exception as exc:
-            result = {"ok": False, "user_id": user_id, "story_id": story_id, "error": str(exc)}
-        _log_canvas_failure("canvas_delete", payload, result)
-        return result
+            ),
+        )
 
     @api(method="POST", alias="canvas_read", route="operations", **_api_visibility("canvas_read"))
     async def canvas_read(self, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
-        payload = _payload(data, **kwargs)
-        user_id = self._resolve_user_id(payload)
-        story_id = _protocol_string(payload, "story_id")
-        try:
-            result = canvas_api.read(
+        payload = payload_from_call(data, **kwargs)
+        return self._canvas_service().operation(
+            "canvas_read",
+            payload,
+            lambda *, user_id, story_id: canvas_api.read(
                 payload=payload,
                 store=self._canvas_store(payload, user_id=user_id),
                 user_id=user_id,
                 story_id=story_id,
-            )
-        except Exception as exc:
-            result = {"ok": False, "user_id": user_id, "story_id": story_id, "error": str(exc)}
-        _log_canvas_failure("canvas_read", payload, result)
-        return result
+            ),
+        )
 
     @api(method="POST", alias="canvas_write", route="operations", **_api_visibility("canvas_write"))
     async def canvas_write(self, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
-        payload = _payload(data, **kwargs)
-        user_id = self._resolve_user_id(payload)
-        story_id = _protocol_string(payload, "story_id")
-        try:
-            result = canvas_api.write(
+        payload = payload_from_call(data, **kwargs)
+        return self._canvas_service().operation(
+            "canvas_write",
+            payload,
+            lambda *, user_id, story_id: canvas_api.write(
                 payload=payload,
                 store=self._canvas_store(payload, user_id=user_id),
                 user_id=user_id,
                 story_id=story_id,
                 target=self._canvas_target(),
-            )
-        except Exception as exc:
-            result = {"ok": False, "user_id": user_id, "story_id": story_id, "error": str(exc)}
-        _log_canvas_failure("canvas_write", payload, result)
-        return result
+            ),
+        )
 
     @api(method="POST", alias="canvas_patch", route="operations", **_api_visibility("canvas_patch"))
     async def canvas_patch(self, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
-        payload = _payload(data, **kwargs)
+        payload = payload_from_call(data, **kwargs)
         return self._apply_canvas_patch_payload(payload)
 
     @data_bus_handler(
@@ -990,35 +694,15 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
         idempotency="required",
     )
     async def handle_canvas_patch_data_bus(self, ctx, message) -> DataBusResult:
-        payload = dict(message.payload if message.payload is not None else {})
-        actor = dict(message.actor if message.actor is not None else {})
-        if ctx.tenant and "tenant" not in payload:
-            payload["tenant"] = ctx.tenant
-        if ctx.project and "project" not in payload:
-            payload["project"] = ctx.project
-        if actor.get("user_id") and "user_id" not in payload:
-            payload["user_id"] = actor["user_id"]
-        if actor.get("fingerprint") and "fingerprint" not in payload:
-            payload["fingerprint"] = actor["fingerprint"]
-        if actor.get("roles") and "roles" not in payload:
-            payload["roles"] = list(actor.get("roles") if actor.get("roles") is not None else [])
-        if actor.get("user_id") and "actor" not in payload:
-            payload["actor"] = actor["user_id"]
-        if message.object_ref and "object_ref" not in payload:
-            payload["object_ref"] = message.object_ref
-
-        result = self._apply_canvas_patch_payload(payload)
-        if result.get("ok") is False and result.get("current_revision") is not None:
-            return DataBusResult.conflict(message, result)
-        return DataBusResult.ok(message, result)
+        return self._canvas_service().data_bus_patch_result(ctx, message)
 
     @api(
         method="POST",
-        alias="versatile_webapp_data",
+        alias="telegram_miniapp_data",
         route="operations",
-        **_api_visibility("versatile_webapp_data"),
+        **_api_visibility("telegram_miniapp_data"),
     )
-    async def versatile_webapp_data(
+    async def telegram_miniapp_data(
         self,
         user_id: Optional[str] = None,
         fingerprint: Optional[str] = None,
@@ -1245,8 +929,8 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
             delete_history=delete_history,
         )
 
-    @api(method="POST", alias="telegram_versatile_webapp_data", route="public", public_auth=TELEGRAM_WEBAPP_PUBLIC_AUTH)
-    async def telegram_versatile_webapp_data(
+    @api(method="POST", alias="telegram_miniapp_data", route="public", public_auth=TELEGRAM_WEBAPP_PUBLIC_AUTH)
+    async def telegram_miniapp_data_public(
         self,
         request: Any = None,
         telegram_init_data: str = "",
@@ -1333,9 +1017,8 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
             result.setdefault("user_id", identity.user_id)
         return result if isinstance(result, dict) else {"ok": True, "result": result}
 
-    # Public Telegram bridge APIs for the shared memory component embedded in
-    # `versatile_webapp`. These are operation endpoints, not separate widget
-    # surfaces; the only versatile web-app widget alias is `versatile_webapp`.
+    # Public Telegram bridge APIs for Telegram-authenticated clients. These are
+    # operation endpoints, not separate widget surfaces in bundle config.
     @api(method="POST", alias="telegram_memories_widget_data", route="public", public_auth=TELEGRAM_WEBAPP_PUBLIC_AUTH)
     async def telegram_memories_widget_data(self, request: Any = None, telegram_init_data: str = "", **kwargs) -> Dict[str, Any]:
         return await self._telegram_memory_widget_call("memories_widget_data", request=request, telegram_init_data=telegram_init_data, **kwargs)
@@ -1497,9 +1180,9 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
                 "widget": {
                     "memories": {"user_types": [], "roles": []},
                     "pinboard": {"user_types": [], "roles": []},
+                    "telegram_miniapp": {"user_types": [], "roles": []},
                     "usage_card": {"user_types": [], "roles": []},
                     "versatile_chat": {"user_types": [], "roles": []},
-                    "versatile_webapp": {"user_types": [], "roles": []},
                 },
             },
             "integrations": {
@@ -1520,7 +1203,6 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
                 "data_bus_subject": CANVAS_DATA_BUS_SUBJECT,
                 "revision_retention": 80,
             },
-            "surfaces": default_as_consumer_surfaces_props().get("surfaces", {}),
             "telemetry_sink": {
                 "endpoint_url": "",
                 "auth_header": "",
@@ -1568,6 +1250,21 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
                         "src_folder": "sdk://infra/economics/ui/widget/usage-card",
                         "build_command": "npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build",
                     },
+                    "telegram_miniapp": {
+                        "enabled": True,
+                        "src_folder": "ui/widgets/telegram_miniapp",
+                        "build_command": "npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build",
+                        "shared_sources": {
+                            "memory_widget": {
+                                "src_folder": "sdk://context/memory/ui/widget/memories",
+                                "target": "_shared/memory-widget",
+                            },
+                            "telegram_widget": {
+                                "src_folder": "sdk://integrations/telegram/ui/widget.telegram",
+                                "target": "_shared/telegram-widget",
+                            },
+                        },
+                    },
                     "pinboard": {
                         "enabled": True,
                         # Standalone Pin Board: hosts the canvas component as
@@ -1582,20 +1279,6 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
                             "canvas_component": {
                                 "src_folder": "sdk://solutions/canvas/ui/component",
                                 "target": "_shared/canvas-component",
-                            },
-                        },
-                    },
-                    "versatile_webapp": {
-                        "src_folder": "ui/widgets/versatile_webapp",
-                        "build_command": "npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build",
-                        "shared_sources": {
-                            "memory_widget": {
-                                "src_folder": "sdk://context/memory/ui/widget/memories",
-                                "target": "_shared/memory-widget",
-                            },
-                            "telegram_widget": {
-                                "src_folder": "sdk://integrations/telegram/ui/widget.telegram",
-                                "target": "_shared/telegram-widget",
                             },
                         },
                     },

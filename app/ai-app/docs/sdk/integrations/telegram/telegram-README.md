@@ -61,7 +61,7 @@ start with the bot transport path: `telegram_webhook` plus
 `user_admin.handle_webhook(...)` and
 `user_admin.run_with_queued_telegram_delivery(...)`. The versatile reference
 bundle demonstrates that bot transport and also includes a compact Mini App
-reference (`ui/widgets/versatile_webapp`) for memory canvas, chat channel
+reference (`ui/widgets/telegram_miniapp`) for memory canvas, chat channel
 selection, and Telegram admin. Add Mini App APIs only when the product also
 needs Telegram-hosted controls.
 
@@ -235,7 +235,7 @@ Reference implementation:
 
 ```text
 app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/entrypoint.py
-app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/widgets/versatile_webapp
+app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/widgets/telegram_miniapp
 ```
 
 ### 6. Keep Admin Operations Separate

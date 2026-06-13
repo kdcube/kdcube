@@ -48,38 +48,6 @@ def _get_path(data: Mapping[str, Any] | None, path: str, default: Any = None) ->
     return cur
 
 
-def merge_config_defaults(defaults: Mapping[str, Any], overrides: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Return `defaults` recursively overlaid with deployment overrides."""
-
-    merged = {str(k): v for k, v in defaults.items()}
-    for key, value in (overrides or {}).items():
-        text_key = str(key)
-        existing = merged.get(text_key)
-        if isinstance(existing, Mapping) and isinstance(value, Mapping):
-            merged[text_key] = merge_config_defaults(existing, value)
-        else:
-            merged[text_key] = value
-    return merged
-
-
-def bundle_props_with_default_agent_tools(
-    bundle_props: Mapping[str, Any] | None,
-    *,
-    default_bundle_props: Mapping[str, Any],
-) -> dict[str, Any]:
-    """Apply bundle-owned agent tool defaults when no deployment tool policy exists."""
-
-    props = {str(k): v for k, v in (bundle_props or {}).items()}
-    missing = object()
-    surface_agents = _get_path(props, "surfaces.as_consumer.agents", missing)
-    if surface_agents is not missing:
-        return props
-    legacy_agents = _get_path(props, "tools.agents", missing)
-    if legacy_agents is not missing:
-        return props
-    return merge_config_defaults(default_bundle_props, props)
-
-
 def _as_list(value: Any) -> list[Any]:
     if value is None:
         return []
@@ -328,7 +296,5 @@ __all__ = [
     "AgentToolConfig",
     "DEFAULT_AGENT_ID",
     "agent_tool_config_from_bundle_props",
-    "bundle_props_with_default_agent_tools",
-    "merge_config_defaults",
     "named_service_agent_connections",
 ]

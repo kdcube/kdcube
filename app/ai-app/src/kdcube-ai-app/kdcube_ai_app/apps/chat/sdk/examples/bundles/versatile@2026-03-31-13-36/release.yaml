@@ -2,15 +2,15 @@ bundle:
   repo: "https://github.com/kdcube/kdcube-ai-app.git"
   ref: "2026.5.16.407"
   description: |
-    User-memory, Telegram WebApp, and shared-widget release for versatile@2026-03-31-13-36.
+    User-memory, Telegram Mini App, and shared-widget release for versatile@2026-03-31-13-36.
 
     Highlights
 
     - Replaces the old preference-demo surface with the durable user-memory
       subsystem: widget CRUD, pin/confirm/retire flows, snapshots, restore
       preview/apply, and reconciliation job controls.
-    - Keeps the reference `versatile_webapp` usable both as a KDCube widget and
-      as a Telegram WebApp by materializing the shared memory widget source into
+    - Keeps the reference `telegram_miniapp` usable both as a KDCube widget and
+      as a Telegram Mini App by materializing the shared memory widget source into
       the bundle widget build.
     - Registers Telegram SDK helpers with bundle-scoped configuration so
       multiple Telegram-enabled bundles can run in the same processor without
@@ -19,7 +19,7 @@ bundle:
       read and, when policy allows, write durable user memory.
     - Documents the memory configuration shape and shared-widget build pattern
       in the bundle SDK docs.
-    - Reuses the shared Telegram widget UI components for the reference WebApp
+    - Reuses the shared Telegram widget UI components for the reference Mini App
       so bundle builders can see the same admin/channel patterns used by the
       platform SDK.
     - Tightens Telegram Mini App handling so KDCube iframe usage and Telegram
