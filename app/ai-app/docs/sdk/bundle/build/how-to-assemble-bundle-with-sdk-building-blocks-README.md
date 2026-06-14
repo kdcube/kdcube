@@ -6,6 +6,7 @@ tags: ["sdk", "bundle", "tier-1", "building-blocks", "integrations", "solutions"
 keywords: ["bundle building blocks", "sdk integrations", "sdk solutions", "bundle assembly map", "reuse sdk components", "telegram integration", "email integration", "tasks solution", "delivery integration", "shared sdk widget components", "built in tools", "react tools", "bundle events", "event sources", "artifact rehosters"]
 updated_at: 2026-06-11
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-write-bundle-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-test-bundle-README.md
@@ -58,6 +59,12 @@ If you landed here directly, first read
 This page is the SDK/platform block map, not the whole bundle-building route.
 Doc front-matter IDs are platform doc IDs. In a local checkout, read the files
 directly under `repo:kdcube-ai-app/app/ai-app/docs/...`.
+
+If the feature is about how an external product, website, server, or scene
+integrates with KDCube app surfaces, first choose the client shape in
+[How To Integrate With KDCube Apps](../../../how-to-integrate-with-kdcube-apps-README.md):
+iframe app UI, embedded control plane, direct host browser client,
+host-server client, or backend-only app.
 
 For the local runtime command flow, use the canonical schemas in
 [how-to-configure-and-run-bundle-README.md#canonical-cli-flow-schemas](how-to-configure-and-run-bundle-README.md#canonical-cli-flow-schemas):
@@ -137,6 +144,7 @@ ownership.
 | Bundle-served MCP endpoint | `@mcp(...)` | [Bundle Platform Integration](../bundle-platform-integration-README.md), [MCP Tools](../../tools/mcp-README.md) |
 | Claude Code subagent with scoped MCP/tools | `ClaudeCodeAgent`, `ClaudeCodeWorkspaceConfig` | [Bundle Agent Integration](../bundle-agent-integration-README.md) |
 | Browser widget or Mini App | `@ui_widget(...)`, source-folder widget build, operations/public APIs | [Bundle Widget Integration](../bundle-widget-integration-README.md) |
+| Host product/client integration with a KDCube app | Choose iframe app UI, embedded control plane, direct host browser client, host-server client, or backend-only app; then wire operations, chat stream, Data Bus, named services, files, and auth accordingly | [How To Integrate With KDCube Apps](../../../how-to-integrate-with-kdcube-apps-README.md) |
 | Expose a namespace (`task:`, …) of objects/actions for other bundles to call, **or** consume another bundle's namespace as canvas pins / chat chips / agent tools | Owner side: `named_service` API operation + `NamedServiceRegistry`. Consumer side: `named_services.namespaces.<ns>.provider` config + generic resolver — no shared code, configured discovery | [Namespace Services](../../namespace-services/README.md) (index → Providers / Clients / Integration), [Bundle Subsystem Integration](../bundle-subsystem-integration-README.md) |
 | Widget expand to fullscreen/overlay when embedded as an iframe | host-driven `kdcube-widget-view` / `kdcube-set-view` postMessage; host promotes the same iframe (no reload) | [Frame View Contract](../bundle-widget-integration-README.md#frame-view-contract-host-driven-expand) |
 | Live events from a non-chat widget/API operation to the browser | `/sse/stream` or Socket.IO plus `KDC-Stream-ID`; bundle emits `comm.service_event(...)` from request-bound context | [Bundle Client Communication](../bundle-client-communication-README.md#non-chat-bundle-events-over-the-shared-stream), [Bundle Transports](../bundle-transports-README.md#71-communicator-output) |

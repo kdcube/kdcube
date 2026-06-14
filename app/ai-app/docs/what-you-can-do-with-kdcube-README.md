@@ -7,6 +7,7 @@ keywords: ["what is kdcube", "what can kdcube do", "ai product platform", "bundl
 updated_at: 2026-06-13
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/quick-start-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
@@ -48,6 +49,10 @@ Use KDCube when an AI system needs product structure:
   services, and provenance
 - a local-to-cloud delivery path that coding agents and engineers can follow
 
+For the client integration map — iframe app UI, embedded control plane, direct
+host browser clients, host-server clients, and backend-only KDCube apps — read
+[How To Integrate With KDCube Apps](how-to-integrate-with-kdcube-apps-README.md).
+
 ## 1. KDCube In One Paragraph
 
 KDCube hosts **bundles** inside isolated `tenant/project` environments. A bundle
@@ -88,14 +93,14 @@ Common bundle shapes:
 | Product shape | KDCube surfaces |
 | --- | --- |
 | internal AI workbench with files, tasks, and reports | chat/on-message, ReAct tools, canvas, widgets, rendering tools, hosted artifacts |
-| internal operations tool | authenticated APIs, admin widgets, storage, role policy |
+| internal operations tool | authenticated APIs, admin widgets, Data Bus handlers, storage, role policy |
 | public integration endpoint | public `@api`, webhook auth, idempotent processing |
 | Telegram or email assistant | SDK integration, public webhook/OAuth callback, user registry, delivery |
 | browser/iframe app | bundle widget or full UI, operation APIs, shared SDK UI panels |
 | docs or data assistant | knowledge source, MCP endpoint, search/fetch/read tools |
 | scheduled automation | `@cron`, `@on_job`, jobs stream, task/memo solution |
 | existing app wrapper | thin bundle adapter around existing backend/UI/business logic |
-| namespace provider | provider-owned refs, schemas, search/get/upsert, block rendering, canvas actions, file hosting |
+| namespace provider | ontological namespace ownership, provider-owned refs, schemas, search/get/upsert, block rendering, canvas actions, file hosting |
 
 One bundle can expose several of these at once.
 
@@ -130,6 +135,11 @@ KDCube bundles can expose:
 - **widgets**: embedded bundle UI, Telegram Mini App, or KDCube widget
 - **main UI**: full browser app surface
 - **MCP endpoints**: bundle-served tool/resource interface for external agents
+- **Data Bus handlers**: durable app-domain messages, mutations, patches,
+  annotations, and async state changes handled by `@data_bus_handler`
+- **namespace-service provider**: ontological namespace ownership for refs,
+  objects, schemas, files, actions, renderers, and resolvers that other KDCube
+  surfaces can consume generically
 - **cron**: scheduled scans or recurring jobs
 - **jobs**: async work submitted to the platform job stream and handled by
   `@on_job`
@@ -146,7 +156,13 @@ Telegram message
 
 KDCube widget
   -> authenticated operation APIs
+  -> Data Bus message for durable state mutation
   -> same bundle storage and user state
+
+Canvas pin or external ref
+  -> namespace-service provider resolves task:/mem:/domain: refs
+  -> generic chat/canvas/ReAct surfaces render and act without hardcoded
+     provider-specific logic
 ```
 
 ## 6. Flagship ReAct Runtime Model
@@ -217,11 +233,14 @@ provide workflow instructions and domain guidance that the agent can load before
 using tools. New bundles wire skills per agent through
 `surfaces.as_consumer.agents.<agent>.skills`.
 
-Namespace services are the bridge between bundle-owned domain systems and common
-runtime surfaces. A provider owns refs, objects, schemas, files, block rendering,
-URI resolution, and UI actions for a namespace such as `task:` or `mem:`. A
-consumer connects chat, canvas, ReAct, widgets, or MCP to that namespace by
-configuration, not by embedding provider-specific logic into shared components.
+Namespace services are the bridge between app-owned domain systems and common
+runtime surfaces. A provider is the ontological owner of a namespace such as
+`task:`, `mem:`, or a domain-specific prefix: it defines what the refs mean,
+which object kinds exist, which schemas and mutations are valid, how files are
+materialized, how blocks render, how URIs resolve, and which UI/canvas actions
+are meaningful. A consumer connects chat, canvas, ReAct, widgets, or MCP to
+that namespace by configuration, not by embedding provider-specific logic into
+shared components.
 
 See:
 
@@ -342,11 +361,16 @@ Practical rules:
 - keep business logic reusable and testable outside the bundle class
 - keep KDCube decorators and runtime calls close to `entrypoint.py`
 - expose APIs/widgets/MCP/cron/jobs through platform decorators
+- expose durable domain mutations through Data Bus handlers when clients submit
+  app-owned state changes
+- expose namespace services when the app owns a domain ontology that other
+  KDCube surfaces should resolve, render, search, or mutate generically
 - wire agent tools in `surfaces.as_consumer.agents.<agent>.tools`
 - wire agent skills in `surfaces.as_consumer.agents.<agent>.skills`
 - define deployment config in `config/bundles.template.yaml`
 - define deployment secrets in `config/bundles.secrets.template.yaml`
-- document public routes, widgets, MCP, jobs, and config in `interface/README.md`
+- document public routes, widgets, MCP, jobs, Data Bus subjects,
+  namespace-service refs/schemas, and config in `interface/README.md`
 - test with the shared bundle docs/test path before release
 
 Start with the Tier 1 bundle docs:
@@ -383,7 +407,7 @@ Build the bundle as a thin KDCube adapter around product logic:
 - config/bundles.template.yaml wires agent tools under surfaces.as_consumer.agents.<agent>.tools
 - config/bundles.template.yaml wires agent skills under surfaces.as_consumer.agents.<agent>.skills
 - config templates define bundle props/secrets
-- interface docs define routes/widgets/MCP/jobs/config
+- interface docs define routes/widgets/MCP/jobs/Data Bus subjects/namespace services/config
 - tests verify imports, descriptors, and runtime behavior
 
 Run locally with kdcube init/start/bundle reload using the active descriptor set.
@@ -415,6 +439,9 @@ KDCube is a runtime for AI product bundles.
 One tenant/project is an isolated environment.
 One bundle is one runnable product unit.
 A bundle can expose chat, APIs, widgets, MCP, cron, jobs, tools, skills, and UI.
+A bundle can also own durable Data Bus handlers and act as a namespace-service
+provider: the ontological owner of refs, schemas, objects, files, renderers,
+and actions for a domain namespace.
 Descriptors wire the environment; entrypoint decorators expose the bundle.
 Bundle reload updates bundle code/config without rebuilding the platform image.
 The same contract supports local development and cloud deployment.

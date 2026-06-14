@@ -6,6 +6,7 @@ tags: ["sdk", "bundle", "plugins", "claude-code", "codex", "handoff", "tier-1"]
 keywords: ["tier 1 bundle pack", "build with kdcube plugin", "claude code plugin", "codex plugin", "bundle docs pack", "bundle agent facets", "shared sdk widget source", "bundle events", "event sources", "artifact rehosters", "plugin doc links update"]
 updated_at: 2026-06-11
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-test-bundle-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
@@ -85,6 +86,12 @@ whenever the task touches bundle-local imports, widget origins/assets, widget
 visibility, live events, Data Bus, authored event policies, or resolver
 registration. Plugin prompts should surface it as a recipe page, not duplicate
 its contents.
+
+Add [../../../how-to-integrate-with-kdcube-apps-README.md](../../../how-to-integrate-with-kdcube-apps-README.md)
+whenever the task is about integrating a host product, website scene, server,
+or app-specific client with KDCube. Plugin prompts should route the agent to
+the client mode first: iframe app UI, embedded control plane, direct host
+browser client, host-server client, or backend-only app surfaces.
 
 This optional lifecycle doc should also be available:
 

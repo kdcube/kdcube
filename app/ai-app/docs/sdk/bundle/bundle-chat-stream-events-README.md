@@ -5,6 +5,7 @@ summary: "Reference catalog for chat stream events visible to bundle-facing clie
 tags: ["sdk", "bundle", "sse", "socketio", "protocol", "events", "streaming", "chat"]
 keywords: ["chat stream event catalog", "socketio event catalog", "sse event catalog", "client visible event lifecycle", "continuation acknowledgements", "chat step events", "rate limit events", "backpressure events", "bundle emitted events", "stream protocol reference"]
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-ui-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-communication-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
@@ -18,6 +19,10 @@ see_also:
 # Bundle Chat Stream Events
 
 This document describes the **shared chat stream event protocol** used by the chat system.
+
+For choosing whether the client is a KDCube-served app UI, direct host browser
+client, host-server client, or backend-only app consumer, start with
+[How To Integrate With KDCube Apps](../../how-to-integrate-with-kdcube-apps-README.md).
 
 It covers:
 

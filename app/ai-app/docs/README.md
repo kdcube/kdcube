@@ -7,6 +7,7 @@ keywords: ["documentation index", "platform architecture", "configuration guides
 updated_at: 2026-05-27
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/what-you-can-do-with-kdcube-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/quick-start-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-write-bundle-README.md
@@ -21,6 +22,7 @@ Curated index of platform, service, and SDK documentation.
 ## Start Here
 
 * What You Can Do With KDCube: [what-you-can-do-with-kdcube-README.md](what-you-can-do-with-kdcube-README.md)
+* How To Integrate With KDCube Apps: [how-to-integrate-with-kdcube-apps-README.md](how-to-integrate-with-kdcube-apps-README.md)
 * Quick Start: [quick-start-README.md](quick-start-README.md)
 * How To Navigate Bundle Docs: [how-to-navigate-kdcube-docs-README.md](sdk/bundle/build/how-to-navigate-kdcube-docs-README.md)
 * Bundle Docs Index: [bundle-index-README.md](sdk/bundle/bundle-index-README.md)
@@ -37,6 +39,7 @@ Curated index of platform, service, and SDK documentation.
 
 ## Bundle Interfaces And Frontend
 
+* How To Integrate With KDCube Apps: [how-to-integrate-with-kdcube-apps-README.md](how-to-integrate-with-kdcube-apps-README.md)
 * Bundle Interfaces: [bundle-interfaces-README.md](sdk/bundle/bundle-interfaces-README.md)
 * Bundle Client UI: [bundle-client-ui-README.md](sdk/bundle/bundle-client-ui-README.md)
 * Bundle Widget Integration: [bundle-widget-integration-README.md](sdk/bundle/bundle-widget-integration-README.md)

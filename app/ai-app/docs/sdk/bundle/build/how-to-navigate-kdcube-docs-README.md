@@ -16,6 +16,7 @@ keywords:
   ]
 updated_at: 2026-06-11
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-index-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-test-bundle-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
@@ -114,6 +115,7 @@ Conditional additions:
 | Situation | Add |
 | --- | --- |
 | Mounting memory, canvas, tasks, Telegram, delivery, or another reusable SDK subsystem | [../bundle-subsystem-integration-README.md](../bundle-subsystem-integration-README.md) |
+| Integrating a host product or server with KDCube app surfaces, deciding iframe vs direct client vs backend-only app | [../../../how-to-integrate-with-kdcube-apps-README.md](../../../how-to-integrate-with-kdcube-apps-README.md) |
 | Exposing a namespace of objects for other bundles, or consuming another bundle's namespace (canvas pins / chat chips / agent tools) | [../../namespace-services/README.md](../../namespace-services/README.md) |
 | Touching bundle imports, widget assets/origins, widget visibility, live events, Data Bus, event policies, or resolver registration | [how-to-avoid-common-bundle-integration-failures-README.md](how-to-avoid-common-bundle-integration-failures-README.md) |
 | Agent tools, skills, MCP, file-producing tools, role models, Claude Code | [../bundle-agent-integration-README.md](../bundle-agent-integration-README.md) |
@@ -140,6 +142,7 @@ Conditional additions:
 | How do I test the bundle? | [how-to-test-bundle-README.md](how-to-test-bundle-README.md) |
 | How do I expose APIs, widgets, MCP, cron, jobs, or Data Bus handlers? | [../bundle-platform-integration-README.md](../bundle-platform-integration-README.md) |
 | How do browser widgets communicate with bundle operations and streams? | [../bundle-client-communication-README.md](../bundle-client-communication-README.md) |
+| How does a host app or server integrate with KDCube without necessarily using a widget? | [../../../how-to-integrate-with-kdcube-apps-README.md](../../../how-to-integrate-with-kdcube-apps-README.md) |
 | How do I configure Data Bus publish limits? | [../../../configuration/gateway-descriptor-README.md#data_buspublish_limits](../../../configuration/gateway-descriptor-README.md#data_buspublish_limits), [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md) |
 | How do I build source-folder widgets or reuse SDK widget source? | [../bundle-widget-integration-README.md](../bundle-widget-integration-README.md), [../ui-components-lifecycle-README.md](../ui-components-lifecycle-README.md) |
 | How does ReAct see tools, skills, MCP, and generated files? | [../bundle-agent-integration-README.md](../bundle-agent-integration-README.md) |

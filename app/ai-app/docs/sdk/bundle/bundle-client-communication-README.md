@@ -6,6 +6,7 @@ tags: ["sdk", "bundle", "transport", "auth", "headers", "cookies", "sse", "socke
 keywords: ["browser to bundle transport", "widget iframe communication", "integration request headers", "data bus publish", "auth token forwarding", "session and stream identifiers", "peer targeting", "sse and socket communication", "bundle client request contract"]
 updated_at: 2026-06-06
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-transports-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-ui-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-chat-stream-events-README.md
@@ -30,6 +31,10 @@ This document is the browser/UI contract for talking to the platform over:
 - proc integrations (`/api/integrations/*`)
 
 It focuses on what a bundle-facing client can send, what the server accepts, and what the client should expect back.
+
+For choosing the client shape first — iframe app UI, direct host browser
+client, host-server client, or backend-only KDCube app — read
+[How To Integrate With KDCube Apps](../../how-to-integrate-with-kdcube-apps-README.md).
 
 This page is intentionally browser/UI-oriented.
 

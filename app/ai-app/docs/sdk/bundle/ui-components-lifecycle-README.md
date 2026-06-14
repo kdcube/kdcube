@@ -6,6 +6,7 @@ tags: ["sdk", "bundle", "ui", "widget", "main-view", "lifecycle", "preload", "co
 keywords: ["bundle ui lifecycle", "bundle widget lifecycle", "ui.widgets", "ui.main_view", "ui_widget decorator", "shared storage ui build", "bundle ui preload", "request triggered widget build", "bundle ui locks", "bundle ui signatures", "static widget route", "concurrent proc workers", "ui source edit auto-rebuild", "signature aware coalescing"]
 updated_at: 2026-05-23
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-interfaces-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md
@@ -22,6 +23,10 @@ This page covers source-folder UI components:
 - bundle main view configured by `ui.main_view`
 - bundle widgets configured by `ui.widgets.<alias>`
 - shared SDK UI sources copied by `shared_sources`
+
+For deciding whether an app should ship KDCube-served UI at all, or instead be
+consumed by a direct host browser/server client as a backend-only app, start
+with [How To Integrate With KDCube Apps](../../how-to-integrate-with-kdcube-apps-README.md).
 
 It does not describe chat message rendering, ReAct artifacts, or generated
 runtime widgets inside model output.

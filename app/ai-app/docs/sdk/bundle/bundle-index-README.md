@@ -5,6 +5,7 @@ summary: "Navigation index for bundle documentation: pick the right authoring, r
 tags: ["sdk", "bundle", "docs", "index", "reference"]
 keywords: ["bundle docs navigation", "authoring doc index", "runtime doc index", "integration doc index", "configuration doc index", "reference bundle entrypoint", "delivery and storage docs"]
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-developer-guide-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-subsystem-integration-README.md
@@ -35,6 +36,11 @@ The bundle docs now use one reference bundle only:
 - `versatile@2026-03-31-13-36`
 
 Older `docs/sdk/example-bundle` sample docs are no longer part of the bundle path.
+
+For the product-level client integration map — KDCube app UI iframes, embedded
+control plane, direct host browser clients, host-server clients, and
+backend-only apps — start with
+[How To Integrate With KDCube Apps](../../how-to-integrate-with-kdcube-apps-README.md).
 
 ## Read in this order
 
@@ -111,6 +117,7 @@ Older `docs/sdk/example-bundle` sample docs are no longer part of the bundle pat
 | Bundle lifecycle and instance model | [bundle-lifecycle-README.md](bundle-lifecycle-README.md) |
 | Widgets, streaming, operations, background job surface | [bundle-interfaces-README.md](bundle-interfaces-README.md) |
 | Bundle-facing browser/UI entry | [bundle-client-ui-README.md](bundle-client-ui-README.md) |
+| Product-level KDCube app/client integration modes | [../../how-to-integrate-with-kdcube-apps-README.md](../../how-to-integrate-with-kdcube-apps-README.md) |
 | Browser/UI transport contract | [bundle-client-communication-README.md](bundle-client-communication-README.md) |
 | Chat stream event catalog for bundle-facing clients | [bundle-chat-stream-events-README.md](bundle-chat-stream-events-README.md) |
 | Frontend behavior under drains/rate limits | [bundle-frontend-awareness-README.md](bundle-frontend-awareness-README.md) |

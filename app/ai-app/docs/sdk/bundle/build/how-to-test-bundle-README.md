@@ -6,6 +6,7 @@ tags: ["sdk", "bundle", "testing", "pytest", "widget", "events", "runtime", "val
 keywords: ["bundle testing workflow", "shared bundle suite", "local bundle tests", "widget and api validation", "event source validation", "artifact rehoster validation", "shared sdk widget source validation", "runtime reload verification", "scheduled job checks", "bundle failure diagnosis", "manual and automated test loop", "local qa for bundles", "integration qa for bundles"]
 updated_at: 2026-06-11
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-write-bundle-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
@@ -57,6 +58,12 @@ For the command lifecycle behind runtime tests, use
 The testing loop normally uses `kdcube bundle reload <bundle_id>` after bundle
 source/config changes and `kdcube refresh ... --build` only after platform
 source/image changes.
+
+If the bundle is consumed by an external host product or server, include the
+matching client-mode checks from
+[How To Integrate With KDCube Apps](../../../how-to-integrate-with-kdcube-apps-README.md):
+iframe app UI, direct host browser client, host-server client, or backend-only
+app surfaces.
 
 Common failure tests:
 

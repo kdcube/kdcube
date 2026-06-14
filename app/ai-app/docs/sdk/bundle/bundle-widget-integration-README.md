@@ -6,6 +6,7 @@ tags: ["sdk", "bundle", "widget", "iframe", "frontend", "integrations", "telegra
 keywords: ["bundle widget contract", "iframe widget contract", "widget source folder", "static widget build", "runtime config handshake", "operation url construction", "data bus publishing", "auth propagation to widget", "widget and operation dual pattern", "shared sdk widget source", "telegram widget components", "memory widget component", "bundle widget integration"]
 updated_at: 2026-06-06
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-interfaces-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-subsystem-integration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
@@ -22,6 +23,11 @@ see_also:
 
 Use this doc when a bundle exposes widget UI that KDCube serves and that must
 call bundle operations correctly.
+
+A KDCube-served widget is one app integration shape. For the broader choice
+between iframe UI, direct host browser clients, host-server clients, and
+backend-only KDCube apps, start with
+[How To Integrate With KDCube Apps](../../how-to-integrate-with-kdcube-apps-README.md).
 
 Core contract:
 

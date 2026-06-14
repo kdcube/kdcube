@@ -6,6 +6,7 @@ tags: ["sdk", "bundle", "configuration", "runtime", "cli", "bundles.yaml"]
 keywords: ["local bundle development workflow", "tenant project environment boundary", "descriptor driven runtime setup", "local path bundle loop", "git bundle loop", "bundle reload workflow", "runtime sandbox selection", "bundle config and secret scopes", "shared sdk widget sources", "bundle events", "event sources", "artifact rehosters", "bundle configurator workflow", "bundle deployer workflow", "current kdcube cli workflow", "multiple local runtime snapshots", "single active local compose deployment", "run multiple kdcubes on one machine", "kdcube bundle command", "patch bundle config cli", "patch bundle secret cli"]
 updated_at: 2026-06-11
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-secrets-descriptor-README.md
@@ -69,6 +70,13 @@ Use it when you need to answer questions like:
 This page is not the primary source for bundle design or test strategy.
 It documents the supported local CLI/runtime workflow for descriptor-backed
 bundle development.
+
+When the runtime is being configured for a host product, browser scene, server
+client, or backend-only KDCube app, first choose the integration mode in
+[How To Integrate With KDCube Apps](../../../how-to-integrate-with-kdcube-apps-README.md).
+That choice determines which descriptors matter: frame embedding, CORS, auth
+cookies/token handoff, gateway/Data Bus limits, app operations, or named
+services.
 
 Runtime failure recipes:
 

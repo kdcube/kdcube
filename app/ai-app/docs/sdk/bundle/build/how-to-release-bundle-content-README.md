@@ -6,6 +6,7 @@ tags: ["sdk", "bundle", "release", "content", "lifecycle", "tier-1"]
 keywords: ["bundle content release", "bundle release procedure", "release yaml", "bundle config templates", "bundle tag", "bundle descriptor ref", "shared widget source validation", "bundle events release", "event source validation", "artifact rehoster validation", "agent release workflow", "optional release procedure", "bundle lifecycle maintenance"]
 updated_at: 2026-06-11
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-write-bundle-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
@@ -67,6 +68,11 @@ Release checks for common integration failures:
   `gateway.data_bus.ingress.publish_limits`
 - release notes should not bless hardcoded `localhost`, host-app domains,
   `window.top.location`, or `document.referrer` as API base sources
+- if the released app is consumed by an external host product or server, its
+  interface/release notes should name the supported mode from
+  [How To Integrate With KDCube Apps](../../../how-to-integrate-with-kdcube-apps-README.md):
+  iframe app UI, embedded control plane, direct host browser client,
+  host-server client, or backend-only app surfaces
 
 ## 1. Release Decision With The User
 

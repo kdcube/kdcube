@@ -18,6 +18,7 @@ keywords:
   ]
 updated_at: 2026-06-11
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-subsystem-integration-README.md
@@ -48,11 +49,15 @@ canvas, tasks, Telegram, delivery, or another reusable SDK subsystem, also read
 | --- | --- |
 | Bundle-local Python modules or tool descriptors | top-level imports can pass locally and fail under bundle import isolation. |
 | Widget/static UI code | wrong origins and absolute assets break embedded bundle UIs. |
+| Host product/client integration | iframe UI, direct browser client, host-server client, and backend-only app paths use different auth, origin, stream, and mutation contracts. |
 | Widget visibility or config defaults | inherited widgets can exist but return "not visible to this user". |
 | Live progress from a bundle operation | raw bundle WebSocket/SSE endpoints duplicate platform transport. |
 | Browser-to-bundle durable mutations | Data Bus and conversation events have different ownership and ordering. |
 | ReAct timeline/ANNOUNCE rendering | authored events and tool results need event-source policies. |
 | Canvas/task/memory/file refs | resolver ownership belongs to the namespace owner, not the composition bundle. |
+
+For the client-shape decision behind those failures, read
+[How To Integrate With KDCube Apps](../../../how-to-integrate-with-kdcube-apps-README.md).
 
 ## Recipe: Bundle-Local Python Imports
 

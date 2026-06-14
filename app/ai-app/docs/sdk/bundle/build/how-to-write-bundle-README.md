@@ -6,6 +6,7 @@ tags: ["sdk", "bundle", "authoring", "workflow", "widget", "api", "events", "tes
 keywords: ["bundle authoring guide", "bundle creator path", "bundle integrator path", "end to end bundle design", "decorator selection", "runtime surface selection", "widget api mcp cron on_job choices", "bundle events", "event sources", "artifact rehosters", "shared sdk widget components", "configuration and storage decisions", "bundle lifecycle design", "reference authoring patterns"]
 updated_at: 2026-06-11
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-test-bundle-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
@@ -52,6 +53,12 @@ It is the working instruction set for doing the job correctly.
 
 If you are not yet sure where this page fits in the full reading order, start
 with [how-to-navigate-kdcube-docs-README.md](how-to-navigate-kdcube-docs-README.md).
+
+If the product question is how a host website, host browser client, host
+server, or backend-only app should integrate with KDCube, choose that shape in
+[How To Integrate With KDCube Apps](../../../how-to-integrate-with-kdcube-apps-README.md)
+before deciding whether the app needs widgets, operations, Data Bus handlers,
+named services, chat events, or no UI at all.
 
 For the local runtime command lifecycle, use
 [how-to-configure-and-run-bundle-README.md#canonical-cli-flow-schemas](how-to-configure-and-run-bundle-README.md#canonical-cli-flow-schemas).

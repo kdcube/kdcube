@@ -5,6 +5,7 @@ summary: "Deployment pattern for embedding the KDCube control-plane/chat fronten
 tags: ["service", "cicd", "frontend", "embedding", "iframe", "proxy", "security"]
 keywords: ["control plane iframe embedding", "frame ancestors", "x-frame-options", "bundle widget iframe", "nested iframe deployment", "embedded chatbot frontend"]
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/descriptors-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/assembly-descriptor-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/ngrok-README.md
@@ -13,6 +14,10 @@ see_also:
 
 This page describes how to deploy a KDCube control-plane frontend so it can be
 embedded inside another web application as an iframe.
+
+For the broader app/client integration choice — iframe app UI, embedded control
+plane, direct host browser client, host-server client, or backend-only app — see
+[How To Integrate With KDCube Apps](../../how-to-integrate-with-kdcube-apps-README.md).
 
 > For the integrator-facing big picture — the embedding **topologies**
 > (same-origin / same-site subdomain / cross-site) with diagrams, the **auth

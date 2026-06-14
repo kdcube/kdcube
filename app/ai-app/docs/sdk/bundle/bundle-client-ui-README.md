@@ -6,6 +6,7 @@ tags: ["sdk", "bundle", "frontend", "transport", "auth", "sse", "socketio", "res
 keywords: ["frontend integration entrypoint", "bundle ui contract", "main view ui/main", "widget source folder", "widget and operation interoperability", "browser auth and transport", "chat stream lifecycle guidance", "multi tab coordination", "client side bundle behavior"]
 updated_at: 2026-06-06
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-communication-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-chat-stream-events-README.md
@@ -23,6 +24,10 @@ see_also:
 # Bundle Client UI
 
 This section is the browser/UI entry point for bundle developers.
+
+For the product-level integration map, including KDCube app UI iframes, direct
+host browser clients, host-server clients, and backend-only apps, start with
+[How To Integrate With KDCube Apps](../../how-to-integrate-with-kdcube-apps-README.md).
 
 Use it when your bundle ships:
 

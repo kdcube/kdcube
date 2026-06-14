@@ -6,6 +6,7 @@ tags: ["sdk", "bundle", "tier-1", "agents", "local-runtime", "cli", "ngrok", "te
 keywords: ["agent local bundle setup", "configure bundle with cli", "run kdcube local runtime", "telegram webhook setup", "gmail oauth local setup", "ngrok local kdcube", "bundles yaml staged descriptors", "bundles secrets yaml", "bundle events", "event sources", "artifact rehosters", "kdcube bundle command", "autonomous runtime smoke test"]
 updated_at: 2026-06-11
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-test-bundle-README.md
@@ -67,6 +68,13 @@ Before running or changing CLI commands, use the canonical schemas in
 They define the distinction between `init`, `refresh`, `bundle config apply`,
 `bundle reload`, and `export`. This page is the agent runbook that applies
 those flows.
+
+If the local runtime is being prepared for an external website, scene, host
+server, or app-specific client, first identify the integration mode in
+[How To Integrate With KDCube Apps](../../../how-to-integrate-with-kdcube-apps-README.md).
+That decision controls whether the agent must validate iframe headers,
+browser CORS/auth, chat streams, Data Bus, direct operations, or backend-only
+surface calls.
 
 Common failure smoke checks:
 

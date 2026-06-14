@@ -5,6 +5,7 @@ summary: "The big picture for putting a KDCube surface (bundle widget, bundle ma
 tags: ["service", "cicd", "frontend", "embedding", "iframe", "auth", "cookies", "security"]
 keywords: ["embed kdcube iframe", "host app integration", "same-site subdomain cookie", "cross-site iframe auth", "frame-ancestors", "samesite none cookie", "config_response token handoff", "bundle widget embedding topology", "shared parent domain cookie", "iframe auth decision matrix"]
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/embedding-control-plane-frontend-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-ui-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
@@ -19,6 +20,10 @@ Use this when you put a KDCube surface inside **your own** web page as an iframe
 - a bundle **widget** (`/api/integrations/bundles/{t}/{p}/{bundle}/public/widgets/{alias}`)
 - a bundle **main view** (`/api/integrations/static/...` authed, or `/public/static` anonymous)
 - the **control-plane frontend** (`/platform/*`)
+
+For the broader app/client integration choice — iframe UI, direct host browser
+client, host-server client, or backend-only KDCube app — start with
+[How To Integrate With KDCube Apps](../../how-to-integrate-with-kdcube-apps-README.md).
 
 It is the integrator-facing picture. For the deployment/renderer contract that
 emits the headers, see
