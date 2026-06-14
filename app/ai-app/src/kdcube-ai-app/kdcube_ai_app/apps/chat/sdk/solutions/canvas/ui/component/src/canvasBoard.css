@@ -206,20 +206,22 @@ button {
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  width: 20px;
-  height: 20px;
-  margin-left: -2px;
+  width: 22px;
+  height: 22px;
+  margin: 0 2px;
   padding: 0;
-  border: 1px solid var(--line);
+  border: 1px solid var(--teal);
   border-radius: 999px;
-  background: var(--surface);
-  color: var(--muted);
+  background: rgba(8, 189, 178, 0.12);
+  color: var(--teal-dark);
   cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 
 .canvas-title-info:hover {
+  background: var(--teal);
   border-color: var(--teal);
-  color: var(--teal-dark);
+  color: #fff;
 }
 
 .canvas-title-line strong {
