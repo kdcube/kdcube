@@ -546,6 +546,7 @@ def log_secret_statuses(force: bool = False) -> None:
 
 class CorsConfig(BaseModel):
     allow_origins: list[str] = Field(default_factory=lambda: ["*"])
+    allow_origin_regex: str | None = None
     allow_methods: list[str] = Field(default_factory=lambda: ["*"])
     allow_headers: list[str] = Field(default_factory=lambda: ["*"])
     allow_credentials: bool = True

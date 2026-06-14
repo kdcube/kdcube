@@ -64,6 +64,12 @@ Key facts that trip people up:
 - **CORS does not control framing.** Framing is `frame-ancestors`; CORS is for
   `fetch`/XHR. Allowing an origin in CORS does not let it iframe you, and vice
   versa.
+- **Host-page runtime config fetches are CORS fetches.** If a static host page
+  on `https://pr21.kdcube.tech` calls
+  `https://dev.kdcube.tech/api/cp-frontend-config`, the provider deployment
+  must allow that host in `cors.allow_origins`. Preview domains can be expressed
+  as `https://*.kdcube.tech`; the runtime converts that descriptor glob into a
+  CORS origin regex.
 - **The iframe's own `fetch` is same-origin to the iframe**, not to the host
   page. A widget loaded from `kdcube.example.com` fetching `/api/...` hits
   `kdcube.example.com` — so it needs **no CORS** and resolves relative URLs to
@@ -226,6 +232,8 @@ window.addEventListener('message', (event) => {
   (C); make the cookie `Domain` per-environment.
 - Add the host origin to `cors.allow_origins` **only** if the host page makes
   direct credentialed calls to KDCube (the iframe's own calls don't need it).
+  Use `https://*.kdcube.tech` for KDCube-owned preview subdomains instead of
+  adding every PR hostname one by one.
 - Test login, reload-inside-iframe, logout, chat streaming, uploads, downloads,
   and bundle-widget iframes from inside the embed.
 

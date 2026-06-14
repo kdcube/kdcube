@@ -291,6 +291,13 @@ Server call:
   Host.Server.network -> backend route/auth policy
 ```
 
+For KDCube-hosted preview pages, do not add each PR hostname as a separate
+origin. Configure the provider deployment with `https://*.kdcube.tech` in
+`cors.allow_origins`; the runtime treats descriptor origins containing `*` as
+CORS origin patterns. This matters for host-page calls such as
+`GET /api/cp-frontend-config`. It is separate from iframe permission, which is
+controlled by `proxy.frame_embedding`.
+
 Embedding and direct browser fetch are related but different. A CORS allowlist
 does not allow iframe embedding, and frame policy does not allow the outer host
 page to fetch KDCube.
