@@ -194,11 +194,8 @@ export function buildChatHistory(turns: ChatTurn[]): ChatHistoryItem[] {
 }
 
 export function findActiveTurn(turns: ChatTurn[]): ChatTurn | null {
-  for (let index = turns.length - 1; index >= 0; index -= 1) {
-    const turn = turns[index]
-    if (turn.state === 'pending' || turn.state === 'running') return turn
-  }
-  return null
+  const latest = turns[turns.length - 1] || null
+  return latest && (latest.state === 'pending' || latest.state === 'running') ? latest : null
 }
 
 export function fallbackRateLimitMessage(rateLimit: RateLimitPayload | undefined, data: Record<string, unknown>): string {

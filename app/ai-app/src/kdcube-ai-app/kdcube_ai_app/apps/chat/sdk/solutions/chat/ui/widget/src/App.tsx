@@ -512,7 +512,7 @@ export default function App() {
     else bottomRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
   }, [scrollSignature, hostView])
 
-  const hasPendingTurn = state.turns.some((turn) => turn.state === 'pending' || turn.state === 'running')
+  const hasPendingTurn = Boolean(findActiveTurn(state.turns))
   const bundleId = settings.getBundleId() || BUILT_BUNDLE_ID
   const filteredConversations = useMemo(() => {
     const query = conversationQuery.trim().toLowerCase()

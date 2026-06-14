@@ -336,8 +336,13 @@ const slice = createSlice({
         sentAt,
         additionalEventType,
       } = action.payload
-      const stillOwnsTurn = isContinuation
-        ? state.turns.some((turn) => turn.id === targetTurnId)
+      const effectiveContinuation = typeof response.isContinuation === 'boolean'
+        ? response.isContinuation
+        : isContinuation
+      const serverTurnId = response.turnId
+      const visualContinuationTurnId = response.activeTurnId || targetTurnId
+      const stillOwnsTurn = effectiveContinuation
+        ? state.turns.some((turn) => turn.id === visualContinuationTurnId)
         : true
       const canBindConversation =
         !state.conversationId ||
@@ -346,12 +351,10 @@ const slice = createSlice({
       if (!stillOwnsTurn || !canBindConversation) return
       state.conversationId = response.conversationId
       const ackStatus = typeof response.status === 'string' ? response.status : null
-      const serverTurnId = response.turnId
-      const continuationAccepted = Boolean(response.isContinuation)
-      const visualContinuationTurnId = response.activeTurnId || targetTurnId
+      const continuationAccepted = effectiveContinuation
       const continuationMessageId = response.eventId || response.queuedTurnId || serverTurnId
 
-      if (isContinuation) {
+      if (effectiveContinuation) {
         /* When the user sent a followup/steer, the local turn we want
          * to attach the message bubble to is the *active* one
          * (`visualContinuationTurnId`), regardless of whether the
