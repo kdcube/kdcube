@@ -1,92 +1,59 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.6.14.410"
+  ref: "2026.6.14.1828"
   description: |
-    This platform release hardens ReAct stream-policy interruption and
-    recovery, improves chat widget rendering, adds optional single-file
-    materialization delivery for `react.pull`, expands canvas editing
-    ergonomics, and introduces top-level product documentation for integrating
-    external clients with KDCube apps.
+    This platform release enables wildcard CORS origins for host-page
+    integrations, removes internal preview-route examples from public docs,
+    and disables browser automation tools by default in the Versatile reference
+    bundle template.
 
     Highlights
 
-    - Propagates ReAct stream-policy interrupts through model streaming so the
-      runtime can stop invalid same-round continuations as soon as policy
-      detects them instead of waiting for full model output.
-    - Fixes ReAct stream-policy recovery for denied later actions. Accepted
-      earlier actions remain the recovered structured decision, while denied
-      later actions are suppressed and recorded as protocol notices.
-    - Preserves the raw model prefix generated before a policy interruption,
-      making runtime traces and debugging faithful to what the model had
-      already emitted.
-    - Strengthens channel scanning around literal `<channel:...>` text inside
-      backticked or fenced content, so explanatory text containing protocol
-      markers does not get misread as real channel boundaries.
-    - Carries mid-turn user followup/steer context through notes while
-      removing `timeline_text` from the model-facing surface.
-    - Restarts streamed answer indexing per completion attempt, avoiding stale
-      answer indexes across repeated completion paths.
-    - Adds optional single-file delivery to `react.pull` and factors shared
-      file-delivery helpers so pulled/materialized files can be surfaced more
-      directly when the user asks to download or receive a file.
-    - Improves `react.write` test coverage so ref-backed writes materialize
-      and bind to real bytes before downstream consumers use them.
-    - Adds canvas inline markdown editing and a board information panel, with
-      supporting docs for canvas module usage, pin operations, and subsystem
-      integration.
-    - Updates the chat widget so generated answers render as timeline blocks
-      in the feed and compact chat tiles open with the conversation picker
-      collapsed.
-    - Adds the top-level "How To Integrate With KDCube Apps" article. The new
-      guide explains iframe app UI, embedded control plane, direct host-browser
-      clients, host-server clients, and backend-only app surfaces.
-    - Expands the "What You Can Do With KDCube" product overview so KDCube
-      apps are documented as owners of Data Bus handlers and namespace-service
-      provider surfaces, including ontological namespace ownership for refs,
-      object kinds, schemas, mutations, files, renderers, URI resolution, and
-      UI/canvas actions.
-    - Cross-links the new app-integration guide from the top-level docs index,
-      embedding docs, bundle client/widget docs, UI lifecycle docs, and Tier 1
-      bundle-builder docs.
+    - Adds `allow_origin_regex` to the runtime CORS configuration model.
+    - Converts descriptor origins containing `*` into Starlette-compatible CORS
+      origin regexes, while preserving exact origins and explicit regex
+      configuration.
+    - Makes host-page runtime config fetches such as
+      `/api/cp-frontend-config` work for preview-domain families without
+      adding every preview hostname as a separate CORS origin.
+    - Documents the distinction between iframe embedding policy
+      (`proxy.frame_embedding`) and host-page fetch permission
+      (`cors.allow_origins`).
+    - Replaces internal preview-host examples in public documentation with
+      neutral `example.com` domains.
+    - Comments out `browser_tools` in the Versatile reference bundle template
+      so browser automation is not published to the default agent unless a
+      bundle author explicitly enables it.
+    - Keeps `web_tools` unchanged; only the browser automation surface is
+      disabled by default.
 
     Runtime and deployment notes:
 
-    - Deployments must point the platform ref at 2026.6.14.410 to receive this
+    - Deployments must point the platform ref at 2026.6.14.1828 to receive this
       update.
-    - ReAct policy interruptions now preserve the accepted action prefix and
-      suppress invalid later output. Runtime operators should inspect protocol
-      notices rather than assuming the whole round was discarded.
-    - App/client integrators should start with the new top-level integration
-      article before choosing iframe UI, direct browser integration,
-      server-side integration, or backend-only app consumption.
-    - App authors that own domain objects should document Data Bus subjects
-      and namespace-service refs/schemas in their interface docs, not only
-      routes, widgets, MCP, jobs, and config.
-    - Canvas users gain inline markdown editing and board metadata visibility;
-      deployments serving canvas UI should rebuild/reload the platform assets
-      through the normal release pipeline.
+    - Provider deployments that serve static host pages from preview domains
+      should include a wildcard origin such as
+      `https://*.preview.example.com` in `cors.allow_origins`.
+    - ECS descriptors must render `assembly.yaml -> cors` into runtime
+      `CORS_CONFIG`; older descriptor renderers that hardcode only the app
+      domain will not activate the wildcard origin.
+    - The wildcard CORS support applies to browser fetches. Iframe permission
+      is still governed by `proxy.frame_embedding` and CSP `frame-ancestors`.
 
     Validation and regression coverage:
 
-    - Added and updated tests for ReAct stream-policy recovery, literal
-      channel-marker shielding, raw interrupted-output preservation, ref-backed
-      `react.write` materialization, and `react.pull` delivery behavior.
-    - Manual harness checks covered search-plus-final-answer and multi-action
-      ordering behavior, including interruption of invalid later output while
-      retaining earlier accepted actions.
+    - Added focused tests for CORS origin option derivation, covering wildcard
+      origin conversion and explicit regex preservation.
+    - Parsed the local Versatile runtime config after commenting browser tools
+      and confirmed the default agent no longer sees `browser_tools`.
     - Staged release diff private-name scan passes before the release commit.
 
     Changelog
 
-    - Hardened ReAct stream-policy interruption and recovery.
-    - Preserved interrupted raw output for diagnostics.
-    - Fixed literal channel-marker handling inside backticked/fenced content.
-    - Removed `timeline_text` from the model surface.
-    - Added optional single-file delivery for `react.pull`.
-    - Improved chat widget answer rendering and compact tile behavior.
-    - Added canvas inline markdown editing and board info UI.
-    - Added top-level KDCube app integration documentation.
-    - Updated product docs for Data Bus handlers and namespace-service
-      provider ownership.
+    - Added CORS wildcard-origin support through `allow_origin_regex`.
+    - Documented host-page CORS vs iframe frame policy.
+    - Sanitized public integration examples to avoid internal preview routes.
+    - Disabled browser automation tools by default in the Versatile reference
+      template.
 config:
-    version: "2026.6.14.410"
+    version: "2026.6.14.1828"
