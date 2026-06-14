@@ -620,20 +620,18 @@ export function hydrateHistoricalConversation(conversation: ConversationDTO): Ch
             (typeof artifact.data?.text === 'string' && artifact.data.text) ||
             (typeof payload.text === 'string' && payload.text) ||
             ''
+          // The answer renders inline in the feed as a `final_answer:<attempt>`
+          // timeline artifact, exactly like the live stream. A turn may hold
+          // several assistant completions; each becomes its own block in order.
+          const attempt = turn.artifacts.filter(
+            (item) => item.kind === 'timeline' && /^final_answer:\d+$/.test(item.name),
+          ).length
           turn = {
             ...turn,
             answer: text,
-            timeline: [
-              ...turn.timeline,
-              {
-                id: `history:answer:${turnDto.turn_id}`,
-                timestamp: ts,
-                kind: 'answer',
-                title: 'Assistant answer',
-                body: text,
-                format: 'markdown',
-                status: 'completed',
-              },
+            artifacts: [
+              ...turn.artifacts,
+              { kind: 'timeline', timestamp: ts, name: `final_answer:${attempt}`, markdown: text },
             ],
           }
           break
@@ -1090,20 +1088,43 @@ export function applyChatDelta(state: ChatState, env: ChatDeltaEnvelope): ChatSt
     let timeline = turn.timeline.slice()
 
     switch (marker) {
-      case 'answer':
-        nextTurn.answer = `${turn.answer}${textDelta}`
+      case 'answer': {
+        /* The final answer is just another timeline block in the chronological
+         * feed — not a special pinned bubble. A turn can stream more than one
+         * answer (the agent answers, then does more work and answers again);
+         * the backend restarts the delta index at 0 for each, so a fresh index
+         * 0 after the previous answer already has text marks a new attempt. Each
+         * attempt is its own timeline artifact, so it renders in order and is
+         * never concatenated into the previous answer. */
+        const answerArtifacts = artifacts.filter(
+          (artifact): artifact is TimelineArtifact =>
+            artifact.kind === 'timeline' && /^final_answer:\d+$/.test(artifact.name),
+        )
+        const lastAnswer = answerArtifacts[answerArtifacts.length - 1]
+        const lastAttempt = lastAnswer ? Number(lastAnswer.name.split(':')[1]) : -1
+        const startsNewAttempt = index === 0 && !!lastAnswer && lastAnswer.markdown.length > 0 && textDelta.length > 0
+        const attempt = !lastAnswer ? 0 : startsNewAttempt ? lastAttempt + 1 : lastAttempt
+        const name = `final_answer:${attempt}`
+        const current = artifacts.find(
+          (artifact): artifact is TimelineArtifact => artifact.kind === 'timeline' && artifact.name === name,
+        )
+        const nextArtifact: TimelineArtifact = {
+          kind: 'timeline',
+          timestamp: current?.timestamp ?? timestamp,
+          name,
+          markdown: `${current?.markdown || ''}${textDelta}`,
+        }
+        artifacts = upsertArtifact(
+          artifacts,
+          (artifact) => artifact.kind === 'timeline' && artifact.name === name,
+          nextArtifact,
+        )
+        // Keep the scalar in sync (latest attempt) for the streaming indicator
+        // and copy / history fallback.
+        nextTurn.answer = nextArtifact.markdown
         nextTurn.state = 'running'
-        timeline = upsertTimelineEntry(timeline, (entry) => entry.id === 'answer:assistant', {
-          id: 'answer:assistant',
-          timestamp: timeline.find((entry) => entry.id === 'answer:assistant')?.timestamp ?? timestamp,
-          kind: 'answer',
-          title: timelineTitleForMarker(marker),
-          body: `${timeline.find((entry) => entry.id === 'answer:assistant')?.body || ''}${textDelta}`,
-          format: 'markdown',
-          agent: env.event.agent,
-          status: env.event.status,
-        })
         break
+      }
       case 'thinking': {
         const entryId = `thinking:${env.event.agent || 'assistant'}`
         const current = timeline.find((entry) => entry.id === entryId)

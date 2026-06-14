@@ -387,8 +387,22 @@ function ChatCanvasBlockImpl({ artifact }: { artifact: CanvasArtifact }) {
  *  No bordered card, no chip, no timestamp. The note is simply written into
  *  the transcript flow as a markdown block so it reads like the assistant
  *  jotted it down inline. */
+/* Timeline blocks include the assistant's reaction notes AND its final
+ * answer(s): the answer is just another block in the chronological feed
+ * (`final_answer:<attempt>`), styled prominently so it still reads as the
+ * response while staying in order with the events around it. */
 function ChatTimelineBlockImpl({ artifact }: { artifact: TimelineArtifact }) {
   if (!artifact.markdown || !artifact.markdown.trim()) return null
+  if (/^final_answer:\d+$/.test(artifact.name)) {
+    return (
+      <div className="k-msg mt-1 rounded-md border border-[var(--line-soft)] bg-[var(--surface)] px-3 py-2">
+        <MarkdownBlock content={artifact.markdown} />
+        <span className="k-msg-toolbar">
+          <CopyButton value={artifact.markdown} title="Copy answer" />
+        </span>
+      </div>
+    )
+  }
   return (
     <div className="k-chat-note">
       <MarkdownBlock content={artifact.markdown} compact />
@@ -569,23 +583,19 @@ function ChatTurnViewImpl({
     () => mergeOverviewEvents(turn.artifacts, turn.additionalUserMessages),
     [turn.artifacts, turn.additionalUserMessages],
   )
+  /* The answer(s) render inline in the feed above (as `final_answer:*` timeline
+   * blocks), so the turn no longer pins a separate answer bubble at the bottom.
+   * Only the error notice and the pre-answer streaming hint remain. */
   const isStreaming = turn.state === 'pending' || turn.state === 'running'
   return (
     <div className="k-chat-view">
       <ChatThinkingTimeline entries={thinkingEntries} streaming={isStreaming} />
       <ChatMergedFeed events={overviewEvents} onDownloadError={onDownloadError} />
-      {turn.answer ? (
-        <div className="k-msg mt-1 rounded-md border border-[var(--line-soft)] bg-[var(--surface)] px-3 py-2">
-          <MarkdownBlock content={turn.answer} />
-          <span className="k-msg-toolbar">
-            <CopyButton value={turn.answer} title="Copy answer" />
-          </span>
-        </div>
-      ) : turn.state === 'error' ? (
+      {turn.state === 'error' ? (
         <div className="k-notice k-error">
           <span>{turn.error || 'Request failed.'}</span>
         </div>
-      ) : isStreaming ? (
+      ) : isStreaming && !turn.answer ? (
         <div className="flex items-center gap-2 text-[12px] text-[var(--muted)]">
           <span className="k-status k-live" />
           <span>Streaming response…</span>

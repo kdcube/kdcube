@@ -189,7 +189,14 @@ function TurnViewImpl({
      order so the user can see the conversation evolve. Thinking entries are
      consolidated separately into ThinkingBlock and never enter this list. */
   const overviewEvents = useMemo(
-    () => mergeOverviewEvents(turn.artifacts, turn.additionalUserMessages),
+    () => mergeOverviewEvents(
+      // The final answer renders as its own pinned block below; keep its
+      // `final_answer:*` timeline artifacts out of the Overview feed.
+      turn.artifacts.filter(
+        (artifact) => !(artifact.kind === 'timeline' && /^final_answer:\d+$/.test(artifact.name)),
+      ),
+      turn.additionalUserMessages,
+    ),
     [turn.artifacts, turn.additionalUserMessages],
   )
   /* All user-side attachments for this turn — main message + every
