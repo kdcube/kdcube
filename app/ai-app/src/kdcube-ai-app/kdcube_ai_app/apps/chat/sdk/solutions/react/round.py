@@ -349,7 +349,7 @@ class ReactRound:
             if tool_id == "react.read":
                 return await react_tools.handle_react_read(react=react, ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
             if tool_id == "react.pull":
-                return await react_tools.handle_react_pull(ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
+                return await react_tools.handle_react_pull(react=react, ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
             if tool_id == "react.checkout":
                 return await react_tools.handle_react_checkout(ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
             if tool_id == "react.patch":

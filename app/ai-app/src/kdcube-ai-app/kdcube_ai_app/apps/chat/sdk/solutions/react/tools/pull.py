@@ -24,7 +24,10 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.workspace import (
 from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.common import (
     tool_call_block,
     add_block,
+    notice_block,
     tc_result_path,
+    deliver_file_artifact,
+    enrich_artifact_file_metadata,
     _safe_json,
 )
 from kdcube_ai_app.tools.serialization import json_safe as _json_safe_value
@@ -52,9 +55,20 @@ TOOL_SPEC = {
         "Snapshot subtree pulls are available when the backing implementation reports snapshot subtree support. "
         "Outputs, user attachments, external-event attachments, and hosted binaries require exact refs. "
         "An fi:conv_<conversation_id>.turn_<id>... path belongs to another conversation and is resolved in that conversation. "
-        "Current-conversation fi: paths use fi:turn_<id>... without a conv_ scope segment."
+        "Current-conversation fi: paths use fi:turn_<id>... without a conv_ scope segment. "
+        "share defaults to false; pull normally just materializes locally for your own use. "
+        "Set share=true ONLY in the rare case where you specifically want to hand the materialized file straight to the user now "
+        "(e.g. a binary DOCX/PDF/PPTX/image you cannot re-author through a text writer). It is not a routine step. "
+        "share delivers exactly ONE file: pull a single exact file ref with share=true. A folder/subtree pull, or a pull of several "
+        "refs at once, is NOT shared (the call reports that share was not applied)."
     ),
     "args": {
+        "share": (
+            "bool. Optional, default false — the rare opt-in to also deliver. Leave false for ordinary pulls (reference/local use). "
+            "Set true only when you deliberately want to send ONE pulled file to the user right now: the single-file result is then "
+            "hosted and delivered as a downloadable file (visibility=external, kind=file). It applies to a single exact file ref only — "
+            "a folder/subtree pull or a multi-ref pull is never delivered."
+        ),
         "paths": (
             "list[str] of artifact refs to materialize locally. Each item is either a normal fi: ref or an externally owned ref shown by the runtime. "
             "Allowed fi: refs include fi:turn_<id>.files/<path> (exact file or subtree), "
@@ -72,9 +86,47 @@ TOOL_SPEC = {
         "Folder pulls are grouped by logical_root/physical_root with file_count, bounded tree, and path_rule. "
         "Exact file pulls return one logical_path/physical_path item. "
         "Externally owned refs return source_ref plus the resolved/rehosted fi: logical_path, physical_path, mime, size_bytes, and file_count when available. "
+        "When share=true, each delivered file is also listed under shared with its logical_path. "
         "Diagnostics such as missing, invalid, and errors are included only when non-empty."
     ),
 }
+
+
+def _shareable_file_rows(pulled: List[Any]) -> List[Dict[str, Any]]:
+    """Single-file pulled rows eligible for user delivery (exclude folder/subtree roots)."""
+    rows: List[Dict[str, Any]] = []
+    for row in pulled or []:
+        if not isinstance(row, Mapping):
+            continue
+        logical_path = str(row.get("logical_path") or "").strip()
+        physical_path = str(row.get("physical_path") or "").strip()
+        if logical_path and physical_path:
+            rows.append(dict(row))
+    return rows
+
+
+def _file_artifact_from_row(row: Mapping) -> Dict[str, Any]:
+    physical_path = str(row.get("physical_path") or "").strip()
+    logical_path = str(row.get("logical_path") or "").strip()
+    filename = physical_path.split("/")[-1] if physical_path else (logical_path.split("/")[-1] if logical_path else "")
+    mime = str(row.get("mime") or "").strip()
+    value: Dict[str, Any] = {
+        "type": "file",
+        "path": physical_path,
+        "filename": filename,
+    }
+    if mime:
+        value["mime"] = mime
+    if row.get("size_bytes") is not None:
+        value["size_bytes"] = row.get("size_bytes")
+    return {
+        "artifact_id": logical_path or filename,
+        "tool_id": "react.pull",
+        "visibility": "external",
+        "artifact_kind": "file",
+        "channel": "file",
+        "value": value,
+    }
 
 
 def _physical_to_logical(path: str) -> str:
@@ -152,12 +204,13 @@ def _compact_path_rows(paths: List[str], *, requested_roots: List[str]) -> List[
     return summaries
 
 
-async def handle_react_pull(*, ctx_browser: Any, state: Dict[str, Any], tool_call_id: str) -> Dict[str, Any]:
+async def handle_react_pull(*, react: Any = None, ctx_browser: Any, state: Dict[str, Any], tool_call_id: str) -> Dict[str, Any]:
     last_decision = state.get("last_decision") or {}
     tool_call = last_decision.get("tool_call") or {}
     tool_id = "react.pull"
     raw_params = tool_call.get("params") or {}
     params = raw_params if isinstance(raw_params, dict) else {}
+    share_requested = bool(params.get("share")) if isinstance(params, dict) else False
     raw_paths = params.get("paths")
     if raw_paths is None and isinstance(raw_params, list):
         raw_paths = raw_params
@@ -363,10 +416,60 @@ async def handle_react_pull(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
     )
     missing = namespace_missing + hydrated_missing
 
+    shared: List[str] = []
+    if share_requested:
+        shareable = _shareable_file_rows(pulled)
+        folder_pulled = any(isinstance(r, Mapping) and r.get("logical_root") for r in pulled)
+        if react is None or outdir is None:
+            pass  # no hosting surface in this context; deliver is a no-op
+        elif len(shareable) != 1 or folder_pulled:
+            # share delivers exactly one file. A folder/subtree pull or a multi-file pull is not shared.
+            notice_block(
+                ctx_browser=ctx_browser,
+                tool_call_id=tool_call_id,
+                code="react.pull.share_single_file_only",
+                message=(
+                    "share delivers a single file and was not applied: this pull resolved to "
+                    f"{'a folder/subtree' if folder_pulled else f'{len(shareable)} files'}. "
+                    "To share, pull the one exact file ref with share=true."
+                ),
+                rel="result",
+            )
+        else:
+            row = shareable[0]
+            physical_path = str(row.get("physical_path") or "").strip()
+            logical_path = str(row.get("logical_path") or "").strip()
+            artifact = _file_artifact_from_row(row)
+            try:
+                enrich_artifact_file_metadata(
+                    artifact=artifact,
+                    outdir=outdir,
+                    physical_path=physical_path,
+                )
+                await deliver_file_artifact(
+                    react=react,
+                    ctx_browser=ctx_browser,
+                    artifact=artifact,
+                    outdir=outdir,
+                    turn_id=turn_id,
+                    tool_call_id=tool_call_id,
+                    artifact_path=logical_path,
+                    physical_path=physical_path,
+                    host=True,
+                    visibility="external",
+                    channel="file",
+                )
+                if logical_path:
+                    shared.append(logical_path)
+            except Exception:
+                LOGGER.exception("react.pull share failed for %s", logical_path or physical_path)
+
     payload = {
         "requested": requested_paths,
         "pulled": pulled,
     }
+    if shared:
+        payload["shared"] = shared
     if missing:
         payload["missing"] = missing
     if invalid:

@@ -793,6 +793,104 @@ async def emit_hosted_files(
         )
         return
 
+
+async def deliver_file_artifact(
+    *,
+    react: Any,
+    ctx_browser: Any,
+    artifact: Dict[str, Any],
+    outdir: pathlib.Path,
+    turn_id: str,
+    tool_call_id: str,
+    artifact_path: str,
+    physical_path: str,
+    artifact_rel: Optional[str] = None,
+    host: bool = True,
+    visibility: str = "external",
+    channel: Optional[str] = None,
+    tokens: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Shared file-delivery capability: optionally host a materialized file artifact,
+    emit the hosted file(s) to the user, and add its meta block to the timeline.
+    Returns the meta block. Used by react.write (kind=file) and react.pull (share=true)
+    so the "make a local file user-downloadable" path lives in one place.
+
+    The caller is responsible for building `artifact` with value.path pointing at the
+    on-disk file (outdir-relative), plus artifact_kind/visibility/channel/mime.
+    `physical_path` is the outdir-relative path; `artifact_path` is its logical fi: path.
+    `artifact_rel` is an optional alternate relpath retried if the first host attempt is empty.
+    """
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
+        build_artifact_meta_block,
+        detect_edit,
+    )
+
+    outdir = pathlib.Path(outdir)
+    if host:
+        hosted = await host_artifact_file(
+            hosting_service=react.hosting_service,
+            comm=react.comm,
+            runtime_ctx=ctx_browser.runtime_ctx,
+            artifact=artifact,
+            outdir=outdir,
+        )
+        if (not hosted) and artifact_rel and artifact_rel != physical_path:
+            # Fallback: some deployments set outdir per-turn; try the relpath lookup.
+            try:
+                if isinstance(artifact.get("value"), dict):
+                    artifact["value"]["path"] = artifact_rel
+                hosted = await host_artifact_file(
+                    hosting_service=react.hosting_service,
+                    comm=react.comm,
+                    runtime_ctx=ctx_browser.runtime_ctx,
+                    artifact=artifact,
+                    outdir=outdir,
+                )
+            except Exception:
+                pass
+        await emit_hosted_files(
+            hosting_service=react.hosting_service,
+            hosted=hosted,
+            should_emit=(visibility != "internal" and channel != "internal"),
+        )
+        if visibility != "internal":
+            abs_path = resolve_artifact_path(outdir, physical_path)
+            if not abs_path.exists():
+                notice_block(
+                    ctx_browser=ctx_browser,
+                    tool_call_id=tool_call_id,
+                    code="react.file.hosting_failed",
+                    message="Hosting failed (file missing). User will not receive a downloadable file.",
+                    rel="result",
+                )
+            elif (react.hosting_service and react.comm) and not hosted:
+                notice_block(
+                    ctx_browser=ctx_browser,
+                    tool_call_id=tool_call_id,
+                    code="react.file.hosting_failed",
+                    message="Hosting failed (no hosted result). User will not receive a downloadable file.",
+                    rel="result",
+                )
+
+    edited = detect_edit(
+        timeline=getattr(ctx_browser, "timeline", None),
+        artifact_path=artifact_path,
+        tool_call_id=tool_call_id,
+    )
+    meta_block = build_artifact_meta_block(
+        turn_id=turn_id,
+        tool_call_id=tool_call_id,
+        artifact=artifact,
+        artifact_path=artifact_path,
+        physical_path=physical_path,
+        edited=edited,
+        tokens=tokens,
+    )
+    add_block(ctx_browser, meta_block)
+    return meta_block
+
+
 def infer_format_from_path(path: Optional[str]) -> str:
     if not isinstance(path, str) or not path.strip():
         return "markdown"

@@ -12,11 +12,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
     ARTIFACT_NAMESPACE_FILES,
     ARTIFACT_NAMESPACE_OUTPUTS,
     build_logical_artifact_path,
-    build_artifact_meta_block,
     materialize_inline_artifact_to_file,
     build_artifact_view,
     normalize_physical_path,
-    detect_edit,
     infer_artifact_namespace,
     physical_path_to_logical_path,
 )
@@ -26,12 +24,10 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.common import (
     notice_block,
     add_block,
     is_safe_relpath,
-    host_artifact_file,
-    emit_hosted_files,
+    deliver_file_artifact,
     infer_format_from_path,
     enrich_artifact_file_metadata,
 )
-from kdcube_ai_app.apps.chat.sdk.runtime.workspace import resolve_artifact_path
 
 TOOL_SPEC = {
     "id": "react.write",
@@ -317,69 +313,23 @@ async def handle_react_write(*, react: Any, ctx_browser: Any, state: Dict[str, A
         outdir=pathlib.Path(state["outdir"]),
         physical_path=artifact_name,
     )
-    hosted = []
-    if kind == "file":
-        hosted = await host_artifact_file(
-            hosting_service=react.hosting_service,
-            comm=react.comm,
-            runtime_ctx=ctx_browser.runtime_ctx,
-            artifact=artifact,
-            outdir=pathlib.Path(state["outdir"]),
-        )
-        if (not hosted) and artifact_rel and artifact_rel != artifact_name:
-            # Fallback: some deployments set outdir per-turn; try relpath lookup.
-            try:
-                if isinstance(artifact.get("value"), dict):
-                    artifact["value"]["path"] = artifact_rel
-                hosted = await host_artifact_file(
-                    hosting_service=react.hosting_service,
-                    comm=react.comm,
-                    runtime_ctx=ctx_browser.runtime_ctx,
-                    artifact=artifact,
-                    outdir=pathlib.Path(state["outdir"]),
-                )
-            except Exception:
-                pass
-        await emit_hosted_files(
-            hosting_service=react.hosting_service,
-            hosted=hosted,
-            should_emit=(visibility != "internal" and channel != "internal"),
-        )
-        abs_path = resolve_artifact_path(pathlib.Path(state["outdir"]), artifact_name)
-        if visibility != "internal":
-            if not abs_path.exists():
-                notice_block(
-                    ctx_browser=ctx_browser,
-                    tool_call_id=tool_call_id,
-                    code="react.write.hosting_failed",
-                    message="Hosting failed (file missing). User will not receive a downloadable file.",
-                    rel="result",
-                )
-            elif (react.hosting_service and react.comm) and not hosted:
-                notice_block(
-                    ctx_browser=ctx_browser,
-                    tool_call_id=tool_call_id,
-                    code="react.write.hosting_failed",
-                    message="Hosting failed (no hosted result). User will not receive a downloadable file.",
-                    rel="result",
-                )
     artifact_path = physical_path_to_logical_path(artifact_name)
     physical_path = artifact_name
-    edited = detect_edit(
-        timeline=getattr(ctx_browser, "timeline", None),
-        artifact_path=artifact_path,
-        tool_call_id=tool_call_id,
-    )
-    meta_block = build_artifact_meta_block(
+    meta_block = await deliver_file_artifact(
+        react=react,
+        ctx_browser=ctx_browser,
+        artifact=artifact,
+        outdir=pathlib.Path(state["outdir"]),
         turn_id=turn_id,
         tool_call_id=tool_call_id,
-        artifact=artifact,
         artifact_path=artifact_path,
         physical_path=physical_path,
-        edited=edited,
+        artifact_rel=artifact_rel,
+        host=(kind == "file"),
+        visibility=visibility,
+        channel=channel,
         tokens=tokens_written,
     )
-    add_block(ctx_browser, meta_block)
     meta_extra = {"tool_call_id": tool_call_id, "turn_id": turn_id}
     try:
         meta_text = meta_block.get("text") if isinstance(meta_block, dict) else None

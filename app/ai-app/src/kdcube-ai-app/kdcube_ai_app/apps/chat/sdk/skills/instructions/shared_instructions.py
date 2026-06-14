@@ -247,7 +247,7 @@ or file inspection needs artifact bytes, materialize the visible ref with
 `react.pull` and continue from the returned paths.
 
 ```text
-1) CURRENT TURN OUTPUT_DIR (physical; current-turn execution surface)
+1) CURRENT TURN WORKSPACE (physical; current-turn execution surface; STARTS EMPTY EACH TURN)
    OUTPUT_DIR/
      turn_<current>/
        files/<workspace_scope>/...   # editable durable workspace/project state
@@ -276,6 +276,7 @@ or file inspection needs artifact bytes, materialize the visible ref with
 
 ```
 
+- HARD — EACH TURN STARTS BLANK: your local workspace begins empty every turn. The local bytes of anything you materialized in an earlier turn are not on disk now — files you pulled, checked out, or wrote, and files exec produced, are all gone. Only the `fi:` / owner refs persist across turns; the local files do not. A file you had locally last turn is NOT here this turn. Before any local-bytes tool (exec/code, `react.rg`, `react.patch`, rendering tools, file inspection) uses such a file THIS turn, re-materialize it with `react.pull` (and `react.checkout` for editable `files/...`) in an EARLIER round of this turn. If you have not pulled it this turn, it is not local.
 - `fi:` is the versioned file/artifact namespace. It is the main way to refer to older workspace files, non-workspace outputs, snapshots, and attachments.
 - Exact logical-to-physical conversion is defined once in [PATHS & ARTIFACT IDS].
 - Current-conversation refs use `fi:turn_<id>...`; cross-conversation refs use `fi:conv_<conversation_id>.turn_<id>...` and keep that conversation scope.
@@ -344,7 +345,7 @@ or file inspection needs artifact bytes, materialize the visible ref with
 `react.pull` and continue from the returned paths.
 
 ```text
-1) CURRENT TURN OUTPUT_DIR (physical; current-turn execution surface)
+1) CURRENT TURN WORKSPACE (physical; current-turn execution surface; STARTS EMPTY EACH TURN)
    OUTPUT_DIR/
      turn_<current>/                    # sparse local git repo root in git mode
        files/<workspace_scope>/...      # editable durable workspace/project state
@@ -374,6 +375,7 @@ or file inspection needs artifact bytes, materialize the visible ref with
 
 ```
 
+- HARD — EACH TURN STARTS BLANK: your local workspace begins empty every turn. The local bytes of anything you materialized in an earlier turn are not on disk now — files you pulled, checked out, or wrote, and files exec produced, are all gone. Only the `fi:` / owner refs persist across turns; the local files do not. A file you had locally last turn is NOT here this turn. Before any local-bytes tool (exec/code, `react.rg`, `react.patch`, rendering tools, file inspection) uses such a file THIS turn, re-materialize it with `react.pull` (and `react.checkout` for editable `files/...`) in an EARLIER round of this turn. If you have not pulled it this turn, it is not local.
 - The current turn root `turn_<current>/` is bootstrapped as a sparse local git repo in `OUTPUT_DIR`.
 - The repo root path is `Path(OUTPUT_DIR) / "turn_<current>"`.
 - Runtime keeps git history/refs available there. Materialize needed project files with `react.pull` and `react.checkout`.
