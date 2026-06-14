@@ -1,83 +1,92 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.6.14.0007"
+  ref: "2026.6.14.410"
   description: |
-    This platform release adds the first production-ready online governance
-    layer for ReAct multi-action rounds, aligns the model instructions with
-    the runtime strategy-trait harness, improves canvas pin usability, and
-    hardens isolated tool execution for configured bundle tools.
+    This platform release hardens ReAct stream-policy interruption and
+    recovery, improves chat widget rendering, adds optional single-file
+    materialization delivery for `react.pull`, expands canvas editing
+    ergonomics, and introduces top-level product documentation for integrating
+    external clients with KDCube apps.
 
     Highlights
 
-    - Introduces strategy traits for tools, starting with the `strategy`
-      trait values `exploration`, `exploitation`, `neutral`, and `unknown`.
-      Traits are carried through configured tool connections and the ReAct
-      tool catalog so agents and runtime policy use the same vocabulary.
-    - Adds an ordered multi-action compatibility matrix for ReAct rounds. The
-      first action is admitted, later actions are judged against already
-      accepted actions, incompatible later actions are denied, and unknown
-      strategy tools run alone.
-    - Adds an online ReAct action overseer and stream gates. Stream sniffers
-      can detect candidate actions, buffer user-visible output, ask the
-      overseer for admission, and interrupt generation as soon as a later
-      action is known to be strategically invalid.
-    - Preserves accepted earlier actions instead of nuking the whole round.
-      For example, an allowed search can still run while a premature final
-      answer in the same round is suppressed and recorded as a protocol
-      violation.
-    - Aligns shared ReAct instructions, lite instructions, decision prompts,
-      and prompt tests with the strategy-trait contract taught by the
-      harness.
-    - Documents governed streaming and ReAct online strategic governance,
-      including how stream gates, overseer decisions, tool traits, final
-      answer gating, and interruption paths fit together.
-    - Updates custom-tool and tool-subsystem docs so bundle authors know how
-      to mark connected tools with strategy traits and why this improves
-      reactive-agent correctness, user experience, and token economics.
-    - Improves canvas pin cards with footer timestamps and a copy-URI
-      affordance for easier inspection and handoff of pinned objects.
-    - Fixes isolated/runtime tool import roots so configured SDK and bundle
-      tool packages do not shadow Python stdlib modules such as `types.py`,
-      while preserving same-bundle relative imports for bundle tool modules.
+    - Propagates ReAct stream-policy interrupts through model streaming so the
+      runtime can stop invalid same-round continuations as soon as policy
+      detects them instead of waiting for full model output.
+    - Fixes ReAct stream-policy recovery for denied later actions. Accepted
+      earlier actions remain the recovered structured decision, while denied
+      later actions are suppressed and recorded as protocol notices.
+    - Preserves the raw model prefix generated before a policy interruption,
+      making runtime traces and debugging faithful to what the model had
+      already emitted.
+    - Strengthens channel scanning around literal `<channel:...>` text inside
+      backticked or fenced content, so explanatory text containing protocol
+      markers does not get misread as real channel boundaries.
+    - Carries mid-turn user followup/steer context through notes while
+      removing `timeline_text` from the model-facing surface.
+    - Restarts streamed answer indexing per completion attempt, avoiding stale
+      answer indexes across repeated completion paths.
+    - Adds optional single-file delivery to `react.pull` and factors shared
+      file-delivery helpers so pulled/materialized files can be surfaced more
+      directly when the user asks to download or receive a file.
+    - Improves `react.write` test coverage so ref-backed writes materialize
+      and bind to real bytes before downstream consumers use them.
+    - Adds canvas inline markdown editing and a board information panel, with
+      supporting docs for canvas module usage, pin operations, and subsystem
+      integration.
+    - Updates the chat widget so generated answers render as timeline blocks
+      in the feed and compact chat tiles open with the conversation picker
+      collapsed.
+    - Adds the top-level "How To Integrate With KDCube Apps" article. The new
+      guide explains iframe app UI, embedded control plane, direct host-browser
+      clients, host-server clients, and backend-only app surfaces.
+    - Expands the "What You Can Do With KDCube" product overview so KDCube
+      apps are documented as owners of Data Bus handlers and namespace-service
+      provider surfaces, including ontological namespace ownership for refs,
+      object kinds, schemas, mutations, files, renderers, URI resolution, and
+      UI/canvas actions.
+    - Cross-links the new app-integration guide from the top-level docs index,
+      embedding docs, bundle client/widget docs, UI lifecycle docs, and Tier 1
+      bundle-builder docs.
 
     Runtime and deployment notes:
 
-    - Deployments must point the platform ref at 2026.6.14.0007 to receive this
+    - Deployments must point the platform ref at 2026.6.14.410 to receive this
       update.
-    - Tool connections that participate in ReAct multi-action governance
-      should declare the `strategy` trait in config or tool metadata. Tools
-      without a known strategy are treated as `unknown` and must run alone.
-    - The ReAct harness now admits actions in order and denies incompatible
-      later actions. Accepted earlier actions remain valid and can still run.
-    - Final-answer output is governed like other user-visible streams. It is
-      buffered until the overseer accepts the strategic shape of the round.
-    - Bundle-local tool modules with helper files named like stdlib modules
-      should continue to work in isolated execution because PYTHONPATH now
-      uses the correct package or bundle root.
+    - ReAct policy interruptions now preserve the accepted action prefix and
+      suppress invalid later output. Runtime operators should inspect protocol
+      notices rather than assuming the whole round was discarded.
+    - App/client integrators should start with the new top-level integration
+      article before choosing iframe UI, direct browser integration,
+      server-side integration, or backend-only app consumption.
+    - App authors that own domain objects should document Data Bus subjects
+      and namespace-service refs/schemas in their interface docs, not only
+      routes, widgets, MCP, jobs, and config.
+    - Canvas users gain inline markdown editing and board metadata visibility;
+      deployments serving canvas UI should rebuild/reload the platform assets
+      through the normal release pipeline.
 
     Validation and regression coverage:
 
-    - Added and updated tests for tool traits, tool config trait propagation,
-      ReAct action-overseer decisions, multi-action validation, runtime prompt
-      alignment, and stream gating behavior.
-    - Focused runtime tests cover dynamic bundle-tool imports, import-root
-      selection for package-backed tools, non-importable bundle roots, and
-      subprocess PYTHONPATH construction.
+    - Added and updated tests for ReAct stream-policy recovery, literal
+      channel-marker shielding, raw interrupted-output preservation, ref-backed
+      `react.write` materialization, and `react.pull` delivery behavior.
     - Manual harness checks covered search-plus-final-answer and multi-action
-      ordering behavior, including suppression of invalid later output while
+      ordering behavior, including interruption of invalid later output while
       retaining earlier accepted actions.
     - Staged release diff private-name scan passes before the release commit.
 
     Changelog
 
-    - Added tool strategy traits and compatibility helpers.
-    - Added ReAct online action overseer and governed stream gates.
-    - Updated multi-action runtime validation and tests.
-    - Updated ReAct shared instructions and prompt tests for strategy traits.
-    - Added governed-streaming and online-strategic-governance documentation.
-    - Updated custom-tool, SDK-tool, MCP-tool, named-service-tool, and
-      bundle-agent docs with trait guidance.
-    - Improved canvas pin card footer timestamp and copy-URI UI.
-    - Fixed isolated runtime PYTHONPATH roots for package and bundle tools.
+    - Hardened ReAct stream-policy interruption and recovery.
+    - Preserved interrupted raw output for diagnostics.
+    - Fixed literal channel-marker handling inside backticked/fenced content.
+    - Removed `timeline_text` from the model surface.
+    - Added optional single-file delivery for `react.pull`.
+    - Improved chat widget answer rendering and compact tile behavior.
+    - Added canvas inline markdown editing and board info UI.
+    - Added top-level KDCube app integration documentation.
+    - Updated product docs for Data Bus handlers and namespace-service
+      provider ownership.
 config:
-    version: "2026.6.14.0007"
+    version: "2026.6.14.410"
