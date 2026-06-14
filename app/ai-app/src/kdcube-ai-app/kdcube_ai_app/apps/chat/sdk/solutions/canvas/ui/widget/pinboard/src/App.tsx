@@ -361,6 +361,9 @@ export default function App() {
         onObjectAction={onObjectAction}
         namespaceStyles={settings.getCanvasNamespaceStyles() as Record<string, CanvasNamespaceStyle | string>}
         infoHtml={host?.getBoardInfoHtml() || undefined}
+        /* When floated by the scene's window chrome (embedded), the host owns the
+         * close/dock control — hide the board's own ✕ so there aren't two. */
+        hideCloseControl={typeof window !== 'undefined' && window.parent !== window}
       />
     </div>
   )

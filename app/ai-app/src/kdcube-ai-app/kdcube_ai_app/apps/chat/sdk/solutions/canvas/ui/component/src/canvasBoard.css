@@ -195,6 +195,7 @@ button {
 }
 
 .canvas-title-line span {
+  flex: 0 0 auto;
   color: var(--muted);
   letter-spacing: 0.06em;
   text-transform: uppercase;

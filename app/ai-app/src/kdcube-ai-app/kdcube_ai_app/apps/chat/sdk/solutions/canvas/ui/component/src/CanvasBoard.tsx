@@ -72,6 +72,9 @@ export interface CanvasBoardProps {
   namespaceStyles?: Record<string, CanvasNamespaceStyle | string>
   /** HTML help shown behind the ⓘ icon. Comes from bundle config; when absent a built-in default is used. */
   infoHtml?: string
+  /** Hide the toolbar close (✕) when the host already provides a close/dock
+   *  control (e.g. the scene's floating-window chrome), to avoid two closes. */
+  hideCloseControl?: boolean
 }
 
 interface DragState {
@@ -538,6 +541,7 @@ export function CanvasBoard({
   onObjectAction,
   namespaceStyles,
   infoHtml,
+  hideCloseControl,
 }: CanvasBoardProps) {
   const boardRef = useRef<HTMLDivElement | null>(null)
   const attachmentInputRef = useRef<HTMLInputElement | null>(null)
@@ -1665,7 +1669,6 @@ export function CanvasBoard({
       <div className="canvas-header">
         <div className="canvas-title">
           <p className="canvas-title-line">
-            <span>Pin Board</span>
             <button
               type="button"
               className="canvas-title-info"
@@ -1675,6 +1678,7 @@ export function CanvasBoard({
             >
               <Info size={14} />
             </button>
+            <span>Pin Board</span>
             <strong>{activeCanvas.name}</strong>
             <em>{canvasStats.pins} pins</em>
             <em>{canvasStats.pendingSuggestions} pending</em>
@@ -1746,9 +1750,11 @@ export function CanvasBoard({
             <MessageSquarePlus size={16} />
             Pin board to chat
           </button>
-          <button className="secondary icon-only" title="Close canvas" onClick={onCloseCanvas}>
-            <X size={16} />
-          </button>
+          {!hideCloseControl ? (
+            <button className="secondary icon-only" title="Close canvas" onClick={onCloseCanvas}>
+              <X size={16} />
+            </button>
+          ) : null}
         </div>
       </div>
 
