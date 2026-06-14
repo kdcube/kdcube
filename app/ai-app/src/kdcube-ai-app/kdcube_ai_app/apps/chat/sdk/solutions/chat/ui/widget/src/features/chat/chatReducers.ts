@@ -116,6 +116,27 @@ function canonicalPayloadRef(
   return ref || null
 }
 
+function userTextWithContextChips(text: string, contexts: unknown): string {
+  if (!Array.isArray(contexts) || contexts.length === 0) return text
+  if (/^([\s\S]*?)\n\n\{"context":\[[\s\S]*\]\}\s*$/.test(text)) return text
+  const chips = contexts
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item))
+    .map((item, index) => {
+      const label =
+        (typeof item.label === 'string' && item.label.trim()) ||
+        (typeof item.ref === 'string' && item.ref.trim()) ||
+        (typeof item.kind === 'string' && item.kind.trim()) ||
+        'context'
+      const id =
+        (typeof item.id === 'string' && item.id.trim()) ||
+        (typeof item.ref === 'string' && item.ref.trim()) ||
+        `context-${index}`
+      return { ...item, id, label }
+    })
+  if (!chips.length) return text
+  return `${text.trim()}\n\n${JSON.stringify({ context: chips })}`
+}
+
 export function updateTurn(
   state: ChatState,
   turnId: string,
@@ -556,6 +577,7 @@ export function hydrateHistoricalConversation(conversation: ConversationDTO): Ch
             (typeof artifact.data?.text === 'string' && artifact.data.text) ||
             (typeof payload.text === 'string' && payload.text) ||
             ''
+          const displayText = userTextWithContextChips(text, dataRecord.contexts)
           const eventType =
             (typeof dataRecord.event_type === 'string' && dataRecord.event_type) ||
             (typeof payload.event_type === 'string' && payload.event_type) ||
@@ -569,7 +591,7 @@ export function hydrateHistoricalConversation(conversation: ConversationDTO): Ch
                 ...turn.additionalUserMessages,
                 {
                   id: `stored-user:${turnDto.turn_id}:${turn.additionalUserMessages.length}`,
-                  text,
+                  text: displayText,
                   timestamp: ts,
                   attachments: [],
                   eventType: eventType === 'event.user.steer' ? 'event.user.steer' : 'event.user.followup',
@@ -582,7 +604,7 @@ export function hydrateHistoricalConversation(conversation: ConversationDTO): Ch
           turn = {
             ...turn,
             createdAt: ts,
-            userMessage: text,
+            userMessage: displayText,
           }
           currentUserSlot = 'main'
           break

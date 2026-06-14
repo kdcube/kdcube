@@ -20,6 +20,7 @@ import kdcube_ai_app.apps.chat.sdk.tools.citations as citation_utils
 
 from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore, MAX_CONCURRENT_ARTIFACT_FETCHES
 from kdcube_ai_app.apps.chat.sdk.context.vector.conv_index import ConvIndex
+from kdcube_ai_app.apps.chat.sdk.runtime.user_inputs import iter_turn_user_input_entries
 
 logger = logging.getLogger(__name__)
 TURN_LOG_TAGS_BASE = ["kind:turn.log", "artifact:turn.log"]
@@ -2375,6 +2376,35 @@ class ContextRAGClient:
                     blocks=blocks,
                     sources_pool=(sources_pool or sources_pool_for_conv or []),
                 )
+                for entry in iter_turn_user_input_entries(blocks, turn_id=tid):
+                    row_meta: Dict[str, Any] = {"source": "turn_log"}
+                    for key in ("path", "batch_id", "event_ids"):
+                        value = entry.get(key)
+                        if value:
+                            row_meta[key] = value
+                    meta = entry.get("meta") if isinstance(entry.get("meta"), dict) else {}
+                    for key in ("message_id", "stream_id", "sequence", "event_kind", "event_type", "is_continuation", "target_turn_id", "active_turn_id_at_ingress", "owner_turn_id"):
+                        if meta.get(key) is not None:
+                            row_meta[key] = meta.get(key)
+                    row_data: Dict[str, Any] = {
+                        "text": str(entry.get("text") or ""),
+                        "event_type": entry.get("user_event_type") or "event.user.prompt",
+                        "contexts": entry.get("contexts") or [],
+                        "attachments": entry.get("attachments") or [],
+                        "meta": row_meta,
+                    }
+                    if row_meta.get("is_continuation") is not None:
+                        row_data["is_continuation"] = bool(row_meta.get("is_continuation"))
+                    replace_types["chat:user"] = True
+                    out.append({
+                        "message_id": None,
+                        "type": "chat:user",
+                        "ts": entry.get("ts") or ts or "",
+                        "hosted_uri": None,
+                        "bundle_id": turn_log_item.get("bundle_id"),
+                        "data": row_data,
+                    })
+
                 for _blk in blocks:
                     if not isinstance(_blk, dict):
                         continue
@@ -2395,17 +2425,9 @@ class ContextRAGClient:
                     for _key in ("message_id", "stream_id", "sequence", "event_kind", "event_type", "is_continuation", "target_turn_id", "active_turn_id_at_ingress", "owner_turn_id"):
                         if _blk_meta.get(_key) is not None:
                             _row_meta[_key] = _blk_meta.get(_key)
-                    if _btype == "user.prompt":
-                        _event_type = (_blk_meta or {}).get("event_type") or "event.user.prompt"
-                        _row_type = "chat:user"
-                        _row_data = {"text": _text, "event_type": _event_type, "meta": _row_meta}
-                    elif _btype in {"user.followup", "user.followup.preserved"}:
-                        _row_type = "chat:user"
-                        _row_data = {"text": _text, "event_type": "event.user.followup", "meta": _row_meta}
-                    elif _btype in {"user.steer", "user.steer.preserved"}:
-                        _row_type = "chat:user"
-                        _row_data = {"text": _text, "event_type": "event.user.steer", "meta": _row_meta}
-                    elif _btype == "assistant.completion":
+                    if _btype in {"user.prompt", "user.followup", "user.followup.preserved", "user.steer", "user.steer.preserved"}:
+                        continue
+                    if _btype == "assistant.completion":
                         _row_type = "chat:assistant"
                         _row_data = {"text": _text, "meta": _row_meta}
                     else:

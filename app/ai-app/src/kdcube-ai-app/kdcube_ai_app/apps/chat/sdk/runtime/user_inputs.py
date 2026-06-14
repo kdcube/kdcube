@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import base64
 import datetime
+import json
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from kdcube_ai_app.infra.service_hub.multimodality import MODALITY_IMAGE_MIME, MODALITY_DOC_MIME, \
     MODALITY_MAX_DOC_BYTES, MODALITY_MAX_IMAGE_BYTES
@@ -206,3 +207,350 @@ def attachment_summary_index_text(payload: Dict[str, Any]) -> str:
     header = " ".join(parts).strip()
     text = f"{header}\n{summary}".strip()
     return text[:4000]
+
+
+_USER_INPUT_BLOCK_TYPES = {
+    "user.prompt",
+    "user.followup",
+    "user.followup.preserved",
+    "user.steer",
+    "user.steer.preserved",
+}
+
+
+def _safe_str(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _block_meta(block: Dict[str, Any]) -> Dict[str, Any]:
+    meta = block.get("meta")
+    return meta if isinstance(meta, dict) else {}
+
+
+def _block_batch_id(block: Dict[str, Any]) -> str:
+    meta = _block_meta(block)
+    for value in (
+        meta.get("batch_id"),
+        meta.get("batchId"),
+        block.get("batch_id"),
+        block.get("batchId"),
+    ):
+        s = _safe_str(value)
+        if s:
+            return s
+    return ""
+
+
+def _event_from_block(block: Dict[str, Any]) -> Dict[str, Any]:
+    meta = _block_meta(block)
+    event = meta.get("event")
+    if isinstance(event, dict):
+        return event
+    text = block.get("text")
+    if isinstance(text, str) and text.strip().startswith("{"):
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            parsed = None
+        if isinstance(parsed, dict) and isinstance(parsed.get("event"), dict):
+            return parsed["event"]
+    return {}
+
+
+def _event_payload_dict(event: Dict[str, Any]) -> Dict[str, Any]:
+    payload = event.get("payload")
+    if isinstance(payload, dict):
+        inner = payload.get("event")
+        if isinstance(inner, dict):
+            return inner
+        return payload
+    return {}
+
+
+def _first_text(*values: Any) -> str:
+    for value in values:
+        text = _safe_str(value)
+        if text:
+            return text
+    return ""
+
+
+def _clip(text: str, limit: int = 240) -> str:
+    text = re.sub(r"\s+", " ", _safe_str(text))
+    if limit and len(text) > limit:
+        return text[: max(0, limit - 1)].rstrip() + "..."
+    return text
+
+
+def user_input_text_with_context_chips(text: str, contexts: List[Dict[str, Any]]) -> str:
+    """
+    Preserve the widget's lightweight context-chip wire format for historical
+    hydration while keeping a separate rendered index text for search.
+    """
+    base = _safe_str(text)
+    clean_contexts: List[Dict[str, Any]] = []
+    for idx, context in enumerate(contexts or []):
+        if not isinstance(context, dict):
+            continue
+        label = _first_text(context.get("label"), context.get("ref"), context.get("kind"), "context")
+        clean_contexts.append({
+            "id": _first_text(context.get("id"), context.get("ref"), f"context-{idx}"),
+            "label": label,
+            **{k: v for k, v in context.items() if k not in {"id", "label"} and v is not None and v != ""},
+        })
+    if not clean_contexts:
+        return base
+    return f"{base}\n\n{json.dumps({'context': clean_contexts}, ensure_ascii=False)}"
+
+
+def context_chip_from_event_block(block: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if not isinstance(block, dict):
+        return None
+    btype = _safe_str(block.get("type"))
+    if not btype or btype in _USER_INPUT_BLOCK_TYPES or btype.startswith("user.attachment."):
+        return None
+    if not btype.startswith("event."):
+        return None
+
+    meta = _block_meta(block)
+    event = _event_from_block(block)
+    body = _event_payload_dict(event)
+    event_type = _first_text(meta.get("event_type"), event.get("type"), btype)
+    event_source_id = _first_text(
+        meta.get("event_source_id"),
+        event.get("event_source_id"),
+        body.get("event_source_id"),
+    )
+    ref = _first_text(
+        body.get("object_ref"),
+        body.get("ref"),
+        body.get("hosted_uri"),
+        body.get("logical_path"),
+        event.get("object_ref"),
+        event.get("ref"),
+        event.get("hosted_uri"),
+        event.get("logical_path"),
+        meta.get("object_ref"),
+        meta.get("ref"),
+        meta.get("hosted_uri"),
+        meta.get("logical_path"),
+        block.get("path"),
+    )
+    label = _clip(_first_text(
+        body.get("label"),
+        body.get("title"),
+        body.get("name"),
+        body.get("summary"),
+        body.get("description"),
+        body.get("text"),
+        ref,
+        event_source_id,
+        event_type,
+        "context",
+    ), 120)
+    kind = _first_text(
+        body.get("kind"),
+        body.get("card_kind"),
+        body.get("object_kind"),
+        event_source_id,
+        event_type,
+    )
+    summary = _clip(_first_text(
+        body.get("summary"),
+        body.get("description"),
+        body.get("text"),
+        meta.get("summary"),
+    ), 300)
+    chip: Dict[str, Any] = {
+        "id": _first_text(ref, block.get("path"), event.get("id"), event_type),
+        "label": label,
+        "kind": kind,
+        "event_type": event_type,
+    }
+    if event_source_id:
+        chip["event_source_id"] = event_source_id
+    if ref:
+        chip["ref"] = ref
+    if summary and summary != label:
+        chip["summary"] = summary
+    return chip
+
+
+def attachment_info_from_user_attachment_block(block: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if not isinstance(block, dict):
+        return None
+    btype = _safe_str(block.get("type"))
+    if not btype.startswith("user.attachment."):
+        return None
+    meta = _block_meta(block)
+    payload: Dict[str, Any] = {}
+    text = block.get("text")
+    if isinstance(text, str) and text.strip().startswith("{"):
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            parsed = None
+        if isinstance(parsed, dict):
+            payload = parsed
+    event = _event_from_block(block)
+    body = _event_payload_dict(event)
+    filename = _first_text(
+        payload.get("filename"),
+        payload.get("name"),
+        body.get("filename"),
+        body.get("name"),
+        meta.get("filename"),
+        meta.get("name"),
+        block.get("path"),
+        "attachment",
+    )
+    mime = _first_text(payload.get("mime"), payload.get("mime_type"), body.get("mime"), body.get("mime_type"), meta.get("mime"))
+    ref = _first_text(
+        payload.get("hosted_uri"),
+        payload.get("logical_path"),
+        payload.get("artifact_path"),
+        body.get("hosted_uri"),
+        body.get("logical_path"),
+        body.get("artifact_path"),
+        meta.get("hosted_uri"),
+        meta.get("logical_path"),
+        meta.get("artifact_path"),
+        block.get("path"),
+    )
+    info: Dict[str, Any] = {"label": _clip(filename, 160)}
+    if mime:
+        info["mime"] = mime
+    if ref:
+        info["ref"] = ref
+    size = payload.get("size") or payload.get("size_bytes") or body.get("size") or body.get("size_bytes") or meta.get("size")
+    if size is not None:
+        info["size"] = size
+    return info
+
+
+def render_user_input_batch_index_text(
+    *,
+    text: str,
+    contexts: List[Dict[str, Any]],
+    attachments: List[Dict[str, Any]],
+) -> str:
+    lines: List[str] = []
+    message = _safe_str(text)
+    lines.append("[user.message]")
+    lines.append(message if message else "(no typed message)")
+    for idx, context in enumerate(contexts or [], start=1):
+        if not isinstance(context, dict):
+            continue
+        parts = [
+            _safe_str(context.get("label")),
+            f"kind={context.get('kind')}" if _safe_str(context.get("kind")) else "",
+            f"ref={context.get('ref')}" if _safe_str(context.get("ref")) else "",
+            f"source={context.get('event_source_id')}" if _safe_str(context.get("event_source_id")) else "",
+            f"event={context.get('event_type')}" if _safe_str(context.get("event_type")) else "",
+        ]
+        line = f"[context.{idx}] " + " | ".join([p for p in parts if p])
+        summary = _safe_str(context.get("summary"))
+        if summary:
+            line += f"\n{summary}"
+        lines.append(line)
+    for idx, attachment in enumerate(attachments or [], start=1):
+        if not isinstance(attachment, dict):
+            continue
+        parts = [
+            _safe_str(attachment.get("label")),
+            f"mime={attachment.get('mime')}" if _safe_str(attachment.get("mime")) else "",
+            f"ref={attachment.get('ref')}" if _safe_str(attachment.get("ref")) else "",
+            f"size={attachment.get('size')}" if attachment.get("size") is not None else "",
+        ]
+        lines.append(f"[attachment.{idx}] " + " | ".join([p for p in parts if p]))
+    return "\n".join(lines).strip()
+
+
+def _user_event_type_for_block(block: Dict[str, Any]) -> Optional[str]:
+    btype = _safe_str(block.get("type"))
+    meta = _block_meta(block)
+    if btype == "user.prompt":
+        return _first_text(meta.get("event_type"), "event.user.prompt")
+    if btype in {"user.followup", "user.followup.preserved"}:
+        return "event.user.followup"
+    if btype in {"user.steer", "user.steer.preserved"}:
+        return "event.user.steer"
+    return None
+
+
+def iter_turn_user_input_entries(blocks: List[Dict[str, Any]], *, turn_id: str) -> List[Dict[str, Any]]:
+    """
+    Return durable user-input batches for a turn.
+
+    A Send action can arrive as an accepted event batch: prompt/followup text,
+    files, and context refs share the same batch_id. Index and hydration must
+    treat that whole batch as the user's input, even when the typed text is
+    intentionally empty.
+    """
+    by_batch_context: Dict[str, List[Dict[str, Any]]] = {}
+    by_batch_attachment: Dict[str, List[Dict[str, Any]]] = {}
+    user_blocks: List[Dict[str, Any]] = []
+
+    for block in blocks or []:
+        if not isinstance(block, dict):
+            continue
+        blk_tid = _safe_str(block.get("turn_id"))
+        if blk_tid and blk_tid != turn_id:
+            continue
+        batch_id = _block_batch_id(block)
+        btype = _safe_str(block.get("type"))
+        if btype in _USER_INPUT_BLOCK_TYPES:
+            user_blocks.append(block)
+            continue
+        if not batch_id:
+            continue
+        context = context_chip_from_event_block(block)
+        if context:
+            by_batch_context.setdefault(batch_id, []).append(context)
+            continue
+        attachment = attachment_info_from_user_attachment_block(block)
+        if attachment:
+            by_batch_attachment.setdefault(batch_id, []).append(attachment)
+
+    entries: List[Dict[str, Any]] = []
+    for block in user_blocks:
+        batch_id = _block_batch_id(block)
+        contexts = by_batch_context.get(batch_id, []) if batch_id else []
+        attachments = by_batch_attachment.get(batch_id, []) if batch_id else []
+        text = _safe_str(block.get("text"))
+        if not text and not contexts and not attachments:
+            continue
+        path = _safe_str(block.get("path"))
+        if not path:
+            suffix = batch_id or str(len(entries))
+            path = f"ar:{turn_id}.user.input.{suffix}"
+        meta = _block_meta(block)
+        event_ids: List[str] = []
+        if batch_id:
+            event_ids = [
+                _safe_str((_event_from_block(b) or {}).get("id"))
+                for b in blocks or []
+                if isinstance(b, dict)
+                and _block_batch_id(b) == batch_id
+                and _safe_str((_event_from_block(b) or {}).get("id"))
+            ]
+        display_text = user_input_text_with_context_chips(text, contexts)
+        index_text = render_user_input_batch_index_text(
+            text=text,
+            contexts=contexts,
+            attachments=attachments,
+        )
+        entries.append({
+            "text": display_text,
+            "plain_text": text,
+            "index_text": index_text,
+            "contexts": contexts,
+            "attachments": attachments,
+            "ts": _safe_str(block.get("ts")),
+            "path": path,
+            "user_event_type": _user_event_type_for_block(block),
+            "batch_id": batch_id,
+            "event_ids": event_ids,
+            "meta": meta,
+        })
+    return entries

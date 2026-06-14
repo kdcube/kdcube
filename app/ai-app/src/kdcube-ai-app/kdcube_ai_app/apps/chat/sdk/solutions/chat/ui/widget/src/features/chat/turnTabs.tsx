@@ -48,6 +48,21 @@ import type {
 import { canonicalObjectRef, setChatFileDragData, type ChatFileDragInput } from './fileDrag.ts'
 import { durableHistoricalObjectRef } from './historicalRefs.ts'
 
+function splitContextChips(raw: string): { text: string; contexts: Array<{ id: string; label: string }> } {
+  const match = raw.match(/^([\s\S]*?)\n\n(\{"context":\[[\s\S]*\]\})\s*$/)
+  if (!match) return { text: raw, contexts: [] }
+  try {
+    const parsed = JSON.parse(match[2]) as { context?: Array<{ id?: string; label?: string }> }
+    const contexts = (parsed.context || []).map((entry) => ({
+      id: String(entry.id || ''),
+      label: String(entry.label || entry.id || ''),
+    }))
+    return { text: match[1], contexts }
+  } catch {
+    return { text: raw, contexts: [] }
+  }
+}
+
 function StepListImpl({ steps }: { steps: TurnStep[] }) {
   if (steps.length === 0) return null
   const statusChip = (status: StepStatus) => {
@@ -886,6 +901,7 @@ function FollowupMessageBlockImpl({
 }) {
   const isSteer = message.eventType === 'event.user.steer'
   const text = message.text || (isSteer ? 'Stop requested' : '')
+  const parsed = splitContextChips(text)
   return (
     <div className="flex flex-col gap-1 self-end max-w-[760px]" style={{ marginLeft: 'auto' }}>
       <div className="flex items-center gap-2 text-[11px] text-[var(--muted)]">
@@ -895,7 +911,23 @@ function FollowupMessageBlockImpl({
         <span>{formatTime(message.timestamp)}</span>
       </div>
       <div className="k-msg rounded-md border border-[var(--line-soft)] bg-[var(--surface-2)] px-3 py-2 text-[14px] leading-6">
-        {text ? <div className="whitespace-pre-wrap">{text}</div> : null}
+        {parsed.text ? <div className="whitespace-pre-wrap">{parsed.text}</div> : null}
+        {parsed.contexts.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5 pt-1.5">
+            {parsed.contexts.map((ctx) => (
+              <span
+                key={ctx.id}
+                className="inline-flex items-center gap-1 rounded-full border border-[var(--purple)] bg-[var(--purple-pale)] px-2 py-0.5 text-[11px] font-semibold text-[var(--purple)]"
+              >
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M20.59 13.41 13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
+                  <line x1="7" y1="7" x2="7.01" y2="7" />
+                </svg>
+                {ctx.label}
+              </span>
+            ))}
+          </div>
+        ) : null}
         {message.attachments.length > 0 ? (
           <div className="flex flex-wrap gap-1.5 pt-1.5">
             {message.attachments.map((attachment) => (
@@ -907,9 +939,9 @@ function FollowupMessageBlockImpl({
             ))}
           </div>
         ) : null}
-        {text ? (
+        {parsed.text ? (
           <span className="k-msg-toolbar">
-            <CopyButton value={text} title="Copy follow-up" />
+            <CopyButton value={parsed.text} title="Copy follow-up" />
           </span>
         ) : null}
       </div>

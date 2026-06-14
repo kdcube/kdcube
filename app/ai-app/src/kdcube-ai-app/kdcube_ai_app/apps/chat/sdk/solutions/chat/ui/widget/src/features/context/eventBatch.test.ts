@@ -118,6 +118,38 @@ assertDeepEqual(
   'memory context preserves the producer event source id',
 )
 
+const directMemoryContextOnlyBatch = buildExternalEventBatch(directMemoryDragContexts, {
+  agentId: 'main',
+  eventId: idFactory(),
+  defaults: sampleEventDefaults,
+})
+
+assertDeepEqual(
+  directMemoryContextOnlyBatch.map((event) => ({
+    type: event.type,
+    event_source_id: event.event_source_id,
+    reactive: event.reactive,
+    text: typeof event.payload?.event === 'object'
+      ? (event.payload.event as Record<string, unknown>).text
+      : undefined,
+  })),
+  [
+    {
+      type: 'event.external',
+      event_source_id: 'memory.context',
+      reactive: false,
+      text: undefined,
+    },
+    {
+      type: 'event.user.prompt',
+      event_source_id: 'sample_service.main.chat.user',
+      reactive: true,
+      text: '',
+    },
+  ],
+  'memory context-only send has the same wakeup shape as landing intent context-only send',
+)
+
 const landingIntentBatch = buildExternalEventBatch([
   {
     id: 'intent:landing/why-kdcube',
@@ -177,6 +209,26 @@ assertDeepEqual(
     },
   ],
   'landing intent keeps the chip label separate from the self-contained ReAct payload',
+)
+
+assertDeepEqual(
+  landingIntentBatch.slice(1),
+  [
+    {
+      event_id: 'evt_2',
+      type: 'event.user.prompt',
+      event_source_id: 'sample_service.main.chat.user',
+      reactive: true,
+      agent_id: 'main',
+      payload: {
+        mime: 'text/plain',
+        event: {
+          text: '',
+        },
+      },
+    },
+  ],
+  'context-only send includes a reactive empty user prompt to wake ReAct',
 )
 
 const contexts: AttachedContext[] = [
@@ -596,7 +648,7 @@ const loneCanvasArtifactCardsBatch = buildExternalEventBatch([
 })
 
 assertDeepEqual(
-  loneCanvasArtifactCardsBatch.map((event) => {
+  loneCanvasArtifactCardsBatch.filter((event) => event.reactive !== true).map((event) => {
     const payloadEvent = (event.payload as { event: { id?: unknown; kind?: unknown; ref?: unknown } }).event
     return {
       source: event.event_source_id,

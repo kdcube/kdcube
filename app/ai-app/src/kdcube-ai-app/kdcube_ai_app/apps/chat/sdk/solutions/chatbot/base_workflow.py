@@ -47,7 +47,6 @@ from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.gate.gate_contract import Gat
 from kdcube_ai_app.apps.chat.sdk.solutions.widgets.conversation_turn_work_status import \
     ConversationTurnWorkStatus
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_subsystem import create_tool_subsystem_with_mcp, ToolSubsystem
-from kdcube_ai_app.apps.chat.sdk.runtime.user_inputs import ingest_user_attachments
 from kdcube_ai_app.apps.chat.sdk.runtime.scratchpad import CTurnScratchpad
 from kdcube_ai_app.apps.chat.sdk.skills.skills_registry import SkillsSubsystem
 from kdcube_ai_app.apps.chat.sdk.tools import citations as citations_module
@@ -65,6 +64,8 @@ from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationS
 from kdcube_ai_app.apps.chat.sdk.context.graph.graph_ctx import GraphCtx
 from kdcube_ai_app.apps.chat.sdk.runtime.user_inputs import (
     attachment_summary_index_text,
+    ingest_user_attachments,
+    iter_turn_user_input_entries,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.compaction_memory import extract_note_tags
 
@@ -1444,31 +1445,7 @@ class BaseWorkflow():
             return []
 
     def _iter_turn_prompt_entries(self, *, turn_id: str) -> List[Dict[str, Any]]:
-        entries: List[Dict[str, Any]] = []
-        for blk in self._current_turn_blocks(turn_id=turn_id):
-            btype = str(blk.get("type") or "").strip()
-            text = str(blk.get("text") or "").strip()
-            path = str(blk.get("path") or "").strip()
-            ts = str(blk.get("ts") or "").strip()
-            meta = blk.get("meta") if isinstance(blk.get("meta"), dict) else {}
-            user_event_type: Optional[str] = None
-            if btype == "user.prompt":
-                user_event_type = str(meta.get("event_type") or "event.user.prompt").strip() or "event.user.prompt"
-            elif btype in {"user.followup", "user.followup.preserved"}:
-                user_event_type = "event.user.followup"
-            elif btype in {"user.steer", "user.steer.preserved"}:
-                user_event_type = "event.user.steer"
-            else:
-                continue
-            if not text:
-                continue
-            entries.append({
-                "text": text,
-                "ts": ts,
-                "path": path,
-                "user_event_type": user_event_type,
-            })
-        return entries
+        return iter_turn_user_input_entries(self._current_turn_blocks(turn_id=turn_id), turn_id=turn_id)
 
     def _iter_turn_assistant_completion_entries(self, *, turn_id: str) -> List[Dict[str, Any]]:
         entries: List[Dict[str, Any]] = []
@@ -1582,6 +1559,8 @@ class BaseWorkflow():
         *,
         scratchpad: CTurnScratchpad,
         text: str,
+        index_text: Optional[str] = None,
+        extra_tags: Optional[List[str]] = None,
         ts: str,
         turn_id: str,
         path: str,
@@ -1595,9 +1574,10 @@ class BaseWorkflow():
         )
         conversation_id = self._ctx["conversation"]["conversation_id"]
         text = str(text or "").strip()
-        if not text or not path:
+        text_for_index = str(index_text or text or "").strip()
+        if not text_for_index or not path:
             return None
-        truncated_text = truncate_text_by_tokens(text)
+        truncated_text = truncate_text_by_tokens(text_for_index)
         [uvec] = await self.model_service.embed_texts([truncated_text])
         scratchpad.uvec = uvec
         msg_ts = time.strftime("%Y-%m-%dT%H-%M-%S", time.gmtime())
@@ -1606,13 +1586,17 @@ class BaseWorkflow():
         tags = ["chat:user", f"turn:{turn_id}"] + [f"topic:{t}" for t in scratchpad.turn_topics_plain or []]
         if user_event_type:
             tags.append(f"event_type:{user_event_type}")
+        for tag in extra_tags or []:
+            tag = str(tag or "").strip()
+            if tag and tag not in tags:
+                tags.append(tag)
         await self.conv_idx.add_message(
             user_id=user,
             conversation_id=conversation_id,
             bundle_id=self.config.ai_bundle_spec.id,
             turn_id=turn_id,
             role="user",
-            text=text,
+            text=text_for_index,
             hosted_uri="index_only",
             ts=ts,
             tags=tags,
@@ -1631,9 +1615,23 @@ class BaseWorkflow():
             path = str(entry.get("path") or "").strip()
             if not path or path in scratchpad.persisted_turn_entry_paths:
                 continue
+            batch_id = str(entry.get("batch_id") or "").strip()
+            extra_tags: List[str] = []
+            if batch_id:
+                extra_tags.append(f"batch_id:{batch_id}")
+            for context in entry.get("contexts") or []:
+                if isinstance(context, dict):
+                    source = str(context.get("event_source_id") or "").strip()
+                    if source:
+                        extra_tags.append(f"context_source:{source}")
+                    event_type = str(context.get("event_type") or "").strip()
+                    if event_type:
+                        extra_tags.append(f"context_event_type:{event_type}")
             msgid = await self._persist_user_conversation_entry(
                 scratchpad=scratchpad,
                 text=str(entry.get("text") or ""),
+                index_text=str(entry.get("index_text") or ""),
+                extra_tags=extra_tags,
                 ts=str(entry.get("ts") or self._ctx["conversation"]["ts"]),
                 turn_id=turn_id,
                 path=path,

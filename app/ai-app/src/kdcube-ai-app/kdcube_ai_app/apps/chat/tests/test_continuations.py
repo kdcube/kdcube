@@ -665,9 +665,9 @@ async def test_busy_followup_batch_stamps_context_and_followup_events(_patch_ing
     )
 
     assert result.ok is True
-    assert result.reason == "external_event_accepted"
     assert len(queue.payloads) == 1
     assert queue.payloads[0]["kind"] == "external_event_lane_wakeup"
+    assert result.queue_stats["queue_payload_kind"] == "external_event_lane_wakeup"
 
     source = _scoped_external_source(redis)
     events = await source.read_since(0)
@@ -680,6 +680,76 @@ async def test_busy_followup_batch_stamps_context_and_followup_events(_patch_ing
     assert [event.payload["event"]["batch_id"] for event in events] == [batch_id, batch_id]
     assert events[0].task_payload["request"]["external_events"][0]["event_source_id"] == "memory.context"
     assert events[1].task_payload["request"]["external_events"][0]["type"] == "event.user.followup"
+
+
+@pytest.mark.asyncio
+async def test_context_only_send_with_empty_prompt_enqueues_reactive_wakeup(_patch_ingress_dependencies):
+    redis = _MiniRedis()
+    app = SimpleNamespace(state=SimpleNamespace(
+        redis_async=redis,
+        conversation_browser=_IdleConversationBrowser(),
+        conversation_store=_DummyConversationStore(),
+    ))
+    session = SimpleNamespace(
+        session_id="sess-1",
+        user_type=UserType.REGISTERED,
+        user_id="user-1",
+        username="user",
+        email="user@example.com",
+        fingerprint="fp-1",
+        roles=[],
+        permissions=[],
+        timezone="UTC",
+    )
+
+    memory_event = _domain_event(
+        "event.external",
+        {
+            "context_role": "context",
+            "object_ref": "mem:mem_803986c10e324a16b05a3ba109237c7c",
+            "label": "Family facts about Elena and Timur",
+        },
+        reactive=False,
+    )
+    memory_event["event_source_id"] = "memory.context"
+    memory_event["hosted_uri"] = "mem:mem_803986c10e324a16b05a3ba109237c7c"
+
+    queue = _QueueManagerCaptures(redis)
+    result = await process_chat_message(
+        app=app,
+        chat_queue_manager=queue,
+        chat_comm=_DummyRelay(),
+        session=session,
+        request_context=SimpleNamespace(user_utc_offset_min=None),
+        message_data={
+            "conversation_id": "conv-1",
+            "external_events": [
+                memory_event,
+                _text_event("event.user.prompt", ""),
+            ],
+        },
+        message_text="",
+        ingress=IngressConfig(
+            transport="sse",
+            entrypoint="/sse/chat",
+            component="chat.sse",
+            instance_id="ingress-1",
+            stream_id="stream-1",
+        ),
+    )
+
+    assert result.ok is True
+    assert len(queue.payloads) == 1
+    assert queue.payloads[0]["kind"] == "external_event_lane_wakeup"
+    assert result.queue_stats["queue_payload_kind"] == "external_event_lane_wakeup"
+
+    source = _scoped_external_source(redis)
+    events = await source.read_since(0)
+    assert [event.task_payload["request"]["external_events"][0]["event_source_id"] for event in events] == [
+        "memory.context",
+        "event.user.prompt",
+    ]
+    assert events[1].task_payload["request"]["external_events"][0]["payload"]["event"]["text"] == ""
 
 
 @pytest.mark.asyncio

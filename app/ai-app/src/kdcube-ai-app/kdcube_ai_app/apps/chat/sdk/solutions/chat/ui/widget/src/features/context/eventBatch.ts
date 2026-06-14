@@ -46,6 +46,7 @@ export interface BuildUserPromptEventOptions {
   reactiveEventType?: string
   target?: Record<string, unknown>
   defaults?: ChatEventSourceDefaults
+  allowEmptyText?: boolean
 }
 
 export interface AttachmentEventInput {
@@ -320,7 +321,7 @@ export function buildContextEvents(contexts: AttachedContext[], options: BuildCo
 export function buildUserPromptEvent(text: string, options: BuildUserPromptEventOptions = {}): ExternalEvent | null {
   const body = String(text || '').trim()
   const reactiveEventType = options.reactiveEventType || 'event.user.prompt'
-  if (!body && reactiveEventType !== 'event.user.steer') return null
+  if (!body && reactiveEventType !== 'event.user.steer' && options.allowEmptyText !== true) return null
   const target = options.target || {}
   const eventSourceId =
     typeof target.event_source_id === 'string'
@@ -372,7 +373,13 @@ export function buildUserAttachmentEvents(
 
 export function buildExternalEventBatch(contexts: AttachedContext[], options: BuildExternalEventBatchOptions = {}): ExternalEvent[] {
   const events = buildContextEvents(contexts, options)
-  const prompt = buildUserPromptEvent(options.text || '', options)
+  const prompt = buildUserPromptEvent(options.text || '', {
+    ...options,
+    // A context-only chat send is still a user action that must wake ReAct.
+    // Context events are non-reactive facts; this empty prompt/followup event
+    // is the turn boundary that tells the runtime to process them.
+    allowEmptyText: contexts.length > 0,
+  })
   if (prompt) events.push(prompt)
   const attachments = buildUserAttachmentEvents(options.files || [], options)
   events.push(...attachments)

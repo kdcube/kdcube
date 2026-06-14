@@ -97,6 +97,32 @@ const CHAT_EVENT_DEFAULTS = {
   snapshotSurface: CHAT_SNAPSHOT_SURFACE,
 }
 
+function userMessageWithContextChips(text: string, contexts: AttachedContext[]): string {
+  if (!contexts.length) return text
+  const chips = contexts.map((ctx) => ({
+    id: ctx.id,
+    label: ctx.label || ctx.id,
+  }))
+  return `${text || ''}\n\n${JSON.stringify({ context: chips })}`
+}
+
+function isVisibleTurn(turn: ChatTurn): boolean {
+  if (turn.state === 'pending' || turn.state === 'running' || turn.state === 'error') return true
+  return Boolean(
+    turn.userMessage.trim() ||
+    turn.userAttachments.length ||
+    turn.additionalUserMessages.length ||
+    turn.answer.trim() ||
+    turn.error ||
+    Object.keys(turn.steps).length ||
+    turn.artifacts.length ||
+    turn.timeline.length ||
+    turn.followups.length ||
+    turn.costUsd != null ||
+    turn.elapsedMs != null,
+  )
+}
+
 function forwardCanvasPatchEvent(env: ChatStepEnvelope) {
   if (env.event?.step !== CHAT_CANVAS_PATCH_STEP) return
   if (!env.data || typeof env.data !== 'object') return
@@ -484,8 +510,9 @@ export default function App() {
    * grown" — turn count + the active turn's answer length + banner
    * count + ready. This fires on streaming deltas (so the page keeps
    * up with the answer) but skips no-op renders that didn't add height. */
-  const lastTurn = state.turns[state.turns.length - 1]
-  const scrollSignature = `${state.turns.length}:${lastTurn?.id ?? ''}:${lastTurn?.answer.length ?? 0}:${lastTurn?.timeline.length ?? 0}:${lastTurn?.artifacts.length ?? 0}:${state.banners.length}:${ready ? 1 : 0}`
+  const visibleTurns = useMemo(() => state.turns.filter(isVisibleTurn), [state.turns])
+  const lastTurn = visibleTurns[visibleTurns.length - 1]
+  const scrollSignature = `${visibleTurns.length}:${lastTurn?.id ?? ''}:${lastTurn?.answer.length ?? 0}:${lastTurn?.timeline.length ?? 0}:${lastTurn?.artifacts.length ?? 0}:${state.banners.length}:${ready ? 1 : 0}`
   useEffect(() => {
     if (!autoScrollRef.current) return
     const scroller = activeScroller()
@@ -830,11 +857,12 @@ export default function App() {
       const targetTurnId = isContinuation ? activeTurn?.id : undefined
       const draftText = (textOverride ?? snapshot.composerText).trim()
       const draftFiles = isSteer || textOverride !== undefined ? [] : snapshot.composerFiles
-      /* Host-dropped context objects ride along as event
-       * occurrences before the reactive user prompt. They are never appended
-       * into the message text: canvas, wizard, and canvas pins are separate
-       * context events with their own source ids and refs. */
+      /* Host-dropped context objects ride along as event occurrences before
+       * the reactive user prompt. The backend sees them as structured events;
+       * the local user bubble also gets compact context chips so a context-only
+       * send has a visible "You sent this" anchor. */
       const draftContexts = isSteer || textOverride !== undefined ? [] : snapshot.composerContexts
+      const visibleDraftText = userMessageWithContextChips(draftText, draftContexts)
       const target = chatTarget(storyIdFromContexts(draftContexts))
       const externalEvents = buildExternalEventBatch(draftContexts, {
         agentId: 'main',
@@ -936,7 +964,7 @@ export default function App() {
         isContinuation,
         isSteer,
         targetTurnId: targetTurnId ?? null,
-        draftText,
+        draftText: visibleDraftText,
         draftAttachments,
         sentAt,
         additionalEventType,
@@ -1292,9 +1320,9 @@ export default function App() {
             absolute inside the synthetic boxed preview). First/Prev/Next step
             between user messages; Latest jumps to the bottom. Shown for
             multi-turn chats, or single-turn when scrolled away from the bottom. */}
-        {(!compact && state.turns.length > 1) || showScrollDown ? (
+        {(!compact && visibleTurns.length > 1) || showScrollDown ? (
           <div className={`k-turn-nav ${previewTile ? 'k-scroll-in-tile' : ''}`}>
-            {!compact && state.turns.length > 1 ? (
+            {!compact && visibleTurns.length > 1 ? (
               <>
                 <button type="button" className="k-turn-nav-btn" onClick={() => scrollToTurn('first')} aria-label="Jump to first message" title="First message">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 4h14M12 20V9M7 14l5-5 5 5" /></svg>
@@ -1673,7 +1701,7 @@ export default function App() {
                 ref={scrollContainerRef}
                 className={`k-chat-scroll px-4 py-3 ${compact ? 'min-h-0 flex-1 overflow-y-auto' : 'flex-1 lg:min-h-0 lg:overflow-y-auto'}`}
               >
-                {state.turns.length === 0 ? (
+                {visibleTurns.length === 0 ? (
                   <div className="k-empty">
                     <div className="k-empty-title">No turns yet</div>
                     <div className="k-empty-body">Ask anything — attachments, web search, and code exec are available.</div>
@@ -1696,7 +1724,7 @@ export default function App() {
                   </div>
                 ) : (
                   <div className="flex flex-col gap-4">
-                    {state.turns.map((turn) => (
+                    {visibleTurns.map((turn) => (
                       <TurnView
                         key={turn.id}
                         turn={turn}
