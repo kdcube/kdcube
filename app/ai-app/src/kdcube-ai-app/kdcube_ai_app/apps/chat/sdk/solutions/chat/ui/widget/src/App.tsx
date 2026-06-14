@@ -373,6 +373,13 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [convMenuOpen])
 
+  /* The compact tile always opens with the conversation picker collapsed.
+   * Never carry an open dropdown across a view switch (e.g. open it in
+   * compact, expand, then dock back to compact). */
+  useEffect(() => {
+    if (hostView === 'compact') setConvMenuOpen(false)
+  }, [hostView])
+
   const toggleHostView = useCallback(() => {
     setHostView((prev) => {
       const next = prev === 'expanded' ? 'compact' : 'expanded'
