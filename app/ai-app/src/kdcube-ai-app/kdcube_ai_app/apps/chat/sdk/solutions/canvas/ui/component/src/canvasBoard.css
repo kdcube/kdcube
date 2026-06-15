@@ -1003,6 +1003,7 @@ button {
   overflow-wrap: anywhere;
 }
 
+.canvas-card-flyout-attachments,
 .canvas-card-flyout-desc,
 .canvas-card-flyout-comments {
   margin-top: 10px;
@@ -1010,6 +1011,7 @@ button {
   border-top: 1px dashed var(--line-soft);
 }
 
+.canvas-card-flyout-attachments h4,
 .canvas-card-flyout-desc h4,
 .canvas-card-flyout-comments h4 {
   margin: 0 0 6px;
@@ -1020,10 +1022,51 @@ button {
   color: var(--muted);
 }
 
+.canvas-card-flyout-attachments .count,
 .canvas-card-flyout-comments .count {
   font-weight: 700;
   color: var(--text-2);
   margin-left: 4px;
+}
+
+.canvas-card-flyout-attachment-list {
+  display: grid;
+  gap: 5px;
+}
+
+.canvas-card-flyout-attachment {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 6px;
+  align-items: start;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  padding: 6px;
+  background: rgba(255, 255, 255, 0.68);
+  color: var(--ink);
+  cursor: grab;
+}
+
+.canvas-card-flyout-attachment:active {
+  cursor: grabbing;
+}
+
+.canvas-card-flyout-attachment strong,
+.canvas-card-flyout-attachment small {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-card-flyout-attachment strong {
+  font-size: 11.5px;
+}
+
+.canvas-card-flyout-attachment small {
+  color: var(--muted);
+  font-size: 10.5px;
 }
 
 .canvas-card-flyout-view {

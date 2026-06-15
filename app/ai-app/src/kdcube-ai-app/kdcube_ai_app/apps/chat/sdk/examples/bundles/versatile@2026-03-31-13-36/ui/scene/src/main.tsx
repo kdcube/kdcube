@@ -121,7 +121,7 @@ interface DataBusServiceEnvelope {
     message_id?: string
     subject?: string
     object_ref?: string
-    data?: Record<string, unknown>
+    data?: unknown
     code?: string
     message?: string
   }
@@ -326,21 +326,8 @@ function sceneChatSizing() {
   }
 }
 
-function downloadBase64File(contentBase64: string, filename: string, mime = 'application/octet-stream') {
-  const binary = window.atob(contentBase64)
-  const bytes = new Uint8Array(binary.length)
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index)
-  }
-  const blob = new Blob([bytes], { type: mime || 'application/octet-stream' })
-  const url = window.URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = filename || 'download'
-  document.body.appendChild(link)
-  link.click()
-  link.remove()
-  window.URL.revokeObjectURL(url)
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
 }
 
 function KubeRobotIcon({ size = 22 }: { size?: number }) {
@@ -671,11 +658,11 @@ async function publishDataBusAndWait(
       const data = env.data ?? {}
       if (data.message_id !== message.message_id) return
       if (env.type === 'kdcube.data_bus.result') {
-        finish(() => resolve(data.data ?? {}))
+        finish(() => resolve(isRecord(data.data) ? data.data : {}))
         return
       }
       if (env.type === 'kdcube.data_bus.conflict') {
-        finish(() => resolve(data.data ?? { ok: false, error: 'conflict' }))
+        finish(() => resolve(isRecord(data.data) ? data.data : { ok: false, error: 'conflict' }))
         return
       }
       if (env.type === 'kdcube.data_bus.error') {
@@ -1529,6 +1516,35 @@ function App() {
     setCanvases((current) => upsertCanvasDefinition(current, canvasFromPatchEvent(event, activeCanvas)))
   }, [activeCanvas])
 
+  useEffect(() => {
+    if (!isRegistered) return undefined
+    let cancelled = false
+    let detach: (() => void) | undefined
+    void (async () => {
+      try {
+        const socket = await dataBusSocketFor(ctx)
+        await ensureSocketConnected(socket)
+        if (cancelled) return
+        const onService = (payload: unknown) => {
+          const env = (payload ?? {}) as DataBusServiceEnvelope
+          const data = env.data ?? {}
+          if (env.type !== 'kdcube.data_bus.result') return
+          if (data.subject !== CANVAS_SUBJECT) return
+          if (!isRecord(data.data)) return
+          applyPatchResponse(data.data as unknown as CanvasPatchResponse)
+        }
+        socket.on('chat_service', onService)
+        detach = () => socket.off('chat_service', onService)
+      } catch (error) {
+        console.warn('[versatile:canvas] live canvas subscription failed', error)
+      }
+    })()
+    return () => {
+      cancelled = true
+      if (detach) detach()
+    }
+  }, [applyPatchResponse, ctx, isRegistered])
+
   const patchCanvas = useCallback(async (input: CanvasPatchInput): Promise<CanvasPatchResponse> => {
     const messageId = timestampId('dbmsg')
     const payload = await publishDataBusAndWait(ctx, {
@@ -1656,7 +1672,7 @@ function App() {
       ref: card.ref,
       kind: card.kind,
     })
-    const response = await postOperation<unknown, CanvasObjectActionResponse>(ctx, 'canvas_object_action', {
+    const rawResponse = await postOperation<unknown, CanvasObjectActionResponse>(ctx, 'canvas_object_action', {
       action,
       object_ref: card.ref,
       card_id: card.id,
@@ -1665,6 +1681,10 @@ function App() {
       story_id: CANVAS_STORY_ID,
       mime: card.mime,
     })
+    const response: CanvasObjectActionResponse = { ...rawResponse }
+    if (typeof response.download_url === 'string' && response.download_url.startsWith('/')) {
+      response.download_url = `${ctx.baseUrl}${response.download_url}`
+    }
     console.info('[versatile:canvas] object action response', {
       action,
       cardId: card.id,
@@ -1673,6 +1693,7 @@ function App() {
       namespace: response.namespace,
       resolver: response.resolver,
       resolverStatus: response.resolver_status,
+      hasDownloadUrl: Boolean(response.download_url),
       hasContent: Boolean(response.content_base64),
       targetSurface: response.ui_event?.target_surface,
       error: response.error,
@@ -1680,18 +1701,6 @@ function App() {
     if (!response.ok) {
       setNotice(response.error || response.message || `Canvas object ${action} failed.`)
       return response
-    }
-    if (action === 'download') {
-      if (response.content_base64) {
-        downloadBase64File(
-          response.content_base64,
-          response.filename || card.title || card.id,
-          response.mime || card.mime || 'application/octet-stream',
-        )
-        setNotice(`Downloaded ${response.filename || card.title}.`)
-      } else {
-        setNotice(response.error || response.message || `No downloadable content returned for ${card.title || card.id}.`)
-      }
     }
     if (action === 'open') {
       const result = dispatchSurfaceOpen(response, card)

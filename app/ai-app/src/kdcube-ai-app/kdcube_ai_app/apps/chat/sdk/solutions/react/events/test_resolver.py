@@ -45,7 +45,10 @@ async def test_resolve_event_ref_action_downloads_canonical_fi_artifact(tmp_path
     assert result["object_ref"] == ref
     assert result["filename"] == "problem.md"
     assert result["mime"] == "text/markdown"
-    assert result["content_base64"] == "IyBQcm9ibGVtCg=="
+    assert "content_base64" not in result
+    assert result["download_url"] == (
+        "/api/cb/resources/tenant/project/conv/user/conversation/turn/turn_1/attachment/turn_1/outputs/problem.md/download"
+    )
 
 
 @pytest.mark.asyncio

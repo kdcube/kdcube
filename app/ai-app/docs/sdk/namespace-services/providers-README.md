@@ -4,7 +4,7 @@ title: "Namespace Services: Providers"
 summary: "Transport-neutral SDK concept for bundles and platform subsystems that publish namespace service provider surfaces: namespace ownership, object operations, resolvers, capabilities, relations, and integrations over API, MCP, Data Bus, or local adapters."
 status: design
 tags: ["sdk", "namespace-services", "named-service-provider", "services", "namespaces", "objects", "resolvers", "mcp", "api", "data-bus", "bundles"]
-updated_at: 2026-06-12
+updated_at: 2026-06-15
 keywords:
   [
     "named service provider",
@@ -99,6 +99,131 @@ Ingress is one way to create a caller context. It is not the only way to reach
 a provider. A cron job, Data Bus handler, local bundle workflow, MCP request,
 or API operation can all call the same provider through a `NamedServiceClient`
 once they have a valid `AuthContext`.
+
+## Provider Contract For All Surfaces
+
+A provider that wants its objects to work consistently in chat, canvas,
+pinboard, scene hosts, ReAct, MCP, jobs, and external clients must implement
+the same semantic operations for every surface. The surface can be different;
+the provider contract is not.
+
+```text
+Provider-owned namespace
+  refs and object kinds:
+    task:issue:<id>
+    task:issue:attachment:<issue_id>/attachments/<attachment_id>/v<version>/<filename>
+
+  cheap routing:
+    provider.about
+    provider.capabilities
+    event.resolve
+    object.resolve
+
+  user-visible object effects:
+    object.action(action=preview)
+    object.action(action=open)
+    object.action(action=download)
+    provider-defined object.action(...)
+
+  model/workspace materialization:
+    object.get(response_mode=stream)
+
+  model-visible projection:
+    block.produce
+    block.render
+```
+
+The provider must own these values:
+
+| Provider-owned value | Why it is provider-owned |
+| --- | --- |
+| canonical `object_ref` grammar | Only the owner can parse ref variants, versions, attachments, and parent-child shape correctly. |
+| `object_kind` per concrete ref | A namespace can contain several object families; hosts must not infer kind from broad namespace. |
+| `capabilities` and `actions` per ref | A task issue and a task attachment can expose different actions. |
+| `default_open_effect_action` per ref | A generic click/open can mean `open` for an issue and `download` for an attachment. |
+| `ui_event.target_surface` for `open` | The owner knows which UI surface can edit or inspect that object. |
+| download/read policy | The owner enforces auth and returns a URL or stream under the current context. |
+| block shape | The owner decides what the model sees for a task, memory, source, attachment, or future object. |
+
+Surfaces must stay generic. Chat context chips, canvas cards, pinboard items,
+scene hosts, and ReAct do not know that a `task:` attachment downloads while a
+`task:` issue opens an editor. They call `object.resolve` or `object.action`
+and follow the provider-returned contract.
+
+## Provider Execution Surfaces
+
+A **provider app** is the app or subsystem that owns the namespace and
+registered a provider for it. Provider code is reached through ordinary KDCube
+surfaces. The provider does not need to know whether the caller was canvas,
+chat, ReAct, a scene page, MCP, a job, or an external client unless it wants to
+use `request.context.source` for policy or audit.
+
+```text
+Provider app startup
+  executor: provider app entrypoint
+  surface: on_bundle_load / startup hook
+  customized: yes, provider app
+  work:
+    build NamedServiceRegistry
+    expose named_services()
+    register Discovery.entry for namespace, provider_id, operations, refs
+
+        |
+        v
+
+Same-runtime provider call
+  executor: NamedServiceClient through bundle_registry transport
+  surface: provider app named_services() registry
+  customized: no transport semantics; provider methods are customized
+  work:
+    provider = registry.provider("task.issue")
+    provider.handle(ctx, NamedServiceRequest)
+
+        |
+        v
+
+API provider call
+  executor: provider app @api(alias="named_service", route="operations")
+  surface: provider app operations API
+  customized: yes, provider decides to expose this facade
+  work:
+    dispatch_named_service_api_request(registry, payload)
+
+        |
+        v
+
+Provider operation method
+  executor: NamedServiceProvider method
+  surface: provider operation family
+  customized: yes, namespace/domain semantics live here
+  examples:
+    object.resolve  -> descriptor, capabilities, default_open_effect_action
+    object.action   -> open/download/provider-defined object effect
+    object.get      -> JSON or streamed bytes
+    object.host_file -> host caller file into provider storage
+    object.upsert   -> mutate provider object under provider schema
+    block.produce   -> model-visible blocks
+
+        |
+        v
+
+Provider-owned binary operation, when needed
+  executor: provider app @api(alias="issue_attachment_download", route="operations")
+  surface: provider app binary/read operation
+  customized: yes, provider storage and auth
+  work:
+    authenticate request again
+    read provider-owned bytes
+    return BundleBinaryResponse
+```
+
+For URL-based downloads, `object.action(action="download")` should return
+metadata plus a `download_url` for a provider-owned binary operation. Build the
+URL with
+`kdcube_ai_app.apps.chat.sdk.infra.bundle_urls.bundle_operation_url(...)` so
+providers do not hand-write KDCube integration routes. The browser later calls
+that URL with its normal cookies/session, and the provider operation enforces
+auth again before streaming bytes.
 
 ## Provider Surface
 
@@ -400,6 +525,33 @@ object handle?" It is not inferred by the host surface and it is not a single
 namespace-wide value. For example, the same `task` namespace can return `open`
 for `task:issue:<id>` and `download` for
 `task:issue:attachment:<id>/attachments/...`.
+
+For `download`, the provider should return a cookie-authenticated
+`download_url` plus file metadata. Do not put downloaded bytes in the JSON
+object-action response. `content_base64` is a legacy compatibility field only;
+new providers should use a URL response and stream the bytes from that URL.
+Build KDCube bundle-operation URLs with the SDK helper
+`kdcube_ai_app.apps.chat.sdk.infra.bundle_urls.bundle_operation_url(...)`;
+do not hand-write `/api/integrations/bundles/...` route strings in each
+provider.
+
+```json
+{
+  "ok": true,
+  "ret": {
+    "attrs": {
+      "namespace": "task",
+      "object_ref": "task:issue:attachment:BUG-123/attachments/ta_1/v000001/evidence.md"
+    },
+    "extra": {
+      "download_url": "/api/integrations/bundles/demo-tenant/demo-project/task-tracker%401-0/operations/issue_attachment_download?object_ref=task%3Aissue%3Aattachment%3ABUG-123%2Fattachments%2Fta_1%2Fv000001%2Fevidence.md",
+      "filename": "evidence.md",
+      "mime": "text/markdown",
+      "size_bytes": 1024
+    }
+  }
+}
+```
 
 For `open`, the provider returns the effect result, including
 `ui_event.target_surface` and enough object payload for that surface. The host
@@ -1046,6 +1198,10 @@ When introducing a named service provider:
   provider must parse `object_ref` on every call, branch by object kind, enforce
   auth, and return a bounded result. Do not let an attachment ref fall through to
   parent issue update/delete behavior.
+- implement `download` actions as authenticated URL responses with
+  `download_url`, `filename`, `mime`, and size metadata. The URL may point at a
+  provider-owned operation that streams a `BundleBinaryResponse`; build it with
+  `bundle_operation_url(...)`. Do not return new large byte bodies inside JSON.
 - define streamed `object.get` with `response_mode: stream` for large
   attachment refs that must become `fi:` artifacts;
 - define `block.produce` / `block.render` when ReAct should project

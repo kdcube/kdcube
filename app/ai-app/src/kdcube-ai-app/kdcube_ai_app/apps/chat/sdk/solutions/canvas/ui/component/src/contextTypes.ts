@@ -5,6 +5,7 @@ export interface CanvasContextItem {
   summary?: string
   ref?: string
   logical_path?: string
+  hosted_uri?: string
   mime?: string
   canvas_id?: string
   canvas_name?: string
@@ -58,6 +59,7 @@ export function normalizeContext(value: unknown): CanvasContextItem | null {
     summary: stringValue(raw.summary),
     ref: stringValue(raw.ref),
     logical_path: stringValue(raw.logical_path ?? raw.logicalPath),
+    hosted_uri: stringValue(raw.hosted_uri ?? raw.hostedUri),
     mime: stringValue(raw.mime),
     canvas_id: stringValue(raw.canvas_id ?? raw.canvasId),
     canvas_name: stringValue(raw.canvas_name ?? raw.canvasName),

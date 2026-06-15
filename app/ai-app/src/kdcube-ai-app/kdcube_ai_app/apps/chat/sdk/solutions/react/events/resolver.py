@@ -2,11 +2,11 @@
 # Copyright (c) 2026 Elena Viter
 from __future__ import annotations
 
-import base64
 import logging
 import mimetypes
 from pathlib import PurePosixPath
 from typing import Any, Mapping
+from urllib.parse import quote
 
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
@@ -75,6 +75,38 @@ def _guess_mime(filename: str) -> str:
     if lower.endswith((".md", ".markdown")):
         return "text/markdown"
     return mimetypes.guess_type(filename)[0] or "application/octet-stream"
+
+
+def _fi_attachment_tail_from_storage_relpath(
+    *,
+    storage_relpath: str,
+    turn_id: str,
+    conversation_id: str,
+    fallback: str,
+) -> str:
+    marker = f"/{conversation_id}/{turn_id}/"
+    idx = str(storage_relpath or "").find(marker)
+    if idx >= 0:
+        tail = str(storage_relpath)[idx + len(marker):].strip().lstrip("/")
+        if tail:
+            return tail
+    return fallback.strip().lstrip("/")
+
+
+def _fi_download_url(
+    *,
+    tenant: str,
+    project: str,
+    user_id: str,
+    conversation_id: str,
+    turn_id: str,
+    filename_path: str,
+) -> str:
+    return (
+        f"/api/cb/resources/{quote(tenant, safe='')}/{quote(project, safe='')}"
+        f"/conv/{quote(user_id, safe='')}/{quote(conversation_id, safe='')}"
+        f"/turn/{quote(turn_id, safe='')}/attachment/{quote(filename_path, safe='/')}/download"
+    )
 
 
 async def read_event_ref_bytes(
@@ -266,6 +298,12 @@ async def _resolve_fi_action(
 
     filename = PurePosixPath(relpath).name or "artifact"
     mime = mime_hint or _guess_mime(filename)
+    filename_path = _fi_attachment_tail_from_storage_relpath(
+        storage_relpath=str(meta.get("storage_relpath") or ""),
+        conversation_id=str(meta.get("conversation_id") or conversation_id),
+        turn_id=str(meta.get("turn_id") or turn_id),
+        fallback=build_physical_artifact_path(turn_id=turn_id, namespace=artifact_namespace, relpath=relpath),
+    )
     return {
         **base,
         "resolved": True,
@@ -275,5 +313,12 @@ async def _resolve_fi_action(
         "mime": mime,
         "size": len(data),
         "storage_relpath": meta.get("storage_relpath") or "",
-        "content_base64": base64.b64encode(data).decode("ascii"),
+        "download_url": _fi_download_url(
+            tenant=tenant,
+            project=project,
+            user_id=user_id,
+            conversation_id=str(meta.get("conversation_id") or conversation_id),
+            turn_id=str(meta.get("turn_id") or turn_id),
+            filename_path=filename_path,
+        ),
     }

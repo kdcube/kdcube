@@ -168,6 +168,7 @@ async def object_action(
         "ref": result.get("object_ref") or result.get("ref") or ref,
         "user_id": user_id,
         "story_id": story_id,
+        "has_download_url": bool(result.get("download_url")),
         "has_content_base64": bool(result.get("content_base64")),
         "has_ui_event": bool(result.get("ui_event")),
         "error": result.get("error"),

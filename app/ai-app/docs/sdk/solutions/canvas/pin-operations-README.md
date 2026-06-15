@@ -189,7 +189,7 @@ Recommended operation meanings:
 | `describe(ref)` | Return stable metadata for display cache | title, mime, size, summary, icon hint |
 | `preview(ref)` | Return bounded renderable preview | text excerpt, image preview URL, object summary |
 | `open(ref, request)` | Ask owning subsystem to focus/open the object | UI event, status, or unavailable result |
-| `download(ref, request)` | Materialize downloadable bytes | stream response, URL, or short-lived browser handle |
+| `download(ref, request)` | Materialize downloadable bytes | cookie-authenticated URL that streams bytes, or legacy inline fallback |
 | `rehost(ref, target)` | Copy bytes/object into another subsystem | new target-owned ref |
 
 `download` is not a property stored on the pin. For a ReAct artifact, the flow
@@ -199,7 +199,9 @@ is:
 canvas card has object_ref=fi:...
 user clicks Download
 canvas server calls fi resolver download(ref)
-fi resolver returns a response usable by the browser
+fi resolver returns download_url
+browser GETs download_url with its existing session cookie
+server streams bytes
 ```
 
 For a provider attachment target, the flow is:

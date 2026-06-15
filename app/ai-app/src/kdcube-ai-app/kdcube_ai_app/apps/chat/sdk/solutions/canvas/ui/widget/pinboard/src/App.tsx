@@ -184,6 +184,14 @@ export default function App() {
     setCanvases((current) => upsertCanvasDefinition(current, canvasFromPatchEvent(event, activeCanvasRef.current)))
   }, [])
 
+  useEffect(() => {
+    if (!host) return undefined
+    return host.subscribeCanvasPatchEvents(
+      applyPatchResponse,
+      (err) => console.warn('[pinboard:data-bus] live canvas subscription failed', { message: err.message }),
+    )
+  }, [host, applyPatchResponse])
+
   const patchCanvas = useCallback(async (input: CanvasPatchInput): Promise<CanvasPatchResponse> => {
     if (!host) throw new Error('Pin Board is not ready yet.')
     const response = await host.patchCanvas(input)

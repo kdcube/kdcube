@@ -272,9 +272,11 @@ example, a task provider can return `open` for `task:issue:<id>` and `download`
 for `task:issue:attachment:<id>/...`. The chat widget and pinboard should not
 infer this from `task:` or from broad capabilities.
 
-For downloads, the resolver response must contain downloadable bytes such as
-`content_base64`, plus optional `filename` and `mime`. The widget materializes
-the browser download directly.
+For downloads, the resolver response should contain a cookie-authenticated
+`download_url`, plus optional `filename`, `mime`, and `size`. The widget opens
+that URL as a normal browser download, so file bytes do not travel inside the
+JSON resolver response. `content_base64` remains a legacy fallback for older
+providers only.
 
 For opens, the resolver response must contain a `ui_event.target_surface`.
 The chat iframe posts the resolver response to its host using:

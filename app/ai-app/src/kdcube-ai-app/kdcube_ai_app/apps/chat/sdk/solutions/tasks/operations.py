@@ -9,9 +9,9 @@ import time
 import uuid
 from contextlib import nullcontext
 from typing import Any, Awaitable, Callable, Dict, Optional
-from urllib.parse import urlencode
 
 from kdcube_ai_app.apps.chat.sdk.config import get_secret
+from kdcube_ai_app.apps.chat.sdk.infra.bundle_urls import bundle_operation_url
 from kdcube_ai_app.infra.jobs.stream import RedisBackgroundJobStream
 from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_request_context
 from kdcube_ai_app.apps.chat.sdk.runtime.http_ops import BundleBinaryResponse
@@ -320,8 +320,15 @@ def _artifact_download_url(entrypoint: Any, *, artifact_ref: str, public: bool, 
     query_payload = {"artifact_ref": artifact_ref}
     if download_token:
         query_payload["download_token"] = download_token
-    query = urlencode(query_payload)
-    return f"/api/integrations/bundles/{tenant}/{project}/{bundle_id}/{route}/{alias}?{query}"
+    return bundle_operation_url(
+        tenant=tenant,
+        project=project,
+        bundle_id=bundle_id,
+        route=route,
+        operation=alias,
+        query=query_payload,
+        strict=True,
+    )
 
 
 async def _decorate_execution_artifacts(

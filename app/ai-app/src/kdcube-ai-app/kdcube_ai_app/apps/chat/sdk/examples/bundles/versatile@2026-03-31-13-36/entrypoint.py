@@ -32,6 +32,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
     register_configured_named_service_event_sources,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus import DataBusResult, data_bus_handler
+from kdcube_ai_app.apps.chat.sdk.runtime.http_ops import BundleBinaryResponse
 from kdcube_ai_app.infra.plugin.bundle_loader import bundle_entrypoint, api, on_job, ui_widget
 from kdcube_ai_app.infra.service_hub.inventory import BundleState, Config
 
@@ -583,6 +584,11 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
     async def canvas_object_action(self, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
         payload = payload_from_call(data, **kwargs)
         return await self._canvas_service().object_action(payload)
+
+    @api(method="GET", alias="canvas_object_download", route="operations", **_api_visibility("canvas_object_action"))
+    async def canvas_object_download(self, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> BundleBinaryResponse:
+        payload = payload_from_call(data, **kwargs)
+        return await self._canvas_service().object_download(payload)
 
     @api(method="POST", alias="canvas_search", route="operations", **_api_visibility("canvas_search"))
     async def canvas_search(self, data: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:

@@ -93,6 +93,8 @@ class NamedServiceCanvasObjectResolver(CanvasObjectResolver):
                 action=normalized_action,
                 context={
                     "source": "canvas.object_resolve" if operation == OBJECT_RESOLVE else "canvas.object_action",
+                    "tenant": self.endpoint.tenant or "",
+                    "project": self.endpoint.project or "",
                     "user_id": user_id,
                     "story_id": story_id,
                 },

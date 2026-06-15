@@ -143,6 +143,9 @@ user clicks pin action
 
 The data bus is used when an action needs another mounted widget to react. A
 plain REST operation is enough for immediate preview/download results.
+For downloads, the REST result should return a cookie-authenticated
+`download_url`; the browser then performs a normal GET and receives streamed
+bytes. File bytes should not be embedded in the JSON action response.
 
 ## Opening Objects
 
@@ -219,12 +222,20 @@ pin.object_ref = fi:conv_....turn_...outputs/problem_statement.md
 click Download
  -> canvas_object_action(action=download, object_ref=fi:...)
  -> PlatformArtifactResolver.download(fi:...)
- -> resolver returns a browser-safe response
+ -> resolver returns download_url
+ -> browser GETs download_url with its existing session cookie
+ -> server streams bytes
 ```
 
 If the platform internally needs `ef:` or any other browser route, that is an
 implementation detail of the platform artifact resolver. The canvas card does
 not persist it.
+
+ReAct pull uses the same namespace-owned byte access path but a different sink:
+instead of returning a browser URL, the rehoster writes the bytes into the
+current ReAct workspace. For example, `cnv:` canvas object download and `cnv:`
+pull both use the canvas artifact resolver's byte reader; only the final
+transport differs.
 
 ## Rehosting
 

@@ -384,6 +384,149 @@ function formatFileSize(bytes: number): string {
   return `${value >= 10 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`
 }
 
+function safeDownloadName(value: unknown): string {
+  const raw = String(value || '').split(/[\\/]/).pop()?.trim() || 'download'
+  return raw.replace(/[\x00-\x1f<>:"|?*]+/g, '_').replace(/\s+/g, ' ').slice(0, 180) || 'download'
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : null
+}
+
+function stringValue(value: unknown): string {
+  return value == null ? '' : String(value).trim()
+}
+
+function numberValue(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return undefined
+}
+
+function providerObjectParts(value: unknown): {
+  identity: Record<string, unknown>
+  meta: Record<string, unknown>
+  body: Record<string, unknown>
+} {
+  const raw = asRecord(value) || {}
+  return {
+    identity: asRecord(raw.identity) || {},
+    meta: asRecord(raw.meta) || {},
+    body: asRecord(raw.body) || {},
+  }
+}
+
+function providerObjectAttachmentContexts(
+  card: CanvasCard,
+  resolverState?: CanvasObjectActionResponse,
+): CanvasContextItem[] {
+  const { identity, body } = providerObjectParts(resolverState?.object)
+  const attachments = Array.isArray(body.attachments) ? body.attachments : []
+  const issueId = stringValue(body.issue_id || body.id || identity.object_id)
+  const storyId = stringValue(body.story_id || body.storyId || (issueId ? `issue:${issueId}` : ''))
+  return attachments.map((item, index) => {
+    const attachment = asRecord(item)
+    if (!attachment) return null
+    const ref = stringValue(
+      attachment.logical_path ||
+      attachment.logicalPath ||
+      attachment.hosted_uri ||
+      attachment.hostedUri ||
+      attachment.ref ||
+      attachment.object_ref ||
+      attachment.objectRef,
+    )
+    if (!ref) return null
+    const attachmentId = stringValue(
+      attachment.id ||
+      attachment.attachment_id ||
+      attachment.attachmentId ||
+      ref,
+    )
+    const filename = stringValue(attachment.filename || attachment.name) || safeDownloadName(ref)
+    const mime = stringValue(attachment.mime || attachment.mime_type || attachment.mimeType) || 'application/octet-stream'
+    const sizeBytes = numberValue(attachment.size_bytes || attachment.sizeBytes || attachment.size)
+    const version = numberValue(attachment.version)
+    const objectKind = stringValue(attachment.object_kind || attachment.objectKind || attachment.kind) ||
+      (namespaceFromRef(ref) ? `${namespaceFromRef(ref)}.attachment` : 'object.attachment')
+    const summaryParts = [
+      issueId,
+      mime,
+      sizeBytes !== undefined ? `${sizeBytes} bytes` : '',
+    ].filter(Boolean)
+    return {
+      id: ref,
+      kind: objectKind,
+      label: filename,
+      summary: summaryParts.join(' · '),
+      ref,
+      logical_path: ref,
+      hosted_uri: stringValue(attachment.hosted_uri || attachment.hostedUri) || ref,
+      mime,
+      card_id: card.id,
+      card_type: card.kind,
+      event_source_id: stringValue(resolverState?.event_source_id) || 'named_services.object',
+      data: {
+        parent_card_id: card.id,
+        parent_object_ref: stringValue(resolverState?.object_ref || resolverState?.ref || card.ref),
+        issue_id: issueId,
+        attachment_id: attachmentId,
+        story_id: storyId,
+        object_ref: ref,
+        object_kind: objectKind,
+        filename,
+        mime,
+        size_bytes: sizeBytes,
+        version,
+        row: index,
+      },
+    } satisfies CanvasContextItem
+  }).filter((item): item is CanvasContextItem => Boolean(item))
+}
+
+function triggerBase64Download(
+  contentBase64: string | undefined,
+  filename: string,
+  mime = 'application/octet-stream',
+): boolean {
+  if (!contentBase64) return false
+  const comma = contentBase64.indexOf(',')
+  const encoded = comma >= 0 ? contentBase64.slice(comma + 1) : contentBase64
+  const binary = window.atob(encoded)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index)
+  }
+  const blob = new Blob([bytes], { type: mime || 'application/octet-stream' })
+  const url = window.URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = safeDownloadName(filename)
+  link.style.display = 'none'
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => window.URL.revokeObjectURL(url), 1000)
+  return true
+}
+
+function triggerUrlDownload(downloadUrl: string | undefined, filename: string): boolean {
+  const url = String(downloadUrl || '').trim()
+  if (!url) return false
+  const link = document.createElement('a')
+  link.href = url
+  link.download = safeDownloadName(filename)
+  link.rel = 'noopener'
+  link.style.display = 'none'
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  return true
+}
+
 function cloneCards(cards: CanvasCard[]): CanvasCard[] {
   return cards.map((card) => ({
     ...card,
@@ -613,21 +756,55 @@ export function CanvasBoard({
   useEffect(() => {
     if (!expandedCardId || !onObjectAction) return
     const card = cardsRef.current.find((item) => item.id === expandedCardId)
-    if (!card?.ref || resolverStateByCard[card.id] || resolverLoadingByCard[card.id]) return
+    if (!card?.ref || resolverLoadingByCard[card.id]) return
+    const existing = resolverStateByCard[card.id]
+    if (
+      existing &&
+      (
+        existing.action === 'preview' ||
+        existing.capabilities?.preview !== true ||
+        providerObjectAttachmentContexts(card, existing).length > 0
+      )
+    ) return
     setResolverLoadingByCard((current) => ({ ...current, [card.id]: true }))
-    onObjectAction(card, 'capabilities')
-      .then((result) => {
-        setResolverStateByCard((current) => ({ ...current, [card.id]: result }))
-        if (!result.ok) {
-          setResolverNoticeByCard((current) => ({
-            ...current,
-            [card.id]: result.error || result.message || 'Resolver is not available for this object.',
-          }))
+    const loadAction = async () => {
+      const capabilitiesResult = existing || await onObjectAction(card, 'capabilities')
+      let result = capabilitiesResult
+      if (capabilitiesResult.ok && capabilitiesResult.capabilities?.preview === true) {
+        const previewResult = await onObjectAction(card, 'preview')
+        result = {
+          ...capabilitiesResult,
+          ...previewResult,
+          capabilities: previewResult.capabilities || capabilitiesResult.capabilities,
         }
-      })
+      }
+      setResolverStateByCard((current) => ({
+        ...current,
+        [card.id]: {
+          ...(current[card.id] || {}),
+          ...result,
+          capabilities: result.capabilities || current[card.id]?.capabilities,
+        },
+      }))
+      if (!result.ok) {
+        setResolverNoticeByCard((current) => ({
+          ...current,
+          [card.id]: result.error || result.message || 'Resolver is not available for this object.',
+        }))
+      }
+    }
+    loadAction()
       .catch((error) => {
         const message = error instanceof Error ? error.message : String(error)
-        setResolverNoticeByCard((current) => ({ ...current, [card.id]: message }))
+        if (existing) {
+          setResolverStateByCard((current) => ({ ...current, [card.id]: existing }))
+        }
+        if (!existing) {
+          setResolverNoticeByCard((current) => ({
+            ...current,
+            [card.id]: message,
+          }))
+        }
       })
       .finally(() => {
         setResolverLoadingByCard((current) => ({ ...current, [card.id]: false }))
@@ -1602,9 +1779,15 @@ export function CanvasBoard({
           [card.id]: opened ? 'Open request sent.' : (result.message || 'Resolver returned no open target.'),
         }))
       } else if (action === 'download') {
+        const filename = result.filename || result.title || card.title || card.id
+        const downloaded = triggerUrlDownload(result.download_url, filename) || triggerBase64Download(
+          result.content_base64,
+          filename,
+          result.mime || card.mime || 'application/octet-stream',
+        )
         setResolverNoticeByCard((current) => ({
           ...current,
-          [card.id]: result.content_base64 ? 'Download started.' : (result.message || 'Resolver returned no downloadable content.'),
+          [card.id]: downloaded ? `Downloaded ${safeDownloadName(filename)}.` : (result.message || 'Resolver returned no downloadable content.'),
         }))
       }
     } catch (error) {
@@ -1733,6 +1916,14 @@ export function CanvasBoard({
               <Plus size={16} />
             </button>
           ) : null}
+          <button
+            className="secondary icon-only"
+            onClick={() => void refreshLatestCanvas()}
+            title="Refresh board"
+            disabled={refreshingCanvas}
+          >
+            <RotateCcw size={16} />
+          </button>
           <button className="secondary icon-only" onClick={fitToView} title="Fit pins into view">
             <Frame size={16} />
           </button>
@@ -1918,6 +2109,7 @@ export function CanvasBoard({
             const wantsDownload = capabilities?.download === true || kind === 'file' || kind === 'user.attachment'
             const wantsOpen = kind === 'memory' || kind === 'source' || kind === 'search.result' || kind === 'object.ref' || kind === 'conversation' || Boolean(namespaceFromRef(card.ref))
             const namespaceLabel = namespaceLabelForCard(card, namespaceStyles)
+            const providerAttachmentContexts = providerObjectAttachmentContexts(card, resolverState)
             return (
               <article
                 key={card.id}
@@ -2092,6 +2284,41 @@ export function CanvasBoard({
                     ) : card.summary ? (
                       <pre className="canvas-card-flyout-preview-text">{card.summary}</pre>
                     ) : null
+                  ) : null}
+                  {providerAttachmentContexts.length ? (
+                    <section className="canvas-card-flyout-attachments">
+                      <h4>Attachments <span className="count">({providerAttachmentContexts.length})</span></h4>
+                      <div className="canvas-card-flyout-attachment-list">
+                        {providerAttachmentContexts.map((attachment) => (
+                          <div
+                            key={attachment.id}
+                            className="canvas-card-flyout-attachment"
+                            draggable
+                            title="Drag attachment to chat or canvas"
+                            onDragStart={(event) => {
+                              event.stopPropagation()
+                              onDragCard(attachment)
+                              event.dataTransfer.effectAllowed = 'copy'
+                              event.dataTransfer.setData('application/json', JSON.stringify(attachment))
+                              event.dataTransfer.setData('text/plain', attachment.label)
+                              if (attachment.logical_path || attachment.ref || attachment.hosted_uri) {
+                                event.dataTransfer.setData('text/uri-list', attachment.logical_path || attachment.ref || attachment.hosted_uri || '')
+                              }
+                            }}
+                            onDragEnd={(event) => {
+                              event.stopPropagation()
+                              onDragCard(null)
+                            }}
+                          >
+                            <Paperclip size={13} />
+                            <span>
+                              <strong>{attachment.label}</strong>
+                              {attachment.summary ? <small>{attachment.summary}</small> : null}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
                   ) : null}
                   <section className="canvas-card-flyout-desc">
                     <div className="canvas-card-flyout-desc-head">

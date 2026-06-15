@@ -53,7 +53,7 @@ interface DataBusServiceEnvelope {
     message_id?: string
     subject?: string
     object_ref?: string
-    data?: Record<string, unknown>
+    data?: unknown
     code?: string
     message?: string
   }
@@ -285,11 +285,11 @@ async function publishDataBusAndWait(
       const data = env.data ?? {}
       if (data.message_id !== message.message_id) return
       if (env.type === 'kdcube.data_bus.result') {
-        finish(() => resolve(data.data ?? {}))
+        finish(() => resolve(isRecord(data.data) ? data.data : {}))
         return
       }
       if (env.type === 'kdcube.data_bus.conflict') {
-        finish(() => resolve(data.data ?? { ok: false, error: 'conflict' }))
+        finish(() => resolve(isRecord(data.data) ? data.data : { ok: false, error: 'conflict' }))
         return
       }
       if (env.type === 'kdcube.data_bus.error') {
@@ -318,6 +318,48 @@ async function publishDataBusAndWait(
   return resultPromise
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+function subscribeCanvasPatchEvents(
+  ctx: RouteContext,
+  onPatch: (response: CanvasPatchResponse) => void,
+  onError?: (error: Error) => void,
+): () => void {
+  let closed = false
+  let subscribedSocket: Socket | null = null
+
+  const onService = (payload: unknown): void => {
+    const env = (payload ?? {}) as DataBusServiceEnvelope
+    const data = env.data ?? {}
+    if (env.type !== 'kdcube.data_bus.result') return
+    if (data.subject !== CANVAS_SUBJECT) return
+    if (!isRecord(data.data)) return
+    onPatch(data.data as unknown as CanvasPatchResponse)
+  }
+
+  void (async () => {
+    try {
+      const socket = await dataBusSocketFor(ctx)
+      await ensureSocketConnected(socket)
+      if (closed) return
+      subscribedSocket = socket
+      socket.on('chat_service', onService)
+    } catch (error) {
+      if (closed) return
+      onError?.(error instanceof Error ? error : new Error(String(error)))
+    }
+  })()
+
+  return () => {
+    closed = true
+    if (subscribedSocket) {
+      subscribedSocket.off('chat_service', onService)
+    }
+  }
+}
+
 function objectRefForPatch(input: CanvasPatchInput): string {
   const canvasId = String(input.canvas_id ?? input.patch.canvas_id ?? '').trim()
   if (canvasId) return canvasId
@@ -339,6 +381,10 @@ export interface CanvasHostConfig {
 export interface CanvasHost {
   readonly storyId: string
   patchCanvas(input: CanvasPatchInput): Promise<CanvasPatchResponse>
+  subscribeCanvasPatchEvents(
+    onPatch: (response: CanvasPatchResponse) => void,
+    onError?: (error: Error) => void,
+  ): () => void
   readCanvas(input: CanvasReadInput): Promise<CanvasReadResponse>
   /** List + read the active canvas, returning the merged definition set. */
   loadCanvas(activeCanvasName: string): Promise<CanvasDefinition[]>
@@ -416,6 +462,7 @@ export function createCanvasHost(config: CanvasHostConfig): CanvasHost {
   return {
     storyId,
     patchCanvas,
+    subscribeCanvasPatchEvents: (onPatch, onError) => subscribeCanvasPatchEvents(ctx, onPatch, onError),
     readCanvas,
     loadCanvas,
     getBoardInfoHtml: () => boardInfoHtml,

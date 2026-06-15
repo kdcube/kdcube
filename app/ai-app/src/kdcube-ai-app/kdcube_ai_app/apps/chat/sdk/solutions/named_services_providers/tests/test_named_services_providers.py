@@ -971,7 +971,7 @@ async def test_configured_canvas_resolver_promotes_provider_download_fields():
                         },
                     },
                     "extra": {
-                        "content_base64": "IyBFdmlkZW5jZQo=",
+                        "download_url": "/api/integrations/bundles/tenant-a/project-a/task-tracker%401-0/operations/issue_attachment_download?object_ref=task%3Aissue%3Aattachment%3ABUG-123%2Fattachments%2Fta_1%2Fv000001%2Fevidence.md",
                         "filename": "evidence.md",
                         "mime": "text/markdown",
                         "size_bytes": 11,
@@ -1017,7 +1017,7 @@ async def test_configured_canvas_resolver_promotes_provider_download_fields():
         )
 
     assert result["ok"] is True
-    assert result["content_base64"] == "IyBFdmlkZW5jZQo="
+    assert result["download_url"].startswith("/api/integrations/bundles/tenant-a/project-a/")
     assert result["filename"] == "evidence.md"
     assert result["mime"] == "text/markdown"
     assert result["title"] == "evidence.md"

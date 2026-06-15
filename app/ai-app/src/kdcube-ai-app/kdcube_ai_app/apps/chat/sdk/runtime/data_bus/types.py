@@ -254,13 +254,13 @@ class DataBusReply:
         self.sent_count = 0
 
     async def accepted(self, data: Mapping[str, Any] | None = None) -> None:
-        await self.event("kdcube.data_bus.accepted", data=dict(data or {}), status="running")
+        await self.event("kdcube.data_bus.accepted", data=dict(data or {}), status="running", broadcast=True)
 
     async def ok(self, data: Mapping[str, Any] | None = None) -> None:
-        await self.event("kdcube.data_bus.result", data=dict(data or {}), status="completed")
+        await self.event("kdcube.data_bus.result", data=dict(data or {}), status="completed", broadcast=True)
 
     async def conflict(self, data: Mapping[str, Any] | None = None) -> None:
-        await self.event("kdcube.data_bus.conflict", data=dict(data or {}), status="completed")
+        await self.event("kdcube.data_bus.conflict", data=dict(data or {}), status="completed", broadcast=True)
 
     async def error(
         self,
@@ -276,6 +276,7 @@ class DataBusReply:
                 "details": dict(details or {}),
             },
             status="error",
+            broadcast=True,
         )
 
     async def event(

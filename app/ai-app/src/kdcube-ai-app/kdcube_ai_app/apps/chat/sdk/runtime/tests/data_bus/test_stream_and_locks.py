@@ -4,7 +4,7 @@ import pytest
 
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.locks import RedisDataBusPartitionLocker
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.stream import RedisDataBusStream
-from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.types import DataBusMessage
+from kdcube_ai_app.apps.chat.sdk.runtime.data_bus.types import DataBusMessage, DataBusReply
 
 
 class FakeRedis:
@@ -61,6 +61,14 @@ class FakeRedis:
         return ("0-0", [])
 
 
+class FakeReplyComm:
+    def __init__(self):
+        self.events = []
+
+    def service_event(self, **kwargs):
+        self.events.append(kwargs)
+
+
 @pytest.mark.asyncio
 async def test_data_bus_stream_publishes_json_and_claims_message():
     redis = FakeRedis()
@@ -83,6 +91,36 @@ async def test_data_bus_stream_publishes_json_and_claims_message():
     assert claim.message.payload == {"x": 1}
     await stream.ack(claim)
     assert redis.acks == [(stream.messages_key, stream.group_name, claim.stream_id)]
+
+
+@pytest.mark.asyncio
+async def test_data_bus_replies_broadcast_to_session_room():
+    message = DataBusMessage(
+        message_id="m1",
+        tenant="t",
+        project="p",
+        bundle_id="bundle@1",
+        subject="canvas.patch",
+        object_ref="canvas:main",
+        payload={"x": 1},
+    )
+    comm = FakeReplyComm()
+    reply = DataBusReply(message=message, comm=comm)
+
+    await reply.accepted({"queued": True})
+    await reply.ok({"ok": True})
+    await reply.conflict({"ok": False})
+    await reply.error("bad", "Bad result")
+
+    assert [event["type"] for event in comm.events] == [
+        "kdcube.data_bus.accepted",
+        "kdcube.data_bus.result",
+        "kdcube.data_bus.conflict",
+        "kdcube.data_bus.error",
+    ]
+    assert all(event["broadcast"] is True for event in comm.events)
+    assert all(event["data"]["message_id"] == "m1" for event in comm.events)
+    assert all(event["data"]["subject"] == "canvas.patch" for event in comm.events)
 
 
 @pytest.mark.asyncio

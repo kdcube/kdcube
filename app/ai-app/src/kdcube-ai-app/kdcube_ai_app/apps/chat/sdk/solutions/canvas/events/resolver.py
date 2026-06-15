@@ -15,6 +15,7 @@ from kdcube_ai_app.apps.chat.sdk.events import (
     event_source_declaration,
     event_source_reader,
 )
+from kdcube_ai_app.apps.chat.sdk.infra.bundle_urls import bundle_operation_url
 from kdcube_ai_app.apps.chat.sdk.solutions.canvas.config import canvas_config_from_props
 from kdcube_ai_app.apps.chat.sdk.solutions.canvas.tools_core import DEFAULT_CANVAS_TOOL_EVENT_SOURCE_DESCRIPTIONS
 from kdcube_ai_app.apps.chat.sdk.solutions.canvas.tools_core import read_canvas_for_agent
@@ -138,15 +139,14 @@ async def rehost_canvas_ref(
     except Exception as exc:
         return {"missing": [{"source_ref": uri, "reason": f"canvas_runtime_scope_unavailable:{exc}"}]}
 
-    storage_key = str(key or "").strip().lstrip("/")
+    storage_key = str(key or (uri.split(":", 1)[1] if ":" in uri else "")).strip().lstrip("/")
     if _looks_like_canvas_storage_key(storage_key):
-        try:
-            raw = store.artifacts.read(storage_key)
-        except Exception as exc:
-            return {"missing": [{"source_ref": uri, "reason": f"canvas_object_not_found:{exc}"}]}
-        payload = raw if isinstance(raw, bytes) else str(raw).encode("utf-8")
         mime, _ = mimetypes.guess_type(pathlib.PurePosixPath(storage_key).name)
         mime = mime or "application/octet-stream"
+        try:
+            payload, _meta = CanvasArtifactResolver(store).download_bytes(f"{namespace}:{storage_key}", mime=mime)
+        except Exception as exc:
+            return {"missing": [{"source_ref": uri, "reason": f"canvas_object_not_found:{exc}"}]}
         relpath = f"cnv/{storage_key}"
         namespace_name = ARTIFACT_NAMESPACE_ATTACHMENTS
     else:
@@ -216,6 +216,16 @@ def namespace_for_ref(ref: str) -> str:
     if not value or ":" not in value:
         return ""
     return value.split(":", 1)[0].strip().lower()
+
+
+def _bundle_operation_url(store: CanvasStore, operation: str, query: Mapping[str, Any]) -> str:
+    return bundle_operation_url(
+        tenant=getattr(store, "tenant", ""),
+        project=getattr(store, "project", ""),
+        bundle_id=getattr(store, "bundle_id", ""),
+        operation=operation,
+        query=query,
+    )
 
 
 def _looks_textual(raw: bytes, *, mime: str = "") -> bool:
@@ -428,11 +438,8 @@ class CanvasArtifactResolver(CanvasObjectResolver):
         return out
 
     def download_ref(self, ref: str, *, mime: str = "") -> Dict[str, Any]:
-        key = ref.split(":", 1)[1].strip()
-        if not key:
-            return {"ok": False, "error": f"empty_{self.namespace}_ref", "ref": ref, "namespace": self.namespace}
         try:
-            raw = self.store.artifacts.read(key)
+            data, meta = self.download_bytes(ref, mime=mime)
         except Exception as exc:
             return {
                 "ok": False,
@@ -440,19 +447,46 @@ class CanvasArtifactResolver(CanvasObjectResolver):
                 "ref": ref,
                 "object_ref": ref,
                 "namespace": self.namespace,
-                "key": key,
+                "key": ref.split(":", 1)[1].strip() if ":" in ref else "",
                 "error": f"{self.namespace}_ref_not_found",
                 "message": str(exc),
             }
+        result = {
+            **self.base_response(ref=ref, action="download"),
+            **meta,
+            "resolved": True,
+            "size": len(data),
+        }
+        download_url = _bundle_operation_url(
+            self.store,
+            "canvas_object_download",
+            {
+                "object_ref": ref,
+                "mime": meta.get("mime") or mime,
+                "filename": meta.get("filename") or "",
+            },
+        )
+        if download_url:
+            result["download_url"] = download_url
+        return result
+
+    def download_bytes(self, ref: str, *, mime: str = "") -> tuple[bytes, Dict[str, Any]]:
+        key = ref.split(":", 1)[1].strip()
+        if not key:
+            raise ValueError(f"empty_{self.namespace}_ref")
+        try:
+            raw = self.store.artifacts.read(key)
+        except Exception as exc:
+            raise FileNotFoundError(str(exc)) from exc
         data = raw if isinstance(raw, bytes) else str(raw).encode("utf-8")
         filename = PurePosixPath(key).name or "canvas-artifact"
-        return {
-            **self.base_response(ref=ref, action="download"),
-            "resolved": True,
+        return data, {
+            "key": key,
+            "ref": ref,
+            "object_ref": ref,
+            "namespace": self.namespace,
             "filename": filename,
             "mime": mime or "",
-            "size": len(data),
-            "content_base64": base64.b64encode(data).decode("ascii"),
         }
 
 

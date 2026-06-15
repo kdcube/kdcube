@@ -11,7 +11,9 @@ from kdcube_ai_app.apps.chat.sdk.context.memory.events.resolver import (
 from kdcube_ai_app.apps.chat.sdk.solutions.canvas import api as canvas_api
 from kdcube_ai_app.apps.chat.sdk.solutions.canvas.events.resolver import (
     CallableCanvasObjectResolver,
+    CanvasArtifactResolver,
     build_default_canvas_resolver_registry,
+    object_ref_from_payload,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.canvas.storage import CanvasStore
 from kdcube_ai_app.apps.chat.sdk.solutions.chat.events.resolver import (
@@ -24,6 +26,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.events.resolver import resolve_event_ref_action
 from kdcube_ai_app.apps.chat.sdk.runtime.data_bus import DataBusResult
+from kdcube_ai_app.apps.chat.sdk.runtime.http_ops import BundleBinaryResponse
 
 
 @dataclass(frozen=True)
@@ -303,6 +306,23 @@ class VersatileCanvasService:
             result = {"ok": False, "user_id": user_id, "story_id": story_id, "error": str(exc)}
         self.log_failure("canvas_object_action", payload, result)
         return result
+
+    async def object_download(self, payload: Mapping[str, Any]) -> BundleBinaryResponse:
+        user_id = self.resolve_user_id(payload)
+        ref = object_ref_from_payload(payload) or protocol_string(payload, "artifact_ref")
+        mime = protocol_string(payload, "mime", "application/octet-stream")
+        registry = self.object_resolvers(payload, user_id=user_id)
+        resolver = registry.resolver_for_ref(ref)
+        if not isinstance(resolver, CanvasArtifactResolver):
+            raise RuntimeError("download_not_supported_by_this_resolver")
+        data, meta = resolver.download_bytes(ref, mime=mime)
+        filename = protocol_string(payload, "filename", str(meta.get("filename") or "canvas-artifact"))
+        media_type = protocol_string(payload, "mime", str(meta.get("mime") or "application/octet-stream"))
+        return BundleBinaryResponse(
+            content=data,
+            filename=filename,
+            media_type=media_type or "application/octet-stream",
+        )
 
     def operation(self, alias: str, payload: Mapping[str, Any], operation: Any) -> Dict[str, Any]:
         user_id = self.resolve_user_id(payload)

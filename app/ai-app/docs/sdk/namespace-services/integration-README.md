@@ -4,7 +4,7 @@ title: "Namespace Services: Integration Flow"
 summary: "Visual host/client integration flow for namespace service providers, using task-tracker and versatile as the current reference path."
 status: design
 tags: ["sdk", "namespace-services", "integration", "task-tracker", "versatile", "scene", "canvas", "chat"]
-updated_at: 2026-06-12
+updated_at: 2026-06-15
 keywords:
   [
     "namespace service integration",
@@ -123,69 +123,208 @@ These adapters do not own task semantics. They only know:
 
 ## Object Action Flow
 
-Opening a task card from canvas or chat:
+Example: the user presses **Download** on a canvas card whose ref is a task
+attachment. Each step names the code executor, the surface inside that
+executor, and whether that step is generic or app-specific.
+
+In this section:
+
+- **consumer app** means the app that mounted the canvas/chat/scene surface and
+  configured `surfaces.as_consumer`; in the current reference this is
+  `versatile@2026-03-31-13-36`;
+- **consumer app operation** means an ordinary bundle/app `@api` method, for
+  example `@api(alias="canvas_object_action", route="operations")`;
+- **provider app** means the app that owns the namespace and registered
+  `named_services()` for it; in the current reference this is
+  `task-tracker@1-0`.
 
 ```text
-User action
-  User.clicks(Canvas.card)
-  Canvas.card.object_ref = task:issue:issue_123
-  Canvas.action = open
+1. Browser
+   executor: CanvasBoard React component mounted in the consumer app UI
+   surface: canvas/pinboard UI surface
+   customized: no, generic canvas component
+   input:
+     Canvas.card.object_ref =
+       task:issue:attachment:issue_1/attachments/ta_1/v000001/evidence.md
+     action = download
 
         |
         v
 
-Consumer widget/backend
-  Versatile.canvas_object_action receives:
-    Request.auth = current user/session/tenant/project
-    Canvas.card.object_ref
-    Canvas.action
+2. Browser embedding adapter
+   executor: the consumer app/widget/scene that embedded CanvasBoard
+   surface: browser-to-app operation adapter
+   customized: yes, per consumer app
+   call:
+     POST ConsumerApp.@api(alias="canvas_object_action", route="operations")
+     payload.object_ref = Canvas.card.object_ref
+     payload.action = download
+
+   Current reference:
+     ConsumerApp = versatile@2026-03-31-13-36
+     operation = VersatileEntrypoint.canvas_object_action(...)
 
         |
         v
 
-Consumer resolver adapter
-  CanvasResolver sees namespace(task) from Canvas.card.object_ref
-  Builds NamedServiceRequest:
-    request.operation = object.action
-    request.namespace = task
-    request.object_ref = Canvas.card.object_ref
-    request.action = Canvas.action
-    request.context.auth = Request.auth
+3. Consumer app backend
+   executor: consumer bundle entrypoint method decorated with @api
+   surface: operations API surface of the consumer app
+   customized: yes, consumer chooses which resolvers are registered
+   work:
+     Request.auth = current user/session/tenant/project
+     build CanvasObjectResolverRegistry
+     register configured resolvers from Consumer.config.surfaces.as_consumer.ui.canvas
+     call registry.object_action(payload)
 
         |
         v
 
-Discovery and transport
-  Discovery.resolve(request.operation, request.namespace, request.object_ref)
-    -> Discovery.entry(provider_id=task.issue, bundle_id=task-tracker@1-0)
-  Transport uses Discovery.entry.endpoint:
-    bundle_registry -> TaskProvider.named_services()
-    bundle_operation -> TaskProvider.@api(alias="named_service")
+4. Generic SDK registry
+   executor: CanvasObjectResolverRegistry
+   surface: canvas object resolver dispatch
+   customized: no, generic SDK
+   work:
+     namespace = split_namespace(Canvas.card.object_ref) = task
+     resolver = registered resolver for namespace task
 
         |
         v
 
-Provider operation
-  TaskProvider.object_action(ctx=Request.auth, request)
-  TaskProvider owns:
-    TaskProvider.issue data
-    TaskProvider.permission rules
-    TaskProvider.target surface names
-  Returns:
-    TaskProvider.ret.object = compact task descriptor
-    TaskProvider.ret.ui_event.target_surface = task_tracker.issue_editor
-    TaskProvider.ret.attrs.object_ref = request.object_ref
+5. Generic named-service resolver bridge
+   executor: NamedServiceCanvasObjectResolver
+   surface: configured canvas/chat resolver adapter
+   customized: configured, not hardcoded
+   builds:
+     NamedServiceRequest.operation = object.action
+     NamedServiceRequest.namespace = task
+     NamedServiceRequest.object_ref = Canvas.card.object_ref
+     NamedServiceRequest.action = download
+     NamedServiceRequest.context.source = canvas.object_action
+     NamedServiceRequest.context.tenant/project = Consumer request scope
 
         |
         v
 
-Consumer scene
-  Versatile.scene reads TaskProvider.ret.ui_event.target_surface
-  Versatile.scene opens task-tracker editor iframe
+6. Generic provider discovery/transport
+   executor: named-service endpoint/discovery transport
+   surface: service discovery + bundle_registry or bundle_operation transport
+   customized: provider endpoint config/discovery entry
+   work:
+     Discovery.resolve(object.action, task, object_ref)
+       -> Discovery.entry(provider_id=task.issue, bundle_id=task-tracker@1-0)
+     bundle_registry transport:
+       calls TaskTrackerEntrypoint.named_services().provider("task.issue")
+     bundle_operation transport:
+       calls TaskTrackerEntrypoint.@api(alias="named_service")
+
+        |
+        v
+
+7. Provider app backend
+   executor: TaskIssueNamedServiceProvider.object_action(...)
+   surface: provider registry surface inside task-tracker app
+   customized: yes, provider owns task semantics
+   work:
+     parse object_ref
+     classify object_kind = task.attachment
+     enforce auth/capability
+     run provider action = download
+     build provider-owned download URL with bundle_operation_url(...)
+   returns:
+     ret.extra.download_url =
+       /api/integrations/bundles/.../operations/issue_attachment_download?object_ref=...
+     ret.extra.filename = evidence.md
+     ret.extra.mime = text/markdown
+
+        |
+        v
+
+8. Browser
+   executor: CanvasBoard React component
+   surface: generic canvas download behavior
+   customized: no
+   work:
+     create temporary <a href=download_url download=filename>
+     browser GETs download_url with its current cookies/session
+
+        |
+        v
+
+9. Provider app backend binary operation
+   executor: TaskTrackerEntrypoint.issue_attachment_download(...)
+   surface: provider app @api(alias="issue_attachment_download", route="operations")
+   customized: yes, provider owns bytes/storage
+   work:
+     authenticate request again
+     parse object_ref or issue_id/attachment_id
+     read provider storage
+     return BundleBinaryResponse(bytes, filename, mime)
+
+        |
+        v
+
+10. Browser
+    executor: browser download stack
+    surface: native file download
+    customized: no
+    result:
+      user receives evidence.md
 ```
 
-The task ref remains `task:issue:issue_123` the entire time. Canvas owns card
-layout. Task-tracker owns task semantics.
+The task attachment ref remains provider-owned the entire time. Canvas owns the
+card and click UI. The consumer app owns the `@api` entrypoint that its canvas
+calls. The task provider owns task/attachment semantics and byte access.
+
+## Same Ref Across Surfaces
+
+The same provider-owned ref can travel through every consumer surface. The
+consumer changes; the provider contract does not.
+
+```text
+Provider object
+  TaskProvider.object_ref =
+    task:issue:attachment:issue_1/attachments/ta_1/v000001/evidence.md
+
+        |
+        +--> chat context chip
+        |     Consumer calls object.resolve for label/actions.
+        |     On click, Consumer runs default_open_effect_action from provider.
+        |
+        +--> canvas/pinboard card
+        |     Consumer stores Canvas.card.object_ref unchanged.
+        |     On open/download, Consumer calls object.action.
+        |
+        +--> scene host
+        |     Consumer receives Provider.ret.ui_event.target_surface.
+        |     Scene routes that target to the mounted widget/component.
+        |
+        +--> ReAct context/materialization
+              Consumer calls event.resolve + block.produce for model context.
+              react.pull calls object.get(response_mode=stream) for bytes.
+```
+
+For an attachment ref, the task provider can return:
+
+```text
+object.resolve:
+  object_kind = task.attachment
+  actions = [preview, open, download]
+  default_open_effect_action = download
+  parent.object_ref = task:issue:issue_1
+
+object.action(action=download):
+  download_url = /api/integrations/bundles/.../issue_attachment_download?object_ref=...
+  filename = evidence.md
+  mime = text/markdown
+
+object.get(response_mode=stream):
+  chunks = attachment bytes for react.pull or another materializer
+```
+
+No consumer surface should hardcode that `task:` attachments download while
+`task:` issues open an editor. The task provider declares that per concrete
+object handle.
 
 ## ReAct External Event Block Flow
 
@@ -325,6 +464,133 @@ named-service error code and response.
 
 Normal block rendering does not copy provider bytes. ReAct gets bytes from
 foreign namespaces only through explicit pull materialization.
+
+## ReAct Named-Service Tool Flow
+
+Example: the model calls `named_services.search_objects`,
+`named_services.host_file`, or `named_services.upsert_object`. Each step names
+where code executes, which surface executes it, and which part is customized.
+
+```text
+1. LLM generation
+   executor: model stream governed by ReAct runtime
+   surface: ReAct action/tool lane
+   customized: no provider code; prompt and tool catalog influence output
+   emits:
+     action = call_tool
+     tool_id = named_services.search_objects
+     params.namespace = task
+
+        |
+        v
+
+2. ReAct runtime and harness
+   executor: ReAct v3 runtime in the consumer app process
+   surface: decision/tool-execution phase
+   customized: no namespace semantics
+   work:
+     validate the action packet
+     apply multi-action strategy/harness rules
+     choose ToolSubsystem for accepted tool calls
+
+        |
+        v
+
+3. Consumer app tool config
+   executor: agent_tool_config_from_bundle_props(...)
+   surface: Consumer.config.surfaces.as_consumer.agents.<agent>.tools
+   customized: yes, per consumer app and agent
+   owns:
+     namespace allow-list = task
+     visible operations = provider.about, object.search, object.host_file,
+                          object.upsert, object.delete, ...
+   maps provider operations to generic tool names:
+     object.search    -> named_services.search_objects
+     object.get       -> named_services.get_object
+     object.host_file -> named_services.host_file
+     object.upsert    -> named_services.upsert_object
+     object.delete    -> named_services.delete_object
+
+        |
+        v
+
+4. Generic named-service tool adapter
+   executor: kdcube_ai_app...named_services_providers.tools
+   surface: ToolSubsystem module call
+   customized: configured namespace/provider endpoints, not task semantics
+   builds:
+     NamedServiceRequest.operation = object.search OR object.host_file OR ...
+     NamedServiceRequest.namespace = task
+     NamedServiceRequest.object_ref = tool params object_ref, when present
+     NamedServiceRequest.context.source = named_services.client_tool
+     NamedServiceRequest.context.auth = current ReAct request/session
+
+        |
+        v
+
+5. Generic provider discovery/transport
+   executor: NamedServiceEndpoint / call_named_service_endpoint(...)
+   surface: service discovery + bundle_registry/bundle_operation transport
+   customized: provider endpoint config/discovery entry
+   work:
+     Discovery.resolve(operation, task, object_ref)
+       -> Discovery.entry(provider_id=task.issue, bundle_id=task-tracker@1-0)
+     bundle_registry:
+       call TaskTrackerEntrypoint.named_services() in-process
+     bundle_operation:
+       call TaskTrackerEntrypoint.@api(alias="named_service", route="operations")
+
+        |
+        v
+
+6. Provider app backend
+   executor: TaskIssueNamedServiceProvider.<operation>(ctx, request)
+   surface: provider registry/API surface inside task-tracker app
+   customized: yes, provider owns task semantics
+   examples:
+     object.search:
+       query task storage/index and return bounded task descriptors
+     object.host_file:
+       read caller file descriptor under auth, store provider attachment,
+       return Provider.object_ref for the new task attachment
+     object.upsert:
+       validate task.issue schema and mutate the issue
+     object.get(response_mode=stream):
+       stream provider-owned object bytes for react.pull
+
+        |
+        v
+
+7. ReAct tool result
+   executor: ToolSubsystem result handling in the consumer app
+   surface: ReAct tool result artifact/timeline
+   customized: no provider semantics
+   result:
+     success -> bounded NamedServiceResponse JSON or pull materialization rows
+     failure -> provider error code/message preserved in the tool result
+
+        |
+        v
+
+8. Next ReAct decision
+   executor: model sees accepted tool result in the next round
+   surface: ReAct timeline/context
+   customized: model behavior only; provider result remains authoritative
+```
+
+Important ownership rules:
+
+- The model sees generic tool names. The provider supplies schemas through
+  `provider.about` and `object.schema`.
+- The consumer app decides which named-service tools and namespaces the agent
+  may call.
+- The named-service tool adapter does not know how task issues or task
+  attachments work. It only builds `NamedServiceRequest`.
+- The provider app owns object parsing, permissions, search, mutation,
+  hosting, streamed bytes, and any domain-specific error.
+- Large bytes do not ride inside generic tool JSON. `react.pull` uses
+  `object.get(response_mode=stream)` and writes provider bytes into ReAct
+  `fi:` workspace files.
 
 ## Host-File Flow
 

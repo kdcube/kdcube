@@ -267,6 +267,7 @@ export interface ObjectActionResponse {
   mime?: string
   text?: string
   json?: unknown
+  download_url?: string
   content_base64?: string
   filename?: string
   size?: number

@@ -4,7 +4,7 @@ title: "Namespace Services: Clients"
 summary: "How bundles, agents, widgets, jobs, and external clients consume configured namespace service providers."
 status: design
 tags: ["sdk", "namespace-services", "clients", "tools", "resolvers", "bundles"]
-updated_at: 2026-06-12
+updated_at: 2026-06-15
 keywords:
   [
     "namespace service client",
@@ -123,6 +123,167 @@ for the concrete action name it accepts or rejects.
 The namespace `pull` policy is separate from model-callable tools. A client may
 allow `react.pull` to materialize `task:` refs through provider `object.get`
 without exposing the generic `named_services.get_object` tool to the agent.
+
+## Consumer Contract For All Surfaces
+
+A consumer surface configures access and routes effects. It does not own the
+foreign namespace semantics.
+
+```text
+Consumer config
+  agents.<agent>.tools:
+    allow model-callable provider operations
+
+  agents.<agent>.event_sources:
+    allow event.resolve, block.produce, object.get pull/materialization
+
+  ui.canvas.resolvers:
+    allow object.resolve and object.action for canvas/chat/pinboard refs
+
+  scene surface registry:
+    map provider-returned target_surface values to mounted UI surfaces
+```
+
+Every consumer surface should follow the same sequence:
+
+```text
+Incoming object handle
+  object_ref = task:issue:attachment:BUG-123/attachments/ta_1/v000001/evidence.md
+        |
+        v
+Consumer finds namespace = task
+        |
+        v
+Consumer calls provider operation allowed for that surface:
+  object.resolve       -> cheap metadata, actions, default_open_effect_action
+  object.action(open)  -> provider ui_event, scene routes target_surface
+  object.action(download) -> provider download_url, browser streams bytes
+  object.get(stream)   -> ReAct/materializer writes bytes to fi:
+  block.produce        -> model-visible blocks
+        |
+        v
+Consumer renders/routes the returned result without rewriting task semantics
+```
+
+The consumer owns:
+
+| Consumer-owned value | Meaning |
+| --- | --- |
+| `surfaces.as_consumer` config | Which namespace, operation families, tools, and UI resolvers are enabled. |
+| current `AuthContext` | Tenant, project, session, user, job, or service principal carried by the runtime. |
+| surface registry | Which local iframe/widget/component handles a returned `target_surface`. |
+| card/chip layout | How an already-resolved object handle appears in canvas, chat, or pinboard. |
+
+The provider owns:
+
+| Provider-owned value | Meaning |
+| --- | --- |
+| `object_kind`, `actions`, `capabilities` | Semantics for the concrete ref. |
+| `default_open_effect_action` | What a generic click/open should run for this concrete object. |
+| `download_url` and file metadata | How the browser downloads provider-owned bytes. |
+| streamed `object.get` representation | How ReAct or other materializers pull the object into a workspace. |
+| `block.produce` output | How the object becomes model-visible context. |
+
+## Consumer Execution Surfaces
+
+A **consumer app** is the app that mounted a surface and configured
+`surfaces.as_consumer`. It may be a chat app, a scene page, a bundle widget,
+or a backend workflow. "Consumer operation" is not a separate concept: it is
+the app's normal `@api(..., route="operations")` entrypoint that its browser
+surface or backend flow calls.
+
+For example, when a canvas card is clicked:
+
+```text
+Browser surface
+  executor: CanvasBoard React component
+  surface: canvas/pinboard UI
+  owns: click, selected action, Canvas.card.object_ref
+  customized: no, generic component
+
+        |
+        v
+
+Consumer browser adapter
+  executor: page/widget/scene code that mounted CanvasBoard
+  surface: browser-to-app operation adapter
+  owns: which app operation URL to call
+  customized: yes, per consumer app
+
+        |
+        v
+
+Consumer app backend operation
+  executor: consumer app @api(alias="canvas_object_action", route="operations")
+  surface: operations API of the consumer app
+  owns: AuthContext, resolver registry construction, allowed resolver config
+  customized: yes, consumer chooses configured resolvers
+
+        |
+        v
+
+Generic SDK resolver registry
+  executor: CanvasObjectResolverRegistry
+  surface: SDK resolver dispatch
+  owns: namespace dispatch and resolver lookup
+  customized: no
+
+        |
+        v
+
+Named-service resolver/client
+  executor: NamedServiceCanvasObjectResolver and NamedServiceClient transport
+  surface: configured named-service adapter
+  owns: NamedServiceRequest shape, discovery/transport call
+  customized: configured by namespace/provider discovery, not domain-coded
+
+        |
+        v
+
+Provider app backend
+  executor: provider app named_services() registry or @api(alias="named_service")
+  surface: provider registry/API surface
+  owns: object kind, actions, auth checks, bytes, ui_event, download_url
+  customized: yes, provider owns namespace semantics
+```
+
+For ReAct, the same separation applies:
+
+```text
+ReAct tool lane
+  executor: ReAct runtime + ToolSubsystem in the consumer app
+  surface: model-callable tool execution
+  owns: tool-call validation, tool result artifacts, round routing
+  customized: no namespace semantics
+
+        |
+        v
+
+Consumer config
+  executor: agent_tool_config_from_bundle_props(...)
+  surface: surfaces.as_consumer.agents.<agent>.tools
+  owns: which named_service tools and namespaces the agent may call
+  customized: yes, per consumer app/agent
+
+        |
+        v
+
+Named-service tool adapter
+  executor: named_services.search_objects / host_file / upsert_object / ...
+  surface: generic tool module
+  owns: mapping tool name to provider operation
+  customized: allowed namespaces and provider endpoint config
+
+        |
+        v
+
+Provider app backend
+  executor: provider operation such as object.search, object.host_file,
+            object.upsert, object.get, block.produce
+  surface: provider registry/API surface
+  owns: schema, mutation, search, file hosting, streamed bytes
+  customized: yes, provider-owned domain behavior
+```
 
 ## Client Ids
 
@@ -249,6 +410,10 @@ orchestration.
 `object.action` runs explicit UI actions such as `open`, `preview`, or
 `download`. The owning provider decides which actions are accepted for the
 concrete object ref.
+For `download`, consumers should prefer provider-returned `download_url` and
+let the browser issue an authenticated GET with normal platform cookies.
+`content_base64` can be handled as a compatibility fallback, but new provider
+integrations should not depend on it.
 
 ### Consumer-Owned Versus Provider-Owned Values
 

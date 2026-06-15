@@ -14,6 +14,7 @@ import {
   buildRequestHeaders,
   downloadBlobAsFile,
   requireScope,
+  resolveAbsoluteUrl,
 } from './transport.ts'
 import type {
   ConversationDTO,
@@ -399,6 +400,16 @@ function base64ToBlob(value: string, mime: string): Blob {
   return new Blob([bytes], { type: mime || 'application/octet-stream' })
 }
 
+function downloadUrlAsFile(url: string, filename: string): void {
+  const anchor = document.createElement('a')
+  anchor.href = resolveAbsoluteUrl(url)
+  anchor.download = filename
+  anchor.rel = 'noopener'
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+}
+
 export async function resolveObjectAction(params: ResolveObjectActionParams): Promise<ObjectActionResponse> {
   const { tenant, project } = requireScope()
   const response = await fetch(operationsUrl('canvas_object_action', settings.getBundleId(), tenant, project), {
@@ -443,12 +454,17 @@ export function downloadObjectActionResult(
   fallbackFilename: string,
   fallbackMime?: string | null,
 ): void {
-  const contentBase64 = typeof body.content_base64 === 'string' ? body.content_base64 : ''
-  if (!contentBase64) {
-    throw new Error('Resolver did not return downloadable bytes.')
-  }
   const resolvedMime = typeof body.mime === 'string' && body.mime ? body.mime : fallbackMime || 'application/octet-stream'
   const resolvedFilename = typeof body.filename === 'string' && body.filename ? body.filename : fallbackFilename
+  const downloadUrl = typeof body.download_url === 'string' ? body.download_url.trim() : ''
+  if (downloadUrl) {
+    downloadUrlAsFile(downloadUrl, resolvedFilename)
+    return
+  }
+  const contentBase64 = typeof body.content_base64 === 'string' ? body.content_base64 : ''
+  if (!contentBase64) {
+    throw new Error('Resolver did not return a download URL or downloadable bytes.')
+  }
   downloadBlobAsFile(base64ToBlob(contentBase64, resolvedMime), resolvedFilename)
 }
 
