@@ -4,7 +4,7 @@ title: "Namespace Services: Clients"
 summary: "How bundles, agents, widgets, jobs, and external clients consume configured namespace service providers."
 status: design
 tags: ["sdk", "namespace-services", "clients", "tools", "resolvers", "bundles"]
-updated_at: 2026-06-15
+updated_at: 2026-06-16
 keywords:
   [
     "namespace service client",
@@ -356,9 +356,25 @@ The current ReAct integration passes the ReAct agent id as the namespace
 service client id. Other runtimes can pass their own client id when their tool
 adapters are wired.
 
-Agents should use `provider.about.search_scopes[]` to choose the searchable ref
-scope and default search semantics. Use `object.schema` for exact body fields
-and filters. For ReAct specifically, fully reading a provider-owned namespace ref means
+The ReAct tool catalog is built from the consumer allow-list plus provider
+metadata. For `named_services.search_objects`, the rendered tool block lists:
+
+```text
+Scope:
+    - namespaces applicable: sensor
+    - provider search scopes:
+        sensor:
+          - sensor:temperature - temperature readings
+          - sensor:humidity:aggr - humidity aggregates
+```
+
+The namespace passed to `named_services.search_objects(namespace=...)` is the
+search scope. A scoped namespace searches that provider-declared object space.
+If the rendered tool catalog does not provide enough semantics, agents should
+call `named_services.provider_about(namespace=...)` for provider guidance and
+`named_services.object_schema(...)` for exact body fields and filters.
+
+For ReAct specifically, fully reading a provider-owned namespace ref means
 `react.pull(<provider_ref>)` first, then `react.read(<materialized fi:...>)`.
 This applies even when the provider object is JSON or markdown, not only when
 it is a binary file. The provider decides the materialized representation and

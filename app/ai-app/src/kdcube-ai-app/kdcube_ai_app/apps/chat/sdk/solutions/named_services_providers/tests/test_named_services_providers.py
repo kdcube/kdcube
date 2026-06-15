@@ -33,11 +33,13 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
     NamedServiceCanvasObjectResolver,
     NamedServiceClient,
     NamedServiceContext,
+    NamedServiceDiscoveryEntry,
     NamedServiceProvider,
     NamedServiceProviderSpec,
     NamedServiceRegistry,
     NamedServiceRequest,
     NamedServiceResponse,
+    NamedServiceSearchScope,
     RedisNamedServiceDiscovery,
     bind_named_service_discovery,
     call_named_service_endpoint,
@@ -1507,6 +1509,28 @@ def test_named_service_tools_support_default_client_policy():
     assert any(spec["alias"] == "named_services" for spec in specs)
 
 
+def test_named_service_provider_spec_serializes_search_scopes():
+    spec = NamedServiceProviderSpec(
+        provider_id="sensor.provider",
+        namespace="sensor",
+        operations={"object.search": {"transports": ["local"]}},
+        search_scopes=[
+            {"namespace": "sensor:temperature", "label": "temperature readings", "object_kind": "sensor.temperature"},
+            NamedServiceSearchScope(namespace="sensor:humidity:aggr", label="humidity aggregates"),
+        ],
+    )
+
+    restored = NamedServiceProviderSpec.from_dict(spec.to_dict())
+
+    assert restored.namespaces == ("sensor",)
+    assert [scope.namespace for scope in restored.search_scopes] == [
+        "sensor:temperature",
+        "sensor:humidity:aggr",
+    ]
+    assert restored.search_scopes[0].label == "temperature readings"
+    assert restored.search_scopes[0].object_kind == "sensor.temperature"
+
+
 def test_named_service_tool_catalog_hides_operations_not_allowed_for_client():
     props = {
         "named_services": {
@@ -1561,6 +1585,24 @@ def test_named_service_tool_catalog_marks_applicable_namespaces():
                                 "namespaces": {
                                     "task": {
                                         "allowed": ["provider.about", "object.search", "object.schema", "object.host_file"],
+                                        "providers": [
+                                            {
+                                                "provider_id": "task.provider",
+                                                "namespace": "task",
+                                                "search_scopes": [
+                                                    {
+                                                        "namespace": "task:issue",
+                                                        "label": "task issues",
+                                                        "object_kind": "task.issue",
+                                                    },
+                                                    {
+                                                        "namespace": "task:attachment",
+                                                        "label": "task attachments/files",
+                                                        "object_kind": "task.attachment",
+                                                    },
+                                                ],
+                                            }
+                                        ],
                                     },
                                     "memo": {
                                         "allowed": ["provider.about", "object.list"],
@@ -1583,10 +1625,86 @@ def test_named_service_tool_catalog_marks_applicable_namespaces():
     assert "named_service_operation" not in catalog["provider_about"]
     assert catalog["provider_about"]["namespaces_applicable"] == ["task", "memo"]
     assert catalog["search_objects"]["namespaces_applicable"] == ["task"]
+    assert catalog["search_objects"]["search_scopes_by_namespace"] == {
+        "task": [
+            {
+                "namespace": "task:issue",
+                "label": "task issues",
+                "object_kind": "task.issue",
+            },
+            {
+                "namespace": "task:attachment",
+                "label": "task attachments/files",
+                "object_kind": "task.attachment",
+            },
+        ],
+    }
     assert catalog["object_schema"]["namespaces_applicable"] == ["task"]
     assert catalog["host_file"]["namespaces_applicable"] == ["task"]
     assert catalog["list_objects"]["namespaces_applicable"] == ["memo"]
     assert "get_object" not in catalog
+
+
+def test_named_service_tool_catalog_adds_search_scopes_from_discovery_snapshot():
+    props = {
+        "surfaces": {
+            "as_consumer": {
+                "agents": {
+                    "main": {
+                        "tools": [
+                            {
+                                "kind": "named_service",
+                                "alias": "named_services",
+                                "namespaces": {
+                                    "sensor": {
+                                        "allowed": ["provider.about", "object.search"],
+                                    },
+                                },
+                            },
+                        ],
+                    },
+                },
+            },
+        },
+    }
+    discovery_entry = NamedServiceDiscoveryEntry(
+        spec=NamedServiceProviderSpec(
+            provider_id="sensor.provider",
+            bundle_id="sensor-app@1-0",
+            namespace="sensor",
+            operations={"object.search": {"transports": ["bundle_registry"]}},
+            search_scopes=[
+                {"namespace": "sensor:temperature", "label": "temperature readings"},
+                {"namespace": "sensor:humidity:aggr", "label": "humidity aggregates"},
+            ],
+        )
+    )
+
+    named_service_client_tools.bind_registry(
+        {
+            "bundle_props": props,
+            "client_id": "main",
+            "named_service_discovery_entries": [discovery_entry],
+        }
+    )
+    try:
+        catalog = named_service_client_tools.list_tools()
+    finally:
+        named_service_client_tools.bind_registry({})
+
+    assert catalog["search_objects"]["namespaces_applicable"] == ["sensor"]
+    assert catalog["search_objects"]["search_scopes_by_namespace"] == {
+        "sensor": [
+            {
+                "namespace": "sensor:temperature",
+                "label": "temperature readings",
+            },
+            {
+                "namespace": "sensor:humidity:aggr",
+                "label": "humidity aggregates",
+            },
+        ],
+    }
 
 
 def test_named_service_tool_catalog_defaults_do_not_expose_object_action():

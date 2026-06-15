@@ -37,6 +37,8 @@ from .types import (
     OBJECT_UPSERT,
     PROVIDER_ABOUT,
     NamedServiceRequest,
+    NamedServiceSearchScope,
+    normalize_search_scopes,
     namespace_for_ref,
 )
 
@@ -288,6 +290,65 @@ def _operation_applicable_namespaces(namespaces: list[str], operation: str) -> l
         if ns and _operation_allowed(ns, operation) and ns not in applicable:
             applicable.append(ns)
     return applicable
+
+
+def _search_scope_to_dict(scope: NamedServiceSearchScope) -> Dict[str, Any]:
+    return scope.to_dict()
+
+
+def _add_search_scopes(
+    target: Dict[str, list[Dict[str, Any]]],
+    *,
+    base_namespace: str,
+    raw_scopes: Any,
+) -> None:
+    base_ns = _base_namespace(base_namespace)
+    if not base_ns:
+        return
+    bucket = target.setdefault(base_ns, [])
+    seen = {str(item.get("namespace") or "") for item in bucket if isinstance(item, Mapping)}
+    for scope in normalize_search_scopes(raw_scopes, default_namespace=base_ns):
+        if scope.namespace in seen:
+            continue
+        seen.add(scope.namespace)
+        bucket.append(_search_scope_to_dict(scope))
+
+
+def _snapshot_search_scopes() -> Dict[str, list[Dict[str, Any]]]:
+    """Return provider-declared search scopes available without provider I/O."""
+
+    out: Dict[str, list[Dict[str, Any]]] = {}
+    registry_scopes = REGISTRY.get("named_service_search_scopes")
+    if isinstance(registry_scopes, Mapping):
+        for namespace, raw_scopes in registry_scopes.items():
+            _add_search_scopes(out, base_namespace=str(namespace), raw_scopes=raw_scopes)
+
+    for entry in REGISTRY.get("named_service_discovery_entries") or ():
+        spec = getattr(entry, "spec", None)
+        if spec is None and isinstance(entry, Mapping):
+            spec = entry.get("spec") or entry
+        namespaces = getattr(spec, "namespaces", None)
+        search_scopes = getattr(spec, "search_scopes", None)
+        if isinstance(spec, Mapping):
+            namespaces = spec.get("namespaces") or ([spec.get("namespace")] if spec.get("namespace") else [])
+            search_scopes = spec.get("search_scopes") or spec.get("searchScopes")
+        for namespace in namespaces or ():
+            _add_search_scopes(out, base_namespace=str(namespace), raw_scopes=search_scopes)
+
+    for namespace, namespace_cfg in named_service_namespaces(_bundle_props()).items():
+        if isinstance(namespace_cfg, Mapping):
+            _add_search_scopes(
+                out,
+                base_namespace=namespace,
+                raw_scopes=namespace_cfg.get("search_scopes") or namespace_cfg.get("searchScopes"),
+            )
+        for provider_config in named_service_namespace_provider_configs(_bundle_props(), namespace=namespace):
+            _add_search_scopes(
+                out,
+                base_namespace=str(provider_config.get("namespace") or namespace),
+                raw_scopes=provider_config.get("search_scopes") or provider_config.get("searchScopes"),
+            )
+    return {namespace: scopes for namespace, scopes in out.items() if scopes}
 
 
 def _action_allowed(namespace: str, action: str) -> bool:
@@ -728,6 +789,7 @@ def list_tools() -> Dict[str, Dict[str, Any]]:
     if not namespaces:
         return {}
     visible: Dict[str, Dict[str, Any]] = {}
+    search_scopes_by_namespace = _snapshot_search_scopes()
     for tool_name, meta in tools.items():
         if tool_name == "object_action":
             continue
@@ -736,9 +798,20 @@ def list_tools() -> Dict[str, Dict[str, Any]]:
             continue
         applicable_namespaces = _operation_applicable_namespaces(namespaces, operation)
         if applicable_namespaces:
-            visible[tool_name] = {
+            tool_meta = {
                 **meta,
                 "namespaces_applicable": applicable_namespaces,
+            }
+            if tool_name == "search_objects":
+                visible_search_scopes = {
+                    namespace: search_scopes_by_namespace[namespace]
+                    for namespace in applicable_namespaces
+                    if search_scopes_by_namespace.get(namespace)
+                }
+                if visible_search_scopes:
+                    tool_meta["search_scopes_by_namespace"] = visible_search_scopes
+            visible[tool_name] = {
+                **tool_meta,
             }
     return visible
 

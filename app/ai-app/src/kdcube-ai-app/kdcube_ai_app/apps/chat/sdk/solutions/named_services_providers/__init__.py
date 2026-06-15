@@ -88,8 +88,10 @@ from .types import (
     NamedServiceProviderSpec,
     NamedServiceRequest,
     NamedServiceResponse,
+    NamedServiceSearchScope,
     NamedServiceStreamResult,
     build_default_operations,
+    normalize_search_scopes,
     namespace_for_ref,
 )
 
@@ -132,8 +134,10 @@ __all__ = [
     "NamedServiceRegistry",
     "NamedServiceRequest",
     "NamedServiceResponse",
+    "NamedServiceSearchScope",
     "NamedServiceStreamResult",
     "build_default_operations",
+    "normalize_search_scopes",
     "call_named_service_endpoint",
     "call_named_service_endpoint_stream",
     "client_has_named_service_tools",

@@ -1608,6 +1608,9 @@ def build_tool_catalog(adapters: Optional[List[Dict[str, Any]]] = None,
         namespaces_applicable = doc.get("namespaces_applicable") or metadata.get("namespaces_applicable")
         if namespaces_applicable:
             item["namespaces_applicable"] = list(namespaces_applicable)
+        search_scopes_by_namespace = doc.get("search_scopes_by_namespace") or metadata.get("search_scopes_by_namespace")
+        if isinstance(search_scopes_by_namespace, dict) and search_scopes_by_namespace:
+            item["search_scopes_by_namespace"] = dict(search_scopes_by_namespace)
         tool_traits = doc.get("tool_traits") or metadata.get("tool_traits")
         if isinstance(tool_traits, dict) and tool_traits:
             item["tool_traits"] = dict(tool_traits)
@@ -1645,6 +1648,7 @@ def build_tools_block(
         examples = tool.get("examples", [])
         constraints = tool.get("constraints", [])
         namespaces_applicable = tool.get("namespaces_applicable")
+        search_scopes_by_namespace = tool.get("search_scopes_by_namespace")
         tool_traits = tool.get("tool_traits") if isinstance(tool.get("tool_traits"), dict) else {}
 
         async_txt = " [async]" if is_async else ""
@@ -1659,6 +1663,21 @@ def build_tools_block(
             lines.append("   Scope:")
             if namespaces_applicable:
                 lines.append(f"       • namespaces applicable: {', '.join(str(ns) for ns in namespaces_applicable)}")
+            if isinstance(search_scopes_by_namespace, dict) and search_scopes_by_namespace:
+                lines.append("       • provider search scopes:")
+                for namespace, scopes in search_scopes_by_namespace.items():
+                    if not isinstance(scopes, list) or not scopes:
+                        continue
+                    lines.append(f"           {namespace}:")
+                    for scope in scopes:
+                        if not isinstance(scope, dict):
+                            continue
+                        scope_ns = str(scope.get("namespace") or "").strip()
+                        if not scope_ns:
+                            continue
+                        label = str(scope.get("label") or scope.get("description") or scope.get("object_kind") or "").strip()
+                        suffix = f" — {label}" if label else ""
+                        lines.append(f"             - {scope_ns}{suffix}")
             if tool_traits:
                 for trait_name, trait_value in tool_traits.items():
                     values = trait_value if isinstance(trait_value, list) else [trait_value]

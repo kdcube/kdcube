@@ -4,7 +4,7 @@ title: "Namespace Services: Integration Flow"
 summary: "Visual host/client integration flow for namespace service providers, using task-tracker and versatile as the current reference path."
 status: design
 tags: ["sdk", "namespace-services", "integration", "task-tracker", "versatile", "scene", "canvas", "chat"]
-updated_at: 2026-06-15
+updated_at: 2026-06-16
 keywords:
   [
     "namespace service integration",
@@ -89,6 +89,7 @@ TaskProvider bundle load
     spec.provider_id = task.issue
     spec.refs = task:issue:*, task:issue:attachment:*/attachments/*, task:issue:*
     spec.object_kinds = task.issue, task.attachment
+    spec.search_scopes = provider-declared searchable scoped namespaces
     spec.operations includes event.resolve, object.get, block.produce, ...
 
         |
@@ -103,6 +104,7 @@ TaskProvider.entrypoint.on_bundle_load
     Discovery.entry.operations = TaskProvider.spec.operations
     Discovery.entry.refs = TaskProvider.spec.refs
     Discovery.entry.object_kinds = TaskProvider.spec.object_kinds
+    Discovery.entry.search_scopes = TaskProvider.spec.search_scopes
 
         |
         v
@@ -120,6 +122,126 @@ These adapters do not own task semantics. They only know:
   Consumer.config.allowed surfaces/operations
   Discovery can find the provider when a request happens
 ```
+
+## Search Scope Discovery And Tool Catalog Flow
+
+Search scopes are provider-declared object spaces. They are carried by provider
+registration/discovery so a consumer can render them in the model tool catalog
+without first calling the provider. `provider.about` remains available for
+richer domain guidance, but it is not required for the fast "which namespace
+argument should I use for search?" path.
+
+```text
+1. Provider app startup
+   executor: provider bundle entrypoint / named_service_provider spec
+   surface: provider registration surface
+   customized: yes, provider owns object-space names
+   emits:
+     Provider.spec.namespace = sensor
+     Provider.spec.search_scopes:
+       - sensor:temperature     label="temperature readings"
+       - sensor:humidity:aggr   label="humidity aggregates"
+
+        |
+        v
+
+2. Named Service Discovery
+   executor: RedisNamedServiceDiscovery.register(...)
+   surface: tenant/project discovery table
+   customized: no, generic SDK persistence
+   stores:
+     Discovery.entry.spec.search_scopes = Provider.spec.search_scopes
+
+        |
+        v
+
+3. Consumer ReAct tool catalog refresh
+   executor: ToolSubsystem.react_tools(...)
+   surface: consumer app ReAct decision setup
+   customized: no namespace semantics
+   work:
+     read configured base namespaces from surfaces.as_consumer.agents.<agent>.tools
+     read provider Discovery.entry rows once for those namespaces
+     bind named_service_discovery_entries into the generic named_services tool module
+
+        |
+        v
+
+4. Generic named-service tool catalog
+   executor: named_services_providers.tools.list_tools()
+   surface: model-callable tool metadata
+   customized: consumer allow-list only
+   work:
+     if object.search is allowed for base namespace sensor:
+       expose named_services.search_objects
+       attach search_scopes_by_namespace.sensor from discovery/config
+
+        |
+        v
+
+5. ReAct prompt renderer
+   executor: build_tools_block(...)
+   surface: rendered tool catalog visible to the model
+   customized: no provider code
+   renders:
+     Scope:
+       - namespaces applicable: sensor
+       - provider search scopes:
+           sensor:
+             - sensor:temperature - temperature readings
+             - sensor:humidity:aggr - humidity aggregates
+
+        |
+        v
+
+6. Model tool call
+   executor: LLM generation governed by ReAct harness
+   surface: action/tool lane
+   customized: model behavior only
+   emits:
+     named_services.search_objects(
+       namespace="sensor:temperature",
+       query="lab reading spike",
+       limit=10
+     )
+
+        |
+        v
+
+7. Provider object.search
+   executor: provider NamedServiceProvider.object_search(...)
+   surface: provider app backend
+   customized: yes, provider owns search/index semantics
+   receives:
+     NamedServiceRequest.namespace = sensor:temperature
+   returns:
+     bounded object descriptors with canonical refs, labels, summaries,
+     object_kind, mime, and provider cursor when applicable
+
+        |
+        v
+
+8. Search result side channel
+   executor: named_services.search_objects wrapper
+   surface: ReAct tool result + subsystem artifact
+   customized: no provider semantics
+   emits:
+     named_service.search_results
+     payload.items[] = context-compatible handles
+
+        |
+        +--> Capable UI client
+             surface: optional named-service search results widget
+             work:
+               render rows
+               click -> normal object.action resolver path
+               drag  -> normal context attach/pin path
+```
+
+The base namespace in `namespaces applicable` remains the policy boundary. The
+provider search scopes beneath it are valid `namespace` arguments for
+`named_services.search_objects`; each one means "search this provider-declared
+object space."
 
 ## Object Action Flow
 

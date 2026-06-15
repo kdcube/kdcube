@@ -4,7 +4,7 @@ title: "Namespace Services: Providers"
 summary: "Transport-neutral SDK concept for bundles and platform subsystems that publish namespace service provider surfaces: namespace ownership, object operations, resolvers, capabilities, relations, and integrations over API, MCP, Data Bus, or local adapters."
 status: design
 tags: ["sdk", "namespace-services", "named-service-provider", "services", "namespaces", "objects", "resolvers", "mcp", "api", "data-bus", "bundles"]
-updated_at: 2026-06-15
+updated_at: 2026-06-16
 keywords:
   [
     "named service provider",
@@ -246,12 +246,45 @@ concrete payload fields. `provider.about` must not return full object schemas,
 full capability maps, or the complete provider spec; those belong to
 `object.schema` and `provider.capabilities`.
 
-Providers that expose more than one searchable object space should also declare
-bounded `search_scopes` in `provider.about`. A search scope names the namespace
-string that clients may pass to `object.search`, the object kind it returns,
-whether it is the default for the base namespace, and a compact filter summary.
-The base namespace remains valid when the consumer config allows `object.search`;
-the provider decides and documents what that default search means.
+Providers that expose more than one searchable object space should declare
+bounded `search_scopes` on the provider spec. Search scopes are registration
+metadata, so consumers can render them in the agent tool catalog from service
+discovery without first making a live `provider.about` call. `provider.about`
+may still return richer human guidance, but the fast path for model tool
+selection is the provider registration/discovery entry.
+
+Each search scope names a namespace string that clients may pass to
+`object.search`. The scope is also the search boundary: searching
+`sensor:temperature` means "search objects whose provider-declared searchable
+scope is `sensor:temperature`." The base namespace remains valid when the
+consumer config allows `object.search`; the provider decides and documents what
+the base namespace search means.
+
+```python
+@named_service_provider(
+    provider_id="sensor.provider",
+    namespace="sensor",
+    operations={"object.search": {"transports": ["bundle_registry"]}},
+    search_scopes=[
+        {
+            "namespace": "sensor:temperature",
+            "label": "temperature readings",
+            "object_kind": "sensor.temperature",
+        },
+        {
+            "namespace": "sensor:humidity:aggr",
+            "label": "humidity aggregates",
+            "object_kind": "sensor.humidity.aggregate",
+        },
+    ],
+)
+class SensorProvider(NamedServiceProvider):
+    ...
+```
+
+The same shape can be supplied through explicit provider config when discovery
+is not available. Prefer provider registration when the provider app is loaded
+in the runtime because it keeps the object-space contract with the provider.
 
 ### Object Operations
 

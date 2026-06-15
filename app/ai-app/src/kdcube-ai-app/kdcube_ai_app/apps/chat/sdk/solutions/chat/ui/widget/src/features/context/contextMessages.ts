@@ -147,7 +147,12 @@ export function setContextDragData(dataTransfer: DataTransfer, context: Recogniz
     'context',
   )
   dataTransfer.effectAllowed = 'copy'
-  dataTransfer.setData(KDCUBE_CONTEXT_MIME_TYPE, JSON.stringify({ context }))
-  dataTransfer.setData('application/json', JSON.stringify({ type: GENERIC_CONTEXT_ATTACH, context }))
+  // Canonical context-drag shape is the plural `contexts: [...]` envelope so the
+  // SAME payload is recognized by both the chat composer (recognizeContextPayload)
+  // and the canvas drop (normalizeContextMessage). Emitting singular `context`
+  // here let canvas drops fall through to text -> a generic `cnv:` card instead of
+  // the native object ref.
+  dataTransfer.setData(KDCUBE_CONTEXT_MIME_TYPE, JSON.stringify({ contexts: [context] }))
+  dataTransfer.setData('application/json', JSON.stringify({ type: GENERIC_CONTEXT_ATTACH, contexts: [context] }))
   dataTransfer.setData('text/plain', label)
 }

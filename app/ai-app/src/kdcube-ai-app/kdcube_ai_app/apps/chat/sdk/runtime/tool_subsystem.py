@@ -109,6 +109,7 @@ class ToolSubsystem:
         self.mcp_subsystem = mcp_subsystem
         self.hosting_service = hosting_service
         self._mcp_entries: List[Dict[str, Any]] = []
+        self._named_service_metadata_refreshed = False
 
         # --- compute bundle_root once ---
         self.bundle_root: pathlib.Path | None = None
@@ -300,6 +301,7 @@ class ToolSubsystem:
             "constraints",
             "examples",
             "namespaces_applicable",
+            "search_scopes_by_namespace",
             "tool_traits",
         ):
             if source.get(key) not in (None, "", []):
@@ -525,6 +527,7 @@ class ToolSubsystem:
                 await self.ensure_mcp_entries()
             except Exception:
                 pass
+        await self._refresh_named_service_tool_metadata()
         return self.react_tools_cached(
             allowed_plugins=allowed_plugins,
             allowed_ids=allowed_ids,
@@ -532,6 +535,89 @@ class ToolSubsystem:
             include_mcp=include_mcp,
             allowed_tool_names_by_alias=allowed_tool_names_by_alias,
         )
+
+    async def _refresh_named_service_tool_metadata(self) -> None:
+        if self._named_service_metadata_refreshed:
+            return
+        self._named_service_metadata_refreshed = True
+        if "named_services" not in self._mods_by_alias:
+            return
+        if not self._named_service_tools_configured():
+            return
+        try:
+            from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
+                named_service_namespaces,
+            )
+            from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.discovery import (
+                RedisNamedServiceDiscovery,
+            )
+
+            bundle_props = self.registry.get("bundle_props")
+            namespaces = sorted(named_service_namespaces(bundle_props if isinstance(bundle_props, Mapping) else {}).keys())
+            redis = self.registry.get("redis")
+            tenant, project = self._request_scope()
+            entries = []
+            if redis is not None and tenant and project and namespaces:
+                discovery = RedisNamedServiceDiscovery(redis, tenant=tenant, project=project)
+                seen: set[tuple[str, str]] = set()
+                for namespace in namespaces:
+                    for entry in await discovery.providers(namespace=namespace):
+                        key = (entry.spec.bundle_id or "", entry.spec.provider_id)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        entries.append(entry)
+            if entries:
+                self.registry["named_service_discovery_entries"] = entries
+        except Exception:
+            try:
+                self.log.debug("failed to refresh named-service discovery metadata", exc_info=True)
+            except Exception:
+                pass
+
+        modrec = self._mods_by_alias.get("named_services")
+        if not modrec:
+            return
+        mod = modrec.get("mod")
+        try:
+            bind_module_target(
+                mod,
+                svc=self.svc,
+                registry=self.registry,
+                integrations={
+                    "ctx_client": self.context_rag_client,
+                    "kv_cache": self.kv_cache,
+                    "tool_subsystem": self,
+                },
+            )
+            raw_tools = mod.list_tools() if hasattr(mod, "list_tools") else {}
+        except Exception:
+            return
+        if not isinstance(raw_tools, Mapping):
+            return
+        for entry in self.tools_info:
+            if str(entry.get("plugin_alias") or "") != "named_services":
+                continue
+            tool_id = str(entry.get("id") or "")
+            tool_name = tool_id.rsplit(".", 1)[-1] if "." in tool_id else tool_id
+            raw = raw_tools.get(tool_name)
+            if not isinstance(raw, Mapping):
+                continue
+            metadata = dict(entry.get("metadata") or {})
+            doc = entry.setdefault("doc", {})
+            if not isinstance(doc, dict):
+                continue
+            for key in ("namespaces_applicable", "search_scopes_by_namespace"):
+                value = raw.get(key)
+                if value in (None, "", []):
+                    metadata.pop(key, None)
+                    doc.pop(key, None)
+                    continue
+                metadata[key] = value
+                doc[key] = value
+            if metadata:
+                entry["metadata"] = metadata
+                doc["metadata"] = metadata
 
     def react_tools_cached(self, *,
                            allowed_plugins: Optional[List[str]] = None,
@@ -945,7 +1031,7 @@ class ToolSubsystem:
         }
         if isinstance(raw, dict):
             metadata: Dict[str, Any] = {}
-            for key in ("namespaces_applicable",):
+            for key in ("namespaces_applicable", "search_scopes_by_namespace"):
                 if raw.get(key) not in (None, "", []):
                     metadata[key] = raw.get(key)
             if metadata:

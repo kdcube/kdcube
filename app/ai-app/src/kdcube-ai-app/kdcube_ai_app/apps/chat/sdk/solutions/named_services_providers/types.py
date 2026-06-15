@@ -267,6 +267,76 @@ class NamedServiceOperationSpec:
         }
 
 
+@dataclass(frozen=True)
+class NamedServiceSearchScope:
+    namespace: str
+    label: str | None = None
+    object_kind: str | None = None
+    description: str | None = None
+    filters_schema: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        namespace = normalize_required_string(self.namespace, field_name="search_scope.namespace").lower().rstrip(":")
+        object.__setattr__(self, "namespace", namespace)
+        object.__setattr__(self, "label", normalize_optional_string(self.label))
+        object.__setattr__(self, "object_kind", normalize_optional_string(self.object_kind))
+        object.__setattr__(self, "description", normalize_optional_string(self.description))
+        object.__setattr__(self, "filters_schema", ensure_json_object(self.filters_schema, field_name="search_scope.filters_schema"))
+
+    @classmethod
+    def from_value(cls, value: Any, *, default_namespace: str | None = None) -> "NamedServiceSearchScope":
+        if isinstance(value, NamedServiceSearchScope):
+            return value
+        if isinstance(value, str):
+            return cls(namespace=value)
+        if not isinstance(value, Mapping):
+            raise TypeError("search scope must be a string or mapping")
+        data = dict(value or {})
+        namespace = (
+            data.get("namespace")
+            or data.get("scope")
+            or data.get("search_scope")
+            or data.get("name")
+            or default_namespace
+            or ""
+        )
+        return cls(
+            namespace=str(namespace),
+            label=normalize_optional_string(data.get("label") or data.get("title")),
+            object_kind=normalize_optional_string(data.get("object_kind") or data.get("kind")),
+            description=normalize_optional_string(data.get("description") or data.get("summary")),
+            filters_schema=ensure_json_object(data.get("filters_schema") or data.get("filters"), field_name="search_scope.filters_schema"),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        out = {
+            "namespace": self.namespace,
+            "label": self.label,
+            "object_kind": self.object_kind,
+            "description": self.description,
+            "filters_schema": dict(self.filters_schema or {}),
+        }
+        return {key: value for key, value in out.items() if value not in (None, "", {})}
+
+
+def normalize_search_scopes(value: Any, *, default_namespace: str | None = None) -> tuple[NamedServiceSearchScope, ...]:
+    if value in (None, ""):
+        return ()
+    raw_items = value if isinstance(value, (list, tuple)) else (value,)
+    scopes: list[NamedServiceSearchScope] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        try:
+            scope = NamedServiceSearchScope.from_value(item, default_namespace=default_namespace)
+        except Exception:
+            continue
+        if scope.namespace in seen:
+            continue
+        seen.add(scope.namespace)
+        scopes.append(scope)
+    return tuple(scopes)
+
+
 def build_default_operations(
     transports: Sequence[str] = (TRANSPORT_LOCAL,),
     *,
@@ -303,6 +373,7 @@ class NamedServiceProviderSpec:
     namespaces: tuple[str, ...] = ()
     refs: tuple[str, ...] = ()
     object_kinds: tuple[str, ...] = ()
+    search_scopes: tuple[NamedServiceSearchScope, ...] = ()
     operations: dict[str, NamedServiceOperationSpec] = field(default_factory=dict)
     label: str | None = None
     description: str | None = None
@@ -311,11 +382,14 @@ class NamedServiceProviderSpec:
     def __post_init__(self) -> None:
         provider_id = normalize_required_string(self.provider_id, field_name="provider_id")
         object.__setattr__(self, "provider_id", provider_id)
+        search_scopes = normalize_search_scopes(self.search_scopes, default_namespace=self.namespace)
+        object.__setattr__(self, "search_scopes", search_scopes)
         namespaces = tuple(
             sorted({
                 *(ns.strip().lower() for ns in self.namespaces if str(ns).strip()),
                 *([self.namespace.strip().lower()] if self.namespace and self.namespace.strip() else []),
                 *(namespace_for_ref(ref) for ref in self.refs if namespace_for_ref(ref)),
+                *(namespace_for_ref(scope.namespace) for scope in search_scopes if namespace_for_ref(scope.namespace)),
             })
         )
         object.__setattr__(self, "namespaces", namespaces)
@@ -340,6 +414,10 @@ class NamedServiceProviderSpec:
             namespaces=normalize_tuple(data.get("namespaces") or ()),
             refs=normalize_tuple(data.get("refs") or ()),
             object_kinds=normalize_tuple(data.get("object_kinds") or ()),
+            search_scopes=normalize_search_scopes(
+                data.get("search_scopes") or data.get("searchScopes"),
+                default_namespace=normalize_optional_string(data.get("namespace")),
+            ),
             operations=operations,
             label=normalize_optional_string(data.get("label")),
             description=normalize_optional_string(data.get("description")),
@@ -388,6 +466,7 @@ class NamedServiceProviderSpec:
             "namespaces": list(self.namespaces or ()),
             "refs": list(self.refs or ()),
             "object_kinds": list(self.object_kinds or ()),
+            "search_scopes": [scope.to_dict() for scope in (self.search_scopes or ())],
             "operations": {op: spec.to_dict() for op, spec in (self.operations or {}).items()},
             "label": self.label,
             "description": self.description,

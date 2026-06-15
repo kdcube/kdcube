@@ -70,6 +70,12 @@ def test_tool_catalog_renders_named_service_namespace_scope():
         raw={
             "named_service_operation": "object.search",
             "namespaces_applicable": ["task", "memo"],
+            "search_scopes_by_namespace": {
+                "task": [
+                    {"namespace": "task:issue", "label": "task issues"},
+                    {"namespace": "task:attachment", "label": "task attachments/files"},
+                ],
+            },
             "tool_traits": {"strategy": ["exploration"]},
         },
         is_async=True,
@@ -88,12 +94,17 @@ def test_tool_catalog_renders_named_service_namespace_scope():
     assert entry["doc"]["namespaces_applicable"] == ["task", "memo"]
     assert "named_service_operation" not in catalog[0]
     assert catalog[0]["namespaces_applicable"] == ["task", "memo"]
+    assert catalog[0]["search_scopes_by_namespace"]["task"][0]["namespace"] == "task:issue"
     assert "named_service_operation" not in prompt_catalog[0]["doc"]
     assert prompt_catalog[0]["doc"]["namespaces_applicable"] == ["task", "memo"]
+    assert prompt_catalog[0]["doc"]["search_scopes_by_namespace"]["task"][1]["namespace"] == "task:attachment"
     assert prompt_catalog[0]["doc"]["tool_traits"] == {"strategy": ["exploration"]}
     assert "named service operation" not in rendered
     assert "object.search" not in rendered
     assert "namespaces applicable: task, memo" in rendered
+    assert "provider search scopes:" in rendered
+    assert "task:issue — task issues" in rendered
+    assert "task:attachment — task attachments/files" in rendered
     assert "strategy: exploration" in rendered
 
 

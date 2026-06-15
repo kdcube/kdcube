@@ -16,6 +16,7 @@ from .types import (
     NamedServiceProviderSpec,
     NamedServiceRequest,
     build_default_operations,
+    normalize_search_scopes,
     namespace_for_ref,
 )
 
@@ -160,6 +161,10 @@ def _spec_from_provider_config(config: Mapping[str, Any], *, namespace: str = ""
         namespaces=tuple(str(item).strip().lower().rstrip(":") for item in (cfg.get("namespaces") or ()) if str(item).strip()),
         refs=tuple(str(item).strip() for item in (cfg.get("refs") or ()) if str(item).strip()),
         object_kinds=tuple(str(item).strip() for item in (cfg.get("object_kinds") or ()) if str(item).strip()),
+        search_scopes=normalize_search_scopes(
+            cfg.get("search_scopes") or cfg.get("searchScopes"),
+            default_namespace=str(cfg.get("namespace") or namespace or "").strip().lower().rstrip(":") or None,
+        ),
         operations=_normalize_provider_operations(cfg.get("operations")),
         label=str(cfg.get("label") or "").strip() or None,
         description=str(cfg.get("description") or "").strip() or None,
@@ -306,6 +311,7 @@ class RedisNamedServiceDiscovery:
             "    expires_at: %s\n"
             "  refs:\n%s\n"
             "  object_kinds:\n%s\n"
+            "  search_scopes:\n%s\n"
             "  operations:\n%s",
             self.tenant,
             self.project,
@@ -319,6 +325,7 @@ class RedisNamedServiceDiscovery:
             "persistent" if entry.expires_at <= 0 else entry.expires_at,
             _report_list(entry.spec.refs),
             _report_list(entry.spec.object_kinds),
+            _report_list(scope.namespace for scope in (entry.spec.search_scopes or ())),
             _report_list(sorted((entry.spec.operations or {}).keys())),
         )
         return entry

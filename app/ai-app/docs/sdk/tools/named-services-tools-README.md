@@ -3,7 +3,7 @@ id: repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/named-services-tools-README.md
 title: "Named Service Tools"
 summary: "How named-service namespace operations become model-callable tools, how per-agent namespace allow-lists scope those tools, and how ReAct sees the namespace scope in its catalog."
 tags: ["sdk", "tools", "named-services", "namespaces", "react", "configuration"]
-keywords: ["named_service", "named_services", "surfaces.as_consumer", "namespaces_applicable", "object.get", "object.host_file", "object.upsert", "react.pull"]
+keywords: ["named_service", "named_services", "surfaces.as_consumer", "namespaces_applicable", "provider search scopes", "search_scopes_by_namespace", "named_service.search_results", "object.get", "object.host_file", "object.upsert", "react.pull"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/tool-subsystem-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/custom-tools-README.md
@@ -80,9 +80,12 @@ operations to concrete model-callable tools such as
 
 The rendered ReAct catalog does not show provider operation ids. A tool is
 visible only if at least one configured namespace allows the matching operation,
-and the rendered ReAct catalog includes one scope field:
+and the rendered ReAct catalog includes scope fields:
 
 - `namespaces applicable`: namespaces where this agent may call that tool.
+- `provider search scopes`: provider-declared scoped namespaces that may be
+  passed to `named_services.search_objects(namespace=...)` for that base
+  namespace.
 
 Example rendered catalog entry:
 
@@ -94,13 +97,17 @@ Example rendered catalog entry:
 
    Scope:
        • namespaces applicable: sensor, front-door
+       • provider search scopes:
+           sensor:
+             - sensor:temperature — temperature readings
+             - sensor:humidity:aggr — humidity aggregates
        • strategy: exploration
 
    📥 Parameters:
        • namespace: typing.Annotated[str
-         "Configured named-service namespace."]
+         "Configured named-service namespace or provider-declared searchable scoped namespace."]
        • query: typing.Annotated[str
-         "Search query. Providers should use hybrid search when available."]
+         "Search query. Namespace about/schema declares per-scope semantics and filters."]
 
    📞 Usage: named_services.search_objects(...)
 ```
@@ -122,20 +129,19 @@ once, instead of repeating it in every named-service tool description:
 - Provider operation ids are config/protocol details, not ReAct-facing tool
   data. To call the tool, use the normal tool parameters with a namespace from
   the tool's visible scope.
-- For an unfamiliar namespace, call `provider.about` before the first
+- For search, first use the provider search scopes already rendered under
+  `named_services.search_objects` when present. If the rendered scope list or
+  its semantics are not enough, call `provider.about` before the first
   search/list/mutation unless a fresh provider description is already visible in
-  the current context. The tool catalog lists base namespaces; scoped namespace
-  names come from the provider, not from guessing.
+  the current context.
 - ReAct starts each turn with a sparse local workspace. It can directly use
   only current-turn `su:`, `so:`, `fi:`, and `ar:` refs that were produced in
   this turn or explicitly materialized in this turn.
 - Existing namespace refs in events, pins, canvas drops, prior messages, or
   prior tool results are handles. Use `react.pull` to materialize such a handle
   into this turn's local `fi:` workspace before reading concrete content.
-- `provider.about.search_scopes[]` lists searchable ref scopes and compact
-  query/filter semantics. In `search_objects`, the `namespace` argument is the
-  search scope: a scoped namespace searches objects whose refs live in that
-  scope.
+- In `search_objects`, the `namespace` argument is the search scope. A scoped
+  namespace searches that provider-declared object space.
 - Use `object.schema` only when exact body fields or filter contracts are
   needed.
 - If the agent passes the base namespace to `search_objects`, the namespace
@@ -145,6 +151,11 @@ once, instead of repeating it in every named-service tool description:
   the scoped namespace for the namespace service.
 - Use `object.search` or `object.list` to find objects when no exact ref is
   already present.
+- `named_services.search_objects` returns the provider response to the model
+  and also emits a generic `named_service.search_results` subsystem artifact.
+  Capable chat/scene clients can render those result rows as clickable and
+  draggable context objects; model instructions must not assume that such a UI
+  exists.
 - Use pull/read for existing refs already in the timeline when content is
   needed; use live `object.get` only when the configured tool surface exposes
   it and the model deliberately needs current namespace service state.

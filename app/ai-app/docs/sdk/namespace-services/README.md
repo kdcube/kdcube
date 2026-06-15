@@ -4,7 +4,7 @@ title: "Namespace Services"
 summary: "Index and mental model for namespace-owning service providers, clients, object resolution, and bundle-to-bundle integration."
 status: design
 tags: ["sdk", "namespace-services", "providers", "clients", "resolvers", "bundles"]
-updated_at: 2026-06-12
+updated_at: 2026-06-16
 keywords:
   [
     "namespace services",
@@ -119,10 +119,15 @@ through Named Service Discovery:
 - a provider bundle exposes a `named_services()` registry object and may also
   expose a `named_service` API operation backed by that registry;
 - a provider bundle registers its providers into Redis-backed Named Service
-  Discovery after its local prerequisites are ready;
+  Discovery after its local prerequisites are ready, including provider
+  `search_scopes` when it exposes multiple searchable object spaces;
 - a client bundle configures `surfaces.as_consumer` for the model tools,
   event-source/pull policies, and resolver surfaces allowed to use that
   namespace;
+- ReAct named-service search tools render provider-declared search scopes from
+  discovery/config in the tool catalog, and `object.search` emits a generic
+  `named_service.search_results` artifact so capable clients can render
+  clickable/draggable result rows;
 - canvas/chat object actions use a reusable resolver adapter;
 - namespace artifact refs can be materialized by `react.pull`; the backend
   rehoster calls the provider's `object.get` with `response_mode: stream`,
