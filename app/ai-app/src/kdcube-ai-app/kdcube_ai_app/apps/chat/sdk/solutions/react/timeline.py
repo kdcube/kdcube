@@ -649,6 +649,22 @@ def _tool_id_from_call_or_result(block: Dict[str, Any], call_block: Optional[Dic
     return ""
 
 
+def _tool_error_code_message(payload: Any) -> tuple[str, str]:
+    if not isinstance(payload, dict):
+        return "error", _compact_hint(payload)
+    err = payload.get("error")
+    if isinstance(err, dict):
+        code = str(err.get("code") or payload.get("code") or "error").strip() or "error"
+        msg = str(err.get("message") or payload.get("message") or "").strip()
+        return code, msg
+    if err is not None:
+        return str(payload.get("code") or "error").strip() or "error", _compact_hint(err)
+    return (
+        str(payload.get("code") or "error").strip() or "error",
+        str(payload.get("message") or "").strip(),
+    )
+
+
 def _tool_status_and_hint(result_block: Optional[Dict[str, Any]]) -> tuple[str, str]:
     if not isinstance(result_block, dict):
         return "", ""
@@ -3921,10 +3937,9 @@ class Timeline:
                 bits.append(f"{label}={json.dumps(preview, ensure_ascii=False)}")
 
         err = payload.get("error")
-        if isinstance(err, dict):
-            code = err.get("code") or payload.get("code") or "error"
-            msg = err.get("message") or payload.get("message") or ""
-            bits.append(f"status=error")
+        if err is not None:
+            code, msg = _tool_error_code_message(payload)
+            bits.append("status=error")
             add_value("error", f"{code} {msg}".strip(), limit=120)
         elif payload.get("code") and payload.get("message"):
             bits.append("status=error")
@@ -6869,10 +6884,10 @@ class Timeline:
                         if tool_id:
                             header += f" {tool_id}"
                         lines.append(header)
-                        err = payload.get("error") or None
-                        if err:
-                            code = err.get("code") or "error"
-                            msg = err.get("message") or ""
+                        err_present = "error" in payload and payload.get("error") is not None
+                        status_is_error = str(payload.get("status") or "").strip().lower() == "error"
+                        if err_present or status_is_error or (payload.get("code") and payload.get("message")):
+                            code, msg = _tool_error_code_message(payload)
                             lines.append(f"Status: error — {code} {msg}".strip())
                         else:
                             lines.append("Status: success")

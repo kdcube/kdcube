@@ -412,6 +412,41 @@ def test_generated_pdf_tool_result_is_not_attached_as_model_document():
     assert "provider_tokens_estimate_if_attached:" in text
 
 
+def test_tool_result_summary_accepts_string_error_payload():
+    ctx = RuntimeCtx(turn_id="turn_tool_error", started_at="2026-02-09T00:00:00Z")
+    tl = Timeline(runtime=ctx)
+
+    payload = {
+        "artifact_path": "tc:turn_tool_error.tc_1.result",
+        "mime": "text/plain",
+        "kind": "file",
+        "visibility": "internal",
+        "tool_call_id": "tc_1",
+        "description": "Tool call failed before producing a structured error object",
+        "status": "error",
+        "error": "subprocess failed while importing module",
+    }
+    tl.blocks.extend([
+        tl._block(type="turn.header", author="system", turn_id=ctx.turn_id, ts=ctx.started_at, text=""),
+        tl._block(
+            type="react.tool.result",
+            author="agent",
+            turn_id=ctx.turn_id,
+            ts=ctx.started_at,
+            mime="application/json",
+            path="tc:turn_tool_error.tc_1.result",
+            text=json.dumps(payload),
+        ),
+    ])
+
+    rendered = _run(tl.render(cache_last=True))
+    text = "\n".join(b.get("text", "") for b in rendered if b.get("type") == "text")
+
+    assert "[TOOL RESULT" in text
+    assert "Status: error" in text
+    assert "subprocess failed while importing module" in text
+
+
 def test_react_read_pdf_result_is_attached_as_model_document():
     ctx = RuntimeCtx(turn_id="turn_pdf_read", started_at="2026-02-09T00:00:00Z")
     tl = Timeline(runtime=ctx)
