@@ -83,6 +83,11 @@ how the agent interprets every domain object.
 The widget is split into a **headless engine** and a **view**, so you can keep
 all of the chat orchestration and replace only the look:
 
+> Packaged version: this engine is being extracted to the framework-agnostic
+> [`@kdcube/components-core/chat`](../../npm/components-core/chat-engine-README.md)
+> (+ React bindings in [`@kdcube/components-react`](../../npm/components-react/README.md)).
+> This in-tree widget remains the reference until it consumes the package.
+
 | Layer | Source | Reusable as-is |
 | --- | --- | --- |
 | State machine | `features/chat/chatSlice.ts` + `chatReducers.ts` (Redux Toolkit) | turns the SSE/socket envelope stream into the turn model |

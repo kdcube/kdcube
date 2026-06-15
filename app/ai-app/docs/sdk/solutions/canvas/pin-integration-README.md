@@ -288,6 +288,10 @@ and edits.
 
 ## Chat Context Batch
 
+> The drag/drop payload shape for context pins (one envelope, `ref` the single uri
+> field) is the [context-pin contract](../../npm/components-core/context-pin-contract-README.md)
+> in `@kdcube/components-core`.
+
 When the user sends a chat request with context attached, that context must be
 recorded before the reactive user prompt in the conversation event batch. This
 is required for causal replay and debugging.
