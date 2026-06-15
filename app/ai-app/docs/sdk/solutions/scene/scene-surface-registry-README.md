@@ -118,18 +118,31 @@ clears that focus.
 
 ## Registry Shape
 
-A scene host should keep a registry like this:
+The shared SDK runtime exposes this registry from:
+
+```text
+src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/scene/src
+```
+
+A scene host registers each reachable surface with `createSceneRuntime()`:
 
 ```ts
+// The host aliases this import to sdk://solutions/scene/src.
+import { createSceneRuntime } from "@kdcube/scene-runtime"
+
 type SceneSurfaceRegistration = {
-  label: string
-  ensureOpen: () => void
-  postCommand: (command: Record<string, unknown>) => boolean
+  label?: string
+  ensureOpen?: (request: SceneSurfaceOpenRequest) => void
+  isReady?: (request: SceneSurfaceOpenRequest) => boolean
+  postCommand: (
+    command: Record<string, unknown>,
+    request: SceneSurfaceOpenRequest,
+  ) => boolean
   commandFromOpen: (request: {
     targetSurface: string
     uiEvent: Record<string, unknown>
     response: Record<string, unknown>
-    sourceCard?: Record<string, unknown>
+    source?: Record<string, unknown>
   }) => Record<string, unknown> | null
 }
 ```
@@ -154,6 +167,11 @@ const surfaces = {
     }),
   },
 }
+
+const scene = createSceneRuntime()
+Object.entries(surfaces).forEach(([targetSurface, registration]) => {
+  scene.registerSurface(targetSurface, registration)
+})
 ```
 
 The dispatch helper is generic:
@@ -167,11 +185,47 @@ resolver response
   -> post command to iframe
 ```
 
+The same runtime handles object-open messages emitted by chat context chips
+(`kdcube-object-open`) and standalone pinboard widgets
+(`kdcube-pinboard-open`). The host may route those events through
+`scene.routeMessage(event, ...)`, or call `scene.dispatchSurfaceOpen(response,
+source)` directly after it receives a provider resolver response.
+
+Host-originated commands use the same queue and readiness path:
+
+```ts
+scene.queueSurfaceCommand("sdk.memory.viewer", { action: "create" })
+```
+
+Use this when the scene itself has a UI affordance, such as a `Create memory`
+button, and still wants the target widget to receive the command through the
+same `ensureOpen -> queue -> flush` mechanics as resolver opens.
+
 If no surface is registered, the host should keep the object intact and show a
 clear UI notice:
 
 ```text
 No widget surface is registered for sdk.memory.viewer.
+```
+
+The dispatch result is always bounded:
+
+```ts
+type SceneDispatchResult =
+  | { ok: true; code: "dispatched" | "queued"; targetSurface: string; message: string }
+  | {
+      ok: false
+      code:
+        | "message_invalid"
+        | "origin_not_allowed"
+        | "message_source_not_registered"
+        | "target_surface_missing"
+        | "target_surface_unavailable"
+        | "surface_command_unavailable"
+        | "surface_command_rejected"
+      message: string
+      targetSurface?: string
+    }
 ```
 
 ## Iframe Readiness
@@ -258,7 +312,9 @@ transport is a postMessage. See the host-broker contract in
 
 ## Current Implementation
 
-The versatile scene implements the first local version of this registry:
+The reusable headless registry is implemented in the SDK scene runtime. The
+versatile scene is the reference host that wires concrete iframe/panel
+reactions into that model:
 
 ```text
 sdk.memory.viewer -> memory iframe

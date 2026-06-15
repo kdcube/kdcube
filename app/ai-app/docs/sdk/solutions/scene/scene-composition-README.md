@@ -64,6 +64,35 @@ The host is a composition and transport layer. It never reads a memory, opens a
 conversation, or interprets a canvas object — it relays config and routes
 commands.
 
+## Reusable Runtime
+
+The reusable part of a scene lives in the SDK as a headless TypeScript runtime:
+
+```text
+src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/scene/src
+  index.ts      public exports
+  runtime.ts    surface registry, object-open dispatch, CONFIG helpers
+  types.ts      message, registration, and dispatch result types
+```
+
+This runtime intentionally has no React dependency and no page layout. It owns
+only the generic orchestration kernel:
+
+```text
+child widget message / resolver response
+  -> normalize object-open or pinboard-open request
+  -> read Provider.ui_event.target_surface
+  -> find host-registered surface
+  -> ask the host adapter to open/focus/mount that surface
+  -> queue and flush the domain widget command
+```
+
+The concrete host still owns all visual reaction details: floating windows,
+rails, iframe refs, panel size, CSS, branding, login, and which surfaces are
+available in that composition. A bundle main UI, a nested bundle widget, and an
+external website page can therefore reuse the same scene runtime while keeping
+different views.
+
 ## Mounting Components
 
 Each embedded component is a declared bundle surface pointed at a shared SDK

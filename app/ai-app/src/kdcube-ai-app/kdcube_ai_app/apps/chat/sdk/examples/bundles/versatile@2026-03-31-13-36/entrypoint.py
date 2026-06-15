@@ -1237,6 +1237,10 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
                             "src_folder": "sdk://solutions/canvas/ui/component",
                             "target": "_shared/canvas-component",
                         },
+                        "scene_runtime": {
+                            "src_folder": "sdk://solutions/scene",
+                            "target": "_shared/scene-runtime",
+                        },
                     },
                 },
                 "widgets": {
@@ -1330,6 +1334,13 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
             {
                 "src_folder": "sdk://solutions/canvas/ui/component",
                 "target": "_shared/canvas-component",
+            },
+        )
+        shared_sources.setdefault(
+            "scene_runtime",
+            {
+                "src_folder": "sdk://solutions/scene",
+                "target": "_shared/scene-runtime",
             },
         )
         main_view_cfg["shared_sources"] = shared_sources

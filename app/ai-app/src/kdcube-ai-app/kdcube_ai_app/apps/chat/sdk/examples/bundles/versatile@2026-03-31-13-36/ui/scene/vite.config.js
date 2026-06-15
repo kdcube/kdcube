@@ -17,10 +17,22 @@ const repoCanvasComponent = path.resolve(
   '../../../../..',
   'solutions/canvas/ui/component/src/index.ts',
 )
+const materializedSceneRuntime = path.resolve(__dirname, '_shared/scene-runtime/src/index.ts')
+const envSceneRuntime = process.env.KDCUBE_SCENE_RUNTIME_SRC
+  ? path.resolve(process.env.KDCUBE_SCENE_RUNTIME_SRC)
+  : ''
+const repoSceneRuntime = path.resolve(
+  __dirname,
+  '../../../../..',
+  'solutions/scene/src/index.ts',
+)
 
 const canvasComponentEntry = fs.existsSync(materializedCanvasComponent)
   ? materializedCanvasComponent
   : envCanvasComponent || repoCanvasComponent
+const sceneRuntimeEntry = fs.existsSync(materializedSceneRuntime)
+  ? materializedSceneRuntime
+  : envSceneRuntime || repoSceneRuntime
 
 export default defineConfig({
   plugins: [react()],
@@ -28,6 +40,7 @@ export default defineConfig({
   resolve: {
     alias: [
       { find: '@kdcube/canvas-component', replacement: canvasComponentEntry },
+      { find: '@kdcube/scene-runtime', replacement: sceneRuntimeEntry },
       { find: 'lucide-react', replacement: require.resolve('lucide-react') },
       { find: /^react$/, replacement: require.resolve('react') },
       { find: /^react-dom$/, replacement: require.resolve('react-dom') },

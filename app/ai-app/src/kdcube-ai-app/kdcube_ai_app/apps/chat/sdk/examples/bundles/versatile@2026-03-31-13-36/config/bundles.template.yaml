@@ -273,6 +273,9 @@ bundles:
               canvas_component:
                 src_folder: sdk://solutions/canvas/ui/component
                 target: _shared/canvas-component
+              scene_runtime:
+                src_folder: sdk://solutions/scene
+                target: _shared/scene-runtime
           widgets:
             versatile_chat:
               src_folder: sdk://solutions/chat/ui/widget
