@@ -9,6 +9,8 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-lifecycle-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/cicd/ngrok-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/synch-mechanisms/file-lock-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/index/hybrid-index-README.md
 ---
 # Synchronization Mechanisms
 
@@ -117,6 +119,11 @@ kdcube_ai_app/infra/plugin/bundle_store.py
 applications/src/knowledge@1-0/entrypoint.py
   raw observed file lock for materializing packaged maintained knowledge into
   bundle storage and building the runtime SQLite index
+
+kdcube_ai_app/apps/chat/sdk/solutions/canvas/search/pin_search.py
+  raw observed file lock serializing per-user pin-index updates: a canvas write/
+  patch/delete embeds the changed cards and rebuilds the vector index under the
+  lock, so concurrent canvas updates can't corrupt the index
 
 kdcube_ai_app/infra/plugin/bundle_once.py
 kdcube_ai_app/apps/chat/sdk/solutions/chatbot/entrypoint.py

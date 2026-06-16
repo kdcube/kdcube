@@ -93,7 +93,7 @@ The canvas module owns these card/object kinds:
 | `user.attachment` | `A` | canvas `cnv:` storage | User file uploaded to canvas |
 | `agent.text` | `R` | canvas `cnv:` storage | Assistant-authored text card created through `canvas.patch` or dragged from assistant output |
 | `file` | `F` | platform `fi:` or canvas/domain owner namespace | Produced or found file/report artifact |
-| `memory` | `M` | memory subsystem `mem:` | Memory/search object pin |
+| `memory` | `M` | memory named-service provider `mem:record:<id>` | Memory/search object pin |
 | `source` / `search.result` | `S` | source/search resolver `so:` or subsystem | Source row or search result pin |
 
 These are not platform-managed chat replicas:
@@ -111,11 +111,12 @@ If a canvas-owned card is attached into chat, it remains a `cnv:` ref. Attaching
 does not convert it into a chat prompt, chat attachment, or `fi:` artifact.
 
 Cards are proxies to objects. For resolver-backed pins, the card id is the
-original resolver URI itself: `acme:...`, `fi:...`, `mem:...`, `so:...`, etc.
+original resolver URI itself: `acme:...`, `fi:...`, `mem:record:<id>`,
+`so:...`, etc.
 One object has one proxy on a canvas:
 
 - dragging the same `acme:ticket:<id>` again does not create another card;
-- dragging the same `fi:`, `cnv:`, `mem:`, `so:`, or other resolver-backed ref
+- dragging the same `fi:`, `cnv:`, `mem:record:<id>`, `so:`, or other resolver-backed ref
   again does not create another card;
 - if that proxy is already in the bin, dragging the same object back onto the
   board restores the existing proxy instead of creating a copy;
@@ -245,6 +246,13 @@ its response. Bundle-level config for the board is served by the bundle through
 its own operations, never by a platform-wide config endpoint. See the board UI
 affordances above and [Canvas SDK Solution](./canvas-sdk-solution-README.md).
 
+`canvas_search` is read-only **hybrid search of the user's pins** — semantic +
+lexical + recency, reciprocal-rank-fused — over a per-user index that is built when
+a board changes, not per query, from the card-level snapshot. It is a generic canvas
+mechanism (`CanvasPinSearch`) reused by any bundle that mounts the canvas, and its
+query embed is economically gated (degrading to lexical when the budget guard
+denies). See [Pin Operations → Pin Search And Indexing](./pin-operations-README.md#pin-search-and-indexing).
+
 ### 2. Conversation Context Batch
 
 When the user sends a chat request with canvas context attached, the client
@@ -345,7 +353,7 @@ Agent rules:
 
 - Do not edit/re-save canvas JSON directly.
 - Do not move, resize, or arrange existing cards. Positioning is user/UI work.
-- Do not mutate proxy refs such as `mem:`, `fi:`, `acme:`, or `so:`. You may
+- Do not mutate proxy refs such as `mem:record:<id>`, `fi:`, `acme:`, or `so:`. You may
   update the canvas-owned description/comments for those cards.
 - `user.text` content may be updated when the user asks.
 - Generated files are not pinned automatically. Produce the file, then call
@@ -383,7 +391,8 @@ canvas_write: collaborate only through canvas.patch with base_revision=revision.
 Map labels are for spatial reasoning and are assigned by the ANNOUNCE renderer.
 Canvas-owned durable card ids are timestamp-bearing (`ut_...`, `ua_...`,
 `at_...`). Proxy card ids are the original resolver refs (`acme:...`, `fi:...`,
-`mem:...`, etc.). The legend's `card_id` is the value to use in `canvas.patch`.
+`mem:record:<id>`, etc.). The legend's `card_id` is the value to use in
+`canvas.patch`.
 
 `[CANVAS FOCUSED CONTEXT]` is separate and turn-local. It represents the user's
 selected or multi-selected cards on the attached canvas, for requests such as
@@ -400,8 +409,9 @@ priority: inspect selected cards before broader canvas context unless the user a
 ```
 
 Dragging an individual pin to chat is different. The chat context for that pin
-uses the proxied object ref (`acme:`, `mem:`, `fi:`, `cnv:`, etc.) and may carry
-canvas provenance in metadata, but it is not a canvas-focus event by itself.
+uses the proxied object ref (`acme:`, `mem:record:<id>`, `fi:`, `cnv:`, etc.)
+and may carry canvas provenance in metadata, but it is not a canvas-focus event
+by itself.
 
 ## Collaboration, Versioning, And Conflicts
 

@@ -3368,6 +3368,43 @@ class MemoryEntrypointMixin:
             user_type=role,
         )
 
+    def _economics_search_subject(self):
+        """Feature-neutral EconomicsSubject for any in-request semantic search
+        (issues, pins, …). Tenant/project from runtime identity; user_id + role from
+        the authenticated session. Distinct from the memory variant, which layers
+        the memory-widget user override."""
+        from kdcube_ai_app.apps.chat.sdk.infra.economics.enforcement import EconomicsSubject
+
+        ident = self.runtime_identity() if hasattr(self, "runtime_identity") else {}
+        user = getattr(self.comm_context, "user", None)
+        actor = getattr(self.comm_context, "actor", None)
+        user_id = str(getattr(user, "user_id", None) or getattr(actor, "user_id", None) or "")
+        return EconomicsSubject(
+            tenant=str((ident or {}).get("tenant") or ""),
+            project=str((ident or {}).get("project") or ""),
+            user_id=user_id,
+            user_type=str(getattr(user, "user_type", None) or "registered"),
+        )
+
+    def search_semantic_guard(self, *, flow: str):
+        """Reusable async `semantic_guard` for any feature's semantic search — the
+        SAME economics gate memory search uses (verify-only `economic_preflight`).
+        Plug into `IssueService` / `PinSearchIndex` / `HybridIndex`'s `semantic_guard`.
+        Returns None when economics isn't enabled or the user is anonymous (search
+        stays on, ungated); on denial the search degrades to lexical + recency."""
+        if not self._memory_economics_enabled():
+            return None
+        try:
+            from kdcube_ai_app.apps.chat.sdk.infra.economics.search_guard import make_semantic_search_guard
+
+            subject = self._economics_search_subject()
+            if not (subject.tenant and subject.project and subject.user_id and subject.user_id != "anonymous"):
+                return None
+            return make_semantic_search_guard(self, subject=subject, flow=flow)
+        except Exception:
+            logger.warning("[economics] semantic search guard unavailable; search ungated", exc_info=True)
+            return None
+
     async def _memory_search_embed_or_downgrade(self, query: str) -> Optional[Sequence[float]]:
         """Embed the query for semantic ranking, gated by economics.
 

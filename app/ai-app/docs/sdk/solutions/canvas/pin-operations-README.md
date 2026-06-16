@@ -24,6 +24,9 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/pin-integration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/external-subsystem-event-source-products-pins-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/index/hybrid-index-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/index/hybrid-scoring-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/synch-mechanisms/critical-section-README.md
 ---
 # Canvas Pin Operations
 
@@ -64,14 +67,13 @@ deleted boards drop out of active resolution.
 A pin's `object_ref` resolves through one of two tiers, picked by namespace
 prefix:
 
-- **Owned** (`cnv:`, `conv:`, `mem:`) — a concrete resolver on this surface
-  knows the kind, preview, and open semantics directly.
-- **Foreign** (a namespace another bundle owns, for example `acme:`) — the generic
-  `NamedServiceCanvasObjectResolver` treats the ref as opaque and asks the owner
-  bundle over the in-runtime bridge. It is additive (registered after the
-  concrete resolvers, only for namespaces configured under
-  `surfaces.as_consumer.ui.canvas.resolvers`) and
-  never shadows owned refs.
+- **Owned** (`cnv:`, `conv:`) — a concrete resolver on this surface knows the
+  kind, preview, and open semantics directly.
+- **Configured namespace** (for example `mem:`, `task:`, or `acme:`) — the
+  generic `NamedServiceCanvasObjectResolver` treats the ref as opaque and asks
+  the namespace owner over the in-runtime bridge. It is additive (registered
+  after the concrete resolvers, only for namespaces configured under
+  `surfaces.as_consumer.ui.canvas.resolvers`) and never shadows owned refs.
 
 See [Namespace Services](../../namespace-services/README.md) for the
 provider/consumer contract behind foreign refs.
@@ -105,7 +107,7 @@ This makes duplicate prevention deterministic:
 
 - dragging the same `acme:ticket:<id>` again updates/restores the existing pin;
 - dragging the same `fi:` again updates/restores the existing pin;
-- dragging the same `mem:` again updates/restores the existing pin;
+- dragging the same `mem:record:<id>` again updates/restores the existing pin;
 - dragging the same `repo:` or `so:` ref again updates/restores the existing pin.
 
 Canvas-owned objects are the exception because the user creates a new object
@@ -119,6 +121,12 @@ cnv:.../at_2026-06-07-13-20-10_a1b2  assistant text
 
 Canvas-owned storage uses `cnv:` refs, so the canvas subsystem owns the board
 and canvas-object namespace.
+
+Object-reference cards are not files unless the object itself is a file. Their
+flyout should show the object URI, root namespace, object kind/subnamespace, and
+cached preview/summary. The UI should expose a copy affordance for the
+canonical object URI so users can inspect or report exactly which external
+object is pinned.
 
 ## Board Operations
 
@@ -288,6 +296,40 @@ The provider decides that the first ref can open the issue editor while the
 second can download bytes or open the parent issue focused on the attachment.
 Canvas does not infer this from `task`; it only forwards the full ref and renders
 the returned capabilities.
+
+## Pin Search And Indexing
+
+A board can be searched. Search is hybrid — semantic + lexical + recency, fused
+with reciprocal rank fusion — the same family used for tasks and memories, over a
+per-user SQLite + vector index (`solutions/canvas/search`, on top of the generic
+[hybrid index](../index/hybrid-index-README.md)).
+
+Two rules shape it, both following from "a pin is a proxy":
+
+- **Index on update, not on search.** The index is (re)built when a board changes
+  (pin add / edit / remove / board delete), never per query. Searches are frequent
+  and must not rebuild; updates are rare and pay the embedder once.
+- **Index the card-level snapshot, not the source object.** A pin proxies an object
+  in another subsystem that may be unversioned, and we don't observe when its source
+  data changes. So the searchable material is exactly what the card holds — label /
+  title / description / comments / kind / ref — captured at pin/update time. The
+  index never re-fetches the source object; it reflects the card and changes only
+  when the card changes.
+
+Indexing is serialized per user with the runtime's observed file lock (see
+[Synchronization Mechanisms](../../../service/synch-mechanisms/critical-section-README.md)),
+so concurrent canvas updates can't corrupt the index.
+
+`canvas_search` is read-only: it does not sync or re-embed pins, it searches the
+already-built index and embeds only the *query*. The query embed is economically
+gated — when the budget guard denies (or the query is trivial), search degrades to
+lexical + recency and costs no embed call. Write-side embedding (on update) is never
+gated; the board always stays indexed.
+
+The mechanism is generic — `CanvasPinSearch`, usable by any bundle that mounts the
+canvas, not one bundle's service. Filters: one board or all of a user's boards, and
+optional `kinds` / `namespaces`. See
+[Pin Integration → Pin Search](./pin-integration-README.md#pin-search) for the wiring.
 
 ## Error Handling
 

@@ -66,8 +66,17 @@ kdcube_ai_app.apps.chat.sdk.solutions.canvas
   events/focus_policies.py
                           Reusable focused-card context projection helpers and
                           generic canvas focus policy ids
+  search/                 Generic pin-board search: CanvasPinSearch service +
+                          card→Document mapping over the SQLite+vector hybrid
+                          index; index-on-update, read-only economical search
   ui/component/src        Reusable React canvas board component source
 ```
+
+`search/` is a reusable mechanism, not bundle-specific: any bundle that mounts the
+canvas gets pin search by constructing `CanvasPinSearch(entrypoint)` and calling
+`index`/`clear` on canvas update and `search` on query. It derives the embedder and
+the economical guard from the host entrypoint. See
+[Pin Integration → Pin Search](./pin-integration-README.md#pin-search).
 
 The SDK package does not know provider object semantics, memory semantics,
 or ReAct artifact download transport details. It only stores canonical refs and
@@ -112,7 +121,7 @@ namespace when pinned:
 | Object | Canonical ref kept by canvas | Owner |
 | --- | --- | --- |
 | ReAct/chat artifact | `fi:conv_<conversation>/turn_.../outputs/file.md` | ReAct artifact layer |
-| Memory | `mem:<memory-id>` | Memory module |
+| Memory | `mem:record:<memory-id>` | Memory named-service provider |
 | Provider object | `acme:ticket:<object-id>` | Provider subsystem |
 | Canvas user text/upload | `cnv:<canvas-object>` | Canvas storage owner |
 | Knowledge/source row | `repo:<repo>/<path>` or `so:<source>` | Knowledge/source subsystem |
@@ -171,6 +180,8 @@ canvas.object_action(ref="acme:ticket:...", action="open")
 The first URI segment before `:` is the routing namespace. Everything before
 the last `:` is the provider-owned owner key/subnamespace. Canvas may display
 that owner key, but it dispatches resolver calls by the root namespace only.
+That is why `mem:record:<id>` routes through the configured `mem` resolver and
+`task:issue:<id>` routes through the configured `task` resolver.
 
 Core contract:
 
@@ -238,7 +249,8 @@ The instructions explain:
 - `[CANVAS FOCUSED CONTEXT]` is turn-local selected/multi-selected card
   context for batch operations on the attached board.
 - Individual pins dragged from canvas into chat render as their proxied objects
-  (`acme:`, `mem:`, `fi:`, `cnv:`, etc.), not as canvas-focus events.
+  (`acme:`, `mem:record:<id>`, `fi:`, `cnv:`, etc.), not as canvas-focus
+  events.
 - `react.pull(paths=["cnv:<name>@<revision>"])` imports exact hidden board
   state into the ReAct workspace; inspect the returned `fi:` or physical path.
 - `canvas.patch` is the only agent write path.
@@ -328,7 +340,7 @@ This is the intended SDK boundary:
 | --- | --- |
 | Canvas SDK policies | Text shape for `[CANVAS STATE]`, `[CANVAS BOARD]`, `[CANVAS FOCUS]`, and `[CANVAS FOCUSED CONTEXT]`. Focus means selected/multi-selected cards on a board. |
 | Composition bundle wrappers | Event-source ids, event-policy ids, storage prefixes, and compatibility metadata keys. |
-| Domain resolvers | Object-specific previews, open/download/rehost actions for refs such as `acme:`, `mem:`, `fi:`, and `repo:`. |
+| Domain resolvers | Object-specific previews, open/download/rehost actions for refs such as `acme:`, `mem:record:<id>`, `fi:`, and `repo:`. |
 
 ## Data Bus Integration
 
@@ -381,6 +393,16 @@ type CanvasPatch = (payload: CanvasPatchInput) => Promise<CanvasPatchResponse>
 The UI component does not know how to download a `fi:` file or open an
 `acme:` object. It sends object actions to the bundle, and the bundle dispatches
 through the resolver registry.
+
+`namespaceStyles` is presentation metadata keyed by the root namespace, not by
+card type and not by subnamespace. For example, `mem:record:<id>` should use
+the style configured for `mem`, while `task:issue:<id>` and
+`task:attachment:<id>` should both use the style configured for `task`.
+The same root-namespace style should be preserved as an object moves from
+search result to chat context chip to canvas card.
+In bundle configuration this metadata lives at top-level `config.namespace_styles`
+so chat, canvas, and any other namespace-aware surface can consume the same
+contract.
 
 ### Inline Editing
 

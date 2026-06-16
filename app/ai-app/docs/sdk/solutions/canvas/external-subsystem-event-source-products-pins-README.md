@@ -97,9 +97,15 @@ the object pin on the board, it can use `canvas.patch(comment_card)` or
 
 ## Object Search And Drag To Canvas
 
-Object search is a provider function. Search results can be dragged onto a
-canvas as `object.ref` cards. The search result should supply enough metadata
-for the canvas legend:
+Object search here is a **provider function** — the owning subsystem searches its
+own objects and returns rows the user can drag onto a board. This is distinct from
+**pin-board search** (`canvas_search` / `CanvasPinSearch`), which searches the
+cards already on the user's boards. Provider search finds objects to pin; pin-board
+search finds pins already placed. See
+[Pin Operations → Pin Search And Indexing](./pin-operations-README.md#pin-search-and-indexing).
+
+Search results can be dragged onto a canvas as `object.ref` cards. The search
+result should supply enough metadata for the canvas legend:
 
 ```json
 {
@@ -137,7 +143,8 @@ Current implementation:
 - `cnv:` canvas-owned user text, user attachments, and agent text are hosted
   by canvas storage.
 - `fi:` ReAct artifacts are platform-owned and may be cross-conversation.
-- `mem:` is memory-subsystem owned.
+- `mem:` is memory-provider owned through the named-service bridge; durable
+  memory records should use `mem:record:<id>`.
 - Provider refs are preserved on object pins and dispatched by their root
   namespace. For `acme:ticket:<id>`, `acme` is the routing namespace and
   `acme:ticket` is the provider-owned owner key/subnamespace.

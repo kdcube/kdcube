@@ -26,6 +26,9 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-surface-registry-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/comm/conversation-event-bus-and-data-bus-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/index/hybrid-index-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/index/hybrid-scoring-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/synch-mechanisms/critical-section-README.md
 ---
 # Canvas Pin Integration
 
@@ -41,12 +44,12 @@ This page covers the pin/object resolver part of that integration.
 A composition bundle can integrate several subsystems. A typical shape is:
 
 ```text
-canvas module         board, pins, revisions, comments, suggestions
-provider subsystem    acme:ticket:<id>, provider tools, provider editor
-chat subsystem        ar: replicas, fi: chat attachments and ReAct artifacts
-memory subsystem      mem: memories and memory search
-knowledge subsystem   repo: repository-backed knowledge articles through MCP/search
-source/search pool    so: or future source refs
+canvas module                  board, pins, revisions, comments, suggestions
+provider subsystem             acme:ticket:<id>, provider tools, provider editor
+chat subsystem                 ar: replicas, fi: chat attachments and ReAct artifacts
+memory named-service provider  mem:record:<id>, memory search, memory actions
+knowledge subsystem            repo: repository-backed knowledge articles through MCP/search
+source/search pool             so: or future source refs
 ```
 
 Canvas stores pins. Resolvers make pins useful.
@@ -62,7 +65,7 @@ canvas = CanvasModule(
     resolvers=[
         PlatformArtifactResolver(),   # fi:
         ProviderObjectResolver(),     # acme:
-        MemoryObjectResolver(),       # mem:
+        NamedServiceCanvasObjectResolver("mem"),  # mem:
         KnowledgeArticleResolver(),   # repo:
         CanvasOwnedResolver(),        # cnv:
     ],
@@ -90,7 +93,7 @@ The registry dispatches by URI prefix:
 ```text
 acme:ticket:ticket_...      -> ProviderObjectResolver
 fi:conv_...                 -> PlatformArtifactResolver
-mem:user/...                -> MemoryObjectResolver
+mem:record:mem_...          -> NamedServiceCanvasObjectResolver("mem")
 repo:kdcube-ai-app/app/ai-app/docs/...                 -> KnowledgeArticleResolver
 cnv:.../ut_...              -> CanvasOwnedResolver
 ```
@@ -105,16 +108,53 @@ The SDK canvas code uses the same shape locally:
 ```text
 canvas/events/resolver.py        CanvasObjectResolverRegistry and canvas-owned cnv: resolver
 React events/resolver.py         fi: resolver owned by the ReAct SDK event/artifact layer
-memory/events/resolver.py        mem: resolver owned by the SDK memory module
-named service resolvers          provider-owned refs via the namespace-service bridge
+named service resolvers          provider-owned refs via the namespace-service bridge,
+                                  including mem: when memory is exposed as a named service
 ```
 
 The composition entrypoint only assembles the registry for the mounted bundle.
 It does not implement provider, `fi:`, or `mem:` semantics inline. Provider
 behavior is in the provider subsystem, `fi:` behavior is in the ReAct
-event/artifact layer, and `mem:` behavior is in the SDK memory module. That
-boundary is intentional: adding a new namespace means registering the owning
-subsystem's resolver, not teaching canvas a new object type.
+event/artifact layer, and `mem:` behavior is reached through the memory
+named-service provider. That boundary is intentional: adding a new namespace
+means registering the owning subsystem's resolver, not teaching canvas a new
+object type.
+
+## Pin Search
+
+Pin boards are searchable, and the search is a **generic canvas mechanism** — not
+something a bundle re-implements. It lives in `solutions/canvas/search` and any
+bundle that mounts the canvas reuses it:
+
+```python
+from kdcube_ai_app.apps.chat.sdk.solutions.canvas.search import CanvasPinSearch
+
+self.pins = CanvasPinSearch(entrypoint)            # in the bundle's canvas mount
+await self.pins.index(store=..., user_id=u, story_id=t, payload=p)   # on canvas update
+await self.pins.clear(store=..., user_id=u, story_id=t, payload=p)   # on board delete
+await self.pins.search(store=..., user_id=u, story_id=t, payload=p)  # on query (read-only)
+```
+
+`CanvasPinSearch` derives its two runtime dependencies from the host entrypoint, so
+the bundle writes no bespoke embed/guard code:
+
+- the embedder — `entrypoint.models_service.embed_texts`, and
+- the economical guard — `entrypoint.search_semantic_guard(flow="canvas.pins.search")`,
+  the same verify-only `economic_preflight` gate memory and task-tracker search use.
+
+A bundle's canvas service stays thin: it constructs `self.pins = CanvasPinSearch(...)`
+once and calls `index` after a successful write/patch/delete and `search` for
+`canvas_search`. The reusable service owns the embedder, guard, card→Document mapping,
+the observed-file-lock-serialized index build, and the read-only query.
+
+The search itself — hybrid semantic + lexical + recency over a per-user SQLite +
+vector index, indexed from the card-level snapshot on update — is described in
+[Pin Operations → Pin Search And Indexing](./pin-operations-README.md#pin-search-and-indexing).
+The underlying engine is the generic
+[hybrid index](../index/hybrid-index-README.md) and its
+[scoring](../index/hybrid-scoring-README.md). This is board-level search of the
+**user's pins**, distinct from a provider's own object search (see
+[External Subsystem Pins](./external-subsystem-event-source-products-pins-README.md#object-search-and-drag-to-canvas)).
 
 ## Client And Server Responsibilities
 
@@ -253,8 +293,8 @@ drop fi: file onto provider attachments
   -> provider subsystem rehosts bytes
   -> provider creates provider-owned attachment ref
 
-drop mem: memory onto canvas
-  -> pin memory as mem:
+drop mem:record:<id> memory onto canvas
+  -> pin memory as mem:record:<id>
   -> no rehost
 ```
 
@@ -273,12 +313,12 @@ Expected memory behavior:
 
 ```text
 drag memory item out
-  -> payload contains object_ref=mem:...
+  -> payload contains object_ref=mem:record:<id>
   -> canvas creates/updates memory card
   -> chat attaches focused memory context
 
 drag mem: object into memory widget or click Open
-  -> MemoryObjectResolver.open(mem:...)
+  -> named-service resolver calls object.action(open, mem:record:<id>)
   -> memory widget opens memory detail
 ```
 
@@ -327,8 +367,8 @@ ANNOUNCE contains the volatile rich views:
 
 `[CANVAS FOCUSED CONTEXT]` is for selected/multi-selected cards on the attached
 canvas. A pin dragged by itself is rendered as the object it proxies (`acme:`,
-`mem:`, `fi:`, `cnv:`, etc.) and may carry canvas provenance metadata, but it
-is not a canvas-focus event by itself.
+`mem:record:<id>`, `fi:`, `cnv:`, etc.) and may carry canvas provenance
+metadata, but it is not a canvas-focus event by itself.
 
 If dry-run rendering shows context but live rendering only shows
 `[USER MESSAGE]`, the normal send path is losing `external_events[]` or the
@@ -376,7 +416,7 @@ expanded, then shows only resolver-supported actions. The generic behavior is:
 |---|---:|---:|---:|---|
 | `cnv:` | yes | no | yes | Canvas-owned board/object artifact storage. |
 | provider namespace | provider-defined | provider-defined | provider-defined | Reads and opens through the provider subsystem. |
-| `mem:` | yes | yes | no | Memory event resolver is owned by the SDK memory module; the host only registers it with local store/scope context. |
+| `mem:` | yes | yes | no | Memory is resolved through the configured named-service provider; canvas stores and forwards the canonical `mem:record:<id>` ref. |
 | `fi:` | no | no | no | Canonical file refs are preserved. Download/preview waits for a platform artifact resolver. |
 
 For provider open, the resolver returns:
