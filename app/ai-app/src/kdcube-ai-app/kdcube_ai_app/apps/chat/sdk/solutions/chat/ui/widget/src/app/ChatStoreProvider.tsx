@@ -6,26 +6,28 @@
  *     <MyOwnChatUI />        // calls useChatEngine() inside
  *   </ChatStoreProvider>
  *
- * Responsibilities:
- *  - provide the Redux store (the chat state machine + transport already live
- *    in the slice/reducers/api — see app/store.ts), and
- *  - apply any caller-supplied connection config to `settings` BEFORE the
- *    engine boots, so a custom/external host can pass baseUrl/tenant/project/
- *    bundle/tokens directly instead of relying on the iframe parent handshake.
+ * It applies any caller-supplied connection config to `settings` BEFORE the engine
+ * boots, then renders the active **engine root**. There are two interchangeable
+ * roots behind the `@chat/engine-root` alias:
+ *
+ *   - `localEngineRoot.tsx`  — the in-tree Redux store + `useChatEngine` (DEFAULT)
+ *   - `packageEngine.tsx`    — the framework-agnostic `@kdcube/components-react/chat`
+ *                              engine + iframe host-bridge (the npm:// packages)
+ *
+ * `vite.config.ts` resolves the alias to one or the other at build time, keyed on
+ * `VITE_CHAT_ENGINE` (`package` → package engine, else in-tree). Switching engines
+ * is therefore a single env var in the widget's build command — no code changes —
+ * and the default build never pulls `@kdcube/*` into its module graph.
  *
  * When `config` is omitted the engine keeps today's behavior: it resolves
- * baseUrl/tenant/project/bundle/auth from query params, the served route, and
- * the parent-frame CONFIG handshake (settings.setupParentListener()).
- *
- * Note: the store is a module singleton today (app/store.ts), so two providers
- * on one page share one chat state — correct for the single-widget embed. Making
- * it multi-instance safe (a store per provider) is a deliberate follow-up.
+ * baseUrl/tenant/project/bundle/auth from query params, the served route, and the
+ * parent-frame CONFIG handshake (settings.setupParentListener()).
  */
 import type { ReactNode } from 'react'
 import { useState } from 'react'
-import { Provider } from 'react-redux'
-import { store } from './store.ts'
-import { ChatEngineHost } from './useChatEngine.tsx'
+// Resolved at build time by vite.config (engine-root swap); both targets export an
+// `EngineRoot({ children })` with identical behavior from the host's point of view.
+import { EngineRoot } from '@chat/engine-root'
 import type { AppSettings } from '../settings.ts'
 import { settings } from '../settings.ts'
 
@@ -39,16 +41,12 @@ export function ChatStoreProvider({
   children: ReactNode
 }) {
   /* Apply caller config exactly once, synchronously, before children (and the
-   * engine boot inside useChatEngine) first render. A useState initializer runs
-   * during render, ahead of child effects. */
+   * engine boot) first render. A useState initializer runs during render, ahead of
+   * child effects. Both engine roots read the same `settings` singleton. */
   useState(() => {
     if (config && Object.keys(config).length > 0) settings.update(config)
     return true
   })
 
-  return (
-    <Provider store={store}>
-      <ChatEngineHost>{children}</ChatEngineHost>
-    </Provider>
-  )
+  return <EngineRoot>{children}</EngineRoot>
 }

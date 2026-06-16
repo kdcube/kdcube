@@ -574,6 +574,34 @@ class BaseEntrypoint:
     def _sdk_source_root() -> pathlib.Path:
         return pathlib.Path(__file__).resolve().parents[2]
 
+    @staticmethod
+    def _npm_packages_root() -> pathlib.Path:
+        # The standalone components library (@kdcube/components-*) ships INSIDE the
+        # installed app tree, at <kdcube-ai-app>/npm/packages, so it is copied into
+        # the runtime image by the same `COPY src/kdcube-ai-app/ .` that ships the
+        # Python package. That makes the relative position identical in the repo and
+        # in the container:
+        #   repo:      .../src/kdcube-ai-app/npm/packages
+        #   container: /app/npm/packages
+        # The SDK root resolves to <kdcube-ai-app>/kdcube_ai_app/apps/chat/sdk, so
+        # the kdcube-ai-app root is parents[3] and `npm` sits beside kdcube_ai_app.
+        #
+        # An explicit override wins (useful for unusual layouts / tests); otherwise
+        # we probe the consistent location and fall back to the legacy sibling path
+        # (app/ai-app/src/npm) so an un-migrated checkout still resolves locally.
+        override = os.environ.get("KDCUBE_NPM_PACKAGES_ROOT")
+        if override:
+            return pathlib.Path(override).expanduser().resolve()
+        sdk_root = pathlib.Path(__file__).resolve().parents[2]
+        candidates = (
+            sdk_root.parents[3] / "npm" / "packages",   # shipped: <kdcube-ai-app>/npm (== /app/npm)
+            sdk_root.parents[4] / "npm" / "packages",   # legacy local sibling: app/ai-app/src/npm
+        )
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return candidates[0]
+
     def _resolve_ui_shared_source_path(self, *, source: str, bundle_root: str) -> pathlib.Path:
         raw = str(source or "").strip()
         if raw.startswith("sdk://"):
@@ -586,6 +614,19 @@ class BaseEntrypoint:
                 resolved.relative_to(root)
             except ValueError as exc:
                 raise ValueError(f"shared UI source escapes SDK root: {source!r}") from exc
+            return resolved
+        if raw.startswith("npm://"):
+            # Standalone components library, e.g. npm://components-core/src ->
+            # app/ai-app/src/npm/packages/components-core/src.
+            rel = raw[len("npm://"):].strip().lstrip("/")
+            if not rel:
+                raise ValueError("shared UI source npm:// path is empty")
+            root = self._npm_packages_root()
+            resolved = (root / rel).resolve()
+            try:
+                resolved.relative_to(root)
+            except ValueError as exc:
+                raise ValueError(f"shared UI source escapes npm packages root: {source!r}") from exc
             return resolved
         if raw.startswith("bundle://"):
             rel = raw[len("bundle://"):].strip().lstrip("/")

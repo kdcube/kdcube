@@ -199,7 +199,10 @@ export interface ChatEngine {
   }
 }
 
-const ChatEngineContext = createContext<ChatEngine | null>(null)
+// Exported so the package engine root (packageEngine.tsx) can provide the very same
+// context instance that App.tsx consumes via useChatEngine() — both engine roots
+// feed one ChatEngineContext.
+export const ChatEngineContext = createContext<ChatEngine | null>(null)
 
 /** Build the engine. Called exactly once (by ChatEngineHost) inside <Provider>. */
 function useChatEngineImpl(): ChatEngine {

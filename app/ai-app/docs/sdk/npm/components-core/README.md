@@ -59,6 +59,6 @@ JS calls it directly — none need to know Redux.
 ## Build / verify
 
 ```sh
-cd app/ai-app/src/npm && npm install
+cd app/ai-app/src/kdcube-ai-app/npm && npm install
 cd packages/components-core && npx tsc --noEmit && npx tsup   # typecheck + build dist
 ```

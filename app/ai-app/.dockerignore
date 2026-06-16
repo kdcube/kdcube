@@ -1,0 +1,6 @@
+# Build context = app/ai-app. Keep node_modules out of every image: the Python
+# images install via pip (requirements-*.txt) and bundle UI widgets run their own
+# `npm install` at refresh time, so no node_modules ever needs to ship. This also
+# keeps the components workspace (src/kdcube-ai-app/npm) from bloating the image —
+# only its package source is materialized by the npm:// shared-source resolver.
+**/node_modules

@@ -1,0 +1,13 @@
+{
+  "name": "@kdcube/components-workspace",
+  "private": true,
+  "version": "0.0.0",
+  "description": "KDCube client components library — framework-agnostic engines (@kdcube/components-core) and per-framework adapters (@kdcube/components-react, …).",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  }
+}

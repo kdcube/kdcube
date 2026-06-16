@@ -20,7 +20,9 @@ keywords:
 
 A two-package library that decouples KDCube's interactive components (chat today;
 canvas, memories, … next) from any single framework or host. Workspace:
-`app/ai-app/src/npm/`.
+`app/ai-app/src/kdcube-ai-app/npm/` (inside the installed app tree, so the package
+source ships into the runtime image and is reachable via the `npm://` shared-source
+resolver).
 
 | Package | Layer | Knows about |
 | --- | --- | --- |
