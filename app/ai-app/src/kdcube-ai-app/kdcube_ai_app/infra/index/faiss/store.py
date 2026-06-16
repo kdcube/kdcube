@@ -1,21 +1,21 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
-"""Pluggable vector backends for the hybrid index.
+"""faiss-backed vector stores for the generic index (`VectorStore` protocol).
 
-- BruteForceVectorStore: pure-python cosine, zero deps. The default — fine for
-  per-scope collections (tens–thousands of docs) and fully testable without faiss.
-- LocalFaissStore: file-backed faiss index next to the owner's SQLite. For scale,
-  single-process / shared-filesystem.
-- CachedFaissStore: wraps the cross-process `FaissProjectCache` (Redis-coordinated).
+- LocalFaissStore: file-backed faiss index (IndexFlatIP + IDMap2) persisted at a
+  given path. Persistent → survives new instances / processes.
+- CachedFaissStore: wraps the platform's cross-process `FaissProjectCache`
+  (Redis-coordinated; see infra/embedding/faiss_manager.py).
 
-All use cosine similarity on L2-normalized vectors; ids are the SQLite rowids.
+faiss + numpy are heavy, optional deps — imported here only, so the rest of the
+index has no faiss dependency. Both use cosine similarity on L2-normalized
+vectors; ids are the integer rowids the index passes in.
 """
 from __future__ import annotations
 
-import math
 import threading
 from pathlib import Path
-from typing import Dict, List, Sequence
+from typing import List, Sequence
 
 try:  # heavy, optional
     import numpy as np  # type: ignore
@@ -26,39 +26,6 @@ try:  # heavy, optional
     import faiss  # type: ignore
 except Exception:  # pragma: no cover
     faiss = None  # type: ignore
-
-
-def _normalize(vec: Sequence[float]) -> List[float]:
-    norm = math.sqrt(sum(float(x) * float(x) for x in vec)) or 1.0
-    return [float(x) / norm for x in vec]
-
-
-class BruteForceVectorStore:
-    """In-memory exact cosine search. No external deps; rebuilt from the index's
-    cached vectors. Suitable for per-user / per-board scales."""
-
-    volatile = True  # in-memory: a new instance starts empty (forces rebuild)
-
-    def __init__(self) -> None:
-        self._lock = threading.RLock()
-        self._items: List[tuple[int, List[float]]] = []  # (id, normalized vector)
-
-    def rebuild(self, items: Sequence[tuple[int, Sequence[float]]], dim: int) -> None:
-        with self._lock:
-            self._items = [(int(i), _normalize(v)) for i, v in items if v]
-
-    def search(self, vector: Sequence[float], top_k: int) -> List[tuple[int, float]]:
-        with self._lock:
-            if not self._items:
-                return []
-            q = _normalize(vector)
-            scored = [(i, sum(a * b for a, b in zip(q, v))) for i, v in self._items]
-            scored.sort(key=lambda t: t[1], reverse=True)
-            return scored[: max(1, top_k)]
-
-    def reset(self) -> None:
-        with self._lock:
-            self._items = []
 
 
 def _require_faiss() -> None:
@@ -81,7 +48,7 @@ def _build_index(items: Sequence[tuple[int, Sequence[float]]], dim: int):
 
 
 class LocalFaissStore:
-    """File-backed faiss index (IndexFlatIP + IDMap2) persisted next to the SQLite."""
+    """File-backed faiss index (IndexFlatIP + IDMap2) persisted at `path`."""
 
     volatile = False  # persisted to a file: survives new instances
 
@@ -148,3 +115,6 @@ class CachedFaissStore:
 
     def reset(self) -> None:  # pragma: no cover
         self._cache.publish_new_index(self._scope, _build_index([], 1))
+
+
+__all__ = ["LocalFaissStore", "CachedFaissStore"]

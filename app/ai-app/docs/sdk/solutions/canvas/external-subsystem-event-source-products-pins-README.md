@@ -19,6 +19,7 @@ keywords:
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/canvas-module-guide-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/pin-operations-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/search-operations-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/pin-integration-README.md
 ---
 # External Subsystem Event Source Product Pins

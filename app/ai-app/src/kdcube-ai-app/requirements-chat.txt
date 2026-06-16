@@ -90,6 +90,9 @@ folium
 stripe
 mcp
 
+# faiss vector backend for the generic hybrid index (infra/index/faiss); used by any bundle.
+faiss-cpu==1.14.3
+
 # Test utilities for the chat processor venv.
 pytest
 pytest-asyncio

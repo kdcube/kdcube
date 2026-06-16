@@ -307,8 +307,9 @@ per-user SQLite + vector index (`solutions/canvas/search`, on top of the generic
 Two rules shape it, both following from "a pin is a proxy":
 
 - **Index on update, not on search.** The index is (re)built when a board changes
-  (pin add / edit / remove / board delete), never per query. Searches are frequent
-  and must not rebuild; updates are rare and pay the embedder once.
+  (pin add / edit / remove / board delete), not per query. Searches are frequent and
+  must not rebuild; updates are rare and pay the embedder once. (A one-time lazy
+  build runs on search if a board was never indexed — self-heal, cheap thereafter.)
 - **Index the card-level snapshot, not the source object.** A pin proxies an object
   in another subsystem that may be unversioned, and we don't observe when its source
   data changes. So the searchable material is exactly what the card holds — label /
@@ -330,6 +331,11 @@ The mechanism is generic — `CanvasPinSearch`, usable by any bundle that mounts
 canvas, not one bundle's service. Filters: one board or all of a user's boards, and
 optional `kinds` / `namespaces`. See
 [Pin Integration → Pin Search](./pin-integration-README.md#pin-search) for the wiring.
+
+For the full contract — the **exact card fields that get indexed** (`card_text`), the
+vector backends and their files (`pins.index.sqlite` / `pins.index.faiss`), the
+config knob, and the observability logs — see
+[Pin Search Operations](./search-operations-README.md).
 
 ## Error Handling
 

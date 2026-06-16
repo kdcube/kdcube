@@ -48,6 +48,7 @@ async def _run() -> None:
         idx = await index_pins(
             store=store, user_id="u-1", story_id="s-1",
             payload={"canvas_id": "b1"}, embed_fn=fake_embed, dim=len(VOCAB),
+            vector_backend="bruteforce",
         )
         assert idx["ok"] is True and idx["indexed"] == 2, idx
 
@@ -55,7 +56,7 @@ async def _run() -> None:
         res = await search_pins(
             store=store, user_id="u-1", story_id="s-1",
             payload={"query": "alpha deploy", "canvas_id": "b1", "limit": 10},
-            embed_fn=fake_embed, dim=len(VOCAB),
+            embed_fn=fake_embed, dim=len(VOCAB), vector_backend="bruteforce",
         )
         assert res["ok"] is True, res
         ids = [r["card_id"] for r in res["results"]]
@@ -70,6 +71,7 @@ async def _run() -> None:
             store=store, user_id="u-1", story_id="s-1",
             payload={"query": "alpha", "canvas_id": "b1"},
             embed_fn=fake_embed, dim=len(VOCAB), semantic_guard=deny,
+            vector_backend="bruteforce",
         )
         assert res2["ok"] is True and [r["card_id"] for r in res2["results"]] == ["p1"], res2
 

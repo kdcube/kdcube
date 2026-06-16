@@ -32,6 +32,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
     DISABLE_AUTOUPDATER=1
 
+# Defensive: if a second OpenMP runtime (e.g. torch) ever coexists with faiss,
+# let the process continue instead of aborting with OMP Error #15.
+ENV KMP_DUPLICATE_LIB_OK=TRUE
+
 WORKDIR /app
 
 # Install Docker CLI (processor may spawn code exec via docker)

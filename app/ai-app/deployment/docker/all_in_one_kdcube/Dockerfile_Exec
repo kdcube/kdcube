@@ -39,6 +39,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH="/opt/venv/bin:$PATH" \
     PY_CODE_EXEC_TIMEOUT=600
 
+# Defensive: if a second OpenMP runtime (e.g. torch) ever coexists with faiss,
+# let the process continue instead of aborting with OMP Error #15.
+ENV KMP_DUPLICATE_LIB_OK=TRUE
+
 # --- App code ---
 # Copy app to /opt/app so kdcube_ai_app is at /opt/app/kdcube_ai_app
 COPY src/kdcube-ai-app/ /opt/app/

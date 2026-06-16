@@ -5,29 +5,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Protocol, Sequence, runtime_checkable
+from typing import Any, Awaitable, Callable, Dict, List, Sequence
+
+# The pluggable vector backend contract lives one level up — the SQLite index
+# *uses* a VectorStore, it does not own the backends. faiss backends are in
+# `kdcube_ai_app.infra.index.faiss`.
+from ..vector_store import VectorStore  # noqa: F401  (re-exported public type)
 
 # An embedder: text batch -> one vector per text. The platform's
 # `model_service.embed_texts` satisfies this exactly.
 EmbedFn = Callable[[Sequence[str]], Awaitable[List[List[float]]]]
-
-
-@runtime_checkable
-class VectorStore(Protocol):
-    """Pluggable ANN backend keyed by integer ids (the SQLite rowids).
-
-    Implementations: BruteForceVectorStore (pure-python, default), LocalFaissStore
-    (file-backed faiss), CachedFaissStore (cross-process via FaissProjectCache).
-    """
-
-    def rebuild(self, items: Sequence[tuple[int, Sequence[float]]], dim: int) -> None:
-        """Replace the whole index with these (id, vector) pairs."""
-
-    def search(self, vector: Sequence[float], top_k: int) -> List[tuple[int, float]]:
-        """Return [(id, similarity)] best-first (cosine on normalized vectors)."""
-
-    def reset(self) -> None:
-        """Drop the index."""
 
 
 @dataclass

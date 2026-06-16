@@ -37,6 +37,7 @@ class CanvasPinSearch:
         *,
         flow: str = "canvas.pins.search",
         dim: int = DEFAULT_EMBEDDING_DIM,
+        vector_backend: Optional[str] = None,
         vector_store: Optional[VectorStore] = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
@@ -44,7 +45,21 @@ class CanvasPinSearch:
         self.flow = flow
         self.dim = dim
         self.vector_store = vector_store
+        # Vector backend: explicit arg > bundle prop `canvas.pin_search_backend` >
+        # "faiss-local" (file-backed per-user faiss). Set "bruteforce" to opt out
+        # (pure-python, no faiss dep).
+        self.vector_backend = vector_backend or self._configured_backend(entrypoint)
         self.logger = logger or logging.getLogger("kdcube.canvas.pins")
+
+    @staticmethod
+    def _configured_backend(entrypoint: Any) -> str:
+        bundle_prop = getattr(entrypoint, "bundle_prop", None)
+        if callable(bundle_prop):
+            try:
+                return str(bundle_prop("canvas.pin_search_backend", "faiss-local") or "faiss-local")
+            except Exception:
+                pass
+        return "faiss-local"
 
     def _embed_fn(self):
         model_service = getattr(self.entrypoint, "models_service", None)
@@ -62,19 +77,22 @@ class CanvasPinSearch:
     async def index(self, *, store: Any, user_id: str, story_id: str, payload: Mapping[str, Any]) -> dict:
         return await index_pins(
             store=store, user_id=user_id, story_id=story_id, payload=payload,
-            embed_fn=self._embed_fn(), dim=self.dim, vector_store=self.vector_store,
+            embed_fn=self._embed_fn(), dim=self.dim,
+            vector_backend=self.vector_backend, vector_store=self.vector_store,
         )
 
     async def clear(self, *, store: Any, user_id: str, story_id: str, payload: Mapping[str, Any]) -> dict:
         return await clear_pins(
             store=store, user_id=user_id, story_id=story_id, payload=payload,
-            embed_fn=self._embed_fn(), dim=self.dim, vector_store=self.vector_store,
+            embed_fn=self._embed_fn(), dim=self.dim,
+            vector_backend=self.vector_backend, vector_store=self.vector_store,
         )
 
     async def search(self, *, store: Any, user_id: str, story_id: str, payload: Mapping[str, Any]) -> dict:
         return await search_pins(
             store=store, user_id=user_id, story_id=story_id, payload=payload,
-            embed_fn=self._embed_fn(), dim=self.dim, vector_store=self.vector_store,
+            embed_fn=self._embed_fn(), dim=self.dim,
+            vector_backend=self.vector_backend, vector_store=self.vector_store,
             semantic_guard=self._guard(),
         )
 
