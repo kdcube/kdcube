@@ -1,146 +1,168 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.6.15.1942"
+  ref: "2026.6.16.320"
   description: |
-    This release strengthens KDCube's namespace-service integration across
-    chat, canvas, pinboard, ReAct, and composed scene surfaces. Provider-owned
-    objects can now travel through common UI surfaces as generic object
-    references while the owning provider remains responsible for resolving,
-    previewing, opening, downloading, and mutating those objects.
+    This release continues the namespace-service and reusable component work
+    started in 2026.6.15.1942. The focus is on making provider-owned search
+    results visible and interactive in chat/canvas, teaching ReAct the exact
+    searchable scopes exposed by each namespace provider, and advancing the
+    in-repo npm component extraction path for chat, canvas, and future scene
+    composition.
 
-    The main product outcome is that app-owned namespaces such as tasks,
-    files, memories, canvas objects, and future domain objects can participate
-    in the same drag, pin, click, and tool flows without embedding
-    namespace-specific behavior in the common components. Canvas and chat route
-    object actions through resolver/provider contracts; providers define what
-    an object can do.
+    The main product outcome is that ReAct can search app-owned namespaces and
+    the UI can surface those results as generic context objects. A provider can
+    advertise scoped object spaces such as records, attachments, events, or
+    other domain entities through discovery metadata; the ReAct tool catalog
+    then shows those scopes next to the generic named-service search tool.
+    Search results are emitted through the timeline as structured UI artifacts,
+    so capable clients can render them as clickable and draggable objects
+    without hardcoding provider-specific behavior into the common chat or
+    canvas components.
 
     Highlights
 
-    - Adds a shared SDK URL helper for browser-callable bundle operations.
-      Providers can return auth-bound operation URLs for actions such as
-      downloads instead of pushing file bytes through JSON responses.
-    - Updates canvas object action handling so resolver responses can expose
-      `download_url` alongside existing UI-event and preview responses.
-      Canvas logs now distinguish download URLs from legacy base64 payloads.
-    - Adds a binary download operation path for the Versatile canvas service.
-      Canvas artifact refs are resolved by the canvas artifact resolver and
-      streamed back through a normal bundle operation response.
-    - Updates canvas artifact resolution so downloads return metadata and a
-      provider/consumer URL, not embedded `content_base64`. The resolver still
-      owns byte lookup, filename selection, MIME metadata, and missing-ref
-      errors.
-    - Improves canvas rehosting of `cnv:` refs by using the same artifact
-      resolver path that powers object actions. This keeps rehosting,
-      downloads, and resolver behavior aligned.
-    - Extends the shared canvas component to expose provider object
-      attachments in expanded card views. Attachments discovered from a
-      provider preview become draggable context rows that can be sent to chat
-      or pinned onto canvas.
-    - Adds `hosted_uri`/`download_url` awareness to canvas and chat API types
-      so object-action results can travel cleanly through frontend clients.
-    - Updates the pinboard host integration to subscribe to canvas patch
-      notifications over the Data Bus and apply live canvas updates when other
-      surfaces mutate the same board.
-    - Hardens Data Bus result typing so frontend consumers do not assume every
-      service envelope `data` payload is already an object map.
-    - Adds tests for Data Bus stream/lock behavior affected by the stronger
-      typing.
-    - Normalizes named-service host-file artifact paths in ReAct so hosted
-      file operations can find user-provided files under runtime output/work
-      roots instead of failing on prompt-scoped display paths.
-    - Hardens ReAct timeline rendering when a tool result stores `error` as a
-      string instead of a structured error object. The timeline now renders
-      those failures instead of crashing during the next decision prompt.
-    - Updates ReAct event-reference resolution so file/object actions can use
-      provider-owned download URLs where available.
-    - Updates named-service provider tests to cover the new object action and
-      download response shapes.
+    - Adds a generic named-service search-results emission path. When
+      `named_services.search_objects` runs, the provider response is still
+      returned to the model, and a `named_service.search_results` artifact is
+      emitted for clients that can render result rows.
+    - Adds a `NamedServiceSearchResultsWidget` so chat surfaces can show
+      namespace search results as first-class interactive context items rather
+      than burying them inside tool JSON.
+    - Makes search-result context payloads use the canonical context-pin
+      envelope: `type: kdcube.context.attach` with a plural `contexts` array.
+      This aligns search results, chat context chips, canvas pins, memory
+      references, and app-owned objects on one drag/drop contract.
+    - Introduces provider-derived search scopes:
+      `NamedServiceSearchScope`, `NamedServiceProviderSpec.search_scopes`,
+      provider registration with `search_scopes=[...]`, and Redis discovery
+      serialization/deserialization for those scopes.
+    - Updates ReAct named-service tool metadata so discovery-provided search
+      scopes are rendered in the tool catalog next to the base namespaces that
+      are allowed by the consumer policy.
+    - Fixes cross-runtime search-scope rendering when discovery returns
+      scope-like objects from another loaded module instance. Scope metadata is
+      now normalized by shape, not only by exact Python class identity.
+    - Adds diagnostics around named-service discovery refresh and tool metadata
+      rendering so operators can see which namespaces and search scopes were
+      discovered and applied to the ReAct catalog.
+    - Adds framework-agnostic `@kdcube/components-core` package sources for
+      chat state, protocol, transport, reducer logic, context-pin utilities,
+      and shared engine configuration.
+    - Adds `@kdcube/components-react` package sources for the React chat
+      provider/wrapper layer that sits on top of the headless chat engine.
+    - Adds an opt-in package-engine path in the existing chat widget so the
+      in-tree widget can be switched toward the extracted package engine while
+      keeping the current SDK source path available.
+    - Documents the npm component library plan, chat engine surface,
+      engine/runtime configuration, typed host event bus, React wrapper, and
+      widget integration/deployment path.
 
     Namespace-service contract
 
-    - Providers own object semantics for their namespace. A provider resolver
-      declares capabilities, resolves previews/details, returns default open
-      effects, handles object actions, and provides download URLs or binary
-      operation endpoints where appropriate.
-    - Consumers such as chat, canvas, pinboard, scene, and ReAct should not
-      hardcode behavior for a namespace. They pass object refs and requested
-      actions to the provider contract, then execute the generic response
-      shape.
-    - Common UI surfaces can show object chips, context rows, and canvas cards
-      using generic metadata: kind, label, summary, ref, logical path,
-      `hosted_uri`, MIME type, capabilities, and provider action responses.
-    - Provider-owned downloads should prefer an auth-bound download URL or
-      binary bundle operation. JSON `content_base64` remains a compatibility
-      path, but it is no longer the primary path for provider object downloads.
+    - A configured namespace remains the policy boundary for a consumer. Scoped
+      search namespaces advertised by the provider are object spaces inside
+      that allowed boundary and may be used as the `namespace` argument to
+      `named_services.search_objects`.
+    - Providers can publish search scopes through discovery metadata, so ReAct
+      does not have to guess object spaces or call provider-about on every
+      turn just to learn common search targets.
+    - The rendered tool catalog now distinguishes the base namespace from the
+      provider search scopes available under it. This lets the model choose a
+      more precise search target when the user asks for a specific object kind.
+    - Provider schema/about remains the place for deeper provider-specific
+      semantics and filters. Discovery search scopes provide the fast
+      always-visible summary needed for normal tool selection.
+    - Common UI clients should treat named-service search results as context
+      refs. The provider continues to own object resolution, open effects,
+      downloads, mutations, and any namespace-specific details.
 
-    Canvas and pinboard behavior
+    Chat, canvas, and context behavior
 
-    - Canvas card actions now follow the provider/consumer split:
-      the user clicks or downloads a card, the consumer bundle operation routes
-      through its resolver registry, and the provider/resolver returns the
-      response the UI should execute.
-    - Provider object previews can include attachment objects. The shared
-      canvas component renders those attachments in the expanded card flyout
-      and makes them draggable without learning provider-specific rules.
-    - Pinboard listens for canvas patch results over the Data Bus, so a board
-      open in one surface can update when another surface applies a patch.
+    - Search results emitted by named-service tools can be rendered as rows in
+      chat. Each row carries the object ref and provider metadata needed for
+      later open, drag, pin, or provider action flows.
+    - Dragging a search result or context chip now uses the same envelope shape
+      that canvas and chat consumers parse. This removes the previous spread of
+      per-surface fields that meant similar things.
+    - The chat widget has new reducer and turn-tab plumbing for subsystem
+      artifacts such as named-service search results.
+    - Canvas and chat integration docs point to the shared context-pin
+      contract as the canonical source for draggable object refs.
 
     ReAct and tool behavior
 
-    - ReAct named-service tools and event ref actions now align with the same
-      provider-owned object model used by canvas. ReAct should pass
-      namespace/object refs to named-service operations rather than inventing
-      file-system paths for provider-owned objects.
-    - String-shaped tool errors are rendered safely in the timeline, avoiding a
-      graph failure when the next decision prompt includes a failed tool
-      result.
-    - Host-file artifact path normalization lets provider host-file operations
-      resolve user attachments from runtime artifact roots.
+    - `named_services.search_objects` is still an exploration tool. It returns
+      the provider response to the model and separately emits UI-visible
+      search-result artifacts for clients that support them.
+    - ReAct tool rendering refreshes named-service discovery before composing
+      the catalog and applies provider search scopes to the tool metadata.
+    - Search scopes are normalized defensively when crossing runtime/module
+      boundaries, preventing dataclass identity mismatches from hiding valid
+      scopes in the rendered prompt.
+    - The named-service tool docs avoid provider-specific examples while still
+      explaining that provider-advertised scoped namespaces are valid search
+      targets.
+    - Runtime tests cover the named-service search scope rendering path.
+
+    Components and package extraction
+
+    - Adds the initial in-repo npm workspace for KDCube components.
+    - Adds `packages/components-core` with headless chat engine building
+      blocks: engine, protocol, reducers, state, event batching, transport
+      clients, runtime config, shared context-pin helpers, and host events.
+    - Adds `packages/components-react` with React bindings for chat, including
+      provider and hook surfaces that can later replace the monolithic widget
+      view wiring.
+    - Keeps the current SDK widget path working while documenting how the
+      widget can opt into the package-backed engine path.
+    - Adds documentation for future consumers who want to embed chat/canvas
+      directly from npm packages instead of copying widget internals.
 
     Documentation
 
-    - Expands the namespace-service provider documentation with provider
-      execution surfaces, binary download expectations, and provider-owned
-      object action responsibilities.
-    - Expands the namespace-service client documentation with consumer
-      execution surfaces and the meaning of a consumer operation such as
-      `canvas_object_action`.
-    - Adds detailed integration diagrams for canvas card actions and ReAct
-      named-service tool calls, including which code executes each step and
-      which parts are customized by the consumer or provider.
-    - Updates canvas pin/action docs and chat widget docs to describe
-      draggable context objects, object action responses, and provider-owned
-      downloads.
+    - Updates namespace-service docs to explain scoped search namespaces,
+      provider-discovered search scopes, search-result artifacts, and the
+      provider/client split.
+    - Updates named-service tool docs to describe how a model should use
+      provider-declared search scopes without guessing scoped namespace names.
+    - Adds the `docs/sdk/npm` documentation tree for component packages:
+      library map, components-core, chat engine, engine config, host event bus,
+      context-pin contract, components-react, and widget integration.
+    - Cross-links chat, canvas, and namespace-service docs to the context-pin
+      contract.
+    - Documents the chat widget engine switch and deployment implications for
+      the package-backed path.
 
     Runtime and deployment notes
 
-    - Deployments must point the platform ref at 2026.6.15.1942 to receive
-      these namespace-service, canvas, chat, and ReAct fixes.
-    - Apps that provide object namespaces should implement provider resolvers
-      for capabilities, preview/details, object actions, and provider-owned
-      downloads where the namespace exposes files or artifacts.
-    - Apps that consume object namespaces should route through the resolver
-      registry or named-service tools rather than adding namespace-specific
-      behavior to common components.
-    - Existing canvas and chat flows remain compatible with older object-action
-      responses. New providers should prefer `download_url` or binary
-      operation responses over base64-in-JSON for downloads.
+    - Deployments must point the platform ref at 2026.6.16.320 to receive the
+      named-service search-scope rendering fix, search-result UI artifact
+      support, context-pin normalization, and npm component package sources.
+    - Providers that expose multiple searchable object spaces should register
+      `search_scopes` during named-service provider registration so consumers
+      can render those scopes immediately from discovery.
+    - Consumers should continue routing named-service objects through the
+      provider contract. Search-result widgets and drag/drop surfaces should
+      pass refs forward instead of inventing namespace-specific logic.
+    - The package-backed chat engine remains opt-in; existing SDK widget builds
+      remain compatible while the package extraction continues.
 
     Changelog
 
-    - Added `bundle_operation_url(...)` SDK helper and tests.
-    - Added canvas artifact resolver download URL support and tests.
-    - Added Versatile canvas binary object-download operation.
-    - Added provider attachment rendering and dragging in shared canvas card
-      flyouts.
-    - Added frontend `download_url` and `hosted_uri` response handling in
-      canvas/chat-related types.
-    - Added pinboard Data Bus subscription for live canvas patch updates.
-    - Strengthened Data Bus envelope typing and tests.
-    - Normalized named-service host-file artifact paths for ReAct.
-    - Hardened ReAct timeline rendering for string-shaped tool errors.
-    - Updated namespace-service, canvas, and chat documentation for provider
-      object action flows.
+    - Added named-service search-result artifact emission.
+    - Added named-service search results widget support in chat.
+    - Added provider search-scope metadata types and discovery serialization.
+    - Rendered provider search scopes in ReAct named-service tool metadata.
+    - Fixed search-scope normalization across runtime/module boundaries.
+    - Added discovery/tool metadata diagnostics for named-service scopes.
+    - Normalized chat/canvas context drags to the canonical context-pin
+      envelope.
+    - Added the initial npm component workspace and package sources.
+    - Added headless chat engine sources under `components-core`.
+    - Added React chat wrapper sources under `components-react`.
+    - Added opt-in package-engine wiring for the existing chat widget.
+    - Added npm component, chat engine, host-event, context-pin, and widget
+      integration documentation.
+    - Added docs and tests for named-service scoped search behavior.
 config:
-    version: "2026.6.15.1942"
+    version: "2026.6.16.320"
