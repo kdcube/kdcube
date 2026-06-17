@@ -49,12 +49,17 @@ const materializedComponentsCoreCanvas = path.resolve(__dirname, '_shared/compon
 const componentsCoreCanvasEntry = fs.existsSync(materializedComponentsCoreCanvas)
   ? materializedComponentsCoreCanvas
   : findInWorkspace(__dirname, 'npm/packages/components-core/src/canvas/index.ts')
+// The canvas stylesheet sits next to the component entry; resolve the subpath
+// explicitly so the `@import '@kdcube/components-react/canvas/canvasBoard.css'` in
+// styles.css finds it (the entry alias points at index.ts).
+const canvasComponentCss = path.resolve(path.dirname(canvasComponentEntry), 'canvasBoard.css')
 
 export default defineConfig({
   plugins: [react()],
   base: './',
   resolve: {
     alias: [
+      { find: '@kdcube/components-react/canvas/canvasBoard.css', replacement: canvasComponentCss },
       { find: '@kdcube/components-react/canvas', replacement: canvasComponentEntry },
       { find: '@kdcube/components-core/scene', replacement: sceneRuntimeEntry },
       { find: '@kdcube/components-core/canvas', replacement: componentsCoreCanvasEntry },

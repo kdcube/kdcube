@@ -763,6 +763,11 @@ class CanvasStore:
                 "selected": bool(card.get("selected")),
                 "suggested": bool(card.get("suggested")) or str(card.get("placement") or "") == "suggested",
                 "created_by": str(card.get("created_by") or ""),
+                # The UI renders the card's "added" timestamp from created_at (and
+                # sorts/derives board stats from updated_at). These are stored as int
+                # epoch seconds; the legend must carry them or the UI shows no time.
+                "created_at": card.get("created_at"),
+                "updated_at": card.get("updated_at"),
                 "comments_count": len(card.get("comments") or []) if isinstance(card.get("comments"), list) else 0,
                 "locked": bool(card.get("locked")),
                 "agent_avoid": bool(card.get("agent_avoid")),
