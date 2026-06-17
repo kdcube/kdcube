@@ -43,6 +43,12 @@ const canvasComponentEntry = fs.existsSync(materializedComponentsReactCanvas)
 const sceneRuntimeEntry = fs.existsSync(materializedComponentsCoreScene)
   ? materializedComponentsCoreScene
   : envSceneRuntime || repoSceneRuntime
+// Canvas core logic (@kdcube/components-core/canvas — model/ingress/types), imported by
+// the canvas component. Same materialized-_shared + workspace-fallback resolution.
+const materializedComponentsCoreCanvas = path.resolve(__dirname, '_shared/components-core/canvas/index.ts')
+const componentsCoreCanvasEntry = fs.existsSync(materializedComponentsCoreCanvas)
+  ? materializedComponentsCoreCanvas
+  : findInWorkspace(__dirname, 'npm/packages/components-core/src/canvas/index.ts')
 
 export default defineConfig({
   plugins: [react()],
@@ -51,6 +57,7 @@ export default defineConfig({
     alias: [
       { find: '@kdcube/components-react/canvas', replacement: canvasComponentEntry },
       { find: '@kdcube/components-core/scene', replacement: sceneRuntimeEntry },
+      { find: '@kdcube/components-core/canvas', replacement: componentsCoreCanvasEntry },
       { find: 'lucide-react', replacement: require.resolve('lucide-react') },
       { find: /^react$/, replacement: require.resolve('react') },
       { find: /^react-dom$/, replacement: require.resolve('react-dom') },

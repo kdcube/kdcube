@@ -343,6 +343,9 @@ bundles:
               components_react_canvas:
                 src_folder: npm://components-react/src/canvas
                 target: _shared/components-react/canvas
+              components_core_canvas:
+                src_folder: npm://components-core/src/canvas
+                target: _shared/components-core/canvas
               components_core_scene:
                 src_folder: npm://components-core/src/scene
                 target: _shared/components-core/scene
@@ -375,5 +378,8 @@ bundles:
                 components_react_canvas:
                   src_folder: npm://components-react/src/canvas
                   target: _shared/components-react/canvas
+                components_core_canvas:
+                  src_folder: npm://components-core/src/canvas
+                  target: _shared/components-core/canvas
         mcp:
           services: {}

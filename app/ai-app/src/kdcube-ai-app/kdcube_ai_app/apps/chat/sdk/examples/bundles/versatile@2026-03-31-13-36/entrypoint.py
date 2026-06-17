@@ -1232,6 +1232,10 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
                             "src_folder": "npm://components-react/src/canvas",
                             "target": "_shared/components-react/canvas",
                         },
+                        "components_core_canvas": {
+                            "src_folder": "npm://components-core/src/canvas",
+                            "target": "_shared/components-core/canvas",
+                        },
                         "components_core_scene": {
                             "src_folder": "npm://components-core/src/scene",
                             "target": "_shared/components-core/scene",
@@ -1283,6 +1287,10 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
                                 "src_folder": "npm://components-react/src/canvas",
                                 "target": "_shared/components-react/canvas",
                             },
+                            "components_core_canvas": {
+                                "src_folder": "npm://components-core/src/canvas",
+                                "target": "_shared/components-core/canvas",
+                            },
                         },
                     },
                 },
@@ -1332,6 +1340,13 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
             {
                 "src_folder": "npm://components-react/src/canvas",
                 "target": "_shared/components-react/canvas",
+            },
+        )
+        shared_sources.setdefault(
+            "components_core_canvas",
+            {
+                "src_folder": "npm://components-core/src/canvas",
+                "target": "_shared/components-core/canvas",
             },
         )
         shared_sources.setdefault(

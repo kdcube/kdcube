@@ -16,11 +16,20 @@
     "./chat": {
       "types": "./dist/chat/index.d.ts",
       "import": "./dist/chat/index.js"
+    },
+    "./scene": {
+      "types": "./dist/scene/index.d.ts",
+      "import": "./dist/scene/index.js"
+    },
+    "./canvas": {
+      "types": "./dist/canvas/index.d.ts",
+      "import": "./dist/canvas/index.js"
     }
   },
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
+    "test:scene": "npm run build && node --test tests/scene-runtime.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
