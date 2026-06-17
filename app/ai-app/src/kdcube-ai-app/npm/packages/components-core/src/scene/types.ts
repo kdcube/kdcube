@@ -7,6 +7,8 @@ export const SCENE_OBJECT_OPEN = 'kdcube-object-open'
 export const SCENE_PINBOARD_OPEN = 'kdcube-pinboard-open'
 export const SCENE_WIDGET_VIEW = 'kdcube-widget-view'
 export const SCENE_WIDGET_FOCUS = 'kdcube-widget-focus'
+export const SCENE_CONTEXT_DRAG_START = 'kdcube-context-drag-start'
+export const SCENE_CONTEXT_DRAG_END = 'kdcube-context-drag-end'
 
 export type SceneDispatchSuccessCode = 'dispatched' | 'queued'
 
@@ -35,6 +37,36 @@ export interface SceneDispatchError {
 
 export type SceneDispatchResult = SceneDispatchSuccess | SceneDispatchError
 
+export type SceneContextDropEffect = 'open' | 'attach' | 'pin'
+
+export interface SceneContextDropSuccess {
+  ok: true
+  code: 'opened' | 'delivered'
+  targetSurface: string
+  context: SceneContextItem
+  response?: SceneRecord
+  dispatch?: SceneDispatchResult
+  message: string
+}
+
+export interface SceneContextDropError {
+  ok: false
+  code:
+    | 'active_drag_missing'
+    | 'context_missing'
+    | 'target_rejected'
+    | 'target_surface_missing'
+    | 'object_action_failed'
+    | 'target_delivery_missing'
+    | 'target_delivery_failed'
+  targetSurface?: string
+  context?: SceneContextItem
+  error?: unknown
+  message: string
+}
+
+export type SceneContextDropResult = SceneContextDropSuccess | SceneContextDropError
+
 export interface SceneSurfaceOpenRequest {
   targetSurface: string
   uiEvent: SceneRecord
@@ -55,6 +87,51 @@ export interface SceneContextItem extends SceneRecord {
   summary?: string
   mime?: string
   data?: SceneRecord
+}
+
+export interface SceneActiveContextDrag {
+  sourceSurfaceRef?: string
+  contexts: SceneContextItem[]
+  message?: SceneRecord
+}
+
+export interface SceneContextDropRequest {
+  context: SceneContextItem
+  target: SceneDropTarget
+  point?: { x: number; y: number }
+  activeDrag?: SceneActiveContextDrag
+}
+
+export interface SceneDropTarget {
+  surfaceRef: string
+  targetSurface?: string
+  acceptsRootNamespaces: string[]
+  dropEffect?: SceneContextDropEffect
+  label?: string
+  deliverContext?: (request: SceneContextDropRequest) => void | Promise<void>
+}
+
+export interface SceneObjectOpenActionRequest {
+  action: 'open'
+  object_ref: string
+  target_surface?: string
+  context?: SceneContextItem
+}
+
+export interface SceneContextDragBrokerOptions {
+  objectAction: (request: SceneObjectOpenActionRequest) => Promise<SceneRecord>
+  dispatchOpenResponse: (response: SceneRecord, source?: SceneContextItem) => SceneDispatchResult
+  logger?: Pick<Console, 'info' | 'warn' | 'error'>
+}
+
+export interface SceneContextDragBroker {
+  handleDragStart: (message: unknown) => SceneActiveContextDrag | null
+  handleDragEnd: () => void
+  clear: () => void
+  getActiveDrag: () => SceneActiveContextDrag | null
+  getActiveContext: () => SceneContextItem | null
+  accepts: (target: SceneDropTarget, context?: SceneContextItem | null) => boolean
+  dropOnTarget: (target: SceneDropTarget, point?: { x: number; y: number }) => Promise<SceneContextDropResult>
 }
 
 export interface SceneSurfaceRegistration {

@@ -1,15 +1,23 @@
 import {
   SCENE_CONFIG_REQUEST,
   SCENE_CONFIG_RESPONSE,
+  SCENE_CONTEXT_DRAG_START,
   SCENE_OBJECT_OPEN,
   SCENE_PINBOARD_OPEN,
+  type SceneActiveContextDrag,
+  type SceneContextDragBroker,
+  type SceneContextDragBrokerOptions,
   type SceneDispatchError,
   type SceneDispatchErrorCode,
   type SceneDispatchResult,
   type SceneDispatchSuccess,
   type SceneContextItem,
+  type SceneContextDropError,
+  type SceneContextDropResult,
+  type SceneDropTarget,
   type SceneMessageEvent,
   type SceneMessageRouteOptions,
+  type SceneObjectOpenActionRequest,
   type SceneRecord,
   type SceneRuntime,
   type SceneRuntimeConfigResponseOptions,
@@ -60,6 +68,10 @@ export function rootNamespaceFromRef(ref: unknown): string {
   return match ? match[1].toLowerCase() : ''
 }
 
+export function rootNamespaceFromNamespace(namespace: unknown): string {
+  return asSceneString(namespace).toLowerCase().split(':', 1)[0] || ''
+}
+
 export function normalizeSceneContext(value: unknown): SceneContextItem | null {
   if (!isSceneRecord(value)) return null
   const ref = canonicalObjectRef(value)
@@ -71,6 +83,23 @@ export function normalizeSceneContext(value: unknown): SceneContextItem | null {
   context.logical_path = asSceneString(context.logical_path) || ref
   context.namespace = asSceneString(context.namespace) || rootNamespaceFromRef(ref)
   return context
+}
+
+export function rootNamespaceCandidates(item: SceneContextItem | null | undefined): string[] {
+  if (!item) return []
+  const seen = new Set<string>()
+  const out: string[] = []
+  const add = (value: unknown): void => {
+    const root = rootNamespaceFromNamespace(value)
+    if (!root || seen.has(root)) return
+    seen.add(root)
+    out.push(root)
+  }
+  add(item.namespace)
+  add(rootNamespaceFromRef(item.ref))
+  add(rootNamespaceFromRef(item.object_ref))
+  add(rootNamespaceFromRef(item.logical_path))
+  return out
 }
 
 export function contextFromSceneMessage(message: unknown): SceneContextItem | null {
@@ -85,6 +114,25 @@ export function contextFromSceneMessage(message: unknown): SceneContextItem | nu
     if (context) return context
   }
   return normalizeSceneContext(data)
+}
+
+export function normalizeContextDragMessage(input: unknown): SceneActiveContextDrag | null {
+  const data = asSceneRecord(input)
+  if (asSceneString(data.type) !== SCENE_CONTEXT_DRAG_START) return null
+  const rawContexts = Array.isArray(data.contexts)
+    ? data.contexts
+    : data.context !== undefined
+      ? [data.context]
+      : []
+  const contexts = rawContexts
+    .map((item) => normalizeSceneContext(item))
+    .filter((item): item is SceneContextItem => Boolean(item))
+  if (!contexts.length) return null
+  return {
+    sourceSurfaceRef: asSceneString(data.source_surface_ref) || asSceneString(data.sourceSurfaceRef) || asSceneString(data.source),
+    contexts,
+    message: data,
+  }
 }
 
 export function targetSurfaceFromOpenResponse(response: unknown): string {
@@ -178,6 +226,125 @@ export function buildConfigResponse(
     type: options.responseType || SCENE_CONFIG_RESPONSE,
     identity: data.identity,
     config,
+  }
+}
+
+function contextDropError(
+  code: SceneContextDropError['code'],
+  message: string,
+  targetSurface?: string,
+  context?: SceneContextItem,
+  error?: unknown,
+): SceneContextDropError {
+  return { ok: false, code, message, targetSurface, context, error }
+}
+
+export function createContextDragBroker(options: SceneContextDragBrokerOptions): SceneContextDragBroker {
+  let activeDrag: SceneActiveContextDrag | null = null
+  const logger = options.logger
+
+  function getActiveContext(): SceneContextItem | null {
+    return activeDrag?.contexts[0] ?? null
+  }
+
+  function accepts(target: SceneDropTarget, contextInput?: SceneContextItem | null): boolean {
+    const context = contextInput ?? getActiveContext()
+    if (!context) return false
+    const accepted = new Set((target.acceptsRootNamespaces || []).map((item) => asSceneString(item).toLowerCase()).filter(Boolean))
+    if (accepted.has('*')) return true
+    return rootNamespaceCandidates(context).some((candidate) => accepted.has(candidate))
+  }
+
+  async function dropOnTarget(target: SceneDropTarget, point?: { x: number; y: number }): Promise<SceneContextDropResult> {
+    if (!activeDrag) {
+      return contextDropError('active_drag_missing', 'No active context drag is available.', target.targetSurface)
+    }
+    const context = getActiveContext()
+    if (!context) {
+      return contextDropError('context_missing', 'Active context drag did not include a usable context.', target.targetSurface)
+    }
+    if (!accepts(target, context)) {
+      return contextDropError('target_rejected', 'The drop target does not accept this context namespace.', target.targetSurface, context)
+    }
+
+    const targetSurface = asSceneString(target.targetSurface)
+    const request = { context, target, point, activeDrag }
+    const effect = target.dropEffect || 'open'
+    if (effect !== 'open') {
+      if (!target.deliverContext) {
+        return contextDropError('target_delivery_missing', 'The drop target does not define a local delivery handler.', targetSurface, context)
+      }
+      try {
+        await target.deliverContext(request)
+        logger?.info?.('[kdcube.scene] delivered context drop', {
+          effect,
+          targetSurface,
+          surfaceRef: target.surfaceRef,
+          ref: context.ref,
+        })
+        return {
+          ok: true,
+          code: 'delivered',
+          targetSurface,
+          context,
+          message: `Delivered context to ${target.label || targetSurface || target.surfaceRef}.`,
+        }
+      } catch (error) {
+        return contextDropError('target_delivery_failed', 'The drop target delivery handler failed.', targetSurface, context, error)
+      }
+    }
+
+    if (!targetSurface) {
+      return contextDropError('target_surface_missing', 'Open drop target does not define target_surface.', undefined, context)
+    }
+
+    const actionRequest: SceneObjectOpenActionRequest = {
+      action: 'open',
+      object_ref: asSceneString(context.ref),
+      target_surface: targetSurface,
+      context,
+    }
+    try {
+      const response = await options.objectAction(actionRequest)
+      const dispatch = options.dispatchOpenResponse(response, context)
+      logger?.info?.('[kdcube.scene] resolved context drop open', {
+        targetSurface,
+        surfaceRef: target.surfaceRef,
+        ref: context.ref,
+        dispatch,
+      })
+      return {
+        ok: true,
+        code: 'opened',
+        targetSurface,
+        context,
+        response,
+        dispatch,
+        message: dispatch.message,
+      }
+    } catch (error) {
+      logger?.warn?.('[kdcube.scene] context drop open failed', { targetSurface, ref: context.ref, error })
+      return contextDropError('object_action_failed', 'Object action open failed for dropped context.', targetSurface, context, error)
+    }
+  }
+
+  return {
+    handleDragStart(message: unknown) {
+      activeDrag = normalizeContextDragMessage(message)
+      return activeDrag
+    },
+    handleDragEnd() {
+      activeDrag = null
+    },
+    clear() {
+      activeDrag = null
+    },
+    getActiveDrag() {
+      return activeDrag
+    },
+    getActiveContext,
+    accepts,
+    dropOnTarget,
   }
 }
 
