@@ -2,7 +2,7 @@
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/npm/README.md
 title: "KDCube Components Library (npm)"
 summary: "Index and map for the two-package components library that decouples KDCube's interactive UI from any framework: @kdcube/components-core (headless engines) and @kdcube/components-react (React bindings). Start here, then follow the per-package and per-concept docs."
-status: design
+status: implementation
 tags: ["sdk", "npm", "components", "components-core", "components-react", "headless", "index"]
 updated_at: 2026-06-16
 keywords:
@@ -18,8 +18,8 @@ keywords:
 
 # KDCube Components Library (npm)
 
-A two-package library that decouples KDCube's interactive components (chat today;
-canvas, memories, … next) from any single framework or host. Workspace:
+A two-package library that decouples KDCube's interactive components (chat,
+scene runtime, canvas today; memories, … next) from any single framework or host. Workspace:
 `app/ai-app/src/kdcube-ai-app/npm/` (inside the installed app tree, so the package
 source ships into the runtime image and is reachable via the `npm://` shared-source
 resolver).
@@ -29,8 +29,8 @@ resolver).
 | **`@kdcube/components-core`** | headless engines — state machine + transport + protocol + host event bus | nothing UI: no React, no DOM host, no iframe |
 | **`@kdcube/components-react`** | React bindings — provider + hooks (+ optional default UI) | React only |
 
-Each package is **multi-component** via subpath exports (`…/chat` today; `…/canvas`,
-`…/scene` next), so a consumer installs two packages and imports only what it needs.
+Each package is **multi-component** via subpath exports, so a consumer installs
+two packages and imports only what it needs.
 Future adapters (`@kdcube/components-angular`, `…-vanilla`) slot in with no core change.
 
 ## Read in order
@@ -40,7 +40,8 @@ Future adapters (`@kdcube/components-angular`, `…-vanilla`) slot in with no co
    - [Engine config & auth](./components-core/engine-config-README.md) — `EngineConfig`, cookie/token, `EngineRuntime`.
    - [Host event bus](./components-core/host-event-bus-README.md) — the events the engine bubbles to the host.
    - [Context-pin contract](./components-core/context-pin-contract-README.md) — the cross-component drag contract.
-2. **React package** — [`components-react/README.md`](./components-react/README.md) — `ChatStoreProvider` + hooks.
+   - Scene runtime: `@kdcube/components-core/scene` exports the surface registry and context-drag broker.
+2. **React package** — [`components-react/README.md`](./components-react/README.md) — `ChatStoreProvider` + hooks, and `CanvasBoard`.
 3. **Widget integration & deployment** — [`widget-integration-README.md`](./widget-integration-README.md) — the SDK chat widget's local/package engine switch, the `npm://` build path, and how the package source ships into the image.
 
 ## How it's consumed (three stories)
@@ -59,10 +60,12 @@ switches: `docs/sdk/solutions/chat/chat-widget-solution-README.md`.
 
 ## Status
 
-- [x] Workspace + both packages; `/chat` subpath exports; tsup build.
+- [x] Workspace + both packages; `/chat`, `/scene`, and `/canvas` subpath exports; tsup build.
 - [x] Chat engine ported into `@kdcube/components-core/chat`.
 - [x] React bindings in `@kdcube/components-react/chat`.
 - [x] Context-pin contract in `@kdcube/components-core`.
+- [x] Scene runtime and context-drag broker in `@kdcube/components-core/scene`.
+- [x] Canvas board React component in `@kdcube/components-react/canvas`.
 - [x] SDK widget consumes the packages via an opt-in engine switch + iframe host-bridge ([details](./widget-integration-README.md)).
 - [x] Package source ships in the runtime image (app tree + `npm://`).
 - [ ] Make the package engine the default once validated across environments.

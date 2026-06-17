@@ -2,7 +2,7 @@
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/npm/widget-integration-README.md
 title: "SDK Chat Widget — Package Engine Integration & Deployment"
 summary: "How the in-tree SDK chat widget consumes the @kdcube/components-* packages: the one-knob local/package engine switch, the npm:// materialize-and-alias build path, the build-time engine-root swap, and how the package source ships into the runtime image. Default is the in-tree engine; the package engine is opt-in."
-status: design
+status: implementation
 tags: ["sdk", "npm", "components", "chat-widget", "vite", "bundles", "deployment", "npm-scheme", "engine-switch"]
 updated_at: 2026-06-16
 keywords:
@@ -106,5 +106,23 @@ No code changes are needed to switch — only the knob.
 - [x] Widget consumes `@kdcube/components-react/chat` via the package engine (opt-in).
 - [x] One-knob switch; default stays local; regression-safe default build.
 - [x] Package source ships in the image via the app tree (`npm://` + `/app/npm`).
+- [x] Default widget, `VITE_CHAT_ENGINE=package`, and `VITE_CHAT_UI=package`
+  build successfully from the repo workspace.
 - [ ] Make `package` the default once validated across environments.
 - [ ] Publish / registry path for external consumers (still deferred).
+
+## Readiness To Flip The Default
+
+Build readiness is green: all three widget modes compile. The remaining gate is
+runtime validation, not source availability:
+
+- Login/config handshake in iframe host.
+- Conversation list/create/switch/delete.
+- Send/follow-up streaming.
+- Context attach/remove, including `conv:`, `mem:record:*`, `task:*`, and `fi:*`.
+- Host events: auth-required, object-open, pin-conversation, canvas-patch,
+  view-change.
+- Namespace style propagation into chat chips and search results.
+
+Until those pass in local + staging, keep the default on the in-tree engine and
+opt into package mode per bundle/profile.

@@ -2,7 +2,7 @@
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/cross-surface-context-drag-README.md
 title: "Cross-Surface Context Drag"
 summary: "Concrete design for generic object drag/drop between scene surfaces: source drag lifecycle, scene broker state, namespace-provider open resolution, target-surface command dispatch, and current migration gaps."
-status: draft
+status: implementation
 tags: ["sdk", "solutions", "scene", "drag-drop", "context-pin", "surfaces", "named-services", "canvas", "chat"]
 updated_at: 2026-06-17
 keywords:
@@ -267,12 +267,12 @@ Every surface that renders context chips/cards should receive the same map from
 scene config. The style is not owned by canvas, chat, memory, or task. A scoped
 ref such as `task:issue:attachment:...` uses style key `task`.
 
-## Required SDK Extraction
+## SDK Runtime API
 
-Today, parts of this behavior are implemented in concrete host pages. The SDK
-scene runtime should absorb the generic pieces so every host uses one path.
+The generic pieces live in the SDK scene runtime and are also exported by
+`@kdcube/components-core/scene`.
 
-Proposed reusable APIs:
+Reusable APIs:
 
 ```ts
 export function normalizeContextDragMessage(input: unknown): ActiveContextDrag | null
@@ -306,19 +306,29 @@ The runtime still does not know memory/task semantics. It only knows canonical
 context drag messages, namespace matching, provider action invocation, and
 surface dispatch.
 
+Current consumers:
+
+- The versatile scene imports `@kdcube/components-core/scene`, which currently
+  resolves to the materialized SDK source during bundle builds.
+- The website landing scene uses the same contract through its plain-script
+  `KDCScene.createContextDragBroker()` adapter until the site consumes the ESM
+  package directly.
+- The npm package now exposes `@kdcube/components-core/scene` as a real subpath,
+  so future hosts can import it without SDK source materialization.
+
 ## Current Implementation Status
 
 | Area | Current state | Gap |
 | --- | --- | --- |
-| Chat/search result source surfaces | Emit or carry canonical context payloads in current paths. | Need one shared helper for all rendered context chips/search rows. |
+| Chat/search result source surfaces | Emit or carry canonical context payloads in current paths. | Continue replacing remaining local helpers with package helpers as chat package becomes default. |
 | Standalone pinboard source surface | Emits `kdcube-context-drag-start/end` when cards are dragged. | Needs to stay aligned when canvas moves into npm packages. |
-| Embedded canvas board in versatile scene | Some paths still wire `onDragCard` locally. | Must emit the same drag lifecycle, not `undefined`. |
-| Website landing scene | Tracks context drag and matches targets by root namespace. | Logic is host-local; should move to SDK scene runtime. |
-| Versatile scene | Tracks brokered drops and dispatches to registered surfaces. | Logic is host-local and not fully shared with website scene. |
+| Embedded canvas board in versatile scene | `onDragCard` now feeds the scene context-drag broker. | Continue validating canvas-card -> owning-widget drops across mounted external panels. |
+| Website landing scene | Uses the scene broker contract for context normalization, namespace matching, and provider-backed open drops. | Plain-script adapter remains until the website can import the ESM package. |
+| Versatile scene | Uses `createSceneRuntime()` for target-surface dispatch and `createContextDragBroker()` for owning-surface drops. | Canvas pinning remains a host-provided `pin` effect, by design. |
 | Memory widget | Has both host-command open and native drop parsing. | Native drop parser is convenience only; host-command open is the generic path. |
 | Task widget | Has target-surface command handling for issue list/editor paths. | Needs reliable broker input from all source surfaces. |
 | Providers | `mem` and `task` resolve `open` through named-service/canvas resolver paths. | New namespaces must advertise and implement `object.action open`. |
-| Namespace styles | Config exists and is passed to some surfaces. | Need one scene-owned style config path for all surfaces, including chat chips. |
+| Namespace styles | Config exists and is passed through scene/widget config to chat and canvas surfaces. | New surfaces must consume the shared namespace presentation map instead of inventing local colors. |
 
 ## Acceptance Matrix
 
@@ -366,4 +376,3 @@ specific code in the target widget:
 | Provider rejects requested target | Scene routes provider response or shows provider error; frontend does not force the target. |
 | Target surface not registered | Scene reports `target_surface_unavailable`. |
 | Target surface not ready | Scene queues command until ready; if readiness never arrives, show bounded timeout/debug state. |
-

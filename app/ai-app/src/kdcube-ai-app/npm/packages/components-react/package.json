@@ -16,6 +16,10 @@
     "./chat": {
       "types": "./dist/chat/index.d.ts",
       "import": "./dist/chat/index.js"
+    },
+    "./canvas": {
+      "types": "./dist/canvas/index.d.ts",
+      "import": "./dist/canvas/index.js"
     }
   },
   "scripts": {
@@ -29,6 +33,7 @@
   },
   "dependencies": {
     "@kdcube/components-core": "*",
+    "lucide-react": "^0.468.0",
     "react-markdown": "^10.1.0",
     "react-redux": "^9.1.0",
     "remark-breaks": "^4.0.0",

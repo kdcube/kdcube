@@ -2,7 +2,7 @@
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/npm/components-react/README.md
 title: "@kdcube/components-react"
 summary: "The React bindings package: thin adapters over @kdcube/components-core. @kdcube/components-react/chat exports ChatStoreProvider (owns one engine + provides its RTK store via react-redux), useChatEngine, useChatState, and useChatStatus. All behaviour lives in the core; this is React idiom only."
-status: design
+status: implementation
 tags: ["sdk", "npm", "components-react", "react", "hooks", "provider", "chat"]
 updated_at: 2026-06-16
 keywords:
@@ -18,10 +18,9 @@ keywords:
 
 # `@kdcube/components-react`
 
-Thin React adapters over `@kdcube/components-core`. No behaviour lives here — only the
-React idiom: a provider that owns one engine instance (and provides its RTK store via
-react-redux so view components can `useSelector`), plus hooks to reach the controller
-and subscribe to its state/status. Peer deps: `react`, `react-dom`.
+Thin React adapters over `@kdcube/components-core`. Most behaviour lives in core or
+the component's explicit host callbacks; this package provides React providers,
+hooks, and React-hosted components. Peer deps: `react`, `react-dom`.
 
 ## `@kdcube/components-react/chat`
 
@@ -57,6 +56,25 @@ function MyChatUI() {
 Everything the engine can do (config, the controller surface, the event bus) is in the
 core docs: [`../components-core/README.md`](../components-core/README.md).
 
+## `@kdcube/components-react/canvas`
+
+```tsx
+import { CanvasBoard } from '@kdcube/components-react/canvas'
+```
+
+`CanvasBoard` is the reusable React board component used by the standalone
+pinboard widget and the versatile scene. Hosts provide the storage/operation
+callbacks:
+
+- `patchCanvas`, `readCanvas`
+- `onDropFiles`, `onDropText`, `onDropContext`, `onDropIngress`
+- `onObjectAction`
+- optional `getBrokeredDrop` / `onBrokeredDropHandled` for scene-brokered drops
+- `namespaceStyles` from the app/scene namespace presentation config
+
+The component does not fetch namespace colors or resolve provider objects by
+itself. Those remain host/runtime responsibilities.
+
 ## Namespace Styles
 
 The default chat shell accepts `namespaceStyles`, the same app-level namespace
@@ -80,5 +98,5 @@ other mounted surfaces receive.
 ## Build / verify
 
 ```sh
-cd app/ai-app/src/npm/packages/components-react && npx tsc --noEmit && npx tsup
+cd app/ai-app/src/kdcube-ai-app/npm/packages/components-react && npx tsc --noEmit && npx tsup
 ```

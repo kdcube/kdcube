@@ -151,6 +151,12 @@ surface message / resolver response
   -> queue and flush the surface command
 ```
 
+For cross-surface drag/drop, the same runtime exports
+`createContextDragBroker()`. The broker owns only transient browser drag state,
+context normalization, root-namespace target matching, and provider-backed
+`object.action(open)` for owning-surface drops. The host still owns overlay
+geometry, panel chrome, and local `pin`/`attach` delivery effects.
+
 A main app UI, a nested app widget, and an external website page can reuse this
 runtime while keeping different markup, CSS, surfaces, and auth shell.
 

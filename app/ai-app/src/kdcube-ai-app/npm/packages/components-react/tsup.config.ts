@@ -4,6 +4,7 @@ export default defineConfig({
   entry: {
     index: 'src/index.ts',
     'chat/index': 'src/chat/index.tsx',
+    'canvas/index': 'src/canvas/index.ts',
   },
   format: ['esm'],
   dts: true,
@@ -14,6 +15,7 @@ export default defineConfig({
     'react',
     'react-dom',
     'react-redux',
+    'lucide-react',
     '@kdcube/components-core',
     'react-markdown',
     'remark-gfm',

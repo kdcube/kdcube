@@ -15,3 +15,5 @@ export type {
   ConnectionStatus,
   NoticeTone,
 } from '@kdcube/components-core'
+
+export * from './canvas'
