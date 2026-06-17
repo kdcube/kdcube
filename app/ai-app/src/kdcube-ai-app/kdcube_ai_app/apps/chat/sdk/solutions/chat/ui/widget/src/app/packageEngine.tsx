@@ -9,17 +9,14 @@
  * Enabled only when `ChatStoreProvider` selects the package path; the default
  * remains the local engine. See `ChatStoreProvider.tsx`.
  */
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import {
   ChatStoreProvider as PkgChatStoreProvider,
   useChatEngine as usePkgEngine,
-  useChatState,
-  useChatStatus,
 } from '@kdcube/components-react/chat'
 import type { EngineConfig } from '@kdcube/components-core'
 import type { AttachContextInput } from '@kdcube/components-core/chat'
 import {
-  isKdcubePreviewContext,
   recognizeContextMessage,
   recognizeContextRemoval,
   requestAuthRequired,
@@ -34,7 +31,6 @@ import {
   CHAT_CONTEXT_REMOVE_MESSAGE,
   settings,
 } from '../settings.ts'
-import { ChatEngineContext, type ChatEngine, type HostView } from './useChatEngine.tsx'
 
 function buildEngineConfig(): EngineConfig {
   return {
@@ -88,15 +84,12 @@ export function PackageChatRoot({ children }: { children: ReactNode }) {
 
 function PackageEngineHost({ children }: { children: ReactNode }) {
   const engine = usePkgEngine()
-  const state = useChatState((s) => s)
-  const status = useChatStatus()
-  const kdcubePreview = useMemo(() => isKdcubePreviewContext(), [])
 
   // --- outbound: engine events -> host postMessage (via host.ts) ---
   useEffect(() => {
     const offs = [
       engine.on('unauthorized', () => requestAuthRequired()),
-      engine.on('view-change', ({ view }) => requestHostView(view as HostView)),
+      engine.on('view-change', ({ view }) => requestHostView(view as 'compact' | 'expanded')),
       engine.on('object-open', ({ ref }) => {
         const r = (ref || {}) as Record<string, unknown>
         requestHostObjectOpen({
@@ -231,43 +224,8 @@ function PackageEngineHost({ children }: { children: ReactNode }) {
     settings.onConfigReceived(() => engine.refreshAuth())
   }, [engine])
 
-  const viewModel = useMemo<ChatEngine>(() => ({
-    state: state as unknown as ChatEngine['state'],
-    ready: status.ready,
-    bootError: status.bootError,
-    setBootError: engine.setBootError,
-    authed: status.authed,
-    hostView: status.hostView,
-    setHostView: (next) => engine.setHostView(next),
-    setHostViewLocal: () => engine.setHostView(status.hostView === 'compact' ? 'expanded' : 'compact', { silent: true }),
-    kdcubePreview,
-    bundleId: engine.bundleId,
-    send: engine.send,
-    steer: engine.steer,
-    loadConversation: engine.loadConversation,
-    newChat: engine.newChat,
-    deleteConversation: (conversation) => {
-      const label = conversation.title || conversation.id
-      if (window.confirm(`Delete "${label}"? This cannot be undone.`)) engine.deleteConversation(conversation)
-    },
-    refreshConversationList: engine.refreshConversations,
-    attachContext: engine.attachContext,
-    removeContext: (ids) => engine.removeContext(ids),
-    openContextChip: engine.openContextChip as ChatEngine['openContextChip'],
-    downloadFile: engine.downloadFile,
-    submitFeedback: engine.submitFeedback,
-    handleReconnect: engine.handleReconnect,
-    pinConversationToCanvas: engine.pinConversationToCanvas,
-    promptLogin: engine.promptLogin,
-    dryRun: {
-      enabled: status.dryRun.enabled,
-      loading: status.dryRun.loading,
-      preview: status.dryRun.preview,
-      error: status.dryRun.error,
-      setEnabled: engine.setDryRunEnabled,
-      clearPreview: engine.clearDryRunPreview,
-    },
-  }), [engine, state, status, kdcubePreview])
-
-  return <ChatEngineContext.Provider value={viewModel}>{children}</ChatEngineContext.Provider>
+  // The package <Chat/> consumes the package engine via its own context; this host
+  // only wires the iframe bridge above and renders children. (The in-tree App view
+  // model / ChatEngineContext lived here previously and is gone with App.)
+  return <>{children}</>
 }

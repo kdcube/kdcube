@@ -34,7 +34,10 @@ DEFAULT_CHAT_WIDGET_SHARED_SOURCES = {
 # a bundle mounting the chat widget the default way builds on any image, even one
 # whose ``/app/npm`` is absent (e.g. before the next image rebuild). The npm:// path
 # is only exercised when you explicitly opt in, which is the same moment you rebuild.
-DEFAULT_CHAT_WIDGET_ENGINE = "local"
+# The chat widget is package-only now (the in-tree App/engine were removed), so the
+# build always materializes the @kdcube/components-* sources. "local" no longer
+# builds; the default is the package UI.
+DEFAULT_CHAT_WIDGET_ENGINE = "package-ui"
 
 
 def _with_chat_vite_env(command: str, env: Mapping[str, Any]) -> str:
