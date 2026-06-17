@@ -1220,6 +1220,13 @@ class UserBudgetBreakdownService:
                 if reset_at:
                     hour_reset_at = datetime.fromtimestamp(reset_at, tz=timezone.utc).isoformat()
 
+            day_period_start, day_period_end, day_period_key = await rl._rolling_day_period(
+                bundle_id=bundle_id,
+                subject_id=subject_id,
+                now=now,
+                create_if_missing=False,
+            )
+
             month_reset_at = None
             has_month_limit = (
                 getattr(effective_policy, "requests_per_month", None) is not None
@@ -1237,6 +1244,9 @@ class UserBudgetBreakdownService:
             reset_windows = {
                 "bundle_id": bundle_id,
                 "hour_reset_at": hour_reset_at,
+                "day_started_at": day_period_start.isoformat() if day_period_start else None,
+                "day_reset_at": day_period_end.isoformat() if day_period_end else None,
+                "month_started_at": period_start.isoformat() if period_start else None,
                 "month_reset_at": month_reset_at,
             }
 

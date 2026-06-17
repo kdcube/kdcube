@@ -74,6 +74,9 @@ interface QuotaBreakdown {
     reset_windows?: {
         bundle_id?: string | null;
         hour_reset_at?: string | null;
+        day_started_at?: string | null;
+        day_reset_at?: string | null;
+        month_started_at?: string | null;
         month_reset_at?: string | null;
     } | null;
     remaining: {
@@ -688,9 +691,9 @@ const UserBillingDashboard: React.FC = () => {
                                     </div>
                                 )}
                                 <div className="mt-4 rounded-xl border border-sky-100 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-                                    <div className="font-semibold">Usage windows are rolling</div>
+                                    <div className="font-semibold">Active quota buckets</div>
                                     <p className="mt-1 text-sky-800">
-                                        The numbers below reflect your combined usage across all apps in this workspace. The hourly numbers are for the last 60 minutes, the daily numbers are for the last 24 hours, and the monthly numbers are for a rolling 30-day window.
+                                        The numbers below reflect your combined usage across all apps in this workspace. Hourly usage is the last 60 minutes; daily and monthly usage are the current quota periods since their last reset.
                                     </p>
                                 </div>
                                 <div className="mt-4 space-y-3">
@@ -724,7 +727,7 @@ const UserBillingDashboard: React.FC = () => {
                                         )}
                                     </div>
                                     <div className="border-t border-gray-100 pt-3">
-                                        <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400">Last 24 hours</div>
+                                        <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400">Current 24h quota period</div>
                                         <MetricRow
                                             label="Requests"
                                             used={breakdown.current_usage.requests_today}
@@ -742,9 +745,14 @@ const UserBillingDashboard: React.FC = () => {
                                                 remainingUsd={breakdown.remaining.tokens_today_usd}
                                             />
                                         </div>
+                                        {breakdown.reset_windows?.day_reset_at && (
+                                            <div className="mt-2 text-xs text-gray-500">
+                                                Daily quota resets at {formatDateTime(breakdown.reset_windows.day_reset_at)}
+                                            </div>
+                                        )}
                                     </div>
                                     <div className="border-t border-gray-100 pt-3">
-                                        <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400">Rolling 30-day window</div>
+                                        <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400">Current 30-day quota period</div>
                                         <MetricRow
                                             label="Requests"
                                             used={breakdown.current_usage.requests_this_month}
@@ -764,7 +772,7 @@ const UserBillingDashboard: React.FC = () => {
                                         </div>
                                         {breakdown.reset_windows?.month_reset_at && (
                                             <div className="mt-2 text-xs text-gray-500">
-                                                Rolling 30-day window resets at {formatDateTime(breakdown.reset_windows.month_reset_at)}
+                                                Monthly quota resets at {formatDateTime(breakdown.reset_windows.month_reset_at)}
                                             </div>
                                         )}
                                     </div>

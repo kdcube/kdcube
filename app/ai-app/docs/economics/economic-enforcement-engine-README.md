@@ -47,7 +47,7 @@ from kdcube_ai_app.apps.chat.sdk.infra.economics.enforcement import EconomicsSub
 subject = EconomicsSubject(
     tenant="acme", project="main", user_id="u-123",
     user_type="paid",          # resolved economics role; never a hardcoded default
-    timezone="Europe/Kyiv",     # optional; anchors rolling windows
+    timezone="Europe/Kyiv",     # optional; anchors quota periods where configured
 )
 ```
 

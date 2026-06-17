@@ -54,7 +54,7 @@ UI card: **Quota Policies**
 - These are the base limits used by the rate limiter.
 - Plan overrides (`user_plan_overrides`) can temporarily replace these values per user.
 - Quotas are enforced **per tenant/project** (global across bundles).
-- Hourly limits use a **rolling 60‑minute** window; monthly limits use a **rolling 30‑day** window anchored to first usage per tenant/project; daily is **calendar day (UTC)**.
+- Hourly limits use a **rolling 60‑minute** window; daily limits use the **current 24‑hour quota period since the last daily reset**; monthly limits use the **current 30‑day quota period since the last monthly reset**.
 - Reservation floor is **per bundle**, configured via bundle props `economics.reservation_amount_dollars` (not in this UI).
 
 ### Bundle reservation floor (per bundle)

@@ -102,8 +102,8 @@ Policy source:
 
 Window semantics:
 - Hourly tokens: **rolling 60‑minute** window (minute buckets).
-- Daily requests/tokens: **rolling 24‑hour** window. API fields still use `requests_today` / `tokens_today` names for backward compatibility.
-- Monthly requests/tokens: **rolling 30‑day** window anchored to first usage per tenant/project.
+- Daily requests/tokens: **current 24‑hour quota period since the last daily reset**. API fields still use `requests_today` / `tokens_today` names for backward compatibility.
+- Monthly requests/tokens: **current 30‑day quota period since the last monthly reset**.
 
 ### D) Project budget (money) (PostgreSQL + Redis analytics)
 **Module:** `ProjectBudgetLimiter`
@@ -156,7 +156,7 @@ Output:
 
 Important semantics:
 - Token limits are **post‑paid**: checks are based on committed counters from previous turns.
-- Hourly, daily, and monthly windows are all rolling.
+- The user-facing counters show active quota buckets: last 60 minutes for hourly, current 24-hour period for daily, and current 30-day period for monthly.
 - Concurrency lock is released at commit (or forced release on error).
 
 ## Customer-facing billing widget
@@ -167,9 +167,9 @@ The customer widget at `src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/econom
 - By default, the endpoint uses limiter bundle id `__project__`, which matches the real quota scope enforced at runtime.
 - This means the usage shown in the widget is combined across all bundles/apps in the same tenant/project, not scoped to the currently loaded app.
 - The widget should present:
-  - `Last 60 minutes`, `Last 24 hours`, and `Rolling 30-day window` usage,
+  - `Last 60 minutes`, `Current 24h quota period`, and `Current 30-day quota period` usage,
   - remaining headroom for each window,
-  - reset timestamps for the same project-wide rolling windows,
+  - reset timestamps for the same project-wide quota buckets,
   - personal lifetime credit balance,
   - the rule that requests larger than remaining plan quota require personal credits for the overflow.
 

@@ -2,8 +2,8 @@
  * Compact KDCube-style usage card.
  *
  * Renders the registered user's combined budget across all apps in the
- * current workspace, scoped to the rolling hourly / daily / monthly
- * windows that the server reports. Subscription / Stripe checkout flow
+ * current workspace, scoped to the active hourly / daily / monthly quota
+ * buckets that the server reports. Subscription / Stripe checkout flow
  * is intentionally hidden; the relevant fields exist on the response but
  * are not surfaced here yet.
  *
@@ -342,14 +342,15 @@ export const App: React.FC = () => {
               tokQuota={breakdown.effective_policy.tokens_per_hour}
             />
             <UsageBlock
-              label="Last 24h"
+              label="Current 24h"
+              resetAt={breakdown.reset_windows?.day_reset_at}
               costUsed={breakdown.current_usage.tokens_today_usd}
               costQuota={breakdown.effective_policy.usd_per_day}
               tokUsed={breakdown.current_usage.tokens_today}
               tokQuota={breakdown.effective_policy.tokens_per_day}
             />
             <UsageBlock
-              label="Last 30 days"
+              label="Current 30d"
               resetAt={breakdown.reset_windows?.month_reset_at}
               costUsed={breakdown.current_usage.tokens_this_month_usd}
               costQuota={breakdown.effective_policy.usd_per_month}
@@ -369,7 +370,7 @@ export const App: React.FC = () => {
               limitUsd={breakdown.effective_policy.usd_per_hour}
             />
           </UsageWindow>
-          <UsageWindow title="Last 24 hours">
+          <UsageWindow title="Current 24h quota period" resetAt={breakdown.reset_windows?.day_reset_at}>
             <UsageRow
               label="Requests"
               used={breakdown.current_usage.requests_today}
@@ -385,7 +386,7 @@ export const App: React.FC = () => {
               limitUsd={breakdown.effective_policy.usd_per_day}
             />
           </UsageWindow>
-          <UsageWindow title="Rolling 30 days" resetAt={breakdown.reset_windows?.month_reset_at}>
+          <UsageWindow title="Current 30-day quota period" resetAt={breakdown.reset_windows?.month_reset_at}>
             <UsageRow
               label="Requests"
               used={breakdown.current_usage.requests_this_month}

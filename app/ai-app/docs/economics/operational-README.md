@@ -42,8 +42,8 @@ Plan quotas are seeded once by a master bundle:
 
 Window semantics (global per tenant/project):
 - Hourly tokens: rolling 60‑minute window (minute buckets).
-- Daily requests/tokens: rolling 24‑hour window. API fields still use `requests_today` / `tokens_today`.
-- Monthly requests/tokens: rolling 30‑day window anchored to first usage per tenant/project.
+- Daily requests/tokens: current 24‑hour quota period since the last daily reset. API fields still use `requests_today` / `tokens_today`.
+- Monthly requests/tokens: current 30‑day quota period since the last monthly reset.
 - Reservation floor is configured per bundle via props `economics.reservation_amount_dollars`.
 
 Billing widget:
@@ -51,7 +51,7 @@ Billing widget:
 - If omitted, the backend uses limiter bundle id `__project__`, which matches the actual quota enforcement scope.
 - The displayed usage therefore covers the user’s combined usage across all bundles/apps in the tenant/project.
 - The customer widget should use this endpoint rather than relying on frontend-patched bundle ids.
-- The widget labels should match the rolling limiter semantics: `Last 60 minutes`, `Last 24 hours`, and `Rolling 30-day window`.
+- The widget labels should match the limiter semantics: `Last 60 minutes`, `Current 24h quota period`, and `Current 30-day quota period`.
 
 Funding split (runtime):
 - Plan quota/funding is consumed first. Wallet covers only overflow and wallet-paid tokens do **not** consume plan quota.

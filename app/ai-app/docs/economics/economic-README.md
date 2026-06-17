@@ -116,8 +116,8 @@ Plan quotas are stored in the control plane table `plan_quota_policies`.
 **Scope and window semantics (important):**
 - Quotas are enforced **per tenant/project** (global across bundles).
 - Hourly token limits use a **rolling 60‑minute** window (minute buckets).
-- Monthly limits use a **rolling 30‑day** window anchored to the user’s first usage **per tenant/project**.
-- Daily limits use **calendar day (UTC)**.
+- Daily limits use the **current 24‑hour quota period since the last daily reset**.
+- Monthly limits use the **current 30‑day quota period since the last monthly reset**.
 - Total requests do not reset.
 Reservation amount configuration:
 - Per‑bundle fixed reservation can be set via bundle props: `economics.reservation_amount_dollars`.

@@ -29,7 +29,7 @@ see_also:
 # Usage Card Widget
 
 The usage card is a small, embeddable widget that shows the signed-in user
-their current budget posture: short rolling windows, the active reset window,
+their current budget posture: active quota buckets since their last reset,
 and any lifetime credit balance. It is a reusable SDK widget — bundles mount
 it by alias, the same way the chat widget or the memory widget is mounted.
 
@@ -63,9 +63,9 @@ Three stacked windows, plus a credits line when the account has any:
 
 | Window | Source field | Purpose |
 | --- | --- | --- |
-| Last 60 minutes | `breakdown.rolling_60m` | Burst spend; fastest moving |
-| Last 24 hours | `breakdown.rolling_24h` | Day-scale spend |
-| Active reset window | `breakdown.reset_window` | Plan window (e.g. 30 days) |
+| Last 60 minutes | `breakdown.current_usage.tokens_this_hour` | Burst spend; fastest moving |
+| Current 24h quota period | `breakdown.current_usage.tokens_today` / `requests_today` | Day quota spend since last daily reset |
+| Current 30-day quota period | `breakdown.current_usage.tokens_this_month` / `requests_this_month` | Month quota spend since last monthly reset |
 | Lifetime credits | `breakdown.lifetime_credits` | Optional balance row |
 
 Each window renders one or more rows with:
@@ -83,7 +83,7 @@ The card renders in one of two densities:
 
 | Mode | When | Shows |
 | --- | --- | --- |
-| Super-compact | Default when summoned with `?view=compact` (or `?compact=1`) | One-line `Plan: <name> · <email>` header, then the rolling windows `Last hour` / `Last 24h` / `Last 30 days`. Each block shows `$ spent / quota` as the headline (colored gold ≥80%, red at the cap) with `tokens spent / quota` alongside, plus when the window resets (hourly roll-off and the 30-day `period_end`; the 24h window has no reset, and unlimited plans show none). No request counts; quota reads `∞` on an unlimited plan. |
+| Super-compact | Default when summoned with `?view=compact` (or `?compact=1`) | One-line `Plan: <name> · <email>` header, then the active quota buckets `Last hour` / `Current 24h` / `Current 30d`. Each block shows `$ spent / quota` as the headline (colored gold >=80%, red at the cap) with `tokens spent / quota` alongside, plus when the quota bucket resets. No request counts; quota reads `∞` on an unlimited plan. |
 | Full | Default standalone, or after the host sends `kdcube-set-view {view:"expanded"}` | The three stacked windows above with per-row pill bars and policy hints. |
 
 A scene host flips between the two with `kdcube-set-view`; the same message the

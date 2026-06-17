@@ -47,6 +47,9 @@ export interface BudgetRemaining {
 export interface BudgetResetWindows {
   bundle_id?: string | null;
   hour_reset_at?: string | null;
+  day_started_at?: string | null;
+  day_reset_at?: string | null;
+  month_started_at?: string | null;
   month_reset_at?: string | null;
 }
 
