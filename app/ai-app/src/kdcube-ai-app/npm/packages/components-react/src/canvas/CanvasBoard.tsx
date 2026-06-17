@@ -733,6 +733,10 @@ export function CanvasBoard({
   const [externalDropReady, setExternalDropReady] = useState(false)
   const [expandedCardId, setExpandedCardId] = useState<string>('')
   const [expandFlipUp, setExpandFlipUp] = useState(false)
+  // Max height for the open flyout, capped per-open to the room available in its
+  // chosen direction so the board's own bounds clip it (it scrolls inside) — never
+  // the card/board interior. Keeps the detail readable even on a small canvas.
+  const [expandMaxHeight, setExpandMaxHeight] = useState(380)
   const [copiedCardId, setCopiedCardId] = useState<string>('')
   const [infoOpen, setInfoOpen] = useState(false)
   // Local draft for a new user-text card: edited inline (markdown) before it is
@@ -1191,6 +1195,7 @@ export function CanvasBoard({
       return
     }
     let flipUp = false
+    let maxH = 380
     const board = boardRef.current
     const node = board?.querySelector(`[data-card-id="${cssAttrValue(cardId)}"]`) as HTMLElement | null
     if (board && node) {
@@ -1198,9 +1203,16 @@ export function CanvasBoard({
       const c = node.getBoundingClientRect()
       const roomBelow = b.bottom - c.bottom
       const roomAbove = c.top - b.top
-      flipUp = roomBelow < 240 && roomAbove > roomBelow
+      // Open downward unless the full panel can't fit there and there's more room
+      // above; then cap the panel to the room actually available in that direction
+      // (minus a small gutter) so the board clips it instead of the interior — the
+      // panel scrolls inside. Stays usable even when the canvas is small.
+      flipUp = roomBelow < 396 && roomAbove > roomBelow
+      const room = flipUp ? roomAbove : roomBelow
+      maxH = Math.min(380, Math.max(0, Math.floor(room - 12)))
     }
     setExpandFlipUp(flipUp)
+    setExpandMaxHeight(maxH)
     setExpandedCardId(cardId)
   }, [])
 
@@ -2590,6 +2602,7 @@ export function CanvasBoard({
                 />
                 <div
                   className={`canvas-card-flyout ${pinned && expandFlipUp ? 'up' : ''}`}
+                  style={pinned ? { maxHeight: expandMaxHeight } : undefined}
                   onClick={(event) => event.stopPropagation()}
                   onPointerDown={(event) => event.stopPropagation()}
                 >
