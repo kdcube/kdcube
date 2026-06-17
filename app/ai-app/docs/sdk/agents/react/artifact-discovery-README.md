@@ -3,9 +3,13 @@ id: repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-discovery-READM
 title: "Artifact Discovery"
 summary: "How artifacts are discovered from timeline blocks and how logical/physical paths resolve for tools."
 tags: ["sdk", "agents", "react", "artifacts", "paths"]
+updated_at: 2026-06-17
 keywords: ["logical paths", "physical paths", "react.read", "attachments", "artifact resolution", "timeline blocks"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/react-object-materialization-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/artifact-storage-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/react-tools-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/timeline-README.md
@@ -99,6 +103,116 @@ hosted blob handles when present.
 
 For **user attachments**, `user.attachment.meta` stores the safe digest in `text`, while the
 attachment file block stores hosting metadata + `meta.digest`.
+
+## External Object Pull, Read, And Owner Rendering
+
+External owner refs such as `mem:record:...`, `task:...`, and `cnv:...` are not
+`fi:` files. They first have to be materialized into the current ReAct
+workspace. The materialized file is local, but it keeps the original owner URI
+in metadata so owner-specific block production can still run.
+
+The canonical runtime-boundary diagram for named-service objects is
+[Namespace Services: ReAct Object Materialization](../../namespace-services/react-object-materialization-README.md).
+
+```text
+1. Visible ref
+   executor: model / timeline / search-result UI
+   surface: ReAct visible context
+   value:
+     object_ref = mem:record:mem_123
+
+        |
+        v
+
+2. Pull exact bytes
+   executor: react.tools.pull in the consumer ReAct runtime
+   surface: current turn workspace / artifact root
+   work:
+     call namespace rehoster or named-service artifact rehoster
+     named-service path calls provider object.get(response_mode=stream)
+     write streamed bytes under OUTPUT_DIR
+   result:
+     logical_path  = fi:turn_1.files/mem_123.json
+     physical_path = turn_1/files/mem_123.json
+     object_ref    = mem:record:mem_123
+     state.pulled_logical_refs[logical_path].object_ref = object_ref
+
+        |
+        v
+
+3. Read materialized bytes
+   executor: react.tools.read in the consumer ReAct runtime
+   surface: current turn timeline block production
+   work:
+     read fi:turn_1.files/mem_123.json
+     build a read target whose meta includes:
+       object_ref       = mem:record:mem_123
+       source_namespace = mem
+
+        |
+        v
+
+4. Owner event-source resolution
+   executor: EventSourceSubsystem
+   surface: consumer runtime event-source registry
+   work:
+     try resolve_event_source_id_for_ref(object_ref)
+       provider event.resolve may answer named_services.mem
+     otherwise use registered named_services.<source_namespace> when present
+   traces:
+     react.read.owner_projection status=...
+
+        |
+        v
+
+5. Owner block production
+   executor: named-service block-production adapter
+   surface: configured named_services.<namespace> event source
+   work:
+     call provider block.produce(object_ref=object_ref, target=read_target)
+
+        |
+        v
+
+6. Visible blocks
+   executor: react.tools.read
+   surface: current turn timeline
+   result:
+     if provider returns blocks:
+       append provider-authored blocks
+       block.meta.owner_projected = true
+       block.meta.materialized_path = fi:turn_1.files/mem_123.json
+     else:
+       append generic textual fi: read block
+```
+
+This provider call happens during block production for the `react.read` tool
+result. Later prompt rendering reads the stored blocks, applies normal
+timeline/compaction projection policies, and can call provider `block.render`
+for visible owner-projected blocks. If the stored block was owner-projected,
+rendering starts from the owner-authored block; if no owner block was produced,
+rendering starts from the generic `fi:` read block.
+
+For provider authors, the split is:
+
+| Operation | Purpose |
+| --- | --- |
+| `object.get(response_mode=stream)` | Produce bytes that `react.pull` writes into an `fi:` artifact. |
+| `event.resolve` | Optionally map an owner ref to a more specific event source id. |
+| `block.produce` | Produce the model-visible ReAct block for the owner object. |
+| `block.render` | Optional prompt-render patch operation for provider-owned visible blocks, also available to explicit clients. |
+
+For the pull/read/model-context path, the provider operation is
+`block.produce`. For provider-specific prompt-render patches, the provider
+operation is `block.render`.
+
+For consumer authors, the invariant is:
+
+```text
+fi: path = local materialized bytes
+meta.object_ref = semantic owner identity for read/projection
+meta.source_namespace = routing namespace for owner projection
+```
 
 ## Discovery Rules
 

@@ -4,7 +4,7 @@ title: "Namespace Services: Clients"
 summary: "How bundles, agents, widgets, jobs, and external clients consume configured namespace service providers."
 status: design
 tags: ["sdk", "namespace-services", "clients", "tools", "resolvers", "bundles"]
-updated_at: 2026-06-16
+updated_at: 2026-06-17
 keywords:
   [
     "namespace service client",
@@ -19,6 +19,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/providers-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/react-object-materialization-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/runtime/cross-runtime-context-README.md
 ---
 # Namespace Services: Clients
@@ -189,6 +190,38 @@ The provider owns:
 | `download_url` and file metadata | How the browser downloads provider-owned bytes. |
 | streamed `object.get` representation | How ReAct or other materializers pull the object into a workspace. |
 | `block.produce` output | How the object becomes model-visible context. |
+
+When a consumer materializes a namespace ref with `react.pull`, the resulting
+workspace artifact is local (`fi:...`) but not semantically anonymous. The pull
+result and later `react.read` blocks preserve the provider URI as `object_ref`
+plus `source_namespace`. The `fi:` path identifies the local workspace copy;
+`object_ref` identifies the owner object.
+
+For ReAct reads, this owner handoff is part of the generic client path:
+
+```text
+react.pull(mem:record:mem_123)
+  -> object.get(response_mode=stream)
+  -> fi:turn_1.files/mem_123.json
+  -> state.pulled_logical_refs[fi:...] = {object_ref: mem:record:mem_123}
+
+react.read(fi:turn_1.files/mem_123.json)
+  -> build generic read target with meta.object_ref = mem:record:mem_123
+  -> resolve owner event source:
+       event.resolve(object_ref), or registered named_services.<namespace>
+  -> apply block_production for that event source
+  -> provider block.produce returns model-visible owner blocks
+  -> fallback to generic fi: text only when no owner block is produced
+```
+
+The read path logs `react.read.owner_projection` with states such as
+`no_event_sources`, `no_event_source`, `namespace_event_source`, `policy_error`,
+`no_blocks`, and `produced`. Those traces are the first place to check when a
+pulled namespace ref reads as a generic file instead of an owner-rendered
+object.
+
+For runtime boundaries and latency points in this flow, see
+[ReAct Object Materialization](react-object-materialization-README.md).
 
 ## Consumer Execution Surfaces
 
@@ -509,6 +542,13 @@ metadata plus async byte chunks; the runtime writes the chunks into the ReAct
 context, and provider errors are returned in the `react.pull` tool result under
 `errors`.
 
+For JSON object namespaces, the streamed bytes should be a compact JSON
+projection intended for `react.read`, not necessarily the full provider
+response envelope. Keep the `NamedServiceStreamResult.response` sidecar small:
+identity, revision, MIME, and enough descriptor fields for diagnostics. The
+full object body belongs in the streamed artifact bytes. This keeps the pull
+tool result small and lets the agent read only when it needs the object.
+
 Configured namespaces can also publish ReAct block-production policies:
 
 ```python
@@ -528,3 +568,16 @@ calls the provider's `block.produce` operation and appends the returned blocks.
 When a lane event uses another authored source but carries a configured
 foreign ref, the resolver bridge calls provider `event.resolve` first and uses
 the provider-returned event source id before block production.
+
+The same event source is also used by `react.read` after `react.pull`
+materialization. For a pulled `fi:` artifact with `meta.object_ref`, ReAct can
+route directly to the registered `named_services.<root_namespace>` event source
+when present. This keeps `event.resolve` useful for richer routing, but does
+not make it a hard requirement for ordinary owner rendering.
+
+During prompt rendering, the same event-source registration enables optional
+provider `block.render` calls. The render adapter scans the visible timeline
+for provider-owned `object_ref` values, calls each relevant provider once in
+parallel with a bounded block snapshot, and merges patches accepted for that
+provider's own block indexes. Provider render latency is therefore bounded by
+the slowest relevant provider call, not by a sequential chain of renderers.

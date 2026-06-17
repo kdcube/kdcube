@@ -118,7 +118,7 @@ async def test_pull_materializes_registered_namespace_ref(tmp_path):
         target.write_text("status: draft\n", encoding="utf-8")
         return {
             "materialized": [{
-                "source_ref": ref,
+                "object_ref": ref,
                 "logical_path": physical_path_to_logical_path(physical_path),
                 "physical_path": physical_path,
                 "namespace": "snapshots",
@@ -148,7 +148,7 @@ async def test_pull_materializes_registered_namespace_ref(tmp_path):
 
     payload = _latest_payload(ctx)
     assert payload["pulled"] == [{
-        "source_ref": "nmsp:draft_1/issue-draft.yaml",
+        "object_ref": "nmsp:draft_1/issue-draft.yaml",
         "logical_path": "fi:turn_pull.snapshots/nmsp/draft_1/issue-draft.yaml",
         "physical_path": "turn_pull/snapshots/nmsp/draft_1/issue-draft.yaml",
         "namespace": "snapshots",
@@ -160,17 +160,19 @@ async def test_pull_materializes_registered_namespace_ref(tmp_path):
     assert "invalid" not in payload
     assert "missing" not in payload
     assert "errors" not in payload
+    assert state["pulled_object_refs"]["nmsp:draft_1/issue-draft.yaml"]["logical_path"] == "fi:turn_pull.snapshots/nmsp/draft_1/issue-draft.yaml"
+    assert state["pulled_logical_refs"]["fi:turn_pull.snapshots/nmsp/draft_1/issue-draft.yaml"]["object_ref"] == "nmsp:draft_1/issue-draft.yaml"
     assert (outdir / "workdir" / "turn_pull" / "snapshots" / "nmsp" / "draft_1" / "issue-draft.yaml").read_text(encoding="utf-8") == "status: draft\n"
 
 
 @pytest.mark.asyncio
 async def test_pull_materializes_canvas_owned_attachment_ref(tmp_path, monkeypatch):
     outdir = tmp_path / "out"
-    source_ref = (
+    object_ref = (
         "cnv:canvas/users/user-1/canvases/cnv_user-1_main/"
         "objects/user-attachments/ua_2026-06-09-18-38-30_xkib/v000001.docx"
     )
-    storage_key = source_ref.split(":", 1)[1]
+    storage_key = object_ref.split(":", 1)[1]
 
     from kdcube_ai_app.apps.chat.sdk.solutions.canvas.events import resolver as canvas_resolver
 
@@ -198,7 +200,7 @@ async def test_pull_materializes_canvas_owned_attachment_ref(tmp_path, monkeypat
         "last_decision": {
             "tool_call": {
                 "params": {
-                    "paths": [source_ref],
+                    "paths": [object_ref],
                 }
             }
         },
@@ -209,7 +211,7 @@ async def test_pull_materializes_canvas_owned_attachment_ref(tmp_path, monkeypat
 
     payload = _latest_payload(ctx)
     assert payload["pulled"] == [{
-        "source_ref": source_ref,
+        "object_ref": object_ref,
         "logical_path": "fi:turn_pull.user.attachments/cnv/canvas/users/user-1/canvases/cnv_user-1_main/objects/user-attachments/ua_2026-06-09-18-38-30_xkib/v000001.docx",
         "physical_path": "turn_pull/attachments/cnv/canvas/users/user-1/canvases/cnv_user-1_main/objects/user-attachments/ua_2026-06-09-18-38-30_xkib/v000001.docx",
         "namespace": "attachments",

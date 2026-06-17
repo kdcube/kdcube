@@ -4,7 +4,7 @@ title: "Namespace Services: Providers"
 summary: "Transport-neutral SDK concept for bundles and platform subsystems that publish namespace service provider surfaces: namespace ownership, object operations, resolvers, capabilities, relations, and integrations over API, MCP, Data Bus, or local adapters."
 status: design
 tags: ["sdk", "namespace-services", "named-service-provider", "services", "namespaces", "objects", "resolvers", "mcp", "api", "data-bus", "bundles"]
-updated_at: 2026-06-16
+updated_at: 2026-06-17
 keywords:
   [
     "named service provider",
@@ -23,6 +23,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/integration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/clients-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/react-object-materialization-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-surface-registry-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/event-hub/resolver-and-policy-registration-README.md
@@ -70,7 +71,8 @@ owner bundle/subsystem
     object.action / resolve
     relation.list / search
     event.resolve / event.action
-    block.produce / block.render
+    block.produce
+    block.render
     provider.operation
         |
         +-- local adapter
@@ -377,7 +379,7 @@ those foreign refs.
 | `event.resolve` | Resolve an owner URI or event payload into lightweight routing metadata. |
 | `event.action` | Run a bounded action on an event ref, such as preview, open, or explain. |
 | `block.produce` | Produce model-visible blocks from provider-owned objects or events. |
-| `block.render` | Render provider-owned objects/events for timeline, compact history, widgets, or ANNOUNCE-style summaries. |
+| `block.render` | Optionally patch provider-owned timeline blocks during model prompt rendering, or serve explicit provider-render clients. |
 
 `event.resolve` is the provider-owned URI resolver. It is a function, not a
 host-side pattern declaration. The host may dispatch `task:...` to the task
@@ -398,6 +400,14 @@ The resolver must not read the object body, hit heavy storage, or materialize
 bytes. It is the routing step used before block production. Object content
 belongs to `object.get`; model-visible projection belongs to `block.produce`;
 workspace materialization belongs to streamed `object.get` through `react.pull`.
+The ReAct read pipeline calls `block.produce`. Timeline rendering then renders
+the stored blocks, applies local ReAct timeline/compaction projection policies,
+and runs optional provider `block.render` hooks for visible provider-owned
+blocks. The named-service render adapter calls relevant providers concurrently
+and merges patches only for blocks owned by the provider namespace/event source.
+Explicit clients may also call `block.render` directly when they need a
+rendered provider representation without producing a new timeline block
+occurrence.
 
 These operations are the provider-side shape behind event-source readers,
 block-production policies, timeline projection policies, and renderer-specific
@@ -489,14 +499,97 @@ response payloads.
 
 `NamedServiceStreamResult` carries both:
 
-- `response`: the same `NamedServiceResponse` shape shown above, including
-  `ret.object` identity/body metadata or a structured `error`;
+- `response`: a named-service sidecar response. Keep it compact: provider
+  identity, namespace, object ref, revision, MIME, and descriptor fields are
+  appropriate. The large object body belongs in the streamed bytes;
 - `chunks`: an async byte iterator for the object representation.
 
 Do not base64 large files into tool results and do not hide object metadata in
 HTTP headers. If access is denied or the object is missing, return a failed
 `NamedServiceResponse` in the stream result; callers such as `react.pull`
 surface that exact error to the agent.
+
+For JSON object refs, `response_mode: stream` still means "produce bytes". The
+bytes can be UTF-8 JSON and should be the compact representation the model will
+read after `react.pull`, for example `{ok, object_ref, object}` or a
+provider-owned read shape. Returning only a plain `NamedServiceResponse` to a
+stream request is tolerated by the generic materializer as a compatibility
+fallback, but it is not the preferred provider contract and may lose
+provider-specific read formatting. The preferred shape is:
+
+```text
+object.get(response_mode=stream)
+  response: compact sidecar descriptor
+  chunks:   compact JSON/file bytes to write into fi:
+
+block.produce
+  input target.meta.object_ref or target.object_ref
+  output provider-owned ReAct visible blocks
+
+block.render
+  input bounded timeline snapshot plus render_context
+  output patches for provider-owned block indexes
+```
+
+Model-visible owner formatting is the `block.produce` contract. After
+`react.read(fi:...)`, the consumer runtime preserves `object_ref` and asks the
+owner event source to run `block.produce`. Every object family that needs
+formatting different from raw file text should expose `block.produce`. If
+`block.produce` returns no blocks, the consumer falls back to generic text for
+textual `fi:` artifacts.
+
+`block.render` is the optional second-stage rendering contract. It runs during
+prompt rendering after stored blocks have already been produced. The provider
+receives a bounded snapshot of visible blocks around its objects:
+
+```json
+{
+  "blocks": [
+    {
+      "index": 12,
+      "type": "react.tool.result",
+      "text": "...",
+      "meta": {
+        "object_ref": "mem:record:mem_123"
+      }
+    }
+  ],
+  "render_context": {
+    "phase": "timeline_projection",
+    "audience": "model",
+    "event_source_id": "named_services.mem",
+    "trigger_object_refs": ["mem:record:mem_123"],
+    "limits": {
+      "max_blocks": 64,
+      "neighbor_radius": 4
+    }
+  }
+}
+```
+
+The provider returns patch operations:
+
+```json
+{
+  "patches": [
+    {
+      "op": "patch_block",
+      "index": 12,
+      "fields": {
+        "text": "[MEMORY RECORD]\n...",
+        "meta": {
+          "render_policy": "memory.named_service.block_render"
+        }
+      }
+    }
+  ]
+}
+```
+
+The central adapter accepts patches for indexes owned by that provider
+namespace/event source. Context neighbors are available to the provider as
+read-only input. Provider render calls are parallel; each provider sees the
+same input snapshot and the central adapter merges the accepted patches.
 
 Example provider return:
 
@@ -1303,8 +1396,10 @@ When introducing a named service provider:
   `bundle_operation_url(...)`. Do not return new large byte bodies inside JSON.
 - define streamed `object.get` with `response_mode: stream` for large
   attachment refs that must become `fi:` artifacts;
-- define `block.produce` / `block.render` when ReAct should project
-  provider-owned objects as model-visible blocks;
+- define `block.produce` when ReAct should project provider-owned objects as
+  model-visible blocks;
+- define `block.render` when provider-owned blocks need custom prompt-render
+  patches or explicit rendered representations;
 - define pagination, search mode, revision, and idempotency rules;
 - define relation operations if the provider connects multiple objects;
 - define auth and visibility policy;

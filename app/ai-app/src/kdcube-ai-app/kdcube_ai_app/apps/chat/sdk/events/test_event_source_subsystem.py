@@ -109,7 +109,7 @@ async def test_artifact_namespace_rehoster_is_discovered_and_invoked(tmp_path):
         target.write_text("ok", encoding="utf-8")
         return {
             "materialized": [{
-                "source_ref": ref,
+                "object_ref": ref,
                 "logical_path": "fi:turn_1.files/cnv/demo.txt",
                 "physical_path": "turn_1/files/cnv/demo.txt",
             }]
@@ -128,7 +128,7 @@ async def test_artifact_namespace_rehoster_is_discovered_and_invoked(tmp_path):
 
     assert result["errors"] == []
     assert result["materialized"] == [{
-        "source_ref": "cnv:demo",
+        "object_ref": "cnv:demo",
         "logical_path": "fi:turn_1.files/cnv/demo.txt",
         "physical_path": "turn_1/files/cnv/demo.txt",
         "file_count": 1,

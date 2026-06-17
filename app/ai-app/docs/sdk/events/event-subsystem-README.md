@@ -4,6 +4,7 @@ title: "SDK Events Subsystem"
 summary: "Shared event-source declarations and discovery used by tools today and by broader SDK event flows over time."
 status: draft
 tags: ["sdk", "events", "event-source", "tools", "react"]
+updated_at: 2026-06-17
 keywords:
   [
     "event_source",
@@ -19,6 +20,7 @@ keywords:
   ]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/react-object-materialization-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-events-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-event-envelope-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-README.md
@@ -214,6 +216,18 @@ memory, task, canvas, or knowledge-source semantics itself; it relies on the
 namespace owner's reader/policies when runtime code needs owner payloads.
 Model-facing exact content access is different: use `react.pull` with a
 namespace rehoster, then inspect the returned `fi:` artifact.
+For named-service namespaces, the pull/read path preserves the owner URI and
+lets `react.read` call the owner's `block.produce` operation before the read
+block is stored. The boundary diagram is
+[Namespace Services: ReAct Object Materialization](../namespace-services/react-object-materialization-README.md).
+
+During prompt rendering, named-service event sources can also participate in
+timeline projection through provider `block.render`. ReAct scans visible blocks
+for preserved `object_ref` values, groups them by `named_services.<namespace>`,
+calls relevant providers concurrently with bounded timeline snapshots, and
+merges patches accepted for provider-owned block indexes. This keeps the
+event-source subsystem generic while letting namespace owners customize the
+model-facing rendering of their own objects.
 
 Readers are discovered from the same loaded tool/event modules as event
 sources:
@@ -319,7 +333,7 @@ async def rehost_canvas_ref(*, ref, key, ctx_browser, outdir, **context):
     ...
     return {
         "materialized": [{
-            "source_ref": ref,
+            "object_ref": ref,
             "logical_path": "fi:turn_<id>.snapshots/cnv/main.json",
             "physical_path": "turn_<id>/snapshots/cnv/main.json",
         }]
@@ -341,6 +355,13 @@ explicit on the timeline while giving agents a standard way to materialize exact
 content when needed. The pull result is the contract consumed by the agent: it
 includes the source ref and the resolved/rehosted `logical_path` /
 `physical_path` rows to use next.
+
+Named-service rehosters use the same artifact contract. The provider supplies
+bytes through `object.get(response_mode=stream)`. The consumer ReAct runtime
+writes those bytes into the current `fi:` workspace and stores the original
+owner ref beside the local path. Later `react.read` can project the owner object
+through `block.produce`; later `Timeline.render()` renders the stored blocks
+locally.
 
 ## File Rows And Preview Text
 

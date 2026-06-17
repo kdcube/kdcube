@@ -53,6 +53,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.compaction_memory import (
 from kdcube_ai_app.apps.chat.sdk.solutions.react.events.common import event_source_pipeline_enabled
 from kdcube_ai_app.apps.chat.sdk.solutions.react.events.projection import (
     apply_event_source_transformers,
+    apply_event_source_transformers_async,
     clear_timeline_segment_marks,
     patch_timeline_segment_marks,
     produce_event_source_announce_blocks,
@@ -1736,6 +1737,37 @@ class Timeline:
             full_timeline_blocks = self._clone_blocks_for_policy_view(timeline_blocks or self._collect_blocks())
             patch_timeline_segment_marks(blocks, timeline_segment_fn=self._timeline_segment_for_render)
             apply_event_source_transformers(
+                event_sources=self._event_sources(),
+                react_phase="timeline_projection",
+                timeline_blocks=blocks,
+                current_turn_id=str(getattr(self.runtime, "turn_id", "") or ""),
+                full_timeline_blocks=full_timeline_blocks,
+                **context,
+            )
+            return blocks
+        except Exception:
+            logger.debug("[react.event_source.timeline_projection_failed]", exc_info=True)
+            return blocks
+        finally:
+            try:
+                clear_timeline_segment_marks(blocks)
+            except Exception:
+                pass
+
+    async def _apply_event_source_timeline_projection_async(
+        self,
+        blocks: List[Dict[str, Any]],
+        *,
+        timeline_blocks: Optional[List[Dict[str, Any]]] = None,
+        **context: Any,
+    ) -> List[Dict[str, Any]]:
+        blocks = self._clone_blocks_for_policy_view(blocks)
+        if not self._event_source_pipeline_enabled() or not blocks:
+            return blocks
+        try:
+            full_timeline_blocks = self._clone_blocks_for_policy_view(timeline_blocks or self._collect_blocks())
+            patch_timeline_segment_marks(blocks, timeline_segment_fn=self._timeline_segment_for_render)
+            await apply_event_source_transformers_async(
                 event_sources=self._event_sources(),
                 react_phase="timeline_projection",
                 timeline_blocks=blocks,
@@ -5441,11 +5473,12 @@ class Timeline:
             prompt_rendered_tokens: Optional[int] = None
             trigger_visible_block_count: Optional[int] = None
             try:
-                visible_probe = self._prepare_visible_blocks_for_render(
+                visible_probe = await self._prepare_visible_blocks_for_render_async(
                     blocks,
                     cache_last=cache_last,
                     include_sources=include_sources,
                     include_announce=include_announce,
+                    provider_render=False,
                 )
                 visible_probe = self._append_tail_blocks(
                     blocks=visible_probe,
@@ -5489,7 +5522,7 @@ class Timeline:
                 trigger_tokens_estimate=prompt_rendered_tokens,
                 trigger_visible_block_count=trigger_visible_block_count,
             )
-        visible_blocks = self._prepare_visible_blocks_for_render(
+        visible_blocks = await self._prepare_visible_blocks_for_render_async(
             blocks,
             cache_last=cache_last,
             include_sources=include_sources,
@@ -5704,6 +5737,29 @@ class Timeline:
             cache_last=bool(cache_last),
             include_sources=bool(include_sources),
             include_announce=bool(include_announce),
+        )
+        visible_blocks = self._apply_hidden_replacements(visible_blocks)
+        visible_blocks = self._apply_render_directives_before_cache(visible_blocks)
+        return visible_blocks
+
+    async def _prepare_visible_blocks_for_render_async(
+        self,
+        blocks: List[Dict[str, Any]],
+        *,
+        cache_last: bool,
+        include_sources: bool,
+        include_announce: bool,
+        provider_render: bool = True,
+    ) -> List[Dict[str, Any]]:
+        visible_blocks = self._slice_after_compaction_summary(blocks)
+        visible_blocks = self._restore_missing_turn_headers_for_render(visible_blocks)
+        visible_blocks = await self._apply_event_source_timeline_projection_async(
+            visible_blocks,
+            timeline_blocks=blocks,
+            cache_last=bool(cache_last),
+            include_sources=bool(include_sources),
+            include_announce=bool(include_announce),
+            provider_render=bool(provider_render),
         )
         visible_blocks = self._apply_hidden_replacements(visible_blocks)
         visible_blocks = self._apply_render_directives_before_cache(visible_blocks)

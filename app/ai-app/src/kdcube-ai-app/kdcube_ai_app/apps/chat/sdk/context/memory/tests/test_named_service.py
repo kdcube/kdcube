@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 import pytest
@@ -15,6 +16,7 @@ from kdcube_ai_app.apps.chat.sdk.context.memory.named_service import (
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
     NamedServiceContext,
     NamedServiceRequest,
+    NamedServiceStreamResult,
 )
 
 
@@ -262,3 +264,82 @@ async def test_memory_get_accepts_legacy_me_ref_and_returns_canonical_ref() -> N
     assert response.object["object_ref"] == "mem:record:mem_1"
     assert store.get_requests[0]["memory_id"] == "mem_1"
     assert store.get_requests[0]["scope_filter"] == "all_user_memories"
+
+
+@pytest.mark.asyncio
+async def test_memory_get_streams_compact_read_payload_for_react_pull() -> None:
+    store = _Store(record=_record())
+    response = await _provider_with_store(store).object_get(
+        NamedServiceContext(tenant="tenant-a", project="project-a", user_id="user-a"),
+        NamedServiceRequest(
+            operation="object.get",
+            namespace="mem",
+            object_ref="mem:record:mem_1",
+            response_mode="stream",
+        ),
+    )
+
+    assert isinstance(response, NamedServiceStreamResult)
+    assert response.filename == "mem_1.json"
+    assert response.media_type == "application/vnd.kdcube.memory.record+json;version=1"
+    assert response.response.ok is True
+    assert response.response.object_ref == "mem:record:mem_1"
+    assert response.response.object["summary"] == "Prefer balanced legal/commercial wording"
+    assert "body" not in response.response.object
+
+    chunks = []
+    async for chunk in response.chunks:
+        chunks.append(chunk)
+    payload = json.loads(b"".join(chunks).decode("utf-8"))
+    assert payload["ok"] is True
+    assert payload["object_ref"] == "mem:record:mem_1"
+    assert payload["memory"]["object_ref"] == "mem:record:mem_1"
+    assert payload["memory"]["memory"] == "Prefer balanced legal/commercial wording"
+    assert payload["memory"]["context"] == "Applies to relationship documents."
+
+
+@pytest.mark.asyncio
+async def test_memory_block_produce_projects_pulled_read_payload() -> None:
+    store = _Store(record=_record())
+    provider = _provider_with_store(store)
+    payload = {
+        "ok": True,
+        "object_ref": "mem:record:mem_1",
+        "memory": {
+            "id": "mem_1",
+            "object_ref": "mem:record:mem_1",
+            "memory": "Prefer balanced legal/commercial wording",
+            "context": "Applies to relationship documents.",
+            "kind": "preference",
+            "status": "active",
+            "visibility": "user",
+            "labels": ["legal"],
+            "keywords": ["commercial"],
+        },
+    }
+    response = await provider.block_produce(
+        NamedServiceContext(tenant="tenant-a", project="project-a", user_id="user-a", turn_id="turn_read"),
+        NamedServiceRequest(
+            operation="block.produce",
+            namespace="mem",
+            object_ref="mem:record:mem_1",
+            payload={
+                "target": {
+                    "turn_id": "turn_read",
+                    "tool_call_id": "r_mem",
+                    "logical_path": "fi:turn_read.files/mem_1.json",
+                    "text": json.dumps(payload, ensure_ascii=False),
+                }
+            },
+        ),
+    )
+
+    assert response.ok is True
+    blocks = response.extra["blocks"]
+    assert len(blocks) == 1
+    block = blocks[0]
+    assert block["path"] == "mem:record:mem_1"
+    assert "[MEMORY RECORD]" in block["text"]
+    assert "Prefer balanced legal/commercial wording" in block["text"]
+    assert block["meta"]["object_ref"] == "mem:record:mem_1"
+    assert block["meta"]["materialized_path"] == "fi:turn_read.files/mem_1.json"

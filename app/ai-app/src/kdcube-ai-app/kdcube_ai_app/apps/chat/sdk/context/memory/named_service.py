@@ -15,6 +15,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
     NamedServiceRequest,
     NamedServiceResponse,
     NamedServiceSearchScope,
+    NamedServiceStreamResult,
     TRANSPORT_API,
     TRANSPORT_LOCAL,
     build_default_operations,
@@ -366,6 +367,127 @@ def _memory_record_to_named_service_object(
     return obj
 
 
+async def _single_json_chunk(payload: Mapping[str, Any]):
+    yield json.dumps(payload, ensure_ascii=False, indent=2, default=str).encode("utf-8")
+
+
+def _memory_object_to_read_payload(obj: Mapping[str, Any]) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "ok": True,
+        "object_ref": obj.get("object_ref") or obj.get("ref"),
+        "memory": dict(obj),
+        "count": 1,
+    }
+    events = obj.get("events")
+    if isinstance(events, list):
+        payload["events"] = list(events)
+        payload["events_count"] = len(events)
+    return {key: value for key, value in payload.items() if value not in (None, "", [])}
+
+
+def _memory_object_to_stream_descriptor(obj: Mapping[str, Any]) -> dict[str, Any]:
+    keep = (
+        "id",
+        "object_ref",
+        "ref",
+        "namespace",
+        "object_kind",
+        "label",
+        "title",
+        "summary",
+        "mime",
+        "capabilities",
+        "default_open_effect_action",
+        "identity",
+        "meta",
+    )
+    return {key: obj[key] for key in keep if key in obj and obj[key] not in (None, "", [], {})}
+
+
+def _json_object_from_text(value: Any) -> dict[str, Any]:
+    if not isinstance(value, str) or not value.strip():
+        return {}
+    try:
+        parsed = json.loads(value)
+    except Exception:
+        return {}
+    return dict(parsed) if isinstance(parsed, Mapping) else {}
+
+
+def _memory_object_from_block_target(target: Mapping[str, Any]) -> dict[str, Any]:
+    for source in (
+        target.get("object"),
+        target.get("memory"),
+        target.get("ret"),
+        target.get("raw"),
+    ):
+        if not isinstance(source, Mapping):
+            continue
+        memory = source.get("memory")
+        if isinstance(memory, Mapping):
+            return dict(memory)
+        obj = source.get("object")
+        if isinstance(obj, Mapping):
+            return dict(obj)
+    payload = _json_object_from_text(target.get("text"))
+    if isinstance(payload.get("memory"), Mapping):
+        return dict(payload["memory"])
+    if isinstance(payload.get("object"), Mapping):
+        return dict(payload["object"])
+    source_block = target.get("source_block") if isinstance(target.get("source_block"), Mapping) else {}
+    payload = _json_object_from_text(source_block.get("text"))
+    if isinstance(payload.get("memory"), Mapping):
+        return dict(payload["memory"])
+    if isinstance(payload.get("object"), Mapping):
+        return dict(payload["object"])
+    return {}
+
+
+def _memory_ref_from_object_or_request(request: NamedServiceRequest, target: Mapping[str, Any], obj: Mapping[str, Any]) -> str:
+    for value in (
+        request.object_ref,
+        obj.get("object_ref"),
+        obj.get("ref"),
+        target.get("object_ref"),
+        target.get("ref"),
+    ):
+        text = _text(value)
+        if text:
+            memory_id = memory_id_from_ref(text)
+            return memory_ref(memory_id) if memory_id else text
+    memory_id = _text(obj.get("id") or obj.get("object_id") or request.object_id)
+    return memory_ref(memory_id) if memory_id else ""
+
+
+def _memory_object_read_text(obj: Mapping[str, Any], *, object_ref: str) -> str:
+    body = obj.get("body") if isinstance(obj.get("body"), Mapping) else {}
+    memory_text = _text(obj.get("memory") or body.get("memory") or obj.get("summary") or obj.get("title"))
+    context_text = _text(obj.get("context") or body.get("context"))
+    kind = _text(obj.get("kind") or body.get("kind"))
+    status = _text(obj.get("status") or body.get("status"))
+    visibility = _text(obj.get("visibility") or body.get("visibility"))
+    labels = obj.get("labels") or body.get("labels") or ()
+    keywords = obj.get("keywords") or body.get("keywords") or ()
+    lines = ["[MEMORY RECORD]"]
+    if object_ref:
+        lines.append(f"object_ref: {object_ref}")
+    if kind:
+        lines.append(f"kind: {kind}")
+    if status:
+        lines.append(f"status: {status}")
+    if visibility:
+        lines.append(f"visibility: {visibility}")
+    if labels:
+        lines.append("labels: " + ", ".join(str(item) for item in labels if str(item).strip()))
+    if keywords:
+        lines.append("keywords: " + ", ".join(str(item) for item in keywords if str(item).strip()))
+    if memory_text:
+        lines.extend(["", "memory:", memory_text])
+    if context_text:
+        lines.extend(["", "context:", context_text])
+    return "\n".join(lines).strip()
+
+
 @named_service_provider(
     provider_id=PROVIDER_ID,
     namespace=NAMESPACE,
@@ -629,7 +751,7 @@ class MemoryNamedServiceProvider(NamedServiceProvider):
             }),
         )
 
-    async def object_get(self, ctx: NamedServiceContext, request: NamedServiceRequest) -> NamedServiceResponse:
+    async def object_get(self, ctx: NamedServiceContext, request: NamedServiceRequest) -> NamedServiceResponse | NamedServiceStreamResult:
         store = self._store(ctx)
         await self._ensure_store_schema(store)
         memory_id = memory_id_from_ref(request.object_ref or "") or _text(request.object_id)
@@ -675,12 +797,123 @@ class MemoryNamedServiceProvider(NamedServiceProvider):
                 scope_filter=self._scope_filter(request, default="all_user_memories"),
             )
             obj["events"] = [_memory_event_to_history_payload(event) for event in events]
+        if _text(request.response_mode).lower() == "stream":
+            object_ref = memory_ref(record.id)
+            return NamedServiceStreamResult(
+                response=NamedServiceResponse.ok_response(
+                    provider=self.provider_identity(),
+                    namespace=request.namespace or NAMESPACE,
+                    object_ref=object_ref,
+                    object=_memory_object_to_stream_descriptor(obj),
+                    revision=str(record.revision),
+                ),
+                chunks=_single_json_chunk(_memory_object_to_read_payload(obj)),
+                filename=f"{record.id}.json",
+                media_type=MEMORY_MIME,
+            )
         return NamedServiceResponse.ok_response(
             provider=self.provider_identity(),
             namespace=request.namespace or NAMESPACE,
             object_ref=memory_ref(record.id),
             object=obj,
             revision=str(record.revision),
+        )
+
+    async def event_resolve(self, ctx: NamedServiceContext, request: NamedServiceRequest) -> NamedServiceResponse:
+        del ctx
+        object_ref = request.object_ref or ""
+        memory_id = memory_id_from_ref(object_ref)
+        if not memory_id:
+            return NamedServiceResponse.error_response(
+                code="memory_id_required",
+                message="event.resolve requires a mem:record:<memory_id> object_ref.",
+                status=400,
+                provider=self.provider_identity(),
+                namespace=request.namespace or NAMESPACE,
+                object_ref=request.object_ref,
+            )
+        canonical_ref = memory_ref(memory_id)
+        return NamedServiceResponse.ok_response(
+            provider=self.provider_identity(),
+            namespace=request.namespace or NAMESPACE,
+            object_ref=canonical_ref,
+            extra={
+                "event_source_id": f"named_services.{NAMESPACE}",
+                "object_ref": canonical_ref,
+                "target_surface": "sdk.memory.viewer",
+            },
+        )
+
+    async def block_produce(self, ctx: NamedServiceContext, request: NamedServiceRequest) -> NamedServiceResponse:
+        target = request.payload.get("target") if isinstance(request.payload.get("target"), Mapping) else {}
+        target = dict(target or {})
+        obj = _memory_object_from_block_target(target)
+        object_ref = _memory_ref_from_object_or_request(request, target, obj)
+        if not obj:
+            get_response = await self.object_get(
+                ctx,
+                NamedServiceRequest.from_dict({
+                    **request.to_dict(),
+                    "operation": "object.get",
+                    "namespace": request.namespace or NAMESPACE,
+                    "object_ref": object_ref or request.object_ref,
+                    "response_mode": "",
+                }),
+            )
+            if not isinstance(get_response, NamedServiceResponse) or not get_response.ok:
+                return NamedServiceResponse.ok_response(
+                    provider=self.provider_identity(),
+                    namespace=request.namespace or NAMESPACE,
+                    object_ref=object_ref or request.object_ref,
+                    extra={"blocks": []},
+                    warnings=[{
+                        "code": get_response.error.code if isinstance(get_response, NamedServiceResponse) and get_response.error else "memory_block_produce_get_failed",
+                        "message": get_response.error.message if isinstance(get_response, NamedServiceResponse) and get_response.error else "Memory object could not be loaded for block production.",
+                    }],
+                )
+            obj = dict(get_response.object or {})
+            object_ref = _memory_ref_from_object_or_request(request, target, obj)
+        if not object_ref:
+            return NamedServiceResponse.ok_response(
+                provider=self.provider_identity(),
+                namespace=request.namespace or NAMESPACE,
+                extra={"blocks": []},
+                warnings=[{"code": "memory_ref_missing", "message": "Memory block production could not determine object_ref."}],
+            )
+
+        text = _memory_object_read_text(obj, object_ref=object_ref)
+        block = {
+            "turn": target.get("turn_id") or ctx.turn_id or "",
+            "type": "react.tool.result",
+            "call_id": target.get("tool_call_id") or "",
+            "tool_id": "named_services.mem",
+            "event_source_id": f"named_services.{NAMESPACE}",
+            "mime": "text/markdown",
+            "path": object_ref,
+            "text": text,
+            "meta": {
+                "tool_call_id": target.get("tool_call_id") or "",
+                "tool_id": target.get("tool_id") or "react.read",
+                "turn_id": target.get("turn_id") or ctx.turn_id or "",
+                "object_ref": object_ref,
+                "source_namespace": NAMESPACE,
+                "materialized_path": target.get("logical_path") or target.get("path") or "",
+                "object_kind": OBJECT_KIND,
+                "mime": MEMORY_MIME,
+                "render_policy": "memory.named_service.block_produce",
+            },
+        }
+        LOGGER.info(
+            "[memory.named_service.block_produce] produced object_ref=%s materialized_path=%s text_symbols=%s",
+            object_ref,
+            target.get("logical_path") or target.get("path") or "",
+            len(text),
+        )
+        return NamedServiceResponse.ok_response(
+            provider=self.provider_identity(),
+            namespace=request.namespace or NAMESPACE,
+            object_ref=object_ref,
+            extra={"blocks": [block]},
         )
 
     async def object_resolve(self, ctx: NamedServiceContext, request: NamedServiceRequest) -> NamedServiceResponse:

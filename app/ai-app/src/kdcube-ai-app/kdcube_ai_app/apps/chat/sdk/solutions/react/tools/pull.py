@@ -85,7 +85,7 @@ TOOL_SPEC = {
         "JSON object with requested refs and compact pulled summaries. "
         "Folder pulls are grouped by logical_root/physical_root with file_count, bounded tree, and path_rule. "
         "Exact file pulls return one logical_path/physical_path item. "
-        "Externally owned refs return source_ref plus the resolved/rehosted fi: logical_path, physical_path, mime, size_bytes, and file_count when available. "
+        "Externally owned refs return object_ref plus the resolved/rehosted fi: logical_path, physical_path, mime, size_bytes, and file_count when available. "
         "When share=true, each delivered file is also listed under shared with its logical_path. "
         "Diagnostics such as missing, invalid, and errors are included only when non-empty."
     ),
@@ -314,7 +314,7 @@ async def handle_react_pull(*, react: Any = None, ctx_browser: Any, state: Dict[
                 if isinstance(item, Mapping):
                     namespace_missing.append(dict(item))
                 else:
-                    namespace_missing.append({"source_ref": raw, "missing": str(item or raw)})
+                    namespace_missing.append({"object_ref": raw, "missing": str(item or raw)})
             for item in result.get("invalid") or []:
                 if isinstance(item, Mapping):
                     invalid.append(dict(item))
@@ -395,20 +395,34 @@ async def handle_react_pull(*, react: Any = None, ctx_browser: Any, state: Dict[
             requested_roots=namespace_rehosted,
         )
     pulled = namespace_materialized + namespace_fallback_pulled + hydrated_pulled
-    pulled_source_refs = state.setdefault("pulled_source_refs", {})
-    if not isinstance(pulled_source_refs, dict):
-        pulled_source_refs = {}
-        state["pulled_source_refs"] = pulled_source_refs
+    pulled_object_refs = state.setdefault("pulled_object_refs", {})
+    if not isinstance(pulled_object_refs, dict):
+        pulled_object_refs = {}
+        state["pulled_object_refs"] = pulled_object_refs
+    pulled_logical_refs = state.setdefault("pulled_logical_refs", {})
+    if not isinstance(pulled_logical_refs, dict):
+        pulled_logical_refs = {}
+        state["pulled_logical_refs"] = pulled_logical_refs
     for row in pulled:
         if not isinstance(row, Mapping):
             continue
-        source_ref = str(row.get("source_ref") or "").strip()
+        object_ref = str(row.get("object_ref") or row.get("source_ref") or "").strip()
         logical_path = str(row.get("logical_path") or "").strip()
-        if source_ref and logical_path:
-            pulled_source_refs[source_ref] = {
+        if object_ref and isinstance(row, dict):
+            row["object_ref"] = object_ref
+            row.pop("source_ref", None)
+        if object_ref and logical_path:
+            source_info = {
+                "object_ref": object_ref,
                 "logical_path": logical_path,
                 **({"physical_path": str(row.get("physical_path") or "").strip()} if row.get("physical_path") else {}),
                 **({"mime": str(row.get("mime") or "").strip()} if row.get("mime") else {}),
+            }
+            pulled_object_refs[object_ref] = {
+                key: value for key, value in source_info.items() if key != "object_ref"
+            }
+            pulled_logical_refs[logical_path] = {
+                key: value for key, value in source_info.items() if key != "logical_path"
             }
     hydrated_missing = _compact_path_rows(
         [str(p or "") for p in (rehost_result.get("missing") or [])],

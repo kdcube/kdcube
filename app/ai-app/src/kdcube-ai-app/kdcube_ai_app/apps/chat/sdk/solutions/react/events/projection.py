@@ -113,6 +113,42 @@ def apply_event_source_transformers(
     return timeline_blocks
 
 
+async def apply_event_source_transformers_async(
+    *,
+    event_sources: Any,
+    react_phase: str,
+    timeline_blocks: list[MutableMapping[str, Any]],
+    **context: Any,
+) -> list[MutableMapping[str, Any]]:
+    """Run local timeline transformers, then async provider render hooks.
+
+    Local event-source policies are applied first using the established sync
+    path. Named-service ``block.render`` hooks then fan out concurrently and
+    merge validated provider patches into the same policy view.
+    """
+    apply_event_source_transformers(
+        event_sources=event_sources,
+        react_phase=react_phase,
+        timeline_blocks=timeline_blocks,
+        **context,
+    )
+    if react_phase == "timeline_projection" and context.get("provider_render", True) is not False:
+        try:
+            from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.block_policy_adapter import (
+                apply_named_service_block_render_projection,
+            )
+
+            await apply_named_service_block_render_projection(
+                event_sources=event_sources,
+                timeline_blocks=timeline_blocks,
+                react_phase=react_phase,
+                **context,
+            )
+        except Exception:
+            return timeline_blocks
+    return timeline_blocks
+
+
 def produce_event_source_announce_blocks(
     *,
     event_sources: Any,

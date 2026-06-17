@@ -190,8 +190,11 @@ async def test_announce_production_runs_after_cache_markers_and_stays_uncached()
     assert not any((block.get("meta") or {}).get("event_render_policy") for block in tl.blocks)
 
 
-def test_bind_params_normalizes_visible_physical_artifact_ref_to_logical_ref():
-    ctx = RuntimeCtx(turn_id="turn_cur", started_at="2026-02-09T00:00:00Z")
+def test_bind_params_normalizes_visible_physical_artifact_ref_to_logical_ref(tmp_path):
+    artifact = tmp_path / "turn_cur" / "outputs" / "report.html"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("<html>ok</html>", encoding="utf-8")
+    ctx = RuntimeCtx(turn_id="turn_cur", started_at="2026-02-09T00:00:00Z", outdir=str(tmp_path))
     tl = Timeline(runtime=ctx)
     tl.blocks.append({
         "type": "react.tool.result",
@@ -216,8 +219,11 @@ def test_bind_params_normalizes_visible_physical_artifact_ref_to_logical_ref():
     assert params["content"] == "<html>ok</html>"
 
 
-def test_bind_params_assumes_fi_for_visible_bare_artifact_ref():
-    ctx = RuntimeCtx(turn_id="turn_cur", started_at="2026-02-09T00:00:00Z")
+def test_bind_params_assumes_fi_for_visible_bare_artifact_ref(tmp_path):
+    artifact = tmp_path / "outputs" / "report.html"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("<html>bare</html>", encoding="utf-8")
+    ctx = RuntimeCtx(turn_id="turn_cur", started_at="2026-02-09T00:00:00Z", outdir=str(tmp_path))
     tl = Timeline(runtime=ctx)
     tl.blocks.append({
         "type": "react.tool.result",
@@ -242,8 +248,11 @@ def test_bind_params_assumes_fi_for_visible_bare_artifact_ref():
     assert params["content"] == "<html>bare</html>"
 
 
-def test_bind_params_normalizes_current_turn_outputs_ref_when_visible():
-    ctx = RuntimeCtx(turn_id="turn_cur", started_at="2026-02-09T00:00:00Z")
+def test_bind_params_normalizes_current_turn_outputs_ref_when_visible(tmp_path):
+    artifact = tmp_path / "turn_cur" / "outputs" / "ai_security_news" / "slides.html"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("<html>slides</html>", encoding="utf-8")
+    ctx = RuntimeCtx(turn_id="turn_cur", started_at="2026-02-09T00:00:00Z", outdir=str(tmp_path))
     tl = Timeline(runtime=ctx)
     tl.blocks.append({
         "type": "react.tool.result",

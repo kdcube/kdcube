@@ -124,7 +124,7 @@ async def rehost_canvas_ref(
     runtime = getattr(ctx_browser, "runtime_ctx", None)
     turn_id = str(_runtime_value(runtime, "turn_id", "") or "").strip()
     if not uri or not turn_id or outdir is None:
-        return {"missing": [{"source_ref": uri, "reason": "missing_ref_or_runtime"}]}
+        return {"missing": [{"object_ref": uri, "reason": "missing_ref_or_runtime"}]}
 
     from kdcube_ai_app.apps.chat.sdk.runtime.workspace import resolve_artifact_path
     from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
@@ -137,7 +137,7 @@ async def rehost_canvas_ref(
     try:
         store = _store_from_runtime(runtime)
     except Exception as exc:
-        return {"missing": [{"source_ref": uri, "reason": f"canvas_runtime_scope_unavailable:{exc}"}]}
+        return {"missing": [{"object_ref": uri, "reason": f"canvas_runtime_scope_unavailable:{exc}"}]}
 
     storage_key = str(key or (uri.split(":", 1)[1] if ":" in uri else "")).strip().lstrip("/")
     if _looks_like_canvas_storage_key(storage_key):
@@ -146,16 +146,16 @@ async def rehost_canvas_ref(
         try:
             payload, _meta = CanvasArtifactResolver(store).download_bytes(f"{namespace}:{storage_key}", mime=mime)
         except Exception as exc:
-            return {"missing": [{"source_ref": uri, "reason": f"canvas_object_not_found:{exc}"}]}
+            return {"missing": [{"object_ref": uri, "reason": f"canvas_object_not_found:{exc}"}]}
         relpath = f"cnv/{storage_key}"
         namespace_name = ARTIFACT_NAMESPACE_ATTACHMENTS
     else:
         try:
             result = read_canvas_for_agent(store=store, uri=uri)
         except Exception as exc:
-            return {"missing": [{"source_ref": uri, "reason": f"canvas_read_failed:{exc}"}]}
+            return {"missing": [{"object_ref": uri, "reason": f"canvas_read_failed:{exc}"}]}
         if not result.get("ok"):
-            return {"missing": [{"source_ref": uri, "reason": str(result.get("error") or "canvas_read_failed")}]}
+            return {"missing": [{"object_ref": uri, "reason": str(result.get("error") or "canvas_read_failed")}]}
         payload = json.dumps(result, ensure_ascii=False, indent=2).encode("utf-8")
         mime = "application/json"
         digest = hashlib.sha1(uri.encode("utf-8")).hexdigest()[:12]
@@ -173,7 +173,7 @@ async def rehost_canvas_ref(
     target.write_bytes(payload)
     return {
         "materialized": [{
-            "source_ref": uri,
+            "object_ref": uri,
             "logical_path": logical_path,
             "physical_path": physical_path,
             "namespace": namespace_name,

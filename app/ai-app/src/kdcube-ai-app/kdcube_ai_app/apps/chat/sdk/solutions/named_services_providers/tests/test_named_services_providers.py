@@ -1101,6 +1101,78 @@ async def test_configured_artifact_rehoster_streams_named_service_bytes(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_configured_artifact_rehoster_materializes_named_service_json_object(tmp_path):
+    object_ref = "mem:record:mem_123"
+
+    async def _stream_caller(call):
+        assert call.bundle_id == "versatile@2026-03-31-13-36"
+        assert call.operation == "named_service"
+        assert call.data["operation"] == "object.get"
+        assert call.data["response_mode"] == "stream"
+        assert call.data["context"]["source"] == "react.pull"
+        assert call.data["context"]["materialize"] is True
+        assert call.data["object_ref"] == object_ref
+        return NamedServiceResponse.ok_response(
+            namespace="mem",
+            object_ref=object_ref,
+            object={
+                "id": "mem_123",
+                "object_ref": object_ref,
+                "ref": object_ref,
+                "namespace": "mem",
+                "object_kind": "memory.record",
+                "mime": "application/vnd.kdcube.memory.record+json;version=1",
+                "memory": "Remember to test named-service JSON pulls.",
+                "body": {"memory": "Remember to test named-service JSON pulls."},
+            },
+            revision="7",
+        )
+
+    event_sources = EventSourceSubsystem()
+    count = register_configured_named_service_artifact_rehosters(
+        event_sources,
+        tenant="tenant-a",
+        project="project-a",
+        namespaces={
+            "mem": {
+                "pull": {"operation": "object.get"},
+                "providers": [
+                    {
+                        "transport": "bundle_operation",
+                        "bundle_id": "versatile@2026-03-31-13-36",
+                        "provider": "sdk.memory",
+                        "operations": ["object.get"],
+                    }
+                ],
+            }
+        },
+    )
+
+    assert count == 1
+    runtime = SimpleNamespace(turn_id="turn_rehost")
+    ctx_browser = SimpleNamespace(runtime_ctx=runtime)
+    with bind_bundle_operation_stream_caller(_stream_caller):
+        result = await event_sources.rehost_namespace_ref(
+            object_ref,
+            ctx_browser=ctx_browser,
+            outdir=tmp_path,
+        )
+
+    assert result["errors"] == []
+    assert result["missing"] == []
+    materialized = result["materialized"][0]
+    assert materialized["logical_path"].startswith("fi:")
+    assert materialized["mime"] == "application/json"
+    assert materialized["response"]["ok"] is True
+    assert materialized["response"]["ret"]["attrs"]["object_ref"] == object_ref
+    target = tmp_path / "workdir" / materialized["physical_path"]
+    payload = json.loads(target.read_text())
+    assert payload["ok"] is True
+    assert payload["object"]["object_ref"] == object_ref
+    assert payload["object"]["memory"] == "Remember to test named-service JSON pulls."
+
+
+@pytest.mark.asyncio
 async def test_configured_artifact_rehoster_surfaces_provider_error(tmp_path):
     async def _stream_caller(call):
         assert call.data["operation"] == "object.get"
@@ -1263,6 +1335,103 @@ async def test_configured_event_source_delegates_block_production_to_named_servi
 
     assert target["blocks_produced"] is True
     assert target["blocks"][0]["object_ref"] == "task:issue:BUG-123"
+
+
+@pytest.mark.asyncio
+async def test_named_service_block_render_projection_fans_out_and_merges_owned_patches(monkeypatch):
+    import kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.block_policy_adapter as adapter
+
+    calls: list[NamedServiceRequest] = []
+
+    async def _call(_endpoint, request):
+        calls.append(request)
+        namespace = request.namespace
+        if namespace == "mem":
+            return NamedServiceResponse.ok_response(
+                namespace=namespace,
+                object_ref=request.object_ref,
+                extra={
+                    "patches": [
+                        {
+                            "op": "patch_block",
+                            "index": 2,
+                            "fields": {
+                                "text": "Rendered memory",
+                                "meta": {"render_policy": "mem.render"},
+                            },
+                        },
+                        {
+                            "op": "patch_block",
+                            "index": 0,
+                            "fields": {"text": "Invalid neighbor rewrite"},
+                        },
+                    ]
+                },
+            )
+        return NamedServiceResponse.ok_response(
+            namespace=namespace,
+            object_ref=request.object_ref,
+            extra={
+                "patches": [
+                    {
+                        "op": "replace_block",
+                        "index": 1,
+                        "block": {
+                            "type": "react.tool.result",
+                            "text": "Rendered task",
+                            "meta": {"object_ref": "task:issue:BUG-123"},
+                        },
+                    },
+                    {
+                        "op": "append_block_after",
+                        "index": 1,
+                        "block": {
+                            "type": "text",
+                            "text": "Task companion",
+                            "meta": {"object_ref": "task:issue:BUG-123"},
+                        },
+                    },
+                ]
+            },
+        )
+
+    monkeypatch.setattr(adapter, "call_named_service_endpoint", _call)
+
+    event_sources = EventSourceSubsystem()
+    register_configured_named_service_event_sources(
+        event_sources,
+        namespaces={
+            "task": {"providers": [{"transport": "bundle_operation", "bundle_id": "task-tracker@1-0", "provider": "task.issue"}]},
+            "mem": {"providers": [{"transport": "bundle_operation", "bundle_id": "versatile@2026-03-31-13-36", "provider": "sdk.memory"}]},
+        },
+    )
+    timeline = [
+        {"type": "text", "text": "Neighbor context"},
+        {
+            "type": "react.tool.result",
+            "event_source_id": "named_services.task",
+            "text": "Raw task",
+            "meta": {"object_ref": "task:issue:BUG-123"},
+        },
+        {
+            "type": "react.tool.result",
+            "event_source_id": "named_services.mem",
+            "text": "Raw memory",
+            "meta": {"object_ref": "mem:record:mem_123"},
+        },
+    ]
+
+    await adapter.apply_named_service_block_render_projection(
+        event_sources=event_sources,
+        timeline_blocks=timeline,
+    )
+
+    assert sorted(call.namespace for call in calls) == ["mem", "task"]
+    assert timeline[0]["text"] == "Neighbor context"
+    assert timeline[1]["text"] == "Rendered task"
+    assert timeline[2]["text"] == "Task companion"
+    assert timeline[3]["text"] == "Rendered memory"
+    assert timeline[3]["meta"]["render_policy"] == "mem.render"
 
 
 @pytest.mark.asyncio

@@ -4,7 +4,7 @@ title: "Namespace Services: Integration Flow"
 summary: "Visual host/client integration flow for namespace service providers, using task-tracker and versatile as the current reference path."
 status: design
 tags: ["sdk", "namespace-services", "integration", "task-tracker", "versatile", "scene", "canvas", "chat"]
-updated_at: 2026-06-16
+updated_at: 2026-06-17
 keywords:
   [
     "namespace service integration",
@@ -19,6 +19,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/providers-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/clients-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/react-object-materialization-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-composition-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/canvas-sdk-solution-README.md
 ---
@@ -580,8 +581,97 @@ ReAct workspace materialization
     ReAct.physical_path = current turn workspace file
   react.pull returns:
     PullResult.materialized[].logical_path = ReAct.fi.logical_path
+    PullResult.materialized[].object_ref = original provider URI
     PullResult.materialized[].response = TaskProvider.response
     PullResult.errors[] = TaskProvider.error response, if any
+
+  react.read(ReAct.fi.logical_path) emits:
+    block.path = ReAct.fi.logical_path
+    block.meta.object_ref = original provider URI
+    block.meta.source_namespace = provider root namespace
+```
+
+Owner projection then runs before the generic read block is committed:
+
+```text
+1. ReAct read tool
+   executor: react.tools.read.handle_react_read
+   surface: consumer app ReAct runtime
+   customized: no provider semantics
+   reads:
+     block.meta.object_ref = task:... / mem:... / other provider ref
+
+        |
+        v
+
+2. Owner event-source resolution
+   executor: EventSourceSubsystem
+   surface: consumer app event-source registry
+   customized: provider may implement event.resolve
+   work:
+     try provider event.resolve(object_ref)
+     else use registered named_services.<root_namespace> event source
+   traces:
+     react.read.owner_projection status=namespace_event_source/no_event_source/...
+
+        |
+        v
+
+3. Named-service block policy
+   executor: named_services.block_production.provider
+   surface: generic named-service event-source adapter
+   customized: no provider semantics
+   work:
+     call provider block.produce(object_ref=object_ref, target=read target)
+
+        |
+        v
+
+4. Provider block production
+   executor: provider NamedServiceProvider.block_produce(...)
+   surface: provider app backend
+   customized: yes, provider owns model-visible text shape
+   returns:
+     ret.extra.blocks[] with owner-authored ReAct blocks
+
+        |
+        v
+
+5. ReAct visible context
+   executor: react.read
+   surface: current turn timeline
+   work:
+     append provider blocks when returned
+     otherwise append generic textual fi: read block
+
+        |
+        v
+
+6. Optional provider render projection
+   executor: Timeline.render() named-service render adapter
+   surface: consumer ReAct prompt rendering
+   customized: no provider semantics in the adapter
+   work:
+     scan visible blocks for object_ref values
+     group candidate blocks by named_services.<namespace> event source
+     call provider block.render concurrently for relevant providers
+     pass a bounded block snapshot plus render_context
+     merge valid patches for provider-owned block indexes
+
+        |
+        v
+
+7. Provider block rendering
+   executor: provider NamedServiceProvider.block_render(...)
+   surface: provider app backend
+   customized: yes, provider owns final model-facing rendering
+   receives:
+     blocks[] with stable index values
+     render_context.phase = timeline_projection
+     render_context.audience = model
+     render_context.event_source_id = named_services.<namespace>
+   returns:
+     patch operations such as patch_block, replace_block, append_block_after
 ```
 
 The provider enforces access before streaming. If access is denied, missing, or
@@ -589,7 +679,14 @@ misconfigured, `react.pull` returns an `errors` row containing the provider's
 named-service error code and response.
 
 Normal block rendering does not copy provider bytes. ReAct gets bytes from
-foreign namespaces only through explicit pull materialization.
+foreign namespaces only through explicit pull materialization. Provider
+`block.render` receives already-produced visible blocks and returns rendering
+patches; it is not a file/body materialization path.
+
+The `fi:` path is only the local workspace location. Namespace-aware rendering
+and policy selection uses the preserved `object_ref` / `source_namespace`
+metadata, not the `fi:` prefix. The detailed runtime-boundary diagram for this
+path is [ReAct Object Materialization](react-object-materialization-README.md).
 
 ## ReAct Named-Service Tool Flow
 
@@ -846,8 +943,10 @@ operation name or the two-step host/cite strategy.
    ReAct `fi:` artifacts.
 11. Implement `object.host_file` when callers need to create provider-owned
    file refs from runtime files or artifact refs.
-12. Implement `block.produce` / `block.render` when provider objects should
-   become model-visible blocks.
+12. Implement `block.produce` when provider objects should become
+    model-visible ReAct read blocks. Implement `block.render` when provider
+    objects need custom prompt-render patches or explicit rendered
+    representations.
 13. Keep owner storage and mutation rules inside the provider bundle.
 
 Current task-tracker reference points:

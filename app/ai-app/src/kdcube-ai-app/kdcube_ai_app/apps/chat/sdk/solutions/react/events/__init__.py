@@ -42,6 +42,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.events.listener import (
 from kdcube_ai_app.apps.chat.sdk.solutions.react.events.projection import (
     TIMELINE_SEGMENT_META_KEY,
     apply_event_source_transformers,
+    apply_event_source_transformers_async,
     clear_timeline_segment_marks,
     event_source_ids_from_timeline,
     patch_timeline_segment_marks,
@@ -104,6 +105,7 @@ __all__ = [
     "acquire_live_external_event_owner",
     "announce_event_policy",
     "apply_event_source_transformers",
+    "apply_event_source_transformers_async",
     "block_event_id",
     "block_event_source_id",
     "block_matches_event_source",

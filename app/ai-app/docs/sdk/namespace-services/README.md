@@ -4,7 +4,7 @@ title: "Namespace Services"
 summary: "Index and mental model for namespace-owning service providers, clients, object resolution, and bundle-to-bundle integration."
 status: design
 tags: ["sdk", "namespace-services", "providers", "clients", "resolvers", "bundles"]
-updated_at: 2026-06-16
+updated_at: 2026-06-17
 keywords:
   [
     "namespace services",
@@ -19,6 +19,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/providers-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/clients-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/react-object-materialization-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/runtime/cross-runtime-context-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-surface-registry-README.md
@@ -45,7 +46,8 @@ TaskIssueNamedServiceProvider
   +-- object.resolve for cheap URI-to-capabilities/metadata resolution
   +-- object.action(open/preview)
   +-- object.upsert / delete when allowed
-  +-- block.produce / block.render when the namespace owns ReAct projection
+  +-- block.produce when the namespace owns ReAct read projection
+  +-- block.render for optional prompt-render patches or explicit render clients
 ```
 
 Namespace parsing has one platform rule:
@@ -109,6 +111,7 @@ zero change to owned-pin semantics.
 | [Providers](providers-README.md) | Provider contract, operation vocabulary, auth context, and transport adapters. |
 | [Clients](clients-README.md) | Client config, tool exposure, current resolver behavior, and client ids. |
 | [Integration](integration-README.md) | Visual provider-host/client-bundle flow using task-tracker and versatile. |
+| [ReAct Object Materialization](react-object-materialization-README.md) | Runtime-boundary diagram for `react.pull`, streamed `object.get`, `react.read`, owner `block.produce`, and prompt rendering. |
 | [Logical Reference Namespaces](../events/namespaces-README.md) | Foundational rules for `task:`, `mem:`, `cnv:`, `fi:`, and other refs. |
 
 ## Current Scope
@@ -132,7 +135,12 @@ through Named Service Discovery:
 - namespace artifact refs can be materialized by `react.pull`; the backend
   rehoster calls the provider's `object.get` with `response_mode: stream`,
   receives a normal named-service response plus byte chunks, and writes those
-  chunks into the ReAct `fi:` workspace under the current auth context;
+  chunks into the ReAct `fi:` workspace under the current auth context. The
+  materialized artifact keeps the original namespace URI as `object_ref`, so
+  later `react.read(fi:...)` blocks can still be routed to
+  namespace-specific rendering or block-production policy. That routing is
+  traceable through `react.read.owner_projection` logs and falls back to
+  generic text only when no owner block is produced;
 - configured namespaces can register ReAct event sources such as
   `named_services.task`; URI-to-event-source routing calls the provider's
   lightweight `event.resolve` function, then block production delegates to the

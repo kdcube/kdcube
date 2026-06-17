@@ -922,11 +922,11 @@ async def rehost_memory_ref(
     runtime = getattr(ctx_browser, "runtime_ctx", None)
     turn_id = str(getattr(runtime, "turn_id", "") or "").strip()
     if not object_ref or not turn_id or outdir is None:
-        return {"missing": [{"source_ref": object_ref, "reason": "missing_ref_or_runtime"}]}
+        return {"missing": [{"object_ref": object_ref, "reason": "missing_ref_or_runtime"}]}
 
     result = await read_memory(object_ref=object_ref, scope_filter="all_user_memories", include_events="true")
     if not isinstance(result, dict) or not result.get("ok"):
-        return {"missing": [{"source_ref": object_ref, "reason": str((result or {}).get("error") or "memory_not_found")}]}
+        return {"missing": [{"object_ref": object_ref, "reason": str((result or {}).get("error") or "memory_not_found")}]}
 
     from kdcube_ai_app.apps.chat.sdk.runtime.workspace import resolve_artifact_path
     from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
@@ -949,7 +949,7 @@ async def rehost_memory_ref(
     target.write_bytes(payload)
     return {
         "materialized": [{
-            "source_ref": object_ref,
+            "object_ref": object_ref,
             "logical_path": logical_path,
             "physical_path": physical_path,
             "namespace": ARTIFACT_NAMESPACE_SNAPSHOTS,

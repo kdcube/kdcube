@@ -555,13 +555,13 @@ class EventSourceSubsystem:
             )
             if inspect.isawaitable(result):
                 result = await result
-            return self._normalize_rehost_result(result, source_ref=raw)
+            return self._normalize_rehost_result(result, object_ref=raw)
         except Exception as exc:
             return {
                 "rehosted": [],
                 "missing": [],
                 "errors": [{
-                    "source_ref": raw,
+                    "object_ref": raw,
                     "namespace": namespace,
                     "error": {
                         "code": "namespace_rehost_failed",
@@ -945,9 +945,9 @@ class EventSourceSubsystem:
         self._event_source_resolvers[resolver.namespace] = resolver
 
     @staticmethod
-    def _normalize_rehost_result(result: Any, *, source_ref: str) -> dict[str, Any]:
+    def _normalize_rehost_result(result: Any, *, object_ref: str) -> dict[str, Any]:
         if result is None:
-            return {"rehosted": [], "missing": [source_ref], "errors": [], "invalid": [], "materialized": []}
+            return {"rehosted": [], "missing": [object_ref], "errors": [], "invalid": [], "materialized": []}
         if isinstance(result, str):
             result = {"physical_path": result}
         if isinstance(result, Mapping):
@@ -962,7 +962,7 @@ class EventSourceSubsystem:
             ]
             rehosted.extend(str(item or "").strip() for item in (result.get("rehosted") or []) if str(item or "").strip())
             for row in rows:
-                row.setdefault("source_ref", source_ref)
+                row.setdefault("object_ref", row.pop("source_ref", object_ref))
                 if not row.get("file_count"):
                     row["file_count"] = 1
             return {
@@ -980,7 +980,7 @@ class EventSourceSubsystem:
                 if str(row.get("physical_path") or "").strip()
             ]
             for row in rows:
-                row.setdefault("source_ref", source_ref)
+                row.setdefault("object_ref", row.pop("source_ref", object_ref))
                 if not row.get("file_count"):
                     row["file_count"] = 1
             return {"rehosted": list(dict.fromkeys(rehosted)), "missing": [], "errors": [], "invalid": [], "materialized": rows}

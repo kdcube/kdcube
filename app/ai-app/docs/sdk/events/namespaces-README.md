@@ -4,7 +4,7 @@ title: "Logical Reference Namespaces"
 summary: "Foundational model for model-facing logical refs such as ar:, ev:, tc:, fi:, task:, mem:, cnv:, and so:, and how they relate to events, react.read, react.pull, and react.checkout."
 status: draft
 tags: ["sdk", "events", "react", "logical-references", "namespaces", "artifacts"]
-updated_at: 2026-06-09
+updated_at: 2026-06-17
 keywords:
   [
     "logical reference namespace",
@@ -22,6 +22,7 @@ keywords:
   ]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/providers-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/react-object-materialization-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-event-envelope-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
@@ -96,6 +97,14 @@ rehoster mirrors the owner content into the ReAct workspace and returns ordinary
 `fi:` logical paths plus physical paths. ReAct then reads, searches, or executes
 against those returned paths. ReAct does not hard-code memory, canvas, task, or
 owner object rendering.
+
+When `react.pull` materializes an owner ref into `fi:`, the runtime preserves
+the owner identity as `object_ref` plus `source_namespace`. A later
+`react.read(fi:...)` uses the same `object_ref` to call the namespace owner's
+`block.produce` policy. The
+prompt renderer then renders the stored blocks locally. The full
+runtime-boundary diagram is
+[Namespace Services: ReAct Object Materialization](../namespace-services/react-object-materialization-README.md).
 
 ## Events And Namespaces
 

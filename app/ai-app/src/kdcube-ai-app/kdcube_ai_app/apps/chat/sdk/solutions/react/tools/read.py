@@ -9,6 +9,7 @@ import pathlib
 
 import json
 import hashlib
+import logging
 from kdcube_ai_app.apps.chat.sdk.util import (
     LINE_NUMBERS_DISABLED,
     LINE_NUMBERS_LINES,
@@ -49,6 +50,7 @@ DEFAULT_VISIBLE_READ_CONTEXT_FRACTION = 0.15
 DEFAULT_SYMBOLS_PER_TOKEN_BUDGET = 4
 MIN_VISIBLE_READ_MAX_TOKENS = 4_000
 READ_DEDUP_PREFIXES = ("fi:", "so:", "sk:", "tc:", "ev:", "ar:", "ks:", "su:", "ws:")
+LOGGER = logging.getLogger("kdcube.react.read")
 
 TOOL_SPEC = {
     "id": "react.read",
@@ -244,6 +246,16 @@ def _count_tokens(text: str) -> int:
         return int(token_count(text))
     except Exception:
         return 0
+
+
+def _is_textual_mime(mime: str) -> bool:
+    media_type = str(mime or "").split(";", 1)[0].strip().lower()
+    return (
+        media_type.startswith("text/")
+        or media_type in {"application/json", "application/xml", "application/yaml"}
+        or media_type.endswith("+json")
+        or media_type.endswith("+xml")
+    )
 
 
 def _skill_read_event_item(
@@ -522,11 +534,18 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
         if path:
             paths.append(path)
     read_item_requests = _read_item_requests(params)
-    pulled_source_refs_raw = state.get("pulled_source_refs")
-    pulled_source_refs = pulled_source_refs_raw if isinstance(pulled_source_refs_raw, dict) else {}
+    pulled_object_refs_raw = state.get("pulled_object_refs")
+    pulled_object_refs = pulled_object_refs_raw if isinstance(pulled_object_refs_raw, dict) else {}
+    legacy_pulled_source_refs_raw = state.get("pulled_source_refs")
+    legacy_pulled_source_refs = legacy_pulled_source_refs_raw if isinstance(legacy_pulled_source_refs_raw, dict) else {}
+    pulled_logical_refs_raw = state.get("pulled_logical_refs")
+    pulled_logical_refs = pulled_logical_refs_raw if isinstance(pulled_logical_refs_raw, dict) else {}
 
     def _pulled_logical_mirror(path: str) -> str:
-        row = pulled_source_refs.get(str(path or "").strip())
+        key = str(path or "").strip()
+        row = pulled_object_refs.get(key)
+        if not isinstance(row, (dict, str)):
+            row = legacy_pulled_source_refs.get(key)
         if isinstance(row, dict):
             return str(row.get("logical_path") or "").strip()
         if isinstance(row, str):
@@ -536,6 +555,22 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
     def _map_pulled_path(path: str) -> str:
         logical = _pulled_logical_mirror(path)
         return logical or path
+
+    def _pulled_source_info(path: str) -> Dict[str, str]:
+        row = pulled_logical_refs.get(str(path or "").strip())
+        if not isinstance(row, dict):
+            return {}
+        info = {str(key): str(value).strip() for key, value in row.items() if str(value or "").strip()}
+        object_ref = info.get("object_ref") or info.get("source_ref") or info.get("original_ref") or ""
+        if object_ref:
+            info["object_ref"] = object_ref
+            info.pop("source_ref", None)
+            info.pop("original_ref", None)
+        if object_ref and "source_namespace" not in info:
+            namespace = object_ref.partition(":")[0].strip()
+            if namespace:
+                info["source_namespace"] = namespace
+        return info
 
     paths = [_map_pulled_path(path) for path in paths]
     read_item_requests = [
@@ -778,6 +813,227 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             ),
             "meta": marker_meta,
         })
+
+    def _object_ref_from_block(block: Dict[str, Any]) -> str:
+        meta = block.get("meta") if isinstance(block.get("meta"), dict) else {}
+        for source in (meta, block):
+            for key in ("object_ref", "original_ref", "source_ref", "ref"):
+                value = str(source.get(key) or "").strip()
+                if ":" in value:
+                    return value
+        return ""
+
+    def _namespace_from_ref(ref: str, *, meta: Optional[Dict[str, Any]] = None) -> str:
+        meta = meta if isinstance(meta, dict) else {}
+        source_namespace = str(meta.get("source_namespace") or "").strip().lower().rstrip(":")
+        if source_namespace:
+            return source_namespace
+        namespace, sep, _ = str(ref or "").strip().partition(":")
+        return namespace.strip().lower().rstrip(":") if sep else ""
+
+    async def _owner_event_source_id_for_ref(ref: str, *, meta: Optional[Dict[str, Any]] = None) -> tuple[str, str]:
+        runtime_ctx = getattr(ctx_browser, "runtime_ctx", None)
+        event_sources = getattr(runtime_ctx, "event_sources", None)
+        if event_sources is None:
+            LOGGER.info(
+                "[react.read.owner_projection] status=no_event_sources object_ref=%s",
+                ref,
+            )
+            return "", "none"
+
+        resolved_event_source_id = ""
+        resolve_event_source_id = getattr(event_sources, "resolve_event_source_id_for_ref", None)
+        if callable(resolve_event_source_id):
+            try:
+                resolved_event_source_id = str(
+                    await resolve_event_source_id(
+                        ref,
+                        ctx_browser=ctx_browser,
+                        runtime_ctx=runtime_ctx,
+                        timeline=getattr(ctx_browser, "timeline", None),
+                    )
+                    or ""
+                ).strip()
+            except Exception:
+                LOGGER.warning(
+                    "[react.read.owner_projection] status=resolver_error object_ref=%s",
+                    ref,
+                    exc_info=True,
+                )
+        if resolved_event_source_id:
+            return resolved_event_source_id, "resolver"
+
+        namespace = _namespace_from_ref(ref, meta=meta)
+        if namespace:
+            candidate = f"named_services.{namespace}"
+            by_event_source_id = getattr(event_sources, "by_event_source_id", None)
+            try:
+                if callable(by_event_source_id) and by_event_source_id(candidate) is not None:
+                    LOGGER.info(
+                        "[react.read.owner_projection] status=namespace_event_source object_ref=%s namespace=%s event_source_id=%s",
+                        ref,
+                        namespace,
+                        candidate,
+                    )
+                    return candidate, "namespace_event_source"
+            except Exception:
+                LOGGER.warning(
+                    "[react.read.owner_projection] status=namespace_event_source_check_error object_ref=%s namespace=%s candidate=%s",
+                    ref,
+                    namespace,
+                    candidate,
+                    exc_info=True,
+                )
+
+        LOGGER.info(
+            "[react.read.owner_projection] status=no_event_source object_ref=%s namespace=%s",
+            ref,
+            _namespace_from_ref(ref, meta=meta),
+        )
+        return "", "none"
+
+    async def _maybe_add_owner_projected_block(
+        block: Dict[str, Any],
+        *,
+        source_text: str,
+        source_tokens: int,
+        source_text_symbols: int,
+        source_bytes: int,
+        source_line_count: Optional[int],
+    ) -> bool:
+        meta = block.get("meta") if isinstance(block.get("meta"), dict) else {}
+        object_ref = _object_ref_from_block(block)
+        if not object_ref:
+            return False
+        event_source_id, resolution = await _owner_event_source_id_for_ref(object_ref, meta=meta)
+        if not event_source_id:
+            return False
+
+        runtime_ctx = getattr(ctx_browser, "runtime_ctx", None)
+        event_sources = getattr(runtime_ctx, "event_sources", None)
+        apply_policies = getattr(event_sources, "apply_react_phase_policies_async", None)
+        if not callable(apply_policies):
+            LOGGER.info(
+                "[react.read.owner_projection] status=no_async_policy_dispatch object_ref=%s event_source_id=%s path=%s",
+                object_ref,
+                event_source_id,
+                block.get("path") or "",
+            )
+            return False
+
+        target: Dict[str, Any] = {
+            "ok": True,
+            "error": None,
+            "ret": {
+                "ref": object_ref,
+                "object_ref": object_ref,
+                "logical_path": block.get("path") or "",
+                "mime": block.get("mime") or "",
+            },
+            "raw": {
+                "text": source_text,
+                "mime": block.get("mime") or "",
+                "path": block.get("path") or "",
+            },
+            "blocks": [],
+            "turn_id": turn_id,
+            "tool_call_id": tool_call_id,
+            "tool_id": tool_id,
+            "event_source_id": event_source_id,
+            "object_ref": object_ref,
+            "ref": object_ref,
+            "logical_path": block.get("path") or "",
+            "path": block.get("path") or "",
+            "mime": block.get("mime") or "",
+            "text": source_text,
+            "meta": {
+                **{k: v for k, v in dict(meta or {}).items() if k not in {"source_ref", "original_ref"}},
+                "object_ref": object_ref,
+                "source_namespace": _namespace_from_ref(object_ref, meta=meta),
+                "resolved_event_source_id": event_source_id,
+                "event_source_resolution": resolution,
+                "source_tokens": source_tokens,
+                "source_text_symbols": source_text_symbols,
+                "source_bytes": source_bytes,
+                **({"source_line_count": source_line_count} if source_line_count is not None else {}),
+            },
+            "event": {
+                "type": "react.read.owner_projection",
+                "event_source_id": event_source_id,
+                "logical_path": block.get("path") or "",
+                "payload": {
+                    "event": {
+                        "object_ref": object_ref,
+                        "logical_path": block.get("path") or "",
+                        "mime": block.get("mime") or "",
+                    }
+                },
+            },
+        }
+        try:
+            await apply_policies(
+                "block_production",
+                event_source_id,
+                target,
+                runtime_ctx=runtime_ctx,
+                ctx_browser=ctx_browser,
+                timeline=getattr(ctx_browser, "timeline", None),
+            )
+        except Exception:
+            LOGGER.warning(
+                "[react.read.owner_projection] status=policy_error object_ref=%s event_source_id=%s path=%s",
+                object_ref,
+                event_source_id,
+                block.get("path") or "",
+                exc_info=True,
+            )
+            return False
+
+        produced = [item for item in (target.get("blocks") or []) if isinstance(item, dict)]
+        if not produced:
+            LOGGER.info(
+                "[react.read.owner_projection] status=no_blocks object_ref=%s event_source_id=%s path=%s blocks_produced=%s",
+                object_ref,
+                event_source_id,
+                block.get("path") or "",
+                bool(target.get("blocks_produced")),
+            )
+            return bool(target.get("blocks_produced"))
+
+        added_count = 0
+        for produced_block in produced:
+            out = dict(produced_block)
+            out.setdefault("turn", turn_id)
+            out.setdefault("type", "react.tool.result")
+            out.setdefault("call_id", tool_call_id)
+            out.setdefault("tool_id", tool_id)
+            out.setdefault("event_source_id", event_source_id)
+            out.setdefault("mime", "text/markdown")
+            out.setdefault("path", object_ref)
+            out_meta = dict(out.get("meta") or {})
+            out_meta.setdefault("tool_call_id", tool_call_id)
+            out_meta.setdefault("tool_id", tool_id)
+            out_meta.setdefault("turn_id", turn_id)
+            out_meta.setdefault("object_ref", object_ref)
+            out_meta.pop("source_ref", None)
+            out_meta.pop("original_ref", None)
+            out_meta.setdefault("source_namespace", _namespace_from_ref(object_ref, meta=meta))
+            out_meta.setdefault("materialized_path", block.get("path") or "")
+            out_meta.setdefault("resolved_event_source_id", event_source_id)
+            out_meta.setdefault("event_source_resolution", resolution)
+            out_meta["owner_projected"] = True
+            out["meta"] = out_meta
+            if _maybe_add_block(out):
+                added_count += 1
+        LOGGER.info(
+            "[react.read.owner_projection] status=produced object_ref=%s event_source_id=%s path=%s produced=%s added=%s",
+            object_ref,
+            event_source_id,
+            block.get("path") or "",
+            len(produced),
+            added_count,
+        )
+        return True
 
     if skill_paths and not stats_only:
         try:
@@ -1053,7 +1309,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             entry["bytes"] = int(emitted.get("bytes") or 0)
         return entry
 
-    def _materialize_text_block(
+    async def _materialize_text_block(
         *,
         ctx_path: str,
         text: str,
@@ -1144,7 +1400,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 "requested_text_symbols": requested_read_text_symbols,
                 "recover_with": "react.read range items",
             })
-            added = _maybe_add_block({
+            block = {
                 "turn": turn_id,
                 "type": "react.tool.result",
                 "call_id": tool_call_id,
@@ -1152,7 +1408,17 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 "path": ctx_path or tc_result_path(turn_id=turn_id, call_id=tool_call_id),
                 "text": preview_text,
                 "meta": marker_meta,
-            })
+            }
+            added = await _maybe_add_owner_projected_block(
+                block,
+                source_text=text,
+                source_tokens=source_tokens,
+                source_text_symbols=source_text_symbols,
+                source_bytes=source_bytes,
+                source_line_count=source_line_count,
+            )
+            if not added:
+                added = _maybe_add_block(block)
             truncated_paths.append({
                 "path": ctx_path,
                 "tokens": source_tokens,
@@ -1177,7 +1443,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 "visible_read_limit_bytes": limit_bytes,
             }
 
-        added = _maybe_add_block({
+        block = {
             "turn": turn_id,
             "type": "react.tool.result",
             "call_id": tool_call_id,
@@ -1185,8 +1451,19 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             "path": ctx_path or tc_result_path(turn_id=turn_id, call_id=tool_call_id),
             "text": text,
             "meta": meta_extra,
-        })
-        return {"added": added, "tokens": total}
+        }
+        added = await _maybe_add_owner_projected_block(
+            block,
+            source_text=text,
+            source_tokens=source_tokens,
+            source_text_symbols=source_text_symbols,
+            source_bytes=source_bytes,
+            source_line_count=source_line_count,
+        )
+        owner_projected = bool(added)
+        if not added:
+            added = _maybe_add_block(block)
+        return {"added": added, "tokens": total, "owner_projected": owner_projected}
 
     def _conversation_id_for_path(ctx_path: str, item_req: Optional[Dict[str, Any]] = None) -> Optional[str]:
         item_req = item_req or {}
@@ -1274,7 +1551,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
         if stats_only:
             size_bytes_raw = res.get("size_bytes")
             size_bytes = int(size_bytes_raw) if size_bytes_raw is not None else None
-            is_text = art_mime.startswith("text/") or art_mime in {"application/json", "application/xml", "application/yaml"}
+            is_text = _is_textual_mime(art_mime)
             entry = {
                 "path": ctx_path,
                 "status": "stats_only",
@@ -1315,6 +1592,16 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             })
 
         meta_extra = {"tool_call_id": tool_call_id, "turn_id": turn_id, "tool_id": tool_id}
+        source_info = _pulled_source_info(ctx_path)
+        if source_info:
+            object_ref = source_info.get("object_ref") or ""
+            if object_ref:
+                meta_extra["object_ref"] = object_ref
+            source_namespace = source_info.get("source_namespace") or ""
+            if source_namespace:
+                meta_extra["source_namespace"] = source_namespace
+            if source_info.get("mime"):
+                meta_extra["source_mime"] = source_info["mime"]
         if source_conversation_id:
             meta_extra["source_conversation_id"] = source_conversation_id
         for key in ("hosted_uri", "rn", "key", "physical_path", "digest"):
@@ -1341,7 +1628,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
         if isinstance(art_text, str) and (art_text.strip() or text_view_meta):
             if text_view_meta:
                 art_text = _range_header(path=ctx_path, view=text_view_meta) + art_text
-            emitted = _materialize_text_block(
+            emitted = await _materialize_text_block(
                 ctx_path=ctx_path,
                 text=art_text,
                 mime=art_mime if art_mime else "text/markdown",
@@ -1504,7 +1791,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 if text_view_meta:
                     meta_extra["read_range"] = text_view_meta
                     text = _range_header(path=ctx_path, view=text_view_meta) + text
-            emitted = _materialize_text_block(
+            emitted = await _materialize_text_block(
                 ctx_path=ctx_path,
                 text=text,
                 mime=mime or "text/markdown",
@@ -1876,7 +2163,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             meta_extra = {"tool_call_id": tool_call_id, "tool_id": tool_id}
             if view_meta:
                 meta_extra["read_range"] = view_meta
-            emitted = _materialize_text_block(
+            emitted = await _materialize_text_block(
                 ctx_path=ctx_path or tc_result_path(turn_id=turn_id, call_id=tool_call_id),
                 text=art_text,
                 mime=mime,

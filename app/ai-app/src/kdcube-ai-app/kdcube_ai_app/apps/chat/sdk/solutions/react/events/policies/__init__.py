@@ -63,6 +63,11 @@ class ReactEventPolicyBinding:
         if self.fn is None:
             return target
         result = self.fn(target, **context, **self.params)
+        if inspect.isawaitable(result):
+            close = getattr(result, "close", None)
+            if callable(close):
+                close()
+            return target
         return target if result is None else result
 
     async def apply_async(self, target: Any, **context: Any) -> Any:

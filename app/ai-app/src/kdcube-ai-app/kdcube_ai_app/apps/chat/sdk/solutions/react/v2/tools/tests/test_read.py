@@ -3,11 +3,20 @@
 import pytest
 import json
 import random
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
+from kdcube_ai_app.apps.chat.sdk.events import EventSourceSubsystem, event_source_declaration
+from kdcube_ai_app.apps.chat.sdk.solutions.react.events import block_production_policy
 from kdcube_ai_app.apps.chat.sdk.solutions.react.proto import RuntimeCtx
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.read import handle_react_read
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.tests.helpers import FakeBrowser
+
+
+def _module(name: str, **attrs):
+    mod = ModuleType(name)
+    for key, value in attrs.items():
+        setattr(mod, key, value)
+    return mod
 
 
 class _FakeComm:
@@ -78,6 +87,109 @@ async def test_read_supports_outdir_relative_fi_paths(tmp_path):
 
     assert any(
         b.get("path") == "fi:logs/docker.err.log" and b.get("text") == "boom"
+        for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result"
+    )
+
+
+@pytest.mark.asyncio
+async def test_read_preserves_pulled_namespace_object_ref_metadata(tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_read", outdir=str(tmp_path), workdir=str(tmp_path))
+    ctx = FakeBrowser(runtime)
+    physical = tmp_path / "turn_read" / "files" / "memory.json"
+    physical.parent.mkdir(parents=True, exist_ok=True)
+    physical.write_text('{"ok": true, "memory": {"memory": "Prefer concise docs"}}', encoding="utf-8")
+    path = "fi:turn_read.files/memory.json"
+    state = {
+        "last_decision": {"tool_call": {"params": {"paths": [path]}}},
+        "pulled_logical_refs": {
+            path: {
+                "object_ref": "mem:record:mem_123",
+                "mime": "application/vnd.kdcube.memory.record+json;version=1",
+            }
+        },
+    }
+
+    await handle_react_read(ctx_browser=ctx, state=state, tool_call_id="r3_source")
+
+    blocks = [
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result" and b.get("path") == path
+    ]
+    assert blocks
+    meta = blocks[-1]["meta"]
+    assert meta["object_ref"] == "mem:record:mem_123"
+    assert "source_ref" not in meta
+    assert "original_ref" not in meta
+    assert meta["source_namespace"] == "mem"
+    assert meta["source_mime"] == "application/vnd.kdcube.memory.record+json;version=1"
+
+
+@pytest.mark.asyncio
+async def test_read_projects_pulled_namespace_ref_through_owner_event_source(tmp_path):
+    @block_production_policy(event_policy_id="demo.block_production.owner_read")
+    async def owner_read_policy(target, **_):
+        blocks = target.setdefault("blocks", [])
+        blocks.append({
+            "turn": target.get("turn_id") or "",
+            "type": "react.tool.result",
+            "call_id": target.get("tool_call_id") or "",
+            "event_source_id": target.get("event_source_id") or "",
+            "mime": "text/markdown",
+            "path": target.get("object_ref") or "",
+            "text": f"OWNER BLOCK\nobject_ref: {target.get('object_ref')}",
+            "meta": {"from_owner": True},
+        })
+        target["blocks_produced"] = True
+        return target
+
+    def list_event_sources():
+        return [
+            event_source_declaration(
+                event_source_id="named_services.mem",
+                policies=[
+                    {"react_phase": "block_production", "event_policy_id": "demo.block_production.owner_read"},
+                ],
+                kind="named_service",
+            )
+        ]
+
+    event_sources = EventSourceSubsystem(modules=[{
+        "mod": _module(
+            "demo_owner_read_events",
+            list_event_sources=list_event_sources,
+            owner_read_policy=owner_read_policy,
+        ),
+        "alias": "demo",
+    }])
+    runtime = RuntimeCtx(turn_id="turn_read", outdir=str(tmp_path), workdir=str(tmp_path), event_sources=event_sources)
+    ctx = FakeBrowser(runtime)
+    physical = tmp_path / "turn_read" / "files" / "memory.json"
+    physical.parent.mkdir(parents=True, exist_ok=True)
+    physical.write_text('{"ok": true, "memory": {"memory": "Prefer concise docs"}}', encoding="utf-8")
+    path = "fi:turn_read.files/memory.json"
+    state = {
+        "last_decision": {"tool_call": {"params": {"paths": [path]}}},
+        "pulled_logical_refs": {
+            path: {
+                "object_ref": "mem:record:mem_123",
+                "mime": "application/vnd.kdcube.memory.record+json;version=1",
+            }
+        },
+    }
+
+    await handle_react_read(ctx_browser=ctx, state=state, tool_call_id="r_owner_projected")
+
+    assert any(
+        b.get("path") == "mem:record:mem_123"
+        and "OWNER BLOCK" in (b.get("text") or "")
+        and b.get("meta", {}).get("owner_projected") is True
+        and b.get("meta", {}).get("object_ref") == "mem:record:mem_123"
+        for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result"
+    )
+    assert not any(
+        b.get("path") == path and "Prefer concise docs" in (b.get("text") or "")
         for b in ctx.timeline.blocks
         if b.get("type") == "react.tool.result"
     )
