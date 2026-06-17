@@ -23,7 +23,8 @@ class SlackConnection(ConnectionProvider):
     provider = "slack"
     label = "Slack"
     authorize_url = "https://slack.com/oauth/v2/authorize"
-    token_url = "https://slack.com/api/oauth.v2/access"
+    # Slack API methods are dotted: oauth.v2.access (a slash here → HTTP 404).
+    token_url = "https://slack.com/api/oauth.v2.access"
     # These are USER-token scopes (the user acts on their own workspace), so they
     # are requested under `user_scope` — see authorize_scope_param below.
     scopes = ["search:read", "channels:history", "groups:history"]

@@ -65,7 +65,10 @@ def test_slack_provider_registered():
     assert prov.provider == "slack"
     assert prov.label == "Slack"
     assert prov.authorize_url == "https://slack.com/oauth/v2/authorize"
-    assert prov.token_url == "https://slack.com/api/oauth.v2/access"
+    # Slack API methods are dotted — oauth.v2.access. A slash before the method
+    # (oauth.v2/access) is a real endpoint typo that returns HTTP 404 at exchange.
+    assert prov.token_url == "https://slack.com/api/oauth.v2.access"
+    assert "/access" not in prov.token_url  # regression: never the slash form
     assert "search:read" in prov.scopes
 
 
