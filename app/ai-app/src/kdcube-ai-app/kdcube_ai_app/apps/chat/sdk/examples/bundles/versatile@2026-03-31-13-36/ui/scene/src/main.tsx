@@ -32,11 +32,13 @@ import {
   type CanvasUploadResponse,
 } from '@kdcube/components-react/canvas'
 import {
+  createContextDragBroker,
   createSceneRuntime,
   providerSurfaceCommandFromOpen,
   type SceneDispatchResult,
   type SceneSurfaceOpenRequest,
   type SceneSurfaceRegistration,
+  type SceneDropTarget,
 } from '@kdcube/components-core/scene'
 import { Archive, Bot, Gauge, ListTodo, Maximize2, Minimize2, Plus, X } from 'lucide-react'
 import React, { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
@@ -1752,6 +1754,75 @@ function App() {
     await handleCanvasObjectAction(sourceCard, 'open', { targetSurface })
   }, [cardFromBrokeredContext, handleCanvasObjectAction])
 
+  const contextDragBroker = useMemo(() => createContextDragBroker({
+    logger: console,
+    objectAction: async (request) => {
+      const sourceCard = cardFromBrokeredContext(request.context as CanvasContextItem)
+      if (!sourceCard) throw new Error('Dropped context did not include an object ref.')
+      const response = await postOperation<Record<string, unknown>, CanvasObjectActionResponse>(ctx, 'canvas_object_action', {
+        action: 'open',
+        object_ref: request.object_ref,
+        canvas_id: activeCanvas.id,
+        canvas_name: activeCanvas.name,
+        mime: sourceCard.mime,
+        ...(request.target_surface ? { target_surface: request.target_surface } : {}),
+      })
+      if (request.target_surface) {
+        response.ui_event = {
+          ...(response.ui_event || {}),
+          target_surface: request.target_surface,
+        }
+      }
+      return response as unknown as Record<string, unknown>
+    },
+    dispatchOpenResponse: (response, source) => {
+      const sourceCard = cardFromBrokeredContext(source as CanvasContextItem)
+      if (!sourceCard) {
+        return { ok: false, code: 'surface_command_unavailable', message: 'Dropped context did not include an object ref.' } as SceneDispatchResult
+      }
+      return dispatchSurfaceOpen(response as CanvasObjectActionResponse, sourceCard)
+    },
+  }), [activeCanvas.id, activeCanvas.name, cardFromBrokeredContext, ctx, dispatchSurfaceOpen])
+
+  const memoryDropTarget = useMemo<SceneDropTarget>(() => ({
+    surfaceRef: 'versatile.memory',
+    targetSurface: 'sdk.memory.viewer',
+    acceptsRootNamespaces: ['mem'],
+    dropEffect: 'open',
+    label: 'memory viewer',
+  }), [])
+
+  const externalDropTarget = useMemo<SceneDropTarget | null>(() => {
+    const targetSurface = firstExternalTargetSurface(externalPanel)
+    if (!targetSurface) return null
+    return {
+      surfaceRef: externalPanel?.id || 'versatile.external',
+      targetSurface,
+      acceptsRootNamespaces: targetSurface.startsWith('task_tracker.') ? ['task'] : ['*'],
+      dropEffect: 'open',
+      label: externalPanel?.label || 'external surface',
+    }
+  }, [externalPanel])
+
+  const handleCanvasCardDrag = useCallback((input: CanvasContextItem | CanvasContextItem[] | null) => {
+    if (!input) {
+      contextDragBroker.handleDragEnd()
+      clearBrokeredCanvasDrop()
+      return
+    }
+    const contexts = (Array.isArray(input) ? input : [input]).filter(Boolean)
+    const active = contextDragBroker.handleDragStart({
+      type: 'kdcube-context-drag-start',
+      source_surface_ref: 'versatile.canvas',
+      contexts,
+    })
+    const context = active?.contexts[0] ?? null
+    if (context) {
+      brokeredCanvasDropRef.current = { kind: 'context', context }
+      setBrokeredContextDragActive(true)
+    }
+  }, [clearBrokeredCanvasDrop, contextDragBroker])
+
   const handleBrokeredSurfaceDragOver = useCallback((event: React.DragEvent<HTMLElement>) => {
     if (brokeredCanvasDropRef.current?.kind !== 'context') return
     event.preventDefault()
@@ -1764,8 +1835,20 @@ function App() {
     if (drop?.kind !== 'context') return
     event.preventDefault()
     event.stopPropagation()
-    void openBrokeredContext(drop.context, targetSurface).finally(clearBrokeredCanvasDrop)
-  }, [clearBrokeredCanvasDrop, openBrokeredContext])
+    const target = targetSurface === 'sdk.memory.viewer'
+      ? memoryDropTarget
+      : externalDropTarget
+    if (!target) {
+      void openBrokeredContext(drop.context, targetSurface).finally(clearBrokeredCanvasDrop)
+      return
+    }
+    void contextDragBroker.dropOnTarget(target).then((result) => {
+      setNotice(result.message)
+    }).finally(() => {
+      contextDragBroker.handleDragEnd()
+      clearBrokeredCanvasDrop()
+    })
+  }, [clearBrokeredCanvasDrop, contextDragBroker, externalDropTarget, memoryDropTarget, openBrokeredContext])
 
   const handleMemorySurfaceDrop = useCallback((event: React.DragEvent<HTMLElement>) => {
     handleBrokeredSurfaceDrop(event, 'sdk.memory.viewer')
@@ -1809,7 +1892,13 @@ function App() {
           return
         }
         if (data.type === 'kdcube-context-drag-start' || data.type === 'kdcube.memory.drag.start') {
-          const context = normalizeContext(data.context)
+          const contexts = Array.isArray(data.contexts) ? data.contexts : data.context ? [data.context] : []
+          const active = contextDragBroker.handleDragStart({
+            type: 'kdcube-context-drag-start',
+            source_surface_ref: String(data.source_surface_ref || data.sourceSurfaceRef || data.source || ''),
+            contexts,
+          })
+          const context = active?.contexts[0] ?? null
           if (context) {
             brokeredCanvasDropRef.current = { kind: 'context', context }
             setBrokeredContextDragActive(true)
@@ -1829,6 +1918,7 @@ function App() {
           data.type === 'kdcube-canvas-ingress-drag-end' ||
           data.type === 'kdcube.memory.drag.end'
         ) {
+          contextDragBroker.handleDragEnd()
           clearBrokeredCanvasDrop()
           return
         }
@@ -1947,7 +2037,7 @@ function App() {
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [bringPanelToFront, clearBrokeredCanvasDrop, dispatchSurfaceOpen, externalPanel, flushSurfaceCommand, pinIngressPayloadToCanvas, pinConversationToCanvas, sendToChat])
+  }, [bringPanelToFront, clearBrokeredCanvasDrop, contextDragBroker, dispatchSurfaceOpen, externalPanel, flushSurfaceCommand, pinIngressPayloadToCanvas, pinConversationToCanvas, sendToChat])
 
   useEffect(() => {
     syncChatWidgetView(chatExpanded ? 'expanded' : 'compact')
@@ -2003,7 +2093,7 @@ function App() {
                 onCanvasChange={setActiveCanvasName}
                 onAttachCanvas={(context) => attachContexts('kdcube-context-attach', [context])}
                 onAttachCard={handleAttachCards}
-                onDragCard={() => undefined}
+                onDragCard={handleCanvasCardDrag}
                 onCloseCanvas={() => setCanvasOpen(false)}
                 onDropFiles={pinDroppedFilesToCanvas}
                 onDropText={pinDroppedTextToCanvas}
