@@ -818,6 +818,10 @@ function normalizeExternalPanelConfig(value: unknown): SceneExternalPanelConfig 
   }
 }
 
+function firstExternalTargetSurface(panel: SceneExternalPanelConfig | null): string {
+  return Object.keys(panel?.surfaces || {})[0] || ''
+}
+
 async function loadSceneConfig(ctx: RouteContext): Promise<SceneConfig> {
   try {
     const payload = await postOperation<Record<string, never>, { ok?: boolean; external_panels?: unknown[]; namespace_styles?: unknown; namespaceStyles?: unknown }>(
@@ -1066,8 +1070,10 @@ function App() {
           isReady: () => externalReadyRef.current,
           postCommand: sendExternalWidgetCommand,
           commandFromOpen: (request) => {
+            const providerCommand = providerSurfaceCommandFromOpen(request)
+            if (providerCommand) return { ...(surface.command || {}), ...providerCommand, target_surface: targetSurface }
             if (surface.command) return { ...surface.command }
-            return providerSurfaceCommandFromOpen(request)
+            return null
           },
         }
       })
@@ -1665,12 +1671,15 @@ function App() {
   const handleCanvasObjectAction = useCallback(async (
     card: CanvasCard,
     action: CanvasObjectActionName,
+    options: { targetSurface?: string } = {},
   ): Promise<CanvasObjectActionResponse> => {
+    const targetSurface = String(options.targetSurface || '').trim()
     console.info('[versatile:canvas] object action request', {
       action,
       cardId: card.id,
       ref: card.ref,
       kind: card.kind,
+      targetSurface,
     })
     const rawResponse = await postOperation<unknown, CanvasObjectActionResponse>(ctx, 'canvas_object_action', {
       action,
@@ -1679,8 +1688,15 @@ function App() {
       canvas_id: activeCanvas.id,
       canvas_name: activeCanvas.name,
       mime: card.mime,
+      ...(targetSurface ? { target_surface: targetSurface } : {}),
     })
     const response: CanvasObjectActionResponse = { ...rawResponse }
+    if (targetSurface) {
+      response.ui_event = {
+        ...(response.ui_event || {}),
+        target_surface: targetSurface,
+      }
+    }
     if (typeof response.download_url === 'string' && response.download_url.startsWith('/')) {
       response.download_url = `${ctx.baseUrl}${response.download_url}`
     }
@@ -1727,13 +1743,13 @@ function App() {
     }
   }, [])
 
-  const openBrokeredContext = useCallback(async (context: CanvasContextItem) => {
+  const openBrokeredContext = useCallback(async (context: CanvasContextItem, targetSurface?: string) => {
     const sourceCard = cardFromBrokeredContext(context)
     if (!sourceCard) {
       setNotice('Dropped context did not include an object ref.')
       return
     }
-    await handleCanvasObjectAction(sourceCard, 'open')
+    await handleCanvasObjectAction(sourceCard, 'open', { targetSurface })
   }, [cardFromBrokeredContext, handleCanvasObjectAction])
 
   const handleBrokeredSurfaceDragOver = useCallback((event: React.DragEvent<HTMLElement>) => {
@@ -1743,13 +1759,21 @@ function App() {
     if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
   }, [])
 
-  const handleBrokeredSurfaceDrop = useCallback((event: React.DragEvent<HTMLElement>) => {
+  const handleBrokeredSurfaceDrop = useCallback((event: React.DragEvent<HTMLElement>, targetSurface?: string) => {
     const drop = brokeredCanvasDropRef.current
     if (drop?.kind !== 'context') return
     event.preventDefault()
     event.stopPropagation()
-    void openBrokeredContext(drop.context).finally(clearBrokeredCanvasDrop)
+    void openBrokeredContext(drop.context, targetSurface).finally(clearBrokeredCanvasDrop)
   }, [clearBrokeredCanvasDrop, openBrokeredContext])
+
+  const handleMemorySurfaceDrop = useCallback((event: React.DragEvent<HTMLElement>) => {
+    handleBrokeredSurfaceDrop(event, 'sdk.memory.viewer')
+  }, [handleBrokeredSurfaceDrop])
+
+  const handleExternalSurfaceDrop = useCallback((event: React.DragEvent<HTMLElement>) => {
+    handleBrokeredSurfaceDrop(event, firstExternalTargetSurface(externalPanel))
+  }, [externalPanel, handleBrokeredSurfaceDrop])
 
   useEffect(() => {
     requestRuntimeConfig()
@@ -1923,7 +1947,7 @@ function App() {
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [bringPanelToFront, clearBrokeredCanvasDrop, dispatchSurfaceOpen, externalPanel, flushSurfaceCommand, handleBrokeredSurfaceDrop, handleBrokeredSurfaceDragOver, pinIngressPayloadToCanvas, pinConversationToCanvas, sendToChat])
+  }, [bringPanelToFront, clearBrokeredCanvasDrop, dispatchSurfaceOpen, externalPanel, flushSurfaceCommand, pinIngressPayloadToCanvas, pinConversationToCanvas, sendToChat])
 
   useEffect(() => {
     syncChatWidgetView(chatExpanded ? 'expanded' : 'compact')
@@ -2168,7 +2192,7 @@ function App() {
           aria-label="Memories"
           onPointerDownCapture={() => bringPanelToFront('memory')}
           onDragOver={handleBrokeredSurfaceDragOver}
-          onDrop={handleBrokeredSurfaceDrop}
+          onDrop={handleMemorySurfaceDrop}
         >
           <header onPointerDown={startMemoryDrag}>
             <span className="memory-pane-title">
@@ -2251,7 +2275,7 @@ function App() {
           aria-label={externalPanel.label}
           onPointerDownCapture={() => bringPanelToFront('external')}
           onDragOver={handleBrokeredSurfaceDragOver}
-          onDrop={handleBrokeredSurfaceDrop}
+          onDrop={handleExternalSurfaceDrop}
         >
           <header onPointerDown={startExternalDrag}>
             <span className="external-pane-title">
