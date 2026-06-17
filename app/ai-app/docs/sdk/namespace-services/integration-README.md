@@ -581,13 +581,13 @@ ReAct workspace materialization
     ReAct.physical_path = current turn workspace file
   react.pull returns:
     PullResult.materialized[].logical_path = ReAct.fi.logical_path
-    PullResult.materialized[].object_ref = original provider URI
+    PullResult.materialized[].object_ref = provider-returned canonical URI
     PullResult.materialized[].response = TaskProvider.response
     PullResult.errors[] = TaskProvider.error response, if any
 
   react.read(ReAct.fi.logical_path) emits:
     block.path = ReAct.fi.logical_path
-    block.meta.object_ref = original provider URI
+    block.meta.object_ref = provider-returned canonical URI
     block.meta.source_namespace = provider root namespace
 ```
 

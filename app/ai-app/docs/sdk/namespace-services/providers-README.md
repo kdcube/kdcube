@@ -94,8 +94,9 @@ or delete it. Canvas owns board layout; the task provider owns task meaning.
 
 Tools, canvas object actions, chat context chips, ReAct block production,
 timeline rendering, artifact/event ref resolution, MCP tools, Codex tools, and
-Claude Code tools are consumers of the same provider. Do not create a separate
-tool-only contract for a domain that already owns a named service provider.
+Claude Code tools are consumers of the same provider. A domain that owns a
+named service provider uses that provider as the tool, UI, render, and
+integration contract.
 
 Ingress is one way to create a caller context. It is not the only way to reach
 a provider. A cron job, Data Bus handler, local bundle workflow, MCP request,
@@ -140,17 +141,17 @@ The provider must own these values:
 | Provider-owned value | Why it is provider-owned |
 | --- | --- |
 | canonical `object_ref` grammar | Only the owner can parse ref variants, versions, attachments, and parent-child shape correctly. |
-| `object_kind` per concrete ref | A namespace can contain several object families; hosts must not infer kind from broad namespace. |
+| `object_kind` per concrete ref | A namespace can contain several object families; hosts receive concrete kind from the provider. |
 | `capabilities` and `actions` per ref | A task issue and a task attachment can expose different actions. |
 | `default_open_effect_action` per ref | A generic click/open can mean `open` for an issue and `download` for an attachment. |
 | `ui_event.target_surface` for `open` | The owner knows which UI surface can edit or inspect that object. |
 | download/read policy | The owner enforces auth and returns a URL or stream under the current context. |
 | block shape | The owner decides what the model sees for a task, memory, source, attachment, or future object. |
 
-Surfaces must stay generic. Chat context chips, canvas cards, pinboard items,
-scene hosts, and ReAct do not know that a `task:` attachment downloads while a
-`task:` issue opens an editor. They call `object.resolve` or `object.action`
-and follow the provider-returned contract.
+Surfaces stay generic. Chat context chips, canvas cards, pinboard items, scene
+hosts, and ReAct call `object.resolve` or `object.action` and follow the
+provider-returned contract. The provider response distinguishes cases such as a
+`task:` attachment downloading and a `task:` issue opening an editor.
 
 ## Provider Schemas
 
@@ -161,8 +162,8 @@ validation and softer semantic guidance.
 For closed values, use normal schema `enum` semantics. A caller should assume
 unknown values are rejected.
 
-For extensible values, do not use `enum`. Mark the field as an open vocabulary
-in the description and include provider metadata such as
+For extensible values, mark the field as an open vocabulary in the description
+and include provider metadata such as
 `x-kdcube-known-values` or `x-kdcube-suggested-values`. This tells agents and
 clients which values are already meaningful while preserving the provider's
 ability to accept new normalized values.
@@ -252,9 +253,9 @@ For URL-based downloads, `object.action(action="download")` should return
 metadata plus a `download_url` for a provider-owned binary operation. Build the
 URL with
 `kdcube_ai_app.apps.chat.sdk.infra.bundle_urls.bundle_operation_url(...)` so
-providers do not hand-write KDCube integration routes. The browser later calls
-that URL with its normal cookies/session, and the provider operation enforces
-auth again before streaming bytes.
+providers use one SDK route builder for KDCube integration URLs. The browser
+later calls that URL with its normal cookies/session, and the provider
+operation enforces auth again before streaming bytes.
 
 ## Provider Surface
 
@@ -273,9 +274,8 @@ before choosing a narrower operation.
 
 Providers that expose mutation should keep `provider.about` concise: service
 purpose, base object summaries, and a short hint to call `object.schema` for
-concrete payload fields. `provider.about` must not return full object schemas,
-full capability maps, or the complete provider spec; those belong to
-`object.schema` and `provider.capabilities`.
+concrete payload fields. Full object schemas, capability maps, and the complete
+provider spec belong to `object.schema` and `provider.capabilities`.
 
 Providers that expose more than one searchable object space should declare
 bounded `search_scopes` on the provider spec. Search scopes are registration
@@ -326,7 +326,7 @@ the agent tool catalog and `object.schema` surface them.
 A hybrid-search provider (semantic + lexical + recency) may also expose an
 optional **`factor_weights`** object filter so a caller can tune relevance per
 query without a redeploy. Unset keys keep the subsystem default, so omitting it
-never changes behavior. Canonical shape (as the task issue scope declares it):
+keeps current behavior. Canonical shape (as the task issue scope declares it):
 
 | Key | Type / range | Default | Meaning |
 |---|---|---|---|
@@ -396,8 +396,7 @@ resolution object, usually in `ret.extra`, for example:
 }
 ```
 
-The resolver must not read the object body, hit heavy storage, or materialize
-bytes. It is the routing step used before block production. Object content
+The resolver is the routing step used before block production. Object content
 belongs to `object.get`; model-visible projection belongs to `block.produce`;
 workspace materialization belongs to streamed `object.get` through `react.pull`.
 The ReAct read pipeline calls `block.produce`. Timeline rendering then renders
@@ -504,10 +503,10 @@ response payloads.
   appropriate. The large object body belongs in the streamed bytes;
 - `chunks`: an async byte iterator for the object representation.
 
-Do not base64 large files into tool results and do not hide object metadata in
-HTTP headers. If access is denied or the object is missing, return a failed
-`NamedServiceResponse` in the stream result; callers such as `react.pull`
-surface that exact error to the agent.
+Large files travel as stream chunks, while object metadata travels in the
+named-service response sidecar. Access denial and missing-object conditions are
+represented as failed `NamedServiceResponse` values in the stream result;
+callers such as `react.pull` surface that exact error to the agent.
 
 For JSON object refs, `response_mode: stream` still means "produce bytes". The
 bytes can be UTF-8 JSON and should be the compact representation the model will
@@ -538,9 +537,19 @@ formatting different from raw file text should expose `block.produce`. If
 `block.produce` returns no blocks, the consumer falls back to generic text for
 textual `fi:` artifacts.
 
-`block.render` is the optional second-stage rendering contract. It runs during
-prompt rendering after stored blocks have already been produced. The provider
-receives a bounded snapshot of visible blocks around its objects:
+`block.render` is the optional second-stage rendering contract. It has two
+compatible call modes:
+
+- timeline mode, used by `Timeline.render()`: request payload includes
+  `blocks[]`; response includes patch operations for provider-owned block
+  indexes;
+- direct-client mode: request payload may omit `blocks[]`; response can include
+  a direct rendered representation such as `{format, markdown, blocks}` for a
+  client that called `block.render` explicitly.
+
+Timeline mode runs during prompt rendering after stored blocks have already
+been produced. The provider receives a bounded snapshot of visible blocks
+around its objects:
 
 ```json
 {
@@ -590,6 +599,22 @@ The central adapter accepts patches for indexes owned by that provider
 namespace/event source. Context neighbors are available to the provider as
 read-only input. Provider render calls are parallel; each provider sees the
 same input snapshot and the central adapter merges the accepted patches.
+
+### Provider Implementation Matrix
+
+| Operation | Provider receives | Provider returns | Consumer caller | Trace markers |
+| --- | --- | --- | --- | --- |
+| `object.get` | `request.object_ref`, optional `object_id`, `response_mode` | `NamedServiceResponse` for JSON mode; `NamedServiceStreamResult` for stream mode | tools, resolvers, `react.pull` namespace rehoster | `Named-service artifact rehost start/complete`, provider dispatch logs |
+| `event.resolve` | `request.object_ref` | `ret.extra.event_source_id`, canonical `object_ref`, object kind, cheap routing metadata | ReAct owner event-source resolver, scene/canvas resolvers | `react.read.owner_projection status=namespace_event_source/...` |
+| `block.produce` | `request.object_ref`, `payload.target` with read artifact metadata | `ret.extra.blocks[]` with provider-authored model-visible blocks | `react.read` owner projection | `memory.named_service.block_produce`, provider-specific logs, `react.read.owner_projection status=produced` |
+| `block.render` timeline mode | `payload.blocks[]` with stable `index` values plus `render_context` | `ret.extra.patches[]`, or `ret.extra.blocks[]` with `index` fields | `Timeline.render()` named-service render adapter | `named_services.block_render status=called/rendered/empty/not_declared/merged` |
+| `block.render` direct mode | `request.object_ref`, optional custom payload | provider-defined rendered representation, commonly `{format, markdown, blocks}` | explicit SDK/client call | provider dispatch logs |
+
+Timeline-mode `block.render` patches are block-indexed. The central adapter
+accepts `patch_block`, `replace_block`, and `append_block_after` operations for
+indexes owned by the same provider namespace/event source. Direct-client
+responses are useful for custom clients, but timeline rendering consumes
+patches or indexed blocks.
 
 Example provider return:
 
@@ -719,13 +744,12 @@ for `task:issue:<id>` and `download` for
 `task:issue:attachment:<id>/attachments/...`.
 
 For `download`, the provider should return a cookie-authenticated
-`download_url` plus file metadata. Do not put downloaded bytes in the JSON
-object-action response. `content_base64` is a legacy compatibility field only;
-new providers should use a URL response and stream the bytes from that URL.
+`download_url` plus file metadata. Downloaded bytes stream from the URL target.
+`content_base64` is a legacy compatibility field only; new providers should use
+a URL response and stream the bytes from that URL.
 Build KDCube bundle-operation URLs with the SDK helper
 `kdcube_ai_app.apps.chat.sdk.infra.bundle_urls.bundle_operation_url(...)`;
-do not hand-write `/api/integrations/bundles/...` route strings in each
-provider.
+the SDK helper centralizes `/api/integrations/bundles/...` route construction.
 
 ```json
 {
@@ -748,8 +772,9 @@ provider.
 For `open`, the provider returns the effect result, including
 `ui_event.target_surface` and enough object payload for that surface. The host
 scene owns the reaction: mounting/focusing an app iframe, sending a widget
-command, or reporting that the target surface is unavailable. Do not encode
-host-specific UI behavior into the chat/canvas component.
+command, or reporting that the target surface is unavailable. Host-specific UI
+behavior lives in the scene/host, while chat/canvas keep the generic object
+contract.
 
 Example:
 
@@ -909,9 +934,9 @@ class TaskIssueProvider(NamedServiceProvider):
         )
 ```
 
-This resolver must not call the database, open the object, or stream bytes. It
-is the provider-owned route from `uri` to resolution metadata. Heavy reads
-belong to `object.get`; model-visible content belongs to `block.produce`.
+This resolver is the provider-owned route from `uri` to resolution metadata.
+Heavy reads belong to `object.get`; model-visible content belongs to
+`block.produce`.
 
 ## Bundle Configuration Surface
 
@@ -1080,9 +1105,9 @@ arguments.
 | scheduled job / cron | explicit bundle-job context | tenant, project, job principal, job metadata |
 | scheduled job on behalf of a user | restored saved user auth context plus job metadata | original user principal, tenant, project, executing bundle id |
 
-MCP tool schemas should not expose `cookie`, `authorization`, `user_id`, or
-`roles` as ordinary tool parameters. The platform/adapter resolves those from
-the request and passes a `NamedServiceContext` to the provider.
+MCP tool schemas expose domain parameters. The platform/adapter resolves
+`cookie`, `authorization`, `user_id`, and `roles` from the request and passes a
+`NamedServiceContext` to the provider.
 
 The SDK primitive is:
 
@@ -1112,8 +1137,8 @@ client = NamedServiceClient.for_bundle_job(
 Provider code reads `ctx.auth_context.principal_kind` when it needs to
 distinguish a user request from job/system/service work. A bundle is the
 execution/provider context (`bundle_id`), not the caller principal. Headless
-contexts do not fake a user, and delegated jobs can preserve the saved user
-principal while marking the call source as `bundle_job`.
+contexts carry a job/service principal, and delegated jobs can preserve the
+saved user principal while marking the call source as `bundle_job`.
 
 ### Scoped MCP Tokens
 
@@ -1236,9 +1261,9 @@ class MyEntrypoint(...):
 
 The platform API route authenticates the browser/widget request and binds the
 request context. The helper then creates a `NamedServiceClient` with
-`transport="api"` and calls the provider in-process. It must not call back into
-`/api/integrations/...`; that would add latency, duplicate auth handling, and
-break scheduled/local callers.
+`transport="api"` and calls the provider in-process. This path avoids a public
+`/api/integrations/...` round trip, keeps auth handling in one place, and works
+for scheduled/local callers.
 
 ### Request-Bound Runtime-Local Bridges
 
@@ -1273,8 +1298,9 @@ raw = await call_bundle_operation(
 
 Platform runtime binds the same caller context while executing request-scoped
 bundle code. Peer calls stay inside the same KDCube process and reuse the
-current tenant/project/session visibility checks. Bundles do not replay browser
-cookies, mint ad-hoc tokens, or POST back to their own public API.
+current tenant/project/session visibility checks. Peer calls use the current
+runtime context instead of replaying browser cookies, minting ad-hoc tokens, or
+posting back to their own public API.
 
 This bridge is for request-scoped bounded operations. Headless jobs should use
 an explicit `AuthContext` and provider/client path instead of assuming a live
@@ -1384,22 +1410,24 @@ When introducing a named service provider:
 - define `object.resolve` as lightweight URI resolution. It should parse the
   provider-owned ref and return canonical `object_ref`, `object_kind`, parent
   refs, capabilities/actions, `default_open_effect_action` when a generic UI
-  can open/click the object handle, and cheap display metadata. It must not read
-  large object bodies or stream bytes.
+  can open/click the object handle, and cheap display metadata. Object bodies
+  belong to `object.get`; byte streams belong to streamed `object.get`.
 - implement `object.action` as `action(object_ref, action, payload)`. The
   provider must parse `object_ref` on every call, branch by object kind, enforce
-  auth, and return a bounded result. Do not let an attachment ref fall through to
-  parent issue update/delete behavior.
+  auth, and return a bounded result. Attachment refs and parent object refs are
+  separate object spaces with separate mutation behavior.
 - implement `download` actions as authenticated URL responses with
   `download_url`, `filename`, `mime`, and size metadata. The URL may point at a
   provider-owned operation that streams a `BundleBinaryResponse`; build it with
-  `bundle_operation_url(...)`. Do not return new large byte bodies inside JSON.
+  `bundle_operation_url(...)`. JSON responses carry the URL and metadata; the
+  bytes stream from the URL target.
 - define streamed `object.get` with `response_mode: stream` for large
   attachment refs that must become `fi:` artifacts;
 - define `block.produce` when ReAct should project provider-owned objects as
   model-visible blocks;
-- define `block.render` when provider-owned blocks need custom prompt-render
-  patches or explicit rendered representations;
+- define `block.render` timeline mode when provider-owned blocks need
+  prompt-render patches; define direct mode when explicit clients need a
+  rendered representation;
 - define pagination, search mode, revision, and idempotency rules;
 - define relation operations if the provider connects multiple objects;
 - define auth and visibility policy;

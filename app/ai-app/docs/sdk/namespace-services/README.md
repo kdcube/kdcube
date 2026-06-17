@@ -87,22 +87,26 @@ Two bundles, one configured edge, no shared code:
   normally resolved from the Redis-backed discovery table at call time.
 ```
 
-## Two Resolution Tiers
+## Resolution Tiers
 
 A canvas/chat surface resolves a pinned `object_ref` through one of two tiers,
 chosen by namespace prefix:
 
 | Tier | Namespaces | Resolver | Knows |
 | --- | --- | --- | --- |
-| Owned-concrete | `cnv:` `conv:` `mem:` (the surface's own) | the surface's own resolver | kind, preview, open — no cross-bundle call |
-| Foreign-generic | another bundle's (`task:`) | `NamedServiceCanvasObjectResolver` | nothing local — opaque `object_ref`, capabilities from config, owner answers over the bridge |
+| Surface-local concrete | `cnv:` `conv:` and sometimes same-surface `mem:` | the surface's own resolver | local board/chat/widget state and local UI actions |
+| Named-service generic | configured provider namespaces such as `task:` or `mem:` | `NamedServiceCanvasObjectResolver` / named-service tool and event-source adapters | opaque `object_ref`; provider supplies capabilities, actions, pull/read/render behavior |
 
-The foreign-generic tier is **additive**: it registers after the concrete
-resolvers and only fires for namespaces listed in the consumer bundle's
-`surfaces.as_consumer` resolver config (empty by default), so it never shadows
-owned namespaces. It replaces what used to be a hard "registered elsewhere"
-handoff with a live cross-bundle call — strictly more reach for foreign refs,
-zero change to owned-pin semantics.
+The same namespace may appear in different tiers depending on the runtime
+surface. For example, a memory widget may open `mem:` objects through its local
+viewer, while ReAct materializes and reads `mem:` through the named-service
+provider. The shared identity remains the canonical `object_ref`; the tier only
+describes which adapter receives the current request.
+
+The named-service generic tier is additive. It registers after concrete
+resolvers and fires for namespaces listed in the consumer bundle's
+`surfaces.as_consumer` config. Local surfaces keep their own direct handlers,
+and provider-backed refs gain a live cross-bundle/object-owner bridge.
 
 ## Documents
 

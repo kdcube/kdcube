@@ -79,6 +79,17 @@ def _json_response_filename(ref: str, key: str, payload: Mapping[str, Any]) -> s
     return filename
 
 
+def _canonical_object_ref(payload: Mapping[str, Any], *, fallback: str) -> str:
+    ret = payload.get("ret")
+    if isinstance(ret, Mapping):
+        for source in (ret.get("attrs"), ret.get("object"), ret.get("extra")):
+            if isinstance(source, Mapping):
+                value = str(source.get("object_ref") or source.get("ref") or "").strip()
+                if value:
+                    return value
+    return str(fallback or "").strip()
+
+
 def _json_artifact_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     ret = payload.get("ret")
     if not isinstance(ret, Mapping):
@@ -339,13 +350,15 @@ class NamedServiceArtifactNamespaceRehoster:
             self.operation,
             endpoint.provider or "",
             endpoint.bundle_id,
-            ref,
+            _canonical_object_ref(payload, fallback=ref),
             logical_path,
             len(body),
         )
+        object_ref = _canonical_object_ref(payload, fallback=ref)
         return {
             "materialized": [{
-                "object_ref": ref,
+                "object_ref": object_ref,
+                **({"requested_object_ref": ref} if object_ref != str(ref or "").strip() else {}),
                 "logical_path": logical_path,
                 "physical_path": physical_path,
                 "namespace": ARTIFACT_NAMESPACE_ATTACHMENTS,

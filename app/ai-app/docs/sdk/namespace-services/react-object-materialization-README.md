@@ -34,7 +34,7 @@ Current implementation state:
 
 - `react.pull` calls the provider through `object.get(response_mode=stream)`.
 - `react.read` calls owner block production through `block.produce` when the
-  pulled `fi:` artifact preserves the owner identity as `object_ref`.
+  pulled `fi:` artifact preserves the canonical owner identity as `object_ref`.
 - `Timeline.render()` renders stored timeline blocks, applies local ReAct
   projection policies, then runs the optional named-service `block.render`
   projection for providers whose objects are present in the visible timeline.
@@ -42,6 +42,9 @@ Current implementation state:
   The provider receives a bounded timeline snapshot and returns patches. The
   central merge accepts patches only for blocks owned by that provider
   namespace.
+- `block.render` may also support direct-client responses such as
+  `{format, markdown, blocks}`. The automatic `Timeline.render()` path consumes
+  timeline-mode patches or indexed blocks.
 - A provider response with `named_service_operation_not_supported` is cached as
   an unsupported render hook for the process lifetime, so later renders skip
   that provider until the runtime restarts.
@@ -100,7 +103,8 @@ Current implementation state:
    work:
      write streamed bytes under OUTPUT_DIR
      mint a local fi: artifact path for the current turn
-     preserve owner identity in pull state and artifact metadata
+     preserve the provider-returned canonical object_ref in pull state and
+     artifact metadata
    result:
      logical_path  = fi:turn_1.files/mem_123.json
      physical_path = turn_1/files/mem_123.json
@@ -216,8 +220,12 @@ Current implementation state:
 ## Owner Identity Field
 
 `object_ref` is the canonical owner identity field throughout this path. It is
-the URI whose bytes were copied into the local `fi:` artifact, and it is the URI
-used by `react.read`, owner event-source routing, and `block.produce`.
+the provider-returned canonical ref when the provider normalizes an alias such
+as `mem:<id>` to `mem:record:<id>`. A materializer may retain the requested ref
+as diagnostic metadata when it differs, but read/projection/render policy
+selection uses `object_ref`.
+This is the URI used by `react.read`, owner event-source routing, and
+`block.produce`.
 
 ## Provider Contract
 
@@ -299,6 +307,11 @@ Supported patch forms:
 Provider calls are independent. Every provider sees the same input snapshot.
 Merge order does not create data dependencies between providers because a
 provider patch can change only blocks owned by that provider namespace.
+
+Direct-client `block.render` calls can return a rendered representation such as
+`{format, markdown, blocks}`. The prompt-time render adapter uses the
+timeline-mode response: `patches[]`, or `blocks[]` entries that carry
+`index`/`target_index`/`block_index`.
 
 ## Consumer Runtime Contract
 

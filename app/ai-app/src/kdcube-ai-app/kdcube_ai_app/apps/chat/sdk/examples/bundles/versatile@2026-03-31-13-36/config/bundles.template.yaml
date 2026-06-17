@@ -255,6 +255,9 @@ bundles:
                     discovery:
                       mode: service_discovery
                     policies:
+                      block_production:
+                        mode: provider
+                        operation: block.produce
                       pull:
                         mode: provider
                         operation: object.get

@@ -193,9 +193,11 @@ The provider owns:
 
 When a consumer materializes a namespace ref with `react.pull`, the resulting
 workspace artifact is local (`fi:...`) but not semantically anonymous. The pull
-result and later `react.read` blocks preserve the provider URI as `object_ref`
-plus `source_namespace`. The `fi:` path identifies the local workspace copy;
-`object_ref` identifies the owner object.
+result and later `react.read` blocks preserve the provider-returned canonical
+URI as `object_ref` plus `source_namespace`. The `fi:` path identifies the
+local workspace copy; `object_ref` identifies the owner object. When a provider
+accepts an alias and returns a normalized ref, the normalized ref is the
+`object_ref` used by read/projection/render policy selection.
 
 For ReAct reads, this owner handoff is part of the generic client path:
 

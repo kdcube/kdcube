@@ -1173,6 +1173,63 @@ async def test_configured_artifact_rehoster_materializes_named_service_json_obje
 
 
 @pytest.mark.asyncio
+async def test_configured_artifact_rehoster_prefers_canonical_json_object_ref(tmp_path):
+    requested_ref = "mem:mem_123"
+    canonical_ref = "mem:record:mem_123"
+
+    async def _stream_caller(call):
+        assert call.data["object_ref"] == requested_ref
+        return NamedServiceResponse.ok_response(
+            namespace="mem",
+            object_ref=canonical_ref,
+            object={
+                "id": "mem_123",
+                "object_ref": canonical_ref,
+                "ref": canonical_ref,
+                "namespace": "mem",
+                "object_kind": "memory.record",
+                "memory": "Canonical memory ref.",
+            },
+            revision="1",
+        )
+
+    event_sources = EventSourceSubsystem()
+    register_configured_named_service_artifact_rehosters(
+        event_sources,
+        tenant="tenant-a",
+        project="project-a",
+        namespaces={
+            "mem": {
+                "pull": {"operation": "object.get"},
+                "providers": [
+                    {
+                        "transport": "bundle_operation",
+                        "bundle_id": "versatile@2026-03-31-13-36",
+                        "provider": "sdk.memory",
+                        "operations": ["object.get"],
+                    }
+                ],
+            }
+        },
+    )
+
+    ctx_browser = SimpleNamespace(runtime_ctx=SimpleNamespace(turn_id="turn_rehost"))
+    with bind_bundle_operation_stream_caller(_stream_caller):
+        result = await event_sources.rehost_namespace_ref(
+            requested_ref,
+            ctx_browser=ctx_browser,
+            outdir=tmp_path,
+        )
+
+    materialized = result["materialized"][0]
+    assert materialized["object_ref"] == canonical_ref
+    assert materialized["requested_object_ref"] == requested_ref
+    target = tmp_path / "workdir" / materialized["physical_path"]
+    payload = json.loads(target.read_text())
+    assert payload["object"]["object_ref"] == canonical_ref
+
+
+@pytest.mark.asyncio
 async def test_configured_artifact_rehoster_surfaces_provider_error(tmp_path):
     async def _stream_caller(call):
         assert call.data["operation"] == "object.get"
