@@ -18,6 +18,7 @@ UI composition. The integration package supplies the mechanics.
 
 | Integration | Use it for |
 | --- | --- |
+| [Connections](connections-README.md) *(design)* | The generic registry-driven framework for connecting external systems via OAuth in Settings (user-scoped tokens), generalizing the per-integration accounts/settings pattern below. Read this first when adding a new OAuth integration. |
 | [Email](email/README.md) | Gmail OAuth/API, iCloud IMAP/SMTP, account settings, attachment materialization, Email MCP, Claude Code email processing, and email delivery helpers. |
 | [LinkedIn](linkedin/README.md) | LinkedIn OAuth, UGC Posts API for text and image posts, content formatting helpers (`format_post_text`), image upload via Assets API. |
 | [Telegram](telegram/README.md) | Webhooks, Bot API rendering, progress streaming, Mini App auth, user registry storage, widget operations, and signed downloads. |
