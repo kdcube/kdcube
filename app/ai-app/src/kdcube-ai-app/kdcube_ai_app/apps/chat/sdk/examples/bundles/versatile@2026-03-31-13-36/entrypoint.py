@@ -1233,7 +1233,7 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
                             "target": "_shared/components-react/canvas",
                         },
                         "components_core_scene": {
-                            "src_folder": "sdk://solutions/scene",
+                            "src_folder": "npm://components-core/src/scene",
                             "target": "_shared/components-core/scene",
                         },
                     },
@@ -1337,7 +1337,7 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
         shared_sources.setdefault(
             "components_core_scene",
             {
-                "src_folder": "sdk://solutions/scene",
+                "src_folder": "npm://components-core/src/scene",
                 "target": "_shared/components-core/scene",
             },
         )

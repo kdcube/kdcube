@@ -28,15 +28,14 @@ const envCanvasComponent = process.env.KDCUBE_CANVAS_COMPONENT_SRC
   ? path.resolve(process.env.KDCUBE_CANVAS_COMPONENT_SRC)
   : ''
 const repoCanvasComponent = findInWorkspace(__dirname, 'npm/packages/components-react/src/canvas/index.ts')
-const materializedComponentsCoreScene = path.resolve(__dirname, '_shared/components-core/scene/src/index.ts')
+// Scene runtime = the npm @kdcube/components-core/scene package (files at the package
+// root, no src/ subdir); materialized under _shared/ by the bundle build, workspace
+// npm/packages fallback for plain checkouts.
+const materializedComponentsCoreScene = path.resolve(__dirname, '_shared/components-core/scene/index.ts')
 const envSceneRuntime = process.env.KDCUBE_SCENE_RUNTIME_SRC
   ? path.resolve(process.env.KDCUBE_SCENE_RUNTIME_SRC)
   : ''
-const repoSceneRuntime = path.resolve(
-  __dirname,
-  '../../../../..',
-  'solutions/scene/src/index.ts',
-)
+const repoSceneRuntime = findInWorkspace(__dirname, 'npm/packages/components-core/src/scene/index.ts')
 
 const canvasComponentEntry = fs.existsSync(materializedComponentsReactCanvas)
   ? materializedComponentsReactCanvas

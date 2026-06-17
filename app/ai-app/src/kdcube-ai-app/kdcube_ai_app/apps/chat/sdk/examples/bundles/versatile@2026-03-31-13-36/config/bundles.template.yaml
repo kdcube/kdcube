@@ -344,7 +344,7 @@ bundles:
                 src_folder: npm://components-react/src/canvas
                 target: _shared/components-react/canvas
               components_core_scene:
-                src_folder: sdk://solutions/scene
+                src_folder: npm://components-core/src/scene
                 target: _shared/components-core/scene
           widgets:
             # Chat is package-only — `engine` expands to the npm:// shared sources +
