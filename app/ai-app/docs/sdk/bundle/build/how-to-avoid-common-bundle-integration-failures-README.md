@@ -26,6 +26,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-communication-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-economics-integration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/custom-tools-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/comm/conversation-event-bus-and-data-bus-README.md
@@ -55,6 +56,7 @@ canvas, tasks, Telegram, delivery, or another reusable SDK subsystem, also read
 | Browser-to-bundle durable mutations | Data Bus and conversation events have different ownership and ordering. |
 | ReAct timeline/ANNOUNCE rendering | authored events and tool results need event-source policies. |
 | Canvas/task/memory/file refs | resolver ownership belongs to the namespace owner, not the composition bundle. |
+| Semantic search, background jobs, or task execution | economics must be wired at the operation boundary and visible through `[economics.enforcement]` traces. |
 
 For the client-shape decision behind those failures, read
 [How To Integrate With KDCube Apps](../../../how-to-integrate-with-kdcube-apps-README.md).
@@ -164,6 +166,38 @@ Read:
 
 - [Bundle Widget Integration: source-folder widget apps](../bundle-widget-integration-README.md#source-folder-widget-apps)
 - [Bundle Widget Integration: frame origin and API base URL](../bundle-widget-integration-README.md#frame-origin-and-api-base-url)
+
+## Recipe: Widget UI — Settle The Design Before You Build
+
+A recurring failure: an agent jumps straight into a monolithic `App.tsx` with
+`useState` + raw `fetch` and ad-hoc CSS. The result looks off-brand next to the
+rest of the product and is not modular, so it has to be rebuilt. Conclude the
+design first, then implement.
+
+Before writing widget UI, settle these four things:
+
+1. **Use the kdcube design system — do not invent a look.** Reuse the shared
+   tokens/feel from the chat widget (`…/sdk/solutions/chat/ui/widget/src/index.css`)
+   or the `@kdcube/components-react` packages (`chat`, `canvas`). Inter font, the
+   teal accent, the card/line/surface tokens, `.notice`/banner roles. Match the
+   widgets already on the scene (memories, pinboard, chat); a new widget should
+   look native beside them.
+2. **Build modular React + Redux, not a monolith.** A store + feature slices
+   (`createAsyncThunk`) + typed hooks (`useAppDispatch`/`useAppSelector`) + an
+   `api/` layer (`settings.ts` host/scope, `client.ts` ops, `types.ts`) + split
+   feature components + a shared `AppShell`. One giant `App.tsx` with inline
+   `fetch` is the anti-pattern.
+3. **Support every host the widget will run in, from the start.** A kdcube widget
+   is an authenticated iframe (operations route; resolve baseUrl/tenant/project
+   from the URL or the parent `CONFIG_REQUEST` bridge). If it is also a Telegram
+   Mini App, the same widget must use the **public** route + the raw `initData`
+   header, call `Telegram.WebApp.ready()/expand()`, and respect safe-area insets.
+   Decide the host matrix before coding, not after.
+4. **Copy an existing widget as the template.** Start from the SDK `memories`
+   widget (`…/apps/chat/sdk/context/memory/ui/widget/memories`) — it already
+   encodes the store/slice/api/component layout and the kdcube look.
+
+Skipping this is what turns one UI task into "build it, then refactor it."
 
 ## Recipe: Widget Visibility Gates
 
