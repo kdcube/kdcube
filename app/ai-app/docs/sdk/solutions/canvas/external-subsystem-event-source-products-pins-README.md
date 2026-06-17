@@ -121,6 +121,12 @@ result should supply enough metadata for the canvas legend:
 The canvas should not duplicate the object description, attachments, or history
 as inline card content. It may keep a short preview/summary for display.
 
+The same search result can be dragged to any compatible scene surface. The
+source uses the canonical context-pin payload with the provider-owned `ref`;
+the scene broker routes the drop by root namespace and the provider-resolved
+`target_surface`. A search-results widget should not contain task, memory, or
+other provider-specific open logic.
+
 ## Event Batch With Provider Context
 
 When the user sends a chat request with a canvas and an open provider object attached,

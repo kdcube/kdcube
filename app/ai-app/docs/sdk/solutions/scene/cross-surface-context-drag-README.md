@@ -1,0 +1,369 @@
+---
+id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/cross-surface-context-drag-README.md
+title: "Cross-Surface Context Drag"
+summary: "Concrete design for generic object drag/drop between scene surfaces: source drag lifecycle, scene broker state, namespace-provider open resolution, target-surface command dispatch, and current migration gaps."
+status: draft
+tags: ["sdk", "solutions", "scene", "drag-drop", "context-pin", "surfaces", "named-services", "canvas", "chat"]
+updated_at: 2026-06-17
+keywords:
+  [
+    "cross surface drag",
+    "context drag broker",
+    "kdcube-context-drag-start",
+    "kdcube-context-drag-end",
+    "context pin contract",
+    "root namespace drop target",
+    "requested target surface",
+    "object action open",
+    "target_surface",
+  ]
+see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-composition-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-surface-registry-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/pin-operations-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/npm/components-core/context-pin-contract-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/integration-README.md
+---
+# Cross-Surface Context Drag
+
+This document defines the concrete contract for dragging an existing object
+between surfaces in a scene.
+
+The design target:
+
+```text
+source surface emits canonical context drag
+  -> scene host tracks active context
+  -> scene matches drop targets by root namespace
+  -> scene asks provider to resolve object.action(open, object_ref)
+  -> provider returns ui_event.target_surface
+  -> scene registry sends a local open command to the target surface
+```
+
+The goal is that chat, canvas, memory, task, provider widgets, search results,
+and future surfaces interoperate without knowing each other's implementation.
+
+## Terms
+
+| Term | Meaning |
+| --- | --- |
+| Source surface | The UI surface where the drag starts: chat chip, search result, canvas card, memory row, task row, etc. |
+| Target surface | The UI surface under the drop: memory viewer, issue list/editor, chat composer, canvas board, provider editor, etc. |
+| Context item | One draggable object reference, using the context-pin contract. Its canonical URI is `ref`. |
+| Root namespace | The first URI segment before `:`, for example `mem`, `task`, `fi`, `cnv`. Scoped refs such as `task:issue:...` still have root namespace `task`. |
+| Active drag context | Temporary scene host state that exists only during one browser drag. |
+| Requested target surface | A scene hint that the user dropped on a specific registered surface. The provider still decides whether this target is valid. |
+
+## Non-Goals
+
+- The scene runtime must not know what a memory, task, ticket, file, or provider
+  object is.
+- A target widget must not parse every other source widget's native browser drag
+  payload as the primary interop mechanism.
+- Canvas must not be the owner of namespace styles or object semantics.
+- Chat must not rewrite provider refs into chat-owned refs unless the object is
+  actually chat-owned.
+
+## Actor Responsibilities
+
+| Actor | Required responsibilities |
+| --- | --- |
+| Source surface | Emits drag start/end messages with canonical `contexts`. May also set browser `DataTransfer` for local/native fallback. |
+| Scene host | Keeps active drag context, shows/arms compatible drop zones, calls the object-action backend, dispatches resolver response through the surface registry. |
+| Namespace provider | Owns URI semantics. Validates `object_ref`, resolves `open`, and returns `ui_event.target_surface` or an explicit error. |
+| Scene surface registry | Routes only by resolver-approved `target_surface`; queues until the target is ready. |
+| Target surface | Implements its own local open/focus command and loads the object through its own API. |
+
+## Source Surface Contract
+
+Every source surface that lets users drag existing object refs must emit these
+messages to the scene host.
+
+Start:
+
+```json
+{
+  "type": "kdcube-context-drag-start",
+  "source_surface_ref": "app.pinboard",
+  "contexts": [
+    {
+      "ref": "task:issue:ticket_2026-06-12-00-53-30-951095965",
+      "label": "Cancel membership — Judo and more",
+      "kind": "object.ref",
+      "namespace": "task",
+      "summary": "Need to send the cancellation letter..."
+    }
+  ]
+}
+```
+
+End:
+
+```json
+{
+  "type": "kdcube-context-drag-end",
+  "source_surface_ref": "app.pinboard"
+}
+```
+
+Rules:
+
+- `contexts` is always an array.
+- `contexts[*].ref` is the canonical object URI. It is the only identity the
+  scene and provider need.
+- `namespace` is optional display metadata. If present, it must agree with the
+  root namespace of `ref`. If absent, the scene derives root namespace from
+  `ref`.
+- `label`, `summary`, `kind`, and `mime` are presentation hints only.
+- The source should preserve the same `ref` when the object moves through
+  search results, chat context pins, canvas cards, and target surfaces.
+
+## Scene Host Contract
+
+The scene host owns the browser-level drop orchestration:
+
+```ts
+type ContextItem = {
+  ref: string
+  label?: string
+  kind?: string
+  namespace?: string
+  summary?: string
+  mime?: string
+  [key: string]: unknown
+}
+
+type ActiveContextDrag = {
+  sourceSurfaceRef?: string
+  contexts: ContextItem[]
+}
+
+type SceneDropTarget = {
+  surfaceRef: string
+  targetSurface: string
+  acceptsRootNamespaces: string[]
+  dropEffect?: "open" | "attach" | "pin"
+}
+```
+
+Required scene behavior:
+
+1. On `kdcube-context-drag-start`, normalize all context items and store one
+   active drag context.
+2. Derive a candidate root namespace set from each item:
+   - `item.namespace`, reduced to root namespace;
+   - `item.ref`, reduced to root namespace;
+   - optional compatibility fields only as aliases to `ref`, not as new
+     identities.
+3. Mark a drop target active when any root namespace intersects
+   `acceptsRootNamespaces`.
+4. On drop, choose the first active context item unless the target explicitly
+   supports multi-object drops.
+5. For a normal owning-surface drop, call the provider-backed object action:
+
+```json
+{
+  "action": "open",
+  "object_ref": "task:issue:ticket_2026-06-12-00-53-30-951095965",
+  "target_surface": "task_tracker.issue_list"
+}
+```
+
+6. Dispatch only the provider response. Do not invent the final target in the
+   frontend if the provider rejects or changes it.
+7. Clear active drag state on drop, drag-end, escape/cancel, or timeout.
+
+The scene may keep temporary active drag state because browser drag state itself
+is temporary UI state. It must not persist that state.
+
+## Provider Contract
+
+The namespace provider owns `open` semantics for the full URI. It receives the
+full object ref and an optional requested target surface.
+
+Example request:
+
+```json
+{
+  "namespace": "task",
+  "operation": "object.action",
+  "object_ref": "task:issue:ticket_2026-06-12-00-53-30-951095965",
+  "action": "open",
+  "payload": {
+    "target_surface": "task_tracker.issue_list"
+  }
+}
+```
+
+Example response:
+
+```json
+{
+  "ok": true,
+  "object_ref": "task:issue:ticket_2026-06-12-00-53-30-951095965",
+  "ui_event": {
+    "type": "kdcube.ui.object.open.requested",
+    "subject": "ui.object.open.requested",
+    "target_surface": "task_tracker.issue_list",
+    "object_ref": "task:issue:ticket_2026-06-12-00-53-30-951095965",
+    "mode": "focused"
+  }
+}
+```
+
+Provider rules:
+
+- Validate against the full URI, not just the root namespace.
+- Treat `target_surface` from the scene as a request, not a command.
+- Return a `ui_event.target_surface` only when that effect is valid.
+- Return an explicit error when the object cannot be opened or the requested
+  target is not allowed.
+- For scoped refs, keep the original ref intact. If opening an attachment should
+  focus its parent issue, return the parent/focus details in `ui_event` without
+  replacing the canonical attachment ref unless the provider explicitly says so.
+
+## Target Surface Contract
+
+A target surface does not need to know the drag source. It only implements the
+local command the scene adapter sends after provider resolution.
+
+Example target command:
+
+```json
+{
+  "type": "task-tracker-command",
+  "action": "open",
+  "target_surface": "task_tracker.issue_list",
+  "object_ref": "task:issue:ticket_2026-06-12-00-53-30-951095965",
+  "mode": "focused"
+}
+```
+
+Target rules:
+
+- Load/focus the object using the surface's own API.
+- Preserve unsaved work according to that surface's own policy.
+- Report readiness to the scene if it is an iframe or lazy-mounted surface.
+- Do not implement source-specific parsing as the primary interop path.
+
+Widget-local native drops are allowed only as convenience fallback. For example,
+a memory widget can accept a `mem:record:...` browser drop and focus it directly.
+That path must not be the only way cross-surface drops work.
+
+## Namespace Styles
+
+Namespace styles are app/scene configuration, keyed by root namespace:
+
+```json
+{
+  "mem": { "label": "Memory", "accent": "#16a34a" },
+  "task": { "label": "Task", "accent": "#2563eb" },
+  "fi": { "label": "File", "accent": "#64748b" },
+  "cnv": { "label": "Canvas", "accent": "#7c3aed" }
+}
+```
+
+Every surface that renders context chips/cards should receive the same map from
+scene config. The style is not owned by canvas, chat, memory, or task. A scoped
+ref such as `task:issue:attachment:...` uses style key `task`.
+
+## Required SDK Extraction
+
+Today, parts of this behavior are implemented in concrete host pages. The SDK
+scene runtime should absorb the generic pieces so every host uses one path.
+
+Proposed reusable APIs:
+
+```ts
+export function normalizeContextDragMessage(input: unknown): ActiveContextDrag | null
+
+export function rootNamespaceFromRef(ref: unknown): string
+
+export function rootNamespaceCandidates(item: ContextItem): string[]
+
+export function createContextDragBroker(options: {
+  objectAction: (request: {
+    action: "open"
+    object_ref: string
+    target_surface?: string
+    context?: ContextItem
+  }) => Promise<Record<string, unknown>>
+  dispatchOpenResponse: (response: Record<string, unknown>, source?: Record<string, unknown>) => SceneDispatchResult
+})
+```
+
+Minimal broker behavior:
+
+```ts
+broker.handleDragStart(message)
+broker.handleDragEnd()
+broker.accepts(target, contextItem)
+broker.dropOnTarget(target)
+broker.clear()
+```
+
+The runtime still does not know memory/task semantics. It only knows canonical
+context drag messages, namespace matching, provider action invocation, and
+surface dispatch.
+
+## Current Implementation Status
+
+| Area | Current state | Gap |
+| --- | --- | --- |
+| Chat/search result source surfaces | Emit or carry canonical context payloads in current paths. | Need one shared helper for all rendered context chips/search rows. |
+| Standalone pinboard source surface | Emits `kdcube-context-drag-start/end` when cards are dragged. | Needs to stay aligned when canvas moves into npm packages. |
+| Embedded canvas board in versatile scene | Some paths still wire `onDragCard` locally. | Must emit the same drag lifecycle, not `undefined`. |
+| Website landing scene | Tracks context drag and matches targets by root namespace. | Logic is host-local; should move to SDK scene runtime. |
+| Versatile scene | Tracks brokered drops and dispatches to registered surfaces. | Logic is host-local and not fully shared with website scene. |
+| Memory widget | Has both host-command open and native drop parsing. | Native drop parser is convenience only; host-command open is the generic path. |
+| Task widget | Has target-surface command handling for issue list/editor paths. | Needs reliable broker input from all source surfaces. |
+| Providers | `mem` and `task` resolve `open` through named-service/canvas resolver paths. | New namespaces must advertise and implement `object.action open`. |
+| Namespace styles | Config exists and is passed to some surfaces. | Need one scene-owned style config path for all surfaces, including chat chips. |
+
+## Acceptance Matrix
+
+The scene contract is complete only when these cases work without source-widget
+specific code in the target widget:
+
+| Source | Target | Expected result |
+| --- | --- | --- |
+| Chat named-service search result | Canvas | Pin proxy card with same `ref`. |
+| Chat named-service search result | Owning widget | Open/focus object through provider `open`. |
+| Canvas card | Chat | Attach context with same `ref`. |
+| Canvas card | Owning widget | Open/focus object through provider `open`. |
+| Memory row | Canvas | Pin `mem:record:...` proxy card. |
+| Memory row | Memory widget | Open/focus memory through scene or local fallback. |
+| Task issue row | Canvas | Pin `task:issue:...` proxy card. |
+| Task issue card | Task widget | Open/focus issue in the task surface. |
+| Task attachment ref | Task widget | Provider-defined behavior, such as open parent issue focused on attachment. |
+| Unknown namespace ref | Canvas | Pin unresolved proxy card; object actions unavailable. |
+| Unknown namespace ref | Owning widget | No target; scene reports unavailable. |
+
+## Migration Steps
+
+1. Keep the canonical context-pin contract as the single payload shape.
+2. Move context drag normalization and namespace matching from concrete host
+   pages into the SDK scene runtime.
+3. Replace per-host drop handlers with runtime broker calls.
+4. Ensure every source surface uses the same drag-start/end helper.
+5. Ensure every target surface is registered with:
+   - target surface id;
+   - accepted root namespaces;
+   - local command mapper;
+   - readiness/queue policy.
+6. Keep provider `open` as the only authority for final target-surface routing.
+7. Add the acceptance matrix as browser/integration tests for both the website
+   landing scene and the versatile scene.
+
+## Failure Modes To Surface
+
+| Failure | UI/result |
+| --- | --- |
+| Source did not emit drag-start | Drop zones do not arm; console/debug should identify missing source drag event. |
+| Context has no canonical `ref` | Drop rejected as invalid context. |
+| Target does not accept root namespace | Drop target stays inactive. |
+| Provider not configured for namespace | Object action returns provider-not-found; scene shows unavailable action. |
+| Provider rejects requested target | Scene routes provider response or shows provider error; frontend does not force the target. |
+| Target surface not registered | Scene reports `target_surface_unavailable`. |
+| Target surface not ready | Scene queues command until ready; if readiness never arrives, show bounded timeout/debug state. |
+

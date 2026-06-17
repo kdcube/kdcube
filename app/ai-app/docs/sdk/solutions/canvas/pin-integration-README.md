@@ -308,24 +308,33 @@ attachments.
 ## Memory Widget Integration
 
 The memory widget should be integrated as another surface, not as special
-canvas code.
+canvas code. The same rule applies to any owning widget: issue tracker,
+document viewer, CRM record editor, or app-specific provider UI.
 
-Expected memory behavior:
+Expected behavior:
 
 ```text
-drag memory item out
+drag provider-owned item out
   -> payload contains object_ref=mem:record:<id>
-  -> canvas creates/updates memory card
-  -> chat attaches focused memory context
+  -> canvas creates/updates a proxy card with that same object_ref
+  -> chat attaches the same object_ref as focused context
 
-drag mem: object into memory widget or click Open
-  -> named-service resolver calls object.action(open, mem:record:<id>)
-  -> memory widget opens memory detail
+drag object from canvas/search/chat into owning widget, or click Open
+  -> source surface emits canonical context drag
+  -> scene host asks named-service resolver for object.action(open, object_ref)
+  -> resolver returns ui_event.target_surface
+  -> scene dispatches to the registered owning widget
+  -> owning widget opens/focuses the object
 ```
 
 The provider example app can use a compact memory widget variant when screen space
 is limited. The full memory module still owns exact memory rendering, search,
 and edits.
+
+Some widgets may also support native browser drops for their own refs. That is
+only a local convenience. The generic cross-widget contract is the scene broker
+path documented in
+[Scene Composition -> Cross-Surface Context Drag](../scene/scene-composition-README.md#cross-surface-context-drag).
 
 ## Chat Context Batch
 

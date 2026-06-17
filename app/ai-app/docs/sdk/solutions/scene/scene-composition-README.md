@@ -4,7 +4,7 @@ title: "Scene Composition"
 summary: "How an app assembles a host scene from configured UI surfaces, shared scene runtime sources, config handshakes, local message routing, and optional Data Bus subscriptions."
 status: draft
 tags: ["sdk", "solutions", "scene", "surface", "widget", "iframe", "composition", "data-bus", "postmessage"]
-updated_at: 2026-06-15
+updated_at: 2026-06-17
 keywords:
   [
     "scene composition",
@@ -18,6 +18,7 @@ keywords:
     "multi component scene",
   ]
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/cross-surface-context-drag-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-surface-registry-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/ui-components-lifecycle-README.md
@@ -289,6 +290,69 @@ Typical categories:
 
 The exact message names are app/surface-owned. The scene runtime only requires
 the surface adapter functions registered with `createSceneRuntime()`.
+
+## Cross-Surface Context Drag
+
+The concrete contract, status table, and migration checklist live in
+[Cross-Surface Context Drag](cross-surface-context-drag-README.md). This section
+summarizes the host composition role.
+
+Cross-surface drag/drop is scene work, not widget-to-widget special casing. A
+source surface that lets the user drag an object ref must publish a canonical
+context-drag message to the host scene when the drag starts, and a drag-end
+message when it ends:
+
+```json
+{
+  "type": "kdcube-context-drag-start",
+  "source_surface_ref": "app.pinboard",
+  "contexts": [
+    {
+      "ref": "acme:ticket:ticket_123",
+      "label": "Upload fails after screenshot",
+      "kind": "object.ref"
+    }
+  ]
+}
+```
+
+The canonical payload is the context-pin envelope: `contexts` is always an
+array, and each context's `ref` is the canonical object URI. The scene host may
+store this current drag context only for the lifetime of the browser drag. It
+uses that context to decide which mounted surface accepts the drop and which
+object action to request.
+
+Generic flow:
+
+```text
+source surface dragstart
+  -> host scene records active contexts
+  -> user drops over a compatible surface region
+  -> host calls object.action(open, ref, requested target surface)
+  -> namespace provider returns ui_event.target_surface
+  -> scene surface registry dispatches the command
+  -> target surface opens/focuses the object
+```
+
+Widget-local native drop handling is optional. It can be a convenience for a
+single widget, but it is not the scene contract. The reliable generic path is
+the scene broker path above. A widget that only parses browser `DataTransfer`
+payloads is not enough for all cross-iframe scenes, because browsers do not
+deliver native drag data consistently across nested frames.
+
+For this path to work, every participant has a narrow responsibility:
+
+| Participant | Required behavior |
+| --- | --- |
+| Source surface | Emit `kdcube-context-drag-start` / `kdcube-context-drag-end` with canonical `contexts`. |
+| Scene host | Track the active context, match drop zones by root namespace, call the backend object action, and dispatch by `target_surface`. |
+| Namespace provider | Resolve `open` for the full object URI and return the target surface UI event. |
+| Target surface | Register with the scene and implement only its own local open/focus command. |
+
+Namespace styling is the same map for every surface. It is keyed by the root
+namespace (`mem`, `task`, `fi`, `cnv`, and so on) and should be passed by the
+host scene to every surface that renders context chips/cards. It must not be
+implemented separately by canvas, chat, or memory.
 
 ## Data Bus Subscriptions
 
