@@ -48,6 +48,8 @@ const OPEN_MESSAGE = 'kdcube-pinboard-open'
 const CLOSE_MESSAGE = 'kdcube-pinboard-close'
 const DROP_CONTEXT_MESSAGE = 'kdcube-pinboard-drop-context'
 const DROP_INGRESS_MESSAGE = 'kdcube-pinboard-drop-ingress'
+const CONTEXT_DRAG_START_MESSAGE = 'kdcube-context-drag-start'
+const CONTEXT_DRAG_END_MESSAGE = 'kdcube-context-drag-end'
 
 function postToHost(message: Record<string, unknown>): void {
   if (window.parent && window.parent !== window) {
@@ -284,6 +286,24 @@ export default function App() {
     postToHost({ type: ATTACH_MESSAGE, mode: 'attach', contexts: [context] })
   }, [])
 
+  const onDragCard = useCallback((input: CanvasContextItem | CanvasContextItem[] | null) => {
+    if (!input) {
+      postToHost({ type: CONTEXT_DRAG_END_MESSAGE })
+      return
+    }
+    const contexts = Array.isArray(input) ? input.filter(Boolean) : [input]
+    if (!contexts.length) {
+      postToHost({ type: CONTEXT_DRAG_END_MESSAGE })
+      return
+    }
+    postToHost({
+      type: CONTEXT_DRAG_START_MESSAGE,
+      source_surface_ref: 'kdcube.pinboard',
+      context: contexts[0],
+      contexts,
+    })
+  }, [])
+
   const onObjectAction = useCallback(async (
     card: CanvasCard,
     action: CanvasObjectActionName,
@@ -367,7 +387,7 @@ export default function App() {
         onCanvasChange={handleCanvasChange}
         onAttachCanvas={onAttachCanvas}
         onAttachCard={onAttachCard}
-        onDragCard={() => undefined}
+        onDragCard={onDragCard}
         onCloseCanvas={onCloseCanvas}
         onCreateCanvas={onCreateCanvas}
         onArchiveCanvas={onArchiveCanvas}

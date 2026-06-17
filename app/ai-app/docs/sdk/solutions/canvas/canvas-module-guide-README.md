@@ -414,6 +414,15 @@ uses the proxied object ref (`acme:`, `mem:record:<id>`, `fi:`, `cnv:`, etc.)
 and may carry canvas provenance in metadata, but it is not a canvas-focus event
 by itself.
 
+Dragging an individual pin to any other scene surface uses the same canonical
+context-pin contract. The board emits `kdcube-context-drag-start` with
+`contexts: [{ ref: <proxied object ref>, ... }]`; the scene host brokers the
+drop and asks the namespace provider for the open effect when the target is an
+owning surface. See
+[Pin Operations -> Board Operations](./pin-operations-README.md#board-operations)
+and
+[Scene Composition -> Cross-Surface Context Drag](../scene/scene-composition-README.md#cross-surface-context-drag).
+
 ## Collaboration, Versioning, And Conflicts
 
 Canvas uses optimistic concurrency:

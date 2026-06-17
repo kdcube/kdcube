@@ -252,6 +252,10 @@ The instructions explain:
 - Individual pins dragged from canvas into chat render as their proxied objects
   (`acme:`, `mem:record:<id>`, `fi:`, `cnv:`, etc.), not as canvas-focus
   events.
+- Individual pins dragged from canvas to another scene surface emit the same
+  canonical context-pin payload. The scene broker, not canvas, decides which
+  mounted drop target accepts the root namespace and asks the namespace
+  provider for the `open` effect.
 - `react.pull(paths=["cnv:<name>@<revision>"])` imports exact hidden board
   state into the ReAct workspace; inspect the returned `fi:` or physical path.
 - `canvas.patch` is the only agent write path.

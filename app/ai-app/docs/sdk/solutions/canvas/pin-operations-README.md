@@ -158,6 +158,29 @@ chat, or dropped into the bin.
 
 The resolver only decides what can be done with the underlying object.
 
+When a card is dragged out of the board to another scene surface, the board is
+the source surface for a normal context drag. It must publish the canonical
+context-pin payload to the host scene:
+
+```json
+{
+  "type": "kdcube-context-drag-start",
+  "source_surface_ref": "app.pinboard",
+  "contexts": [
+    {
+      "ref": "mem:record:mem_2026_06_16_...",
+      "kind": "object.ref",
+      "label": "For KDCube responsibility..."
+    }
+  ]
+}
+```
+
+The card's proxied object ref stays intact. Dropping that card on chat attaches
+the context, dropping it on another board pins it, and dropping it on an owning
+surface asks the namespace provider for the default open effect. Canvas does
+not parse task/memory/provider semantics for those drops.
+
 ## Resolver Operations
 
 Resolver actions are derived from functions available on the registered

@@ -4,7 +4,7 @@ title: "Scene Surface Registry"
 summary: "How a scene host routes resolver-owned object actions to registered UI surfaces without hardcoding namespace or widget semantics."
 status: draft
 tags: ["sdk", "solutions", "scene", "surfaces", "resolvers", "named-services"]
-updated_at: 2026-06-15
+updated_at: 2026-06-17
 keywords:
   [
     "scene surface registry",
@@ -16,6 +16,7 @@ keywords:
     "default_open_effect_action",
   ]
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/cross-surface-context-drag-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/providers-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-composition-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/event-hub/resolver-and-policy-registration-README.md
@@ -261,6 +262,67 @@ chat, dragged to canvas, and then opened from the board should keep the same
 `object_ref`; the source surface, scene host, and target surface may add local
 presentation metadata, but none of them should replace the ref with a
 surface-local identity.
+
+## Drag Drop To A Target Surface
+
+The implementation-oriented design is
+[Cross-Surface Context Drag](cross-surface-context-drag-README.md). This section
+shows how drag/drop maps onto the surface registry's object-open route.
+
+Dropping an existing object onto one of its capable surfaces is just another
+object-open route. It should not depend on the target widget knowing every
+possible source widget's browser drag payload.
+
+```text
+FRONTEND                                             BACKEND
+
+Source surface
+ example: board card, search result, context chip
+ |
+ | dragstart:
+ | postMessage({
+ |   type: "kdcube-context-drag-start",
+ |   contexts: [{ ref: "task:issue:ticket_123", ... }]
+ | })
+ v
+Scene host
+ |
+ | active drag context = task:issue:ticket_123
+ | drop target accepts root namespace "task"
+ |
+ | object.action(
+ |   action="open",
+ |   object_ref="task:issue:ticket_123",
+ |   requested_target_surface="app.issue.viewer"
+ | )
+ v
+App operation facade ------------------------------> Namespace provider
+                                                     / resolver
+                                                     |
+                                                     | validates the full URI
+                                                     | chooses/accepts target surface
+                                                     v
+Scene host <-----------------------------------------+
+ |
+ | resolver response with ui_event.target_surface
+ | route through createSceneRuntime registry
+ v
+Target surface
+ example: issue viewer receives { action: "open", object_ref: ... }
+```
+
+The `requested_target_surface` is a scene hint: "the user dropped the object on
+this registered surface." The namespace provider still owns the decision. It
+may return that target, another target, or an unavailable/error result. The
+scene must route only the resolver-approved response.
+
+Widget-local native drop handling can exist as a narrow optimization, but it is
+not the generic contract. The generic contract is:
+
+1. source surfaces emit canonical context drag messages;
+2. the scene host tracks active drag context and compatible drop zones;
+3. providers resolve `open` for the full object ref;
+4. target surfaces implement their registered local open command.
 
 ## Registry Shape
 

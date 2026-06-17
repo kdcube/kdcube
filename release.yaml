@@ -1,168 +1,213 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.6.16.320"
+  ref: "2026.6.17.505"
   description: |
-    This release continues the namespace-service and reusable component work
-    started in 2026.6.15.1942. The focus is on making provider-owned search
-    results visible and interactive in chat/canvas, teaching ReAct the exact
-    searchable scopes exposed by each namespace provider, and advancing the
-    in-repo npm component extraction path for chat, canvas, and future scene
-    composition.
+    This release advances the platform runtime, reusable component extraction,
+    memory-as-named-service work, canvas/pinboard interop, and scene
+    composition contracts that landed after 2026.6.16.320.
 
-    The main product outcome is that ReAct can search app-owned namespaces and
-    the UI can surface those results as generic context objects. A provider can
-    advertise scoped object spaces such as records, attachments, events, or
-    other domain entities through discovery metadata; the ReAct tool catalog
-    then shows those scopes next to the generic named-service search tool.
-    Search results are emitted through the timeline as structured UI artifacts,
-    so capable clients can render them as clickable and draggable objects
-    without hardcoding provider-specific behavior into the common chat or
-    canvas components.
+    The main product outcome is a more coherent object model across chat,
+    canvas, memory, task/provider widgets, and future scene participants.
+    Provider-owned objects now move through the UI as canonical refs, scene
+    surfaces route object opens through resolver-owned `target_surface`
+    decisions, and canvas pins behave as proxies instead of copying or
+    rewriting object identity. This release also extends the reusable npm
+    component path with a full React chat UI package surface, improves memory
+    search and memory object semantics, and documents the generic cross-surface
+    drag/drop contract that scenes should implement.
 
     Highlights
 
-    - Adds a generic named-service search-results emission path. When
-      `named_services.search_objects` runs, the provider response is still
-      returned to the model, and a `named_service.search_results` artifact is
-      emitted for clients that can render result rows.
-    - Adds a `NamedServiceSearchResultsWidget` so chat surfaces can show
-      namespace search results as first-class interactive context items rather
-      than burying them inside tool JSON.
-    - Makes search-result context payloads use the canonical context-pin
-      envelope: `type: kdcube.context.attach` with a plural `contexts` array.
-      This aligns search results, chat context chips, canvas pins, memory
-      references, and app-owned objects on one drag/drop contract.
-    - Introduces provider-derived search scopes:
-      `NamedServiceSearchScope`, `NamedServiceProviderSpec.search_scopes`,
-      provider registration with `search_scopes=[...]`, and Redis discovery
-      serialization/deserialization for those scopes.
-    - Updates ReAct named-service tool metadata so discovery-provided search
-      scopes are rendered in the tool catalog next to the base namespaces that
-      are allowed by the consumer policy.
-    - Fixes cross-runtime search-scope rendering when discovery returns
-      scope-like objects from another loaded module instance. Scope metadata is
-      now normalized by shape, not only by exact Python class identity.
-    - Adds diagnostics around named-service discovery refresh and tool metadata
-      rendering so operators can see which namespaces and search scopes were
-      discovered and applied to the ReAct catalog.
-    - Adds framework-agnostic `@kdcube/components-core` package sources for
-      chat state, protocol, transport, reducer logic, context-pin utilities,
-      and shared engine configuration.
-    - Adds `@kdcube/components-react` package sources for the React chat
-      provider/wrapper layer that sits on top of the headless chat engine.
-    - Adds an opt-in package-engine path in the existing chat widget so the
-      in-tree widget can be switched toward the extracted package engine while
-      keeping the current SDK source path available.
-    - Documents the npm component library plan, chat engine surface,
-      engine/runtime configuration, typed host event bus, React wrapper, and
-      widget integration/deployment path.
+    - Adds the concrete cross-surface context drag contract for scenes:
+      source surfaces emit `kdcube-context-drag-start/end`, the scene tracks
+      active context by root namespace, the provider resolves
+      `object.action(open, object_ref)`, and the scene dispatches the
+      provider-approved `ui_event.target_surface`.
+    - Updates the standalone pinboard widget so canvas-origin card drags are
+      published to the scene broker with canonical context payloads. This lets
+      canvas cards route generically to chat, memory, task/provider surfaces,
+      and other registered scene targets.
+    - Routes scene panel drops to requested surfaces while still preserving the
+      provider as the authority for final open effects.
+    - Adds scene and canvas documentation that separates widget-local native
+      drop handling from the generic scene-brokered path.
+    - Expands the memory named-service provider, memory object resolver, and
+      memory widget behavior so `mem:record:<id>` objects can participate in
+      namespace-service search, open, drag, pin, and ReAct context flows.
+    - Adds memory-native search relevance configuration with no-regression
+      default scoring, including discoverable factor weights and tests for the
+      memory scoring path.
+    - Improves canvas pin cards, object-ref flyouts, namespace visual
+      treatment, copy affordances, and memory pin display behavior.
+    - Simplifies the canvas object contract so a pin keeps one canonical
+      object ref and object actions always route through the registered
+      resolver for that ref.
+    - Adds generic canvas pin search and indexing improvements, including the
+      shared hybrid index, vector backend split, FAISS support, and the
+      semantic-search economics guard path.
+    - Adds a richer extracted React chat UI under the in-repo npm component
+      packages, including the chat shell, turn views, composer, file drop,
+      markdown, webapp, modal, sidebar, and support utilities.
+    - Keeps the current SDK chat widget working while adding package-backed UI
+      roots and shared context chip visuals in both the SDK widget and npm
+      package sources.
+    - Improves `react.patch` diagnostics so agents receive actionable hunk
+      mismatch details, expected/actual context, and suggested raw reads.
+    - Pins client-side TSX runtime dependencies used by the visualization
+      transpiler path.
 
-    Namespace-service contract
+    Scene and cross-surface interop
 
-    - A configured namespace remains the policy boundary for a consumer. Scoped
-      search namespaces advertised by the provider are object spaces inside
-      that allowed boundary and may be used as the `namespace` argument to
-      `named_services.search_objects`.
-    - Providers can publish search scopes through discovery metadata, so ReAct
-      does not have to guess object spaces or call provider-about on every
-      turn just to learn common search targets.
-    - The rendered tool catalog now distinguishes the base namespace from the
-      provider search scopes available under it. This lets the model choose a
-      more precise search target when the user asks for a specific object kind.
-    - Provider schema/about remains the place for deeper provider-specific
-      semantics and filters. Discovery search scopes provide the fast
-      always-visible summary needed for normal tool selection.
-    - Common UI clients should treat named-service search results as context
-      refs. The provider continues to own object resolution, open effects,
-      downloads, mutations, and any namespace-specific details.
+    - Documents a concrete scene contract for object drag/drop between
+      surfaces. A source surface owns only the drag lifecycle and canonical
+      context payload. The scene owns temporary active drag state and drop
+      target matching. The namespace provider owns object semantics and open
+      effects. The target surface owns only its local open/focus command.
+    - Adds a dedicated design document for cross-surface context drag,
+      including message shapes, actor responsibilities, provider request and
+      response examples, target command examples, namespace style ownership,
+      SDK extraction targets, a current-status table, an acceptance matrix, and
+      failure modes.
+    - Clarifies that native browser `DataTransfer` parsing inside a widget may
+      be kept as a convenience, but it is not the generic cross-frame scene
+      contract.
+    - Clarifies that namespace styles are app/scene configuration keyed by root
+      namespace, not canvas-owned or chat-owned metadata.
+    - Keeps refs stable as objects move through search results, chat context
+      chips, canvas cards, target widget opens, and ReAct context.
 
-    Chat, canvas, and context behavior
+    Memory named-service and search
 
-    - Search results emitted by named-service tools can be rendered as rows in
-      chat. Each row carries the object ref and provider metadata needed for
-      later open, drag, pin, or provider action flows.
-    - Dragging a search result or context chip now uses the same envelope shape
-      that canvas and chat consumers parse. This removes the previous spread of
-      per-surface fields that meant similar things.
-    - The chat widget has new reducer and turn-tab plumbing for subsystem
-      artifacts such as named-service search results.
-    - Canvas and chat integration docs point to the shared context-pin
-      contract as the canonical source for draggable object refs.
+    - Extends the memory subsystem toward the named-service object model. The
+      memory provider exposes `mem` and `mem:record` search scopes, memory
+      object schema/about metadata, and object actions for open and memory
+      lifecycle operations.
+    - Moves memory policy/instruction material toward the memory module so
+      durable memory guidance is included when memory support is configured,
+      instead of being permanently baked into common ReAct instructions.
+    - Preserves direct memory tooling compatibility while preparing the
+      standard named-service tools to become the primary object interface.
+    - Adds timestamp-oriented memory id expectations and tests around memory
+      store id behavior.
+    - Adds memory-native scoring configuration with defaults matching the
+      existing additive weighted-sum model. Factor weights can tune semantic,
+      text, label, salience, importance, confidence, freshness, and
+      confirmation factors without changing default ordering.
+    - Updates memory widget docs and UI behavior around drag/focus, compact and
+      expanded layouts, search-by-ref focus, maintenance controls, and memory
+      event/detail loading.
+
+    Canvas and pinboard
+
+    - Treats every resolver-backed pin as a proxy to exactly one canonical
+      object ref. Canvas owns placement, display cache, descriptions, comments,
+      suggestions, bin state, and board revision; the namespace resolver owns
+      preview, open, download, rehost, and object semantics.
+    - Updates canvas object actions and storage paths so `object_ref` is the
+      durable identity used for resolver dispatch.
+    - Adds or improves tests around canvas pin search wiring, named-service
+      provider routing, pin search indexing, and canvas object contract
+      behavior.
+    - Improves card UX: object-ref flyouts, copy URI controls, namespace label
+      and accent handling, clearer object cards, and memory pin text display.
+    - Adds Data Bus/live update and resolver routing refinements for canvas
+      actions and scene-open interactions.
+    - Adds pinboard runtime settings support for namespace styles and host
+      scene configuration handshake fields.
+
+    Search, indexing, and economics
+
+    - Adds the generic SQLite plus vector hybrid index path used by searchable
+      collections, with lexical FTS, vector scoring, recency, and reciprocal
+      fusion support.
+    - Splits FAISS storage out of the SQLite index package and adds a generic
+      vector-store interface.
+    - Adds FAISS dependency wiring to the chat/proc images and Python
+      requirements so canvas pin search can default to the FAISS-backed path
+      when available.
+    - Adds `CanvasPinSearch` as a reusable canvas search service that derives
+      its embedder and economics guard from the host entrypoint.
+    - Adds the shared semantic-search guard built on verify-only economic
+      preflight so semantic search can downgrade to lexical when spend is not
+      allowed.
+    - Documents hybrid index, hybrid scoring, canvas search operations, and the
+      observed-file-lock lifecycle for search indexing.
 
     ReAct and tool behavior
 
-    - `named_services.search_objects` is still an exploration tool. It returns
-      the provider response to the model and separately emits UI-visible
-      search-result artifacts for clients that support them.
-    - ReAct tool rendering refreshes named-service discovery before composing
-      the catalog and applies provider search scopes to the tool metadata.
-    - Search scopes are normalized defensively when crossing runtime/module
-      boundaries, preventing dataclass identity mismatches from hiding valid
-      scopes in the rendered prompt.
-    - The named-service tool docs avoid provider-specific examples while still
-      explaining that provider-advertised scoped namespaces are valid search
-      targets.
-    - Runtime tests cover the named-service search scope rendering path.
+    - Adds namespace-specific tool strategy trait support so a namespace can
+      override a generic named-service tool's default strategy where the tool
+      semantics differ, for example neutral upsert behavior.
+    - Improves action-overseer and multi-action tests for neutral/exploitation
+      tool combinations.
+    - Updates named-service tool docs and runtime metadata paths for search
+      scopes, namespace traits, and provider-specific schema information.
+    - Improves ReAct workspace/timeline rendering around external context
+      events, named-service objects, canvas refs, and memory refs.
+    - Improves `react.patch` hunk mismatch reporting with diagnostics that
+      identify the first mismatched patch and target lines.
 
-    Components and package extraction
+    Reusable components and npm packages
 
-    - Adds the initial in-repo npm workspace for KDCube components.
-    - Adds `packages/components-core` with headless chat engine building
-      blocks: engine, protocol, reducers, state, event batching, transport
-      clients, runtime config, shared context-pin helpers, and host events.
-    - Adds `packages/components-react` with React bindings for chat, including
-      provider and hook surfaces that can later replace the monolithic widget
-      view wiring.
-    - Keeps the current SDK widget path working while documenting how the
-      widget can opt into the package-backed engine path.
-    - Adds documentation for future consumers who want to embed chat/canvas
-      directly from npm packages instead of copying widget internals.
+    - Adds a package-backed React chat UI surface under
+      `@kdcube/components-react`, including `ChatShell`, turn rendering,
+      composer, sidebar, banners, file drop, markdown rendering, artifact
+      helpers, and UI support utilities.
+    - Adds standalone package examples for the extracted chat UI.
+    - Adds shared context chip visuals to the SDK widget and
+      `@kdcube/components-core`, keeping namespace/object rendering aligned
+      across current and future package consumers.
+    - Keeps the package-backed engine/UI path opt-in while preserving current
+      SDK widget compatibility.
+    - Documents the component extraction path and how chat, canvas, memory, and
+      scene pieces should converge on core/headless plus React wrapper package
+      boundaries.
 
     Documentation
 
-    - Updates namespace-service docs to explain scoped search namespaces,
-      provider-discovered search scopes, search-result artifacts, and the
-      provider/client split.
-    - Updates named-service tool docs to describe how a model should use
-      provider-declared search scopes without guessing scoped namespace names.
-    - Adds the `docs/sdk/npm` documentation tree for component packages:
-      library map, components-core, chat engine, engine config, host event bus,
-      context-pin contract, components-react, and widget integration.
-    - Cross-links chat, canvas, and namespace-service docs to the context-pin
-      contract.
-    - Documents the chat widget engine switch and deployment implications for
-      the package-backed path.
+    - Adds `docs/sdk/solutions/scene/cross-surface-context-drag-README.md` as
+      the concrete design for generic scene object drag/drop.
+    - Updates scene composition and surface registry docs with the concrete
+      cross-surface drag and drop-to-open journeys.
+    - Updates canvas module, pin integration, pin operations, external
+      subsystem pins, canvas search, hybrid index, and hybrid scoring docs.
+    - Updates memory overview, operational, ReAct integration, and memory
+      widget docs for named-service integration and search weighting.
+    - Updates React tool docs with the new patch diagnostics behavior.
+    - Updates npm component docs around namespace styles, context-pin contract,
+      and component package responsibilities.
 
     Runtime and deployment notes
 
-    - Deployments must point the platform ref at 2026.6.16.320 to receive the
-      named-service search-scope rendering fix, search-result UI artifact
-      support, context-pin normalization, and npm component package sources.
-    - Providers that expose multiple searchable object spaces should register
-      `search_scopes` during named-service provider registration so consumers
-      can render those scopes immediately from discovery.
-    - Consumers should continue routing named-service objects through the
-      provider contract. Search-result widgets and drag/drop surfaces should
-      pass refs forward instead of inventing namespace-specific logic.
-    - The package-backed chat engine remains opt-in; existing SDK widget builds
-      remain compatible while the package extraction continues.
+    - Deployments must point the platform ref at 2026.6.17.505 to receive the
+      memory named-service provider, canvas object contract simplification,
+      cross-surface drag broker updates, pinboard drag publication, improved
+      canvas pin search, FAISS vector backend wiring, package React chat UI
+      sources, and ReAct patch diagnostics.
+    - Existing widgets that parse native browser drops may keep that fallback,
+      but host scenes should rely on canonical scene broker messages for
+      cross-surface behavior.
+    - New provider namespaces should expose `object.action open`, preserve
+      canonical refs, and return `ui_event.target_surface` for any target they
+      can open.
+    - Surfaces that render context chips or cards should receive namespace
+      styles from scene/app configuration keyed by root namespace.
 
     Changelog
 
-    - Added named-service search-result artifact emission.
-    - Added named-service search results widget support in chat.
-    - Added provider search-scope metadata types and discovery serialization.
-    - Rendered provider search scopes in ReAct named-service tool metadata.
-    - Fixed search-scope normalization across runtime/module boundaries.
-    - Added discovery/tool metadata diagnostics for named-service scopes.
-    - Normalized chat/canvas context drags to the canonical context-pin
-      envelope.
-    - Added the initial npm component workspace and package sources.
-    - Added headless chat engine sources under `components-core`.
-    - Added React chat wrapper sources under `components-react`.
-    - Added opt-in package-engine wiring for the existing chat widget.
-    - Added npm component, chat engine, host-event, context-pin, and widget
-      integration documentation.
-    - Added docs and tests for named-service scoped search behavior.
+    - Added cross-surface context drag design and scene documentation.
+    - Published pinboard card drags to the scene broker.
+    - Routed scene panel drops to requested surfaces.
+    - Added and tested memory named-service provider behavior.
+    - Added memory-native relevance factor weights and scoring tests.
+    - Simplified canvas object refs and resolver dispatch.
+    - Improved canvas pin cards, object-ref flyouts, and memory pin display.
+    - Added canvas pin search, hybrid indexing, and economics guard wiring.
+    - Split FAISS vector storage and added dependency wiring.
+    - Added extracted React chat UI package sources and standalone example.
+    - Added shared context chip visuals across SDK and package paths.
+    - Improved ReAct patch mismatch diagnostics.
+    - Updated scene, canvas, memory, namespace-service, npm component, and
+      ReAct tool documentation.
 config:
-    version: "2026.6.16.320"
+    version: "2026.6.17.505"
