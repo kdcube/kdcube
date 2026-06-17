@@ -1,213 +1,199 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.6.17.505"
+  ref: "2026.6.18.142"
   description: |
-    This release advances the platform runtime, reusable component extraction,
-    memory-as-named-service work, canvas/pinboard interop, and scene
-    composition contracts that landed after 2026.6.16.320.
+    This release consolidates the post-2026.6.17.505 platform work around
+    reusable component packages, scene/canvas interop, semantic-search
+    economics, named-service object materialization, ReAct tool observability,
+    and stream destination partitioning.
 
-    The main product outcome is a more coherent object model across chat,
-    canvas, memory, task/provider widgets, and future scene participants.
-    Provider-owned objects now move through the UI as canonical refs, scene
-    surfaces route object opens through resolver-owned `target_surface`
-    decisions, and canvas pins behave as proxies instead of copying or
-    rewriting object identity. This release also extends the reusable npm
-    component path with a full React chat UI package surface, improves memory
-    search and memory object semantics, and documents the generic cross-surface
-    drag/drop contract that scenes should implement.
+    The main product outcome is that chat, canvas, memory, task-oriented
+    providers, and scene surfaces now share a clearer set of contracts. Canvas
+    and scene runtime code moved to the npm package path, the chat widget now
+    runs through the package-backed engine/UI path, semantic search can be
+    admitted and charged as a first-class economics operation, and service
+    events are separated from turn-local chat events so shared project streams
+    do not leak into the wrong UI surface.
 
     Highlights
 
-    - Adds the concrete cross-surface context drag contract for scenes:
-      source surfaces emit `kdcube-context-drag-start/end`, the scene tracks
-      active context by root namespace, the provider resolves
-      `object.action(open, object_ref)`, and the scene dispatches the
-      provider-approved `ui_event.target_surface`.
-    - Updates the standalone pinboard widget so canvas-origin card drags are
-      published to the scene broker with canonical context payloads. This lets
-      canvas cards route generically to chat, memory, task/provider surfaces,
-      and other registered scene targets.
-    - Routes scene panel drops to requested surfaces while still preserving the
-      provider as the authority for final open effects.
-    - Adds scene and canvas documentation that separates widget-local native
-      drop handling from the generic scene-brokered path.
-    - Expands the memory named-service provider, memory object resolver, and
-      memory widget behavior so `mem:record:<id>` objects can participate in
-      namespace-service search, open, drag, pin, and ReAct context flows.
-    - Adds memory-native search relevance configuration with no-regression
-      default scoring, including discoverable factor weights and tests for the
-      memory scoring path.
-    - Improves canvas pin cards, object-ref flyouts, namespace visual
-      treatment, copy affordances, and memory pin display behavior.
-    - Simplifies the canvas object contract so a pin keeps one canonical
-      object ref and object actions always route through the registered
-      resolver for that ref.
-    - Adds generic canvas pin search and indexing improvements, including the
-      shared hybrid index, vector backend split, FAISS support, and the
-      semantic-search economics guard path.
-    - Adds a richer extracted React chat UI under the in-repo npm component
-      packages, including the chat shell, turn views, composer, file drop,
-      markdown, webapp, modal, sidebar, and support utilities.
-    - Keeps the current SDK chat widget working while adding package-backed UI
-      roots and shared context chip visuals in both the SDK widget and npm
-      package sources.
-    - Improves `react.patch` diagnostics so agents receive actionable hunk
-      mismatch details, expected/actual context, and suggested raw reads.
-    - Pins client-side TSX runtime dependencies used by the visualization
-      transpiler path.
+    - Moves the current chat widget to the package-backed chat engine and React
+      UI path, removing the old in-tree app/engine copy and keeping the widget
+      as a thin package consumer.
+    - Moves canvas and scene runtime sources into `@kdcube/components-core`
+      and `@kdcube/components-react`, removes dead SDK copies, and exports the
+      canvas and scene package entrypoints.
+    - Routes canvas-card drags through the generic scene context-drag broker
+      so canvas cards can be offered to other scene surfaces through canonical
+      context payloads instead of widget-specific drag formats.
+    - Adds scene runtime package tests and component-core tests for cross-
+      surface context drag, owning-surface opens, and local pin/attach target
+      delivery.
+    - Adds event-partitioned destination behavior for accounting events:
+      standalone service operations still emit project/service usage updates,
+      while chat turn cost steps are emitted only for actual chat turns.
+    - Adds defensive chat reducer filtering so project-level
+      `accounting.usage` events from canvas, memory, task, or other service
+      searches do not create phantom chat Steps entries.
+    - Adds the Connections SDK framework with provider registry, OAuth
+      mechanics, token refresh, settings/store support, provider examples, and
+      contract/client/provider primitives for reusable integration surfaces.
+    - Adds documentation for the Connections framework and links it from the
+      SDK integrations index.
+    - Adds semantic-search spend accounting so memory search, canvas pin
+      search, and other semantic search surfaces can reserve, execute, collect
+      embedding accounting, and settle into Redis quota buckets.
+    - Adds `billable_equivalent_tokens` for non-LLM service spend so small
+      embedding-only operations still move quota counters instead of settling
+      to zero visible usage.
+    - Adds service-only settlement scopes for standalone searches while
+      preserving parent-turn settlement for chat-originated search calls.
+    - Adds centralized economics traces for semantic search admission,
+      reservation, accounting binding, usage collection, and settlement.
+    - Adds and tests search guard behavior for nested parent accounting scopes
+      so query embeddings preserve the active chat turn while carrying the
+      search flow metadata.
+    - Improves namespace styling for chat context pins and canvas cards,
+      including root-namespace-driven colors, context chip visuals, namespace
+      style transport, and support utilities used by both current and package
+      UI paths.
+    - Caps canvas pin flyouts to the available board room so object-ref and
+      card detail panels stay inside the visible board area.
+    - Emits ReAct tool lifecycle steps so generated tool calls, protocol
+      execution, skipped/invalid calls, results, and errors can be inspected
+      in UI step views.
+    - Fixes named-service ReAct object materialization so pulled namespace
+      objects can be materialized, read, and rendered through registered
+      block production/rendering policies.
+    - Wires named-service block rendering so providers can transform their own
+      produced blocks during timeline projection without owning unrelated
+      blocks.
+    - Clarifies active economics quota windows in UI docs and text: hourly,
+      daily, and monthly displays represent active quota periods since their
+      current reset anchors, not calendar labels.
+    - Adds bundle build documentation for widget usability, economics
+      integration, and local import rules, including the rule that bundle-local
+      imports must not hide real import errors with broad fallback imports.
 
-    Scene and cross-surface interop
+    Reusable components and package extraction
 
-    - Documents a concrete scene contract for object drag/drop between
-      surfaces. A source surface owns only the drag lifecycle and canonical
-      context payload. The scene owns temporary active drag state and drop
-      target matching. The namespace provider owns object semantics and open
-      effects. The target surface owns only its local open/focus command.
-    - Adds a dedicated design document for cross-surface context drag,
-      including message shapes, actor responsibilities, provider request and
-      response examples, target command examples, namespace style ownership,
-      SDK extraction targets, a current-status table, an acceptance matrix, and
-      failure modes.
-    - Clarifies that native browser `DataTransfer` parsing inside a widget may
-      be kept as a convenience, but it is not the generic cross-frame scene
-      contract.
-    - Clarifies that namespace styles are app/scene configuration keyed by root
-      namespace, not canvas-owned or chat-owned metadata.
-    - Keeps refs stable as objects move through search results, chat context
-      chips, canvas cards, target widget opens, and ReAct context.
+    - The chat widget now delegates to package-backed engine/UI code. The old
+      in-tree App and engine implementation was removed so the SDK widget and
+      future hosts converge on the same reusable package surface.
+    - Canvas framework-agnostic model, ingress, ids, and bridge code now live
+      under `@kdcube/components-core/canvas`.
+    - Canvas React board code now lives under `@kdcube/components-react/canvas`.
+    - Scene runtime code now lives under `@kdcube/components-core/scene`.
+    - Package exports were expanded so canvas and scene can be consumed from
+      the component package boundaries.
+    - The decomposition docs were refreshed to explain how current SDK-hosted
+      widgets consume the package path during the transition.
 
-    Memory named-service and search
+    Scene, canvas, and context drag
 
-    - Extends the memory subsystem toward the named-service object model. The
-      memory provider exposes `mem` and `mem:record` search scopes, memory
-      object schema/about metadata, and object actions for open and memory
-      lifecycle operations.
-    - Moves memory policy/instruction material toward the memory module so
-      durable memory guidance is included when memory support is configured,
-      instead of being permanently baked into common ReAct instructions.
-    - Preserves direct memory tooling compatibility while preparing the
-      standard named-service tools to become the primary object interface.
-    - Adds timestamp-oriented memory id expectations and tests around memory
-      store id behavior.
-    - Adds memory-native scoring configuration with defaults matching the
-      existing additive weighted-sum model. Factor weights can tune semantic,
-      text, label, salience, importance, confidence, freshness, and
-      confirmation factors without changing default ordering.
-    - Updates memory widget docs and UI behavior around drag/focus, compact and
-      expanded layouts, search-by-ref focus, maintenance controls, and memory
-      event/detail loading.
+    - Canvas-card drags now publish canonical scene context-drag messages
+      instead of relying on ad hoc widget drops.
+    - The scene broker now remains the generic cross-surface path for matching
+      root namespaces, delivering pins/attachments locally, and asking
+      namespace providers to open objects on owning surfaces.
+    - Scene and component-core tests cover canonical drag messages,
+      non-canonical rejection, namespace matching, provider-backed opens, and
+      local pin/attach delivery.
+    - Canvas card timestamps, projections, and CSS are aligned with the
+      canonical component source.
+    - Canvas pin flyouts are constrained to visible board bounds.
 
-    Canvas and pinboard
+    Economics and accounting
 
-    - Treats every resolver-backed pin as a proxy to exactly one canonical
-      object ref. Canvas owns placement, display cache, descriptions, comments,
-      suggestions, bin state, and board revision; the namespace resolver owns
-      preview, open, download, rehost, and object semantics.
-    - Updates canvas object actions and storage paths so `object_ref` is the
-      durable identity used for resolver dispatch.
-    - Adds or improves tests around canvas pin search wiring, named-service
-      provider routing, pin search indexing, and canvas object contract
-      behavior.
-    - Improves card UX: object-ref flyouts, copy URI controls, namespace label
-      and accent handling, clearer object cards, and memory pin text display.
-    - Adds Data Bus/live update and resolver routing refinements for canvas
-      actions and scene-open interactions.
-    - Adds pinboard runtime settings support for namespace styles and host
-      scene configuration handshake fields.
+    - Semantic search surfaces now use accounting-aware search model services
+      that can reserve and settle operation-scoped searches when no parent
+      chat turn is active.
+    - Nested search calls inside an active chat economics scope perform
+      verify-only admission while keeping embedding accounting inside the
+      parent chat turn.
+    - The accounting calculator now falls back from memory cache to accounting
+      storage when needed and exposes billable-equivalent tokens for embedding
+      and web-search costs.
+    - The chat accounting path now logs weighted LLM tokens separately from
+      billable-equivalent service tokens.
+    - Standalone search settlement emits project/service usage updates without
+      emitting a turn-local chat step.
+    - Added regression tests for search guard accounting context behavior,
+      economics guard service-only accounting, and component-core accounting
+      event filtering.
 
-    Search, indexing, and economics
+    Named services, ReAct, and timeline rendering
 
-    - Adds the generic SQLite plus vector hybrid index path used by searchable
-      collections, with lexical FTS, vector scoring, recency, and reciprocal
-      fusion support.
-    - Splits FAISS storage out of the SQLite index package and adds a generic
-      vector-store interface.
-    - Adds FAISS dependency wiring to the chat/proc images and Python
-      requirements so canvas pin search can default to the FAISS-backed path
-      when available.
-    - Adds `CanvasPinSearch` as a reusable canvas search service that derives
-      its embedder and economics guard from the host entrypoint.
-    - Adds the shared semantic-search guard built on verify-only economic
-      preflight so semantic search can downgrade to lexical when spend is not
-      allowed.
-    - Documents hybrid index, hybrid scoring, canvas search operations, and the
-      observed-file-lock lifecycle for search indexing.
+    - Named-service object materialization was fixed so ReAct can pull
+      namespace refs, rehost/materialize object payloads, and read the result
+      without requiring streamed bytes for JSON object responses.
+    - Timeline rendering can dispatch owned blocks to namespace block-render
+      providers and merge provider results safely.
+    - Block production/rendering docs and traces were updated so developers can
+      see when provider rendering is declared, called, skipped, or errored.
+    - ReAct tool lifecycle events now reach the UI for generated calls,
+      executions, results, and protocol errors.
+    - `react.patch` and bundle build docs continue to emphasize precise reads
+      and local import behavior for agent-generated edits.
 
-    ReAct and tool behavior
+    Connections SDK
 
-    - Adds namespace-specific tool strategy trait support so a namespace can
-      override a generic named-service tool's default strategy where the tool
-      semantics differ, for example neutral upsert behavior.
-    - Improves action-overseer and multi-action tests for neutral/exploitation
-      tool combinations.
-    - Updates named-service tool docs and runtime metadata paths for search
-      scopes, namespace traits, and provider-specific schema information.
-    - Improves ReAct workspace/timeline rendering around external context
-      events, named-service objects, canvas refs, and memory refs.
-    - Improves `react.patch` hunk mismatch reporting with diagnostics that
-      identify the first mismatched patch and target lines.
+    - Adds a reusable connections framework for registry-driven external
+      integrations.
+    - Adds OAuth authorization and refresh helpers, provider registry support,
+      settings/store primitives, and provider examples.
+    - Adds solution-level contract, provider, and client abstractions.
+    - Adds tests for registry behavior, OAuth refresh, token refresh, and the
+      solution contract.
+    - Adds SDK documentation for when and how to add a new connection-backed
+      integration.
 
-    Reusable components and npm packages
+    Stream destination partitioning
 
-    - Adds a package-backed React chat UI surface under
-      `@kdcube/components-react`, including `ChatShell`, turn rendering,
-      composer, sidebar, banners, file drop, markdown rendering, artifact
-      helpers, and UI support utilities.
-    - Adds standalone package examples for the extracted chat UI.
-    - Adds shared context chip visuals to the SDK widget and
-      `@kdcube/components-core`, keeping namespace/object rendering aligned
-      across current and future package consumers.
-    - Keeps the package-backed engine/UI path opt-in while preserving current
-      SDK widget compatibility.
-    - Documents the component extraction path and how chat, canvas, memory, and
-      scene pieces should converge on core/headless plus React wrapper package
-      boundaries.
-
-    Documentation
-
-    - Adds `docs/sdk/solutions/scene/cross-surface-context-drag-README.md` as
-      the concrete design for generic scene object drag/drop.
-    - Updates scene composition and surface registry docs with the concrete
-      cross-surface drag and drop-to-open journeys.
-    - Updates canvas module, pin integration, pin operations, external
-      subsystem pins, canvas search, hybrid index, and hybrid scoring docs.
-    - Updates memory overview, operational, ReAct integration, and memory
-      widget docs for named-service integration and search weighting.
-    - Updates React tool docs with the new patch diagnostics behavior.
-    - Updates npm component docs around namespace styles, context-pin contract,
-      and component package responsibilities.
+    - Documents event-partitioned destinations for shared SSE/project streams.
+    - Clarifies that broad fanout is intentional, but UI mutation must be
+      destination-aware.
+    - Chat timeline consumes turn-local accounting only for known local turns.
+    - Usage observers continue to consume service/project `accounting.usage`
+      events.
+    - The follow-up contract identifies future explicit fields such as
+      `origin_agent_id`, `origin_surface_ref`, `target_surface_ref`, and
+      `target_role` for stronger multi-agent and background-agent routing.
 
     Runtime and deployment notes
 
-    - Deployments must point the platform ref at 2026.6.17.505 to receive the
-      memory named-service provider, canvas object contract simplification,
-      cross-surface drag broker updates, pinboard drag publication, improved
-      canvas pin search, FAISS vector backend wiring, package React chat UI
-      sources, and ReAct patch diagnostics.
-    - Existing widgets that parse native browser drops may keep that fallback,
-      but host scenes should rely on canonical scene broker messages for
-      cross-surface behavior.
-    - New provider namespaces should expose `object.action open`, preserve
-      canonical refs, and return `ui_event.target_surface` for any target they
-      can open.
-    - Surfaces that render context chips or cards should receive namespace
-      styles from scene/app configuration keyed by root namespace.
+    - Deployments must point the platform ref at 2026.6.18.142 to receive the
+      package-backed chat widget, npm-sourced canvas/scene runtime, semantic
+      search charging fixes, named-service object materialization fixes,
+      ReAct tool lifecycle UI steps, and event-partitioned accounting behavior.
+    - Search operations that are semantic should use the accounting-aware
+      search model service so spend is admitted and settled consistently.
+    - Service/project events should remain broadly delivered, while UI
+      consumers decide whether the event is actionable for their surface.
+    - Future producers should stamp explicit origin and destination fields on
+      service events to make filtering independent of conversation/turn ids.
 
     Changelog
 
-    - Added cross-surface context drag design and scene documentation.
-    - Published pinboard card drags to the scene broker.
-    - Routed scene panel drops to requested surfaces.
-    - Added and tested memory named-service provider behavior.
-    - Added memory-native relevance factor weights and scoring tests.
-    - Simplified canvas object refs and resolver dispatch.
-    - Improved canvas pin cards, object-ref flyouts, and memory pin display.
-    - Added canvas pin search, hybrid indexing, and economics guard wiring.
-    - Split FAISS vector storage and added dependency wiring.
-    - Added extracted React chat UI package sources and standalone example.
-    - Added shared context chip visuals across SDK and package paths.
-    - Improved ReAct patch mismatch diagnostics.
-    - Updated scene, canvas, memory, namespace-service, npm component, and
-      ReAct tool documentation.
+    - Switched chat widget to package-backed engine/UI implementation.
+    - Moved canvas and scene runtime sources to npm component packages.
+    - Removed dead SDK canvas/scene source copies.
+    - Exported canvas and scene package entrypoints.
+    - Routed canvas-card drags through the scene context-drag broker.
+    - Added component-core tests for scene drag and chat accounting filtering.
+    - Added Connections SDK framework, providers, settings/store, and tests.
+    - Added Connections SDK documentation.
+    - Enforced economics for semantic search surfaces.
+    - Added billable-equivalent token accounting for embedding-only spend.
+    - Accounted memory and canvas search usage into Redis quota buckets.
+    - Added service-only accounting emission for standalone search settlement.
+    - Partitioned chat turn accounting from project/service usage events.
+    - Fixed named-service ReAct object materialization.
+    - Wired named-service block rendering for timeline projection.
+    - Emitted ReAct tool lifecycle steps to the UI.
+    - Fixed namespace styling and context pin visuals.
+    - Capped canvas pin flyouts to available board room.
+    - Clarified active quota window semantics.
+    - Updated bundle build and economics integration docs.
 config:
-    version: "2026.6.17.505"
+    version: "2026.6.18.142"
