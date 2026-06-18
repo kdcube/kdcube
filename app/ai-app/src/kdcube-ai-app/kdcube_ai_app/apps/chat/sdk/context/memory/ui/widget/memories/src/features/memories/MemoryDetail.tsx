@@ -62,7 +62,7 @@ export function MemoryDetail({ onEdit, single = false }: MemoryDetailProps) {
           <button
             type="button"
             className="secondary-button"
-            title="Open this memory in its own window"
+            title="Open this memory in its own editor window"
             onClick={() => {
               try {
                 window.parent.postMessage({
@@ -76,7 +76,7 @@ export function MemoryDetail({ onEdit, single = false }: MemoryDetailProps) {
               }
             }}
           >
-            Open in window
+            Open in Editor
           </button>
         </div>
       ) : null}

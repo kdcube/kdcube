@@ -1565,6 +1565,18 @@ input[type="range"] { accent-color: var(--teal); }
 .memory-single .memory-detail {
   padding: 0;
 }
+/* Keep the status pill (top-right) from being clipped when the title is long or
+   the window is narrow: let the title column shrink, keep the pill its own size,
+   and let it wrap under the title if there is genuinely no room. */
+.detail-head > div {
+  min-width: 0;
+}
+.detail-head .status-pill {
+  flex-shrink: 0;
+}
+.memory-single .detail-head {
+  flex-wrap: wrap;
+}
 .detail-actions-open {
   margin-bottom: 6px;
 }

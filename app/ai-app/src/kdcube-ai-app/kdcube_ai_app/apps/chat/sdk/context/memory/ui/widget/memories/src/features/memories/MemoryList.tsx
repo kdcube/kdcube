@@ -134,8 +134,21 @@ export function MemoryList() {
             onClick={() => {
               dispatch(selectMemory(memory.id));
               void dispatch(loadMemoryEvents(memory.id));
+              // The compact list has no inline detail panel, so a click opens the
+              // record in the dedicated editor window (the host listens; this is a
+              // no-op when the widget runs standalone).
+              try {
+                window.parent.postMessage({
+                  type: 'kdcube-memory-open-item',
+                  widget: 'memories',
+                  memory_id: memory.id,
+                  object_ref: `mem:${memory.id}`,
+                }, '*');
+              } catch {
+                /* no host listening */
+              }
             }}
-            title="Drag to canvas or click to open memory detail"
+            title="Drag to canvas, or click to open this memory in its editor"
           >
             <div className="memory-row-main">
               <span className="memory-title">{memory.memory}</span>

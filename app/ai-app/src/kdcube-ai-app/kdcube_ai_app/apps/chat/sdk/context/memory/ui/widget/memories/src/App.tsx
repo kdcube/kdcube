@@ -241,6 +241,19 @@ export default function App() {
           ...(Array.isArray(data.object_refs) ? data.object_refs : []),
         ]);
         focusAndExpandMemoryIds(memoryIds);
+        return;
+      }
+      // Focus a set of records in the list WITHOUT forcing the expanded view —
+      // used when several memories are dropped at once (keep the current form).
+      if (data.action === 'focus') {
+        const memoryIds = normalizeMemoryRefs([
+          data.memory_id,
+          data.object_ref,
+          ...(Array.isArray(data.memory_ids) ? data.memory_ids : []),
+          ...(Array.isArray(data.object_refs) ? data.object_refs : []),
+        ]);
+        focusMemoryIdsKeepView(memoryIds);
+        return;
       }
     }
     window.addEventListener('message', onHostMessage);
