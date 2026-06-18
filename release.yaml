@@ -1,199 +1,131 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.6.18.142"
+  ref: "2026.6.18.2120"
   description: |
-    This release consolidates the post-2026.6.17.505 platform work around
-    reusable component packages, scene/canvas interop, semantic-search
-    economics, named-service object materialization, ReAct tool observability,
-    and stream destination partitioning.
+    This release consolidates the platform work after 2026.6.18.142 around
+    reactive event processing, Telegram delivery, reusable SDK scene widgets,
+    memory/canvas object handling, gateway auth logging, and the versatile
+    reference bundle release.
 
-    The main product outcome is that chat, canvas, memory, task-oriented
-    providers, and scene surfaces now share a clearer set of contracts. Canvas
-    and scene runtime code moved to the npm package path, the chat widget now
-    runs through the package-backed engine/UI path, semantic search can be
-    admitted and charged as a first-class economics operation, and service
-    events are separated from turn-local chat events so shared project streams
-    do not leak into the wrong UI surface.
+    The main product outcome is a more reliable reactive conversation loop.
+    Events accepted into a running turn are now tracked by a timeline render
+    cursor owned by the turn timeline itself, rather than by fragile visible
+    block timestamp derivation. This makes close-gate decisions resilient to
+    projection, compaction, hidden metadata, and repeated follow-up batches.
+    Accepted event blocks belong to the runtime turn that processed them, while
+    ingress active-turn data remains provenance only.
 
     Highlights
 
-    - Moves the current chat widget to the package-backed chat engine and React
-      UI path, removing the old in-tree app/engine copy and keeping the widget
-      as a thin package consumer.
-    - Moves canvas and scene runtime sources into `@kdcube/components-core`
-      and `@kdcube/components-react`, removes dead SDK copies, and exports the
-      canvas and scene package entrypoints.
-    - Routes canvas-card drags through the generic scene context-drag broker
-      so canvas cards can be offered to other scene surfaces through canonical
-      context payloads instead of widget-specific drag formats.
-    - Adds scene runtime package tests and component-core tests for cross-
-      surface context drag, owning-surface opens, and local pin/attach target
-      delivery.
-    - Adds event-partitioned destination behavior for accounting events:
-      standalone service operations still emit project/service usage updates,
-      while chat turn cost steps are emitted only for actual chat turns.
-    - Adds defensive chat reducer filtering so project-level
-      `accounting.usage` events from canvas, memory, task, or other service
-      searches do not create phantom chat Steps entries.
-    - Adds the Connections SDK framework with provider registry, OAuth
-      mechanics, token refresh, settings/store support, provider examples, and
-      contract/client/provider primitives for reusable integration surfaces.
-    - Adds documentation for the Connections framework and links it from the
-      SDK integrations index.
-    - Adds semantic-search spend accounting so memory search, canvas pin
-      search, and other semantic search surfaces can reserve, execute, collect
-      embedding accounting, and settle into Redis quota buckets.
-    - Adds `billable_equivalent_tokens` for non-LLM service spend so small
-      embedding-only operations still move quota counters instead of settling
-      to zero visible usage.
-    - Adds service-only settlement scopes for standalone searches while
-      preserving parent-turn settlement for chat-originated search calls.
-    - Adds centralized economics traces for semantic search admission,
-      reservation, accounting binding, usage collection, and settlement.
-    - Adds and tests search guard behavior for nested parent accounting scopes
-      so query embeddings preserve the active chat turn while carrying the
-      search flow metadata.
-    - Improves namespace styling for chat context pins and canvas cards,
-      including root-namespace-driven colors, context chip visuals, namespace
-      style transport, and support utilities used by both current and package
-      UI paths.
-    - Caps canvas pin flyouts to the available board room so object-ref and
-      card detail panels stay inside the visible board area.
-    - Emits ReAct tool lifecycle steps so generated tool calls, protocol
-      execution, skipped/invalid calls, results, and errors can be inspected
-      in UI step views.
-    - Fixes named-service ReAct object materialization so pulled namespace
-      objects can be materialized, read, and rendered through registered
-      block production/rendering policies.
-    - Wires named-service block rendering so providers can transform their own
-      produced blocks during timeline projection without owning unrelated
-      blocks.
-    - Clarifies active economics quota windows in UI docs and text: hourly,
-      daily, and monthly displays represent active quota periods since their
-      current reset anchors, not calendar labels.
-    - Adds bundle build documentation for widget usability, economics
-      integration, and local import rules, including the rule that bundle-local
-      imports must not hide real import errors with broad fallback imports.
+    - Fixes ReAct close-gate handling so a final answer is not repeatedly
+      deferred because an already-rendered external event was missed by a
+      derived visible-block watermark.
+    - Adds a centralized rendered-through cursor on the ReAct timeline, with
+      timestamp and block identity, so the runtime can decide whether any
+      later timeline blocks still need another round.
+    - Preserves correct prompt ownership for accepted external events: runtime
+      turn id is authoritative for the block being processed; previously active
+      turn id is retained as provenance and no longer stamps the processed
+      block.
+    - Improves assistant completion selection and indexing so all legal
+      assistant completions remain represented, while state-level
+      `final_answer` is treated only as the latest/fallback answer surface.
+    - Adds tests around external-event timeline rendering, runtime close-gate
+      behavior, rendered-through cursors, and base workflow runtime context.
+    - Documents Telegram webhook submit and queued delivery boundaries,
+      including webhook ingress, queued resubmitter delivery, live streaming,
+      and non-live job execution.
+    - Extends Telegram integration tests for queued delivery and bridge
+      behavior after the external-event infrastructure changes.
+    - Fixes the Slack OAuth token endpoint to use `oauth.v2.access`.
+    - Improves memory widget behavior for compact open, open-in-editor,
+      multi-id drops, clipped pills, and focused list rendering.
+    - Improves canvas, chat, and context-drag interoperability so memory,
+      canvas, and file objects use canonical context payloads across widget
+      surfaces.
+    - Releases `versatile@2026-03-31-13-36` bundle content as
+      `2026.6.18.2105`, including the SDK component scene, memory/canvas/chat
+      composition, and bundle template alignment.
+    - Keeps `object.action` for namespace objects on the UI resolver surface
+      instead of exposing it as a model-callable named-service tool in the
+      reference template.
+    - Adds a gateway auth-log noise fix: expected token rejection now degrades
+      to anonymous without warning tracebacks unless `AUTH_DEBUG` is enabled.
 
-    Reusable components and package extraction
+    ReAct and external events
 
-    - The chat widget now delegates to package-backed engine/UI code. The old
-      in-tree App and engine implementation was removed so the SDK widget and
-      future hosts converge on the same reusable package surface.
-    - Canvas framework-agnostic model, ingress, ids, and bridge code now live
-      under `@kdcube/components-core/canvas`.
-    - Canvas React board code now lives under `@kdcube/components-react/canvas`.
-    - Scene runtime code now lives under `@kdcube/components-core/scene`.
-    - Package exports were expanded so canvas and scene can be consumed from
-      the component package boundaries.
-    - The decomposition docs were refreshed to explain how current SDK-hosted
-      widgets consume the package path during the transition.
+    - Timeline rendering records the last processed block as a durable cursor.
+    - Close-gate checks compare accepted timeline blocks against that cursor,
+      not against post-render visible block projections.
+    - The cursor includes timestamp and block identity so equal-timestamp
+      blocks remain disambiguated.
+    - The cursor is stored with the timeline data that owns the render, making
+      the check resilient when prompt materialization, projection, or
+      compaction changes the visible representation.
+    - Runtime context now uses the processing turn id for accepted event
+      blocks. Wakeup or previous active-turn ids are provenance, not ownership.
+    - Tests cover close-gate retry behavior, external-event folding, rendered
+      prompt cursors, and final answer selection.
 
-    Scene, canvas, and context drag
+    Telegram integration
 
-    - Canvas-card drags now publish canonical scene context-drag messages
-      instead of relying on ad hoc widget drops.
-    - The scene broker now remains the generic cross-surface path for matching
-      root namespaces, delivering pins/attachments locally, and asking
-      namespace providers to open objects on owning surfaces.
-    - Scene and component-core tests cover canonical drag messages,
-      non-canonical rejection, namespace matching, provider-backed opens, and
-      local pin/attach delivery.
-    - Canvas card timestamps, projections, and CSS are aligned with the
-      canonical component source.
-    - Canvas pin flyouts are constrained to visible board bounds.
+    - Adds a dedicated Telegram webhook submit and delivery article with ASCII
+      diagrams for webhook, resubmitter, queue, and live stream boundaries.
+    - Clarifies that queued Telegram delivery uses the platform delivery queue
+      and resubmitter even when the webhook path starts the turn.
+    - Clarifies the difference between live webhook turns, queued delivery, and
+      non-live job execution.
+    - Adds tests for Telegram delivery behavior and admin/user bridge paths.
 
-    Economics and accounting
+    SDK scene, memory, canvas, and chat
 
-    - Semantic search surfaces now use accounting-aware search model services
-      that can reserve and settle operation-scoped searches when no parent
-      chat turn is active.
-    - Nested search calls inside an active chat economics scope perform
-      verify-only admission while keeping embedding accounting inside the
-      parent chat turn.
-    - The accounting calculator now falls back from memory cache to accounting
-      storage when needed and exposes billable-equivalent tokens for embedding
-      and web-search costs.
-    - The chat accounting path now logs weighted LLM tokens separately from
-      billable-equivalent service tokens.
-    - Standalone search settlement emits project/service usage updates without
-      emitting a turn-local chat step.
-    - Added regression tests for search guard accounting context behavior,
-      economics guard service-only accounting, and component-core accounting
-      event filtering.
+    - Updates memory widget UI behavior for compact panels, resize, focused
+      ids, multiple memory drops, and editor handoff.
+    - Updates canvas pinboard and chat widget context-drop handling so objects
+      carry canonical refs across surfaces.
+    - Aligns file drag payloads and context messages between package-backed
+      chat and scene hosts.
+    - Updates versatile bundle release metadata, journal, and tests to reflect
+      the SDK component scene and configured `mem:` event-source/resolver
+      surfaces.
 
-    Named services, ReAct, and timeline rendering
+    Gateway and integration fixes
 
-    - Named-service object materialization was fixed so ReAct can pull
-      namespace refs, rehost/materialize object payloads, and read the result
-      without requiring streamed bytes for JSON object responses.
-    - Timeline rendering can dispatch owned blocks to namespace block-render
-      providers and merge provider results safely.
-    - Block production/rendering docs and traces were updated so developers can
-      see when provider rendering is declared, called, skipped, or errored.
-    - ReAct tool lifecycle events now reach the UI for generated calls,
-      executions, results, and protocol errors.
-    - `react.patch` and bundle build docs continue to emphasize precise reads
-      and local import behavior for agent-generated edits.
-
-    Connections SDK
-
-    - Adds a reusable connections framework for registry-driven external
-      integrations.
-    - Adds OAuth authorization and refresh helpers, provider registry support,
-      settings/store primitives, and provider examples.
-    - Adds solution-level contract, provider, and client abstractions.
-    - Adds tests for registry behavior, OAuth refresh, token refresh, and the
-      solution contract.
-    - Adds SDK documentation for when and how to add a new connection-backed
-      integration.
-
-    Stream destination partitioning
-
-    - Documents event-partitioned destinations for shared SSE/project streams.
-    - Clarifies that broad fanout is intentional, but UI mutation must be
-      destination-aware.
-    - Chat timeline consumes turn-local accounting only for known local turns.
-    - Usage observers continue to consume service/project `accounting.usage`
-      events.
-    - The follow-up contract identifies future explicit fields such as
-      `origin_agent_id`, `origin_surface_ref`, `target_surface_ref`, and
-      `target_role` for stronger multi-agent and background-agent routing.
+    - Gateway auth now treats normal authentication rejection as an expected
+      anonymous-degrade path. It no longer logs full warning tracebacks for
+      missing, expired, or invalid session tokens unless auth debugging is
+      explicitly enabled.
+    - Unexpected gateway auth failures still degrade to anonymous and emit a
+      compact warning, with traceback detail only when `AUTH_DEBUG` is enabled.
+    - Slack connection provider now calls the correct OAuth token endpoint.
 
     Runtime and deployment notes
 
-    - Deployments must point the platform ref at 2026.6.18.142 to receive the
-      package-backed chat widget, npm-sourced canvas/scene runtime, semantic
-      search charging fixes, named-service object materialization fixes,
-      ReAct tool lifecycle UI steps, and event-partitioned accounting behavior.
-    - Search operations that are semantic should use the accounting-aware
-      search model service so spend is admitted and settled consistently.
-    - Service/project events should remain broadly delivered, while UI
-      consumers decide whether the event is actionable for their surface.
-    - Future producers should stamp explicit origin and destination fields on
-      service events to make filtering independent of conversation/turn ids.
+    - Deployments should point the platform ref at 2026.6.18.2120 to receive
+      the ReAct close-gate/event ownership fixes, Telegram delivery docs/tests,
+      memory/canvas/chat widget interop updates, gateway auth-log reduction,
+      and versatile bundle release metadata.
+    - Reactive event producers should rely on the runtime turn id stamped
+      during event acceptance for processed blocks. Previous active-turn data
+      should be used only for provenance and diagnostics.
+    - Public deployments should see substantially less gateway warning noise
+      from anonymous or expired-session traffic.
 
     Changelog
 
-    - Switched chat widget to package-backed engine/UI implementation.
-    - Moved canvas and scene runtime sources to npm component packages.
-    - Removed dead SDK canvas/scene source copies.
-    - Exported canvas and scene package entrypoints.
-    - Routed canvas-card drags through the scene context-drag broker.
-    - Added component-core tests for scene drag and chat accounting filtering.
-    - Added Connections SDK framework, providers, settings/store, and tests.
-    - Added Connections SDK documentation.
-    - Enforced economics for semantic search surfaces.
-    - Added billable-equivalent token accounting for embedding-only spend.
-    - Accounted memory and canvas search usage into Redis quota buckets.
-    - Added service-only accounting emission for standalone search settlement.
-    - Partitioned chat turn accounting from project/service usage events.
-    - Fixed named-service ReAct object materialization.
-    - Wired named-service block rendering for timeline projection.
-    - Emitted ReAct tool lifecycle steps to the UI.
-    - Fixed namespace styling and context pin visuals.
-    - Capped canvas pin flyouts to available board room.
-    - Clarified active quota window semantics.
-    - Updated bundle build and economics integration docs.
+    - Added timeline render cursor support for close-gate decisions.
+    - Fixed ReAct external-event close-gate cycling on already-rendered events.
+    - Fixed runtime turn ownership for accepted external event blocks.
+    - Improved final answer selection and assistant completion handling.
+    - Added ReAct timeline, rendering, and runtime regression tests.
+    - Added Telegram webhook submit and queued delivery documentation.
+    - Added Telegram integration tests for delivery paths.
+    - Fixed Slack OAuth token endpoint.
+    - Improved memory widget compact, focused, and editor flows.
+    - Improved canvas/chat/file context drag payloads.
+    - Released versatile bundle content as 2026.6.18.2105.
+    - Updated versatile bundle template event-source/resolver tests.
+    - Reduced gateway auth warning traceback noise for expected anonymous
+      degradation.
 config:
-    version: "2026.6.18.142"
+    version: "2026.6.18.2120"
