@@ -23,6 +23,7 @@ keywords:
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-ingress-to-react-turn-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-journey-and-handling-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
@@ -41,6 +42,11 @@ There is no singular event field in the target protocol. A user prompt with
 attachments, a canvas snapshot plus user request, or a wizard field update can
 all be represented as multiple ordered event occurrences in one client
 submission.
+
+The envelope describes event occurrences. It does not make client-provided
+`turn_id` fields authoritative. The effective ReAct turn id comes from
+`ExternalEventPayload.routing.turn_id`, created by ingress; see
+[Event Ingress To React Turn](event-ingress-to-react-turn-README.md).
 
 ## Accepted Event Shape
 

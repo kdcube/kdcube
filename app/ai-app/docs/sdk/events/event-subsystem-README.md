@@ -21,6 +21,7 @@ keywords:
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/react-object-materialization-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-ingress-to-react-turn-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-events-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-event-envelope-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-README.md
@@ -40,6 +41,11 @@ The SDK events subsystem provides shared event-source identity and discovery.
 ReAct is the first consumer, but the model is wider than ReAct: the same source
 identity can describe tool calls, conversation-scoped UI/user/domain events,
 and future event-producing SDK surfaces.
+
+This page explains source identity and policy/reader registration. It does not
+describe the ingress package boundary or ReAct runtime turn identity; use
+[Event Ingress To React Turn](event-ingress-to-react-turn-README.md) for that
+field-level journey.
 
 ## Core Model
 

@@ -7,6 +7,7 @@ keywords: ["bundle agent integration", "React tool config", "skill config", "eve
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-runtime-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-conversation-events-and-react-output-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-transports-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
@@ -35,6 +36,12 @@ Use it when a bundle needs any of these:
 - a bundle-served MCP endpoint exposed through `@mcp(...)`
 - a Claude Code subprocess agent that uses custom MCP tools
 - separate agent surfaces for chat turns, scheduled jobs, or background jobs
+
+If the bundle needs to submit user/domain events into an existing conversation
+or deliver ReAct output to a non-browser channel, read
+[Bundle Conversation Events And React Output](bundle-conversation-events-and-react-output-README.md)
+before implementing a custom transport adapter. Agent construction and event
+transport are separate concerns.
 
 Before adding bundle-local tools or subagents, check
 [How To Assemble A Bundle With SDK Building Blocks](build/how-to-assemble-bundle-with-sdk-building-blocks-README.md).

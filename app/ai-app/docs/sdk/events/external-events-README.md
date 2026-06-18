@@ -19,7 +19,9 @@ keywords:
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-conversation-events-and-react-output-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-event-envelope-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-ingress-to-react-turn-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-journey-and-handling-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/ingress/events-inception-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/events-orchestration-README.md
@@ -49,6 +51,10 @@ The ingress-level mechanics are documented in
 document explains the SDK semantics and how they connect to ReAct event sources.
 The end-to-end transport and handling journey is documented in
 [External Events Journey And Handling](external-events-journey-and-handling-README.md).
+For the concrete origin of `turn_id`, `queued_turn_id`,
+`active_turn_id_at_ingress`, `owner_turn_id`, the ReAct runtime turn id, and
+the close-gate cursor, read
+[Event Ingress To React Turn](event-ingress-to-react-turn-README.md).
 
 ## Wire Shape
 
@@ -116,7 +122,11 @@ Field roles:
 | `external_events[].story_id` | Optional product/story correlation carried with the event. |
 | `external_events[].payload` | Event body descriptor: `payload.mime` plus either inline `payload.event` or pullable `payload.event_ref`. |
 | `payload.target.agent_id` | Target agent lane. |
-| `turn_id` / `active_turn_id` | Platform turn routing fields. Do not hide these inside `payload.target`. |
+| `turn_id` / `active_turn_id` | Platform turn routing fields. Do not hide these inside `payload.target`. Browser SDK callers usually receive these from the chat client/runtime; webhook/backend submitters should let the platform submitter mint and stamp them. |
+
+The `turn_id` shown in a request body is not an event occurrence field and does
+not override the ReAct runtime turn after ingress accepts the package. The
+runtime turn comes from `ExternalEventPayload.routing.turn_id`.
 
 The canonical envelope and examples for snapshot, file upload, and text
 selection events are in

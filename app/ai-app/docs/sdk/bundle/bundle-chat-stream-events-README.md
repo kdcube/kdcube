@@ -6,8 +6,10 @@ tags: ["sdk", "bundle", "sse", "socketio", "protocol", "events", "streaming", "c
 keywords: ["chat stream event catalog", "socketio event catalog", "sse event catalog", "client visible event lifecycle", "continuation acknowledgements", "chat step events", "rate limit events", "backpressure events", "bundle emitted events", "stream protocol reference"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-conversation-events-and-react-output-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-ui-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-communication-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-ingress-to-react-turn-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/shared-timeline-event-bus-steer-followup-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-event-recording-and-sinks-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-frontend-awareness-README.md
@@ -32,6 +34,12 @@ It covers:
 - the synchronous chat-send acknowledgements
 - the default event families emitted by ingress + processor + bundles
 - the places where SSE framing differs from Socket.IO event delivery
+
+This page is the client-visible stream catalog. It does not define how backend
+webhooks or Telegram adapters submit conversation work, and it does not define
+how to reduce a completed ReAct turn for a non-browser channel. Use
+[Bundle Conversation Events And React Output](bundle-conversation-events-and-react-output-README.md)
+for those bundle-side contracts.
 
 It is intended for:
 - Frontend developers integrating the chat UI.

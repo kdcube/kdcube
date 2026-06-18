@@ -6,6 +6,7 @@ tags: ["sdk", "bundle", "transport", "protocol", "mcp", "rest", "sse", "socketio
 keywords: ["bundle transport map", "chat transport", "data bus transport", "background job transport", "on_job transport", "operations rest transport", "widget transport", "static ui transport", "communicator streaming", "public route transport", "mcp endpoint transport"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-agent-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-conversation-events-and-react-output-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-interfaces-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-communication-README.md
@@ -31,6 +32,11 @@ It answers:
 - what `operations` vs `public` means for REST and MCP
 
 This page is transport-focused.
+
+For the specific contract that takes authored `external_events[]` from a
+browser, webhook, Telegram adapter, or backend submitter into a conversation
+ReAct turn, and for reducing ReAct output back to a non-browser channel, use
+[Bundle Conversation Events And React Output](bundle-conversation-events-and-react-output-README.md).
 
 Named service providers define semantic provider/client contracts above these
 transports. A named service provider can expose the same operation through

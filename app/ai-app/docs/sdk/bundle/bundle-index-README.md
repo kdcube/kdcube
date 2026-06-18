@@ -18,6 +18,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-delivery-and-update-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-agent-integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-conversation-events-and-react-output-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-events-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-entrypoint-classes-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
@@ -71,21 +72,23 @@ backend-only apps — start with
    - runtime surfaces available to bundle code
 11. [bundle-event-recording-and-sinks-README.md](bundle-event-recording-and-sinks-README.md)
    - how bundles record selected comm events and send bounded batches to sinks
-12. [bundle-events-README.md](bundle-events-README.md)
+12. [bundle-conversation-events-and-react-output-README.md](bundle-conversation-events-and-react-output-README.md)
+   - how bundles submit `external_events[]` into the conversation lane and consume ReAct timeline output for non-browser delivery
+13. [bundle-events-README.md](bundle-events-README.md)
    - bundle-authored events, tool-backed event sources, ReAct policy bindings, UI story events, snapshots, and custom artifact namespace rehosters
-13. [bundle-agent-integration-README.md](bundle-agent-integration-README.md)
+14. [bundle-agent-integration-README.md](bundle-agent-integration-README.md)
    - React tools/skills, MCP connector/server patterns, and Claude Code subagent requirements
-14. [bundle-entrypoint-classes-README.md](bundle-entrypoint-classes-README.md)
+15. [bundle-entrypoint-classes-README.md](bundle-entrypoint-classes-README.md)
    - which SDK entrypoint base to use: base, economics, memory, or both
-15. [bundle-properties-and-secrets-lifecycle-README.md](bundle-properties-and-secrets-lifecycle-README.md)
+16. [bundle-properties-and-secrets-lifecycle-README.md](bundle-properties-and-secrets-lifecycle-README.md)
    - how code defaults, descriptor/admin props, effective bundle props, and bundle secrets flow at runtime
-16. [bundle-platform-integration-README.md](bundle-platform-integration-README.md)
+17. [bundle-platform-integration-README.md](bundle-platform-integration-README.md)
    - exact decorator and route contract
-17. [bundle-transports-README.md](bundle-transports-README.md)
+18. [bundle-transports-README.md](bundle-transports-README.md)
    - canonical inbound/outbound protocol and transport map
-18. [../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../configuration/bundle-runtime-configuration-and-secrets-README.md)
+19. [../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../configuration/bundle-runtime-configuration-and-secrets-README.md)
    - platform/global, bundle-scoped, and user-scoped configuration and secrets
-19. [bundle-delivery-and-update-README.md](bundle-delivery-and-update-README.md)
+20. [bundle-delivery-and-update-README.md](bundle-delivery-and-update-README.md)
    - local reload, registry updates, delivery modes, and deployment-side changes
 
 ## Core Doc Map
@@ -107,6 +110,7 @@ backend-only apps — start with
 | Conversation agent lanes and Data Bus partitions | [../../service/comm/bus-routing-and-partitioning-README.md](../../service/comm/bus-routing-and-partitioning-README.md) |
 | Named provider/client surfaces for namespaced services, object actions, relations, API/MCP/Data Bus adapters | [../namespace-services/providers-README.md](../namespace-services/providers-README.md) |
 | Durable bundle-scoped inbound Data Bus messages | [../../service/comm/data-bus-README.md](../../service/comm/data-bus-README.md), [bundle-client-communication-README.md#data-bus-contract](bundle-client-communication-README.md#data-bus-contract) |
+| Submit conversation events and reduce ReAct timeline output for adapters | [bundle-conversation-events-and-react-output-README.md](bundle-conversation-events-and-react-output-README.md) |
 | Bundle-authored events, event sources, ReAct policies, snapshots, and custom namespace rehosters | [bundle-events-README.md](bundle-events-README.md) |
 | React, tools/skills, MCP, Claude Code, and file-producing tool integration | [bundle-agent-integration-README.md](bundle-agent-integration-README.md) |
 | Decorators, widget/API/public integration, Data Bus handlers, `@on_job` | [bundle-platform-integration-README.md](bundle-platform-integration-README.md) |

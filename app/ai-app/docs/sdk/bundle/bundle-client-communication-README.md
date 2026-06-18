@@ -8,6 +8,7 @@ updated_at: 2026-06-06
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-transports-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-conversation-events-and-react-output-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-client-ui-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-chat-stream-events-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-frontend-awareness-README.md
@@ -31,6 +32,11 @@ This document is the browser/UI contract for talking to the platform over:
 - proc integrations (`/api/integrations/*`)
 
 It focuses on what a bundle-facing client can send, what the server accepts, and what the client should expect back.
+
+For user/domain events that should enter a conversation ReAct turn, do not infer
+behavior from generic REST/Data Bus transport alone. Use the
+`external_events[]` conversation-event contract in
+[Bundle Conversation Events And React Output](bundle-conversation-events-and-react-output-README.md).
 
 For choosing the client shape first — iframe app UI, direct host browser
 client, host-server client, or backend-only KDCube app — read

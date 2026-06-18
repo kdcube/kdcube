@@ -19,6 +19,7 @@ keywords:
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-event-envelope-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-ingress-to-react-turn-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
@@ -39,6 +40,9 @@ Processor responsibilities are summarized in
 [Proc Events Orchestration](../../arch/proc/events-orchestration-README.md).
 The canonical accepted event envelope and concrete snapshot/file/selection
 examples are in [External Event Envelope](external-event-envelope-README.md).
+When debugging where a turn id or lane cursor came from, use
+[Event Ingress To React Turn](event-ingress-to-react-turn-README.md); this
+journey page stays at the protocol-flow level.
 
 ## Identities
 

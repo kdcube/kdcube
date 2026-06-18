@@ -7,6 +7,8 @@ keywords: ["telegram webhook", "telegram submitter", "telegram queued delivery",
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-external-prereq-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-ingress-to-react-turn-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-conversation-events-and-react-output-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/timeline-README.md
 ---
@@ -61,6 +63,11 @@ The fallback inline path `run_react_turn(...)` exists only for environments
 where `entrypoint.chat_submitter.submit` is not available or the SDK cannot
 submit a registered Telegram user to chat ingress. Reference bundles should use
 the submitter path.
+
+The Telegram payload can contain Telegram-specific ids and transport metadata.
+The effective ReAct runtime turn id is still the chat ingress
+`ExternalEventPayload.routing.turn_id`; see
+[Event Ingress To React Turn](../../events/event-ingress-to-react-turn-README.md).
 
 ## Boundary Diagram
 

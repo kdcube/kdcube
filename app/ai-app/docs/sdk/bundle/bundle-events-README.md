@@ -23,8 +23,10 @@ keywords:
   ]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/comm/bus-routing-and-partitioning-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-conversation-events-and-react-output-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-subsystem-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-ingress-to-react-turn-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-journey-and-handling-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/event-source-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/event-source/block-production-README.md
@@ -41,6 +43,13 @@ This page is the bundle-developer guide for event-aware applications.
 Use it when a bundle has a UI that produces meaningful user actions, tools that
 produce structured results, story/wizard snapshots, or custom artifact refs that
 must later be materialized for ReAct.
+
+For the transport contract that submits `external_events[]` into the conversation
+lane and for reducing ReAct timeline output back to Telegram or another
+non-browser channel, use
+[Bundle Conversation Events And React Output](bundle-conversation-events-and-react-output-README.md).
+This page stays focused on event-source semantics, policies, readers, and
+namespace ownership.
 
 The short model:
 

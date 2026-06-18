@@ -16,7 +16,9 @@ keywords:
     "external events",
   ]
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-ingress-to-react-turn-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-journey-and-handling-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-conversation-events-and-react-output-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/ingress/events-inception-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/proc/events-orchestration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/timeline-README.md
@@ -30,6 +32,11 @@ see_also:
 ## 0. Implementation Status
 
 This design is now implemented in the current React runtime with these concrete semantics:
+
+For the exact origin of `target_turn_id`, `active_turn_id_at_ingress`,
+`owner_turn_id`, `queued_turn_id`, `RuntimeCtx.turn_id`, and the close-gate
+cursor, use [Event Ingress To React Turn](../../events/event-ingress-to-react-turn-README.md).
+This page explains the followup/steer behavior after those fields exist.
 
 - ingress appends busy-turn `followup` / `steer` into one Redis-backed shared conversation event source
 - the active React turn acquires a fenced owner lease and listens to that source live

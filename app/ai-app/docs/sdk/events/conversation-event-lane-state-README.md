@@ -15,6 +15,7 @@ keywords:
     "event timestamp",
   ]
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/event-ingress-to-react-turn-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/comm/conversation-event-bus-orchestrator-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-journey-and-handling-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/external-events-README.md
@@ -45,6 +46,7 @@ T.handler.status                         open | closed
 T.handler.status_at
 
 T.last_processed_event_timestamp
+T.last_processed_event_id
 T.last_processed_reactive_event_timestamp
 
 T.consumer.status                        active | scheduled | none
@@ -59,6 +61,7 @@ Field meanings:
 | `T.handler.status` | BaseWorkflow / ContextBrowser handler setup and ReAct close gate | `open` while the handler can accept lane events into this turn; `closed` after the close gate succeeds. |
 | `T.handler.status_at` | Same writer as `T.handler.status` | Latest acknowledgement timestamp for `T.handler.status`. |
 | `T.last_processed_event_timestamp` | Reader/Consumer while holding `lock(T)` | Maximum event-envelope timestamp accepted into the live turn path for any event type. |
+| `T.last_processed_event_id` | Reader/Consumer while holding `lock(T)` | Event id for the latest accepted event at `T.last_processed_event_timestamp`; used as the tie-breaker when multiple events share a timestamp. |
 | `T.last_processed_reactive_event_timestamp` | Reader/Consumer while holding `lock(T)` | Maximum event-envelope timestamp accepted into the live turn path for reactive events. |
 | `T.consumer.status` | Proc and Reader/Consumer while holding `lock(T)` | `scheduled`, `active`, or `none`. |
 | `T.consumer.status_at` | Same writer as `T.consumer.status`, and Reader acknowledgements | Latest real lane-local acknowledgement timestamp for `T.consumer.status`. |
@@ -125,20 +128,31 @@ lock(T)
 unlock(T)
 ```
 
-ReAct close gate compares a value from ReAct with a value from `T`:
+ReAct close gate compares the timeline render cursor with `T`:
 
 ```text
-handler_processed_event_timestamp =
-  max event timestamp in the last timeline snapshot ReAct used
-  to produce its candidate answer
+lane state:
+  T.last_processed_event_timestamp
+  T.last_processed_event_id
 
-if handler_processed_event_timestamp < T.last_processed_event_timestamp:
+timeline:
+  timeline.last_rendered_event_cursor.timestamp
+  timeline.last_rendered_event_cursor.event_id
+
+if timeline.last_rendered_event_cursor is older than T.last_processed_event_*:
   keep T.handler.status = open
   ReAct continues
 else:
   set T.handler.status = closed
   set T.handler.status_at = now
 ```
+
+The cursor is committed on the timeline after prompt rendering succeeds. It
+means the rendered model context included timeline content produced from events
+up to that event timestamp/id. The model may have seen a compacted
+representation rather than raw event text; that still counts because the event
+was processed into the rendered context. The cursor is stored on the timeline so
+in-turn compaction does not lose the progress marker.
 
 Turn finalization runs after the handler is closed. After artifacts persist,
 ContextBrowser publishes one wake when unprocessed reactive lane work remains.
