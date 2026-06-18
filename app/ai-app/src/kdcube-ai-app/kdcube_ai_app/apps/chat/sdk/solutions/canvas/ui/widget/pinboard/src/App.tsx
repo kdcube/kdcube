@@ -11,7 +11,7 @@
  * to the parent frame, which routes them to the right sibling widget.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import {
   CanvasBoard,
   applyCanvasCards,
@@ -54,6 +54,16 @@ const CONTEXT_DRAG_END_MESSAGE = 'kdcube-context-drag-end'
 function postToHost(message: Record<string, unknown>): void {
   if (window.parent && window.parent !== window) {
     window.parent.postMessage({ source: 'kdcube.pinboard', ...message }, '*')
+  }
+}
+
+function dragEndPoint(event?: DragEvent<HTMLElement>): Record<string, number> {
+  if (!event) return {}
+  return {
+    client_x: event.clientX,
+    client_y: event.clientY,
+    screen_x: event.screenX,
+    screen_y: event.screenY,
   }
 }
 
@@ -286,14 +296,14 @@ export default function App() {
     postToHost({ type: ATTACH_MESSAGE, mode: 'attach', contexts: [context] })
   }, [])
 
-  const onDragCard = useCallback((input: CanvasContextItem | CanvasContextItem[] | null) => {
+  const onDragCard = useCallback((input: CanvasContextItem | CanvasContextItem[] | null, event?: DragEvent<HTMLElement>) => {
     if (!input) {
-      postToHost({ type: CONTEXT_DRAG_END_MESSAGE })
+      postToHost({ type: CONTEXT_DRAG_END_MESSAGE, ...dragEndPoint(event) })
       return
     }
     const contexts = Array.isArray(input) ? input.filter(Boolean) : [input]
     if (!contexts.length) {
-      postToHost({ type: CONTEXT_DRAG_END_MESSAGE })
+      postToHost({ type: CONTEXT_DRAG_END_MESSAGE, ...dragEndPoint(event) })
       return
     }
     postToHost({
@@ -301,6 +311,7 @@ export default function App() {
       source_surface_ref: 'kdcube.pinboard',
       context: contexts[0],
       contexts,
+      ...dragEndPoint(event),
     })
   }, [])
 

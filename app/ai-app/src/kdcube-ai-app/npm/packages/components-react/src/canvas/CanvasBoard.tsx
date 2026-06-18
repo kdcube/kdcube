@@ -63,7 +63,7 @@ export interface CanvasBoardProps {
   onCanvasChange: (canvasName: string) => void
   onAttachCanvas: (context: CanvasContextItem) => void
   onAttachCard: (context: CanvasContextItem | CanvasContextItem[]) => void
-  onDragCard: (context: CanvasContextItem | CanvasContextItem[] | null) => void
+  onDragCard: (context: CanvasContextItem | CanvasContextItem[] | null, event?: DragEvent<HTMLElement>) => void
   onCloseCanvas: () => void
   onCreateCanvas?: (name: string) => void
   onArchiveCanvas?: (canvas: CanvasDefinition) => void
@@ -1729,9 +1729,11 @@ export function CanvasBoard({
       cardOffsets,
     })
     event.dataTransfer.effectAllowed = 'copyMove'
-    event.dataTransfer.setData('application/json', dragDataForCards(inputCards))
+    const dragData = dragDataForCards(inputCards)
+    event.dataTransfer.setData('application/vnd.kdcube.context+json', dragData)
+    event.dataTransfer.setData('application/json', dragData)
     event.dataTransfer.setData('text/plain', dragLabelForCards(inputCards))
-    onDragCard(dragPayloadForCards(inputCards))
+    onDragCard(dragPayloadForCards(inputCards), event)
   }
 
   function startCardResize(card: CanvasCard, event: ReactPointerEvent<HTMLButtonElement>) {
@@ -2394,9 +2396,9 @@ export function CanvasBoard({
               }}
               title={`Drag ${selectedVisibleCards.length} selected pins`}
               onDragStart={(event) => startCardsDrag(selectedVisibleCards, event)}
-              onDragEnd={() => {
+              onDragEnd={(event) => {
                 setDragState(null)
-                onDragCard(null)
+                onDragCard(null, event)
               }}
             >
               <span>{selectedVisibleCards.length} selected</span>
@@ -2447,9 +2449,9 @@ export function CanvasBoard({
                     : [card]
                   startCardsDrag(selectedDragCards, event)
                 }}
-                onDragEnd={() => {
+                onDragEnd={(event) => {
                   setDragState(null)
-                  onDragCard(null)
+                  onDragCard(null, event)
                 }}
                 style={{
                   left: card.rect.x,
@@ -2648,7 +2650,7 @@ export function CanvasBoard({
                             title="Drag attachment to chat or canvas"
                             onDragStart={(event) => {
                               event.stopPropagation()
-                              onDragCard(attachment)
+                              onDragCard(attachment, event)
                               event.dataTransfer.effectAllowed = 'copy'
                               // Canonical context-pin envelope (always plural `contexts`).
                               event.dataTransfer.setData('application/json', JSON.stringify({ type: 'kdcube.context.attach', contexts: [attachment] }))
@@ -2659,7 +2661,7 @@ export function CanvasBoard({
                             }}
                             onDragEnd={(event) => {
                               event.stopPropagation()
-                              onDragCard(null)
+                              onDragCard(null, event)
                             }}
                           >
                             <Paperclip size={13} />

@@ -1,3 +1,4 @@
+import type { DragEvent } from 'react';
 import { useAppDispatch, useAppSelector } from '../../app/hooks';
 import type { MemoryEntry } from '../../api/types';
 import { loadMemories, loadMemoryEvents, nextPage, previousPage, selectMemory } from './memoriesSlice';
@@ -44,19 +45,37 @@ function memoryContextPayload(memory: MemoryEntry) {
   };
 }
 
-function setMemoryDragData(dataTransfer: DataTransfer, memory: MemoryEntry): void {
+function dragPoint(event: DragEvent<HTMLElement>): Record<string, number> {
+  return {
+    client_x: event.clientX,
+    client_y: event.clientY,
+    screen_x: event.screenX,
+    screen_y: event.screenY,
+  };
+}
+
+function setMemoryDragData(event: DragEvent<HTMLElement>, memory: MemoryEntry): void {
   const payload = memoryContextPayload(memory);
   const message = {
     type: 'kdcube.context.attach',
     source: 'memories-widget',
     contexts: [payload],
   };
+  const { dataTransfer } = event;
   dataTransfer.effectAllowed = 'copy';
   dataTransfer.setData('application/json', JSON.stringify(message));
   dataTransfer.setData('application/vnd.kdcube.context+json', JSON.stringify(message));
   dataTransfer.setData('text/plain', memory.memory);
   dataTransfer.setData('text/uri-list', payload.ref);
   if (window.parent && window.parent !== window) {
+    window.parent.postMessage({
+      type: 'kdcube-context-drag-start',
+      source: 'memories',
+      source_surface_ref: 'sdk.memory.viewer',
+      context: payload,
+      contexts: [payload],
+      ...dragPoint(event),
+    }, '*');
     window.parent.postMessage({
       type: 'kdcube.memory.drag.start',
       source: 'memories-widget',
@@ -65,8 +84,14 @@ function setMemoryDragData(dataTransfer: DataTransfer, memory: MemoryEntry): voi
   }
 }
 
-function clearMemoryDragData(): void {
+function clearMemoryDragData(event: DragEvent<HTMLElement>): void {
   if (window.parent && window.parent !== window) {
+    window.parent.postMessage({
+      type: 'kdcube-context-drag-end',
+      source: 'memories',
+      source_surface_ref: 'sdk.memory.viewer',
+      ...dragPoint(event),
+    }, '*');
     window.parent.postMessage({
       type: 'kdcube.memory.drag.end',
       source: 'memories-widget',
@@ -104,7 +129,7 @@ export function MemoryList() {
             key={memory.id}
             className={`memory-row compact-memory-row tone-${memory.status || 'active'} ${memory.id === selectedId ? 'selected' : ''}`}
             draggable
-            onDragStart={(event) => setMemoryDragData(event.dataTransfer, memory)}
+            onDragStart={(event) => setMemoryDragData(event, memory)}
             onDragEnd={clearMemoryDragData}
             onClick={() => {
               dispatch(selectMemory(memory.id));
@@ -149,7 +174,7 @@ export function MemoryList() {
               key={memory.id}
               className={`memory-row tone-${memory.status || 'active'} ${memory.id === selectedId ? 'selected' : ''}`}
               draggable
-              onDragStart={(event) => setMemoryDragData(event.dataTransfer, memory)}
+              onDragStart={(event) => setMemoryDragData(event, memory)}
               onDragEnd={clearMemoryDragData}
               onClick={() => {
                 dispatch(selectMemory(memory.id));

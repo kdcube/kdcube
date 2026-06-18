@@ -1,0 +1,267 @@
+domain: ''
+company: KDCube
+context:
+  tenant: demo-tenant
+  project: demo-project
+auth:
+  type: cognito
+  idp: cognito
+  id_token_header_name: X-ID-Token
+  auth_token_cookie_name: __Secure-LATC
+  id_token_cookie_name: __Secure-LITC
+  masqueraded_token_cookie_name: __Secure-LMTC
+  jwks_cache_ttl_seconds: 86400
+  turnstile_development_token: 1x00000000000000000000AA
+  oidc_service_user_email: service@org.com
+  oidc_service_admin_username: ''
+  cognito:
+    region: eu-west-1
+    user_pool_id: eu-west-1_JrKKhQUNp
+    app_client_id: 6lgsqqbpatprt44a4i20hveu6u
+    service_client_id: 6lgsqqbpatprt44a4i20hveu6u
+  proxy_login:
+    redis_key_prefix: 'proxylogin:demo-tenant:demo-project:'
+    token_masquerade: true
+    password_reset:
+      company: KDCube
+      sender: info@nestlogic.com
+      template_name: KDCubeNewUserWelcomeTemplate
+      redirect_url: http://localhost:8010/chatbot/reset-password?user=%[1]s
+    http_urlbase: http://localhost:8010/auth
+proxy:
+  ssl: false
+  route_prefix: /platform
+  frame_embedding:
+    mode: allowlist
+    allowed_origins:
+    - https://kdcube.tech
+    - https://*.kdcube.tech
+    - http://localhost:48913
+    - https://broodier-maxie-uninferrably.ngrok-free.dev
+ports:
+  ingress: '8010'
+  proc: '8020'
+  metrics: '8090'
+  ui: '5173'
+  ui_ssl: '443'
+infra:
+  postgres:
+    host: host.docker.internal
+    port: '5432'
+    user: postgres
+    database: kdcube
+    password: postgres
+    postgres_ssl: false
+  redis:
+    host: host.docker.internal
+    port: '6379'
+    topology: standalone
+    password: redispass
+storage:
+  kdcube: file:///kdcube-storage
+  bundles: file:///bundle-storage
+  workspace:
+    type: git
+    repo: git@github.com:kdcube/agentic-workspace.git
+  claude_code_session:
+    type: git
+    repo: git@github.com:kdcube/agentic-workspace.git
+aws:
+  aws_region: eu-west-1
+  aws_sdk_load_config: true
+  aws_ec2_metadata_disabled: false
+  no_proxy: 169.254.169.254,localhost,127.0.0.1
+models:
+  default_llm_model_id: claude-sonnet-4-6
+  default_embedding_model_id: openai-text-embedding-3-small
+ai:
+  react:
+    react_agent_version: v3
+    react_agent_multiaction: 'on'
+    debug_timeline: true
+    max_iterations: 15
+    context_max_tokens: 240000
+    read_visible_max_text_symbols: 48000
+    read_visible_max_tokens: 12000
+    read_visible_max_bytes: 10485760
+    read_visible_context_fraction: 0.15
+    knowledge_read_visible_max_text_symbols: null
+    knowledge_read_visible_max_tokens: null
+    knowledge_read_visible_max_bytes: null
+    exec_text_preview_max_symbols: 8000
+    tool_result_preview_max_text_symbols: 12000
+    cache_keep_recent_turns: 6
+    cache_keep_recent_intact_turns: 1
+    working_summary_enabled: true
+    pruned_turn_summary_mode: working_summary
+    render_thinking: true
+services:
+  llm:
+    gemini:
+      gemini_cache_enabled: false
+      gemini_cache_ttl_seconds: 3600
+cors:
+  allow_origins:
+  - http://localhost:3000
+  - http://localhost:3001
+  - http://localhost:4000
+  - http://localhost:5173
+  - http://localhost:5174
+  - http://localhost:5175
+  - http://localhost:8050
+  - http://localhost:48913
+  - https://broodier-maxie-uninferrably.ngrok-free.dev
+  allow_credentials: true
+  allow_methods: '*'
+  allow_headers: '*'
+notifications:
+  email:
+    enabled: false
+    host: ''
+    port: '587'
+    user: ''
+    from: ''
+    to: ops@example.com
+    use_tls: true
+routines:
+  economics:
+    subscription_rollover_enabled: true
+    subscription_rollover_cron: 15 * * * *
+    subscription_rollover_lock_ttl_seconds: 900
+    subscription_rollover_sweep_limit: 500
+  stripe:
+    reconcile_enabled: false
+    reconcile_cron: 45 * * * *
+    reconcile_lock_ttl_seconds: 900
+  opex:
+    agg_cron: 0 23 * * *
+secrets:
+  provider: secrets-file
+paths:
+  host_kdcube_storage_path: /Users/elenaviter/.kdcube/kdcube-runtime/demo-tenant__demo-project/data/kdcube-storage
+  host_bundles_path: /Users/elenaviter/src
+  host_managed_bundles_path: /Users/elenaviter/.kdcube/kdcube-runtime/demo-tenant__demo-project/data/managed-bundles
+  host_bundle_storage_path: /Users/elenaviter/.kdcube/kdcube-runtime/demo-tenant__demo-project/data/bundle-storage
+  host_exec_workspace_path: /Users/elenaviter/.kdcube/kdcube-runtime/demo-tenant__demo-project/data/exec-workspace
+  host_react_debug_path: /Users/elenaviter/.kdcube/kdcube-runtime/demo-tenant__demo-project/data/react-debug
+platform:
+  repo: git@github.com:kdcube/kdcube-ai-app.git
+  ref: 2026.5.20.042
+  config:
+    version: 2026.5.20.042
+  services:
+    ingress:
+      log:
+        log_level: INFO
+        log_max_mb: 20
+        log_backup_count: 10
+        log_file_prefix: chat-ingress
+        log_dir: /logs
+      service:
+        uvicorn_reload: false
+        heartbeat_interval: 5
+        cb_relay_identity: kdcube.relay.chatbot
+      av:
+        app_av_scan: false
+        app_av_timeout_s: 3.0
+        clamav_host: localhost
+        clamav_port: 3310
+      idp:
+        idp_db_path: /Users/elenaviter/.kdcube/dev-workspace/data/idp/ingress/idp_users.json
+        idp_import_enabled: false
+        idp_import_run_at: '2026-02-22T07:00:00Z'
+        idp_import_script_path: ''
+      monitoring:
+        monitoring_burst_enable: true
+    proc:
+      log:
+        log_level: INFO
+        log_max_mb: 25
+        log_backup_count: 15
+        log_file_prefix: chat-proc
+        log_dir: /logs
+      service:
+        uvicorn_reload: false
+        heartbeat_interval: 5
+        cb_relay_identity: kdcube.relay.chatbot
+        gateway_config_force_env_on_startup: true
+        chat_scheduler_backend: legacy_lists
+        chat_task_timeout_sec: 600
+        chat_task_idle_timeout_sec: 600
+        chat_task_max_wall_time_sec: 2400
+        chat_task_watchdog_poll_interval_sec: 1.0
+      exec:
+        exec_workspace_root: /exec-workspace
+        py_code_exec_image: py-code-exec:latest
+        py_code_exec_timeout: 600
+        py_code_exec_network_mode: host
+        py_code_exec_container_strategy: split
+        max_file_bytes: 100m
+        max_exec_workspace_delta_bytes: 250m
+        max_workspace_bytes: ''
+        workspace_monitor_interval_s: 0.5
+      react_debug:
+        debug_root: /react-debug
+        keep_files: 100
+      tools:
+        web_search:
+          tools_web_search_fetch_content: true
+          web_search_agentic_thinking_budget: 200
+          web_search_primary_backend: brave
+          web_search_backend: hybrid
+          web_search_hybrid_mode: sequential
+          web_search_segmenter: fast
+          web_favicon_enrich_enabled: true
+          web_favicon_enrich_timeout_s: 3
+          web_favicon_failure_cache_ttl_s: 300
+          web_favicon_browser_fallback_enabled: true
+          web_favicon_browser_fallback_timeout_s: 2
+        web_fetch:
+          web_fetch_resources_medium: ''
+        mcp_cache_ttl_seconds: 36000
+        accounting_services: '{"web_search": {"brave": {"tier": "free"}, "duckduckgo":
+          {"tier": "free"}}}'
+      bundles:
+        bundles_root: /bundles
+        managed_bundles_root: /managed-bundles
+        bundle_storage_root: /bundle-storage
+        bundles_include_examples: true
+        bundle_cleanup_enabled: true
+        bundle_cleanup_interval_seconds: 3600
+        bundle_cleanup_lock_ttl_seconds: 900
+        bundle_ref_ttl_seconds: 3600
+        bundles_force_env_on_startup: true
+        bundles_force_env_lock_ttl_seconds: 60
+        bundles_preload_on_start: true
+        bundles_preload_lock_ttl_seconds: 900
+        bundles_preload_bundle_lock_ttl_seconds: 300
+        bundle_scheduler_reconcile_interval_seconds: 0
+        git:
+          bundle_git_resolution_enabled: true
+          bundle_git_atomic: true
+          bundle_git_always_pull: false
+          bundle_git_redis_lock: true
+          bundle_git_redis_lock_ttl_seconds: 300
+          bundle_git_redis_lock_wait_seconds: 60
+          bundle_git_prefetch_enabled: true
+          bundle_git_prefetch_interval_seconds: 15
+          bundle_git_fail_backoff_seconds: 60
+          bundle_git_fail_max_backoff_seconds: 300
+          bundle_git_keep: 3
+          bundle_git_ttl_hours: 0
+          bundle_git_command_timeout_seconds: 120
+          git_ssh_key_path: ''
+          git_ssh_known_hosts: ''
+          git_ssh_strict_host_key_checking: 'yes'
+frontend:
+  config:
+    auth:
+      authType: cognito
+      idTokenHeaderName: X-ID-Token
+      oidcConfig:
+        authority: https://cognito-idp.eu-west-1.amazonaws.com/eu-west-1_JrKKhQUNp
+        client_id: 6lgsqqbpatprt44a4i20hveu6u
+    routesPrefix: /platform
+    debug:
+      injectDebugCommands: true
+      animateStreaming: false

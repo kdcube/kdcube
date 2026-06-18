@@ -53,6 +53,15 @@ function postParentDragMessage(message: Record<string, unknown>): void {
   window.parent.postMessage(message, '*')
 }
 
+function dragEndPoint(event: DragEvent): Record<string, number> {
+  return {
+    client_x: event.clientX,
+    client_y: event.clientY,
+    screen_x: event.screenX,
+    screen_y: event.screenY,
+  }
+}
+
 export function setChatFileDragData(dataTransfer: DataTransfer, input: ChatFileDragInput): void {
   const message = chatFileDragMessage(input)
   dataTransfer.effectAllowed = 'copy'
@@ -66,7 +75,7 @@ export function setChatFileDragData(dataTransfer: DataTransfer, input: ChatFileD
     source: 'chat-widget',
     payload: message.payload,
   })
-  window.addEventListener('dragend', () => {
-    postParentDragMessage({ type: 'kdcube-canvas-ingress-drag-end', source: 'chat-widget' })
+  window.addEventListener('dragend', (event) => {
+    postParentDragMessage({ type: 'kdcube-canvas-ingress-drag-end', source: 'chat-widget', ...dragEndPoint(event) })
   }, { once: true })
 }
