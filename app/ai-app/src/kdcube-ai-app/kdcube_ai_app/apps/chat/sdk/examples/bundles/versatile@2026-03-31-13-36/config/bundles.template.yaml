@@ -190,12 +190,9 @@ bundles:
                           - object.search
                           - object.schema
                           - object.upsert
-                          - object.action
                           - object.delete
                         tool_traits:
                           upsert_object:
-                            strategy: [neutral]
-                          object_action:
                             strategy: [neutral]
                     tool_traits:
                       provider_about:
@@ -207,8 +204,6 @@ bundles:
                       object_schema:
                         strategy: [exploration]
                       upsert_object:
-                        strategy: [exploitation]
-                      object_action:
                         strategy: [exploitation]
                       delete_object:
                         strategy: [exploitation]
@@ -273,6 +268,9 @@ bundles:
                       pull:
                         mode: provider
                         operation: object.get
+                skills:
+                  custom_root: skills
+                  consumers: {}
             ui:
               canvas:
                 # Add namespace resolver operations here when canvas or chat

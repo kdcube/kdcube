@@ -64,8 +64,27 @@ def test_reference_template_tool_config_uses_as_consumer_surface():
     assert isinstance(main["tools"], list)
     assert main["skills"]["custom_root"] == "skills"
     assert main["skills"]["consumers"] == {}
-    assert main["event_sources"] == []
-    assert as_consumer["ui"]["canvas"]["resolvers"] == []
+    assert main["event_sources"] == [
+        {
+            "kind": "named_service",
+            "namespace": "mem",
+            "enabled": True,
+            "discovery": {"mode": "service_discovery"},
+            "policies": {
+                "block_production": {"mode": "provider", "operation": "block.produce"},
+                "pull": {"mode": "provider", "operation": "object.get"},
+            },
+        }
+    ]
+    assert as_consumer["ui"]["canvas"]["resolvers"] == [
+        {
+            "kind": "named_service",
+            "namespace": "mem",
+            "enabled": True,
+            "discovery": {"mode": "service_discovery"},
+            "allowed": ["object.resolve", "object.action"],
+        }
+    ]
 
     tool_config = agent_tool_config_from_bundle_props(props, "main", bundle_root=_bundle_root())
     assert "canvas" in tool_config.allowed_plugins

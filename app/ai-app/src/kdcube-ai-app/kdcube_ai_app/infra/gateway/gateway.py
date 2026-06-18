@@ -5,8 +5,6 @@
 """
 Simplified, framework-agnostic request gateway
 """
-import traceback
-
 import time
 from dataclasses import asdict
 from typing import Dict, Any, Optional, List, Tuple
@@ -310,10 +308,20 @@ class RequestGateway:
                 "permissions": user.permissions
             }
 
-        except (AuthenticationError, Exception) as ex:
-            logger.warning("Gateway auth failed silently:\n%s", traceback.format_exc())
-            # if _auth_debug_enabled():
-            #     logger.info("Gateway auth failed: %s", str(ex))
+        except AuthenticationError as ex:
+            if _auth_debug_enabled():
+                logger.info(
+                    "Gateway auth rejected token; degrading to anonymous: %s",
+                    str(ex),
+                )
+            return UserType.ANONYMOUS, None
+        except Exception as ex:
+            logger.warning(
+                "Gateway auth unexpected failure; degrading to anonymous: %s: %s",
+                type(ex).__name__,
+                str(ex),
+                exc_info=_auth_debug_enabled(),
+            )
             return UserType.ANONYMOUS, None
 
     async def get_system_status(self) -> Dict[str, Any]:

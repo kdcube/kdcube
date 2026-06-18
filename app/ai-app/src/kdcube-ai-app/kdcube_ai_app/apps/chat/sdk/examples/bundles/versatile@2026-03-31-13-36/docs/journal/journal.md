@@ -2,10 +2,28 @@
 title: Versatile Bundle Journal
 kind: bundle-journal
 bundle_id: versatile@2026-03-31-13-36
-updated_at: 2026-06-13
+updated_at: 2026-06-18
 ---
 
 # Journal
+
+## 2026-06-18
+
+- Released `2026.6.18.2105` as the reference scene/component bundle line.
+- Kept `ui/scene` as the main bundle view and kept `ui/main` only as a legacy
+  comparison surface.
+- Released the SDK chat, memory, and canvas component composition in the
+  reference scene, including draggable/resizable panels, context drops, chat
+  context pins, and right-side component controls.
+- Released the bundle canvas service wiring with shared `canvas.*` operation
+  names and the SDK event/source policy path for canvas and memory objects.
+- Included the ReAct external-event ownership and close-gate fixes needed by
+  Telegram and other reactive event sources: accepted event blocks now belong to
+  the runtime turn, while ingress active-turn information remains provenance.
+- Included the gateway auth-log noise fix so expected bundle-session rejection
+  degrades to anonymous without warning traceback floods on public deployments.
+- Recorded follow-up validation for deployed public landing-page iframe use and
+  compact widget defaults after descriptor restaging.
 
 ## 2026-06-13
 

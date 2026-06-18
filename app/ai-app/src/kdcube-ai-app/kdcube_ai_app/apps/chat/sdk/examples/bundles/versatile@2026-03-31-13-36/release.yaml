@@ -1,33 +1,36 @@
 bundle:
   repo: "https://github.com/kdcube/kdcube-ai-app.git"
-  ref: "2026.5.16.407"
+  ref: "2026.6.18.2105"
   description: |
-    User-memory, Telegram Mini App, and shared-widget release for versatile@2026-03-31-13-36.
+    Scene, SDK component, canvas, memory, and Telegram release for versatile@2026-03-31-13-36.
 
     Highlights
 
-    - Replaces the old preference-demo surface with the durable user-memory
-      subsystem: widget CRUD, pin/confirm/retire flows, snapshots, restore
-      preview/apply, and reconciliation job controls.
-    - Keeps the reference `telegram_miniapp` usable both as a KDCube widget and
-      as a Telegram Mini App by materializing the shared memory widget source into
-      the bundle widget build.
-    - Registers Telegram SDK helpers with bundle-scoped configuration so
-      multiple Telegram-enabled bundles can run in the same processor without
-      import-time config collisions.
-    - Wires memory tools into the ReAct tool surface so configured bundles can
-      read and, when policy allows, write durable user memory.
-    - Documents the memory configuration shape and shared-widget build pattern
-      in the bundle SDK docs.
-    - Reuses the shared Telegram widget UI components for the reference Mini App
-      so bundle builders can see the same admin/channel patterns used by the
-      platform SDK.
-    - Tightens Telegram Mini App handling so KDCube iframe usage and Telegram
-      signed-init-data usage are detected separately.
+    - Retargets the reference main view to `ui/scene`, where chat, memories,
+      and canvas are mounted as reusable SDK components while `ui/main` remains
+      available as a legacy comparison surface.
+    - Adds the bundle canvas service and `canvas.patch` operations using the
+      shared `canvas.*` protocol names, so scene cards and pins exercise the
+      platform canvas SDK instead of bundle-local canvas code.
+    - Wires memory and canvas event/source policies through the bundle so ReAct
+      can see external context, pull registered namespaces, and keep object
+      ownership in the subsystem that produced the object.
+    - Updates the scene UI for draggable/resizable panels, right-side tool
+      controls, context drops, chat context pins, and SDK widget parity.
+    - Updates the Telegram Mini App and shared widget wiring so memory views,
+      admin surfaces, and Data Bus-driven activity remain aligned with the SDK
+      components.
+    - Adds tests for canvas pin search wiring, event-source visibility, and the
+      reference bundle component integration paths.
+    - Includes the platform ReAct external-event close-gate and prompt ownership
+      fixes required for Telegram and other reactive event sources.
+    - Includes the gateway auth-log noise fix: expected token rejection now
+      degrades to anonymous without warning tracebacks unless auth debug is
+      explicitly enabled.
 
     Known follow-ups
 
-    - Continue end-to-end Telegram Mini App validation against a deployed public
-      origin after descriptor reloads.
-    - Keep expanding reference scenarios that show memory search, snapshots, and
-      reconciliation from a bundle-builder perspective.
+    - Validate the released scene against the deployed public landing page after
+      descriptors are restaged.
+    - Continue visual hardening of compact widget panel defaults for external
+      iframe hosts.
