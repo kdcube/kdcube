@@ -6,6 +6,7 @@ tags: ["sdk", "integrations", "telegram", "webhook", "mini-app", "prerequisites"
 keywords: ["telegram prerequisites", "telegram botfather", "telegram webhook", "telegram mini app", "telegram bot token"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-webhook-submit-and-delivery-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/email/email-external-prereq-README.md
 ---
 
@@ -40,6 +41,9 @@ The bundle or platform still owns:
 - conversation binding for Telegram-originated turns
 - workflow submission through conversation `external_events[]`
 - final response delivery through the bundle's Telegram queued-delivery wrapper
+
+For the internal runtime data path after Telegram reaches the webhook, see
+`telegram-webhook-submit-and-delivery-README.md`.
 
 ## Telegram Bot Setup
 

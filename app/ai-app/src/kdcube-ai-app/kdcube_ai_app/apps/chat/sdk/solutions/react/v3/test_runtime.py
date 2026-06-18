@@ -112,6 +112,35 @@ def test_tool_catalog_renders_named_service_namespace_scope():
     assert "memo: neutral" in rendered
 
 
+@pytest.mark.asyncio
+async def test_analyze_result_uses_latest_recorded_completion_before_state(tmp_path):
+    solver = _solver_stub()
+    solver.ctx_browser = SimpleNamespace(sources_pool=[])
+    solver.scratchpad = SimpleNamespace(
+        assistant_completion_attempts=[
+            {"text": "First answer"},
+            {"text": "Latest legal answer"},
+        ]
+    )
+    state = {
+        "outdir": str(tmp_path / "out"),
+        "workdir": str(tmp_path / "work"),
+        "final_answer": "",
+        "suggested_followups": [],
+        "round_timings": [],
+        "total_runtime_sec": 0.0,
+        "session_id": "session-1",
+    }
+
+    result = await solver._analyze_and_build_result(state)
+
+    assert result.final_answer == "Latest legal answer"
+    assert result.final_answers == ["First answer", "Latest legal answer"]
+    saved = json.loads((tmp_path / "out" / "result.json").read_text(encoding="utf-8"))
+    assert saved["final_answer"] == "Latest legal answer"
+    assert saved["final_answers"] == ["First answer", "Latest legal answer"]
+
+
 def test_validate_decision_rejects_tool_call_with_final_answer():
     solver = _solver_stub()
     decision = {

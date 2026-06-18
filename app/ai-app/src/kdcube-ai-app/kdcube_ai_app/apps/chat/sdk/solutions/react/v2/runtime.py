@@ -35,6 +35,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.live_events import (
     sync_reactive_iteration_budget,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.layout import (
+    assistant_completion_texts,
     build_assistant_completion_attempt_blocks,
     build_tool_catalog,
     build_working_summary_attempt_blocks,
@@ -63,7 +64,6 @@ from kdcube_ai_app.apps.chat.sdk.solutions.widgets.conversation_turn_work_status
     ConversationTurnWorkStatus,
 )
 import kdcube_ai_app.apps.chat.sdk.tools.tools_insights as tools_insights
-from kdcube_ai_app.apps.chat.sdk.tools import citations as citations_module
 from kdcube_ai_app.apps.chat.sdk.solutions.react.plan import apply_plan_updates
 from kdcube_ai_app.apps.chat.sdk.solutions.react.round import ReactRound
 from kdcube_ai_app.apps.chat.sdk.solutions.react.proto import ReactStateSnapshot
@@ -2726,13 +2726,14 @@ class ReactSolverV2:
                 blocks = self.ctx_browser.timeline.get_turn_blocks()
                 used_sids = extract_sources_used_from_blocks(blocks)
                 try:
-                    answer_sids = citations_module.extract_citation_sids_any(state.get("final_answer") or "")
+                    self.log.log(
+                        "[react.v2] citations.used_sids.from_blocks "
+                        f"block_count={len(blocks or [])} "
+                        f"used_sids={list(used_sids or [])}",
+                        level="INFO",
+                    )
                 except Exception:
-                    answer_sids = []
-                if answer_sids:
-                    for sid in answer_sids:
-                        if sid not in used_sids:
-                            used_sids.append(sid)
+                    pass
                 if used_sids:
                     sid_set = set(used_sids)
                     citations = []
@@ -2914,12 +2915,54 @@ class ReactSolverV2:
                 self.scratchpad.react_state = react_state.to_dict()
         except Exception:
             pass
+        block_completion_texts: List[str] = []
+        try:
+            timeline = getattr(self.ctx_browser, "timeline", None) if self.ctx_browser else None
+            if timeline is not None:
+                from kdcube_ai_app.apps.chat.sdk.solutions.react.timeline import extract_assistant_completion_texts_from_blocks
+                block_completion_texts = extract_assistant_completion_texts_from_blocks(timeline.get_turn_blocks())
+        except Exception:
+            block_completion_texts = []
+        scratchpad_completion_texts = assistant_completion_texts(self.scratchpad)
+        completion_texts = block_completion_texts or scratchpad_completion_texts
+        state_answer_text = (state.get("final_answer") or "").strip()
+        final_answers = list(completion_texts or [])
+        if not final_answers and state_answer_text:
+            final_answers = [state_answer_text]
+        final_answer_text = (
+            (final_answers[-1] if final_answers else "")
+            or state_answer_text
+        )
+        try:
+            state_answer_len = len(state_answer_text)
+            if block_completion_texts:
+                selected_source = "turn_blocks"
+            elif scratchpad_completion_texts:
+                selected_source = "assistant_completion_attempts"
+            else:
+                selected_source = "state.final_answer"
+            self.log.log(
+                "[react.v2] result.final_answer.selected "
+                f"source={selected_source} "
+                f"block_completions={len(block_completion_texts)} "
+                f"completion_attempts={len(scratchpad_completion_texts)} "
+                f"final_answers={len(final_answers)} "
+                f"selected_len={len(final_answer_text or '')} "
+                f"state_len={state_answer_len} "
+                f"exit_reason={state.get('exit_reason') or ''} "
+                f"iteration={int(state.get('iteration') or 0)} "
+                f"max_iterations={int(state.get('max_iterations') or 0)}",
+                level="INFO",
+            )
+        except Exception:
+            pass
 
         react_result = ReactResult(
             ok=True,
             out=artifacts_out,
             sources_pool=sources_pool,
-            final_answer=(state.get("final_answer") or "").strip(),
+            final_answers=final_answers,
+            final_answer=final_answer_text,
             suggested_followups=state.get("suggested_followups") or [],
             error=state.get("error"),
             round_timings=state.get("round_timings") or [],

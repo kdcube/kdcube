@@ -5,6 +5,7 @@ summary: "Reusable Telegram transport helpers for KDCube bundles: Bot API render
 tags: ["sdk", "integrations", "telegram", "webhooks", "mini-apps", "bundles"]
 keywords: ["telegram bot", "telegram webhook", "telegram mini app", "telegram web app", "telegram activity streamer", "chat submitter", "signed download"]
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-webhook-submit-and-delivery-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/telegram-external-prereq-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-assemble-bundle-with-sdk-building-blocks-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-write-bundle-README.md
@@ -374,6 +375,9 @@ The registry is intentionally storage-only. Authorization and routing happen in
 
 ## Webhook Flow
 
+For the full boundary diagram, see
+`telegram-webhook-submit-and-delivery-README.md`.
+
 ```text
 Telegram update
   -> summarize_telegram_update(update)
@@ -524,6 +528,9 @@ Without that event batch, ingress rejects the submission as
 `missing_external_events` before a workflow can be enqueued.
 
 ## Queued Delivery Boundary
+
+This section is a summary. The canonical runtime boundary explanation is
+`telegram-webhook-submit-and-delivery-README.md`.
 
 Queued Telegram turns have two distinct phases:
 

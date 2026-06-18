@@ -737,6 +737,14 @@ async def run_react_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> Dict[st
         }
     if not comm_context:
         return None
+    telegram_command_type, processed_text = _telegram_command_kind_and_text(text)
+    text_event_type = (
+        "event.user.steer"
+        if telegram_command_type == "steer"
+        else "event.user.followup"
+        if telegram_command_type == "followup"
+        else "event.user.prompt"
+    )
 
     scoped_ctx = comm_context.model_copy(deep=True)
     scoped_ctx.routing.session_id = conversation_id
@@ -761,7 +769,7 @@ async def run_react_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> Dict[st
             )
             summary["attachments"] = attachments
         external_events = _telegram_external_events(
-            text=text,
+            text=processed_text,
             attachments=attachments,
             turn_id=turn_id,
             text_event_type=text_event_type,
@@ -778,6 +786,7 @@ async def run_react_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> Dict[st
                 "conversation_id": conversation_id,
                 "turn_id": turn_id,
                 "external_events": external_events,
+                "message_kind": telegram_command_type,
             }
         )
         state["turn_id"] = turn_id

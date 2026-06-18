@@ -186,6 +186,153 @@ async def test_telegram_submit_react_turn_sends_external_events(tmp_path):
     }
 
 
+@pytest.mark.asyncio
+async def test_telegram_inline_run_react_turn_derives_external_event_type(tmp_path):
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram import TelegramUserAdminStorage
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram import user_admin
+
+    storage = TelegramUserAdminStorage(tmp_path)
+    storage.upsert_user(
+        telegram_user_id="2002",
+        telegram_chat_id="1001",
+        telegram_username="elena",
+        kdcube_user_id="user-a",
+        role="registered",
+        conversation_id="conv-main",
+    )
+    user_admin.configure_telegram_user_admin(
+        storage_factory=lambda entrypoint: storage,
+        storage_root_or_error=lambda entrypoint: tmp_path,
+        bundle_id="test.telegram-inline",
+    )
+
+    class _Ctx:
+        def __init__(self):
+            self.routing = SimpleNamespace(session_id="", conversation_id="", turn_id="")
+            self.user = SimpleNamespace(user_id="web-user", username="", user_type="anonymous")
+            self.request = SimpleNamespace(request_id="request-1")
+            self.actor = SimpleNamespace(tenant_id="tenant-a", project_id="project-a")
+
+        def model_copy(self, deep: bool = False):
+            del deep
+            clone = _Ctx()
+            clone.routing = SimpleNamespace(**vars(self.routing))
+            clone.user = SimpleNamespace(**vars(self.user))
+            clone.request = SimpleNamespace(**vars(self.request))
+            clone.actor = SimpleNamespace(**vars(self.actor))
+            return clone
+
+    class _Entrypoint:
+        BUNDLE_ID = "test.telegram-inline"
+        comm_context = _Ctx()
+
+        def rebind_request_context(self, *, comm_context):
+            self.bound_context = comm_context
+
+        def create_initial_state(self, payload):
+            self.initial_payload = dict(payload)
+            return dict(payload)
+
+        def set_state(self, state):
+            self.state = dict(state)
+
+        async def run(self, **params):
+            self.run_params = dict(params)
+            return {"final_answer": "ok", "followups": [], "turn_log": {"blocks": []}, "timeline": {"blocks": []}}
+
+    entrypoint = _Entrypoint()
+    result = await user_admin.run_react_turn(
+        entrypoint,
+        summary={
+            "text": "/followup and then?",
+            "chat_id": "1001",
+            "user_id": "2002",
+            "username": "elena",
+            "update_id": "upd-2",
+            "attachments": [],
+        },
+    )
+
+    assert result["answer"] == "ok"
+    events = entrypoint.run_params["external_events"]
+    assert events[0]["type"] == "event.user.followup"
+    assert events[0]["event_source_id"] == "telegram.user.followup"
+    assert events[0]["payload"]["event"]["text"] == "and then?"
+    assert entrypoint.initial_payload["message_kind"] == "followup"
+
+
+@pytest.mark.asyncio
+async def test_queued_telegram_delivery_uses_processor_payload_telegram(monkeypatch):
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram import user_admin
+
+    delivered: dict[str, object] = {}
+
+    async def _deliver(**kwargs):
+        delivered.update(kwargs)
+        return {
+            "messages": [{"kind": "text", "text": "Delivered answer"}],
+            "telegram_delivery": {"ok": True, "sent": 1},
+            "sent_after_progress": 1,
+            "progress_final_appended": False,
+        }
+
+    monkeypatch.setattr(user_admin, "deliver_react_turn_to_telegram", _deliver)
+    monkeypatch.setattr(user_admin, "bot_token", lambda entrypoint=None: "telegram-token")
+
+    class _Entrypoint:
+        BUNDLE_ID = "test.telegram-queued"
+        comm_context = SimpleNamespace(
+            request=SimpleNamespace(
+                payload={
+                    "telegram": {
+                        "chat_id": "1001",
+                        "update_id": "upd-queued",
+                        "turn_id": "turn_queued",
+                    }
+                },
+                external_events=[
+                    {
+                        "type": "event.user.prompt",
+                        "payload": {"event": {"text": "hello"}},
+                    }
+                ],
+            ),
+            routing=SimpleNamespace(turn_id="turn_queued"),
+        )
+
+        def bundle_prop(self, path, default=None):
+            return default
+
+    async def _runner():
+        return {
+            "answer": "Queued answer",
+            "turn_log": {
+                "turn_id": "turn_queued",
+                "blocks": [
+                    {
+                        "type": "assistant.completion",
+                        "turn_id": "turn_queued",
+                        "path": "ar:turn_queued.assistant.completion",
+                        "text": "Queued answer",
+                    }
+                ],
+            },
+            "timeline": {"blocks": []},
+        }
+
+    result = await user_admin.run_with_queued_telegram_delivery(
+        _Entrypoint(),
+        runner=_runner,
+    )
+
+    assert result["telegram"]["queued_delivery"] is True
+    assert result["telegram"]["chat_id"] == "1001"
+    assert delivered["chat_id"] == "1001"
+    assert delivered["update_id"] == "upd-queued"
+    assert delivered["react_turn"]["answer"] == "Queued answer"
+    assert delivered["react_turn"]["turn_log"]["turn_id"] == "turn_queued"
+
+
 def test_telegram_user_admin_uses_bound_comm_bundle_id(tmp_path):
     from kdcube_ai_app.apps.chat.sdk.integrations.telegram import TelegramUserAdminStorage
     from kdcube_ai_app.apps.chat.sdk.integrations.telegram import user_admin

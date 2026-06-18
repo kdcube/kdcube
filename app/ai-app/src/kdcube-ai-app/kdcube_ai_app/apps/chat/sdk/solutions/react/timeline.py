@@ -501,7 +501,8 @@ def extract_sources_used_from_blocks(blocks: List[Dict[str, Any]]) -> List[int]:
     for b in blocks or []:
         if not isinstance(b, dict):
             continue
-        if (b.get("type") or "") == "assistant.completion":
+        btype = b.get("type") or ""
+        if btype in {"assistant.completion", "assistant.completion.attempt"}:
             text_val = b.get("text")
             if isinstance(text_val, str) and text_val.strip():
                 for sid in citations_module.extract_citation_sids_any(text_val):
@@ -523,6 +524,25 @@ def extract_sources_used_from_blocks(blocks: List[Dict[str, Any]]) -> List[int]:
                         seen.add(sid)
                         used.append(sid)
     return used
+
+
+def extract_assistant_completion_texts_from_blocks(blocks: List[Dict[str, Any]]) -> List[str]:
+    canonical: List[str] = []
+    attempts: List[str] = []
+    for b in blocks or []:
+        if not isinstance(b, dict):
+            continue
+        btype = b.get("type") or ""
+        if btype not in {"assistant.completion", "assistant.completion.attempt"}:
+            continue
+        text = str(b.get("text") or "").strip()
+        if not text:
+            continue
+        if btype == "assistant.completion":
+            canonical.append(text)
+        else:
+            attempts.append(text)
+    return canonical or attempts
 
 
 def extract_user_prompt_block(blocks: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:

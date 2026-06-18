@@ -2,16 +2,38 @@
 # Copyright (c) 2026 Elena Viter
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.layout import (
+    assistant_completion_texts,
     build_assistant_completion_blocks,
     build_assistant_completion_attempt_blocks,
     build_working_summary_attempt_blocks,
     build_working_summary_blocks,
+    latest_assistant_completion_text,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.proto import RuntimeCtx
+from kdcube_ai_app.apps.chat.sdk.solutions.react.timeline import (
+    extract_assistant_completion_texts_from_blocks,
+    extract_sources_used_from_blocks,
+)
 
 
 def _block_factory(**kwargs):
     return dict(kwargs)
+
+
+class _Scratchpad:
+    pass
+
+
+def test_latest_assistant_completion_text_returns_latest_non_empty_entry():
+    scratchpad = _Scratchpad()
+    scratchpad.assistant_completion_attempts = [
+        {"text": "First answer"},
+        {"text": "   "},
+        {"text": "Latest answer"},
+    ]
+
+    assert latest_assistant_completion_text(scratchpad) == "Latest answer"
+    assert assistant_completion_texts(scratchpad) == ["First answer", "Latest answer"]
 
 
 def test_build_assistant_completion_blocks_numbers_earlier_entries_and_keeps_latest_alias():
@@ -113,6 +135,37 @@ def test_build_assistant_completion_attempt_blocks_marks_attempt_provisional():
     assert blocks[0]["meta"]["provisional"] is True
     assert blocks[0]["meta"]["iteration"] == 4
     assert blocks[0]["meta"]["sources_used"] == [1, 2]
+
+
+def test_extract_assistant_completion_texts_from_blocks_prefers_canonical_blocks():
+    blocks = [
+        {
+            "type": "assistant.completion.attempt",
+            "text": "Visible attempt",
+        },
+        {
+            "type": "assistant.completion",
+            "text": "Canonical answer",
+        },
+    ]
+
+    assert extract_assistant_completion_texts_from_blocks(blocks) == ["Canonical answer"]
+
+
+def test_extract_sources_used_from_blocks_scans_attempt_answer_text():
+    blocks = [
+        {
+            "type": "assistant.completion.attempt",
+            "text": "Provisional answer cites a source [[S:2]].",
+            "meta": {"sources_used": [3]},
+        },
+        {
+            "type": "assistant.completion",
+            "text": "Final answer cites another source [[S:4]].",
+        },
+    ]
+
+    assert extract_sources_used_from_blocks(blocks) == [2, 3, 4]
 
 
 def test_build_working_summary_attempt_blocks_uses_stable_attempt_paths():

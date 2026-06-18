@@ -90,6 +90,25 @@ def record_assistant_completion_attempt(
     return entry
 
 
+def latest_assistant_completion_text(scratchpad: Any) -> str:
+    texts = assistant_completion_texts(scratchpad)
+    return texts[-1] if texts else ""
+
+
+def assistant_completion_texts(scratchpad: Any) -> List[str]:
+    entries = getattr(scratchpad, "assistant_completion_attempts", None)
+    if not isinstance(entries, list):
+        return []
+    texts: List[str] = []
+    for raw in entries:
+        if not isinstance(raw, dict):
+            continue
+        text = str(raw.get("text") or "").strip()
+        if text:
+            texts.append(text)
+    return texts
+
+
 def _normalized_assistant_completion_entries(
     *,
     runtime: RuntimeCtx,

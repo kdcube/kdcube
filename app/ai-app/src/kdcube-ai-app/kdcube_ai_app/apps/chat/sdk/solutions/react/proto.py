@@ -276,6 +276,7 @@ class ReactResult:
     ok: bool = True
     out: List[Dict[str, Any]] = field(default_factory=list)
     sources_pool: List[Dict[str, Any]] = field(default_factory=list)
+    final_answers: List[str] = field(default_factory=list)
     final_answer: Optional[str] = None
     suggested_followups: List[str] = field(default_factory=list)
     error: Any = None
@@ -290,6 +291,7 @@ class ReactResult:
             "ok": bool(self.ok),
             "out": list(self.out or []),
             "sources_pool": list(self.sources_pool or []),
+            "final_answers": list(self.final_answers or []),
             "final_answer": self.final_answer,
             "suggested_followups": list(self.suggested_followups or []),
             "error": self.error,
