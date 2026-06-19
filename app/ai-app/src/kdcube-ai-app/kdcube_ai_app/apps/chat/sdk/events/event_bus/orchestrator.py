@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import logging
+import os
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional, Sequence
 
@@ -18,6 +20,30 @@ from .state import (
     timestamp_lte,
     utc_timestamp,
 )
+
+logger = logging.getLogger(__name__)
+
+# A handler lane is owned by exactly one turn at a time. If that turn crashes or
+# its worker reloads before calling try_close_handler(), the lane stays
+# handler_status="open" under a now-dead handler_turn_id, and every later turn's
+# open_handler() used to defer to it forever -> a permanent close-gate wedge.
+# Treat an "open" lane as reclaimable once its handler_status_at is older than
+# this TTL: long enough never to steal a genuinely in-flight turn (turns finish
+# in seconds to low minutes even at max_iterations), short enough to self-heal.
+def _handler_turn_ttl_ms() -> int:
+    try:
+        seconds = int(float(os.getenv("KDCUBE_HANDLER_TURN_TTL_SECONDS", "600") or 600))
+    except Exception:
+        seconds = 600
+    if seconds <= 0:
+        seconds = 600
+    return seconds * 1000
+
+
+def _handler_open_is_fresh(status_at: str, now: str) -> bool:
+    # Empty/missing/malformed status_at -> not fresh -> reclaimable (self-heal).
+    # timestamp_is_fresh handles parse errors by returning age=inf -> False.
+    return timestamp_is_fresh(now=now, since=status_at, ttl_ms=_handler_turn_ttl_ms())
 
 
 @dataclass(frozen=True)
@@ -65,8 +91,24 @@ class ConversationEventBusOrchestrator:
         now = utc_timestamp()
 
         def _mutate(state: EventLaneState) -> EventLaneState:
-            if state.handler_status == "open" and state.handler_turn_id and state.handler_turn_id != turn_id:
-                return state
+            if (
+                state.handler_status == "open"
+                and state.handler_turn_id
+                and state.handler_turn_id != turn_id
+            ):
+                # Defer ONLY to a genuinely live concurrent turn. If the prior
+                # owner's lane is stale (status_at older than the TTL, or the
+                # turn crashed/reloaded before closing), reclaim it instead of
+                # wedging forever.
+                if _handler_open_is_fresh(state.handler_status_at, now):
+                    return state
+                logger.warning(
+                    "[event-bus] reclaiming stale-open handler turn=%s -> %s "
+                    "(status_at=%s age > TTL)",
+                    state.handler_turn_id,
+                    turn_id,
+                    state.handler_status_at or "<empty>",
+                )
             state.handler_turn_id = turn_id
             state.handler_status = "open"
             state.handler_status_at = now
