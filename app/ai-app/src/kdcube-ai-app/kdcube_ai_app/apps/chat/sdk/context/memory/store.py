@@ -1832,6 +1832,10 @@ class UserMemoryStore:
             scope_filter=str(request.scope_filter or "current_bundle"),
             table_alias="",
         )
+        originator = normalize_term(request.originator)
+        if originator and originator != "any":
+            args.append(originator)
+            where.append(f"originator=${len(args)}")
         labels = normalize_terms(request.labels)
         if labels:
             args.append(labels)
@@ -1927,6 +1931,10 @@ class UserMemoryStore:
             scope_filter=str(request.scope_filter or "current_bundle"),
             table_alias="m",
         )
+        originator = normalize_term(request.originator)
+        if originator and originator != "any":
+            args.append(originator)
+            where.append(f"e.originator=${len(args)}")
         limit = max(1, min(int(request.limit or 20), 200))
         sql = f"""
             SELECT e.*

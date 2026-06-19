@@ -54,8 +54,10 @@ def test_memory_search_scopes_advertise_memory_native_factor_weights() -> None:
     assert factor_weights["type"] == "object"
     assert "semantic_weight" in properties
     assert "freshness_weight" in properties
-    assert "half_life_days" in properties
-    assert "min_relevance_score" in properties
+    assert "half_life_days" not in properties
+    assert "min_relevance_score" not in properties
+    assert "relevance_score" in filters["thresholds"]["properties"]
+    assert "half_life_days" in filters["scoring"]["properties"]
     assert "rrf_k" not in properties
 
 
@@ -173,6 +175,39 @@ async def test_memory_search_defaults_to_all_user_memories() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("origin", "expected_scope_filter", "expected_originator"),
+    [
+        ("any", "all_user_memories", ""),
+        ("any_agent", "all_user_memories", "agent"),
+        ("this_agent", "current_bundle", ""),
+        ("created_by_user", "all_user_memories", "user"),
+        ("global", "global_only", ""),
+    ],
+)
+async def test_memory_search_maps_public_origin_filter_to_internal_scope_filter(
+    origin: str,
+    expected_scope_filter: str,
+    expected_originator: str,
+) -> None:
+    store = _Store()
+    response = await _provider_with_store(store).object_search(
+        NamedServiceContext(tenant="tenant-a", project="project-a", user_id="user-a"),
+        NamedServiceRequest(
+            operation="object.search",
+            namespace="mem",
+            query="legal commercial",
+            limit=5,
+            filters={"origin": origin},
+        ),
+    )
+
+    assert response.ok is True
+    assert store.search_requests[0].scope_filter == expected_scope_filter
+    assert store.search_requests[0].originator == expected_originator
+
+
+@pytest.mark.asyncio
 async def test_memory_search_passes_factor_weight_filters_to_request() -> None:
     store = _Store()
     response = await _provider_with_store(store).object_search(
@@ -184,8 +219,8 @@ async def test_memory_search_passes_factor_weight_filters_to_request() -> None:
             limit=5,
             filters={
                 "factor_weights": {"semantic_weight": "1.0", "freshness_weight": 0},
-                "half_life_days": "10",
-                "min_relevance_score": "0.2",
+                "scoring": {"half_life_days": "10"},
+                "thresholds": {"relevance_score": "0.2"},
             },
         ),
     )

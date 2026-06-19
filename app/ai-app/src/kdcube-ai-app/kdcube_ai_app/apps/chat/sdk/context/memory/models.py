@@ -66,10 +66,18 @@ def normalize_scope_filter(value: str | None) -> str:
         "all_user": "all_user_memories",
         "user_all": "all_user_memories",
         "all_bundles": "all_user_memories",
+        "any": "all_user_memories",
+        "any_agent": "all_user_memories",
+        "all_agents": "all_user_memories",
+        "user": "all_user_memories",
+        "made_by_user": "all_user_memories",
         "current": "current_bundle",
         "bundle": "current_bundle",
         "bundle_only": "current_bundle",
         "current_bundle_only": "current_bundle",
+        "this_agent": "current_bundle",
+        "current_agent": "current_bundle",
+        "made_by_this_agent": "current_bundle",
         "global": "global_only",
         "global_memories": "global_only",
         "current_or_global": "current_bundle_or_global",
@@ -140,6 +148,7 @@ class MemorySearchRequest:
     visible_to_user: Optional[bool] = None
     include_private: bool = True
     scope_filter: MemoryScopeFilter | str = "current_bundle"
+    originator: str = ""
     limit: int = 8
     offset: int = 0
     candidate_limit: int = 200

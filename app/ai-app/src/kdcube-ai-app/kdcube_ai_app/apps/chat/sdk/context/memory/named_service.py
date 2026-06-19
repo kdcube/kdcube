@@ -40,6 +40,7 @@ from .models import (
     MemorySignal,
     is_user_visible,
     normalize_scope_filter,
+    normalize_term,
     normalize_terms,
 )
 from .scoring import DEFAULT_MEMORY_SCORING
@@ -71,30 +72,35 @@ EmbeddingFactory = Callable[[str], Sequence[float] | Awaitable[Sequence[float] |
 
 
 MEMORY_SEARCH_FILTERS: dict[str, Any] = {
-    "scope_filter": {
+    "origin": {
         "type": "string",
-        "enum": ["current_bundle", "all_user_memories", "global_only", "current_bundle_or_global"],
-        "description": "Which user-memory bundle scope to search.",
+        "enum": ["any", "this_agent", "any_agent", "created_by_user", "global"],
+        "description": "Which memory origin to search. any = all user-visible records; this_agent = records saved in this agent/application context; any_agent = agent-created records across agent/application contexts; created_by_user = records explicitly created by the user; global = shared records not tied to one agent/application context.",
+        "default": "any",
     },
     "mode": {
         "type": "string",
         "enum": ["hybrid", "recent", "recent_created", "important", "confirmed", "hotset"],
-        "description": "Memory record search mode. Event-history search is not exposed as a named-service object scope.",
+        "description": "How to rank or browse memory records. hybrid = text/label/semantic relevance for the query; recent = recently updated active records; recent_created = newly created records; important = high-importance records; confirmed = records with confirmation evidence; hotset = compact high-value working set.",
     },
-    "labels": {"type": "string|array", "description": "Comma-separated or array memory labels."},
-    "keywords": {"type": "string|array", "description": "Comma-separated or array memory keywords."},
+    "labels": {"type": "string|array", "description": "Return records with at least one of these normalized labels."},
+    "keywords": {"type": "string|array", "description": "Return records with at least one of these normalized keywords."},
     "kind": {
         "type": "string",
-        "description": "Open-vocabulary memory kind filter. Known values include fact, preference, decision, constraint, communication_style, anchor, spec, milestone, and state.",
+        "description": "Memory kind filter. Use known values when possible: fact, preference, decision, constraint, communication_style, anchor, spec, milestone, state.",
+        "examples": list(KNOWN_MEMORY_KINDS),
         "x-kdcube-known-values": list(KNOWN_MEMORY_KINDS),
     },
-    "status": {"type": "string", "description": "Memory status filter; defaults to active."},
+    "status": {
+        "type": "string",
+        "enum": ["active", "weakened", "unsupported", "retired", "merged", "any"],
+        "description": "Memory lifecycle status. active is the normal usable memory; weakened/unsupported mean evidence reduced confidence; retired/merged are historical unless explicitly requested; any disables status filtering.",
+        "default": "active",
+    },
     "visible_to_user": {"type": "boolean", "description": "Restrict to user-visible memory records when true."},
-    "min_relevance_score": {"type": "number", "description": "Optional minimum lexical/semantic relevance score."},
-    "half_life_days": {"type": "number", "exclusiveMinimum": 0.0, "description": "Days until freshness halves; legacy top-level alias for factor_weights.half_life_days."},
     "factor_weights": {
         "type": "object",
-        "description": "Per-call memory scoring tuning; unset keys use defaults. Memory uses one additive weighted sum, not RRF.",
+        "description": "Relative weights for memory's additive relevance score. Use only when changing ranking priorities; 0 disables that factor.",
         "properties": {
             "semantic_weight": {"type": "number", "minimum": 0.0, "default": DEFAULT_MEMORY_SCORING.semantic_weight, "description": "Embedding/cosine factor weight; 0 turns semantic off (skips the query embed, ranks on text+labels+salience)."},
             "text_weight": {"type": "number", "minimum": 0.0, "default": DEFAULT_MEMORY_SCORING.text_weight, "description": "Token-overlap/text-rank factor weight."},
@@ -104,8 +110,20 @@ MEMORY_SEARCH_FILTERS: dict[str, Any] = {
             "confidence_weight": {"type": "number", "minimum": 0.0, "default": DEFAULT_MEMORY_SCORING.confidence_weight, "description": "Confidence factor weight."},
             "freshness_weight": {"type": "number", "minimum": 0.0, "default": DEFAULT_MEMORY_SCORING.freshness_weight, "description": "Recency factor weight."},
             "confirmation_weight": {"type": "number", "minimum": 0.0, "default": DEFAULT_MEMORY_SCORING.confirmation_weight, "description": "Confirmation-rate factor weight."},
-            "half_life_days": {"type": "number", "exclusiveMinimum": 0.0, "default": DEFAULT_MEMORY_SCORING.half_life_days, "description": "Days until freshness halves."},
-            "min_relevance_score": {"type": "number", "minimum": 0.0, "maximum": 1.0, "default": DEFAULT_MEMORY_SCORING.min_relevance_score, "description": "Relevance floor (0-1); raise to drop weak hits."},
+        },
+    },
+    "thresholds": {
+        "type": "object",
+        "description": "Eligibility floors for normalized memory factors. Use only fields declared here.",
+        "properties": {
+            "relevance_score": {"type": "number", "minimum": 0.0, "maximum": 1.0, "default": DEFAULT_MEMORY_SCORING.min_relevance_score, "description": "Minimum normalized memory relevance. Applies only when query, labels, or keywords request relevance."},
+        },
+    },
+    "scoring": {
+        "type": "object",
+        "description": "Non-weight ranking parameters.",
+        "properties": {
+            "half_life_days": {"type": "number", "exclusiveMinimum": 0.0, "default": DEFAULT_MEMORY_SCORING.half_life_days, "description": "Days until the freshness/recency contribution halves."},
         },
     },
 }
@@ -260,6 +278,36 @@ def _factor_weights(value: Any) -> dict[str, float] | None:
         except Exception:
             continue
     return weights or None
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except Exception:
+            return {}
+    return value if isinstance(value, Mapping) else {}
+
+
+def _normalize_origin_filter(value: Any) -> str:
+    normalized = normalize_term(value)
+    aliases = {
+        "": "",
+        "all": "any",
+        "everything": "any",
+        "all_memories": "any",
+        "user": "created_by_user",
+        "created_by_user": "created_by_user",
+        "made_by_user": "created_by_user",
+        "agent": "any_agent",
+        "agents": "any_agent",
+        "all_agents": "any_agent",
+        "current_agent": "this_agent",
+        "current": "this_agent",
+        "global_memories": "global",
+    }
+    normalized = aliases.get(normalized, normalized)
+    return normalized if normalized in {"any", "this_agent", "any_agent", "created_by_user", "global"} else ""
 
 
 def _bool_or_none(value: Any) -> bool | None:
@@ -585,12 +633,31 @@ class MemoryNamedServiceProvider(NamedServiceProvider):
         return await self._embedding_with(self._search_embedding_factory or self._embedding_factory, query)
 
     def _scope_filter(self, request: NamedServiceRequest, *, default: str | None = None) -> str:
+        origin = _normalize_origin_filter(request.filters.get("origin"))
+        if origin == "this_agent":
+            return "current_bundle"
+        if origin in {"any", "any_agent", "created_by_user"}:
+            return "all_user_memories"
+        if origin == "global":
+            return "global_only"
         return normalize_scope_filter(
             request.filters.get("scope_filter")
             or request.payload.get("scope_filter")
             or default
             or self._default_scope_filter
         )
+
+    def _originator_filter(self, request: NamedServiceRequest) -> str:
+        origin = _normalize_origin_filter(request.filters.get("origin"))
+        if origin == "any_agent":
+            return "agent"
+        if origin == "created_by_user":
+            return "user"
+        raw = _text(request.filters.get("originator") or request.filters.get("created_by") or "")
+        normalized = normalize_term(raw)
+        if normalized in {"agent", "user"}:
+            return normalized
+        return ""
 
     def _source(self, ctx: NamedServiceContext, request: NamedServiceRequest, *, action: str) -> dict[str, Any]:
         return {
@@ -624,7 +691,7 @@ class MemoryNamedServiceProvider(NamedServiceProvider):
                 **SERVICE_ABOUT,
                 "canonical_ref": "mem:record:<memory_id>",
                 "viewer_surface": "sdk.memory.viewer",
-                "schema_hint": "Call object.schema with object_kind='memory.record' for concrete payload fields. Event history is related data returned only when reading a memory with include=['events'].",
+                "schema_hint": "Call named_services.object_schema with object_kind='memory.record' for concrete payload fields and search filters. Event history is related data returned only when reading a memory with include=['events'].",
             },
         )
 
@@ -697,6 +764,8 @@ class MemoryNamedServiceProvider(NamedServiceProvider):
             visible_to_user = True
         scope_filter = self._scope_filter(request, default="all_user_memories")
         factor_weights = _factor_weights(filters.get("factor_weights"))
+        thresholds = _mapping(filters.get("thresholds"))
+        scoring = _mapping(filters.get("scoring"))
         # Semantic factor off (semantic_weight <= 0) → skip the query embed entirely,
         # so the search costs no embedder call and ranks on text + labels + salience.
         # Aligns with the hybrid index's "semantic off" mode: turning the factor off
@@ -717,11 +786,18 @@ class MemoryNamedServiceProvider(NamedServiceProvider):
             visible_to_user=visible_to_user,
             include_private=not bool(visible_to_user),
             scope_filter=scope_filter,
+            originator=self._originator_filter(request),
             limit=limit + 1,
             offset=offset,
             query_embedding=query_embedding,
-            min_relevance_score=_float(filters.get("min_relevance_score"), 0.0),
-            half_life_days=_float(filters.get("half_life_days"), DEFAULT_MEMORY_SCORING.half_life_days),
+            min_relevance_score=_float(
+                thresholds.get("relevance_score", filters.get("min_relevance_score")),
+                DEFAULT_MEMORY_SCORING.min_relevance_score,
+            ),
+            half_life_days=_float(
+                scoring.get("half_life_days", filters.get("half_life_days")),
+                DEFAULT_MEMORY_SCORING.half_life_days,
+            ),
             factor_weights=factor_weights,
         )
         LOGGER.info(
