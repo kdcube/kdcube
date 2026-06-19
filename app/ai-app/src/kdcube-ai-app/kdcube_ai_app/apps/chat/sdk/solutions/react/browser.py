@@ -43,7 +43,12 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.events import (
     stamp_event_identity_many,
 )
 from kdcube_ai_app.apps.chat.sdk.events.event_bus.orchestrator import ConversationEventBusOrchestrator
-from kdcube_ai_app.apps.chat.sdk.events.event_bus.state import event_is_reactive, event_timestamp, timestamp_lte
+from kdcube_ai_app.apps.chat.sdk.events.event_bus.state import (
+    event_is_handler_probe,
+    event_is_reactive,
+    event_timestamp,
+    timestamp_lte,
+)
 
 PROJECT_LOG_SLOTS = { "project_log" }
 SOURCES_POOL_ARTIFACT_TAG = f"artifact:{SOURCES_POOL_KIND}"
@@ -279,7 +284,7 @@ class ContextBrowser:
             return
         try:
             await self.post_save_external_event_handoff()
-            await orchestrator.mark_consumer_none()
+            await orchestrator.mark_consumer_none(turn_id=str(self._runtime_ctx.turn_id or ""))
         except Exception:
             self.log.log("[timeline.external]: failed to release event-bus consumer state\n" + traceback.format_exc(), "ERROR")
 
@@ -605,6 +610,11 @@ class ContextBrowser:
             max_applied_seq = 0
             current_prompt_texts: List[str] = []
             for event in events:
+                if await self._maybe_ack_handler_probe(event):
+                    if getattr(event, "stream_id", None):
+                        max_cursor = str(getattr(event, "stream_id", "") or max_cursor)
+                    max_seq = max(max_seq, int(getattr(event, "sequence", 0) or 0))
+                    continue
                 blocks = await self._blocks_from_external_event(event)
                 max_seq = max(max_seq, int(getattr(event, "sequence", 0) or 0))
                 if getattr(event, "stream_id", None):
@@ -750,6 +760,15 @@ class ContextBrowser:
                 continue
             if self._external_event_already_applied(event):
                 continue
+            if await self._maybe_ack_handler_probe(event):
+                stream_id = str(getattr(event, "stream_id", "") or "")
+                if stream_id:
+                    self._timeline.last_external_event_id = stream_id
+                self._timeline.last_external_event_seq = max(
+                    int(self._timeline.last_external_event_seq or 0),
+                    int(event.sequence or 0),
+                )
+                continue
             blocks = await self._blocks_from_external_event(event)
             stream_id = str(getattr(event, "stream_id", "") or "")
             if not blocks:
@@ -788,6 +807,39 @@ class ContextBrowser:
             except Exception:
                 self.log.log(f"[timeline.external]: failed to mark consumed {traceback.format_exc()}", "ERROR")
         return added
+
+    async def _maybe_ack_handler_probe(self, event: Any) -> bool:
+        if not event_is_handler_probe(event):
+            return False
+        source = self.external_event_source
+        if source is None:
+            return True
+        payload = getattr(event, "payload", None)
+        if not isinstance(payload, dict):
+            payload = {}
+        probe_id = (
+            str(payload.get("probe_id") or "").strip()
+            or str(getattr(event, "message_id", "") or getattr(event, "event_id", "") or "").strip()
+        )
+        for_turn = str(payload.get("for_turn") or "").strip()
+        turn_id = str(self._runtime_ctx.turn_id or "").strip()
+        if not probe_id or not for_turn or not turn_id:
+            return True
+        if for_turn != turn_id:
+            return True
+        ack = getattr(source, "ack_handler_probe", None)
+        if not callable(ack):
+            return True
+        try:
+            await ack(probe_id=probe_id, turn_id=turn_id)
+            self.log.log(
+                f"[timeline.external]: acknowledged handler probe conversation={self._runtime_ctx.conversation_id} "
+                f"turn_id={turn_id} probe_id={probe_id}",
+                "INFO",
+            )
+        except Exception:
+            self.log.log("[timeline.external]: failed to acknowledge handler probe\n" + traceback.format_exc(), "ERROR")
+        return True
 
     async def _emit_external_event_hooks(self, *, type: str, event: Any, blocks: List[Dict[str, Any]]) -> None:
         hooks = list(self._external_event_hooks or [])

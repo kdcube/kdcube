@@ -12,6 +12,7 @@ from kdcube_ai_app.apps.chat.sdk.events.event_bus import (
     RedisEventLaneStateTable,
 )
 from kdcube_ai_app.apps.chat.sdk.events.event_bus.state import (
+    event_is_handler_probe,
     event_is_reactive,
     event_timestamp,
     timestamp_lte,
@@ -55,6 +56,18 @@ def _event(ts: str, *, reactive: bool = True, event_id: str = "") -> SimpleNames
         stream_id="",
         agent_id="default.react.agent",
         payload={"event": {"timestamp": ts, "reactive": reactive}},
+        consumed=False,
+    )
+
+
+def _probe_event(ts: str, *, event_id: str = "probe-1") -> SimpleNamespace:
+    return SimpleNamespace(
+        message_id=event_id,
+        sequence=0,
+        stream_id="",
+        agent_id="default.react.agent",
+        kind="probe",
+        payload={"kind": "probe", "probe_id": event_id, "for_turn": "turn-1", "event": {"timestamp": ts}},
         consumed=False,
     )
 
@@ -721,7 +734,21 @@ async def test_close_gate_uses_event_id_to_disambiguate_same_timestamp_events():
 
 
 @pytest.mark.asyncio
-async def test_open_handler_does_not_overwrite_existing_open_turn():
+async def test_open_handler_does_not_overwrite_existing_open_turn_with_fresh_consumer():
+    orchestrator = _orchestrator()
+
+    first = await orchestrator.open_handler(turn_id="turn-1")
+    await orchestrator.mark_consumer_active(turn_id="turn-1")
+    second = await orchestrator.open_handler(turn_id="turn-2")
+
+    assert first.handler_status == "open"
+    assert first.handler_turn_id == "turn-1"
+    assert second.handler_status == "open"
+    assert second.handler_turn_id == "turn-1"
+
+
+@pytest.mark.asyncio
+async def test_open_handler_reclaims_existing_open_turn_without_live_consumer():
     orchestrator = _orchestrator()
 
     first = await orchestrator.open_handler(turn_id="turn-1")
@@ -730,7 +757,53 @@ async def test_open_handler_does_not_overwrite_existing_open_turn():
     assert first.handler_status == "open"
     assert first.handler_turn_id == "turn-1"
     assert second.handler_status == "open"
-    assert second.handler_turn_id == "turn-1"
+    assert second.handler_turn_id == "turn-2"
+
+
+@pytest.mark.asyncio
+async def test_handler_probe_is_not_reactive_and_does_not_advance_processed_cursor():
+    orchestrator = _orchestrator()
+    await orchestrator.open_handler(turn_id="turn-1")
+
+    probe = _probe_event("2026-06-10T10:00:02Z")
+    assert event_is_handler_probe(probe)
+    assert not event_is_reactive(probe)
+
+    accepted = False
+
+    async def _accept() -> None:
+        nonlocal accepted
+        accepted = True
+
+    decision = await orchestrator.accept_events_for_open_handler(
+        [probe],
+        turn_id="turn-1",
+        accept=_accept,
+    )
+
+    assert decision.accepted
+    assert accepted
+    assert decision.state.last_processed_event_timestamp == ""
+    assert decision.state.last_processed_reactive_event_timestamp == ""
+
+
+@pytest.mark.asyncio
+async def test_handler_probe_does_not_displace_real_processed_event_timestamp():
+    orchestrator = _orchestrator()
+    await orchestrator.open_handler(turn_id="turn-1")
+
+    decision = await orchestrator.accept_events_for_open_handler(
+        [
+            _event("2026-06-10T10:00:01Z", reactive=True, event_id="evt-1"),
+            _probe_event("2026-06-10T10:00:02Z", event_id="probe-2"),
+        ],
+        turn_id="turn-1",
+    )
+
+    assert decision.accepted
+    assert decision.state.last_processed_event_timestamp == "2026-06-10T10:00:01Z"
+    assert decision.state.last_processed_event_id == "evt-1"
+    assert decision.state.last_processed_reactive_event_timestamp == "2026-06-10T10:00:01Z"
 
 
 @pytest.mark.asyncio

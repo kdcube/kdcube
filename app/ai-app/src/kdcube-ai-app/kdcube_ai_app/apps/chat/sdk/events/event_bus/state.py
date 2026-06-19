@@ -155,7 +155,25 @@ def event_id(event: Any) -> str:
     return ""
 
 
+def event_is_handler_probe(event: Any) -> bool:
+    kind = str(getattr(event, "kind", "") or "").strip().lower()
+    if kind == "probe":
+        return True
+    payload = getattr(event, "payload", None)
+    if isinstance(payload, dict):
+        if str(payload.get("kind") or "").strip().lower() == "probe":
+            return True
+    task_payload = getattr(event, "task_payload", None)
+    if isinstance(task_payload, dict):
+        event_meta = task_payload.get("event")
+        if isinstance(event_meta, dict) and str(event_meta.get("kind") or "").strip().lower() == "probe":
+            return True
+    return False
+
+
 def event_is_reactive(event: Any) -> bool:
+    if event_is_handler_probe(event):
+        return False
     payload = getattr(event, "payload", None)
     if isinstance(payload, dict):
         accepted = payload.get("event")

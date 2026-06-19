@@ -10,7 +10,7 @@ from .orchestrator import (
     EventBusScheduleDecision,
 )
 from .exceptions import ExternalEventLaneWakeIgnored
-from .state import EventLaneState, RedisEventLaneStateTable, event_timestamp
+from .state import EventLaneState, RedisEventLaneStateTable, event_is_handler_probe, event_timestamp
 from .wakeup import (
     EventLaneWakePublishResult,
     EventLaneWakePublisher,
@@ -33,6 +33,7 @@ __all__ = [
     "RedisEventLaneStateTable",
     "build_event_lane_ref",
     "build_event_lane_wakeup",
+    "event_is_handler_probe",
     "event_lane_wakeup_queue_key",
     "event_timestamp",
 ]

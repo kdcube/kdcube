@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -22,6 +23,7 @@ from kdcube_ai_app.infra.namespaces import REDIS, ns_key
 logger = logging.getLogger(__name__)
 
 _DEFAULT_OWNER_TTL_SECONDS = 600
+_DEFAULT_HANDLER_PROBE_ACK_TTL_SECONDS = 30
 _PROMOTION_CONSUMER_GROUP = "react-external-promoter.v1"
 _DEFAULT_STREAM_MAX_ENTRIES = max(64, int(os.getenv("CHAT_EXTERNAL_EVENTS_STREAM_MAX_ENTRIES") or "1024"))
 _DEFAULT_STREAM_RETENTION_SECONDS = max(0, int(os.getenv("CHAT_EXTERNAL_EVENTS_STREAM_RETENTION_SECONDS") or str(7 * 24 * 3600)))
@@ -298,6 +300,9 @@ class RedisConversationExternalEventSource:
     def claim_key(self, message_id: str) -> str:
         return f"{self.log_key}:claim:{str(message_id or '').strip()}"
 
+    def probe_ack_key(self, probe_id: str) -> str:
+        return f"{self.log_key}:probe:{safe_event_lane_part(probe_id, default='')}"
+
     @property
     def promotion_cursor_key(self) -> str:
         return f"{self.log_key}:promotion-cursor"
@@ -353,6 +358,84 @@ class RedisConversationExternalEventSource:
         )
         await self.publish_prepared_events([event])
         return event
+
+    async def publish_handler_probe(
+        self,
+        *,
+        for_turn: str,
+        challenger_turn_id: str = "",
+    ) -> ConversationExternalEvent:
+        probe_id = f"probe_{uuid.uuid4().hex[:16]}"
+        payload = {
+            "kind": "probe",
+            "probe_id": probe_id,
+            "for_turn": str(for_turn or "").strip(),
+        }
+        if challenger_turn_id:
+            payload["challenger_turn_id"] = str(challenger_turn_id or "").strip()
+        event = await self.prepare_event(
+            kind="probe",
+            event_id=probe_id,
+            source="event_bus.handler_probe",
+            event_source_id="system.event_lane.probe",
+            payload=payload,
+            task_payload=None,
+        )
+        event.task_payload = None
+        await self.publish_prepared_events([event])
+        return event
+
+    async def ack_handler_probe(
+        self,
+        *,
+        probe_id: str,
+        turn_id: str,
+        ttl_seconds: int = _DEFAULT_HANDLER_PROBE_ACK_TTL_SECONDS,
+    ) -> bool:
+        probe_id = str(probe_id or "").strip()
+        turn_id = str(turn_id or "").strip()
+        if not probe_id or not turn_id:
+            return False
+        setter = getattr(self.redis, "set", None)
+        if callable(setter):
+            try:
+                await setter(self.probe_ack_key(probe_id), turn_id, ex=max(1, int(ttl_seconds or 1)))
+                return True
+            except TypeError:
+                pass
+        await self.redis.setex(self.probe_ack_key(probe_id), max(1, int(ttl_seconds or 1)), turn_id)
+        return True
+
+    async def get_handler_probe_ack(self, *, probe_id: str) -> str:
+        probe_id = str(probe_id or "").strip()
+        if not probe_id:
+            return ""
+        raw = await self.redis.get(self.probe_ack_key(probe_id))
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8")
+        return str(raw or "").strip()
+
+    async def wait_handler_probe_ack(
+        self,
+        *,
+        probe_id: str,
+        for_turn: str,
+        timeout_ms: int = 750,
+        poll_ms: int = 50,
+    ) -> bool:
+        probe_id = str(probe_id or "").strip()
+        expected = str(for_turn or "").strip()
+        if not probe_id or not expected:
+            return False
+        timeout_s = max(0.0, float(timeout_ms or 0) / 1000.0)
+        poll_s = max(0.01, float(poll_ms or 50) / 1000.0)
+        deadline = time.monotonic() + timeout_s
+        while True:
+            if await self.get_handler_probe_ack(probe_id=probe_id) == expected:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(min(poll_s, max(0.0, deadline - time.monotonic())))
 
     async def prepare_event(
         self,
@@ -567,6 +650,10 @@ class RedisConversationExternalEventSource:
             if item is None:
                 continue
             stream_id = str(item.stream_id or "")
+            if str(item.kind or "").strip().lower() == "probe":
+                if stream_id:
+                    await self._ack_stream_event(stream_id)
+                continue
             if item.failed_at is not None or item.task_payload is None or item.promoted_at is not None or item.consumed_at is not None:
                 if stream_id:
                     await self._ack_stream_event(stream_id)
@@ -617,6 +704,10 @@ class RedisConversationExternalEventSource:
             if item is None:
                 continue
             stream_id = str(item.stream_id or "")
+            if str(item.kind or "").strip().lower() == "probe":
+                if stream_id:
+                    last_terminal_stream_id = stream_id
+                continue
             if item.failed_at is not None:
                 if stream_id:
                     last_terminal_stream_id = stream_id

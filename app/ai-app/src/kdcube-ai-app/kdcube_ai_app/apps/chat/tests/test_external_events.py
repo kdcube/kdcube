@@ -336,6 +336,37 @@ async def test_external_event_source_publish_read_and_owner():
 
 
 @pytest.mark.asyncio
+async def test_external_event_handler_probe_is_ackable_but_not_promotable():
+    redis = _FakeRedis()
+    source = build_conversation_external_event_source(
+        redis=redis,
+        tenant="t1",
+        project="p1",
+        conversation_id="conv1",
+    )
+
+    probe = await source.publish_handler_probe(for_turn="turn-a", challenger_turn_id="turn-b")
+
+    assert probe.kind == "probe"
+    assert probe.task_payload is None
+    assert probe.payload == {
+        "kind": "probe",
+        "probe_id": probe.message_id,
+        "for_turn": "turn-a",
+        "challenger_turn_id": "turn-b",
+    }
+
+    events = await source.read_since(0)
+    assert [event.message_id for event in events] == [probe.message_id]
+
+    assert await source.ack_handler_probe(probe_id=probe.message_id, turn_id="turn-a")
+    assert await source.get_handler_probe_ack(probe_id=probe.message_id) == "turn-a"
+
+    claimed = await source.claim_next_promotable(claimant_id="proc-1", min_idle_ms=1)
+    assert claimed is None
+
+
+@pytest.mark.asyncio
 async def test_external_event_source_claim_promote_and_consume():
     redis = _FakeRedis()
     source = build_conversation_external_event_source(
