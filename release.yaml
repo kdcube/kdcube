@@ -1,131 +1,88 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.6.18.2120"
+  ref: "2026.6.19.202"
   description: |
-    This release consolidates the platform work after 2026.6.18.142 around
-    reactive event processing, Telegram delivery, reusable SDK scene widgets,
-    memory/canvas object handling, gateway auth logging, and the versatile
-    reference bundle release.
+    This release follows 2026.6.18.2120 with targeted authentication,
+    cross-origin scene interaction, and documentation improvements needed for
+    mixed-runtime deployments.
 
-    The main product outcome is a more reliable reactive conversation loop.
-    Events accepted into a running turn are now tracked by a timeline render
-    cursor owned by the turn timeline itself, rather than by fragile visible
-    block timestamp derivation. This makes close-gate decisions resilient to
-    projection, compaction, hidden metadata, and repeated follow-up batches.
-    Accepted event blocks belong to the runtime turn that processed them, while
-    ingress active-turn data remains provenance only.
+    The main product outcome is that a runtime can now trust more than one
+    explicitly configured Cognito issuer/client pair while still validating
+    tokens with the normal Cognito verifier. This supports transitional scenes
+    where the browser signs in through one trusted runtime and calls apps
+    hosted by another trusted runtime.
 
     Highlights
 
-    - Fixes ReAct close-gate handling so a final answer is not repeatedly
-      deferred because an already-rendered external event was missed by a
-      derived visible-block watermark.
-    - Adds a centralized rendered-through cursor on the ReAct timeline, with
-      timestamp and block identity, so the runtime can decide whether any
-      later timeline blocks still need another round.
-    - Preserves correct prompt ownership for accepted external events: runtime
-      turn id is authoritative for the block being processed; previously active
-      turn id is retained as provenance and no longer stamps the processed
-      block.
-    - Improves assistant completion selection and indexing so all legal
-      assistant completions remain represented, while state-level
-      `final_answer` is treated only as the latest/fallback answer surface.
-    - Adds tests around external-event timeline rendering, runtime close-gate
-      behavior, rendered-through cursors, and base workflow runtime context.
-    - Documents Telegram webhook submit and queued delivery boundaries,
-      including webhook ingress, queued resubmitter delivery, live streaming,
-      and non-live job execution.
-    - Extends Telegram integration tests for queued delivery and bridge
-      behavior after the external-event infrastructure changes.
-    - Fixes the Slack OAuth token endpoint to use `oauth.v2.access`.
-    - Improves memory widget behavior for compact open, open-in-editor,
-      multi-id drops, clipped pills, and focused list rendering.
-    - Improves canvas, chat, and context-drag interoperability so memory,
-      canvas, and file objects use canonical context payloads across widget
-      surfaces.
-    - Releases `versatile@2026-03-31-13-36` bundle content as
-      `2026.6.18.2105`, including the SDK component scene, memory/canvas/chat
-      composition, and bundle template alignment.
-    - Keeps `object.action` for namespace objects on the UI resolver surface
-      instead of exposing it as a model-callable named-service tool in the
-      reference template.
-    - Adds a gateway auth-log noise fix: expected token rejection now degrades
-      to anonymous without warning tracebacks unless `AUTH_DEBUG` is enabled.
+    - Adds server-side Multi-Cognito authentication mode. A runtime can accept
+      JWTs from every configured trusted Cognito provider in `auth.providers`.
+    - Keeps validation strict: provider routing uses untrusted JWT claims only
+      to select the verifier, then the selected Cognito verifier validates
+      issuer, client/audience, token use, signature, and expiration.
+    - Requires access token and ID token, when both are present, to resolve to
+      the same provider and subject.
+    - Extends authentication settings with `CognitoTrustedProviderConfig` and
+      `AUTH.COGNITO_TRUSTED_PROVIDERS`.
+    - Supports `auth.idp: multi-cognito` / `cognito-multi` plus JSON provider
+      lists through `AUTH_COGNITO_PROVIDERS_JSON` or
+      `COGNITO_TRUSTED_PROVIDERS_JSON`.
+    - Preserves existing single-Cognito behavior when only one provider is
+      configured.
+    - Adds regression tests for provider selection, mixed-token rejection, and
+      delegation to the existing Cognito verifier.
+    - Improves cross-origin context drag calibration by sending drag-start
+      coordinates from chat file and ingress drags.
+    - Increases the chat namespace-style fetch timeout so cold cross-origin CDN
+      cache misses can still load namespace colors.
+    - Clarifies event-lane documentation around external event movement into
+      ReAct turns.
 
-    ReAct and external events
+    Multi-Cognito auth
 
-    - Timeline rendering records the last processed block as a durable cursor.
-    - Close-gate checks compare accepted timeline blocks against that cursor,
-      not against post-render visible block projections.
-    - The cursor includes timestamp and block identity so equal-timestamp
-      blocks remain disambiguated.
-    - The cursor is stored with the timeline data that owns the render, making
-      the check resilient when prompt materialization, projection, or
-      compaction changes the visible representation.
-    - Runtime context now uses the processing turn id for accepted event
-      blocks. Wakeup or previous active-turn ids are provenance, not ownership.
-    - Tests cover close-gate retry behavior, external-event folding, rendered
-      prompt cursors, and final answer selection.
+    - The browser still logs into one configured OIDC authority for a profile.
+      Multi-Cognito is a server-side trust-list mode.
+    - Provider selection is based on `iss` plus `client_id` for access tokens
+      and `iss` plus `aud` for ID tokens.
+    - The selected provider constructs a normal `CognitoAuthManager`, so
+      cryptographic validation and Cognito claim checks remain centralized.
+    - `CognitoUser` now carries provider metadata (`identity_provider` and
+      `issuer`) for diagnostics and downstream policy decisions.
 
-    Telegram integration
+    Scene and chat interop
 
-    - Adds a dedicated Telegram webhook submit and delivery article with ASCII
-      diagrams for webhook, resubmitter, queue, and live stream boundaries.
-    - Clarifies that queued Telegram delivery uses the platform delivery queue
-      and resubmitter even when the webhook path starts the turn.
-    - Clarifies the difference between live webhook turns, queued delivery, and
-      non-live job execution.
-    - Adds tests for Telegram delivery behavior and admin/user bridge paths.
+    - Chat-side file/context drags now include the coordinates needed by the
+      scene host to calibrate cross-origin drops reliably.
+    - Namespace presentation config fetches now allow longer cold starts so
+      namespace-specific color styles are available in embedded chat widgets.
 
-    SDK scene, memory, canvas, and chat
+    Documentation
 
-    - Updates memory widget UI behavior for compact panels, resize, focused
-      ids, multiple memory drops, and editor handoff.
-    - Updates canvas pinboard and chat widget context-drop handling so objects
-      carry canonical refs across surfaces.
-    - Aligns file drag payloads and context messages between package-backed
-      chat and scene hosts.
-    - Updates versatile bundle release metadata, journal, and tests to reflect
-      the SDK component scene and configured `mem:` event-source/resolver
-      surfaces.
-
-    Gateway and integration fixes
-
-    - Gateway auth now treats normal authentication rejection as an expected
-      anonymous-degrade path. It no longer logs full warning tracebacks for
-      missing, expired, or invalid session tokens unless auth debugging is
-      explicitly enabled.
-    - Unexpected gateway auth failures still degrade to anonymous and emit a
-      compact warning, with traceback detail only when `AUTH_DEBUG` is enabled.
-    - Slack connection provider now calls the correct OAuth token endpoint.
+    - Adds Multi-Cognito descriptor examples to auth and descriptor docs.
+    - Documents how trusted providers are configured and how future provider
+      hints may be used for routing/logging while token claims remain
+      authoritative.
 
     Runtime and deployment notes
 
-    - Deployments should point the platform ref at 2026.6.18.2120 to receive
-      the ReAct close-gate/event ownership fixes, Telegram delivery docs/tests,
-      memory/canvas/chat widget interop updates, gateway auth-log reduction,
-      and versatile bundle release metadata.
-    - Reactive event producers should rely on the runtime turn id stamped
-      during event acceptance for processed blocks. Previous active-turn data
-      should be used only for provenance and diagnostics.
-    - Public deployments should see substantially less gateway warning noise
-      from anonymous or expired-session traffic.
+    - Deployments should point the platform ref at 2026.6.19.202 to receive
+      Multi-Cognito auth, cross-origin drag calibration, namespace-style fetch
+      timeout improvements, and the updated docs.
+    - Environments that should accept exactly one Cognito pool should keep
+      `auth.idp: cognito`.
+    - Mixed-runtime environments can use `auth.idp: multi-cognito` with an
+      explicit `auth.providers` list. Each provider entry must include alias,
+      region, user pool id, and app client id.
 
     Changelog
 
-    - Added timeline render cursor support for close-gate decisions.
-    - Fixed ReAct external-event close-gate cycling on already-rendered events.
-    - Fixed runtime turn ownership for accepted external event blocks.
-    - Improved final answer selection and assistant completion handling.
-    - Added ReAct timeline, rendering, and runtime regression tests.
-    - Added Telegram webhook submit and queued delivery documentation.
-    - Added Telegram integration tests for delivery paths.
-    - Fixed Slack OAuth token endpoint.
-    - Improved memory widget compact, focused, and editor flows.
-    - Improved canvas/chat/file context drag payloads.
-    - Released versatile bundle content as 2026.6.18.2105.
-    - Updated versatile bundle template event-source/resolver tests.
-    - Reduced gateway auth warning traceback noise for expected anonymous
-      degradation.
+    - Added `MultiCognitoAuthManager`.
+    - Added trusted Cognito provider config parsing.
+    - Wired ingress auth manager selection for `multi-cognito`.
+    - Added provider metadata to Cognito users.
+    - Added Multi-Cognito tests.
+    - Documented Multi-Cognito auth and descriptor shape.
+    - Improved chat cross-origin drag coordinate reporting.
+    - Increased namespace style fetch timeout for embedded chat.
+    - Clarified event-lane to ReAct turn docs.
 config:
-    version: "2026.6.18.2120"
+    version: "2026.6.19.202"
