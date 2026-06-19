@@ -184,17 +184,70 @@ function initialCompact(): boolean {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object';
+}
+
+function isUsageRefreshMessage(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (value.type === REFRESH_MESSAGE_TYPE || value.type === 'accounting.usage') return true;
+
+  const nestedData = value.data;
+  if (isRecord(nestedData) && (nestedData.type === 'accounting.usage' || nestedData.name === 'accounting.usage')) {
+    return true;
+  }
+
+  const event = value.event;
+  if (isRecord(event) && (event.type === 'accounting.usage' || event.name === 'accounting.usage' || event.step === 'accounting')) {
+    return true;
+  }
+
+  const payload = value.payload;
+  if (isRecord(payload) && (payload.type === 'accounting.usage' || payload.name === 'accounting.usage')) {
+    return true;
+  }
+
+  return false;
+}
+
+function refreshReason(value: unknown): string {
+  if (!isRecord(value)) return 'host-refresh';
+  const reason = value.reason;
+  if (typeof reason === 'string' && reason.trim()) return reason.trim();
+  if (value.type === 'accounting.usage') return 'accounting.usage';
+  const nestedData = value.data;
+  if (isRecord(nestedData) && (nestedData.type === 'accounting.usage' || nestedData.name === 'accounting.usage')) return 'accounting.usage';
+  const event = value.event;
+  if (isRecord(event) && (event.type === 'accounting.usage' || event.name === 'accounting.usage' || event.step === 'accounting')) return 'accounting.usage';
+  return typeof value.type === 'string' ? value.type : 'host-refresh';
+}
+
+function notifyHost(message: Record<string, unknown>): void {
+  try {
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage(message, '*');
+    }
+  } catch {
+    // Host diagnostics are best-effort only.
+  }
+}
+
 export const App: React.FC = () => {
   const [compact, setCompact] = useState<boolean>(initialCompact);
   const [breakdown, setBreakdown] = useState<QuotaBreakdown | null>(null);
   const [profile, setProfile] = useState<ProfileResponse | null>(null);
   const [status, setStatus] = useState<CardStatus>({ loading: false, error: null, ready: false });
   const inFlightRef = useRef<Promise<void> | null>(null);
+  const pendingRefreshRef = useRef(false);
   const debounceRef = useRef<number | null>(null);
   const shellRef = useRef<HTMLDivElement | null>(null);
 
-  const load = useCallback(async () => {
-    if (inFlightRef.current) return inFlightRef.current;
+  const load = useCallback(async (reason = 'load') => {
+    if (inFlightRef.current) {
+      pendingRefreshRef.current = true;
+      console.info('[kdcube.usage-card] refresh queued while load in flight', { reason });
+      return inFlightRef.current;
+    }
     const task = (async () => {
       setStatus((prev) => ({ ...prev, loading: true, error: null }));
       try {
@@ -215,17 +268,23 @@ export const App: React.FC = () => {
         }
       } finally {
         inFlightRef.current = null;
+        if (pendingRefreshRef.current) {
+          pendingRefreshRef.current = false;
+          window.setTimeout(() => {
+            void load('queued-refresh');
+          }, 0);
+        }
       }
     })();
     inFlightRef.current = task;
     return task;
   }, []);
 
-  const scheduleRefresh = useCallback(() => {
+  const scheduleRefresh = useCallback((reason = 'host-refresh') => {
     if (debounceRef.current != null) window.clearTimeout(debounceRef.current);
     debounceRef.current = window.setTimeout(() => {
       debounceRef.current = null;
-      void load();
+      void load(reason);
     }, REFRESH_DEBOUNCE_MS);
   }, [load]);
 
@@ -249,8 +308,11 @@ export const App: React.FC = () => {
         if (data.view === 'compact') setCompact(true);
         return;
       }
-      if (data.type !== REFRESH_MESSAGE_TYPE) return;
-      scheduleRefresh();
+      if (!isUsageRefreshMessage(data)) return;
+      const reason = refreshReason(data);
+      console.info('[kdcube.usage-card] refresh requested', { reason });
+      notifyHost({ type: 'kdcube-usage-card-refresh-ack', widget: 'usage_card', reason, ts: new Date().toISOString() });
+      scheduleRefresh(reason);
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);

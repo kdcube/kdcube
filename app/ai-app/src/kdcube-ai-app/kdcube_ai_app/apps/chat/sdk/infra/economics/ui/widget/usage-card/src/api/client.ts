@@ -28,9 +28,11 @@ export class UsageCardApiError extends Error {
 
 async function fetchJson<T>(url: string): Promise<T> {
   const headers = settings.authHeaders({ Accept: 'application/json' });
+  headers.set('Cache-Control', 'no-cache');
+  headers.set('Pragma', 'no-cache');
   let response: Response;
   try {
-    response = await fetch(url, { credentials: 'include', headers });
+    response = await fetch(url, { credentials: 'include', headers, cache: 'no-store' });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new UsageCardApiError(`network error: ${message}`, 0);
