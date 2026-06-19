@@ -377,6 +377,23 @@ The runtime still does not know memory/task semantics. It only knows canonical
 context drag messages, namespace matching, provider action invocation, and
 surface dispatch.
 
+Host-side plain-browser adapters can also reuse framework-neutral helpers:
+
+```ts
+normalizeHostContextDragStartMessage(message, {
+  startTypes: ["kdcube-context-drag-start"]
+})
+namespaceStyleCandidates(context)
+computeSceneDragScreenCalibration(message, frameRect)
+scenePointFromChildDragMessage(message, frameRect, calibration)
+selectSceneDropTargetAtPoint(targets, point)
+```
+
+These helpers operate on plain objects and geometry. The host still owns overlay
+DOM, rail buttons, iframe creation, and local command delivery. Compatibility
+message aliases can be accepted through `startTypes`, but the canonical producer
+contract remains `kdcube-context-drag-start`.
+
 Current consumers:
 
 - The versatile scene imports `@kdcube/components-core/scene`, which currently

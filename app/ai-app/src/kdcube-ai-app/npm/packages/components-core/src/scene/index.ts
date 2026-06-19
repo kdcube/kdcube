@@ -1,4 +1,5 @@
 export * from './eventBus'
+export * from './hostDrag'
 export * from './runtime'
 export * from './subscriptions'
 export * from './types'

@@ -31,7 +31,7 @@
     "dev": "tsup --watch",
     "test": "npm run build && node --test tests/*.test.mjs",
     "test:chat": "npm run build && node --test tests/chat-accounting-scope.test.mjs",
-    "test:scene": "npm run build && node --test tests/scene-runtime.test.mjs tests/scene-subscriptions.test.mjs tests/scene-event-bus.test.mjs",
+    "test:scene": "npm run build && node --test tests/scene-runtime.test.mjs tests/scene-subscriptions.test.mjs tests/scene-event-bus.test.mjs tests/scene-host-drag.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
