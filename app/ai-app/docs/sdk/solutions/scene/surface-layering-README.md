@@ -15,6 +15,7 @@ keywords:
     "scene host layering",
   ]
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-event-orchestration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-composition-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-surface-registry-README.md
 ---
@@ -23,6 +24,10 @@ see_also:
 A host scene stacks several surfaces — a chat panel, an expandable side pane, a
 canvas, a wizard/editor, transient toasts. Each host historically picked its own
 `z-index` magic numbers, which produces a recurring bug:
+
+Event delivery between those surfaces is a separate concern. The layering rules
+only decide what appears on top; [Scene Event Orchestration](scene-event-orchestration-README.md)
+decides how runtime events are relayed to widgets.
 
 > A surface opened **from within** or **on top of** a full-screen overlay renders
 > **behind** that overlay.

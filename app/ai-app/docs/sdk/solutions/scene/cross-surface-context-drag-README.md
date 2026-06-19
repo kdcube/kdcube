@@ -18,6 +18,7 @@ keywords:
     "target_surface",
   ]
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-event-orchestration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-composition-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-surface-registry-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/pin-operations-README.md
@@ -28,6 +29,10 @@ see_also:
 
 This document defines the concrete contract for dragging an existing object
 between surfaces in a scene.
+
+This document covers transient drag/drop state. Long-lived Event Bus routing
+from the runtime into widgets is covered in
+[Scene Event Orchestration](scene-event-orchestration-README.md).
 
 The design target:
 
@@ -53,6 +58,72 @@ and future surfaces interoperate without knowing each other's implementation.
 | Root namespace | The first URI segment before `:`, for example `mem`, `task`, `fi`, `cnv`. Scoped refs such as `task:issue:...` still have root namespace `task`. |
 | Active drag context | Temporary scene host state that exists only during one browser drag. |
 | Requested target surface | A scene hint that the user dropped on a specific registered surface. The provider still decides whether this target is valid. |
+| Drop overlay | Host-rendered transparent hit area over a compatible mounted surface, created only while a drag is active. |
+| Rail pulse | Host-rendered hint on a summon button when a compatible target surface is available but not currently mounted/open. |
+
+## Drag Overlay Control Plane
+
+Cross-surface drag/drop is not a persistent Event Bus subscription. It is a
+browser UI control plane owned by the scene host:
+
+```text
+source iframe / host chip
+  postMessage: kdcube-context-drag-start
+      |
+      v
+scene host context-drag broker
+  normalize contexts
+  derive root namespace from context.ref
+  select compatible SceneDropTarget entries
+      |
+      +--> mounted target: draw transparent drop overlay over iframe rect
+      |
+      +--> unmounted target: pulse summon rail button
+      |
+      v
+browser drop / child drag-end coordinates
+      |
+      v
+scene host deliverDrop
+  attach -> post context to chat
+  pin    -> post context/ingress to canvas
+  open   -> call provider object.action(open), then route ui_event.target_surface
+```
+
+The overlay is host UI, not a widget. It exists because browser native drag/drop
+does not reliably cross nested iframe boundaries, especially cross-origin. The
+host receives source drag messages, owns the active drag context, and builds
+drop hit areas in the parent page coordinate space.
+
+### Control-Plane Messages
+
+| Message / action | Direction | Lifetime | Name format | Purpose |
+| --- | --- | --- | --- | --- |
+| `kdcube-context-drag-start` | source surface -> scene host | One browser drag | Dash-case transport name | Starts an active scene drag with canonical `contexts`. |
+| `kdcube-context-drag-end` | source surface -> scene host | One browser drag | Dash-case transport name | Supplies final coordinates and lets the host resolve a drop when native `drop` does not reach the parent overlay. |
+| `kdcube-canvas-ingress-drag-start/end` | source surface -> scene host | One browser drag | Dash-case transport name | Carries non-object ingress payloads, such as a user attachment/file payload, toward canvas pinning. |
+| `object.action(open)` | scene host -> namespace provider | Drop handling | Namespace-service operation | Provider validates the full URI and returns the actual `ui_event.target_surface`. |
+| Target command, for example `kdcube-memory-widget-command` | scene host -> target iframe | Drop handling | Dash-case transport name | Local browser command delivered after provider/open resolution. |
+
+Dash-case names are browser transport names. Canonical object identity remains
+inside the payload as `context.ref` / `object_ref`, for example
+`task:issue:...`, `mem:record:...`, or future event identities such as
+`task:event:task-changed` where they are payload values rather than DOM-style
+event names.
+
+### Overlay Target Map
+
+| Target type | Host representation | Match key | Drop effect | Delivery |
+| --- | --- | --- | --- | --- |
+| Mounted chat | Transparent overlay over chat iframe | `*` | `attach` | `postMessage({ type: "kdcube.context.attach", context })`; conversation refs may load the conversation. |
+| Mounted canvas/pinboard | Transparent overlay over pinboard iframe | `*` or ingress-only path | `pin` | `postMessage({ type: "kdcube-pinboard-drop-context", context, x, y })` or ingress payload equivalent. |
+| Mounted memory surface | Transparent overlay over memory iframe | `mem` | `open` | Provider-backed open to `sdk.memory.viewer`, then local memory command. |
+| Mounted task surface | Transparent overlay over task iframe | `task` | `open` | Provider-backed open to task target surface, then local task command. |
+| Unmounted compatible surface | Rail pulse on summon button | Same root namespace match | Target-specific | Open/summon first, then deliver after readiness/short delay. |
+
+Namespace color for the overlay comes from shared namespace presentation config,
+keyed by root namespace. The overlay must not hardcode memory/task/file colors
+by widget.
 
 ## Non-Goals
 

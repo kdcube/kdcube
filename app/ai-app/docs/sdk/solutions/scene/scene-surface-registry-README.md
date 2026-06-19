@@ -16,6 +16,7 @@ keywords:
     "default_open_effect_action",
   ]
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-event-orchestration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/cross-surface-context-drag-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/providers-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-composition-README.md
@@ -54,6 +55,11 @@ download a file, or interpret a ref. It knows only this:
 ```text
 resolver response -> target_surface -> registered host surface -> command
 ```
+
+Long-lived event delivery between surfaces uses the separate
+[Scene Event Orchestration](scene-event-orchestration-README.md) contract.
+The surface registry opens/focuses target surfaces; the event broker relays
+runtime events to widgets that explicitly claim them.
 
 The concrete app decides which surfaces exist. A scene with no task UI should
 not contain task behavior. A scene with no memory UI should not contain memory

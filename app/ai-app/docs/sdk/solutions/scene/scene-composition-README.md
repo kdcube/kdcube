@@ -18,6 +18,7 @@ keywords:
     "multi component scene",
   ]
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-event-orchestration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/cross-surface-context-drag-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/scene-surface-registry-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-widget-integration-README.md
@@ -66,6 +67,8 @@ app config
 
 Object-open routing is covered separately in
 [Scene Surface Registry](scene-surface-registry-README.md).
+Live event routing between a scene host and iframe widgets is covered in
+[Scene Event Orchestration](scene-event-orchestration-README.md).
 
 High-level communication:
 

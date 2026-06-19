@@ -57,6 +57,12 @@ surfaces:
                   - object.host_file
                   - object.upsert
                   - object.delete
+              cnv:
+                allowed:
+                  - provider.about
+                  - object.search
+                  - object.schema
+                  - object.upsert
         event_sources:
           - kind: named_service
             namespace: task
@@ -130,6 +136,16 @@ provider can choose the right object space.
 The namespace `pull` policy is separate from model-callable tools. A client may
 allow `react.pull` to materialize provider refs through provider `object.get`
 without exposing the generic `named_services.get_object` tool to the agent.
+
+Canvas follows the same model. When a bundle registers the SDK canvas provider,
+`cnv` can be configured as a named-service namespace with `object.search`,
+`object.schema`, and, when mutation is allowed, `object.upsert`. Then
+`named_services.search_objects(namespace="cnv", ...)` searches canvas card
+snapshots, `named_services.object_schema(namespace="cnv")` returns
+`canvas.board` / `canvas.card` / `canvas.object` schemas and filter contracts,
+and `named_services.upsert_object(namespace="cnv", ...)` creates or updates
+boards/cards. If a runtime has not registered `cnv`, the generic named-service
+tools correctly list only the namespaces that are configured.
 
 ## Consumer Contract For All Surfaces
 
@@ -399,8 +415,19 @@ Scope:
     - namespaces applicable: sensor
     - provider search scopes:
         sensor:
-          - sensor:temperature - temperature readings
-          - sensor:humidity:aggr - humidity aggregates
+          - sensor:temperature - temperature readings (filters: room, thresholds; details: object_schema(namespace="sensor:temperature"))
+          - sensor:humidity:aggr - humidity aggregates (filters: room, scoring; details: object_schema(namespace="sensor:humidity:aggr"))
+```
+
+Concrete configured examples:
+
+```text
+mem:
+  - mem — all memory objects (filters: origin, mode, labels, keywords, kind, status, visible_to_user, factor_weights, thresholds, scoring; details: object_schema(namespace="mem"))
+  - mem:record — memory records (filters: origin, mode, labels, keywords, kind, status, visible_to_user, factor_weights, thresholds, scoring; details: object_schema(namespace="mem:record"))
+
+cnv:
+  - cnv — canvas cards (filters: canvas_name, canvas_id, all_boards, kinds, namespaces, thresholds; details: object_schema(namespace="cnv"))
 ```
 
 For any named-service tool, the consumer can define default `tool_traits` at the
@@ -413,9 +440,13 @@ The namespace passed to `named_services.search_objects(namespace=...)` is the
 search scope. A scoped namespace searches that provider-declared object space.
 If the rendered tool catalog does not provide enough semantics, agents should
 call `named_services.provider_about(namespace=...)` for provider guidance and
-`named_services.object_schema(...)` for exact body fields and filters. A scope's
-filters may include an optional `factor_weights` object for per-query relevance
-tuning — see [Providers → Search Scope Filters And Relevance Tuning](./providers-README.md#search-scope-filters-and-relevance-tuning).
+`named_services.object_schema(...)` for exact body fields, search filter
+contracts, and tool payload recipes. Search filter options are returned under
+`ret.extra.schema.search.filters`; providers should also return
+`ret.extra.search_scopes` when they can list all searchable scopes in the same
+response. A scope's filters may include provider-owned `factor_weights`,
+`thresholds`, or `scoring` objects — see
+[Providers → Search Scope Filters And Relevance Tuning](./providers-README.md#search-scope-filters-and-relevance-tuning).
 
 For ReAct specifically, fully reading a provider-owned namespace ref means
 `react.pull(<provider_ref>)` first, then `react.read(<materialized fi:...>)`.

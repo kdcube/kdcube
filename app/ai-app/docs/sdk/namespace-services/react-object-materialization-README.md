@@ -53,7 +53,7 @@ Current implementation state:
 
 ```text
 1. Object ref is visible
-   executor: model, chat context, canvas pin, search-result widget, or timeline
+   executor: model, chat context, canvas card, search-result widget, or timeline
    runtime: consumer/client runtime
    data:
      object_ref = mem:record:mem_123

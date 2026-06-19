@@ -62,7 +62,7 @@ The host uses only the routing namespace to find the provider. The provider's
 `event.resolve`, `object.get`, `object.schema`, and related operations decide
 what the owner key and remaining URI tail mean.
 
-The same provider can be consumed by canvas pins, chat context chips,
+The same provider can be consumed by canvas cards, chat context chips,
 model-callable tools, API operations, MCP clients, Data Bus handlers, and
 scheduled jobs. The client surface is transport-neutral; each runtime chooses
 the adapter that fits the call path.
@@ -74,7 +74,7 @@ Two bundles, one configured edge, no shared code:
 ```text
   PROVIDER bundle (owns task:)            CONSUMER bundle (shows task: refs)
  ┌────────────────────────────┐         ┌─────────────────────────────────┐
- │ NamedServiceProvider       │         │ canvas pin / chat chip / tool   │
+ │ NamedServiceProvider       │         │ canvas card / chat chip / tool  │
  │   object.search/get/action │         │   object_ref "task:issue:42"   │
  │            ▲               │         │            │                    │
  │ named_services() registry │◀────────│  NamedServiceCanvasObjectResolver│

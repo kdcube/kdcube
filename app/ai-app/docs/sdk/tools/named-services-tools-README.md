@@ -108,8 +108,8 @@ Example rendered catalog entry:
        • namespaces applicable: sensor, front-door
        • provider search scopes:
            sensor:
-             - sensor:temperature — temperature readings
-             - sensor:humidity:aggr — humidity aggregates
+             - sensor:temperature — temperature readings (filters: room, thresholds; details: object_schema(namespace="sensor:temperature"))
+             - sensor:humidity:aggr — humidity aggregates (filters: room, scoring; details: object_schema(namespace="sensor:humidity:aggr"))
        • strategy: exploration
 
    📥 Parameters:
@@ -120,6 +120,56 @@ Example rendered catalog entry:
 
    📞 Usage: named_services.search_objects(...)
 ```
+
+Concrete example when a bundle configures task, memory, and canvas card search:
+
+```text
+🔧 [8] named_services.search_objects [async]
+
+   Search objects from a configured named-service namespace with cursor
+   pagination. Uses provider hybrid search when available.
+
+   Scope:
+       • namespaces applicable: task, mem, cnv
+       • provider search scopes:
+           task:
+             - task — task issues (filters: state, tags, factor_weights, thresholds, scoring; details: object_schema(namespace="task"))
+             - task:issue — task issues (filters: state, tags, factor_weights, thresholds, scoring; details: object_schema(namespace="task:issue"))
+             - task:attachment — task attachments/files (filters: state, tags, mime, thresholds; details: object_schema(namespace="task:attachment"))
+           mem:
+             - mem — all memory objects (filters: origin, mode, labels, keywords, kind, status, visible_to_user, factor_weights, thresholds, scoring; details: object_schema(namespace="mem"))
+             - mem:record — memory records (filters: origin, mode, labels, keywords, kind, status, visible_to_user, factor_weights, thresholds, scoring; details: object_schema(namespace="mem:record"))
+           cnv:
+             - cnv — canvas cards (filters: canvas_name, canvas_id, all_boards, kinds, namespaces, thresholds; details: object_schema(namespace="cnv"))
+       • strategy: exploration
+
+   📥 Parameters:
+       • namespace: Annotated[str
+         "Configured named-service namespace or provider-declared searchable
+         scoped namespace, for example 'sensor:temperature' or
+         'sensor:humidity:aggr'."]
+       • query: Annotated[str
+         "Search query. Namespace about/schema declares per-scope semantics
+         and filters."]
+       • limit: Annotated[int [default: 10]
+         "Maximum objects to return. Keep this bounded."]
+       • cursor: Annotated[str [optional]
+         "Optional pagination cursor from a previous response."]
+       • filters: Annotated[str [optional]
+         "Optional JSON object with provider-specific filters."]
+
+   📤 Returns:
+       Annotated[Dict[str, Any], "Named service response envelope with
+       matching items."]
+
+   📞 Usage: named_services.search_objects(...)
+```
+
+The concise `filters: ...` list is only a hint. The authoritative contract for
+one namespace/scope is returned by `named_services.object_schema`; read
+`ret.extra.schema.search.filters` for filter fields and
+`ret.extra.search_scopes` for all search scopes the provider exposes in that
+schema response.
 
 If `sensor` allows `object.schema` but `front-door` does not, then
 `named_services.object_schema` is still visible, but its `namespaces
@@ -151,8 +201,10 @@ once, instead of repeating it in every named-service tool description:
   into this turn's local `fi:` workspace before reading concrete content.
 - In `search_objects`, the `namespace` argument is the search scope. A scoped
   namespace searches that provider-declared object space.
-- Use `object.schema` only when exact body fields or filter contracts are
-  needed.
+- Use `object_schema` when exact body fields, search filter contracts, or
+  tool payload recipes are needed. Search filters live under
+  `ret.extra.schema.search.filters`; providers may also include
+  `ret.extra.search_scopes` so the agent can inspect all searchable scopes.
 - If the agent passes the base namespace to `search_objects`, the namespace
   service's declared default search scope handles the call. If the service advertises
   narrower searchable scoped namespaces, the agent may pass one of those scoped
@@ -294,3 +346,27 @@ Hosting a file and citing that file on a domain object are separate operations.
 The first creates or registers a file ref in the namespace and returns that
 ref. The second mutates the namespace object according to that namespace
 schema.
+
+Canvas uses the same `upsert_object` tool when `cnv` is configured and allowed,
+but the object kind is explicit:
+
+```python
+named_services.upsert_object(
+    namespace="cnv",
+    object_json={
+        "object_kind": "canvas.card",
+        "canvas_name": "main",
+        "card": {
+            "kind": "user.text",
+            "title": "Release note",
+            "mime": "text/markdown",
+            "content": {"text": "Ship the release note text here."},
+        },
+    },
+)
+```
+
+The canvas provider applies this as a `new_card` patch. If the card hosts inline
+content, the returned card contains the concrete hosted ref under
+`ret.object.card.logical_path`, for example
+`cnv:canvas/users/<user>/canvases/<board>/objects/user-text/<card-id>/v000001.md`.

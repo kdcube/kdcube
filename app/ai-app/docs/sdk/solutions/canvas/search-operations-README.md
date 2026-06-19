@@ -1,6 +1,6 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/canvas/search-operations-README.md
-title: "Canvas Pin Search Operations"
+title: "Canvas Card Search Operations"
 summary: "The pin-board search contract: exactly what text is indexed per card (the card-level snapshot, not the source object), when the per-user index is built (one index across all of a user's boards), the faiss vector backend and its files on shared storage, the semantic floor (incl. turning semantic off), the economical guard, and the observability logs."
 status: active
 tags: ["sdk", "solutions", "canvas", "pins", "search", "index", "faiss", "embeddings", "hybrid-search"]
@@ -24,9 +24,9 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/index/hybrid-index-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/index/hybrid-scoring-README.md
 ---
-# Canvas Pin Search Operations
+# Canvas Card Search Operations
 
-`canvas_search` is read-only hybrid search over a user's pins — semantic + lexical
+`canvas_search` is read-only hybrid search over a user's canvas cards — semantic + lexical
 + recency, reciprocal-rank-fused — exposed as the generic `CanvasPinSearch` service
 any bundle that mounts the canvas reuses. This page is the precise contract: what
 gets indexed, when, on what backend, and how to observe it. The wiring is in
@@ -55,6 +55,66 @@ card holds. The blob is newline-joined, in this order (blank fields skipped):
 That blob is what gets **embedded** (semantic) and **FTS5-indexed** (lexical);
 **recency** comes from the card's `updated_at`/`created_at`. The `card_id` is
 metadata only — returned on a hit, never searched.
+
+## Search payload and filters
+
+Canvas card search has two compatible surfaces:
+
+- `canvas_search`: the canvas-owned operation used by bundles that mount the
+  canvas search service directly.
+- `cnv` named-service facet: the standard provider surface for runtimes that
+  register canvas as a named-service namespace. In those runtimes,
+  `named_services.search_objects(namespace="cnv", ...)` searches cards,
+  `named_services.object_schema(namespace="cnv")` returns board/card/object
+  schemas and filters under `ret.extra.schema.search.filters`, and
+  `named_services.upsert_object(namespace="cnv", ...)` creates or updates
+  boards/cards when that operation is allowed for the consumer.
+
+Canvas-owned refs are normal namespace refs with subnamespace/path segments:
+`cnv:<board-name>`, `cnv:<board-name>@<revision>`, and hosted card content such
+as `cnv:canvas/users/<user>/canvases/<board>/objects/<kind>/<card-id>/v000001.md`.
+Direct mutation of the hosted object path is not a separate API; update the
+owning `canvas.card`, and the storage layer produces the hosted `cnv:` object.
+
+The current Versatile demo bundle may expose only `task` and `mem` in its
+`named_services.*` catalog until it registers the canvas provider. That is
+configuration, not a different protocol. The shared filter payload is:
+
+```json
+{
+  "query": "text to search",
+  "limit": 20,
+  "canvas_name": "main",
+  "canvas_id": "cnv:<user>:main",
+  "all_boards": false,
+  "kinds": ["file", "memory", "task", "note", "canvas", "search.result"],
+  "namespaces": ["fi", "cnv", "mem", "task", "so"],
+  "thresholds": {
+    "semantic_score": 0.30
+  }
+}
+```
+
+Filter semantics:
+
+| Field | Meaning |
+|---|---|
+| `canvas_name` | Named canvas to search. Defaults to `main` when omitted. |
+| `canvas_id` | Explicit board id. Usually omitted unless the caller already has it. |
+| `all_boards` | When true, searches all boards for the user. Otherwise searches one board. |
+| `kinds` | Card-kind allowlist. A card matches if its canvas card kind is in the list. |
+| `namespaces` | Root namespace allowlist for pinned refs, for example `fi`, `cnv`, `mem`, `task`, `so`. |
+| `thresholds.semantic_score` | Cosine-similarity floor for semantic candidates. Raise to tighten. Set below `0` to turn semantic search off. |
+
+Use `thresholds.semantic_score` for per-call semantic-floor control.
+
+When rendered through `named_services.search_objects`, the tool catalog should
+show the same keys concisely:
+
+```text
+cnv:
+  - cnv — canvas cards (filters: canvas_name, canvas_id, all_boards, kinds, namespaces, thresholds; details: object_schema(namespace="cnv"))
+```
 
 **So you match on what's visible on the card** — its title, description, your
 comments, its kind, and its ref/path. Searching for words that only exist *inside*
@@ -122,11 +182,12 @@ trivial query), search degrades to lexical + recency at zero embed cost. Indexin
 ### Semantic floor / turning semantic off
 
 `CanvasPinSearch(min_semantic_score=…)` (or bundle prop
-`canvas.pin_search_min_semantic_score`, or a per-call `payload["min_semantic_score"]`)
-sets the semantic relevance floor — default `0.30` so an unrelated query doesn't
-match the whole board (the filter/dim UX needs a real boundary). Pass a **negative**
-value (e.g. `-1`) to turn the semantic factor **off** entirely and run on lexical +
-recency only — for a bundle with no embeddings or no budget. The three regimes
+`canvas.pin_search_min_semantic_score`, or per-call
+`payload["thresholds"]["semantic_score"]`) sets the semantic relevance floor —
+default `0.30` so an unrelated query doesn't match the whole board (the filter/dim
+UX needs a real boundary). Pass a **negative** value (e.g. `-1`) to turn the
+semantic factor **off** entirely and run on lexical + recency only — for a bundle
+with no embeddings or no budget. The three regimes
 (`< 0` off / `= 0` no-floor / `> 0` floor) are documented in
 [hybrid scoring](../index/hybrid-scoring-README.md#min_semantic_score--one-knob-three-regimes).
 
