@@ -51,7 +51,7 @@ Examples:
 | --- | --- |
 | task issue provider | `task:issue:...`, issue search, issue editor actions |
 | memory provider | `mem:...`, memory search, memory viewer actions |
-| canvas provider | `cnv:...`, board patches, pins, board object actions |
+| canvas provider | `cnv:<board>`, `cnv:<board>@<revision>`, `cnv:canvas/.../objects/...`, board/card search, board/card upsert, object actions |
 | ReAct artifact provider | `fi:...`, artifact preview/download/materialization |
 | document/source provider | provider-owned refs such as `docs:...` or `repo:...`, document/source search and read actions |
 
@@ -323,29 +323,61 @@ A search scope may declare a `filters` schema — the params a client can pass t
 `object.search` for that scope (state, tags, date ranges, …). Advertise them so
 the agent tool catalog and `object.schema` surface them.
 
-A hybrid-search provider (semantic + lexical + recency) may also expose an
-optional **`factor_weights`** object filter so a caller can tune relevance per
-query without a redeploy. Unset keys keep the subsystem default, so omitting it
-keeps current behavior. Canonical shape (as the task issue scope declares it):
+A hybrid-search provider (semantic + lexical + recency) may also expose
+provider-owned tuning objects. These names are a convention, not a universal
+scoring engine:
+
+- **`factor_weights`**: relative weights only. `0` disables that factor.
+- **`thresholds`**: eligibility floors for normalized provider factors only.
+- **`scoring`**: non-weight ranker parameters.
+
+Unset keys keep the subsystem default, so omitting all tuning keeps current
+behavior. Canonical shape as the task issue scope declares it:
 
 | Key | Type / range | Default | Meaning |
 |---|---|---|---|
-| `lexical_weight` | number, ≥ 0 | 0.55 | keyword (bm25) ranker weight; relative |
-| `semantic_weight` | number, ≥ 0 | 0.45 | embedding (cosine) ranker weight; relative |
-| `recency_weight` | number, ≥ 0 | 0.25 | recency ranker weight; relative, 0 = ignore recency |
-| `rrf_k` | number, ≥ 1 | 60.0 | RRF constant (larger = flatter) |
-| `recency_half_life_days` | number, > 0 | 21.0 | days until recency score halves |
-| `min_semantic_score` | number, 0.0–1.0 | 0.30 | cosine-similarity floor; raise to tighten |
+| `factor_weights.lexical_weight` | number, ≥ 0 | 0.55 | keyword (bm25) ranker weight; relative |
+| `factor_weights.semantic_weight` | number, ≥ 0 | 0.45 | embedding (cosine) ranker weight; relative |
+| `factor_weights.recency_weight` | number, ≥ 0 | 0.25 | recency ranker weight; relative, 0 = ignore recency |
+| `thresholds.semantic_score` | number, -1.0–1.0 | 0.30 | cosine-similarity floor; raise to tighten, <0 turns semantic off |
+| `scoring.rrf_k` | number, ≥ 1 | 60.0 | RRF constant (larger = flatter) |
+| `scoring.recency_half_life_days` | number, > 0 | 21.0 | days until recency score halves |
 
 The three ranker weights are **relative** (only their ratio matters); set one to
-`0` to disable that ranker. `min_semantic_score` floors semantic hits so an
+`0` to disable that ranker. `thresholds.semantic_score` floors semantic hits so an
 unrelated query returns few/none instead of every nearest row. Defaults are the
 declaring subsystem's — each provider documents its own.
 
 Memory declares its own `factor_weights` set for its additive weighted-sum
 scorer (`semantic`, `text`, `label`, `salience`, `importance`, `confidence`,
-`freshness`, `confirmation`, plus `half_life_days` and
-`min_relevance_score`); it is not RRF and has no `rrf_k`.
+`freshness`, `confirmation`); it is not RRF and has no `rrf_k`. Memory's
+freshness decay is in `scoring.half_life_days`, and its optional normalized
+relevance floor is `thresholds.relevance_score`.
+
+Memory also declares an agent-facing `origin` filter. These values are public
+search semantics; storage names such as `bundle_id` are not exposed to the
+model:
+
+| `filters.origin` | Meaning |
+|---|---|
+| `any` | all user-visible memory records, regardless of whether a user or agent created them |
+| `this_agent` | records saved in this agent/application context |
+| `any_agent` | agent-created records across agent/application contexts |
+| `created_by_user` | records explicitly created by the user |
+| `global` | shared records not tied to one agent/application context |
+
+Canvas card search declares the `cnv` search scope when the canvas named-service
+provider is registered. Its filters are `canvas_name`, `canvas_id`,
+`all_boards`, `kinds`, `namespaces`, and `thresholds.semantic_score`. It
+searches card-visible snapshots, not the full source objects behind the cards.
+
+Canvas exposes these object families:
+
+| `object_kind` | Refs / payloads | Notes |
+|---|---|---|
+| `canvas.board` | `cnv:<board-name>` and `cnv:<board-name>@<revision>` | Board document with cards, layout, and revision metadata. `object.upsert` writes/replaces the board document. |
+| `canvas.card` | card body inside a board; hosted content may produce `cnv:canvas/users/.../objects/...` | `object.upsert` creates or updates a card by calling the existing canvas patch path. Cards may host canvas-owned content or pin `fi:`, `mem:`, `task:`, `so:`, or other refs. |
+| `canvas.object` | `cnv:canvas/users/<user>/canvases/<board>/objects/<kind>/<card-id>/v000001.<ext>` | Versioned bytes/text hosted by a card. Mutate the owning `canvas.card`; do not upsert this hosted object directly. |
 
 ### Object Operations
 
@@ -1308,7 +1340,7 @@ browser session exists.
 
 ### Configured Canvas/Chat Resolver
 
-Composition bundles can configure namespace resolvers for canvas pins and chat
+Composition bundles can configure namespace resolvers for canvas cards and chat
 context chips. The chat widget already routes object actions through the
 bundle's `canvas_object_action` operation, so the same resolver registry covers
 both surfaces.
@@ -1366,6 +1398,13 @@ through the request-bound bridge, preserving the user's current auth/session.
 
 Existing bundle-specific operations can stay as compatibility routes while
 they delegate to the named service provider.
+
+For canvas, this means a scene or widget may keep calling the existing
+`canvas_search` and `canvas_patch` bundle operations. The consumer bundle should
+implement those aliases by dispatching to its registered `cnv` provider and then
+returning the same legacy result envelope the UI already expects. This keeps the
+browser transport stable while canvas search/upsert semantics move to the
+named-service contract.
 
 ## Current SDK Package
 

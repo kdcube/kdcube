@@ -12,12 +12,24 @@ from kdcube_ai_app.apps.chat.sdk.solutions.canvas.events.resolver import (
     object_ref_from_payload,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.canvas.search import CanvasPinSearch
+from kdcube_ai_app.apps.chat.sdk.solutions.canvas.search import (
+    CANVAS_BOARD_OBJECT_KIND,
+    CANVAS_CARD_OBJECT_KIND,
+    CANVAS_NAMESPACE,
+    CanvasPinSearchNamedServiceProvider,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.canvas.storage import CanvasStore
 from kdcube_ai_app.apps.chat.sdk.solutions.chat.events.resolver import (
     conversation_ref_capabilities,
     resolve_conversation_ref_action,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
+    NamedServiceClient,
+    NamedServiceContext,
+    NamedServiceRegistry,
+    NamedServiceRequest,
+    NamedServiceResponse,
+    TRANSPORT_LOCAL,
     named_service_canvas_resolver_namespaces,
     register_configured_named_service_canvas_resolvers,
 )
@@ -101,6 +113,7 @@ class VersatileCanvasService:
         # Generic canvas pin search — derives its embedder + economics guard from
         # the host entrypoint; any bundle mounting canvas reuses the same mechanism.
         self.pins = CanvasPinSearch(entrypoint, logger=logger)
+        self._named_service_provider: CanvasPinSearchNamedServiceProvider | None = None
 
     def resolve_user_id(self, payload: Mapping[str, Any]) -> str:
         value = payload.get("user_id")
@@ -172,6 +185,202 @@ class VersatileCanvasService:
             "story_kind": "canvas",
             "conversation_role": "canvas",
         }
+
+    def named_service_provider(self) -> CanvasPinSearchNamedServiceProvider:
+        provider = self._named_service_provider
+        if provider is None:
+            provider = CanvasPinSearchNamedServiceProvider(
+                search_handler=self._named_service_search,
+                upsert_handler=self._named_service_upsert,
+            )
+            self._named_service_provider = provider
+        return provider
+
+    def named_service_registry(self) -> NamedServiceRegistry:
+        registry = NamedServiceRegistry()
+        registry.register(self.named_service_provider())
+        return registry
+
+    def _named_service_context(self, payload: Mapping[str, Any]) -> NamedServiceContext:
+        ident = self.entrypoint.runtime_identity()
+        user_id = self.resolve_user_id(payload)
+        actor_value = payload.get("actor")
+        if isinstance(actor_value, Mapping):
+            actor = dict(actor_value)
+        else:
+            actor = {"name": str(actor_value or user_id or "user"), "user_id": user_id}
+        return NamedServiceContext(
+            tenant=protocol_string(payload, "tenant", protocol_string(ident, "tenant", "default")),
+            project=protocol_string(payload, "project", protocol_string(ident, "project", "default")),
+            user_id=user_id,
+            bundle_id=self.config.bundle_id,
+            actor=actor,
+        )
+
+    def _named_service_client(self, payload: Mapping[str, Any]) -> NamedServiceClient:
+        return NamedServiceClient(
+            self.named_service_registry(),
+            context=self._named_service_context(payload),
+            transport=TRANSPORT_LOCAL,
+        )
+
+    def _legacy_result_from_named_response(
+        self,
+        response: NamedServiceResponse,
+        *,
+        user_id: str,
+        fallback_alias: str,
+    ) -> Dict[str, Any]:
+        raw = response.extra.get("raw_result") if response.ok else None
+        if isinstance(raw, Mapping):
+            result = dict(raw)
+            result.setdefault("ok", response.ok)
+            result.setdefault("user_id", user_id)
+            return result
+        if response.ok:
+            result: Dict[str, Any] = {
+                "ok": True,
+                "user_id": user_id,
+                "items": response.items,
+                "results": response.items,
+                "count": len(response.items),
+            }
+            if response.next_cursor:
+                result["next_cursor"] = response.next_cursor
+            return result
+        error = response.error
+        return {
+            "ok": False,
+            "user_id": user_id,
+            "error": error.message if error is not None else f"{fallback_alias} failed",
+            "code": error.code if error is not None else "named_service_error",
+            "status": response.status,
+            "details": error.details if error is not None else {},
+        }
+
+    async def _named_service_search(
+        self,
+        ctx: NamedServiceContext,
+        request: NamedServiceRequest,
+    ) -> Mapping[str, Any]:
+        payload = dict(request.filters or {})
+        if request.query is not None:
+            payload["query"] = request.query
+        if request.limit is not None:
+            payload["limit"] = request.limit
+        if request.cursor is not None:
+            payload["cursor"] = request.cursor
+        if ctx.tenant and "tenant" not in payload:
+            payload["tenant"] = ctx.tenant
+        if ctx.project and "project" not in payload:
+            payload["project"] = ctx.project
+        if ctx.user_id and "user_id" not in payload:
+            payload["user_id"] = ctx.user_id
+        user_id = self.resolve_user_id(payload)
+        return await self.pins.search(
+            store=self.store(payload, user_id=user_id),
+            user_id=user_id,
+            payload=payload,
+        )
+
+    def _patch_payload_from_named_object(self, obj: Mapping[str, Any], base_revision: Any = None) -> Dict[str, Any]:
+        patch = obj.get("patch")
+        if isinstance(patch, Mapping):
+            out = dict(patch)
+        elif isinstance(obj.get("operations"), list):
+            out = {
+                "schema": "kdcube.canvas.patch.v1",
+                "operations": [dict(op) for op in obj.get("operations") if isinstance(op, Mapping)],
+            }
+        elif obj.get("op"):
+            out = {
+                key: value
+                for key, value in dict(obj).items()
+                if key
+                not in {
+                    "object_kind",
+                    "canvas_name",
+                    "canvas_id",
+                    "board",
+                    "base_revision",
+                    "object_ref",
+                    "actor",
+                }
+            }
+        else:
+            card_payload = obj.get("card") if isinstance(obj.get("card"), Mapping) else obj
+            card_id = protocol_string(obj, "card_id") or protocol_string(card_payload, "id") if isinstance(card_payload, Mapping) else ""
+            if card_id:
+                updates = obj.get("set") if isinstance(obj.get("set"), Mapping) else {
+                    key: value
+                    for key, value in dict(card_payload).items()
+                    if key
+                    not in {
+                        "object_kind",
+                        "canvas_name",
+                        "canvas_id",
+                        "board",
+                        "card",
+                        "card_id",
+                        "content",
+                        "base_revision",
+                    }
+                }
+                op: Dict[str, Any] = {"op": "update_card", "card_id": card_id, "set": dict(updates or {})}
+                if "content" in obj:
+                    op["content"] = obj.get("content")
+                elif isinstance(card_payload, Mapping) and "content" in card_payload:
+                    op["content"] = card_payload.get("content")
+            else:
+                op = {
+                    "op": "new_card",
+                    "card": {
+                        key: value
+                        for key, value in dict(card_payload).items()
+                        if key not in {"object_kind", "canvas_name", "canvas_id", "board", "card", "base_revision"}
+                    },
+                }
+            out = {"schema": "kdcube.canvas.patch.v1", "operations": [op]}
+        if base_revision is not None and "base_revision" not in out:
+            out["base_revision"] = base_revision
+        return out
+
+    async def _named_service_upsert(
+        self,
+        ctx: NamedServiceContext,
+        request: NamedServiceRequest,
+    ) -> Mapping[str, Any]:
+        obj = dict(request.object or {})
+        if ctx.tenant and "tenant" not in obj:
+            obj["tenant"] = ctx.tenant
+        if ctx.project and "project" not in obj:
+            obj["project"] = ctx.project
+        if ctx.user_id and "user_id" not in obj:
+            obj["user_id"] = ctx.user_id
+        actor = ctx.actor if isinstance(ctx.actor, Mapping) else {}
+        if actor and "actor" not in obj:
+            obj["actor"] = actor.get("name") or actor.get("user_id") or ctx.user_id
+        object_kind = protocol_string(obj, "object_kind", CANVAS_CARD_OBJECT_KIND)
+        base_revision = request.base_revision or obj.get("base_revision")
+        user_id = self.resolve_user_id(obj)
+        if object_kind == CANVAS_BOARD_OBJECT_KIND and "patch" not in obj and "operations" not in obj and not obj.get("op"):
+            return canvas_api.write(
+                payload=obj,
+                store=self.store(obj, user_id=user_id),
+                user_id=user_id,
+                target=self.target(),
+            )
+        patch = self._patch_payload_from_named_object(obj, base_revision=base_revision)
+        patch_payload = {
+            **obj,
+            "patch": patch,
+        }
+        return canvas_api.patch(
+            payload=patch_payload,
+            store=self.store(patch_payload, user_id=user_id),
+            user_id=user_id,
+            target=self.target(),
+        )
 
     def _canvas_payload_for_result(self, payload: Mapping[str, Any], result: Mapping[str, Any]) -> Dict[str, Any]:
         merged = dict(payload if payload is not None else {})
@@ -346,11 +555,20 @@ class VersatileCanvasService:
     async def apply_patch_payload(self, payload: Mapping[str, Any]) -> Dict[str, Any]:
         user_id = self.resolve_user_id(payload)
         try:
-            result = canvas_api.patch(
-                payload=payload,
-                store=self.store(payload, user_id=user_id),
+            object_payload = dict(payload if payload is not None else {})
+            object_payload.setdefault("object_kind", CANVAS_BOARD_OBJECT_KIND)
+            if "patch" not in object_payload:
+                object_payload["patch"] = dict(payload if payload is not None else {})
+            response = await self._named_service_client(payload).upsert(
+                namespace=CANVAS_NAMESPACE,
+                object=object_payload,
+                object_ref=protocol_string(payload, "object_ref") or None,
+                base_revision=payload.get("base_revision"),
+            )
+            result = self._legacy_result_from_named_response(
+                response,
                 user_id=user_id,
-                target=self.target(),
+                fallback_alias="canvas_patch",
             )
         except Exception as exc:
             result = {"ok": False, "user_id": user_id, "error": str(exc)}
@@ -361,10 +579,22 @@ class VersatileCanvasService:
     async def search(self, payload: Mapping[str, Any]) -> Dict[str, Any]:
         user_id = self.resolve_user_id(payload)
         try:
-            result = await self.pins.search(
-                store=self.store(payload, user_id=user_id),
+            filters = {
+                key: value
+                for key, value in dict(payload if payload is not None else {}).items()
+                if key not in {"query", "limit", "cursor"}
+            }
+            response = await self._named_service_client(payload).search(
+                namespace=CANVAS_NAMESPACE,
+                query=protocol_string(payload, "query"),
+                limit=int(payload.get("limit") or 20),
+                cursor=protocol_string(payload, "cursor") or None,
+                filters=filters,
+            )
+            result = self._legacy_result_from_named_response(
+                response,
                 user_id=user_id,
-                payload=payload,
+                fallback_alias="canvas_search",
             )
         except Exception as exc:
             result = {"ok": False, "user_id": user_id, "error": str(exc)}

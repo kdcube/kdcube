@@ -26,6 +26,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_memory import
 from kdcube_ai_app.apps.chat.sdk.solutions.canvas import api as canvas_api
 from kdcube_ai_app.apps.chat.sdk.solutions.canvas.events.defaults import default_canvas_event_source_specs
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
+    NamedServiceRegistry,
     named_service_agent_event_source_namespaces,
     named_service_agent_pull_namespaces,
     register_configured_named_service_artifact_rehosters,
@@ -409,6 +410,17 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
 
     async def _apply_canvas_patch_payload(self, payload: Mapping[str, Any]) -> Dict[str, Any]:
         return await self._canvas_service().apply_patch_payload(payload)
+
+    def named_services(self):
+        super_factory = getattr(super(), "named_services", None)
+        registry = super_factory() if callable(super_factory) else None
+        if registry is None:
+            registry = NamedServiceRegistry()
+        if not isinstance(registry, NamedServiceRegistry):
+            raise RuntimeError(f"named_services() returned {type(registry).__name__}, expected NamedServiceRegistry")
+        if registry.get("sdk.canvas.pins") is None:
+            registry.register(self._canvas_service().named_service_provider())
+        return registry
 
     def _namespace_styles(self) -> Mapping[str, Any]:
         namespace_styles = self.bundle_prop("namespace_styles", {}) or {}

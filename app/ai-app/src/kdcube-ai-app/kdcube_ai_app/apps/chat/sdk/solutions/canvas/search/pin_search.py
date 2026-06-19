@@ -43,7 +43,41 @@ DEFAULT_EMBEDDING_DIM = 1536
 # the search on lexical + recency only — the graceful "semantic unavailable" mode.
 DEFAULT_MIN_SEMANTIC_SCORE = 0.30
 
+CANVAS_PIN_SEARCH_FILTERS: dict[str, Any] = {
+    "canvas_name": {"type": "string", "description": "Named canvas to search. Defaults to main when omitted."},
+    "canvas_id": {"type": "string", "description": "Explicit canvas id. Usually omitted unless the caller already has the board id."},
+    "all_boards": {"type": "boolean", "description": "Search all boards for this user when true; otherwise search one board."},
+    "kinds": {"type": "string|array", "description": "Return cards whose canvas card kind matches at least one value, for example file, memory, task, note, canvas, or search.result."},
+    "namespaces": {"type": "string|array", "description": "Return cards whose pinned ref belongs to at least one root namespace, for example fi, cnv, mem, task, or so."},
+    "thresholds": {
+        "type": "object",
+        "description": "Eligibility floors for normalized canvas pin-search factors. Use only fields declared here.",
+        "properties": {
+            "semantic_score": {
+                "type": "number",
+                "minimum": -1.0,
+                "maximum": 1.0,
+                "default": DEFAULT_MIN_SEMANTIC_SCORE,
+                "description": "Cosine similarity floor for semantic card candidates; raise to tighten, set below 0 to turn semantic search off.",
+            },
+        },
+    },
+}
+
 logger = logging.getLogger("kdcube.canvas.pins")
+
+
+def _mapping(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
 
 
 def _read_board_cards(store: Any, *, board_id: str, payload: Mapping[str, Any]) -> list:
@@ -197,7 +231,7 @@ async def search_pins(
     on canvas updates via `index_pins`). Embeds only the query through the supplied
     model service when available; if the model service declines the query embed,
     search degrades to lexical + recency.
-    `payload`: {query, limit?, canvas_name?/canvas_id?, all_boards?, kinds?, namespaces?}."""
+    `payload`: {query, limit?, canvas_name?/canvas_id?, all_boards?, kinds?, namespaces?, thresholds?}."""
     query = str(payload.get("query") or "").strip()
     try:
         limit = int(payload.get("limit") or 20)
@@ -206,12 +240,21 @@ async def search_pins(
     all_boards = bool(payload.get("all_boards"))
     kinds = payload.get("kinds") if isinstance(payload.get("kinds"), (list, tuple)) else None
     namespaces = payload.get("namespaces") if isinstance(payload.get("namespaces"), (list, tuple)) else None
+    thresholds = _mapping(payload.get("thresholds"))
+    requested_semantic_floor = _float_or_none(thresholds.get("semantic_score"))
+    if requested_semantic_floor is None:
+        requested_semantic_floor = _float_or_none(payload.get("min_semantic_score"))
+    effective_min_semantic_score = (
+        requested_semantic_floor
+        if requested_semantic_floor is not None
+        else min_semantic_score
+    )
     board_id = _resolve_board(store, payload)
 
     db_path = pin_index_db_path(store, user_id)
     index = _build_index(
         store, user_id, embed_fn=embed_fn, dim=dim,
-        vector_backend=vector_backend, min_semantic_score=min_semantic_score,
+        vector_backend=vector_backend, min_semantic_score=effective_min_semantic_score,
         vector_store=vector_store, semantic_guard=semantic_guard,
         model_service=model_service,
     )

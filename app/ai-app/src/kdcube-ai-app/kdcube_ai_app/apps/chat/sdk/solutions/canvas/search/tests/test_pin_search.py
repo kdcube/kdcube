@@ -10,7 +10,7 @@ import re
 import tempfile
 from pathlib import Path
 
-from kdcube_ai_app.apps.chat.sdk.solutions.canvas.search import index_pins, search_pins
+from kdcube_ai_app.apps.chat.sdk.solutions.canvas.search import CANVAS_PIN_SEARCH_FILTERS, index_pins, search_pins
 
 VOCAB = ["rollout", "plan", "deploy", "alpha", "prod", "beta", "gamma", "report", "task", "note"]
 
@@ -85,12 +85,18 @@ async def _run() -> None:
 
         res_off = await search_pins(
             store=store, user_id="u-1",
-            payload={"query": "alpha deploy", "canvas_id": "b1", "limit": 10},
+            payload={
+                "query": "alpha deploy",
+                "canvas_id": "b1",
+                "limit": 10,
+                "thresholds": {"semantic_score": -1},
+            },
             embed_fn=counting_embed, dim=len(VOCAB), vector_backend="bruteforce",
-            min_semantic_score=-1,
         )
         assert res_off["ok"] is True and [r["card_id"] for r in res_off["results"]] == ["p1"], res_off
         assert embed_calls["n"] == 0, "semantic-off must not call the embedder for the query"
+        assert "thresholds" in CANVAS_PIN_SEARCH_FILTERS
+        assert "semantic_score" in CANVAS_PIN_SEARCH_FILTERS["thresholds"]["properties"]
         # An unrelated query still returns nothing (lexical has its own boundary).
         res_off_none = await search_pins(
             store=store, user_id="u-1",
