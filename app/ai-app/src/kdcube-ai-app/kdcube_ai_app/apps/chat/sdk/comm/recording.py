@@ -54,7 +54,16 @@ def _as_list(value: Any) -> list[Any]:
     return [value]
 
 
-def _event_value(event: EventFilterInput, key: str) -> Any:
+def _metadata_agent_id(data: Optional[Dict[str, Any]]) -> Any:
+    if not isinstance(data, dict):
+        return None
+    metadata = data.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    return metadata.get("agent_id")
+
+
+def _event_value(event: EventFilterInput, key: str, data: Optional[Dict[str, Any]] = None) -> Any:
     if key == "types":
         return event.type
     if key == "route_key":
@@ -71,6 +80,8 @@ def _event_value(event: EventFilterInput, key: str) -> Any:
         return event.socket_event
     if key == "agents" or key == "agent":
         return event.agent
+    if key in ("agent_ids", "agent_id", "metadata.agent_id"):
+        return _metadata_agent_id(data)
     if key == "steps" or key == "step":
         return event.step
     if key == "statuses" or key == "status":
@@ -91,7 +102,7 @@ def _criteria_empty(criteria: dict[str, Any]) -> bool:
     return True
 
 
-def _criteria_matches(criteria: dict[str, Any], event: EventFilterInput) -> bool:
+def _criteria_matches(criteria: dict[str, Any], event: EventFilterInput, data: Optional[Dict[str, Any]] = None) -> bool:
     if not criteria:
         return True
     for key, value in criteria.items():
@@ -102,7 +113,7 @@ def _criteria_matches(criteria: dict[str, Any], event: EventFilterInput) -> bool
         values = _as_list(value)
         if not values:
             continue
-        actual = _event_value(event, key)
+        actual = _event_value(event, key, data=data)
         if actual not in values:
             return False
     return True
@@ -156,10 +167,10 @@ def selector_allows(
     include = selector.get("include") or {}
     exclude = selector.get("exclude") or {}
 
-    include_ok = True if _criteria_empty(include) else _criteria_matches(include, event)
+    include_ok = True if _criteria_empty(include) else _criteria_matches(include, event, data=data)
     if not include_ok:
         return False
-    if not _criteria_empty(exclude) and _criteria_matches(exclude, event):
+    if not _criteria_empty(exclude) and _criteria_matches(exclude, event, data=data):
         return False
     return True
 

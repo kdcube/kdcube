@@ -397,6 +397,57 @@ async def test_comm_metadata_carries_agent_id_to_telemetry() -> None:
 
 
 @pytest.mark.anyio
+async def test_recording_selector_filters_live_envelopes_by_metadata_agent_id() -> None:
+    comm = _make_comm()
+    comm.record(
+        {"include": {"types": ["accounting.usage"], "agent_ids": ["research.react.agent"]}},
+        mode="replace",
+    )
+
+    comm.service["agent_id"] = "planner.react.agent"
+    await comm.service_event(
+        type="accounting.usage",
+        step="accounting",
+        status="completed",
+        agent="planner.react.agent",
+        data={"breakdown": [], "cost_total_usd": 0.0},
+    )
+
+    comm.service["agent_id"] = "research.react.agent"
+    await comm.service_event(
+        type="accounting.usage",
+        step="accounting",
+        status="completed",
+        agent="research.react.agent",
+        data={"breakdown": [], "cost_total_usd": 0.0},
+    )
+
+    records = comm.export_recorded_events()
+    assert len(records) == 1
+    assert records[0]["metadata"]["agent_id"] == "research.react.agent"
+
+
+@pytest.mark.anyio
+async def test_export_recorded_events_filters_by_metadata_agent_id() -> None:
+    comm = _make_comm()
+    comm.record("accounting.usage", mode="replace")
+
+    for agent_id in ("planner.react.agent", "research.react.agent"):
+        comm.service["agent_id"] = agent_id
+        await comm.service_event(
+            type="accounting.usage",
+            step="accounting",
+            status="completed",
+            agent=agent_id,
+            data={"breakdown": [], "cost_total_usd": 0.0},
+        )
+
+    records = comm.export_recorded_events({"include": {"metadata.agent_id": ["research.react.agent"]}})
+    assert len(records) == 1
+    assert records[0]["metadata"]["agent_id"] == "research.react.agent"
+
+
+@pytest.mark.anyio
 async def test_sink_posts_batch_and_clears_records() -> None:
     comm = _make_comm()
     posted = []

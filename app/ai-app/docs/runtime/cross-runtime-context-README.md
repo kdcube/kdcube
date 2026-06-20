@@ -17,6 +17,7 @@ keywords:
 updated_at: 2026-06-11
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/runtime/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/subagents/subagents-runtime-bootstrap-and-reduce-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-runtime-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/exec/runtime-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/exec/README-iso-runtime.md
@@ -120,6 +121,12 @@ Consequences:
 - stored accounting events can expose `agent_id` as a root context field;
 - comm envelopes can expose the same id under `metadata.agent_id`;
 - accounting role/model dimensions remain independent from `agent_id`.
+
+For subagents, the host binds the subagent `agent_id` before it calls
+`build_portable_spec(...)` and before it exports `COMM_SPEC`. The resulting
+snapshot carries the subagent identity through comm metadata and accounting
+context. A snapshot built before the subagent scope is bound represents the
+host/coordinator identity.
 
 ## Flow
 

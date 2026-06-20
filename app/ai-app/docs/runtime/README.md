@@ -18,6 +18,7 @@ keywords:
 updated_at: 2026-06-11
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/runtime/cross-runtime-context-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/subagents/subagents-runtime-bootstrap-and-reduce-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-runtime-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/exec/runtime-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/exec/README-iso-runtime.md
@@ -44,6 +45,7 @@ For the portable context contract, read
 | Cron/job runtime | scheduler/worker process | `@cron`, `@on_job`, long-running platform work | headless or stored user context; no implicit browser session unless the job payload carries it |
 | Data Bus handler runtime | Data Bus worker | durable bundle-scoped messages | `DataBusContext`, request-like auth context from message actor, current bundle id, optional comm replies |
 | In-process tool runtime | same Python process as current turn | normal SDK tools and provider helpers | current `ContextVar` bindings are visible in the same async task context |
+| Subagent runtime fence | same process, task, thread, subprocess, or isolated runtime | coordinator-delegated scoped agent work | subagent `agent_id`, workspace refs, comm spec, and accounting context are captured in the portable spec built inside the subagent scope |
 | Local subprocess tool runtime | child Python process on same host | crash containment for selected tools | portable spec plus selected contextvars are restored; live Python objects are rebuilt or absent |
 | ISO Docker supervisor runtime | trusted supervisor process/container | tool brokering for isolated execution | descriptors, portable spec, communicator, settings/secrets, and tool subsystem are restored for supervisor |
 | ISO Docker executor runtime | restricted generated-code process/container | untrusted generated code | minimal env, work/out surfaces, supervisor socket; no direct descriptors or platform secrets |
@@ -108,6 +110,7 @@ Examples:
 | Surface family | Runtime crossing rule |
 | --- | --- |
 | Communicator | host exports a comm spec; child runtime rebuilds `ChatCommunicator`. Recording selectors cross only when JSON-portable. |
+| Subagents | coordinator binds a scoped `agent_id`, exports portable/comm specs inside that scope, child writes side files, and host reduces the selected outputs. |
 | Data Bus | messages are durable Redis Stream records. Handler lifecycle belongs to runtime workers. |
 | Conversation event lane | conversation `external_events[]` are ordered and consumed by conversation/runtime orchestration, not by comm relay. |
 | Namespace services | provider location is resolved from Named Service Discovery; calls use the best available runtime bridge while preserving auth context. |

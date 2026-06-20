@@ -5,6 +5,7 @@ summary: "How separate agent calls affect rendered context, prompt caching, and 
 tags: ["sdk", "agents", "react", "context", "caching", "subagents"]
 keywords: ["subagent", "micro-agent", "prompt cache", "system instruction", "handoff", "announce"]
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/subagents/subagents-runtime-bootstrap-and-reduce-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-caching-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-layout.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/react/context-progression.md

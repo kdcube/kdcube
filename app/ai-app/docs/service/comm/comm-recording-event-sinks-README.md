@@ -333,6 +333,7 @@ include:
   routes: []
   socket_events: []
   agents: []
+  agent_ids: []
   steps: []
   statuses: []
   broadcast: null
@@ -341,6 +342,7 @@ exclude:
   routes: []
   socket_events: []
   agents: []
+  agent_ids: []
   steps: []
   statuses: []
   broadcast: null
@@ -361,6 +363,7 @@ Matching fields:
 | `socket_events`, `socket_event` | `EventFilterInput.socket_event` |
 | `route_keys`, `route_key` | `EventFilterInput.route_key` |
 | `agents`, `agent` | `EventFilterInput.agent` |
+| `agent_ids`, `agent_id`, `metadata.agent_id` | Envelope or recorded-item `metadata.agent_id` |
 | `steps`, `step` | `EventFilterInput.step` |
 | `statuses`, `status` | `EventFilterInput.status` |
 | `broadcast` | `EventFilterInput.broadcast` |
@@ -374,6 +377,10 @@ Matching rules:
 | Non-empty `exclude` | Removes events matching every populated exclude criterion |
 | `broadcast: null` | Matches either broadcast value |
 | List values | Exact string/value match |
+
+`agents` and `agent_ids` are intentionally separate fields. `agents` matches
+the visible event actor label. `agent_ids` matches the stable producer identity
+written into the comm envelope metadata.
 
 String shorthand:
 
