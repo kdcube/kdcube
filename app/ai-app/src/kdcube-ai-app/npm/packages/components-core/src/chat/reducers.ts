@@ -374,6 +374,10 @@ function normalizedFileArtifact(
   }
 }
 
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
 function appendHistoricalFileArtifacts(
   artifacts: Artifact[],
   rows: Array<Record<string, unknown>>,
@@ -401,42 +405,46 @@ function collectHistoricalFileRows(
 ): Array<Record<string, unknown>> {
   const rows: Array<Record<string, unknown>> = []
 
-  function addFileRow(candidate: unknown) {
+  function addFileRow(candidate: unknown, explicitFileContainer = false) {
     if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return
     const row = candidate as Record<string, unknown>
     const event = row.event && typeof row.event === 'object' ? row.event as Record<string, unknown> : null
     const data = row.data && typeof row.data === 'object' ? row.data as Record<string, unknown> : null
     const parsedText = parseRecordTextJson(row)
+    const artifactType = typeof row.artifact_type === 'string' ? row.artifact_type.trim() : ''
 
     if (event?.step === 'files' && data && Array.isArray(data.items)) {
-      for (const item of data.items) addFileRow(item)
+      for (const item of data.items) addFileRow(item, true)
       return
     }
-    if (Array.isArray(row.files)) {
-      for (const item of row.files) addFileRow(item)
+    const nextExplicitFileContainer = explicitFileContainer || artifactType === 'files'
+    if (nextExplicitFileContainer && Array.isArray(row.files)) {
+      for (const item of row.files) addFileRow(item, nextExplicitFileContainer)
     }
     if (Array.isArray(row.items)) {
-      for (const item of row.items) addFileRow(item)
+      for (const item of row.items) addFileRow(item, nextExplicitFileContainer)
     }
     if (Array.isArray(row.blocks)) {
-      for (const item of row.blocks) addFileRow(item)
+      for (const item of row.blocks) addFileRow(item, nextExplicitFileContainer)
     }
-    if (data && Array.isArray(data.files)) {
-      for (const item of data.files) addFileRow(item)
+    if (nextExplicitFileContainer && data && Array.isArray(data.files)) {
+      for (const item of data.files) addFileRow(item, nextExplicitFileContainer)
     }
     if (parsedText) {
-      addFileRow(parsedText)
+      addFileRow(parsedText, explicitFileContainer)
     }
 
     const kind = typeof row.kind === 'string' ? row.kind : ''
     const logicalPath = canonicalPayloadRef(row, {}, conversationId)
     if (!logicalPath) return
+    if (!nextExplicitFileContainer && kind !== 'file' && kind !== 'assistant.file') return
     if (
       kind === 'file' ||
       kind === 'assistant.file' ||
-      typeof row.filename === 'string' ||
-      typeof row.mime === 'string' ||
-      typeof row.mime_type === 'string'
+      explicitFileContainer ||
+      nonEmptyString(row.filename) ||
+      nonEmptyString(row.mime) ||
+      nonEmptyString(row.mime_type)
     ) {
       rows.push(row)
     }
@@ -528,6 +536,7 @@ export function createEmptyTurn(turnId: string, createdAt: number, message = '')
     artifacts: [],
     timeline: [],
     followups: [],
+    interruptedNotice: null,
     costUsd: null,
     elapsedMs: null,
   }
@@ -1090,6 +1099,16 @@ export function applyChatStep(state: ChatState, env: ChatStepEnvelope): ChatStat
       }
     }
 
+    /* One-time recovery notice: a new turn that reclaimed a stale-open event
+     * lane emits this step so the user knows the prior (unsaved) response is
+     * being regenerated. Surfaced as a transient banner; never persisted. */
+    const interruptedNotice = env.event.step === 'external_event.handler.reclaim'
+      ? (env.event.markdown
+          || (typeof env.data?.message === 'string' ? env.data.message : '')
+          || turn.interruptedNotice
+          || '')
+      : turn.interruptedNotice
+
     return {
       ...turn,
       costUsd,
@@ -1099,6 +1118,7 @@ export function applyChatStep(state: ChatState, env: ChatStepEnvelope): ChatStat
         [env.event.step]: nextStep,
       },
       artifacts,
+      interruptedNotice,
     }
   })
 }

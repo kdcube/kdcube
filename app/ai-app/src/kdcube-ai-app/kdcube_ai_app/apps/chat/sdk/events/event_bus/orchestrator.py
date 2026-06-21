@@ -91,6 +91,13 @@ class ConversationEventBusOrchestrator:
     ) -> None:
         self.table = table
         self.source = source
+        # Transient signal from the most recent open_handler() call: True when
+        # that call reclaimed a stale-open lane from a previous (crashed or
+        # superseded) owner, with the previous owner's turn id. Not persisted;
+        # the caller reads it right after open_handler() to surface a one-time
+        # "previous response was interrupted, regenerating" notice to the user.
+        self.last_open_reclaimed: bool = False
+        self.last_open_reclaimed_prev_owner: str = ""
 
     @classmethod
     def for_source(cls, source: Any) -> "ConversationEventBusOrchestrator":
@@ -109,6 +116,8 @@ class ConversationEventBusOrchestrator:
             return await self.table.get()
 
         now = utc_timestamp()
+        self.last_open_reclaimed = False
+        self.last_open_reclaimed_prev_owner = ""
         async with self.table.lock():
             state = await self.table.get()
             if state.handler_status == "open" and state.handler_turn_id and state.handler_turn_id != turn_id:
@@ -122,6 +131,8 @@ class ConversationEventBusOrchestrator:
                     state.consumer_status or "<empty>",
                     state.consumer_status_at or "<empty>",
                 )
+                self.last_open_reclaimed = True
+                self.last_open_reclaimed_prev_owner = str(state.handler_turn_id or "")
             state.handler_turn_id = turn_id
             state.handler_status = "open"
             state.handler_status_at = now

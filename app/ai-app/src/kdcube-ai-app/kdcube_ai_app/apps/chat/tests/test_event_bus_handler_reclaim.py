@@ -151,6 +151,9 @@ async def test_open_handler_reclaims_stale_open_lane_when_consumer_stale(monkeyp
     assert state.handler_turn_id == "turn_NEW"
     assert state.handler_status == "open"
     assert state.handler_status_at
+    # Reclaim is signalled so the new turn can surface a one-time recovery notice.
+    assert orchestrator.last_open_reclaimed is True
+    assert orchestrator.last_open_reclaimed_prev_owner == "turn_OLD"
 
 
 @pytest.mark.asyncio
@@ -169,6 +172,8 @@ async def test_open_handler_reclaims_lane_with_empty_consumer_status_at(monkeypa
 
     assert state.handler_turn_id == "turn_NEW"
     assert state.handler_status == "open"
+    assert orchestrator.last_open_reclaimed is True
+    assert orchestrator.last_open_reclaimed_prev_owner == "turn_OLD"
 
 
 @pytest.mark.asyncio
@@ -191,6 +196,8 @@ async def test_open_handler_does_not_steal_fresh_consumer(monkeypatch):
     assert state.handler_status == "open"
     assert state.handler_status_at == stale_handler_at
     assert state.consumer_status_at == fresh_consumer_at
+    # Deferring to a live owner is NOT a reclaim: no recovery notice.
+    assert orchestrator.last_open_reclaimed is False
 
 
 @pytest.mark.asyncio
@@ -202,6 +209,8 @@ async def test_open_handler_opens_empty_lane():
     assert state.handler_turn_id == "turn_NEW"
     assert state.handler_status == "open"
     assert state.handler_status_at
+    # Opening a free lane is the normal path: no prior owner, no notice.
+    assert orchestrator.last_open_reclaimed is False
 
 
 @pytest.mark.asyncio

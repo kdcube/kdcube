@@ -98,6 +98,17 @@ This might be due to high load. Please try again - sometimes a fresh start does 
         """I wasn't able to complete your request in time.
 
 This usually happens during peak usage. Give it another try, and it should work!""",
+    ],
+
+    # Shown once when a new turn picks up a conversation whose previous response
+    # was interrupted before it finished (a crash, reload, or a superseded turn).
+    # The interrupted partial was never saved, so the assistant regenerates.
+    "turn_interrupted_regenerating": [
+        "The previous response was interrupted before it finished, so it wasn't saved. Regenerating your answer now.",
+
+        "Looks like my last reply got cut off and never saved. Let me redo it for you.",
+
+        "My previous answer didn't finish and wasn't kept. Picking it back up and regenerating now.",
     ]
 }
 

@@ -255,6 +255,11 @@ export interface ChatTurn {
   artifacts: Artifact[]
   timeline: TimelineEntry[]
   followups: string[]
+  /* Transient, live-only notice shown when this turn took over a conversation
+   * whose previous response was interrupted before it finished (a crash, reload,
+   * or superseded turn). Set from the live `external_event.handler.reclaim` step;
+   * it is not part of the persisted turn, so it is absent after a reload. */
+  interruptedNotice?: string | null
   /* Turn accounting, populated at the end of the turn: cost from the
    * `accounting.usage` event (data.cost_total_usd) and wall time from the
    * `chat.turn.summary` event (data.elapsed_ms). Null until those arrive. */

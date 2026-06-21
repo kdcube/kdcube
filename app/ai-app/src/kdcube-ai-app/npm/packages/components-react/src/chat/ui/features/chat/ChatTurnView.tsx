@@ -740,6 +740,11 @@ function ChatTurnViewImpl({
   const isStreaming = turn.state === 'pending' || turn.state === 'running'
   return (
     <div className="k-chat-view">
+      {turn.interruptedNotice ? (
+        <div className="k-notice k-info">
+          <span>{turn.interruptedNotice}</span>
+        </div>
+      ) : null}
       <ChatThinkingTimeline entries={thinkingEntries} streaming={isStreaming} />
       <ChatMergedFeed events={overviewEvents} onDownloadError={onDownloadError} namespaceStyles={namespaceStyles} />
       {turn.state === 'error' ? (

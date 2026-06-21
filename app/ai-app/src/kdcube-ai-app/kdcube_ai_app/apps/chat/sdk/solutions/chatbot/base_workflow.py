@@ -155,6 +155,17 @@ def _generic_turn_failure_message(raw_message: str = "") -> str:
     return "The assistant hit an internal error before it could complete the turn. Please retry."
 
 
+def _interrupted_turn_regenerating_message() -> str:
+    # SDK fallback used when the bundle exposes no `turn_interrupted_regenerating`
+    # resource. Surfaced once when a new turn reclaims a stale-open lane whose prior
+    # owner crashed/was-superseded mid-response: the partial the user may have seen
+    # was never saved, so the new owner regenerates from the persisted timeline.
+    return (
+        "A previous response was interrupted before it finished, so it was not saved. "
+        "Regenerating your answer now."
+    )
+
+
 def _service_connectivity_user_message(err: ServiceError) -> str:
     del err
     return (
@@ -1584,6 +1595,45 @@ class BaseWorkflow():
         if callable(checker):
             await checker(phase=phase)
 
+    async def _announce_external_handler_reclaim(self, scratchpad: "CTurnScratchpad") -> None:
+        """When this turn reclaimed a stale-open event lane (its prior owner crashed
+        or was superseded mid-response), tell the user once that the previous,
+        unsaved response is being regenerated. Emitted on the status channel — not
+        the answer — so it does not become part of this turn's persisted output."""
+        consume = getattr(getattr(self, "ctx_browser", None), "consume_external_handler_reclaimed", None)
+        if not callable(consume):
+            return
+        prev_owner = ""
+        try:
+            prev_owner = str(consume() or "")
+        except Exception:
+            prev_owner = ""
+        if not prev_owner:
+            return
+        message = None
+        try:
+            message = self.message_resources_fn("turn_interrupted_regenerating") if self.message_resources_fn else None
+        except Exception:
+            message = None
+        message = message or _interrupted_turn_regenerating_message()
+        try:
+            await self._emit({
+                "type": "chat.step",
+                "agent": "event_lane",
+                "step": "external_event.handler.reclaim",
+                "status": "running",
+                "title": "Regenerating interrupted response",
+                "markdown": message,
+                "data": {
+                    "turn_id": str(getattr(scratchpad, "turn_id", "") or ""),
+                    "prev_owner_turn_id": prev_owner,
+                    "message": message,
+                    "notice_kind": "interrupted_regenerating",
+                },
+            })
+        except Exception:
+            self.logger.log(traceback.format_exc(), "ERROR")
+
     async def _persist_user_conversation_entry(
         self,
         *,
@@ -2646,6 +2696,7 @@ class BaseWorkflow():
                 open_external_event_handler = getattr(self.ctx_browser, "open_external_event_handler", None)
                 if callable(open_external_event_handler):
                     await open_external_event_handler()
+                await self._announce_external_handler_reclaim(scratchpad)
             except ExternalEventLaneTurnSuperseded:
                 raise
             except Exception:

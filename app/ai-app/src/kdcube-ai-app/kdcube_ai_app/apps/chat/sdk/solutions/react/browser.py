@@ -87,6 +87,10 @@ class ContextBrowser:
         self._external_apply_lock = asyncio.Lock()
         self._last_external_event_reader_result: Dict[str, Any] = {}
         self._external_event_lane_superseded: Optional[ExternalEventLaneTurnSuperseded] = None
+        # Set when this turn's open_external_event_handler() reclaimed a stale-open
+        # lane from a crashed/superseded prior owner. The workflow reads + clears it
+        # to surface a one-time "previous response interrupted, regenerating" notice.
+        self._external_handler_reclaimed_prev_owner: str = ""
 
     @property
     def external_event_source(self):
@@ -186,12 +190,24 @@ class ContextBrowser:
                     handler_status=str(state.handler_status or ""),
                     phase="open_external_event_handler",
                 )
+            if getattr(orchestrator, "last_open_reclaimed", False):
+                self._external_handler_reclaimed_prev_owner = str(
+                    getattr(orchestrator, "last_open_reclaimed_prev_owner", "") or ""
+                ) or turn_id
             return bool(state.is_open_for(turn_id))
         except ExternalEventLaneTurnSuperseded:
             raise
         except Exception:
             self.log.log("[timeline.external]: failed to open event-bus handler state\n" + traceback.format_exc(), "ERROR")
             return False
+
+    def consume_external_handler_reclaimed(self) -> str:
+        """Return the prior owner turn id if this turn reclaimed a stale-open lane,
+        then clear the flag so the notice is surfaced at most once. Empty string
+        when this turn opened a free lane (the normal case)."""
+        prev_owner = self._external_handler_reclaimed_prev_owner
+        self._external_handler_reclaimed_prev_owner = ""
+        return prev_owner
 
     async def ensure_external_event_listener(self) -> None:
         if self._timeline is None or not self._external_event_hooks or not self._external_event_listener_requested:
