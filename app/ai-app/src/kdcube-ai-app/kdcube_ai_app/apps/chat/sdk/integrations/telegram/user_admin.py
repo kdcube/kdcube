@@ -795,12 +795,16 @@ async def run_react_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> Dict[st
             _bundle_prop(entrypoint, "integrations.telegram.stream_activity", True)
             and _bundle_prop(entrypoint, "integrations.telegram.send_responses", True)
         )
+        stream_show_progress = bool(
+            _bundle_prop(entrypoint, "integrations.telegram.stream_activity_display", True)
+        )
         async with TelegramActivityStreamer(
             comm=getattr(entrypoint, "comm", None),
             bot_token=await _bot_token_value(entrypoint),
             chat_id=chat_id,
             turn_id=turn_id,
             enabled=stream_enabled,
+            show_progress=stream_show_progress,
         ) as telegram_streamer:
             result = await entrypoint.run(external_events=external_events)
         delivered_file_keys = telegram_streamer.delivered_file_keys() if telegram_streamer else set()
@@ -877,6 +881,9 @@ async def run_with_queued_telegram_delivery(entrypoint: Any, *, runner: Any) -> 
         _bundle_prop(entrypoint, "integrations.telegram.stream_activity", True)
         and _bundle_prop(entrypoint, "integrations.telegram.send_responses", True)
     )
+    stream_show_progress = bool(
+        _bundle_prop(entrypoint, "integrations.telegram.stream_activity_display", True)
+    )
     async with _telegram_conversation_lock(lock_key):
         async with TelegramActivityStreamer(
             comm=getattr(entrypoint, "comm", None),
@@ -884,6 +891,7 @@ async def run_with_queued_telegram_delivery(entrypoint: Any, *, runner: Any) -> 
             chat_id=chat_id,
             turn_id=turn_id,
             enabled=stream_enabled,
+            show_progress=stream_show_progress,
         ) as telegram_streamer:
             result = await runner()
         if not isinstance(result, dict):

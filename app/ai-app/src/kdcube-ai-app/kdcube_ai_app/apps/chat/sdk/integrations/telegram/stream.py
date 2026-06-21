@@ -57,6 +57,7 @@ class TelegramActivityStreamer:
         chat_id: str | int,
         turn_id: str | None = None,
         enabled: bool = True,
+        show_progress: bool = True,
         quiet_seconds: float = 1.5,
         min_send_interval_seconds: float = 3.0,
         max_message_chars: int = 1400,
@@ -68,6 +69,10 @@ class TelegramActivityStreamer:
         self.chat_id = str(chat_id or "").strip()
         self.turn_id = str(turn_id or "").strip()
         self.enabled = bool(enabled and self.bot_token and self.chat_id)
+        # When False, suppress the activity/thinking/step progress display
+        # (chat.delta / chat.step / chat.service / chat.compaction / chat.citations)
+        # but KEEP file delivery (chat.files) and error surfacing (chat.error).
+        self.show_progress = bool(show_progress)
         self.quiet_seconds = max(0.3, float(quiet_seconds or 1.5))
         self.min_send_interval_seconds = max(0.5, float(min_send_interval_seconds or 3.0))
         self.max_message_chars = max(300, int(max_message_chars or 1400))
@@ -299,6 +304,10 @@ class TelegramActivityStreamer:
         if not isinstance(env, Mapping):
             return
         typ = str(env.get("type") or "")
+        # When progress display is suppressed, process ONLY file delivery
+        # (chat.files) and errors (chat.error); skip thinking/step/progress.
+        if not self.show_progress and typ not in {"chat.files", "chat.error"}:
+            return
         if typ == "chat.delta":
             await self._handle_delta(env)
             return

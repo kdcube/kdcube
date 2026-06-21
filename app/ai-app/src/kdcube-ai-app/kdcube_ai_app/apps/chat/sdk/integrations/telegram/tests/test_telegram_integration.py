@@ -1791,3 +1791,91 @@ async def test_telegram_delivery_uploads_local_document(monkeypatch, tmp_path):
             "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_telegram_activity_streamer_show_progress_false_delivers_files_only():
+    """show_progress=False keeps chat.files delivery but suppresses progress
+    (chat.step / chat.delta) display."""
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.stream import TelegramActivityStreamer
+
+    class _FakeComm:
+        def __init__(self):
+            self.listeners = []
+
+        def add_activity_listener(self, cb):
+            self.listeners.append(cb)
+
+        def remove_activity_listener(self, cb):
+            self.listeners.remove(cb)
+
+        async def emit(self, activity):
+            for cb in list(self.listeners):
+                await cb(activity)
+
+    sent = []
+
+    async def _send(messages):
+        sent.extend(messages)
+        return {"ok": True}
+
+    comm = _FakeComm()
+    async with TelegramActivityStreamer(
+        comm=comm,
+        bot_token="token",
+        chat_id="chat",
+        send_messages=_send,
+        show_progress=False,
+        quiet_seconds=0.01,
+        min_send_interval_seconds=0.01,
+    ) as streamer:
+        # Suppressed: step/status progress.
+        await comm.emit(
+            {
+                "event": "chat_step",
+                "data": {
+                    "type": "chat.step",
+                    "event": {"step": "gate", "status": "completed", "title": "Gate Completed"},
+                },
+            }
+        )
+        # Suppressed: thinking/timeline delta.
+        await comm.emit(
+            {
+                "event": "chat_delta",
+                "data": {
+                    "type": "chat.delta",
+                    "event": {"agent": "react.decision"},
+                    "delta": {"marker": "timeline_text", "text": "checking inbox", "index": 0, "completed": True},
+                    "extra": {"artifact_name": "react.notes", "format": "markdown"},
+                },
+            }
+        )
+        # KEPT: file delivery.
+        await comm.emit(
+            {
+                "event": "chat_step",
+                "data": {
+                    "type": "chat.files",
+                    "event": {"step": "files", "status": "completed", "title": "Files Ready (1)"},
+                    "data": {
+                        "count": 1,
+                        "items": [
+                            {
+                                "filename": "report.pdf",
+                                "mime": "application/pdf",
+                                "description": "Generated report",
+                                "hosted_uri": "https://example.test/report.pdf",
+                                "physical_path": "turn_1/outputs/report.pdf",
+                                "artifact_path": "fi:turn_1.outputs/report.pdf",
+                            }
+                        ],
+                    },
+                },
+            }
+        )
+
+    assert len(sent) == 1
+    assert sent[0].kind == "document"
+    assert sent[0].files[0]["filename"] == "report.pdf"
+    assert streamer.delivered_file_keys() == {"https://example.test/report.pdf"}
