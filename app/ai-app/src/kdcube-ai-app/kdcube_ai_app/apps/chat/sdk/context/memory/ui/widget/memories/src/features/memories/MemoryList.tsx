@@ -76,11 +76,6 @@ function setMemoryDragData(event: DragEvent<HTMLElement>, memory: MemoryEntry): 
       contexts: [payload],
       ...dragPoint(event),
     }, '*');
-    window.parent.postMessage({
-      type: 'kdcube.memory.drag.start',
-      source: 'memories-widget',
-      context: payload,
-    }, '*');
   }
 }
 
@@ -91,10 +86,6 @@ function clearMemoryDragData(event: DragEvent<HTMLElement>): void {
       source: 'memories',
       source_surface_ref: 'sdk.memory.viewer',
       ...dragPoint(event),
-    }, '*');
-    window.parent.postMessage({
-      type: 'kdcube.memory.drag.end',
-      source: 'memories-widget',
     }, '*');
   }
 }

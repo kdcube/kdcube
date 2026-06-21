@@ -105,8 +105,25 @@ export interface HostObjectOpenPayload {
 export function requestHostObjectOpen(payload: HostObjectOpenPayload): boolean {
   try {
     if (typeof window === 'undefined' || window.parent === window) return false
+    const response = payload.response || {}
+    const uiEvent = (response.ui_event && typeof response.ui_event === 'object' ? response.ui_event : {}) as Record<string, unknown>
+    const source = payload.source || {}
+    const targetSurface = String(uiEvent.target_surface || response.target_surface || '').trim()
+    const objectRef = String(
+      uiEvent.object_ref ||
+      response.object_ref ||
+      response.ref ||
+      source.object_ref ||
+      source.ref ||
+      '',
+    ).trim()
+    if (!targetSurface) return false
     window.parent.postMessage({
-      type: 'kdcube-object-open',
+      ...uiEvent,
+      type: 'kdcube.surface.command',
+      target_surface: targetSurface,
+      action: 'open',
+      object_ref: objectRef || undefined,
       widget: CHAT_WIDGET_ID,
       response: payload.response,
       source: payload.source,

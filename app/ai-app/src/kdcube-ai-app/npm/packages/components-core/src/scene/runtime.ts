@@ -2,8 +2,7 @@ import {
   SCENE_CONFIG_REQUEST,
   SCENE_CONFIG_RESPONSE,
   SCENE_CONTEXT_DRAG_START,
-  SCENE_OBJECT_OPEN,
-  SCENE_PINBOARD_OPEN,
+  SCENE_SURFACE_COMMAND,
   type SceneActiveContextDrag,
   type SceneContextDragBroker,
   type SceneContextDragBrokerOptions,
@@ -156,6 +155,8 @@ export function providerSurfaceCommandFromOpen(request: SceneSurfaceOpenRequest)
   const objectRef = objectRefFromOpenRequest(request)
   const command: SceneRecord = {
     ...request.uiEvent,
+    type: SCENE_SURFACE_COMMAND,
+    target_surface: request.targetSurface,
     action: 'open',
     view: request.uiEvent.mode || 'expanded',
   }
@@ -163,43 +164,6 @@ export function providerSurfaceCommandFromOpen(request: SceneSurfaceOpenRequest)
   if (request.response.object !== undefined) command.object = request.response.object
   if (request.response.title !== undefined && command.title === undefined) command.title = request.response.title
   return objectRef || Object.keys(command).length > 2 ? command : null
-}
-
-export function normalizeObjectOpenMessage(message: unknown): SceneSurfaceOpenRequest | null {
-  const data = asSceneRecord(message)
-  const type = asSceneString(data.type)
-  if (type !== SCENE_OBJECT_OPEN && type !== SCENE_PINBOARD_OPEN) return null
-
-  if (type === SCENE_OBJECT_OPEN) {
-    const response = asSceneRecord(data.response)
-    const uiEvent = asSceneRecord(response.ui_event)
-    const targetSurface = targetSurfaceFromOpenResponse(response)
-    return {
-      targetSurface,
-      uiEvent,
-      response,
-      source: asSceneRecord(data.source),
-      message: data,
-    }
-  }
-
-  const uiEventInput = asSceneRecord(data.ui_event)
-  const targetSurface = asSceneString(data.target_surface) || asSceneString(uiEventInput.target_surface)
-  const uiEvent = { ...uiEventInput }
-  if (targetSurface && !uiEvent.target_surface) uiEvent.target_surface = targetSurface
-  const responseInput = asSceneRecord(data.response)
-  const response: SceneRecord = Object.keys(responseInput).length
-    ? { ...responseInput, ui_event: asSceneRecord(responseInput.ui_event), target_surface: targetSurface || responseInput.target_surface }
-    : { ui_event: uiEvent, target_surface: targetSurface }
-  if (!Object.keys(asSceneRecord(response.ui_event)).length) response.ui_event = uiEvent
-
-  return {
-    targetSurface: targetSurfaceFromOpenResponse(response) || targetSurface,
-    uiEvent: asSceneRecord(response.ui_event),
-    response,
-    source: asSceneRecord(data.source),
-    message: data,
-  }
 }
 
 export function normalizeSurfaceOpenResponse(response: unknown, source?: unknown): SceneSurfaceOpenRequest | null {
@@ -425,6 +389,11 @@ export function createSceneRuntime(options: SceneRuntimeOptions = {}): SceneRunt
         targetSurface,
       )
     }
+    const surfaceCommand: SceneRecord = {
+      ...command,
+      type: asSceneString(command.type) || SCENE_SURFACE_COMMAND,
+      target_surface: asSceneString(command.target_surface) || targetSurface,
+    }
 
     const request: SceneSurfaceOpenRequest = {
       targetSurface,
@@ -433,7 +402,7 @@ export function createSceneRuntime(options: SceneRuntimeOptions = {}): SceneRunt
       source: asSceneRecord(requestInput.source),
       message: asSceneRecord(requestInput.message),
     }
-    pending.set(targetSurface, { command, request: { ...request, targetSurface } })
+    pending.set(targetSurface, { command: surfaceCommand, request: { ...request, targetSurface } })
     logger?.info?.('[kdcube.scene] queued surface command', {
       targetSurface,
       label: registration.label,
@@ -488,14 +457,21 @@ export function createSceneRuntime(options: SceneRuntimeOptions = {}): SceneRunt
   function routeMessage(event: SceneMessageEvent, routeOptions: SceneMessageRouteOptions = {}): SceneDispatchResult | null {
     const data = asSceneRecord(event.data)
     const type = asSceneString(data.type)
-    if (type !== SCENE_OBJECT_OPEN && type !== SCENE_PINBOARD_OPEN) return null
+    if (type !== SCENE_SURFACE_COMMAND) return null
     if (!isOriginAllowed(event.origin, routeOptions.allowedOrigins)) {
       return resultError('origin_not_allowed', `Scene message origin is not allowed: ${event.origin || '(missing)'}.`)
     }
     if (routeOptions.isSourceAllowed && !routeOptions.isSourceAllowed(event.source, data)) {
       return resultError('message_source_not_registered', 'Scene message source is not registered for this host.')
     }
-    return dispatchRequest(normalizeObjectOpenMessage(data))
+    const targetSurface = asSceneString(data.target_surface) || asSceneString(data.targetSurface)
+    return queueCommand(targetSurface, data, {
+      targetSurface,
+      uiEvent: data,
+      response: asSceneRecord(data.response),
+      source: asSceneRecord(data.source),
+      message: data,
+    })
   }
 
   return {
@@ -528,9 +504,6 @@ export function createSceneRuntime(options: SceneRuntimeOptions = {}): SceneRunt
     },
     dispatchSurfaceOpen(response: unknown, source?: unknown) {
       return dispatchRequest(normalizeSurfaceOpenResponse(response, source))
-    },
-    dispatchObjectOpen(message: unknown) {
-      return dispatchRequest(normalizeObjectOpenMessage(message))
     },
     queueSurfaceCommand(targetSurface: string, command: SceneRecord, request?: Partial<SceneSurfaceOpenRequest>) {
       return queueCommand(targetSurface, command, request)

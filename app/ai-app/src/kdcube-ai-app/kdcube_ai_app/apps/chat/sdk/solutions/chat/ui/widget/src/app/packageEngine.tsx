@@ -32,6 +32,8 @@ import {
   settings,
 } from '../settings.ts'
 
+const SURFACE_COMMAND_MESSAGE_TYPE = 'kdcube.surface.command'
+
 function buildEngineConfig(): EngineConfig {
   return {
     connection: {
@@ -56,6 +58,24 @@ function buildEngineConfig(): EngineConfig {
       idTokenHeader: settings.getIdTokenHeader(),
     },
   }
+}
+
+function conversationIdFromSurfaceCommand(data: Record<string, unknown>): string {
+  const target = String(data.target_surface || '').trim().toLowerCase()
+  const action = String(data.action || '').trim().toLowerCase()
+  if (
+    data.type !== SURFACE_COMMAND_MESSAGE_TYPE ||
+    (target && target !== 'sdk.chat.conversation' && target !== 'sdk.chat.viewer') ||
+    action !== 'open'
+  ) return ''
+  const context = data.context && typeof data.context === 'object' ? data.context as Record<string, unknown> : {}
+  const contextData = context.data && typeof context.data === 'object' ? context.data as Record<string, unknown> : {}
+  const direct = String(data.conversation_id || contextData.conversation_id || context.conversation_id || '').trim()
+  if (direct) return direct
+  const ref = String(data.object_ref || context.object_ref || context.ref || context.logical_path || '').trim()
+  if (!ref.startsWith('conv:')) return ''
+  const parts = ref.slice('conv:'.length).split('/')
+  return (parts[parts.length - 1] || '').trim()
 }
 
 /**
@@ -100,16 +120,24 @@ function PackageEngineHost({ children }: { children: ReactNode }) {
       engine.on('pin-conversation', ({ conversationId, title, context, contexts, ref }) => {
         if (typeof window === 'undefined' || window.parent === window) return
         const ctx = (context || ref || null) as Record<string, unknown> | null
+        const objectRef = typeof ctx?.ref === 'string'
+          ? ctx.ref
+          : typeof ctx?.object_ref === 'string'
+            ? ctx.object_ref
+            : conversationId
+              ? `conv:${conversationId}`
+              : ''
         window.parent.postMessage({
-          type: 'kdcube-pin-conversation',
-          source: 'versatile.chat',
+          type: SURFACE_COMMAND_MESSAGE_TYPE,
+          target_surface: 'sdk.canvas.pinboard',
+          action: 'pin',
           conversation_id: conversationId,
           title: title || 'Conversation',
           agent: 'main',
           context: ctx,
           contexts: contexts || (ctx ? [ctx] : undefined),
-          ref: typeof ctx?.ref === 'string' ? ctx.ref : undefined,
-          object_ref: typeof ctx?.object_ref === 'string' ? ctx.object_ref : undefined,
+          object_ref: objectRef || undefined,
+          source_surface: 'versatile.chat',
         }, '*')
       }),
       engine.on('canvas-patch', ({ event }) => {
@@ -136,8 +164,9 @@ function PackageEngineHost({ children }: { children: ReactNode }) {
         if (data.view === 'compact' || data.view === 'expanded') engine.setHostView(data.view, { silent: true })
         return
       }
-      if (data.type === 'kdcube-chat-widget-command' && data.action === 'load-conversation') {
-        const id = typeof data.conversation_id === 'string' ? data.conversation_id.trim() : ''
+      const conversationId = conversationIdFromSurfaceCommand(data as Record<string, unknown>)
+      if (conversationId) {
+        const id = conversationId.trim()
         if (id) engine.loadConversation(id)
         return
       }

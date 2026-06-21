@@ -8,8 +8,9 @@
  * `engine.on(...)` and decides what to do. The iframe/scene widget maps these
  * to `postMessage`; a website maps them to its own handlers.
  *
- * This replaces the old direct postMessage calls in the widget's `host.ts`
- * (requestAuthRequired / requestHostView / kdcube-object-open / pin-conversation).
+ * This replaces direct host-coupled behavior in the widget. The iframe adapter
+ * maps host events to the current scene contracts, including
+ * `kdcube.surface.command` for cross-surface object actions.
  */
 
 /** A reference to an openable object surfaced by the engine (context chip,

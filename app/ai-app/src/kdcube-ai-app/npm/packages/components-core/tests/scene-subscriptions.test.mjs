@@ -25,7 +25,11 @@ test('builds canonical scene subscription messages', () => {
         id: 'usage-refresh',
         events: ['accounting.usage'],
         channels: ['chat_service'],
-        forwardType: 'kdcube-usage-card-refresh',
+        forward: {
+          type: 'kdcube.surface.command',
+          target_surface: 'sdk.usage.card',
+          action: 'refresh',
+        },
         debounceMs: 800,
       },
     ],
@@ -38,11 +42,15 @@ test('builds canonical scene subscription messages', () => {
     source: 'sse',
     events: ['accounting.usage'],
     channels: ['chat_service'],
-    forwardType: 'kdcube-usage-card-refresh',
+    forwardType: undefined,
     reason: undefined,
     includeEnvelope: false,
     debounceMs: 800,
-    forward: undefined,
+    forward: {
+      type: 'kdcube.surface.command',
+      target_surface: 'sdk.usage.card',
+      action: 'refresh',
+    },
   })
 })
 

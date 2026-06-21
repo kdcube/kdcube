@@ -32,11 +32,14 @@ import {
   type CanvasUploadResponse,
 } from '@kdcube/components-react/canvas'
 import {
+  SCENE_SURFACE_COMMAND,
   createContextDragBroker,
+  createSceneEventBus,
   createSceneRuntime,
   providerSurfaceCommandFromOpen,
+  type SceneEventBus,
+  type SceneEventSubscriptionClaim,
   type SceneDispatchResult,
-  type SceneSurfaceOpenRequest,
   type SceneSurfaceRegistration,
   type SceneDropTarget,
 } from '@kdcube/components-core/scene'
@@ -52,17 +55,30 @@ const CHAT_CONFIG_IDENTITY = 'BUNDLE_VERSATILE_CHAT_VIEW'
 const CHAT_WIDGET_ALIAS = 'versatile_chat'
 const MEMORY_WIDGET_ALIAS = 'memories'
 const USAGE_CARD_WIDGET_ALIAS = 'usage_card'
-// Debounce burst-y accounting.usage broadcasts so a chatty turn does not
-// hammer /api/economics/me/budget-breakdown. 800 ms catches the typical
-// trailing accounting event after the final delta without feeling stale.
-const USAGE_REFRESH_DEBOUNCE_MS = 800
-const USAGE_REFRESH_MESSAGE_TYPE = 'kdcube-usage-card-refresh'
 const CANVAS_SUBJECT = 'canvas.patch'
 const DEFAULT_CHAT_WIDTH = 460
 const DEFAULT_CHAT_HEIGHT = 720
 const DEFAULT_CHAT_MIN_WIDTH = 340
 const DEFAULT_CHAT_MAX_WIDTH = 860
 const FLOATING_PANEL_BASE_Z = 72
+
+const SCENE_EVENT_SUBSCRIPTIONS: Record<string, SceneEventSubscriptionClaim[]> = {
+  [USAGE_CARD_WIDGET_ALIAS]: [
+    {
+      id: 'usage-card-accounting-refresh-default',
+      source: 'socketio',
+      events: ['accounting.usage'],
+      channels: ['chat_service'],
+      forward: {
+        type: SCENE_SURFACE_COMMAND,
+        target_surface: 'sdk.usage.card',
+        action: 'refresh',
+      },
+      reason: 'accounting.usage',
+      debounceMs: 800,
+    },
+  ],
+}
 
 interface RouteContext {
   tenant: string
@@ -251,6 +267,19 @@ function usageCardWidgetUrl(ctx: RouteContext): string {
   return widgetUrl(ctx, USAGE_CARD_WIDGET_ALIAS)
 }
 
+function sceneSubscriptionChannels(subscriptions: Record<string, SceneEventSubscriptionClaim[]>): string[] {
+  const seen = new Set<string>()
+  Object.values(subscriptions).forEach((claims) => {
+    claims.forEach((claim) => {
+      ;(claim.channels ?? []).forEach((channel) => {
+        const value = String(channel || '').trim()
+        if (value) seen.add(value)
+      })
+    })
+  })
+  return Array.from(seen)
+}
+
 function externalWidgetUrl(ctx: RouteContext, panel: SceneExternalPanelConfig, expanded: boolean): string {
   return widgetUrlForBundle(ctx, panel.bundle_id, panel.widget_alias, {
     view: expanded ? 'expanded' : 'compact',
@@ -388,20 +417,6 @@ function GlowPinnedCanvasIcon({ size = 20 }: { size?: number }) {
       <circle cx="34.7" cy="34.3" r="1.5" fill="#4372C3" />
     </svg>
   )
-}
-
-function memoryIdFromSurfaceOpenRequest(request: SceneSurfaceOpenRequest): string {
-  const eventMemoryId = request.uiEvent.memory_id
-  if (typeof eventMemoryId === 'string' && eventMemoryId.trim()) return eventMemoryId.trim()
-  const memory = request.response.memory
-  if (memory && typeof memory === 'object') {
-    const id = (memory as { id?: unknown }).id
-    if (typeof id === 'string' && id.trim()) return id.trim()
-  }
-  const ref = String(request.uiEvent.object_ref || request.response.object_ref || request.response.ref || '').trim()
-  if (ref.startsWith('mem:record:')) return ref.slice('mem:record:'.length).split(/[?#]/, 1)[0].replace(/^\/+/, '')
-  if (ref.startsWith('me:')) return ref.slice(3).split(/[?#]/, 1)[0].replace(/^\/+/, '')
-  return ref.startsWith('mem:') ? ref.slice(4).split(/[?#]/, 1)[0].replace(/^\/+/, '') : ''
 }
 
 function memoryPanelSize(expanded: boolean) {
@@ -888,13 +903,55 @@ function App() {
   const memoryFrameRef = useRef<HTMLIFrameElement | null>(null)
   const externalFrameRef = useRef<HTMLIFrameElement | null>(null)
   const usageFrameRef = useRef<HTMLIFrameElement | null>(null)
-  const usageRefreshTimerRef = useRef<number | null>(null)
   const memoryReadyRef = useRef(false)
   const externalReadyRef = useRef(false)
   const panelZCursorRef = useRef(FLOATING_PANEL_BASE_Z + 4)
   const isRegistered = userType != null && userType !== 'anonymous'
   const externalPanel = sceneConfig.external_panels[0] ?? null
   const sceneRuntime = useMemo(() => createSceneRuntime({ logger: console }), [])
+
+  const sceneFrameForAlias = useCallback((alias: string): HTMLIFrameElement | null => {
+    switch (alias) {
+      case CHAT_WIDGET_ALIAS:
+        return chatFrameRef.current
+      case MEMORY_WIDGET_ALIAS:
+        return memoryFrameRef.current
+      case USAGE_CARD_WIDGET_ALIAS:
+        return usageFrameRef.current
+      case 'external':
+        return externalFrameRef.current
+      default:
+        return null
+    }
+  }, [])
+
+  const sceneEventBus = useMemo<SceneEventBus>(() => createSceneEventBus({
+    getAliases: () => Object.keys(SCENE_EVENT_SUBSCRIPTIONS),
+    defaultSubscriptions: (alias) => SCENE_EVENT_SUBSCRIPTIONS[alias] ?? [],
+    isReady: (alias) => Boolean(sceneFrameForAlias(alias)?.contentWindow),
+    post: (alias, message, event, subscription) => {
+      const frame = sceneFrameForAlias(alias)
+      if (!frame?.contentWindow) {
+        console.info('[kdc-scene] scene event target not mounted', {
+          alias,
+          subscription: subscription.id,
+          type: event.type,
+          channel: event.channel,
+        })
+        return
+      }
+      frame.contentWindow.postMessage(message, '*')
+    },
+    queue: (alias, _message, event, subscription) => {
+      console.info('[kdc-scene] scene event queued target unavailable', {
+        alias,
+        subscription: subscription.id,
+        type: event.type,
+        channel: event.channel,
+      })
+    },
+    logger: console,
+  }), [sceneFrameForAlias])
 
   const getBrokeredCanvasDrop = useCallback(() => brokeredCanvasDropRef.current, [])
   const clearBrokeredCanvasDrop = useCallback(() => {
@@ -954,7 +1011,7 @@ function App() {
         })
       }
       memoryFrameRef.current?.contentWindow?.postMessage(
-        { type: 'kdcube-memory-widget-command', widget: MEMORY_WIDGET_ALIAS, action: 'wake-scroll' },
+        { type: SCENE_SURFACE_COMMAND, target_surface: 'sdk.memory.viewer', action: 'wake-scroll' },
         '*',
       )
     }
@@ -966,11 +1023,7 @@ function App() {
   const sendMemoryWidgetCommand = useCallback((command: Record<string, unknown>) => {
     const target = memoryFrameRef.current?.contentWindow
     if (!target) return false
-    target.postMessage({
-      type: 'kdcube-memory-widget-command',
-      widget: MEMORY_WIDGET_ALIAS,
-      ...command,
-    }, '*')
+    target.postMessage(command, '*')
     return true
   }, [])
 
@@ -989,11 +1042,7 @@ function App() {
   const sendChatWidgetCommand = useCallback((command: Record<string, unknown>) => {
     const target = chatFrameRef.current?.contentWindow
     if (!target) return false
-    target.postMessage({
-      type: 'kdcube-chat-widget-command',
-      widget: CHAT_WIDGET_ALIAS,
-      ...command,
-    }, '*')
+    target.postMessage(command, '*')
     return true
   }, [])
 
@@ -1001,11 +1050,7 @@ function App() {
     if (!externalPanel) return false
     const target = externalFrameRef.current?.contentWindow
     if (!target) return false
-    target.postMessage({
-      type: externalPanel.widget_message_type || 'kdcube-widget-command',
-      widget: externalPanel.widget_alias,
-      ...command,
-    }, '*')
+    target.postMessage(command, '*')
     return true
   }, [externalPanel])
 
@@ -1029,15 +1074,7 @@ function App() {
         ensureOpen: () => openMemoryWidget(true),
         isReady: () => memoryReadyRef.current,
         postCommand: sendMemoryWidgetCommand,
-        commandFromOpen: (request) => {
-          const memoryId = memoryIdFromSurfaceOpenRequest(request)
-          if (!memoryId) return null
-          return {
-            action: 'open',
-            object_ref: request.uiEvent.object_ref || request.response.object_ref || request.response.ref || `mem:record:${memoryId}`,
-            memory_id: memoryId,
-          }
-        },
+        commandFromOpen: providerSurfaceCommandFromOpen,
       },
       'sdk.chat.viewer': {
         label: 'chat',
@@ -1048,20 +1085,7 @@ function App() {
           setChatOpen(true)
         },
         postCommand: sendChatWidgetCommand,
-        commandFromOpen: (request) => {
-          const ev = request.uiEvent
-          const conversationId = String(ev.conversation_id || '').trim()
-          if (!conversationId) return null
-          return {
-            action: 'load-conversation',
-            conversation_id: conversationId,
-            tenant: ev.tenant,
-            project: ev.project,
-            user_id: ev.user_id,
-            bundle_id: ev.bundle_id,
-            agent: ev.agent,
-          }
-        },
+        commandFromOpen: providerSurfaceCommandFromOpen,
       },
     }
     if (externalPanel) {
@@ -1306,29 +1330,6 @@ function App() {
     window.addEventListener('blur', finish, { once: true })
   }, [bringPanelToFront, externalExpanded, externalFrame])
 
-  // Debounced usage-card refresh nudge. Burst-y accounting.usage broadcasts
-  // collapse to a single postMessage so the widget makes one round trip
-  // for the trailing event of a turn rather than one per delta.
-  const scheduleUsageRefresh = useCallback(() => {
-    if (usageRefreshTimerRef.current != null) {
-      window.clearTimeout(usageRefreshTimerRef.current)
-    }
-    usageRefreshTimerRef.current = window.setTimeout(() => {
-      usageRefreshTimerRef.current = null
-      const mounted = !!usageFrameRef.current?.contentWindow
-      console.info('[kdc-scene] usage refresh ping', { mounted })
-      if (!mounted) {
-        console.info('[kdc-scene] usage refresh skipped; usage card frame is not mounted')
-        return
-      }
-      usageFrameRef.current?.contentWindow?.postMessage({
-        type: USAGE_REFRESH_MESSAGE_TYPE,
-        reason: 'accounting.usage',
-        ts: new Date().toISOString(),
-      }, '*')
-    }, USAGE_REFRESH_DEBOUNCE_MS)
-  }, [])
-
   // Resolve the viewer's user_type so the toggle button only renders
   // when the call is non-anonymous. Anonymous viewers do not get the
   // usage card affordance even though the widget URL itself is reachable.
@@ -1355,48 +1356,38 @@ function App() {
     }
   }, [ctx, ready])
 
-  // Subscribe to broadcast accounting.usage envelopes on the chat_service
-  // socket. The data-bus socket is the same singleton used for canvas
-  // publishes, so adding a side listener here costs at most one
-  // connection on first use. We do not need to subscribe at all for
-  // anonymous viewers — the widget is hidden.
+  // Scene-level Event Bus relay. Configured subscription claims decide which
+  // channels are consumed and which surface commands are delivered.
   useEffect(() => {
     if (!isRegistered) return undefined
+    const channels = sceneSubscriptionChannels(SCENE_EVENT_SUBSCRIPTIONS)
+    if (!channels.length) return undefined
     let cancelled = false
-    let detach: (() => void) | undefined
+    const detach: Array<() => void> = []
     void (async () => {
       try {
-        console.info('[kdc-scene] usage relay subscribing', { tenant: ctx.tenant, project: ctx.project })
+        console.info('[kdc-scene] scene event relay subscribing', { tenant: ctx.tenant, project: ctx.project, channels })
         const socket = await dataBusSocketFor(ctx)
         await ensureSocketConnected(socket)
         if (cancelled) return
-        console.info('[kdc-scene] usage relay connected')
-        const onService = (payload: unknown) => {
-          const env = (payload ?? {}) as { type?: string }
-          if (env.type) {
-            console.debug('[kdc-scene] usage relay service event', { type: env.type })
+        console.info('[kdc-scene] scene event relay connected', { channels })
+        channels.forEach((channel) => {
+          const onEvent = (payload: unknown) => {
+            const event = sceneEventBus.normalizeEvent('socketio', { type: channel }, payload)
+            sceneEventBus.publish(event)
           }
-          if (env.type === 'accounting.usage') {
-            console.info('[kdc-scene] usage relay accounting event')
-            scheduleUsageRefresh()
-          }
-        }
-        socket.on('chat_service', onService)
-        detach = () => socket.off('chat_service', onService)
+          socket.on(channel, onEvent)
+          detach.push(() => socket.off(channel, onEvent))
+        })
       } catch (err) {
-        console.warn('[kdc-scene] usage relay subscribe failed', err)
-        // Socket unavailable; widget still has its own manual refresh.
+        console.warn('[kdc-scene] scene event relay subscribe failed', err)
       }
     })()
     return () => {
       cancelled = true
-      if (detach) detach()
-      if (usageRefreshTimerRef.current != null) {
-        window.clearTimeout(usageRefreshTimerRef.current)
-        usageRefreshTimerRef.current = null
-      }
+      detach.forEach((release) => release())
     }
-  }, [ctx, isRegistered, scheduleUsageRefresh])
+  }, [ctx, isRegistered, sceneEventBus])
 
   // Configured provider widgets may publish project-level service events. The
   // scene forwards only the configured event type to the mounted widget.
@@ -1494,8 +1485,11 @@ function App() {
 
   const attachContexts = useCallback((messageType: string, contexts: CanvasContextItem[]) => {
     if (!contexts.length) return
+    const action = messageType.includes('focus') ? 'focus' : 'attach'
     sendToChat({
-      type: messageType,
+      type: SCENE_SURFACE_COMMAND,
+      target_surface: 'sdk.chat.context',
+      action,
       source: 'versatile.scene',
       contexts,
     })
@@ -1524,9 +1518,11 @@ function App() {
     bringPanelToFront('chat')
     setChatOpen(true)
     const post = () => sendToChat({
-      type: 'kdcube-chat-widget-command',
-      widget: CHAT_WIDGET_ALIAS,
-      action: 'load-conversation',
+      type: SCENE_SURFACE_COMMAND,
+      target_surface: 'sdk.chat.conversation',
+      action: 'open',
+      object_ref: context.ref,
+      context,
       conversation_id: conversationId,
       tenant: data.tenant ?? refParts[0],
       project: data.project ?? refParts[1],
@@ -1900,8 +1896,10 @@ function App() {
       ].filter(Boolean)
 
       if (childWindows.includes(event.source as Window)) {
-        if (data.type === 'kdcube-usage-card-refresh-ack') {
-          console.info('[kdc-scene] usage card refresh ack', {
+        if (data.type === 'kdcube.surface.command.ack') {
+          console.info('[kdc-scene] surface command ack', {
+            target_surface: data.target_surface || '',
+            action: data.action || '',
             reason: data.reason || '',
             ts: data.ts || '',
           })
@@ -1915,7 +1913,7 @@ function App() {
           window.parent?.postMessage(data, '*')
           return
         }
-        if (data.type === 'kdcube-context-drag-start' || data.type === 'kdcube.memory.drag.start') {
+        if (data.type === 'kdcube-context-drag-start') {
           const contexts = Array.isArray(data.contexts) ? data.contexts : data.context ? [data.context] : []
           const active = contextDragBroker.handleDragStart({
             type: 'kdcube-context-drag-start',
@@ -1937,11 +1935,7 @@ function App() {
           }
           return
         }
-        if (
-          data.type === 'kdcube-context-drag-end' ||
-          data.type === 'kdcube-canvas-ingress-drag-end' ||
-          data.type === 'kdcube.memory.drag.end'
-        ) {
+        if (data.type === 'kdcube-context-drag-end' || data.type === 'kdcube-canvas-ingress-drag-end') {
           contextDragBroker.handleDragEnd()
           clearBrokeredCanvasDrop()
           return
@@ -1973,31 +1967,17 @@ function App() {
           if (externalPanel && data.widget === externalPanel.widget_alias) bringPanelToFront('external')
           return
         }
-        if (data.type === 'kdcube-object-open' && event.source === chatFrameRef.current?.contentWindow) {
-          const response = asRecord(data.response) as CanvasObjectActionResponse
-          const source = asRecord(data.source)
-          const objectRef = asString(source.ref) || asString(response.object_ref) || asString(response.ref) || asString(response.ui_event?.object_ref)
-          if (!objectRef) {
-            setNotice('Open request did not include an object ref.')
-            return
-          }
-          const title = asString(source.title) || asString(response.title) || objectRef
-          const sourceCard = {
-            id: asString(source.id) || objectRef,
-            title,
-            summary: asString(source.summary) || asString(response.summary),
-            kind: asString(source.kind) || 'context',
-            ref: objectRef,
-            mime: asString(source.mime) || asString(response.mime) || 'application/octet-stream',
-            rect: { x: 0, y: 0, w: 1, h: 1 },
-          } as CanvasCard
-          console.info('[versatile:scene] chat object open request', {
-            widget: data.widget,
-            objectRef,
-            targetSurface: response.ui_event?.target_surface,
+        if (data.type === SCENE_SURFACE_COMMAND) {
+          const targetSurface = asString(data.target_surface) || asString(data.targetSurface)
+          const result = sceneRuntime.queueSurfaceCommand(targetSurface, data)
+          console.info('[versatile:scene] surface command request', {
+            target_surface: targetSurface,
+            action: asString(data.action),
+            object_ref: asString(data.object_ref),
+            ok: result.ok,
+            code: result.code,
           })
-          const result = dispatchSurfaceOpen(response, sourceCard)
-          setNotice(result.message)
+          if (!result.ok) setNotice(result.message)
           return
         }
         if (data.type === 'kdcube-memory-widget-status' && data.widget === MEMORY_WIDGET_ALIAS) {
@@ -2061,7 +2041,7 @@ function App() {
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [bringPanelToFront, clearBrokeredCanvasDrop, contextDragBroker, dispatchSurfaceOpen, externalPanel, flushSurfaceCommand, pinIngressPayloadToCanvas, pinConversationToCanvas, sendToChat])
+  }, [bringPanelToFront, clearBrokeredCanvasDrop, contextDragBroker, dispatchSurfaceOpen, externalPanel, flushSurfaceCommand, pinIngressPayloadToCanvas, pinConversationToCanvas, sceneRuntime, sendToChat])
 
   useEffect(() => {
     syncChatWidgetView(chatExpanded ? 'expanded' : 'compact')

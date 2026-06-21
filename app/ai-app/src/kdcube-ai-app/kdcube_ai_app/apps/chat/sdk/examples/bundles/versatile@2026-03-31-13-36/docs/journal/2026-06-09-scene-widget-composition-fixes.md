@@ -154,16 +154,14 @@ This keeps the default expanded view focused on:
 
 The memory detail/editor panel is now conditional. It is rendered only when a
 memory is selected or an editor is active. Without that guard, the shared memory
-widget reserved an empty right-side panel and made both the legacy workbench and
+widget reserved an empty right-side panel and made older workbench and
 Versatile expanded memory views look like they had a large dead area.
 
-The memory widget emits memory-owned drag lifecycle events
-(`kdcube.memory.drag.start`, `kdcube.memory.drag.end`) for scene coordination.
-For chat/context attachment it emits the generic context protocol
-(`kdcube.context.attach` with `application/vnd.kdcube.context+json`) where the
-payload contains `contexts[]` and the memory object remains `mem:<id>`.
-Consumers must not depend on memory-specific context message names; they read
-the generic context shape and preserve `event_source_id: memory.context`.
+The memory widget emits canonical context drag lifecycle events for scene
+coordination. For chat/context attachment it emits the generic context protocol
+where the payload contains `contexts[]` and the memory object remains
+`mem:<id>`. Consumers read the generic context shape and preserve
+`event_source_id: memory.context`.
 
 Compact memory controls use this split:
 
@@ -181,12 +179,12 @@ header controls. The host panel header becomes the single chrome row:
 ```
 
 The `+` button stays styled as a primary teal action and sends a
-memory-owned command to the iframe:
+generic surface command to the iframe:
 
 ```json
 {
-  "type": "kdcube-memory-widget-command",
-  "widget": "memories",
+  "type": "kdcube.surface.command",
+  "target_surface": "sdk.memory.viewer",
   "action": "create"
 }
 ```
@@ -303,10 +301,10 @@ The scene host translates that into the same memory-owned widget command:
 
 ```json
 {
-  "type": "kdcube-memory-widget-command",
-  "widget": "memories",
+  "type": "kdcube.surface.command",
+  "target_surface": "sdk.memory.viewer",
   "action": "open",
-  "memory_id": "mem_..."
+  "object_ref": "mem:record:mem_..."
 }
 ```
 
@@ -497,11 +495,10 @@ The memory widget accepts:
 
 ```json
 {
-  "type": "kdcube-memory-widget-command",
-  "widget": "memories",
+  "type": "kdcube.surface.command",
+  "target_surface": "sdk.memory.viewer",
   "action": "open",
-  "object_ref": "mem:mem_...",
-  "memory_id": "mem_..."
+  "object_ref": "mem:record:mem_..."
 }
 ```
 

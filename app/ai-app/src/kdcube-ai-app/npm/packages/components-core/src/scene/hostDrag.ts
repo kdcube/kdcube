@@ -31,10 +31,6 @@ export interface SceneDragCoordinateCalibration {
   y: number
 }
 
-export interface NormalizeHostContextDragOptions {
-  startTypes?: readonly string[]
-}
-
 export interface SceneDropTargetGeometry {
   rect: SceneRect
   z?: number
@@ -52,18 +48,15 @@ export function sceneNumber(value: unknown): number | null {
 export function contextItemsFromDragMessage(input: unknown): unknown[] {
   const data = asSceneRecord(input)
   if (Array.isArray(data.contexts)) return data.contexts
-  if (Array.isArray(data.items)) return data.items
   if (data.context !== undefined) return [data.context]
   return []
 }
 
 export function normalizeHostContextDragStartMessage(
   input: unknown,
-  options: NormalizeHostContextDragOptions = {},
 ): SceneActiveContextDrag | null {
   const data = asSceneRecord(input)
-  const accepted = new Set(options.startTypes || [SCENE_CONTEXT_DRAG_START])
-  if (!accepted.has(asSceneString(data.type))) return null
+  if (asSceneString(data.type) !== SCENE_CONTEXT_DRAG_START) return null
   const contexts = contextItemsFromDragMessage(data)
     .map((item) => normalizeSceneContext(item))
     .filter((item): item is SceneContextItem => Boolean(item))

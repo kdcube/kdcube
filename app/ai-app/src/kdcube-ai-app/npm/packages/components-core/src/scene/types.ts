@@ -3,8 +3,7 @@ export type SceneRecord = Record<string, unknown>
 export const SCENE_CONFIG_REQUEST = 'CONFIG_REQUEST'
 export const SCENE_CONFIG_RESPONSE = 'CONFIG_RESPONSE'
 export const SCENE_CONN_RESPONSE = 'CONN_RESPONSE'
-export const SCENE_OBJECT_OPEN = 'kdcube-object-open'
-export const SCENE_PINBOARD_OPEN = 'kdcube-pinboard-open'
+export const SCENE_SURFACE_COMMAND = 'kdcube.surface.command'
 export const SCENE_WIDGET_VIEW = 'kdcube-widget-view'
 export const SCENE_WIDGET_FOCUS = 'kdcube-widget-focus'
 export const SCENE_CONTEXT_DRAG_START = 'kdcube-context-drag-start'
@@ -197,7 +196,6 @@ export interface SceneRuntime {
   getSurface: (targetSurface: string) => SceneSurfaceRegistration | undefined
   listSurfaces: () => string[]
   dispatchSurfaceOpen: (response: unknown, source?: unknown) => SceneDispatchResult
-  dispatchObjectOpen: (message: unknown) => SceneDispatchResult
   queueSurfaceCommand: (targetSurface: string, command: SceneRecord, request?: Partial<SceneSurfaceOpenRequest>) => SceneDispatchResult
   routeMessage: (event: SceneMessageEvent, options?: SceneMessageRouteOptions) => SceneDispatchResult | null
   flushSurface: (targetSurface: string) => boolean

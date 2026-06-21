@@ -41,12 +41,10 @@ import {
 import { settings } from './api/settings'
 import { createCanvasHost, type CanvasHost, type RouteContext } from './api/canvasHost'
 
-// postMessage vocabulary for the host broker (Option B). The standalone
-// board emits intents; the parent page routes them to sibling widgets.
-const ATTACH_MESSAGE = 'kdcube-pinboard-attach'
-const OPEN_MESSAGE = 'kdcube-pinboard-open'
+// postMessage vocabulary for the host broker (Option B). Cross-surface
+// object commands use the scene-wide generic command envelope.
+const SURFACE_COMMAND_MESSAGE_TYPE = 'kdcube.surface.command'
 const CLOSE_MESSAGE = 'kdcube-pinboard-close'
-const DROP_CONTEXT_MESSAGE = 'kdcube-pinboard-drop-context'
 const DROP_INGRESS_MESSAGE = 'kdcube-pinboard-drop-ingress'
 const CONTEXT_DRAG_START_MESSAGE = 'kdcube-context-drag-start'
 const CONTEXT_DRAG_END_MESSAGE = 'kdcube-context-drag-end'
@@ -256,7 +254,9 @@ export default function App() {
     function onMessage(event: MessageEvent) {
       const data = event.data as Record<string, unknown> | null
       if (!data || typeof data !== 'object') return
-      if (data.type === DROP_CONTEXT_MESSAGE) {
+      if (data.type === SURFACE_COMMAND_MESSAGE_TYPE && data.action === 'pin') {
+        const target = String(data.target_surface || '').trim().toLowerCase()
+        if (target && target !== 'sdk.canvas.pinboard') return
         const context = normalizeContext(data.context)
         if (!context) {
           setNotice('Dropped context is not valid.')
@@ -286,14 +286,23 @@ export default function App() {
     if (!items.length) return
     const conversation = items.find((item) => item.kind === 'conversation')
     postToHost({
-      type: ATTACH_MESSAGE,
-      mode: conversation ? 'open-conversation' : 'focus',
-      contexts: items,
+      type: SURFACE_COMMAND_MESSAGE_TYPE,
+      target_surface: conversation ? 'sdk.chat.conversation' : 'sdk.chat.context',
+      action: conversation ? 'open' : 'attach',
+      object_ref: String((conversation || items[0]).object_ref || (conversation || items[0]).ref || '').trim(),
+      context: conversation || items[0],
+      contexts: items.length > 1 ? items : undefined,
     })
   }, [])
 
   const onAttachCanvas = useCallback((context: CanvasContextItem) => {
-    postToHost({ type: ATTACH_MESSAGE, mode: 'attach', contexts: [context] })
+    postToHost({
+      type: SURFACE_COMMAND_MESSAGE_TYPE,
+      target_surface: 'sdk.chat.context',
+      action: 'attach',
+      object_ref: String(context.object_ref || context.ref || '').trim(),
+      context,
+    })
   }, [])
 
   const onDragCard = useCallback((input: CanvasContextItem | CanvasContextItem[] | null, event?: DragEvent<HTMLElement>) => {
@@ -326,7 +335,14 @@ export default function App() {
     const uiEvent = response.ui_event as Record<string, unknown> | undefined
     const targetSurface = uiEvent ? String(uiEvent.target_surface || '').trim() : ''
     if (action === 'open' && targetSurface) {
-      postToHost({ type: OPEN_MESSAGE, target_surface: targetSurface, ui_event: uiEvent, card_ref: card.ref })
+      postToHost({
+        type: SURFACE_COMMAND_MESSAGE_TYPE,
+        target_surface: targetSurface,
+        action: String(uiEvent?.action || 'open'),
+        ui_event: uiEvent,
+        object_ref: String(uiEvent?.object_ref || card.ref || '').trim(),
+        card_ref: card.ref,
+      })
     }
     return response
   }, [host])

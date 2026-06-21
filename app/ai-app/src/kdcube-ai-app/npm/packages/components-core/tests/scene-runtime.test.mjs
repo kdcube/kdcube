@@ -25,7 +25,7 @@ test('normalizes canonical context drag messages', () => {
 })
 
 test('rejects non-canonical drag start messages', () => {
-  assert.equal(normalizeContextDragMessage({ type: 'task-tracker-context-drag-start', contexts: [{ ref: 'task:issue:T-1' }] }), null)
+  assert.equal(normalizeContextDragMessage({ type: 'not-canonical-drag-start', contexts: [{ ref: 'task:issue:T-1' }] }), null)
 })
 
 test('matches drop targets by root namespace', () => {

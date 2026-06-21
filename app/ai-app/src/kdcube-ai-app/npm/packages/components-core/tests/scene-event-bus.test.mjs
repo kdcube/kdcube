@@ -17,7 +17,11 @@ test('dispatches matching scene events to registered widget claims', () => {
       source: 'sse',
       events: ['accounting.usage'],
       channels: ['chat_service'],
-      forwardType: 'kdcube-usage-card-refresh',
+      forward: {
+        type: 'kdcube.surface.command',
+        target_surface: 'sdk.usage.card',
+        action: 'refresh',
+      },
       reason: 'accounting.usage',
     },
   ])
@@ -26,7 +30,9 @@ test('dispatches matching scene events to registered widget claims', () => {
 
   assert.equal(count, 1)
   assert.equal(delivered[0].alias, 'usage_card')
-  assert.equal(delivered[0].message.type, 'kdcube-usage-card-refresh')
+  assert.equal(delivered[0].message.type, 'kdcube.surface.command')
+  assert.equal(delivered[0].message.target_surface, 'sdk.usage.card')
+  assert.equal(delivered[0].message.action, 'refresh')
   assert.deepEqual(delivered[0].message.scene_event, {
     source: 'sse',
     channel: 'chat_service',

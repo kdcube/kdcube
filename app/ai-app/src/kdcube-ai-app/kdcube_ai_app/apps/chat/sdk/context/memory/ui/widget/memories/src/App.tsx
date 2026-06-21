@@ -17,6 +17,8 @@ import {
   updateMemoryPreferences,
 } from './features/memories/memoriesSlice';
 
+const SURFACE_COMMAND_MESSAGE_TYPE = 'kdcube.surface.command';
+
 function compactModeFromLocation(): boolean {
   const params = new URLSearchParams(window.location.search);
   const view = String(params.get('view') || params.get('mode') || '').trim().toLowerCase();
@@ -69,12 +71,18 @@ function memoryIdsFromPayload(value: unknown): string[] {
   const raw = value as Record<string, unknown>;
   const rawItems = Array.isArray(raw.contexts)
     ? raw.contexts
-    : Array.isArray(raw.items)
-      ? raw.items
-      : Array.isArray(raw.cards)
-        ? raw.cards
-        : [raw.context, raw];
+    : Array.isArray(raw.cards)
+      ? raw.cards
+      : [raw.context, raw];
   return normalizeMemoryRefs(rawItems.flatMap(memRefsFromValue));
+}
+
+function isMemorySurfaceCommand(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const raw = value as Record<string, unknown>;
+  if (raw.type !== SURFACE_COMMAND_MESSAGE_TYPE) return false;
+  const target = typeof raw.target_surface === 'string' ? raw.target_surface.trim().toLowerCase() : '';
+  return !target || target === 'sdk.memory.viewer' || target === 'sdk.memory.list' || target.includes('memory');
 }
 
 function memoryIdsFromDataTransfer(dataTransfer: DataTransfer): string[] {
@@ -206,7 +214,7 @@ export default function App() {
     const onHostWake = (event: MessageEvent) => {
       const data = event.data;
       if (!data || typeof data !== 'object') return;
-      if (data.type === 'kdcube-memory-widget-command' && data.action === 'wake-scroll') {
+      if (isMemorySurfaceCommand(data) && data.action === 'wake-scroll') {
         wakeBurst();
       }
     };
@@ -227,31 +235,36 @@ export default function App() {
         if (data.view === 'compact') setCompact(true);
         return;
       }
-      if (data.type !== 'kdcube-memory-widget-command' || data.widget !== 'memories') return;
+      const isSurfaceCommand = isMemorySurfaceCommand(data);
+      if (!isSurfaceCommand) return;
       if (data.action === 'create') {
         setCompact(false);
         setEditorMode('create');
         return;
       }
       if (data.action === 'open') {
-        const memoryIds = normalizeMemoryRefs([
-          data.memory_id,
-          data.object_ref,
-          ...(Array.isArray(data.memory_ids) ? data.memory_ids : []),
-          ...(Array.isArray(data.object_refs) ? data.object_refs : []),
-        ]);
+        const memoryIds = isSurfaceCommand
+          ? memoryIdsFromPayload(data)
+          : normalizeMemoryRefs([
+              data.memory_id,
+              data.object_ref,
+              ...(Array.isArray(data.memory_ids) ? data.memory_ids : []),
+              ...(Array.isArray(data.object_refs) ? data.object_refs : []),
+            ]);
         focusAndExpandMemoryIds(memoryIds);
         return;
       }
       // Focus a set of records in the list WITHOUT forcing the expanded view —
       // used when several memories are dropped at once (keep the current form).
       if (data.action === 'focus') {
-        const memoryIds = normalizeMemoryRefs([
-          data.memory_id,
-          data.object_ref,
-          ...(Array.isArray(data.memory_ids) ? data.memory_ids : []),
-          ...(Array.isArray(data.object_refs) ? data.object_refs : []),
-        ]);
+        const memoryIds = isSurfaceCommand
+          ? memoryIdsFromPayload(data)
+          : normalizeMemoryRefs([
+              data.memory_id,
+              data.object_ref,
+              ...(Array.isArray(data.memory_ids) ? data.memory_ids : []),
+              ...(Array.isArray(data.object_refs) ? data.object_refs : []),
+            ]);
         focusMemoryIdsKeepView(memoryIds);
         return;
       }

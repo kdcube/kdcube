@@ -10,8 +10,8 @@
  * Refresh paths:
  *   - On first mount once settings are ready (parent runtime config or
  *     /api/cp-frontend-config).
- *   - On `kdcube-usage-card-refresh` postMessage from the host (the scene
- *     posts this on each `accounting.usage` event).
+ *   - On `kdcube.surface.command(action="refresh")` postMessage from the
+ *     host scene after `accounting.usage` events.
  *   - On an explicit user click of the small refresh control.
  */
 
@@ -21,7 +21,7 @@ import { settings } from './api/settings';
 import type { ProfileResponse, QuotaBreakdown } from './api/types';
 
 const REFRESH_DEBOUNCE_MS = 600;
-const REFRESH_MESSAGE_TYPE = 'kdcube-usage-card-refresh';
+const SURFACE_COMMAND_MESSAGE_TYPE = 'kdcube.surface.command';
 const SCENE_SUBSCRIBE_MESSAGE_TYPE = 'kdcube-scene-subscribe';
 const SCENE_UNSUBSCRIBE_MESSAGE_TYPE = 'kdcube-scene-unsubscribe';
 
@@ -192,7 +192,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isUsageRefreshMessage(value: unknown): boolean {
   if (!isRecord(value)) return false;
-  if (value.type === REFRESH_MESSAGE_TYPE || value.type === 'accounting.usage') return true;
+  if (value.type === SURFACE_COMMAND_MESSAGE_TYPE) {
+    const action = typeof value.action === 'string' ? value.action.trim().toLowerCase() : '';
+    const target = typeof value.target_surface === 'string' ? value.target_surface.trim().toLowerCase() : '';
+    return action === 'refresh' && (!target || target === 'sdk.usage.card');
+  }
 
   const nestedData = value.data;
   if (isRecord(nestedData) && (nestedData.type === 'accounting.usage' || nestedData.name === 'accounting.usage')) {
@@ -216,6 +220,7 @@ function refreshReason(value: unknown): string {
   if (!isRecord(value)) return 'host-refresh';
   const reason = value.reason;
   if (typeof reason === 'string' && reason.trim()) return reason.trim();
+  if (value.type === SURFACE_COMMAND_MESSAGE_TYPE) return 'surface-command';
   if (value.type === 'accounting.usage') return 'accounting.usage';
   const nestedData = value.data;
   if (isRecord(nestedData) && (nestedData.type === 'accounting.usage' || nestedData.name === 'accounting.usage')) return 'accounting.usage';
@@ -244,7 +249,12 @@ function subscribeToSceneUsageEvents(): void {
         source: 'sse',
         events: ['accounting.usage'],
         channels: ['chat_service', 'chat_step', 'accounting.usage', 'message'],
-        forwardType: REFRESH_MESSAGE_TYPE,
+        forward: {
+          type: SURFACE_COMMAND_MESSAGE_TYPE,
+          target_surface: 'sdk.usage.card',
+          action: 'refresh',
+        },
+        forwardType: SURFACE_COMMAND_MESSAGE_TYPE,
         reason: 'accounting.usage',
         debounceMs: 800,
       },
@@ -339,7 +349,13 @@ export const App: React.FC = () => {
       if (!isUsageRefreshMessage(data)) return;
       const reason = refreshReason(data);
       console.info('[kdcube.usage-card] refresh requested', { reason });
-      notifyHost({ type: 'kdcube-usage-card-refresh-ack', widget: 'usage_card', reason, ts: new Date().toISOString() });
+      notifyHost({
+        type: 'kdcube.surface.command.ack',
+        target_surface: 'sdk.usage.card',
+        action: 'refresh',
+        reason,
+        ts: new Date().toISOString(),
+      });
       scheduleRefresh(reason);
     };
     window.addEventListener('message', onMessage);

@@ -8,24 +8,23 @@ import {
   selectSceneDropTargetAtPoint,
 } from '../dist/scene/index.js'
 
-test('normalizes host drag messages with configured compatibility aliases', () => {
+test('normalizes canonical host drag messages', () => {
   const active = normalizeHostContextDragStartMessage(
     {
-      type: 'task-tracker-context-drag-start',
+      type: 'kdcube-context-drag-start',
       source: 'task_list',
-      items: [{ object_ref: 'task:issue:T-1', label: 'Task one' }],
+      contexts: [{ object_ref: 'task:issue:T-1', label: 'Task one' }],
     },
-    { startTypes: ['kdcube-context-drag-start', 'task-tracker-context-drag-start'] },
   )
 
   assert.equal(active?.sourceSurfaceRef, 'task_list')
   assert.equal(active?.contexts[0].ref, 'task:issue:T-1')
 })
 
-test('keeps canonical drag type as the default accepted host message', () => {
+test('rejects non-canonical drag-start messages', () => {
   assert.equal(
     normalizeHostContextDragStartMessage({
-      type: 'task-tracker-context-drag-start',
+      type: 'not-canonical-drag-start',
       items: [{ ref: 'task:issue:T-1' }],
     }),
     null,

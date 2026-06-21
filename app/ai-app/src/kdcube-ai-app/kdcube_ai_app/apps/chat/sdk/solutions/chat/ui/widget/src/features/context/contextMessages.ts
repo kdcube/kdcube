@@ -29,6 +29,7 @@ export const KDCUBE_CONTEXT_MIME_TYPE = 'application/vnd.kdcube.context+json'
 const GENERIC_CONTEXT_ATTACH = 'kdcube.context.attach'
 const GENERIC_CONTEXT_FOCUS = 'kdcube.context.focus'
 const GENERIC_CONTEXT_REMOVE = 'kdcube.context.remove'
+const SURFACE_COMMAND_MESSAGE_TYPE = 'kdcube.surface.command'
 const REF_KEYS = [
   'ref',
   'object_ref',
@@ -155,7 +156,16 @@ function normalizeContextsFromPayload(data: unknown): RecognizedContext[] {
     ? message.contexts
     : Array.isArray(message.items)
       ? message.items
-      : [message.context]
+      : message.context
+        ? [message.context]
+        : message.object_ref
+          ? [{
+              kind: 'object.ref',
+              ref: message.object_ref,
+              object_ref: message.object_ref,
+              label: message.object_ref,
+            }]
+          : []
   return rawContexts
     .filter((ctx): ctx is Record<string, unknown> => Boolean(ctx) && typeof ctx === 'object')
     .map((ctx, index) => normalizeContext(ctx, index))
@@ -170,6 +180,14 @@ export function recognizeContextMessageWithTypes(data: unknown, types: ContextMe
   if (!data || typeof data !== 'object') return []
   const message = data as Record<string, unknown>
   const type = String(message.type || '').trim()
+  if (type === SURFACE_COMMAND_MESSAGE_TYPE) {
+    const action = String(message.action || '').trim().toLowerCase()
+    const target = String(message.target_surface || '').trim().toLowerCase()
+    if ((action === 'attach' || action === 'focus') && (!target || target === 'sdk.chat.context')) {
+      return normalizeContextsFromPayload(message)
+    }
+    return []
+  }
   if (
     type !== types.attach &&
     type !== types.focus &&
