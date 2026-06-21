@@ -88,11 +88,54 @@ def build_envelope_from_session(session, *, tenant_id,
         # user_session=session
     )
 
+def _maybe_wrap_with_sql_usage_sink(pg_pool) -> None:
+    """Wrap the current async-local accounting storage with the SQL usage-ledger
+    mirror so every accounting event for this turn is also written to
+    <schema>.llm_usage_events (the authoritative cost-per-user source).
+
+    This is the single accounting chokepoint hit by every LIVE turn: chat-proc
+    binds the turn via bind_accounting before invoking the bundle entrypoint --
+    including BaseEntrypointWithEconomics, whose run() overrides BaseEntrypoint.run
+    and never calls AccountingSystem.init_storage itself. Fail-safe and idempotent:
+    skipped when pg_pool is None or the storage is already wrapped; any failure
+    leaves the existing storage untouched and never breaks the turn.
+    """
+    if pg_pool is None:
+        return
+    try:
+        storage = _storage_var.get()
+        if storage is None or storage.__class__.__name__ in (
+            "NoOpAccountingStorage",
+            "SQLUsageAccountingStorage",
+        ):
+            return
+        from kdcube_ai_app.apps.chat.sdk.infra.economics.usage_ledger import (
+            SQLUsageAccountingStorage,
+        )
+        _storage_var.set(SQLUsageAccountingStorage(storage, pg_pool))
+        import logging
+        logging.getLogger("accounting").info(
+            "SQL usage sink attached (mirroring accounting events to the usage "
+            "ledger via bind_accounting; storage=%s)",
+            storage.__class__.__name__,
+        )
+    except Exception:
+        import logging
+        logging.getLogger("accounting").warning(
+            "Could not attach SQL usage sink to accounting storage; cost-per-user "
+            "will fall back to file accounting",
+            exc_info=True,
+        )
+
+
 @asynccontextmanager
-async def bind_accounting(envelope: AccountingEnvelope, storage_backend, *, enabled: bool = True):
+async def bind_accounting(envelope: AccountingEnvelope, storage_backend, *, enabled: bool = True, pg_pool=None):
     """
     Init storage + set base context for the current task.
     Clears context on exit.
+
+    When pg_pool is provided, the per-turn accounting storage is additionally
+    wrapped with the SQL usage-ledger mirror (cost-per-user accrual).
     """
     AccountingSystem.init_storage(storage_backend, enabled)
     # When we spawn a task with asyncio.create_task(...), the current ContextVars are copied.
@@ -113,6 +156,10 @@ async def bind_accounting(envelope: AccountingEnvelope, storage_backend, *, enab
     ctx_token = _context_var.set(ctx)
     # Optionally also isolate storage if you use different backends per task
     store_token = _storage_var.set(_storage_var.get())  # no-op isolation, or set a specific one
+    # Mirror accounting events into the SQL usage ledger for this turn (idempotent,
+    # fail-safe). Wraps the per-scope storage slot so the reset in finally restores
+    # the previous storage cleanly.
+    _maybe_wrap_with_sql_usage_sink(pg_pool)
     # seed enrichment
     ctx.event_enrichment = {
         "metadata": dict(envelope.metadata or {}),

@@ -1689,7 +1689,34 @@ class BaseEntrypoint:
 
         storage = _get_storage()
         if storage is None or storage.__class__.__name__ == "NoOpAccountingStorage":
-            AccountingSystem.init_storage(create_storage_backend(get_settings().STORAGE_PATH), enabled=True)
+            base_storage = create_storage_backend(get_settings().STORAGE_PATH)
+            # Mirror each event into the SQL usage ledger (authoritative source for
+            # cost-per-user). Fail-safe: never blocks the file write / the turn.
+            if getattr(self, "pg_pool", None) is not None:
+                try:
+                    from kdcube_ai_app.apps.chat.sdk.infra.economics.usage_ledger import SQLUsageAccountingStorage
+                    base_storage = SQLUsageAccountingStorage(base_storage, self.pg_pool)
+                    logger.info("SQL usage sink attached (mirroring accounting events to the usage ledger)")
+                except Exception:
+                    logger.warning("Could not attach SQL usage sink to accounting storage; "
+                                   "cost-per-user will fall back to file accounting", exc_info=True)
+            AccountingSystem.init_storage(base_storage, enabled=True)
+        elif getattr(self, "pg_pool", None) is not None and \
+                storage.__class__.__name__ != "SQLUsageAccountingStorage":
+            # A real (non-NoOp) accounting storage is already initialized (the
+            # common runtime path). Wrap it so new turns still mirror to the SQL
+            # usage ledger -- otherwise ongoing spend never accrues and only the
+            # backfill-seeded history is ever visible. Fail-safe: a failure here
+            # leaves the existing storage untouched and never breaks startup.
+            try:
+                from kdcube_ai_app.apps.chat.sdk.infra.economics.usage_ledger import SQLUsageAccountingStorage
+                AccountingSystem.init_storage(
+                    SQLUsageAccountingStorage(storage, self.pg_pool), enabled=True
+                )
+                logger.info("SQL usage sink attached (wrapped existing accounting storage)")
+            except Exception:
+                logger.warning("Could not wrap existing accounting storage with SQL usage sink; "
+                               "cost-per-user will fall back to file accounting", exc_info=True)
 
         async with with_accounting(
             bundle_id or "chat.orchestrator",

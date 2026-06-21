@@ -4,6 +4,7 @@
 # apps/chat/ingress/economics/me.py
 
 import logging
+from datetime import datetime, timezone
 
 from fastapi import Depends, HTTPException, Query, APIRouter
 
@@ -86,6 +87,65 @@ async def get_my_budget_breakdown(
         reservations_limit=50,
         bundle_ids=[resolved_bundle_id] if resolved_bundle_id else None,
     )
+
+
+@me_router.get("/me/cost-breakdown")
+async def get_my_cost_breakdown(
+        date_from: str | None = Query(
+            None, description="Start date YYYY-MM-DD (default: first of current month, UTC)"
+        ),
+        date_to: str | None = Query(
+            None, description="End date YYYY-MM-DD inclusive (default: today, UTC)"
+        ),
+        session: UserSession = Depends(require_auth(RequireUser())),
+):
+    """Real (ledger-derived) spend for the authenticated user, broken down by model.
+
+    Unlike /me/budget-breakdown (which reports quota-equivalent dollars: blended
+    tokens priced at the reference model's OUTPUT rate), this reports actual spend
+    computed per model with real input/output/cache rates from the price table.
+    """
+    settings = get_settings()
+    user_id = session.user_id
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User ID not found in session")
+
+    today = datetime.now(timezone.utc).date()
+    df = date_from or today.replace(day=1).isoformat()
+    dt = date_to or today.isoformat()
+
+    # Authoritative source: the SQL usage ledger. Fall back to the file-based
+    # accounting scan only if the DB is unavailable or has no rows for the window
+    # (e.g. before the migration / sink is deployed).
+    pg_pool = getattr(router.state, "pg_pool", None)
+    res = None
+    if pg_pool is not None:
+        try:
+            from kdcube_ai_app.apps.chat.sdk.infra.economics.usage_ledger import UsageLedgerStore
+            store = UsageLedgerStore(pg_pool, tenant=settings.TENANT, project=settings.PROJECT)
+            if await store.has_data(date_from=df, date_to=dt):
+                res = await store.cost_for_user(user_id=user_id, date_from=df, date_to=dt)
+        except Exception:
+            logger.exception("SQL usage ledger read failed; falling back to file accounting")
+            res = None
+
+    if res is None:
+        from kdcube_ai_app.apps.chat.ingress.opex.cost import build_rate_calculator, cost_for_user
+        calc = build_rate_calculator()
+        try:
+            res = await cost_for_user(
+                calc,
+                tenant=settings.TENANT,
+                project=settings.PROJECT,
+                user_id=user_id,
+                date_from=df,
+                date_to=dt,
+            )
+        except Exception as e:
+            logger.exception("User cost-breakdown failed")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    return {"status": "ok", **res}
 
 
 @me_router.get("/me/subscription")

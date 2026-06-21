@@ -1127,3 +1127,87 @@ DROP TRIGGER IF EXISTS trg_cp_ext_econ_events_updated_at ON <SCHEMA>.external_ec
 CREATE TRIGGER trg_cp_ext_econ_events_updated_at
   BEFORE UPDATE ON <SCHEMA>.external_economics_events
   FOR EACH ROW EXECUTE FUNCTION <SCHEMA>.update_updated_at();
+
+-- =========================================
+-- LLM USAGE LEDGER (authoritative per-user spend)
+--  - one row per accounting event (llm / embedding / web_search)
+--  - cost_usd is the provider-reported cost when available, else priced
+--    from model_pricing via the canonical engine
+--  - aggregated by the llm_usage_by_user_model view
+-- =========================================
+CREATE TABLE IF NOT EXISTS <SCHEMA>.llm_usage_events (
+    id                 BIGSERIAL PRIMARY KEY,
+    tenant             VARCHAR(255) NOT NULL,
+    project            VARCHAR(255) NOT NULL,
+    user_id            VARCHAR(255),
+    request_id         VARCHAR(255),
+    conversation_id    VARCHAR(255),
+    turn_id            VARCHAR(255),
+    agent              VARCHAR(255),
+    bundle_id          VARCHAR(255),
+    service_type       VARCHAR(64) NOT NULL,
+    provider           VARCHAR(128),
+    model              VARCHAR(255),
+    input_tokens       BIGINT NOT NULL DEFAULT 0,
+    output_tokens      BIGINT NOT NULL DEFAULT 0,
+    cache_read_tokens  BIGINT NOT NULL DEFAULT 0,
+    cache_write_tokens BIGINT NOT NULL DEFAULT 0,
+    embedding_tokens   BIGINT NOT NULL DEFAULT 0,
+    search_queries     BIGINT NOT NULL DEFAULT 0,
+    requests           BIGINT NOT NULL DEFAULT 0,
+    cost_usd           NUMERIC(18,6) NOT NULL DEFAULT 0,
+    event_id           VARCHAR(128),
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Idempotency for the write path: ON CONFLICT (event_id) WHERE event_id IS NOT NULL
+CREATE UNIQUE INDEX IF NOT EXISTS uq_llm_usage_event_id
+  ON <SCHEMA>.llm_usage_events (event_id) WHERE event_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_llm_usage_tenant_project_time
+  ON <SCHEMA>.llm_usage_events (tenant, project, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_user_time
+  ON <SCHEMA>.llm_usage_events (tenant, project, user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_model_time
+  ON <SCHEMA>.llm_usage_events (tenant, project, model, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_request
+  ON <SCHEMA>.llm_usage_events (tenant, project, request_id);
+
+-- Effective-dated model price table (fallback pricing for events without a
+-- provider-reported cost). Logically global; stored per project schema.
+CREATE TABLE IF NOT EXISTS <SCHEMA>.model_pricing (
+    id             BIGSERIAL PRIMARY KEY,
+    service_type   VARCHAR(64) NOT NULL,
+    provider       VARCHAR(128) NOT NULL,
+    model          VARCHAR(255) NOT NULL,
+    rates          JSONB NOT NULL,
+    effective_from TIMESTAMPTZ NOT NULL DEFAULT now(),
+    note           TEXT,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_model_pricing_lookup
+  ON <SCHEMA>.model_pricing (service_type, provider, model, effective_from DESC);
+
+-- Per-(user, model, day/month) rollup powering /me/cost-breakdown and
+-- /admin/cost-by-user.
+CREATE OR REPLACE VIEW <SCHEMA>.llm_usage_by_user_model AS
+SELECT
+    tenant,
+    project,
+    user_id,
+    service_type,
+    provider,
+    model,
+    date_trunc('day', created_at)   AS day,
+    date_trunc('month', created_at) AS month,
+    sum(input_tokens)       AS input_tokens,
+    sum(output_tokens)      AS output_tokens,
+    sum(cache_read_tokens)  AS cache_read_tokens,
+    sum(cache_write_tokens) AS cache_write_tokens,
+    sum(embedding_tokens)   AS embedding_tokens,
+    sum(search_queries)     AS search_queries,
+    sum(requests)           AS requests,
+    sum(cost_usd)           AS cost_usd,
+    count(*)                AS events
+FROM <SCHEMA>.llm_usage_events
+GROUP BY tenant, project, user_id, service_type, provider, model,
+         date_trunc('day', created_at), date_trunc('month', created_at);

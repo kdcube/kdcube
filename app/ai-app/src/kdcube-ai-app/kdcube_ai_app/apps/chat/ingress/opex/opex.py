@@ -13,7 +13,7 @@ from kdcube_ai_app.apps.chat.ingress.resolvers import require_auth, auth_without
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.auth.AuthManager import RequireUser
 from kdcube_ai_app.auth.sessions import UserSession
-from kdcube_ai_app.infra.accounting.usage import price_table
+from kdcube_ai_app.infra.accounting.usage import price_table, compute_rollup_cost
 from kdcube_ai_app.storage.storage import create_storage_backend
 from kdcube_ai_app.infra.accounting.calculator import (
     RateCalculator,
@@ -175,122 +175,16 @@ def _compute_cost_estimate(rollup: List[dict]) -> dict:
 
     NOW SUPPORTS: llm, embedding, web_search
     """
-    configuration = price_table()
-    llm_pricelist = configuration.get("llm", [])
-    emb_pricelist = configuration.get("embedding", [])
-    web_search_pricelist = configuration.get("web_search", [])  # NEW
-
     config_str = get_settings().PLATFORM.ACCOUNTING.ACCOUNTING_SERVICES or "{}"
     try:
         accounting_services_config = json.loads(config_str)
     except json.JSONDecodeError:
         accounting_services_config = {}
 
-    def _find_llm_price(provider: str, model: str):
-        for p in llm_pricelist:
-            if p.get("provider") == provider and p.get("model") == model:
-                return p
-        return None
-
-    def _find_emb_price(provider: str, model: str):
-        for p in emb_pricelist:
-            if p.get("provider") == provider and p.get("model") == model:
-                return p
-        return None
-
-    def _find_web_search_price(provider: str, tier: str):
-        """Find web_search price entry by provider and tier."""
-        for p in web_search_pricelist:
-            if p.get("provider") == provider and p.get("tier") == tier:
-                return p
-        return None
-
-    def _get_web_search_tier(provider: str) -> str:
-        """Get tier for web_search provider from config."""
-        web_search_config = accounting_services_config.get("web_search", {})
-        provider_config = web_search_config.get(provider, {})
-        defaults = {"brave": "base", "duckduckgo": "free"}
-        return provider_config.get("tier", defaults.get(provider, "free"))
-
-    total_cost = 0.0
-    breakdown = []
-
-    for item in rollup:
-        service = item.get("service")
-        provider = item.get("provider")
-        model = item.get("model")
-        spent = item.get("spent", {}) or {}
-
-        cost_usd = 0.0
-        tier = None  # for web_search
-        pr = {}
-
-        if service == "llm":
-            pr = _find_llm_price(provider, model)
-            if pr:
-                input_cost = (float(spent.get("input", 0)) / 1_000_000.0) * float(pr.get("input_tokens_1M", 0.0))
-                output_cost = (float(spent.get("output", 0)) / 1_000_000.0) * float(pr.get("output_tokens_1M", 0.0))
-                cache_read_cost = (float(spent.get("cache_read", 0)) / 1_000_000.0) * float(pr.get("cache_read_tokens_1M", 0.0))
-
-                cache_write_cost = 0.0
-                cache_pricing = pr.get("cache_pricing")
-
-                if cache_pricing and isinstance(cache_pricing, dict):
-                    cache_5m_tokens = float(spent.get("cache_5m_write", 0))
-                    cache_1h_tokens = float(spent.get("cache_1h_write", 0))
-
-                    if cache_5m_tokens > 0:
-                        price_5m = float(cache_pricing.get("5m", {}).get("write_tokens_1M", 0.0))
-                        cache_write_cost += (cache_5m_tokens / 1_000_000.0) * price_5m
-
-                    if cache_1h_tokens > 0:
-                        price_1h = float(cache_pricing.get("1h", {}).get("write_tokens_1M", 0.0))
-                        cache_write_cost += (cache_1h_tokens / 1_000_000.0) * price_1h
-                else:
-                    cache_write_tokens = float(spent.get("cache_creation", 0))
-                    cache_write_price = float(pr.get("cache_write_tokens_1M", 0.0))
-                    cache_write_cost = (cache_write_tokens / 1_000_000.0) * cache_write_price
-
-                cost_usd = input_cost + output_cost + cache_write_cost + cache_read_cost
-
-        elif service == "embedding":
-            pr = _find_emb_price(provider, model)
-            if pr:
-                cost_usd = (float(spent.get("tokens", 0)) / 1_000_000.0) * float(pr.get("tokens_1M", 0.0))
-
-        elif service == "web_search":
-            # NEW: web_search cost calculation
-            tier = _get_web_search_tier(provider)
-            pr = _find_web_search_price(provider, tier)
-
-            if pr:
-                search_queries = float(spent.get("search_queries", 0))
-                cost_per_1k = float(pr.get("cost_per_1k_requests", 0.0))
-                cost_usd = (search_queries / 1000.0) * cost_per_1k
-
-        total_cost += cost_usd
-
-        # Include tier in breakdown for web_search
-        breakdown_item = {
-            "service": service,
-            "provider": provider,
-            "model": model,
-            "cost_usd": cost_usd,
-        }
-
-        if service == "web_search" and tier:
-            breakdown_item["tier"] = tier
-            breakdown_item["search_queries"] = spent.get("search_queries", 0)
-            breakdown_item["search_results"] = spent.get("search_results", 0)
-            if pr:
-                breakdown_item["cost_per_1k_requests"] = pr.get("cost_per_1k_requests", 0.0)
-
-        breakdown.append(breakdown_item)
-
-    return {
-        "total_cost_usd": total_cost,
-        "breakdown": breakdown
-    }
+    # Delegate to the canonical, dependency-light pricing engine in
+    # infra.accounting.usage so /api/opex/* and the economics cost-breakdown
+    # endpoints price usage identically (per-model input/output/cache rates).
+    return compute_rollup_cost(rollup, accounting_services_config=accounting_services_config)
 
 # =============================================================================
 # API Endpoints

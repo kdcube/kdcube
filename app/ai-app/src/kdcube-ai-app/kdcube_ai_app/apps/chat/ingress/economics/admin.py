@@ -4,6 +4,7 @@
 # apps/chat/ingress/economics/admin.py
 
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -314,3 +315,59 @@ async def list_pending_stripe_requests(
         })
 
     return {"status": "ok", "count": len(items), "items": items}
+
+
+@admin_router.get("/admin/cost-by-user")
+async def get_cost_by_user(
+        date_from: str | None = Query(
+            None, description="Start date YYYY-MM-DD (default: first of current month, UTC)"
+        ),
+        date_to: str | None = Query(
+            None, description="End date YYYY-MM-DD inclusive (default: today, UTC)"
+        ),
+        session: UserSession = Depends(auth_without_pressure()),
+):
+    """Real (ledger-derived) spend per user across the workspace, sorted by cost.
+
+    Aggregates actual usage from the accounting ledger and prices it per model
+    with real input/output/cache rates (the same engine behind /api/opex/*), so
+    the admin "cost per user" view reflects true spend rather than the
+    quota-equivalent estimate used for rate-limit enforcement.
+    """
+    settings = get_settings()
+
+    today = datetime.now(timezone.utc).date()
+    df = date_from or today.replace(day=1).isoformat()
+    dt = date_to or today.isoformat()
+
+    # Authoritative source: the SQL usage ledger view. Fall back to the
+    # file-based accounting scan only if the DB is unavailable or empty for the
+    # window (e.g. before the migration / sink is deployed).
+    pg_pool = getattr(router.state, "pg_pool", None)
+    res = None
+    if pg_pool is not None:
+        try:
+            from kdcube_ai_app.apps.chat.sdk.infra.economics.usage_ledger import UsageLedgerStore
+            store = UsageLedgerStore(pg_pool, tenant=settings.TENANT, project=settings.PROJECT)
+            if await store.has_data(date_from=df, date_to=dt):
+                res = await store.cost_by_user(date_from=df, date_to=dt)
+        except Exception:
+            logger.exception("SQL usage ledger read failed; falling back to file accounting")
+            res = None
+
+    if res is None:
+        from kdcube_ai_app.apps.chat.ingress.opex.cost import build_rate_calculator, cost_by_user
+        calc = build_rate_calculator()
+        try:
+            res = await cost_by_user(
+                calc,
+                tenant=settings.TENANT,
+                project=settings.PROJECT,
+                date_from=df,
+                date_to=dt,
+            )
+        except Exception as e:
+            logger.exception("Admin cost-by-user failed")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    return {"status": "ok", **res}

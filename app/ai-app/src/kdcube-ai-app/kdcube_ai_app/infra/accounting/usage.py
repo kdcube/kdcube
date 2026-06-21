@@ -831,6 +831,93 @@ def _get_web_search_tier(provider: str,
     defaults = {"brave": "base", "duckduckgo": "free"}
     return provider_config.get("tier", defaults.get(provider, "free"))
 
+def compute_rollup_cost(rollup: Optional[List[dict]],
+                        accounting_services_config: Optional[dict] = None,
+                        pricing_table: Optional[dict] = None) -> Dict[str, Any]:
+    """Turn a usage rollup into real USD cost, priced per (service, provider, model).
+
+    LLM cost uses each model's OWN input and output rates (plus 5m/1h or legacy
+    cache-write and cache-read rates); embeddings use per-1M token rates; web
+    search uses per-1k-request rates. This is the canonical cost path shared by
+    the /api/opex/* endpoints and the economics cost-breakdown endpoints, so
+    every "cost" surface in the product agrees.
+
+    Pure function: depends only on the price table (and, for web-search tier
+    resolution, the optional ACCOUNTING_SERVICES config). `accounting_services_config`
+    is only consulted when a web_search item is present; pass {} to stay fully
+    settings-free.
+
+    Returns {"total_cost_usd": float, "breakdown": [ {service, provider, model,
+    cost_usd, ...} ]}.
+    """
+    if not pricing_table:
+        pricing_table = price_table()
+
+    total_cost = 0.0
+    breakdown: List[Dict[str, Any]] = []
+
+    for item in rollup or []:
+        service = item.get("service")
+        provider = item.get("provider")
+        model = item.get("model")
+        spent = item.get("spent", {}) or {}
+
+        cost_usd = 0.0
+        tier = None
+        pr = None
+
+        if service == "llm":
+            pr = _find_llm_price(provider, model, pricing_table)
+            if pr:
+                input_cost = (float(spent.get("input", 0)) / 1_000_000.0) * float(pr.get("input_tokens_1M", 0.0))
+                output_cost = (float(spent.get("output", 0)) / 1_000_000.0) * float(pr.get("output_tokens_1M", 0.0))
+                cache_read_cost = (float(spent.get("cache_read", 0)) / 1_000_000.0) * float(pr.get("cache_read_tokens_1M", 0.0))
+
+                cache_write_cost = 0.0
+                cache_pricing = pr.get("cache_pricing")
+                if cache_pricing and isinstance(cache_pricing, dict):
+                    cache_5m_tokens = float(spent.get("cache_5m_write", 0))
+                    cache_1h_tokens = float(spent.get("cache_1h_write", 0))
+                    if cache_5m_tokens > 0:
+                        cache_write_cost += (cache_5m_tokens / 1_000_000.0) * float(cache_pricing.get("5m", {}).get("write_tokens_1M", 0.0))
+                    if cache_1h_tokens > 0:
+                        cache_write_cost += (cache_1h_tokens / 1_000_000.0) * float(cache_pricing.get("1h", {}).get("write_tokens_1M", 0.0))
+                else:
+                    cache_write_tokens = float(spent.get("cache_creation", 0))
+                    cache_write_cost = (cache_write_tokens / 1_000_000.0) * float(pr.get("cache_write_tokens_1M", 0.0))
+
+                cost_usd = input_cost + output_cost + cache_write_cost + cache_read_cost
+
+        elif service == "embedding":
+            pr = _find_emb_price(provider, model, pricing_table)
+            if pr:
+                cost_usd = (float(spent.get("tokens", 0)) / 1_000_000.0) * float(pr.get("tokens_1M", 0.0))
+
+        elif service == "web_search":
+            tier = _get_web_search_tier(provider, accounting_services_config)
+            pr = _find_web_search_price(provider, tier, pricing_table)
+            if pr:
+                cost_usd = (float(spent.get("search_queries", 0)) / 1000.0) * float(pr.get("cost_per_1k_requests", 0.0))
+
+        total_cost += cost_usd
+
+        breakdown_item: Dict[str, Any] = {
+            "service": service,
+            "provider": provider,
+            "model": model,
+            "cost_usd": cost_usd,
+        }
+        if service == "web_search" and tier:
+            breakdown_item["tier"] = tier
+            breakdown_item["search_queries"] = spent.get("search_queries", 0)
+            breakdown_item["search_results"] = spent.get("search_results", 0)
+            if pr:
+                breakdown_item["cost_per_1k_requests"] = pr.get("cost_per_1k_requests", 0.0)
+        breakdown.append(breakdown_item)
+
+    return {"total_cost_usd": total_cost, "breakdown": breakdown}
+
+
 # Referent prices
 def _ref_out_price_1m(ref_provider: str, ref_model: str) -> float:
     pr = _find_llm_price(ref_provider, ref_model)

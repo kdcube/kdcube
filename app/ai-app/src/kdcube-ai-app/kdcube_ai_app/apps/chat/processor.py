@@ -2611,7 +2611,7 @@ class EnhancedChatRequestProcessor:
                         data={"default_model": (payload.config.values or {}).get("selected_model"), "task_id": task_id},
                     )
 
-                    async with bind_accounting(envelope, storage_backend, enabled=True):
+                    async with bind_accounting(envelope, storage_backend, enabled=True, pg_pool=self.pg_pool):
                         async with with_accounting("chat.orchestrator",
                                                    app_bundle_id=payload.routing.bundle_id,
                                                    conversation_id=payload.routing.conversation_id,
