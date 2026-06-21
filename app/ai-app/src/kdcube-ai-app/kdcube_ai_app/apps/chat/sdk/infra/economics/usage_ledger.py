@@ -28,6 +28,113 @@ from kdcube_ai_app.infra.accounting.usage import compute_rollup_cost
 logger = logging.getLogger(__name__)
 
 
+# --------------------------------------------------------------------------- #
+# Self-healing schema bootstrap
+# --------------------------------------------------------------------------- #
+# The authoritative copy of this DDL lives in
+# ops/deployment/sql/chatbot/deploy-kdcube-proj-schema.sql (rendered with the
+# project schema substituted for <SCHEMA>). The deploy-time SQL step is fragile
+# and has been observed NOT to run on some targets, leaving the ledger tables
+# absent -> every mirror insert raised asyncpg.UndefinedTableError and was
+# dropped fail-safe (cost-per-user silently under-reported). To make the runtime
+# correct wherever the patched code runs, we keep an identical, fully idempotent
+# (IF NOT EXISTS / CREATE OR REPLACE) copy here and apply it once per process at
+# sink-attach time. Keep it in sync with the SQL file.
+_LEDGER_DDL_TEMPLATE = """
+CREATE TABLE IF NOT EXISTS {schema}.llm_usage_events (
+    id                 BIGSERIAL PRIMARY KEY,
+    tenant             VARCHAR(255) NOT NULL,
+    project            VARCHAR(255) NOT NULL,
+    user_id            VARCHAR(255),
+    request_id         VARCHAR(255),
+    conversation_id    VARCHAR(255),
+    turn_id            VARCHAR(255),
+    agent              VARCHAR(255),
+    bundle_id          VARCHAR(255),
+    service_type       VARCHAR(64) NOT NULL,
+    provider           VARCHAR(128),
+    model              VARCHAR(255),
+    input_tokens       BIGINT NOT NULL DEFAULT 0,
+    output_tokens      BIGINT NOT NULL DEFAULT 0,
+    cache_read_tokens  BIGINT NOT NULL DEFAULT 0,
+    cache_write_tokens BIGINT NOT NULL DEFAULT 0,
+    embedding_tokens   BIGINT NOT NULL DEFAULT 0,
+    search_queries     BIGINT NOT NULL DEFAULT 0,
+    requests           BIGINT NOT NULL DEFAULT 0,
+    cost_usd           NUMERIC(18,6) NOT NULL DEFAULT 0,
+    event_id           VARCHAR(128),
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_llm_usage_event_id
+  ON {schema}.llm_usage_events (event_id) WHERE event_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_llm_usage_tenant_project_time
+  ON {schema}.llm_usage_events (tenant, project, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_user_time
+  ON {schema}.llm_usage_events (tenant, project, user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_model_time
+  ON {schema}.llm_usage_events (tenant, project, model, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_llm_usage_request
+  ON {schema}.llm_usage_events (tenant, project, request_id);
+
+CREATE TABLE IF NOT EXISTS {schema}.model_pricing (
+    id             BIGSERIAL PRIMARY KEY,
+    service_type   VARCHAR(64) NOT NULL,
+    provider       VARCHAR(128) NOT NULL,
+    model          VARCHAR(255) NOT NULL,
+    rates          JSONB NOT NULL,
+    effective_from TIMESTAMPTZ NOT NULL DEFAULT now(),
+    note           TEXT,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_model_pricing_lookup
+  ON {schema}.model_pricing (service_type, provider, model, effective_from DESC);
+
+CREATE OR REPLACE VIEW {schema}.llm_usage_by_user_model AS
+SELECT
+    tenant,
+    project,
+    user_id,
+    service_type,
+    provider,
+    model,
+    date_trunc('day', created_at)   AS day,
+    date_trunc('month', created_at) AS month,
+    sum(input_tokens)       AS input_tokens,
+    sum(output_tokens)      AS output_tokens,
+    sum(cache_read_tokens)  AS cache_read_tokens,
+    sum(cache_write_tokens) AS cache_write_tokens,
+    sum(embedding_tokens)   AS embedding_tokens,
+    sum(search_queries)     AS search_queries,
+    sum(requests)           AS requests,
+    sum(cost_usd)           AS cost_usd,
+    count(*)                AS events
+FROM {schema}.llm_usage_events
+GROUP BY tenant, project, user_id, service_type, provider, model,
+         date_trunc('day', created_at), date_trunc('month', created_at);
+"""
+
+
+async def ensure_ledger_schema(pg_pool, *, tenant: str, project: str) -> str:
+    """Idempotently create the usage-ledger tables/indexes/view for a project schema.
+
+    Mirrors the DDL appended to deploy-kdcube-proj-schema.sql, schema-qualified
+    via project_schema(tenant, project). Safe to call repeatedly and concurrently
+    (every statement is IF NOT EXISTS / CREATE OR REPLACE). Returns the schema name.
+
+    Callers should treat failures as non-fatal (the mirror write path is already
+    fail-safe); this raises so callers can decide whether to log/skip the lazy
+    pricing seed.
+    """
+    schema = _project_schema(tenant, project)
+    ddl = _LEDGER_DDL_TEMPLATE.format(schema=schema)
+    async with pg_pool.acquire() as conn:
+        # asyncpg executes a multi-statement string via the simple query protocol
+        # when no args are passed, which is exactly what we want for DDL.
+        await conn.execute(ddl)
+    return schema
+
+
 def _spent_from_usage(usage: dict) -> dict:
     """Map a ServiceUsage-shaped dict to the rollup 'spent' keys compute_rollup_cost reads."""
     usage = usage or {}

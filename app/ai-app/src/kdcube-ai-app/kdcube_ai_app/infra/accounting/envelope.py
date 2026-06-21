@@ -88,7 +88,55 @@ def build_envelope_from_session(session, *, tenant_id,
         # user_session=session
     )
 
-def _maybe_wrap_with_sql_usage_sink(pg_pool) -> None:
+# Per-process guard: which project schemas we have already ensured the ledger
+# schema for. Keyed by project_schema(tenant, project) so a multi-tenant process
+# bootstraps each schema exactly once. Bounded by the number of tenant/projects.
+_ledger_schema_ensured: set = set()
+
+
+async def _ensure_ledger_schema_once(pg_pool, *, tenant, project) -> None:
+    """Self-heal: create the usage-ledger tables/indexes/view once per process per
+    project schema, then lazily seed model_pricing from code if it's empty.
+
+    The deploy-time SQL DDL step is fragile and has been observed not to run on
+    some targets, leaving the ledger tables absent -> every mirror insert raised
+    asyncpg.UndefinedTableError and was dropped (cost-per-user under-reported).
+    Ensuring the schema here makes the runtime correct wherever the patched code
+    runs. Fully fail-safe: any failure is logged and never breaks the turn.
+    """
+    if pg_pool is None or not tenant or not project:
+        return
+    import logging
+    log = logging.getLogger("accounting")
+    try:
+        from kdcube_ai_app.apps.chat.sdk.infra.economics.usage_ledger import (
+            ensure_ledger_schema,
+        )
+        schema = await ensure_ledger_schema(pg_pool, tenant=str(tenant), project=str(project))
+    except Exception:
+        log.warning(
+            "Could not ensure ledger schema for %s/%s; cost-per-user mirror may "
+            "fail until the schema is created",
+            tenant, project, exc_info=True,
+        )
+        return
+    _ledger_schema_ensured.add(schema)
+    log.info("ledger schema ensured (%s)", schema)
+    # Lazy pricing seed: only when the price table is empty (idempotent).
+    try:
+        from kdcube_ai_app.apps.chat.sdk.infra.economics.pricing import ModelPricingStore
+        store = ModelPricingStore(pg_pool, tenant=str(tenant), project=str(project))
+        if await store.is_empty():
+            n = await store.seed_from_code()
+            log.info("ledger pricing seeded from code (%s rows) for %s", n, schema)
+    except Exception:
+        log.warning(
+            "Could not seed model_pricing for %s/%s (fallback to in-code price "
+            "table)", tenant, project, exc_info=True,
+        )
+
+
+async def _maybe_wrap_with_sql_usage_sink(pg_pool, *, tenant=None, project=None) -> None:
     """Wrap the current async-local accounting storage with the SQL usage-ledger
     mirror so every accounting event for this turn is also written to
     <schema>.llm_usage_events (the authoritative cost-per-user source).
@@ -99,6 +147,10 @@ def _maybe_wrap_with_sql_usage_sink(pg_pool) -> None:
     and never calls AccountingSystem.init_storage itself. Fail-safe and idempotent:
     skipped when pg_pool is None or the storage is already wrapped; any failure
     leaves the existing storage untouched and never breaks the turn.
+
+    On first attach for a given project schema, the ledger tables/indexes/view are
+    self-healed (created IF NOT EXISTS) and the price table is lazily seeded so the
+    mirror insert below cannot fail with UndefinedTableError.
     """
     if pg_pool is None:
         return
@@ -109,6 +161,16 @@ def _maybe_wrap_with_sql_usage_sink(pg_pool) -> None:
             "SQLUsageAccountingStorage",
         ):
             return
+        # Ensure the destination schema exists before we start mirroring into it.
+        # Guarded so the DDL/seed only runs once per process per project schema.
+        from kdcube_ai_app.ops.deployment.sql.db_deployment import project_schema
+        try:
+            already = bool(tenant and project) and \
+                project_schema(str(tenant), str(project)) in _ledger_schema_ensured
+        except Exception:
+            already = False
+        if not already:
+            await _ensure_ledger_schema_once(pg_pool, tenant=tenant, project=project)
         from kdcube_ai_app.apps.chat.sdk.infra.economics.usage_ledger import (
             SQLUsageAccountingStorage,
         )
@@ -159,7 +221,9 @@ async def bind_accounting(envelope: AccountingEnvelope, storage_backend, *, enab
     # Mirror accounting events into the SQL usage ledger for this turn (idempotent,
     # fail-safe). Wraps the per-scope storage slot so the reset in finally restores
     # the previous storage cleanly.
-    _maybe_wrap_with_sql_usage_sink(pg_pool)
+    await _maybe_wrap_with_sql_usage_sink(
+        pg_pool, tenant=envelope.tenant_id, project=envelope.project_id
+    )
     # seed enrichment
     ctx.event_enrichment = {
         "metadata": dict(envelope.metadata or {}),
