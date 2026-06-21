@@ -156,6 +156,12 @@ Widgets that own their own SSE stream, such as a stats widget configured with
 family. The scene still passes runtime and data-scope config to the widget so
 the widget can connect to the correct runtime itself.
 
+The host profile can choose the transport mode for a component. The exact
+event names, channels, and actions are component/app-owned. In scene transport
+mode, the component posts a `kdcube-scene-subscribe` claim after it receives
+host config; the scene only scopes, opens/reuses the runtime relay, matches,
+debounces, and forwards events according to that claim.
+
 ## Runtime Shape
 
 ```text
