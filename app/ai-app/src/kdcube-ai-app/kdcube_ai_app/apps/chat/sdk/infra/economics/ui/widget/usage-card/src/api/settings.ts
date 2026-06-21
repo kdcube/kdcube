@@ -24,6 +24,15 @@ type RuntimeConfigPayload = {
   idTokenHeader?: string;
   idTokenHeaderName?: string;
   auth?: { idTokenHeaderName?: string };
+  configSource?: string;
+  hostedByScene?: boolean;
+  liveEventsTransport?: string;
+  eventTransport?: string;
+  scene?: {
+    embedded?: boolean;
+    configSource?: string;
+    liveEventsTransport?: string;
+  };
   defaultTenant?: string;
   defaultProject?: string;
   defaultAppBundleId?: string;
@@ -72,6 +81,8 @@ class Settings {
     tenant: PLACEHOLDER_TENANT,
     project: PLACEHOLDER_PROJECT,
     bundleId: PLACEHOLDER_BUNDLE_ID,
+    hostedByScene: false,
+    liveEventsTransport: '',
   };
 
   getBaseUrl(): string {
@@ -94,6 +105,14 @@ class Settings {
 
   getWidgetAlias(): string {
     return context.widgetAlias || 'usage_card';
+  }
+
+  isHostedByScene(): boolean {
+    return this.values.hostedByScene;
+  }
+
+  getLiveEventsTransport(): string {
+    return this.values.liveEventsTransport;
   }
 
   authHeaders(base?: HeadersInit): Headers {
@@ -132,6 +151,8 @@ class Settings {
       tenant: tenant || this.values.tenant,
       project: project || this.values.project,
       bundleId: config.defaultAppBundleId || this.values.bundleId,
+      hostedByScene: Boolean(config.hostedByScene || config.scene?.embedded || config.configSource === 'scene'),
+      liveEventsTransport: String(config.liveEventsTransport || config.eventTransport || config.scene?.liveEventsTransport || '').trim(),
     };
     return Boolean(
       tenant || project || config.baseUrl ||

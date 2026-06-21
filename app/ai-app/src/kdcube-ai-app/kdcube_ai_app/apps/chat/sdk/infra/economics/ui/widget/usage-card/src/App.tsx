@@ -240,6 +240,7 @@ function notifyHost(message: Record<string, unknown>): void {
 }
 
 function subscribeToSceneUsageEvents(): void {
+  console.info('[kdcube.usage-card] scene subscription claim', { event: 'accounting.usage' });
   notifyHost({
     type: SCENE_SUBSCRIBE_MESSAGE_TYPE,
     widget: 'usage_card',
@@ -278,6 +279,7 @@ export const App: React.FC = () => {
   const pendingRefreshRef = useRef(false);
   const debounceRef = useRef<number | null>(null);
   const shellRef = useRef<HTMLDivElement | null>(null);
+  const sceneSubscriptionActiveRef = useRef(false);
 
   const load = useCallback(async (reason = 'load') => {
     if (inFlightRef.current) {
@@ -328,12 +330,18 @@ export const App: React.FC = () => {
     let cancelled = false;
     settings.setupParentListener().then((ready) => {
       if (cancelled || !ready) return;
-      subscribeToSceneUsageEvents();
+      if (settings.isHostedByScene() && settings.getLiveEventsTransport() === 'scene') {
+        subscribeToSceneUsageEvents();
+        sceneSubscriptionActiveRef.current = true;
+      }
       void load();
     });
     return () => {
       cancelled = true;
-      unsubscribeFromSceneUsageEvents();
+      if (sceneSubscriptionActiveRef.current) {
+        sceneSubscriptionActiveRef.current = false;
+        unsubscribeFromSceneUsageEvents();
+      }
     };
   }, [load]);
 
