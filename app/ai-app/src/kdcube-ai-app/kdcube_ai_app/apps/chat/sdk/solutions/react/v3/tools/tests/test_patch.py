@@ -60,7 +60,7 @@ async def test_patch_rejects_historical_path_without_copying(tmp_path):
 
     await handle_react_patch(react=FakeReact(), ctx_browser=ctx, state=state, tool_call_id="p1")
 
-    new_path = tmp_path / "turn_new" / "files" / "a.txt"
+    new_path = tmp_path / "workdir" / "turn_new" / "files" / "a.txt"
     assert not new_path.exists()
     assert (old_path / "a.txt").read_text(encoding="utf-8") == "old"
     json_blocks = [b for b in ctx.timeline.blocks if b.get("type") == "react.tool.result" and b.get("mime") == "application/json"]
@@ -75,7 +75,7 @@ async def test_patch_applies_unified_diff_and_rewrites_headers(tmp_path):
     runtime = RuntimeCtx(turn_id="turn_new", outdir=str(tmp_path), workdir=str(tmp_path))
     ctx = FakeBrowser(runtime)
 
-    target = tmp_path / "turn_new" / "files" / "a.txt"
+    target = tmp_path / "workdir" / "turn_new" / "files" / "a.txt"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
 
@@ -118,7 +118,7 @@ async def test_patch_normalizes_llm_generated_bad_hunk_counts(tmp_path):
     runtime = RuntimeCtx(turn_id="turn_new", outdir=str(tmp_path), workdir=str(tmp_path))
     ctx = FakeBrowser(runtime)
 
-    target = tmp_path / "turn_new" / "files" / "demo" / "app.py"
+    target = tmp_path / "workdir" / "turn_new" / "files" / "demo" / "app.py"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
         "# Main application entry point\n\n"
@@ -203,7 +203,7 @@ async def test_patch_rejects_full_replacement_copied_from_line_numbered_preview(
     runtime = RuntimeCtx(turn_id="turn_new", outdir=str(tmp_path), workdir=str(tmp_path))
     ctx = FakeBrowser(runtime)
 
-    target = tmp_path / "turn_new" / "files" / "demo" / "a.txt"
+    target = tmp_path / "workdir" / "turn_new" / "files" / "demo" / "a.txt"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
 
@@ -236,7 +236,7 @@ async def test_patch_rejects_unified_diff_copied_from_line_numbered_preview(tmp_
     runtime = RuntimeCtx(turn_id="turn_new", outdir=str(tmp_path), workdir=str(tmp_path))
     ctx = FakeBrowser(runtime)
 
-    target = tmp_path / "turn_new" / "files" / "demo" / "a.txt"
+    target = tmp_path / "workdir" / "turn_new" / "files" / "demo" / "a.txt"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
 
@@ -281,7 +281,7 @@ async def test_patch_file_kind_hosts_and_emits_file(tmp_path):
     hosting = _FakeHostingService()
     comm = _FakeComm()
 
-    target = tmp_path / "turn_new" / "files" / "a.txt"
+    target = tmp_path / "workdir" / "turn_new" / "files" / "a.txt"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("old", encoding="utf-8")
 
@@ -323,7 +323,7 @@ async def test_patch_updates_existing_current_turn_file_without_react_write_regi
     runtime = RuntimeCtx(turn_id="turn_new", outdir=str(tmp_path), workdir=str(tmp_path))
     ctx = FakeBrowser(runtime)
 
-    target = tmp_path / "turn_new" / "files" / "demo" / "config.py"
+    target = tmp_path / "workdir" / "turn_new" / "files" / "demo" / "config.py"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
         '"""Project configuration constants."""\n\n'
@@ -478,7 +478,7 @@ async def test_patch_hunk_mismatch_emits_actionable_diagnostic(tmp_path):
     runtime = RuntimeCtx(turn_id="turn_new", outdir=str(tmp_path), workdir=str(tmp_path))
     ctx = FakeBrowser(runtime)
 
-    target = tmp_path / "turn_new" / "files" / "demo" / "test_app.py"
+    target = tmp_path / "workdir" / "turn_new" / "files" / "demo" / "test_app.py"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
         "    def test_wrong_method_on_health(self):\n"

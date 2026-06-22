@@ -612,7 +612,14 @@ def materialize_inline_artifact_to_file(
     visibility: Optional[str] = None,
     scratchpad=None,
 ) -> None:
-    workdir = outdir
+    # Normalize to the artifact root (out/workdir) so writes land where every
+    # reader looks (the ANNOUNCE [WORKSPACE] scan, git-lineage publish staging,
+    # react.rg/read). Without this, a runtime-root outdir writes files to
+    # out/turn_<id>/... (missing the workdir layer) — invisible to the workspace
+    # map and never committed to the git lineage. artifact_outdir_for is
+    # idempotent, so passing an already-artifact-root outdir is a no-op.
+    from kdcube_ai_app.apps.chat.sdk.runtime.workspace import artifact_outdir_for
+    workdir = artifact_outdir_for(outdir)
     save_hint = filename_hint
     if turn_id:
         hint = str(filename_hint or getattr(artifact, "path", "") or getattr(artifact, "filename", "") or "").strip()
