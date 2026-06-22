@@ -16,7 +16,6 @@ export interface SceneEventBusSnapshot {
 
 export interface SceneEventBusOptions {
   getAliases: () => Iterable<string>
-  defaultSubscriptions?: (alias: string) => SceneEventSubscriptionClaim[]
   isReady?: (alias: string) => boolean
   post: (alias: string, message: SceneRecord, event: SceneEventBusEvent, subscription: SceneEventSubscriptionClaim) => void
   queue?: (alias: string, message: SceneRecord, event: SceneEventBusEvent, subscription: SceneEventSubscriptionClaim) => void
@@ -122,7 +121,6 @@ export function createSceneEventBus(options: SceneEventBusOptions): SceneEventBu
   const now = options.now || (() => new Date().toISOString())
   const setTimer = options.setTimeout || ((handler, timeout) => globalThis.setTimeout(handler, timeout))
   const clearTimer = options.clearTimeout || ((timer) => globalThis.clearTimeout(timer as ReturnType<typeof setTimeout>))
-  const defaultSubscriptions = options.defaultSubscriptions || (() => [])
   const isReady = options.isReady || (() => true)
   const queue = options.queue || ((alias, message, event, subscription) => options.post(alias, message, event, subscription))
 
@@ -139,7 +137,7 @@ export function createSceneEventBus(options: SceneEventBusOptions): SceneEventBu
   }
 
   function subscriptionsFor(alias: string): SceneEventSubscriptionClaim[] {
-    return subscribers.has(alias) ? subscribers.get(alias) || [] : defaultSubscriptions(alias) || []
+    return subscribers.has(alias) ? subscribers.get(alias) || [] : []
   }
 
   function deliver(alias: string, subscription: SceneEventSubscriptionClaim, event: SceneEventBusEvent): void {

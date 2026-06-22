@@ -362,11 +362,40 @@ function subscribeCanvasPatchEvents(
   }
 }
 
+function normalizeCanvasName(value: unknown): string {
+  return String(value || 'main').trim() || 'main'
+}
+
+function canonicalCanvasId(value: unknown): string | undefined {
+  const canvasId = String(value || '').trim()
+  if (!canvasId || canvasId.startsWith('canvas:')) return undefined
+  return canvasId
+}
+
 function objectRefForPatch(input: CanvasPatchInput): string {
-  const canvasId = String(input.canvas_id ?? input.patch.canvas_id ?? '').trim()
-  if (canvasId) return canvasId
+  const canvasId = canonicalCanvasId(input.canvas_id ?? input.patch.canvas_id)
+  if (canvasId?.startsWith('cnv:')) return canvasId
+  const canvasName = normalizeCanvasName(input.canvas_name ?? input.patch.canvas_name)
+  return `cnv:${canvasName}`
+}
+
+function normalizedPatchInput(input: CanvasPatchInput): CanvasPatchInput {
   const canvasName = String(input.canvas_name ?? input.patch.canvas_name ?? 'main').trim()
-  return `canvas:${canvasName}`
+  const topCanvasId = canonicalCanvasId(input.canvas_id)
+  const patchCanvasId = canonicalCanvasId(input.patch.canvas_id)
+  const normalized: CanvasPatchInput = {
+    ...input,
+    canvas_name: canvasName || 'main',
+    patch: {
+      ...input.patch,
+      canvas_name: canvasName || 'main',
+    },
+  }
+  if (topCanvasId) normalized.canvas_id = topCanvasId
+  else delete normalized.canvas_id
+  if (patchCanvasId) normalized.patch.canvas_id = patchCanvasId
+  else delete normalized.patch.canvas_id
+  return normalized
 }
 
 // ---------------------------------------------------------------------------
@@ -412,13 +441,14 @@ export function createCanvasHost(config: CanvasHostConfig): CanvasHost {
   let boardInfoHtml = ''
 
   const patchCanvas = async (input: CanvasPatchInput): Promise<CanvasPatchResponse> => {
+    const normalizedInput = normalizedPatchInput(input)
     const messageId = timestampId('dbmsg')
     const payload = await publishDataBusAndWait(ctx, {
       message_id: messageId,
       subject: CANVAS_SUBJECT,
-      object_ref: objectRefForPatch(input),
+      object_ref: objectRefForPatch(normalizedInput),
       idempotency_key: messageId,
-      payload: input as unknown as Record<string, unknown>,
+      payload: normalizedInput as unknown as Record<string, unknown>,
       client: { surface, operation: 'canvas_patch' },
     })
     return payload as unknown as CanvasPatchResponse

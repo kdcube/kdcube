@@ -329,8 +329,17 @@ export const App: React.FC = () => {
     let cancelled = false;
     settings.setupParentListener().then((ready) => {
       if (cancelled || !ready) return;
+      console.info('[kdcube.usage-card] host config ready', {
+        hostedByScene: settings.isHostedByScene(),
+        liveEventsTransport: settings.getLiveEventsTransport() || '',
+      });
       if (settings.isHostedByScene() && settings.getLiveEventsTransport() === 'scene') {
         sceneSubscriptionCleanupRef.current = subscribeToSceneUsageEvents();
+      } else {
+        console.info('[kdcube.usage-card] scene subscription skipped', {
+          hostedByScene: settings.isHostedByScene(),
+          liveEventsTransport: settings.getLiveEventsTransport() || '',
+        });
       }
       void load();
     });

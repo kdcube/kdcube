@@ -62,21 +62,18 @@ test('queues events when the target alias is not ready', () => {
   assert.equal(queued.length, 1)
 })
 
-test('uses default subscriptions until a widget registers explicit claims', () => {
+test('does not dispatch until a widget registers explicit claims', () => {
   const delivered = []
   const bus = createSceneEventBus({
     getAliases: () => ['usage_card'],
-    defaultSubscriptions: (alias) => alias === 'usage_card'
-      ? [{ id: 'default-usage', events: ['accounting.usage'], channels: ['message'] }]
-      : [],
     post: (alias, message) => delivered.push({ alias, message }),
   })
 
   bus.publish(bus.normalizeEvent('sse', { type: 'message' }, { type: 'accounting.usage' }))
-  assert.equal(delivered.length, 1)
+  assert.equal(delivered.length, 0)
 
   bus.register('usage_card', [
-    { id: 'explicit-stats', events: ['kdcube.stats.snapshot'], channels: ['chat_service'] },
+    { id: 'explicit-usage', events: ['accounting.usage'], channels: ['message'] },
   ])
   bus.publish(bus.normalizeEvent('sse', { type: 'message' }, { type: 'accounting.usage' }))
   assert.equal(delivered.length, 1)

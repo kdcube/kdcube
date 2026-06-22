@@ -49,6 +49,12 @@ const DROP_INGRESS_MESSAGE = 'kdcube-pinboard-drop-ingress'
 const CONTEXT_DRAG_START_MESSAGE = 'kdcube-context-drag-start'
 const CONTEXT_DRAG_END_MESSAGE = 'kdcube-context-drag-end'
 
+function canonicalCanvasId(value: unknown): string | undefined {
+  const canvasId = String(value || '').trim()
+  if (!canvasId || canvasId.startsWith('canvas:')) return undefined
+  return canvasId
+}
+
 function postToHost(message: Record<string, unknown>): void {
   if (window.parent && window.parent !== window) {
     window.parent.postMessage({ source: 'kdcube.pinboard', ...message }, '*')
@@ -216,7 +222,7 @@ export default function App() {
   }), [patchCanvas, host])
 
   const canvasTarget = useCallback((rect?: CanvasCard['rect']) => ({
-    canvasId: activeCanvas.id,
+    canvasId: canonicalCanvasId(activeCanvas.id),
     canvasName: activeCanvas.name,
     baseRevision: activeCanvas.revision,
     rect,
@@ -350,7 +356,7 @@ export default function App() {
   const onSearchPins = useCallback(async (input: CanvasSearchInput): Promise<CanvasSearchResponse> => {
     if (!host) return { ok: false, items: [], error: 'Pin Board is not ready yet.' }
     const active = activeCanvasRef.current
-    return host.searchPins({ ...input, canvasName: active?.name, canvasId: active?.id })
+    return host.searchPins({ ...input, canvasName: active?.name, canvasId: canonicalCanvasId(active?.id) })
   }, [host])
 
   const onCloseCanvas = useCallback(() => {

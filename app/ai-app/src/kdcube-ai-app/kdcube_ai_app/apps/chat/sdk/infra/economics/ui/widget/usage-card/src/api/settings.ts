@@ -138,6 +138,10 @@ class Settings {
     );
   }
 
+  private isEmbedded(): boolean {
+    return Boolean(window.parent && window.parent !== window);
+  }
+
   private applyRuntimeConfig(config: RuntimeConfigPayload): boolean {
     const tenant = config.defaultTenant || config.tenant || config.tenant_id;
     const project = config.defaultProject || config.project || config.project_id;
@@ -182,7 +186,9 @@ class Settings {
   }
 
   setupParentListener(): Promise<boolean> {
-    if (!this.needsRuntimeConfig()) {
+    const needsRuntimeConfig = this.needsRuntimeConfig();
+    const embedded = this.isEmbedded();
+    if (!needsRuntimeConfig && !embedded) {
       return Promise.resolve(true);
     }
 
@@ -203,6 +209,10 @@ class Settings {
     return new Promise((resolve) => {
       resolveReady = resolve;
       const requestParentConfig = () => {
+        if (!embedded) {
+          finish(true);
+          return;
+        }
         window.parent.postMessage(
           {
             type: 'CONFIG_REQUEST',
@@ -225,8 +235,12 @@ class Settings {
         // even if config never arrives — it will just show an empty state.
         window.setTimeout(() => finish(true), 3000);
       };
+      if (!needsRuntimeConfig) {
+        requestParentConfig();
+        return;
+      }
       this.loadFrontendConfig().then((loaded) => {
-        if (loaded) {
+        if (loaded && !embedded) {
           finish(true);
         } else {
           requestParentConfig();
