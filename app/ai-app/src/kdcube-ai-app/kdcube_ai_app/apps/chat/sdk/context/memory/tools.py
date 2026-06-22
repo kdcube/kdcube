@@ -952,7 +952,7 @@ async def rehost_memory_ref(
             "object_ref": object_ref,
             "logical_path": logical_path,
             "physical_path": physical_path,
-            "namespace": ARTIFACT_NAMESPACE_SNAPSHOTS,
+            "scope": ARTIFACT_NAMESPACE_SNAPSHOTS,
             "mime": "application/json",
             "size_bytes": len(payload),
             "file_count": 1,

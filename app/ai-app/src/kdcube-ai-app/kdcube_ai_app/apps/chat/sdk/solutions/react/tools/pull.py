@@ -85,7 +85,7 @@ TOOL_SPEC = {
         "JSON object with requested refs and compact pulled summaries. "
         "Folder pulls are grouped by logical_root/physical_root with file_count, bounded tree, and path_rule. "
         "Exact file pulls return one logical_path/physical_path item. "
-        "Externally owned refs return object_ref plus the resolved/rehosted fi: logical_path, physical_path, mime, size_bytes, and file_count when available. "
+        "Externally owned refs return object_ref plus the resolved/rehosted fi: logical_path, physical_path, materialization scope, mime, size_bytes, and file_count when available. "
         "When share=true, each delivered file is also listed under shared with its logical_path. "
         "Diagnostics such as missing, invalid, and errors are included only when non-empty."
     ),

@@ -176,7 +176,7 @@ async def rehost_canvas_ref(
             "object_ref": uri,
             "logical_path": logical_path,
             "physical_path": physical_path,
-            "namespace": namespace_name,
+            "scope": namespace_name,
             "mime": mime,
             "size_bytes": len(payload),
             "file_count": 1,

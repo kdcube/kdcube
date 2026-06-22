@@ -121,7 +121,7 @@ async def test_pull_materializes_registered_namespace_ref(tmp_path):
                 "object_ref": ref,
                 "logical_path": physical_path_to_logical_path(physical_path),
                 "physical_path": physical_path,
-                "namespace": "snapshots",
+                "scope": "snapshots",
                 "metadata": {
                     "updated_at": datetime(2026, 6, 12, 20, 39, tzinfo=timezone.utc),
                 },
@@ -151,7 +151,7 @@ async def test_pull_materializes_registered_namespace_ref(tmp_path):
         "object_ref": "nmsp:draft_1/issue-draft.yaml",
         "logical_path": "fi:turn_pull.snapshots/nmsp/draft_1/issue-draft.yaml",
         "physical_path": "turn_pull/snapshots/nmsp/draft_1/issue-draft.yaml",
-        "namespace": "snapshots",
+        "scope": "snapshots",
         "metadata": {
             "updated_at": "2026-06-12T20:39:00+00:00",
         },
@@ -214,7 +214,7 @@ async def test_pull_materializes_canvas_owned_attachment_ref(tmp_path, monkeypat
         "object_ref": object_ref,
         "logical_path": "fi:turn_pull.user.attachments/cnv/canvas/users/user-1/canvases/cnv_user-1_main/objects/user-attachments/ua_2026-06-09-18-38-30_xkib/v000001.docx",
         "physical_path": "turn_pull/attachments/cnv/canvas/users/user-1/canvases/cnv_user-1_main/objects/user-attachments/ua_2026-06-09-18-38-30_xkib/v000001.docx",
-        "namespace": "attachments",
+        "scope": "attachments",
         "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "size_bytes": 8,
         "file_count": 1,
