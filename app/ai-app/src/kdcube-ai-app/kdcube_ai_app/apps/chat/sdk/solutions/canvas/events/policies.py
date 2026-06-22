@@ -481,7 +481,6 @@ def project_canvas_tool_result_blocks(
         error_value = parsed.get("error")
         if error_value:
             lines.append("error: " + _compact(error_value, max_chars=320))
-        lines.append("announce_effect: latest canvas board projection is refreshed in ANNOUNCE for this turn.")
         _set_projected_text(block, text="\n".join(lines), policy_id=policy_id)
     return timeline
 
