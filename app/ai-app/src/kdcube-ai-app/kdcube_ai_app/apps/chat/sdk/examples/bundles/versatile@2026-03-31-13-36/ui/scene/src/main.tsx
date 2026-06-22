@@ -718,7 +718,7 @@ function objectRefForPatch(input: CanvasPatchInput): string {
   const canvasId = String(input.canvas_id ?? input.patch.canvas_id ?? '').trim()
   if (canvasId) return canvasId
   const canvasName = String(input.canvas_name ?? input.patch.canvas_name ?? 'main').trim()
-  return `canvas:${canvasName}`
+  return `cnv:${canvasName}`
 }
 
 const CANVAS_CONTEXT_CARD_KINDS = new Set([

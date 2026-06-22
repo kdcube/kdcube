@@ -8,9 +8,10 @@ exported tool id is:
 canvas.patch
 ```
 
-Canvas board reads are not exposed as an agent tool. They are exposed as an
+Canvas board reads are not exposed as an agent tool. They are exposed as
 external `cnv:` refs that can be imported into the ReAct workspace with
-`react.pull(paths=["cnv:<name>@<revision>"])` when exact JSON is needed.
+`react.pull(paths=["cnv:<name>"])` for the current board. Use
+`cnv:<name>@<revision>` only when exact JSON for a known revision is needed.
 
 The tools bind to the current bundle runtime at call time. Bundle-specific
 transport and storage names are supplied through `bundle_props.canvas`; the

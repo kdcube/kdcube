@@ -37,9 +37,10 @@ provenance may appear as metadata such as `canvas_context`, but the rendered
 
 Canvas read/write behavior:
 - Use the map/legend for awareness. When exact hidden board state, full JSON,
-  full card metadata, coordinates, or refs are needed, import the board with
-  `react.pull(paths=["cnv:<name>@<revision>"])`, then inspect the returned
-  `fi:` logical path or physical path.
+  full card metadata, coordinates, or refs are needed, import the current board
+  with `react.pull(paths=["cnv:<name>"])`, then inspect the returned `fi:`
+  logical path or physical path. Use `cnv:<name>@<revision>` only when you
+  intentionally need the board at a known revision.
 - `cnv:` refs identify canvas-owned board/object state. They are external owner
   refs until pulled into the ReAct workspace.
 - Collaborate only through `canvas.patch` with `base_revision` set to the
