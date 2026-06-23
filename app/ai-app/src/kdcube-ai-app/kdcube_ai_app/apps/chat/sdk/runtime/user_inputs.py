@@ -429,6 +429,49 @@ def attachment_info_from_user_attachment_block(block: Dict[str, Any]) -> Optiona
     return info
 
 
+def _attachment_identity_key(block: Dict[str, Any], info: Dict[str, Any]) -> str:
+    meta = _block_meta(block)
+    event = _event_from_block(block)
+    label = _safe_str(info.get("label"))
+    for value in (
+        block.get("path"),
+        meta.get("logical_path"),
+        meta.get("artifact_path"),
+        (_event_payload_dict(event) or {}).get("logical_path"),
+        (_event_payload_dict(event) or {}).get("artifact_path"),
+    ):
+        text = _safe_str(value)
+        if text:
+            return text
+    event_id = _safe_str((event or {}).get("id") or meta.get("event_id"))
+    if event_id or label:
+        return f"{event_id}:{label}"
+    return _safe_str(info.get("ref"))
+
+
+def _ref_quality(ref: Any) -> int:
+    text = _safe_str(ref)
+    if not text:
+        return 0
+    if text.startswith("fi:"):
+        return 4
+    if "://" not in text:
+        return 3
+    if text.startswith("file://"):
+        return 1
+    return 2
+
+
+def _merge_attachment_info(existing: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(existing)
+    if _ref_quality(incoming.get("ref")) > _ref_quality(merged.get("ref")):
+        merged["ref"] = incoming.get("ref")
+    for key in ("label", "mime", "size"):
+        if merged.get(key) in (None, "") and incoming.get(key) not in (None, ""):
+            merged[key] = incoming.get(key)
+    return merged
+
+
 def render_user_input_batch_index_text(
     *,
     text: str,
@@ -490,6 +533,7 @@ def iter_turn_user_input_entries(blocks: List[Dict[str, Any]], *, turn_id: str) 
     """
     by_batch_context: Dict[str, List[Dict[str, Any]]] = {}
     by_batch_attachment: Dict[str, List[Dict[str, Any]]] = {}
+    by_batch_attachment_key: Dict[str, Dict[str, int]] = {}
     user_blocks: List[Dict[str, Any]] = []
 
     for block in blocks or []:
@@ -511,7 +555,16 @@ def iter_turn_user_input_entries(blocks: List[Dict[str, Any]], *, turn_id: str) 
             continue
         attachment = attachment_info_from_user_attachment_block(block)
         if attachment:
-            by_batch_attachment.setdefault(batch_id, []).append(attachment)
+            attachment_key = _attachment_identity_key(block, attachment)
+            attachments = by_batch_attachment.setdefault(batch_id, [])
+            key_map = by_batch_attachment_key.setdefault(batch_id, {})
+            if attachment_key and attachment_key in key_map:
+                idx = key_map[attachment_key]
+                attachments[idx] = _merge_attachment_info(attachments[idx], attachment)
+            else:
+                if attachment_key:
+                    key_map[attachment_key] = len(attachments)
+                attachments.append(attachment)
 
     entries: List[Dict[str, Any]] = []
     for block in user_blocks:

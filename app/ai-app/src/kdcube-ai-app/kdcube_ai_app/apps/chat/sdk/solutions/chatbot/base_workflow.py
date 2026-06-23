@@ -1466,22 +1466,7 @@ class BaseWorkflow():
             blocks = []
         if not blocks:
             blocks = self._current_turn_blocks(turn_id=turn_id)
-        normalized: List[Dict[str, Any]] = []
-        for block in blocks:
-            if not isinstance(block, dict):
-                continue
-            btype = str(block.get("type") or "").strip()
-            if btype in {"user.prompt", "user.followup", "user.followup.preserved", "user.steer", "user.steer.preserved"}:
-                if str(block.get("turn_id") or "").strip() != turn_id:
-                    block = dict(block)
-                    meta = dict(block.get("meta") if isinstance(block.get("meta"), dict) else {})
-                    previous_turn_id = str(block.get("turn_id") or "").strip()
-                    if previous_turn_id:
-                        meta.setdefault("origin_turn_id", previous_turn_id)
-                    block["turn_id"] = turn_id
-                    block["meta"] = meta
-            normalized.append(block)
-        return iter_turn_user_input_entries(normalized, turn_id=turn_id)
+        return iter_turn_user_input_entries(blocks, turn_id=turn_id)
 
     def _iter_turn_assistant_completion_entries(self, *, turn_id: str) -> List[Dict[str, Any]]:
         entries: List[Dict[str, Any]] = []

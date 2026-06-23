@@ -110,3 +110,55 @@ def test_iter_turn_user_input_entries_groups_context_only_batch():
     assert "[user.message]\n(no typed message)" in entry["index_text"]
     assert "[context.1] Judo cancellation memory" in entry["index_text"]
     assert "[attachment.1] cancel.docx" in entry["index_text"]
+
+
+def test_iter_turn_user_input_entries_dedupes_attachment_meta_and_text_blocks():
+    logical_ref = "fi:turn_1.external.external_event.attachments/evt_1/diagram.svg"
+    physical_ref = "file:///kdcube-storage/cb/tenants/demo/projects/proj/attachments/u/conv/turn_1/turn_1/external/external_event/attachments/evt_1/diagram.svg"
+    blocks = [
+        {
+            "turn_id": "turn_1",
+            "type": "user.attachment.meta",
+            "path": logical_ref,
+            "text": '{"filename":"diagram.svg","mime":"image/svg+xml","artifact_path":"' + logical_ref + '","size_bytes":5636}',
+            "meta": {
+                "batch_id": "batch_1",
+                "filename": "diagram.svg",
+                "mime": "image/svg+xml",
+                "artifact_path": logical_ref,
+                "hosted_uri": physical_ref,
+                "size": 5636,
+                "event_id": "evt_1",
+            },
+        },
+        {
+            "turn_id": "turn_1",
+            "type": "user.attachment.text",
+            "path": logical_ref,
+            "text": "<svg />",
+            "meta": {
+                "batch_id": "batch_1",
+                "filename": "diagram.svg",
+                "mime": "image/svg+xml",
+                "hosted_uri": physical_ref,
+                "event_id": "evt_1",
+            },
+        },
+        {
+            "turn_id": "turn_1",
+            "type": "user.followup",
+            "path": "ar:turn_1.external.followup.evt_1",
+            "text": "What's this?",
+            "ts": "2026-06-14T00:00:00Z",
+            "meta": {"batch_id": "batch_1", "event_type": "event.user.followup"},
+        },
+    ]
+
+    entries = iter_turn_user_input_entries(blocks, turn_id="turn_1")
+
+    assert len(entries) == 1
+    assert len(entries[0]["attachments"]) == 1
+    assert entries[0]["attachments"][0]["ref"] == logical_ref
+    assert entries[0]["attachments"][0]["size"] == 5636
+    assert entries[0]["index_text"].count("[attachment.") == 1
+    assert physical_ref not in entries[0]["index_text"]

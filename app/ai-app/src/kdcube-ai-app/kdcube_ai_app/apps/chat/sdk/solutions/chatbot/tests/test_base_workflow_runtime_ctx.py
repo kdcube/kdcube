@@ -1117,7 +1117,11 @@ async def test_event_lane_prompt_is_not_indexed_twice_by_legacy_persist_call():
                     "ts": "2026-04-26T10:00:00Z",
                     "path": "ar:turn-1.user.prompt.evt_1",
                     "text": "Original prompt",
-                    "meta": {"prompt_origin": "external_event_lane", "event_id": "evt_1"},
+                    "meta": {
+                        "prompt_origin": "external_event_lane",
+                        "event_id": "evt_1",
+                        "origin_turn_id": "turn-previous",
+                    },
                 },
             ]
         ),
@@ -1145,7 +1149,7 @@ async def test_event_lane_prompt_is_not_indexed_twice_by_legacy_persist_call():
 
 
 @pytest.mark.asyncio
-async def test_current_turn_prompt_slice_is_indexed_even_when_block_turn_id_is_stale():
+async def test_current_turn_prompt_persistence_ignores_stale_turn_user_blocks():
     saved_messages = []
 
     class _ConvIdxStub:
@@ -1196,12 +1200,8 @@ async def test_current_turn_prompt_slice_is_indexed_even_when_block_turn_id_is_s
 
     prompt_count = await wf.persist_turn_prompt_entries(scratchpad)
 
-    assert prompt_count == 1
-    assert len(saved_messages) == 1
-    assert saved_messages[0]["role"] == "user"
-    assert saved_messages[0]["turn_id"] == "turn-current"
-    assert saved_messages[0]["text"] == "[user.message]\nCreate a route to Bari using sails"
-    assert saved_messages[0]["tags"][-1] == "event_type:event.user.prompt"
+    assert prompt_count == 0
+    assert saved_messages == []
 
 
 # ---------------------------------------------------------------------------
