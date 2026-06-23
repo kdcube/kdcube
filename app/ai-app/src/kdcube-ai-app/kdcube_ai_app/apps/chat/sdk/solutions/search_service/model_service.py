@@ -19,6 +19,7 @@ feasibility/quota/funding check.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 from typing import Any, Awaitable, Callable, Optional, Sequence
 from uuid import uuid4
@@ -155,9 +156,133 @@ class EconomicSearchModelService:
         self.default_flow = default_flow
         self.policy = policy or FlowPolicy(enforce_concurrency=False, emit_user_events=False)
 
+    def _scope_id(self, flow_name: str) -> str:
+        return f"{flow_name.replace('.', '_')}_{uuid4().hex}"
+
+    def _embedder_debug(self) -> dict[str, Any]:
+        emb_model = getattr(self.model_service, "_emb_model", None)
+        token = ""
+        try:
+            token = str(getattr(getattr(emb_model, "provider", None), "apiToken", "") or "")
+        except Exception:
+            token = ""
+        provider = self.provider
+        model = self.model
+        try:
+            provider_value = getattr(getattr(getattr(emb_model, "provider", None), "provider", None), "value", None)
+            provider = str(provider_value or provider or "")
+            model = str(getattr(emb_model, "systemName", "") or model or "")
+        except Exception:
+            pass
+        return {
+            "provider": provider,
+            "model": model,
+            "token_present": bool(token),
+            "token_len": len(token),
+            "token_sha8": hashlib.sha256(token.encode()).hexdigest()[:8] if token else "",
+            "model_service_id": id(self.model_service),
+        }
+
+    async def _run_guarded_embedding(
+        self,
+        texts: Sequence[str],
+        *,
+        flow_name: str,
+        scope_id: str,
+        reservation_usd: float,
+        min_tokens: int,
+    ) -> list[list[float]]:
+        async with EconomicsGuard(
+            self.entrypoint,
+            subject=self.subject,
+            scope_id=scope_id,
+            flow=flow_name,
+            estimate=EconomicsEstimate(
+                reservation_usd=reservation_usd,
+                min_tokens=max(1, int(min_tokens or 1)),
+            ),
+            policy=self.policy,
+        ) as decision:
+            if bool(getattr(decision, "nested", False)):
+                from kdcube_ai_app.infra import accounting as acct
+
+                async with acct.with_accounting(
+                    flow_name,
+                    request_id=scope_id,
+                    metadata={
+                        "flow": flow_name,
+                        "scope_id": scope_id,
+                    },
+                ):
+                    return await self.model_service.embed_texts(list(texts))
+            return await self.model_service.embed_texts(list(texts))
+
     async def embed_texts(self, texts: Sequence[str]) -> list[list[float]]:
-        """Document/index embeddings. Accounting comes from the underlying service."""
-        return await self.model_service.embed_texts(list(texts))
+        """Document/index embeddings through the same runtime economics facade.
+
+        Unlike query embeddings, document/index embeddings are part of write-side
+        index correctness. If the guard denies or the embedder fails, the
+        exception propagates and the owning index operation fails loudly.
+        """
+        batch = [str(text or "") for text in texts]
+        if not batch:
+            return []
+        flow_name = self.default_flow
+        scope_id = self._scope_id(flow_name)
+        reservation_usd = embedding_reservation_usd_for_texts(
+            batch,
+            provider=self.provider,
+            model=self.model,
+        )
+        min_tokens = sum(max(1, estimate_embedding_tokens(text, min_tokens=16)) for text in batch)
+        dbg = self._embedder_debug()
+        logger.info(
+            "[search.embedding] index embed start flow=%s scope_id=%s provider=%s model=%s docs=%s chars=%s token_present=%s token_len=%s token_sha8=%s model_service_id=%s",
+            flow_name,
+            scope_id,
+            dbg["provider"],
+            dbg["model"],
+            len(batch),
+            sum(len(text) for text in batch),
+            dbg["token_present"],
+            dbg["token_len"],
+            dbg["token_sha8"],
+            dbg["model_service_id"],
+        )
+        try:
+            vectors = await self._run_guarded_embedding(
+                batch,
+                flow_name=flow_name,
+                scope_id=scope_id,
+                reservation_usd=reservation_usd,
+                min_tokens=min_tokens,
+            )
+        except Exception:
+            logger.warning(
+                "[search.embedding] index embed failed flow=%s scope_id=%s provider=%s model=%s docs=%s token_present=%s token_len=%s token_sha8=%s model_service_id=%s",
+                flow_name,
+                scope_id,
+                dbg["provider"],
+                dbg["model"],
+                len(batch),
+                dbg["token_present"],
+                dbg["token_len"],
+                dbg["token_sha8"],
+                dbg["model_service_id"],
+                exc_info=True,
+            )
+            raise
+        logger.info(
+            "[search.embedding] index embed done flow=%s scope_id=%s provider=%s model=%s vectors=%s dim=%s model_service_id=%s",
+            flow_name,
+            scope_id,
+            dbg["provider"],
+            dbg["model"],
+            len(vectors),
+            len(vectors[0]) if vectors else 0,
+            dbg["model_service_id"],
+        )
+        return vectors
 
     async def embed_search_query(self, query: str, *, flow: Optional[str] = None) -> list[float] | None:
         """Query embedding with economics around the actual model call.
@@ -175,34 +300,39 @@ class EconomicSearchModelService:
             provider=self.provider,
             model=self.model,
         )
-        scope_id = f"{flow_name.replace('.', '_')}_{uuid4().hex}"
+        scope_id = self._scope_id(flow_name)
+        dbg = self._embedder_debug()
+        logger.info(
+            "[search.embedding] query embed start flow=%s scope_id=%s provider=%s model=%s chars=%s token_present=%s token_len=%s token_sha8=%s model_service_id=%s",
+            flow_name,
+            scope_id,
+            dbg["provider"],
+            dbg["model"],
+            len(text),
+            dbg["token_present"],
+            dbg["token_len"],
+            dbg["token_sha8"],
+            dbg["model_service_id"],
+        )
         try:
-            async with EconomicsGuard(
-                self.entrypoint,
-                subject=self.subject,
+            vectors = await self._run_guarded_embedding(
+                [text],
+                flow_name=flow_name,
                 scope_id=scope_id,
-                flow=flow_name,
-                estimate=EconomicsEstimate(
-                    reservation_usd=reservation_usd,
-                    min_tokens=max(1, estimate_embedding_tokens(text, min_tokens=16)),
-                ),
-                policy=self.policy,
-            ) as decision:
-                if bool(getattr(decision, "nested", False)):
-                    from kdcube_ai_app.infra import accounting as acct
-
-                    async with acct.with_accounting(
-                        flow_name,
-                        request_id=scope_id,
-                        metadata={
-                            "flow": flow_name,
-                            "scope_id": scope_id,
-                        },
-                    ):
-                        vectors = await self.model_service.embed_texts([text])
-                        return vectors[0] if vectors else None
-                vectors = await self.model_service.embed_texts([text])
-                return vectors[0] if vectors else None
+                reservation_usd=reservation_usd,
+                min_tokens=max(1, estimate_embedding_tokens(text, min_tokens=16)),
+            )
+            vector = vectors[0] if vectors else None
+            logger.info(
+                "[search.embedding] query embed done flow=%s scope_id=%s provider=%s model=%s dim=%s model_service_id=%s",
+                flow_name,
+                scope_id,
+                dbg["provider"],
+                dbg["model"],
+                len(vector) if vector else 0,
+                dbg["model_service_id"],
+            )
+            return vector
         except EconomicsLimitException as exc:
             logger.info(
                 "[economics.enforcement] semantic search denied; degrading to lexical flow=%s scope_id=%s provider=%s model=%s code=%s",
@@ -211,6 +341,20 @@ class EconomicSearchModelService:
                 self.provider,
                 self.model,
                 getattr(exc, "code", "rate_limited"),
+            )
+            return None
+        except Exception:
+            logger.warning(
+                "[search.embedding] query embed failed; degrading to lexical flow=%s scope_id=%s provider=%s model=%s token_present=%s token_len=%s token_sha8=%s model_service_id=%s",
+                flow_name,
+                scope_id,
+                dbg["provider"],
+                dbg["model"],
+                dbg["token_present"],
+                dbg["token_len"],
+                dbg["token_sha8"],
+                dbg["model_service_id"],
+                exc_info=True,
             )
             return None
 

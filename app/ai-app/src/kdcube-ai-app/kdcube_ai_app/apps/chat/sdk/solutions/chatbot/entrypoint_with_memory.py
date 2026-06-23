@@ -3464,32 +3464,15 @@ class MemoryEntrypointMixin:
         }
 
     def _memory_economics_enabled(self) -> bool:
-        return bool(
-            getattr(self, "cp_manager", None)
-            and getattr(self, "rl", None)
-            and getattr(self, "budget_limiter", None)
-        )
+        from kdcube_ai_app.apps.chat.sdk.solutions.search_service import economics_enabled
+
+        return economics_enabled(self)
 
     def _embedding_provider_model(self) -> tuple[str, str]:
         """Configured embedding provider/model used for search estimates."""
-        model_service = getattr(self, "models_service", None)
-        emb_model = getattr(model_service, "_emb_model", None)
-        provider = ""
-        model = ""
-        try:
-            provider_obj = getattr(getattr(emb_model, "provider", None), "provider", None)
-            provider = str(getattr(provider_obj, "value", provider_obj) or "").strip()
-            model = str(getattr(emb_model, "systemName", "") or "").strip()
-        except Exception:
-            provider = ""
-            model = ""
-        if provider and model:
-            return provider, model
-        cfg = getattr(getattr(model_service, "config", None), "embedder_config", None)
-        if isinstance(cfg, dict):
-            provider = str(cfg.get("provider") or "").strip()
-            model = str(cfg.get("model_name") or cfg.get("model") or "").strip()
-        return provider or "openai", model or "text-embedding-3-small"
+        from kdcube_ai_app.apps.chat.sdk.solutions.search_service import embedding_provider_model
+
+        return embedding_provider_model(self)
 
     def _memory_search_reservation_usd(self, query: str = "") -> float:
         """Feasibility-gate amount for a memory semantic-search embedding call.
@@ -3505,7 +3488,7 @@ class MemoryEntrypointMixin:
         except Exception:
             pass
         try:
-            from kdcube_ai_app.apps.chat.sdk.infra.economics.search_guard import embedding_reservation_usd
+            from kdcube_ai_app.apps.chat.sdk.solutions.search_service import embedding_reservation_usd
 
             provider, model = self._embedding_provider_model()
             return embedding_reservation_usd(query, provider=provider, model=model)
@@ -3537,18 +3520,9 @@ class MemoryEntrypointMixin:
         (issues, pins, …). Tenant/project from runtime identity; user_id + role from
         the authenticated session. Distinct from the memory variant, which layers
         the memory-widget user override."""
-        from kdcube_ai_app.apps.chat.sdk.infra.economics.enforcement import EconomicsSubject
+        from kdcube_ai_app.apps.chat.sdk.solutions.search_service import economics_search_subject
 
-        ident = self.runtime_identity() if hasattr(self, "runtime_identity") else {}
-        user = getattr(self.comm_context, "user", None)
-        actor = getattr(self.comm_context, "actor", None)
-        user_id = str(getattr(user, "user_id", None) or getattr(actor, "user_id", None) or "")
-        return EconomicsSubject(
-            tenant=str((ident or {}).get("tenant") or ""),
-            project=str((ident or {}).get("project") or ""),
-            user_id=user_id,
-            user_type=str(getattr(user, "user_type", None) or "registered"),
-        )
+        return economics_search_subject(self)
 
     def search_semantic_guard(self, *, flow: str):
         """Legacy async `semantic_guard` for components that still expose a
@@ -3559,7 +3533,7 @@ class MemoryEntrypointMixin:
         if not self._memory_economics_enabled():
             return None
         try:
-            from kdcube_ai_app.apps.chat.sdk.infra.economics.search_guard import make_semantic_search_guard
+            from kdcube_ai_app.apps.chat.sdk.solutions.search_service import make_semantic_search_guard
 
             subject = self._economics_search_subject()
             if not (subject.tenant and subject.project and subject.user_id and subject.user_id != "anonymous"):
@@ -3573,30 +3547,17 @@ class MemoryEntrypointMixin:
     def search_model_service(self, *, flow: str):
         """Model-service facade for searchable components.
 
-        Components receive this single dependency. Query embeddings are guarded
-        and settled by the facade; document embeddings use the underlying model
-        service and its normal accounting path.
-        """
-        if not self._memory_economics_enabled():
-            return getattr(self, "models_service", None)
-        try:
-            from kdcube_ai_app.apps.chat.sdk.infra.economics.search_guard import EconomicSearchModelService
+        Components receive this single dependency. Query and document embeddings
+        are guarded and settled by the facade; query callers may degrade to
+        lexical search, while index/write callers should let failures propagate.
 
-            subject = self._economics_search_subject()
-            if not (subject.tenant and subject.project and subject.user_id and subject.user_id != "anonymous"):
-                return getattr(self, "models_service", None)
-            provider, model = self._embedding_provider_model()
-            return EconomicSearchModelService(
-                entrypoint=self,
-                model_service=self.models_service,
-                subject=subject,
-                provider=provider,
-                model=model,
-                default_flow=flow,
-            )
-        except Exception:
-            logger.warning("[economics] search model service unavailable; embedding ungated", exc_info=True)
-            return getattr(self, "models_service", None)
+        Memory search uses the feature-neutral subject (matching its prior
+        behavior); the memory-specific subject only gates
+        `_memory_search_embed_or_downgrade`.
+        """
+        from kdcube_ai_app.apps.chat.sdk.solutions.search_service import make_search_model_service
+
+        return make_search_model_service(self, flow=flow)
 
     async def _memory_search_embed_or_downgrade(self, query: str) -> Optional[Sequence[float]]:
         """Embed the query for semantic ranking through the search model service.

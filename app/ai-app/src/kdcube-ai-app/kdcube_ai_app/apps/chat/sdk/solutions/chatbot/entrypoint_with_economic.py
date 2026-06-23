@@ -140,6 +140,26 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
         """
         return dict(DEFAULT_QUOTA_POLICIES)
 
+    # ------------------------------------------------------------------ #
+    # Economics-guarded embedding facade (feature-neutral).
+    #
+    # The build logic lives in solutions/search_service/ as plain
+    # functions over `entrypoint`. This base only exposes a one-line delegator
+    # so any economics entrypoint — memory, canvas, news, … — can call
+    # search_model_service() without touching feature-specific code.
+    # ------------------------------------------------------------------ #
+
+    def search_model_service(self, *, flow: str):
+        """Model-service facade for searchable components.
+
+        Components receive this single dependency. Query and document embeddings
+        are guarded and settled by the facade; query callers may degrade to
+        lexical search, while index/write callers should let failures propagate.
+        """
+        from kdcube_ai_app.apps.chat.sdk.solutions.search_service import make_search_model_service
+
+        return make_search_model_service(self, flow=flow)
+
     async def execute_core(self, *, state: Dict[str, Any], thread_id: str, params: Dict[str, Any]):
         raise NotImplementedError("execute_core() must be implemented by subclasses")
 
