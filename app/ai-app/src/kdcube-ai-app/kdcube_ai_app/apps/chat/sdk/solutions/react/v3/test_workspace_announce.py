@@ -70,8 +70,8 @@ def test_build_announce_text_includes_git_workspace_summary(tmp_path):
     assert "current_turn_root: turn_123/" in announce_text
     # LOCAL material tree: current root is writable, pulled prior root is read-only
     assert "materialized on disk THIS turn." in announce_text
-    assert "turn_123/" in announce_text and "WRITABLE" in announce_text
-    assert "turn_122/" in announce_text and "READ-ONLY" in announce_text
+    assert "turn_123/" in announce_text and "writable" in announce_text
+    assert "turn_122/" in announce_text and "read-only" in announce_text
     # checkout provenance is shown on the current project
     assert "checked out from fi:turn_122.files/projectA" in announce_text
     # REMOTE: one latest-committed-turn anchor builds every pull/checkout ref
@@ -155,13 +155,13 @@ def test_build_announce_text_renders_empty_current_turn_namespaces(tmp_path):
     assert "Timeline fi: refs that are not listed here are hosted/unhydrated" in announce_text
     assert "use react.pull to hydrate them before local-byte tools" in announce_text
     assert "react.read may inspect provider-rendered text" in announce_text
-    assert "turn_123/   (current turn · WRITABLE)" in announce_text
-    assert "    files/" in announce_text
-    assert "    outputs/" in announce_text
-    assert "    attachments/" in announce_text
-    assert "    external/" in announce_text
-    assert "    snapshots/" in announce_text
-    assert announce_text.count("      (empty)") >= 5
+    assert "turn_123/   (current turn · writable)" in announce_text
+    assert "    files/ (empty)" in announce_text
+    assert "    outputs/ (empty)" in announce_text
+    assert "    attachments/ (empty)" in announce_text
+    assert "    external/ (empty)" in announce_text
+    assert "    snapshots/ (empty)" in announce_text
+    assert "      (empty)" not in announce_text
     assert "(no materialized files in the artifact workdir yet)" not in announce_text
 
 

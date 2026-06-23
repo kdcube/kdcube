@@ -803,8 +803,7 @@ def build_announce_workspace_lines(
         children = _direct_children(files_root)
         if not children:
             if show_empty:
-                out.append("    files/")
-                out.append("      (empty)")
+                out.append("    files/ (empty)")
             return
         out.append("    files/")
         for child in children:
@@ -833,14 +832,12 @@ def build_announce_workspace_lines(
             return
         if not ns_path.is_dir():
             if show_empty:
-                out.append(f"    {name}/")
-                out.append("      (empty)")
+                out.append(f"    {name}/ (empty)")
             return
         files, total = _rel_files(ns_path)
         if not files:
             if show_empty:
-                out.append(f"    {name}/")
-                out.append("      (empty)")
+                out.append(f"    {name}/ (empty)")
             return
         out.append(f"    {name}/")
         for rel in files:
@@ -876,9 +873,9 @@ def build_announce_workspace_lines(
         is_current = bool(turn_id and name == turn_id)
         is_turn_root = name in set(roots)
         if is_current:
-            label = "current turn \u00b7 WRITABLE"
+            label = "current turn \u00b7 writable"
         elif is_turn_root:
-            label = "pulled reference \u00b7 READ-ONLY \u2014 checkout into the current turn to write"
+            label = "pulled reference \u00b7 read-only \u2014 checkout into the current turn to write"
         else:
             label = "local workdir entry"
         if not entry.is_dir() and not is_current:
