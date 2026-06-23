@@ -15,6 +15,13 @@ keywords:
     "accounting.usage",
     "make_search_model_service",
     "search flow",
+    "headless config",
+    "scheduled job",
+    "databus runtime",
+    "embedder provider api key",
+    "401 unauthorized",
+    "resolve_config_request_secrets",
+    "AuthContext",
   ]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-subsystem-integration-README.md
@@ -108,6 +115,57 @@ still work but are **ungated** (no enforcement, no usage event) — when:
 So enforcement requires economics enabled **and** a real subject. If you need a
 hard guarantee that a path is metered, assert the returned service is an
 `EconomicSearchModelService`, or fail closed on an anonymous subject yourself.
+
+## Runtime requirements
+
+The facade only **guards and meters** when the runtime gives it what it needs.
+The hosting entrypoint/runtime must satisfy all of:
+
+| Requirement | Why | Source |
+| --- | --- | --- |
+| Entrypoint extends `BaseEntrypointWithEconomics` (or a memory variant) | exposes `search_model_service(...)` | base class |
+| Economics wired: `cp_manager`, `rl`, `budget_limiter` on the entrypoint | `economics_enabled(...)` gates the guard | economics base |
+| Non-anonymous subject: tenant + project + user | the spend must be charged to someone | `runtime_identity()` + `comm_context` |
+| Embedder provider **with a resolved API key** on `models_service` | the embedding HTTP call needs the credential | bundle config/secrets → `ModelServiceBase(config)` |
+| Accounting storage initialized | so `accounting.usage` can be stored | platform / bundle |
+
+If economics is off or the subject is anonymous, the facade falls back to raw
+`models_service` (see [The fallback](#the-fallback-read-this)). But the **embedder
+key requirement is absolute** — without it the embedding call itself fails with
+`401 Unauthorized`, guarded or not.
+
+### Headless contexts: scheduled jobs and the databus runtime
+
+This is the sharp edge. In an HTTP request the entrypoint's `config` is populated
+inline (session/request), so `models_service` already holds the provider key and
+`comm_context` carries the user. **Outside a request — a scheduled job
+(`@on_job`/cron) or a databus event handler — neither is true unless the runtime
+establishes it.** A headless entrypoint built from a bare `Config()` has **no
+provider key**, so `embed_texts` returns `401 Unauthorized`: search silently
+degrades to lexical while indexing fails loud — the classic *"search works but
+indexing fails"* symptom.
+
+Before building the entrypoint for headless work, the runtime must:
+
+1. **Resolve provider secrets into the config** so `ModelServiceBase` gets the key:
+   ```python
+   cfg_req = ConfigRequest(agentic_bundle_id=bundle_id, tenant=tenant, project=project)
+   cfg_req = await resolve_config_request_secrets(cfg_req, bundle_id=bundle_id)
+   config = create_workflow_config(cfg_req)   # config now carries the embedder key
+   # entrypoint(config) → _rebuild_models_service() → ModelServiceBase(config) has the key
+   ```
+2. **Bind an auth context** so the subject resolves off-request:
+   ```python
+   auth = AuthContext.for_bundle_job(tenant=…, project=…, bundle_id=…, job_alias=…, source="bundle_scheduler")
+   with bind_auth_context(auth), bind_current_bundle_id(bundle_id):
+       instance = await get_workflow_instance_async(…)
+   ```
+
+This is what the bundle scheduler now does — see `sdk/runtime/bundle_scheduler.py`
+(`_make_headless_config` + the auth-context bind) and the databus worker
+(`AuthContext.from_mapping(...)`). Any new scheduled/databus path that embeds must
+replicate **both** steps or it will 401. (Fixed in `28930a80`, which replaced a
+bare `Config()` with `resolve_config_request_secrets` + `create_workflow_config`.)
 
 ## Flow naming
 
