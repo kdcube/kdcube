@@ -1,47 +1,69 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.6.24.210"
+  ref: "2026.6.25.255"
   description: |
-    This release follows 2026.6.23.2230 with a targeted deployment startup
-    fix for ECS/chat-proc environments that use the shared managed app cache.
+    This release follows 2026.6.24.210 with fixes around ReAct event handling,
+    embedded chat surfaces, and generic canvas named-service integration.
 
-    The issue observed in staging was that a newly started `chat-proc` task
-    could be marked RUNNING while the container entrypoint was still blocked on
-    a recursive ownership repair of `/bundles/.managed-bundles`. Because that
-    directory is backed by shared storage and may contain many managed app
-    checkouts, `chown -R` can delay the HTTP server from binding to port 8020.
-    During that window the proxy can route to a task that exists but is not yet
-    listening, producing transient widget/API 502s.
+    The main functional change is that canvas boards are now usable through the
+    same named-service interface that ReAct agents use for other external
+    object realms. The `cnv` provider exposes board discovery through
+    `object.list`, distinguishes board discovery from semantic card search, and
+    rejects malformed canvas refs that look like storage ids with separators
+    rewritten. Direct ReAct/named-service canvas mutations now also broadcast
+    the same live `canvas.patch` update envelope as Data Bus-originated UI
+    mutations, so an already-open pinboard updates without requiring a page
+    refresh.
+
+    This release also tightens ReAct runtime/event behavior around interrupted
+    or failed turns. Event-lane cleanup now releases active consumers on turn
+    failure, follow-up recovery remains possible after provider quota errors,
+    and chat step rendering shows the decision/action/tool-result sequence more
+    clearly without hiding useful underlying model errors during debugging.
 
     Highlights
 
-    - Avoids recursive managed app-cache ownership repair during normal
-      container startup.
-    - Keeps shallow ownership repair of the managed app-cache root so the
-      runtime can create new managed app entries.
-    - Adds an explicit opt-in escape hatch:
-      `CHOWN_MANAGED_BUNDLES_RECURSIVE=1`.
-    - Applies the same startup behavior to both deployment entrypoints:
-      `custom-ui-managed-infra` and `all_in_one_kdcube`.
+    - Adds canonical `cnv` board discovery through named-service
+      `object.list`.
+    - Clarifies that `named_services.search_objects` is content/semantic
+      search, not board/container discovery.
+    - Prevents ReAct from creating accidental canvas boards from synthesized
+      refs such as `cnv:<user>_<board>`.
+    - Broadcasts live canvas updates for direct named-service canvas mutations
+      using the existing `kdcube.data_bus.result` / `canvas.patch` envelope.
+    - Keeps Data Bus-originated canvas patches single-emission so UI edits do
+      not double-update subscribers.
+    - Fixes browser back handling for expanded embedded chat in scene-hosted
+      pages.
+    - Cleans up ReAct external-event lane ownership after turn errors so later
+      turns can start normally.
 
     Operational impact
 
-    - Fresh ECS tasks should start the processor without being delayed by a
-      full walk of the managed app cache.
-    - Existing environments that genuinely need one-time recursive ownership
-      repair can set `CHOWN_MANAGED_BUNDLES_RECURSIVE=1` for that maintenance
-      run, then remove it.
-    - This platform image change complements the deployment-side readiness
-      work for `chat-proc` health checks; deployments should still use task
-      health checks so service discovery does not route to non-ready tasks.
+    - App configs that expose the canvas namespace to ReAct should include
+      `object.list` in `cnv.allowed`; the versatile template now does this.
+    - Existing pinboard and scene clients do not need a new protocol for live
+      ReAct canvas edits because the backend emits the already-supported
+      canvas patch event shape.
+    - Canvas board refs returned by list/read/pull should be reused exactly.
+      Storage metadata such as `canvas_id` is no longer a valid source for
+      inventing board object refs.
+    - Failed ReAct turns caused by provider-side limits should no longer leave
+      the external-event lane stuck on the failed turn.
 
     Changelog
 
-    - Changed Docker entrypoints to shallow-chown `MANAGED_BUNDLES_ROOT` by
-      default.
-    - Added `CHOWN_MANAGED_BUNDLES_RECURSIVE=1` opt-in for recursive managed
-      app-cache ownership repair.
-    - Documented why recursive repair is unsafe as a default startup path on
-      shared managed app storage.
+    - Added canvas named-service board listing and canonical board-list result
+      normalization.
+    - Added canvas named-service target validation for malformed or conflicting
+      board refs.
+    - Added live canvas patch broadcasting for direct named-service updates and
+      suppression for Data Bus-originated patches.
+    - Updated ReAct canvas instructions and named-service tool descriptions to
+      distinguish discovery from semantic object search.
+    - Added regression tests for canvas board listing, malformed ref rejection,
+      live named-service update broadcast, and Data Bus suppression.
+    - Fixed embedded chat back-navigation regression in scene-hosted pages.
+    - Hardened ReAct/event-lane cleanup after graph/runtime errors.
 config:
-  version: "2026.6.24.210"
+  version: "2026.6.25.255"
