@@ -26,8 +26,8 @@ From the Economics dashboard you can:
 - Create and manage subscription plans (plan_id → price mapping)
 - Create subscriptions (internal or Stripe)
 - Look up subscription status and balances
-- Manually top up subscription balances
-- Manually renew internal subscriptions (top up + advance next charge)
+- Manually top up external (Stripe) subscription balances
+- Reset an internal plan's quota windows (month + day + hour)
 - Reap expired subscription reservations (single user or all users in project)
 - Sweep expired subscription periods (rollover to project budget)
 - Top up the project budget
@@ -150,7 +150,7 @@ the Stripe subscription first, then grant internal.
 UI card: **Lookup Subscription (by user)**
 
 - Shows subscription metadata and current period balance.
-- Displays a Renew now button for internal subscriptions.
+- Displays a Reset quota button for internal subscriptions.
 
 Backend: `GET /subscriptions/user/{user_id}`
 
@@ -170,27 +170,30 @@ Backend:
 
 Note: chat requests use the runtime `turn_id` as `request_id`; non-chat top-level flows use their own stable accountable request id.
 
-### Renew internal subscription
+### Reset internal quota
 
-UI button: **Renew now** (visible only for internal active subscriptions)
+UI button: **Reset quota** (visible for internal active subscriptions)
 
-- Tops up the subscription period balance.
-- Advances `next_charge_at`.
+- Re-anchors the monthly and daily windows to now and clears the hour buckets.
+- All rolling request/token counters (month, day, hour) start fresh.
 
-Backend: `POST /subscriptions/internal/renew-once`
+Backend: `POST /subscriptions/internal/reset-quota`
+
+Internal plans carry no plan budget. They draw from the project budget bounded by their quota; their allowance is the rolling RL quota.
 
 ### Manual subscription balance top‑up
 
 UI card: **Subscription Balance Admin**
 
-- Manually adds USD to the current subscription period budget.
+- Adds USD to the current subscription period budget.
 - Optional Force topup allows multiple topups within the same period.
+- Applies only to external (Stripe) subscriptions. Internal subscriptions return `400` (use Reset quota).
 
 Backend: `POST /subscriptions/budget/topup`
 
-Note: Manual top‑ups do not advance billing dates. Use Renew now for internal billing cycles.
+Note: Manual top‑ups do not advance billing dates.
 
-Subscriptions do not support overdraft. Any shortfall beyond subscription + wallet is absorbed by the project budget (shortfall note in the ledger).
+External subscription budgets do not support overdraft. Any shortfall beyond subscription + wallet is absorbed by the project budget (shortfall note in the ledger).
 
 ### Sweep expired subscription periods
 

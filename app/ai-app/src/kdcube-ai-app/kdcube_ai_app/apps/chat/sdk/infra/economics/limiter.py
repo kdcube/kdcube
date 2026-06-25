@@ -1824,6 +1824,61 @@ class UserEconomicsRateLimiter:
         period_key = period_start.strftime("%Y%m%d%H%M")
         return period_start, period_end, period_key
 
+    async def reset_quota_windows(
+            self,
+            *,
+            bundle_id: str,
+            subject_id: str,
+            now: Optional[datetime] = None,
+    ) -> dict:
+        """Reset a user's rolling quota windows (month + day + hour) to a fresh start.
+
+        Re-anchors the monthly and daily windows to `now` (new period keys yield zeroed
+        reqs/toks counters and their reservation counterparts) and clears the rolling
+        hour token buckets. Overwrites the Redis anchors and, for the month, its durable
+        mirror. Returns the new month and day period descriptors.
+        """
+        now = now or datetime.utcnow().replace(tzinfo=timezone.utc)
+        now_ts = int(now.timestamp())
+
+        # Month: re-anchor (Redis + durable mirror).
+        month_anchor_key = _k(self.ns, bundle_id, subject_id, "month_anchor")
+        await self.r.set(month_anchor_key, now_ts)
+        if self.rl_anchor_store is not None:
+            try:
+                await self.rl_anchor_store.save(subject_id, now)
+            except Exception:
+                pass
+
+        # Day: re-anchor with the same 24h TTL the rolling-day helper uses.
+        day_anchor_key = _k(self.ns, bundle_id, subject_id, "day_anchor")
+        await self.r.set(day_anchor_key, now_ts)
+        try:
+            await self.r.expireat(day_anchor_key, now_ts + 24 * 60 * 60)
+        except Exception:
+            pass
+
+        # Hour: clear the rolling 60-minute token buckets (keyed by absolute minute,
+        # no anchor) so the summed hour usage reads zero.
+        bucket_prefix = _k(self.ns, bundle_id, subject_id, "toks:hour:bucket")
+        min_now = now_ts // 60
+        bucket_keys = [f"{bucket_prefix}:{m}" for m in range(min_now - 59, min_now + 1)]
+        try:
+            await self.r.delete(*bucket_keys)
+        except Exception:
+            pass
+
+        m_start, m_end, m_key = await self._rolling_month_period(
+            bundle_id=bundle_id, subject_id=subject_id, now=now, create_if_missing=True,
+        )
+        d_start, d_end, d_key = await self._rolling_day_period(
+            bundle_id=bundle_id, subject_id=subject_id, now=now, create_if_missing=True,
+        )
+        return {
+            "month_period_key": m_key, "month_period_start": m_start, "month_period_end": m_end,
+            "day_period_key": d_key, "day_period_start": d_start, "day_period_end": d_end,
+        }
+
     async def release_token_reservation(
             self,
             *,

@@ -821,7 +821,6 @@ SELECT
     date_trunc('month', created_at) AS month,
     CASE
         WHEN note LIKE 'shortfall:wallet_subscription%' THEN 'wallet_subscription'
-        WHEN note LIKE 'shortfall:wallet_paid%' THEN 'wallet_paid'
         WHEN note LIKE 'shortfall:wallet_plan%' THEN 'wallet_plan'
         WHEN note LIKE 'shortfall:subscription_overage%' THEN 'subscription_overage'
         WHEN note LIKE 'shortfall:free_plan%' THEN 'free_plan'
@@ -843,7 +842,6 @@ SELECT
     date_trunc('month', created_at) AS month,
     CASE
         WHEN note LIKE 'shortfall:wallet_subscription%' THEN 'wallet_subscription'
-        WHEN note LIKE 'shortfall:wallet_paid%' THEN 'wallet_paid'
         WHEN note LIKE 'shortfall:wallet_plan%' THEN 'wallet_plan'
         WHEN note LIKE 'shortfall:subscription_overage%' THEN 'subscription_overage'
         WHEN note LIKE 'shortfall:free_plan%' THEN 'free_plan'

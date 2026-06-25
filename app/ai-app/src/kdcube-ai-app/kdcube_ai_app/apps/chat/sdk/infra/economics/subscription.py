@@ -124,17 +124,6 @@ class SubscriptionPlan:
     notes: Optional[str]
 
 
-@dataclass(frozen=True)
-class InternalRenewOnceResult:
-    status: str            # "ok" | "error"
-    action: str            # "applied" | "duplicate"
-    message: str
-    external_id: str
-    user_id: str
-    usd_amount: float
-    charged_at: datetime
-
-
 class RLMonthAnchorStore:
     """
     Durable mirror of the RL monthly-window anchor.
@@ -194,6 +183,26 @@ class RLMonthAnchorStore:
         except Exception:
             # Non-fatal: the Redis anchor is still authoritative this period; we
             # just lose the durable mirror until the next write.
+            return
+
+    async def save(self, subject_id: str, anchor_at: datetime) -> None:
+        """Overwrite the durable monthly-window anchor unconditionally (re-anchor)."""
+        ident = self._split_subject(subject_id)
+        if not ident:
+            return
+        tenant, project, user_id = ident
+        if anchor_at.tzinfo is None:
+            anchor_at = anchor_at.replace(tzinfo=timezone.utc)
+        schema = _project_schema(tenant, project)
+        sql = (
+            f"UPDATE {schema}.{self.TABLE} "
+            f"SET rl_month_anchor_at=$4 "
+            f"WHERE tenant=$1 AND project=$2 AND user_id=$3"
+        )
+        try:
+            async with self.pg_pool.acquire() as c:
+                await c.execute(sql, tenant, project, user_id, anchor_at)
+        except Exception:
             return
 
 
@@ -426,7 +435,7 @@ class SubscriptionManager:
             NOT MODIFY it. A non-active stripe row (canceled/past_due/...) may be
             overridden onto an internal plan.
           - Otherwise, ensure/refresh an internal row.
-          - Internal paid/premium ARE scheduled via next_charge_at.
+          - Internal plans carry no charge schedule: next_charge_at is always NULL.
         """
         now = now or _now()
         plan = await self.get_plan(tenant=tenant, project=project, plan_id=plan_id, conn=conn)
@@ -449,10 +458,7 @@ class SubscriptionManager:
           $1,$2,$3,
           $4,'active',$5,
           $6::timestamptz,
-          CASE
-            WHEN $5 > 0 THEN ($6::timestamptz + interval '1 month')
-            ELSE NULL
-          END,
+          NULL,
           NULL,
           'internal', NULL, NULL
         )
@@ -465,16 +471,7 @@ class SubscriptionManager:
           -- keep started_at stable
           started_at = {tbl}.started_at,
 
-          -- schedule only if chargeable
-          next_charge_at = CASE
-            WHEN EXCLUDED.monthly_price_cents > 0 THEN
-              COALESCE(
-                {tbl}.next_charge_at,
-                ({tbl}.last_charged_at + interval '1 month'),
-                ($6::timestamptz + interval '1 month')
-              )
-            ELSE NULL
-          END,
+          next_charge_at = NULL,
 
           provider = 'internal',
 
@@ -524,8 +521,7 @@ class SubscriptionManager:
         Differs from `ensure_subscription_for_user`:
           - The plan MUST be internal and zero-cost (monthly_price_cents == 0);
             baseline plans are never chargeable.
-          - It carries a monthly ZERO-COST period: next_charge_at is scheduled
-            one month out even though price is 0 (the renewal sweep rolls it).
+          - It carries no charge schedule: next_charge_at is NULL.
           - It NEVER clobbers an existing row. If the user already has any
             subscription (a paid catalog plan, a stripe row, or an existing
             baseline), it is left untouched and returned as-is.
@@ -541,7 +537,7 @@ class SubscriptionManager:
 
         tbl = f"{self._schema(tenant, project)}.{self.TABLE}"
 
-        # Insert a zero-cost internal row with a scheduled monthly period.
+        # Insert a zero-cost internal row with no charge schedule (next_charge_at NULL).
         # ON CONFLICT DO NOTHING: never touch an existing row (paid/stripe/baseline).
         sql = f"""
         INSERT INTO {tbl} (
@@ -553,7 +549,7 @@ class SubscriptionManager:
           $1,$2,$3,
           $4,'active',0,
           $5::timestamptz,
-          ($5::timestamptz + interval '1 month'),
+          NULL,
           $5::timestamptz,
           'internal', NULL, NULL
         )
@@ -788,33 +784,6 @@ class SubscriptionManager:
 
         return [self._from_row(r) for r in rows]
 
-    async def mark_internal_charge(
-            self,
-            *,
-            tenant: str,
-            project: str,
-            user_id: str,
-            charged_at: Optional[datetime],
-            next_charge_at: Optional[datetime],
-            conn: Optional[asyncpg.Connection] = None,
-    ) -> Subscription:
-        charged_at = charged_at or _now()
-        sql = f"""
-        UPDATE {self._schema(tenant, project)}.{self.TABLE}
-        SET last_charged_at=$4, next_charge_at=$5, updated_at=NOW()
-        WHERE tenant=$1 AND project=$2 AND user_id=$3
-        RETURNING *
-        """
-        if conn:
-            row = await conn.fetchrow(sql, tenant, project, user_id, charged_at, next_charge_at)
-        else:
-            async with self.pg_pool.acquire() as c:
-                row = await c.fetchrow(sql, tenant, project, user_id, charged_at, next_charge_at)
-        if not row:
-            raise ValueError(f"subscription not found: {tenant}/{project}/{user_id}")
-        return self._from_row(row)
-
-
     # ---------------- internal idempotency (no SQL in routes) ----------------
 
     async def _lock_or_create_internal_event(
@@ -956,7 +925,11 @@ class SubscriptionManager:
             actor: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Sweep unused subscription balances for subscriptions whose next_charge_at <= now.
+        Sweep unused balances for EXTERNAL subscriptions whose next_charge_at <= now.
+
+        Internal plans carry no plan budget and are never scheduled (next_charge_at is
+        NULL), so they are excluded both by the schedule predicate and explicitly by
+        provider.
         """
         now = now or _now()
         tbl = f"{self._schema(tenant, project)}.{self.TABLE}"
@@ -966,6 +939,7 @@ class SubscriptionManager:
                 SELECT *
                 FROM {tbl}
                 WHERE tenant=$1 AND project=$2
+                  AND provider != 'internal'
                   AND status IN ('active', 'past_due', 'unpaid')
                   AND monthly_price_cents > 0
                   AND next_charge_at IS NOT NULL
@@ -1023,179 +997,3 @@ class SubscriptionManager:
             processed += 1
 
         return {"status": "ok", "count": processed, "moved_usd": moved_total}
-
-    async def renew_internal_subscription_once(
-            self,
-            *,
-            tenant: str,
-            project: str,
-            user_id: str,
-            subscription_budget: Optional[SubscriptionBudgetLimiter] = None,
-            charged_at: Optional[datetime] = None,
-            idempotency_key: Optional[str] = None,
-            actor: Optional[str] = None,
-            conn: Optional[asyncpg.Connection] = None,
-    ) -> InternalRenewOnceResult:
-        """
-        One-shot manual renewal for INTERNAL subscriptions:
-          - idempotent via external_economics_events (source='internal', kind='subscription_topup')
-          - tops up user subscription balance
-          - marks last_charged_at and advances next_charge_at by one month
-        """
-        charged_at = charged_at or _now()
-        next_due = _add_one_month(charged_at)
-        ym = charged_at.strftime("%Y-%m")
-
-        async def _run(c: asyncpg.Connection) -> InternalRenewOnceResult:
-            sub = await self.get_subscription(tenant=tenant, project=project, user_id=user_id, conn=c)
-            if not sub:
-                raise ValueError("subscription not found")
-            if sub.provider != "internal":
-                raise ValueError("not an internal subscription")
-            if sub.status != "active":
-                raise ValueError("subscription not active")
-            if int(sub.monthly_price_cents or 0) <= 0:
-                raise ValueError("monthly_price_cents is 0; nothing to charge")
-
-            prev_desc = build_subscription_period_descriptor(
-                tenant=tenant,
-                project=project,
-                user_id=user_id,
-                provider=sub.provider,
-                stripe_subscription_id=sub.stripe_subscription_id,
-                period_end=sub.next_charge_at,
-                period_start=sub.last_charged_at,
-                fallback_charged_at=charged_at,
-            )
-            period_key_prev = prev_desc["period_key"]
-            period_end_prev = prev_desc["period_end"]
-
-            new_desc = build_subscription_period_descriptor(
-                tenant=tenant,
-                project=project,
-                user_id=user_id,
-                provider=sub.provider,
-                stripe_subscription_id=sub.stripe_subscription_id,
-                period_end=next_due,
-                period_start=charged_at,
-            )
-            period_key_new = new_desc["period_key"]
-            period_start_new = new_desc["period_start"]
-            period_end_new = new_desc["period_end"]
-
-            external_id = idempotency_key or f"internal:renew:{tenant}:{project}:{user_id}:{period_key_new}"
-
-            status, was_created = await self._lock_or_create_internal_event(
-                conn=c,
-                kind="subscription_topup",
-                external_id=external_id,
-                tenant=tenant,
-                project=project,
-                user_id=user_id,
-                amount_cents=int(sub.monthly_price_cents),
-                metadata={
-                    "plan_id": sub.plan_id,
-                    "by": actor or "unknown",
-                    "period_end": period_end_new.isoformat(),
-                },
-            )
-            if status == "applied":
-                return InternalRenewOnceResult(
-                    status="ok",
-                    action="duplicate",
-                    message="Already applied (idempotent)",
-                    external_id=external_id,
-                    user_id=user_id,
-                    usd_amount=float(int(sub.monthly_price_cents) / 100.0),
-                    charged_at=charged_at,
-                )
-            
-            if not was_created and status == "pending":
-                return InternalRenewOnceResult(
-                    status="ok",
-                    action="duplicate",
-                    message="Already pending (idempotent)",
-                    external_id=external_id,
-                    user_id=user_id,
-                    usd_amount=float(int(sub.monthly_price_cents) / 100.0),
-                    charged_at=charged_at,
-                )
-
-            usd_amount = float(int(sub.monthly_price_cents) / 100.0)
-
-            try:
-                period_key = period_key_prev
-                project_budget = ProjectBudgetLimiter(redis=None, pg_pool=self.pg_pool, tenant=tenant, project=project)
-
-                await self.rollover_unused_balance_once(
-                    tenant=tenant,
-                    project=project,
-                    user_id=user_id,
-                    subscription_budget=SubscriptionBudgetLimiter(
-                        pg_pool=self.pg_pool,
-                        tenant=tenant,
-                        project=project,
-                        user_id=user_id,
-                        period_key=period_key_prev,
-                        period_start=prev_desc["period_start"],
-                        period_end=period_end_prev,
-                    ),
-                    project_budget=project_budget,
-                    period_key=period_key,
-                    period_end=period_end_prev,
-                    actor=actor,
-                    conn=c,
-                )
-
-                budget = subscription_budget
-                if not budget or budget.period_key != period_key_new:
-                    budget = SubscriptionBudgetLimiter(
-                        pg_pool=self.pg_pool,
-                        tenant=tenant,
-                        project=project,
-                        user_id=user_id,
-                        period_key=period_key_new,
-                        period_start=period_start_new,
-                        period_end=period_end_new,
-                    )
-
-                await budget.topup_subscription_budget(
-                    usd_amount=usd_amount,
-                    notes=f"internal subscription renewal user_id={user_id}",
-                    request_id=f"internal:renew:{external_id}",
-                    conn=c,
-                )
-
-                # no scheduling => next_charge_at stays NULL
-                await self.mark_internal_charge(
-                    tenant=tenant,
-                    project=project,
-                    user_id=user_id,
-                    charged_at=charged_at,
-                    next_charge_at=next_due,
-                    conn=c,
-                )
-
-                await self._mark_internal_event_applied(c, tenant=tenant, project=project, kind="subscription_topup", external_id=external_id)
-            except Exception as e:
-                # NOTE: if transaction rolls back, this "failed" mark also rolls back (same pattern as Stripe handler).
-                # That’s acceptable for now: next attempt will re-run since status remains pending/not-applied.
-                await self._mark_internal_event_failed(c, tenant=tenant, project=project, kind="subscription_topup", external_id=external_id, error=str(e))
-                raise
-
-            return InternalRenewOnceResult(
-                status="ok",
-                action="applied",
-                message=f"Renewed internal subscription and topped up subscription balance: +${usd_amount:.2f}",
-                external_id=external_id,
-                user_id=user_id,
-                usd_amount=usd_amount,
-                charged_at=charged_at,
-            )
-
-        if conn:
-            return await _run(conn)
-
-        async with self.pg_pool.acquire() as c:
-            async with c.transaction():
-                return await _run(c)

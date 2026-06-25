@@ -91,7 +91,6 @@ Use this to confirm when project budget absorbed **wallet/plan shortfalls**.
 Report fields:
 - **Total absorbed**
 - **Subscription shortfall** (`shortfall:wallet_subscription`)
-- **Wallet paid shortfall** (`shortfall:wallet_paid`)
 - **Wallet plan shortfall** (`shortfall:wallet_plan`)
 - **Subscription overage** (`shortfall:subscription_overage`)
 - **Free plan overage** (`shortfall:free_plan`)
@@ -162,19 +161,29 @@ Use this to confirm:
    - Absorption report shows `shortfall:wallet_plan`.
    - Request lineage shows project + wallet split.
 
-### Test C — Subscription only (20 min)
+### Test C — External subscription only (20 min)
 
-1. Create an internal subscription plan (e.g., `beta-30`) and activate for a user.
-2. Top up the period.
+1. Create an external (Stripe) subscription and activate for a user.
+2. Fund the period (Stripe webhook, or **Subscription Balance Admin** top‑up).
 3. Run requests.
 4. Verify:
    - Subscription balance decreases.
    - No wallet or project budget usage.
    - Absorption report remains empty.
 
-### Test D — Subscription + Wallet (20 min)
+### Test C2 — Internal plan (project by quota) (15 min)
 
-1. Give a subscribed user some wallet credits.
+1. Create an internal subscription (e.g., `beta-30`) and activate for a user.
+2. Run requests.
+3. Verify:
+   - No subscription period budget is created or used.
+   - Project budget decreases, bounded by the plan quota.
+   - **Reset quota** re-anchors the month + day windows and clears hour buckets; all rolling counters start fresh.
+   - Top‑up on this user returns `400` (internal has no balance).
+
+### Test D — External subscription + Wallet (20 min)
+
+1. Give an external subscriber some wallet credits.
 2. Drain subscription to near zero.
 3. Run a large request.
 4. Verify:

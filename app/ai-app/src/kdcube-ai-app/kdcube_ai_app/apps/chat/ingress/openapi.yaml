@@ -2182,17 +2182,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
-  /api/admin/control-plane/subscriptions/internal/renew-once:
+  /api/admin/control-plane/subscriptions/internal/reset-quota:
     post:
       tags:
       - CP admin
-      summary: Renew Internal Subscription Once
-      operationId: renew_internal_subscription_once_api_admin_control_plane_subscriptions_internal_renew_once_post
+      summary: Reset Internal Quota
+      operationId: reset_internal_quota_api_admin_control_plane_subscriptions_internal_reset_quota_post
       requestBody:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/InternalRenewOnceRequest'
+              $ref: '#/components/schemas/InternalQuotaResetRequest'
         required: true
       responses:
         '200':
@@ -4155,29 +4155,16 @@ components:
           title: Detail
       type: object
       title: HTTPValidationError
-    InternalRenewOnceRequest:
+    InternalQuotaResetRequest:
       properties:
         user_id:
           type: string
           title: User Id
-          description: User id to renew
-        charge_at:
-          anyOf:
-          - type: string
-            format: date-time
-          - type: 'null'
-          title: Charge At
-          description: Optional charge timestamp (default now UTC)
-        idempotency_key:
-          anyOf:
-          - type: string
-          - type: 'null'
-          title: Idempotency Key
-          description: Optional explicit idempotency key
+          description: User id whose internal-plan quota window to reset
       type: object
       required:
       - user_id
-      title: InternalRenewOnceRequest
+      title: InternalQuotaResetRequest
     RNContentRequest:
       properties:
         rn:

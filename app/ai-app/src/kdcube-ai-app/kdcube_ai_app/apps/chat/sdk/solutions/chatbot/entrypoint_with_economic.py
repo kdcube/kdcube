@@ -24,6 +24,7 @@ from kdcube_ai_app.apps.chat.sdk.infra.economics.defaults import DEFAULT_QUOTA_P
 from kdcube_ai_app.apps.chat.sdk.infra.economics.plan_resolution import (
     resolve_plan_id,
     subscription_is_active,
+    subscription_provides_plan_budget,
 )
 from kdcube_ai_app.apps.chat.sdk.config_scopes import economics_reservation_default
 from kdcube_ai_app.infra.plugin.bundle_loader import on_reactive_event
@@ -666,6 +667,11 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
         )
         sub_now = datetime.utcnow().replace(tzinfo=timezone.utc)
         has_active_subscription = subscription_is_active(subscription, sub_now)
+        # Only external subscriptions fund a separate guaranteed plan budget. Internal
+        # plans draw from the project budget bounded by quota, so they route through the
+        # project funding branch even though they are an active subscription for plan
+        # resolution (their plan_id still sets the quota).
+        funds_from_subscription = subscription_provides_plan_budget(subscription, sub_now)
         has_wallet = bool(user_budget_tokens and int(user_budget_tokens) > 0)
 
         plan_id, plan_source = resolve_plan_id(
@@ -753,7 +759,7 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
         subscription_balance_usd = 0.0
         subscription_period_key = None
 
-        if has_active_subscription and not budget_bypass:
+        if funds_from_subscription and not budget_bypass:
             from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription_budget import SubscriptionBudgetLimiter
             from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription import build_subscription_period_descriptor
             period_desc = build_subscription_period_descriptor(
@@ -810,13 +816,13 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
             plan_id=plan_id,
             plan_source=plan_source,
             has_wallet=has_wallet,
-            has_active_subscription=has_active_subscription,
+            has_active_subscription=funds_from_subscription,
         )
 
         project_budget = None
         project_available_usd = 0.0
         project_balance_usd = 0.0
-        if not budget_bypass and not has_active_subscription and project_budget_allowed:
+        if not budget_bypass and not funds_from_subscription and project_budget_allowed:
             project_budget = await self.budget_limiter.get_app_budget_balance()
             project_available_usd = float(project_budget.get("available_usd") or 0.0)
             project_balance_usd = float(project_budget.get("balance_usd") or 0.0)
@@ -836,7 +842,7 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
             funding_budget = project_budget
             funding_available_usd = float("inf")
             funding_balance_usd = float("inf")
-        elif has_active_subscription:
+        elif funds_from_subscription:
             funding_source = "subscription"
             funding_label = "subscription balance"
             funding_limiter = subscription_budget_limiter
@@ -924,10 +930,20 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                 used_plan_override=admit.used_plan_override,
                 needed_tokens=int(est_turn_tokens),
             )
+            _deny_event = "rate_limit.denied"
             if "wallet_insufficient" in str(admit.reason or ""):
-                _deny_code = "plan_exhausted_no_personal"
-                _deny_title = "Tier exhausted"
-                _deny_msg = "Plan quota/funds exhausted and personal credits cannot cover the remainder."
+                if (not budget_bypass) and funding_source in ("project", "subscription") and int(_primary_cap_tokens) == 0:
+                    # The primary budget is fully exhausted: its zero cap clamped want_resv
+                    # to 0, so the deny surfaces here at admit instead of at reserve_funding.
+                    # Emit the same primary-exhausted signal the reserve path would.
+                    _deny_code = f"{funding_source}_budget_reservation_failed_no_personal"
+                    _deny_title = f"Insufficient {funding_label}"
+                    _deny_msg = f"{funding_label.title()} exhausted and personal credits cannot cover the turn."
+                    _deny_event = "rate_limit.project_exhausted" if funding_source == "project" else "rate_limit.subscription_exhausted"
+                else:
+                    _deny_code = "plan_exhausted_no_personal"
+                    _deny_title = "Tier exhausted"
+                    _deny_msg = "Plan quota/funds exhausted and personal credits cannot cover the remainder."
             else:
                 _deny_code = "rate_limited"
                 _deny_title = "Rate limit exceeded"
@@ -936,12 +952,13 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                 code=_deny_code,
                 title=_deny_title,
                 message=_deny_msg,
-                event_type="rate_limit.denied",
+                event_type=_deny_event,
                 data={
                     "reason": admit.reason,
                     "bundle_id": bundle_id,
                     "subject_id": self.subj,
                     "user_type": user_type,
+                    "funding_source": funding_source,
                     "snapshot": admit.snapshot,
                     "rate_limit": payload,
                     "lane": "deny",

@@ -122,7 +122,6 @@ interface BudgetAbsorptionRow {
     group_key?: string | null;
     total_shortfall_usd: number;
     wallet_subscription_shortfall_usd: number;
-    wallet_paid_shortfall_usd: number;
     wallet_plan_shortfall_usd: number;
     subscription_overage_shortfall_usd: number;
     free_plan_shortfall_usd: number;
@@ -1070,21 +1069,13 @@ class EconomicsAPI {
         return response.json();
     }
 
-    async renewInternalSubscriptionOnce(payload: {
-        userId: string;
-        chargeAt?: string | null;
-        idempotencyKey?: string | null;
-    }): Promise<any> {
+    async resetInternalQuota(payload: { userId: string }): Promise<any> {
         const response = await this.fetchWithAuth(
-            this.getFullUrl('/subscriptions/internal/renew-once'),
+            this.getFullUrl('/subscriptions/internal/reset-quota'),
             {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    user_id: payload.userId,
-                    charge_at: payload.chargeAt ?? null,
-                    idempotency_key: payload.idempotencyKey ?? null,
-                }),
+                body: JSON.stringify({ user_id: payload.userId }),
             }
         );
         return response.json();
@@ -2394,7 +2385,18 @@ const EconomicsAdmin: React.FC = () => {
             setSubBudgetNotes('');
             setSubBudgetForceTopup(false);
         } catch (err) {
-            setError((err as Error).message);
+            // Internal plans have no balance to top up (backend returns 400). Surface the
+            // backend `detail` cleanly instead of the raw "API request failed: …" string.
+            const raw = (err as Error).message || 'Top-up failed';
+            let friendly = raw;
+            const m = raw.match(/\{[\s\S]*\}/);
+            if (m) {
+                try {
+                    const parsed = JSON.parse(m[0]);
+                    if (parsed?.detail) friendly = String(parsed.detail);
+                } catch { /* keep raw */ }
+            }
+            setError(friendly);
         } finally {
             setLoadingAction(false);
         }
@@ -4174,7 +4176,6 @@ const EconomicsAdmin: React.FC = () => {
                                                                     )}
                                                                     <th className="py-2 pr-4">Total absorbed</th>
                                                                     <th className="py-2 pr-4">Subscription shortfall</th>
-                                                                    <th className="py-2 pr-4">Wallet paid shortfall</th>
                                                                     <th className="py-2 pr-4">Wallet plan shortfall</th>
                                                                     <th className="py-2 pr-4">Subscription overage</th>
                                                                     <th className="py-2 pr-4">Free plan overage</th>
@@ -4190,7 +4191,6 @@ const EconomicsAdmin: React.FC = () => {
                                                                         )}
                                                                         <td className="py-2 pr-4">${row.total_shortfall_usd.toFixed(2)}</td>
                                                                         <td className="py-2 pr-4">${row.wallet_subscription_shortfall_usd.toFixed(2)}</td>
-                                                                        <td className="py-2 pr-4">${row.wallet_paid_shortfall_usd.toFixed(2)}</td>
                                                                         <td className="py-2 pr-4">${row.wallet_plan_shortfall_usd.toFixed(2)}</td>
                                                                         <td className="py-2 pr-4">${row.subscription_overage_shortfall_usd.toFixed(2)}</td>
                                                                         <td className="py-2 pr-4">${row.free_plan_shortfall_usd.toFixed(2)}</td>
@@ -4210,21 +4210,22 @@ const EconomicsAdmin: React.FC = () => {
                                                 />
                                                 <CardBody>
                                                     <pre className="text-xs leading-relaxed text-gray-700 bg-gray-50 border border-gray-200/70 rounded-xl p-4 whitespace-pre-wrap">
-{`PLAN LANE (subscription plan)
-subscription budget -> wallet overflow -> project shortfall
-if estimate too low: project shortfall (shortfall:subscription_overage)
+{`External (Stripe) subscription — primary: subscription budget
+subscription budget -> wallet overflow -> project absorbs
+actual over reserved: subscription headroom, then project (shortfall:subscription_overage)
+wallet short: project absorbs (shortfall:wallet_subscription)
 
-PLAN LANE (no subscription)
-project budget -> wallet overflow -> project shortfall
+Project-funded (free, internal subscription, registered) — primary: project budget
+project budget -> wallet overflow -> project absorbs
+uncovered: project absorbs (shortfall:wallet_plan with wallet, shortfall:free_plan without)
 
-PAID LANE
-wallet -> project shortfall
+Wallet is always overflow, never a primary source.
 
 Shortfall ledger notes:
+- shortfall:subscription_overage
 - shortfall:wallet_subscription
 - shortfall:wallet_plan
-- shortfall:wallet_paid
-- shortfall:subscription_overage`}
+- shortfall:free_plan`}
                                                     </pre>
                                                 </CardBody>
                                             </Card>
@@ -4820,11 +4821,10 @@ Shortfall ledger notes:
 
                                             {/* Internal ops */}
                                             {subscription.provider === 'internal' &&
-                                                subscription.status === 'active' &&
-                                                Number(subscription.monthly_price_cents || 0) > 0 && (
+                                                subscription.status === 'active' && (
                                                     <div className="pt-4 border-t border-gray-200/70 flex flex-wrap items-center justify-between gap-3">
                                                         <div className="text-xs text-gray-600">
-                                                            Manual billing: renew will top-up subscription balance and advance next due date.
+                                                            Internal plans draw from the project budget bounded by quota. Reset re-anchors the month + day windows and clears hour buckets so all rolling counters start fresh.
                                                         </div>
 
                                                         <Button
@@ -4835,8 +4835,8 @@ Shortfall ledger notes:
                                                                 clearMessages();
                                                                 setLoadingAction(true);
                                                                 try {
-                                                                    const res = await api.renewInternalSubscriptionOnce({ userId: subscription.user_id });
-                                                                    setSuccess(res.message || `Renewed ${subscription.user_id}`);
+                                                                    const res = await api.resetInternalQuota({ userId: subscription.user_id });
+                                                                    setSuccess(res.message || `Reset quota for ${subscription.user_id}`);
                                                                     // refresh displayed subscription
                                                                     const fresh = await api.getSubscription(subscription.user_id);
                                                                     setSubscription(fresh.subscription);
@@ -4848,7 +4848,7 @@ Shortfall ledger notes:
                                                                 }
                                                             }}
                                                         >
-                                                            {loadingAction ? 'Renewing…' : 'Renew now'}
+                                                            {loadingAction ? 'Resetting…' : 'Reset quota'}
                                                         </Button>
                                                     </div>
                                                 )}
@@ -4864,8 +4864,8 @@ Shortfall ledger notes:
                                 />
                                 <CardBody className="space-y-6">
                                     <div className="text-xs text-gray-600">
-                                        Manual top-ups do not advance billing dates. For internal subscriptions, prefer
-                                        “Renew now” in the lookup card to top up and advance next due date together.
+                                        Manual top-ups apply to external subscription balances. Internal plans have no
+                                        balance — use “Reset quota” in the lookup card to refresh their rolling quota windows.
                                     </div>
                                     <form onSubmit={handleTopupSubscriptionBudget} className="space-y-4">
                                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

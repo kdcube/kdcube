@@ -12,6 +12,8 @@ enforcement guard, the profile CLI, and the auth-hook role resolver):
   - subscription_is_active(): the "paid lane" predicate — a chargeable, active,
     not-past-due subscription. Free/admin baseline rows (price 0) are NOT active
     here by design: only a chargeable subscription flips a user onto the paid lane.
+  - subscription_provides_plan_budget(): True only for an active EXTERNAL subscription;
+    False for internal subscriptions and for no subscription.
   - resolve_plan_id(): maps a user's normalized role + subscription state onto the
     platform plan-id the runtime resolves them into.
 """
@@ -46,6 +48,16 @@ def subscription_is_active(subscription: Any, now: datetime) -> bool:
     if due_at is not None and due_at <= now:
         return False
     return True
+
+
+def subscription_provides_plan_budget(subscription: Any, now: datetime) -> bool:
+    """True if the subscription funds a separate plan budget, i.e. it is active and
+    its provider is external (anything other than 'internal').
+
+    `now` must be timezone-aware UTC (the caller's clock)."""
+    if not subscription_is_active(subscription, now):
+        return False
+    return (getattr(subscription, "provider", None) or "internal") != "internal"
 
 
 def resolve_plan_id(*, role: str, has_active_subscription: bool, subscription: Any) -> Tuple[str, str]:

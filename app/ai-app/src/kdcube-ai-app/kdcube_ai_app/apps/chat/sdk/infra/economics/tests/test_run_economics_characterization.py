@@ -65,12 +65,12 @@ class _PlanBalance:
 
 
 class _Sub:
-    def __init__(self, active: bool = True, plan_id: str = "payasyougo"):
+    def __init__(self, active: bool = True, plan_id: str = "payasyougo", provider: str = "internal"):
         self.status = "active" if active else "canceled"
         self.monthly_price_cents = 3000
         self.next_charge_at = None
         self.plan_id = plan_id
-        self.provider = "internal"
+        self.provider = provider
         self.stripe_subscription_id = None
         self.last_charged_at = None
 
@@ -457,8 +457,8 @@ async def test_characterize_project_exhausted_wallet_covers(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_characterize_subscription_funding(monkeypatch):
-    # active subscription -> funding_source=subscription; reserve+commit on the
-    # subscription budget, project untouched.
+    # active EXTERNAL subscription -> funding_source=subscription; reserve+commit on
+    # the subscription budget, project untouched.
     from kdcube_ai_app.apps.chat.sdk.infra.economics import subscription_budget as sub_budget_mod
     from kdcube_ai_app.apps.chat.sdk.infra.economics import subscription as sub_mod
     _SubBudget.instances = []
@@ -466,7 +466,7 @@ async def test_characterize_subscription_funding(monkeypatch):
     monkeypatch.setattr(sub_budget_mod, "SubscriptionBudgetLimiter", _SubBudget)
     monkeypatch.setattr(sub_mod, "build_subscription_period_descriptor",
                         lambda **kw: {"period_key": "pk", "period_start": None, "period_end": None})
-    ep = _make_ep(role="registered", wallet=0, sub=_Sub(active=True),
+    ep = _make_ep(role="registered", wallet=0, sub=_Sub(active=True, provider="stripe"),
                   budget=_Budget(overdraft=None), cost_usd=0.03, ranked_tokens=1000, monkeypatch=monkeypatch)
     await ep.run()
     sub_lim = _SubBudget.instances[-1]
@@ -476,6 +476,32 @@ async def test_characterize_subscription_funding(monkeypatch):
     assert ep.budget_limiter.committed == []
     assert [int(k.get("tokens") or 0) for k in ep.rl.commits] == [1000]
     assert [e.get("type") for e in ep._comm.events] == []
+
+
+@pytest.mark.asyncio
+async def test_characterize_internal_subscription_funds_from_project(monkeypatch):
+    # active INTERNAL subscription -> funding_source=project: no subscription budget is
+    # created; the turn reserves+commits on the project budget bounded by quota.
+    from kdcube_ai_app.apps.chat.sdk.infra.economics import subscription_budget as sub_budget_mod
+    from kdcube_ai_app.apps.chat.sdk.infra.economics import subscription as sub_mod
+    _SubBudget.instances = []
+    _SubBudget.available_usd = 10.0
+    monkeypatch.setattr(sub_budget_mod, "SubscriptionBudgetLimiter", _SubBudget)
+    monkeypatch.setattr(sub_mod, "build_subscription_period_descriptor",
+                        lambda **kw: {"period_key": "pk", "period_start": None, "period_end": None})
+    ep = _make_ep(role="registered", wallet=0, sub=_Sub(active=True, provider="internal"),
+                  budget=_Budget(overdraft=None),
+                  cost_usd=0.03, ranked_tokens=1000, monkeypatch=monkeypatch)
+    await ep.run()
+    # no subscription budget instantiated for an internal plan
+    assert _SubBudget.instances == []
+    # routes exactly like a registered project-funded turn
+    assert _trace(ep) == {
+        "budget_reserved_usd": [2.0], "budget_committed_usd": [0.03],
+        "budget_forced": [], "budget_released": 0,
+        "wallet_reserved_tokens": [], "wallet_committed_tokens": [], "wallet_consumed_tokens": [],
+        "wallet_released": 0, "rl_committed_tokens": [1000], "rl_released": [], "events": [],
+    }
 
 
 @pytest.mark.asyncio
@@ -490,7 +516,7 @@ async def test_characterize_subscription_with_wallet_untouched(monkeypatch):
     monkeypatch.setattr(sub_budget_mod, "SubscriptionBudgetLimiter", _SubBudget)
     monkeypatch.setattr(sub_mod, "build_subscription_period_descriptor",
                         lambda **kw: {"period_key": "pk", "period_start": None, "period_end": None})
-    ep = _make_ep(role="registered", wallet=200_000, sub=_Sub(active=True),
+    ep = _make_ep(role="registered", wallet=200_000, sub=_Sub(active=True, provider="stripe"),
                   budget=_Budget(overdraft=None), cost_usd=0.03, ranked_tokens=1000,
                   monkeypatch=monkeypatch)
     await ep.run()

@@ -34,12 +34,12 @@ The economics subsystem covers:
 
 - **Plan** = quota policy identity (limits for requests/tokens/concurrency).
 - **Plan override** = temporary per‑user override of plan limits.
-- **Funding source** = the plan's primary budget: `subscription` (active subscription) or `project` (everyone else). The **wallet** is never a primary source — it covers the over‑quota/over‑funds remainder.
+- **Funding source** = the plan's primary budget: `subscription` (active **external** subscription) or `project` (everyone else, including **internal** subscriptions). The **wallet** is never a primary source — it covers the over‑quota/over‑funds remainder.
 
 Unified funding split (important):
 - Every request is **one split**: `plan_part = min(R, Q, P)` is funded by the primary source (bounded by the remaining quota `Q` **and** the primary funds `P`); `wallet_part = R − plan_part` is covered by the wallet.
 - When the plan quota/funds run out, `plan_part` simply shrinks (to 0) and the wallet covers the rest within the same pass.
-- A **subscription plan** uses **subscription funding** as its primary; a registered/free user uses **project funding**.
+- An **external (Stripe) subscription** uses **subscription funding** as its primary. A registered/free user and an **internal subscription** use **project funding**: internal plans carry no plan budget and draw from the project budget bounded by quota.
 
 Tracing a single request:
 - Chat requests use the chat **turn_id** as `request_id`.
@@ -176,8 +176,9 @@ part; the wallet covers the over‑quota/over‑funds remainder.
 ### Reserve (pre‑run)
 
 - `plan_part = min(R, Q, P)` — R is the estimated turn cost (tokens), Q the remaining plan
-  token quota, P the primary funds (subscription period budget for subscribers, project
-  budget for everyone else). The primary money hold is placed for `plan_part`.
+  token quota, P the primary funds (subscription period budget for external subscribers,
+  project budget for everyone else, including internal subscriptions). The primary money
+  hold is placed for `plan_part`.
 - `wallet_part = R − plan_part` — reserved against the wallet (lifetime tokens) when a wallet
   is present and allowed for the surface.
 - Admit succeeds if, and only if the wallet can cover `wallet_part` and any indivisible
@@ -235,7 +236,9 @@ flowchart TD
 
 ## Subscription Periods and Rollovers
 
-Subscription budgets are per billing period.
+Subscription budgets are per billing period and apply to **external (Stripe)** subscriptions
+only. Internal subscriptions have no period budget (project-funded by quota) and are excluded
+from rollover.
 
 - Each period is keyed by `(tenant, project, user_id, period_key)`.
 - Top‑up is once per period by default (idempotent).

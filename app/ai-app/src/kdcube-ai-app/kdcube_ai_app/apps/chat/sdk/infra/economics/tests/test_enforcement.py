@@ -44,12 +44,12 @@ class _PlanBalance:
 
 
 class _Sub:
-    def __init__(self, active: bool = True, plan_id: str = "beta-30"):
+    def __init__(self, active: bool = True, plan_id: str = "beta-30", provider: str = "internal"):
         self.status = "active" if active else "canceled"
         self.monthly_price_cents = 3000
         self.next_charge_at = None
         self.plan_id = plan_id
-        self.provider = "internal"
+        self.provider = provider
         self.stripe_subscription_id = None
         self.last_charged_at = None
 
@@ -356,12 +356,26 @@ async def test_role_resolver_preserves_privileged_without_db():
 # Funding-source selection
 # --------------------------------------------------------------------------
 async def test_funding_summary_subscription():
-    ep = _ep(sub=_Sub(active=True))
+    # Only an EXTERNAL subscription funds a separate plan budget.
+    ep = _ep(sub=_Sub(active=True, provider="stripe"))
     g = EconomicsGuard(ep, subject=_subject("registered"), scope_id="s1", flow="f",
                        estimate=EconomicsEstimate(reservation_usd=0.05))
     r = await g._resolve_plan_and_funding()
     assert r["has_active_subscription"] is True
+    assert r["funds_from_subscription"] is True
     assert g._funding_summary(r)[0] == "subscription"
+
+
+async def test_funding_summary_internal_subscription_is_project():
+    # An internal subscription is active for plan resolution but draws from the
+    # project budget (no separate plan budget).
+    ep = _ep(sub=_Sub(active=True, provider="internal"))
+    g = EconomicsGuard(ep, subject=_subject("registered"), scope_id="s1", flow="f",
+                       estimate=EconomicsEstimate(reservation_usd=0.05))
+    r = await g._resolve_plan_and_funding()
+    assert r["has_active_subscription"] is True
+    assert r["funds_from_subscription"] is False
+    assert g._funding_summary(r)[0] == "project"
 
 
 async def test_funding_summary_project_for_registered():
@@ -544,6 +558,38 @@ async def test_wallet_overflow_funds_over_funds_remainder():
     assert len(ep.budget_limiter.reserved) == 1             # primary partial hold
     assert len(ep.cp_manager.user_credits_mgr.reserved) == 1  # wallet overflow hold
     await g.__aexit__(None, None, None)
+
+
+class _ZeroBudget(_Budget):
+    # project fully exhausted: $0 available, no overdraft -> primary cap = 0
+    async def get_app_budget_balance(self):
+        return {"available_usd": 0.0, "overdraft_limit_usd": 0.0}
+
+
+async def test_guard_denies_project_exhausted_when_funds_zero_and_no_wallet():
+    # Project primary fully exhausted (cap=0) + no wallet: the wallet-aware admit denies
+    # with wallet_insufficient at admit (before reserve_funding). The deny maps to the
+    # project-exhausted signal, not a generic rate-limit.
+    cp = _CP(plan_balance=_PlanBalance(False))
+    ep = _EP(cp=cp, rl=_RL(allowed=False, reason="wallet_insufficient"), budget=_ZeroBudget())
+    g = EconomicsGuard(ep, subject=_subject("registered"), scope_id="pe1", flow="f",
+                       estimate=EconomicsEstimate(reservation_usd=0.05))
+    with pytest.raises(EconomicsLimitException) as ei:
+        await g.__aenter__()
+    assert ei.value.code == "project_reservation_failed"
+    assert ei.value.data.get("funding_source") == "project"
+
+
+async def test_guard_quota_deny_stays_generic_when_funds_available():
+    # wallet_insufficient but the project still has funds (cap>0) -> quota exhaustion,
+    # which stays a generic rate-limit deny (not project-exhausted).
+    cp = _CP(plan_balance=_PlanBalance(False))
+    ep = _EP(cp=cp, rl=_RL(allowed=False, reason="wallet_insufficient"), budget=_Budget())
+    g = EconomicsGuard(ep, subject=_subject("registered"), scope_id="pe2", flow="f",
+                       estimate=EconomicsEstimate(reservation_usd=0.05))
+    with pytest.raises(EconomicsLimitException) as ei:
+        await g.__aenter__()
+    assert ei.value.code == "rate_limited"
 
 
 async def test_top_level_releases_reservation_on_accounting_failure():

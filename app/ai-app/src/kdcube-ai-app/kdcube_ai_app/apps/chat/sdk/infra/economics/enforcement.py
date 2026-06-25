@@ -46,6 +46,7 @@ from kdcube_ai_app.apps.chat.sdk.infra.economics.project_budget import BudgetIns
 from kdcube_ai_app.apps.chat.sdk.infra.economics.plan_resolution import (
     resolve_plan_id,
     subscription_is_active,
+    subscription_provides_plan_budget,
 )
 from kdcube_ai_app.apps.chat.sdk.infra.economics.quota_lock import QuotaLock, quota_lock_key
 from kdcube_ai_app.apps.chat.sdk.infra.economics.events_resources import (
@@ -407,6 +408,9 @@ class EconomicsGuard:
             tenant=s.tenant, project=s.project, user_id=s.user_id
         )
         has_active_subscription = subscription_is_active(subscription, self.now)
+        # Only external subscriptions fund a separate plan budget; internal plans draw
+        # from the project budget bounded by quota (the plan_id still sets the quota).
+        funds_from_subscription = subscription_provides_plan_budget(subscription, self.now)
 
         # plan id (shared resolver; budget_bypass == role in admin/privileged)
         plan_id, _ = resolve_plan_id(
@@ -437,13 +441,13 @@ class EconomicsGuard:
                 plan_id=plan_id,
                 plan_source=plan_source,
                 has_wallet=has_wallet,
-                has_active_subscription=has_active_subscription,
+                has_active_subscription=funds_from_subscription,
             ))
         else:
             # Fallback mirrors BaseEntrypointWithEconomics.project_budget_allowed_for_plan.
             wallet_first = getattr(self.ep, "wallet_users_use_project_budget_first", lambda: True)()
             project_budget_allowed = (
-                not has_active_subscription
+                not funds_from_subscription
                 and not (has_wallet and not wallet_first)
                 and role != "anonymous"
             )
@@ -458,6 +462,7 @@ class EconomicsGuard:
             "has_wallet": has_wallet,
             "subscription": subscription,
             "has_active_subscription": has_active_subscription,
+            "funds_from_subscription": funds_from_subscription,
             "plan_id": plan_id,
             "base_policy": base_policy,
             "project_budget_allowed": project_budget_allowed,
@@ -552,7 +557,7 @@ class EconomicsGuard:
     def _funding_summary(self, r: dict) -> Tuple[str, float]:
         if r["budget_bypass"]:
             return "project", float("inf")
-        if r["has_active_subscription"]:
+        if r["funds_from_subscription"]:
             return "subscription", float("inf")  # availability checked at reserve time
         if r["project_budget_allowed"]:
             return "project", float("inf")
@@ -637,13 +642,29 @@ class EconomicsGuard:
             if not admit.allowed and not budget_bypass:
                 # Quota/funds exhausted and the wallet cannot cover the remainder, or
                 # an indivisible (requests/concurrency) gate with no wallet. Deny.
-                await self._deny(
-                    code="rate_limited",
-                    title="Rate limit exceeded",
-                    message=f"{self.flow}: rate limited: {admit.reason or 'unknown'}",
-                    user_message=MSG_DENIED_GENERIC,
-                    data={"reason": admit.reason, "snapshot": admit.snapshot, "lane": "deny"},
-                )
+                if ("wallet_insufficient" in str(admit.reason or "")
+                        and funding_source in ("project", "subscription")
+                        and int(primary_cap_tokens) == 0):
+                    # Primary budget fully exhausted: its zero cap clamped want_resv to 0,
+                    # so the deny surfaces here at admit instead of at reserve_funding. Emit
+                    # the same primary-exhausted signal the reserve path would.
+                    await self._deny(
+                        code=f"{funding_source}_reservation_failed",
+                        title="Insufficient funds",
+                        message=f"{self.flow}: {funding_source} budget exhausted and user cannot pay",
+                        user_message=MSG_NO_FUNDING,
+                        data={"reason": f"{funding_source}_budget_exhausted",
+                              "funding_source": funding_source,
+                              "snapshot": admit.snapshot, "lane": "deny"},
+                    )
+                else:
+                    await self._deny(
+                        code="rate_limited",
+                        title="Rate limit exceeded",
+                        message=f"{self.flow}: rate limited: {admit.reason or 'unknown'}",
+                        user_message=MSG_DENIED_GENERIC,
+                        data={"reason": admit.reason, "snapshot": admit.snapshot, "lane": "deny"},
+                    )
             else:
                 if funding_source == "none" and not budget_bypass:
                     await self._deny(

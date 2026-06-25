@@ -112,17 +112,14 @@ Admin UI: **Create Subscription**
 - Plan ID: `beta-30` or `beta-50`
 - User ID: tester user id
 
-### 5) Fund the first subscription period
+### 5) Internal plan funding
 
-Admin UI: **Lookup Subscription (by user)**
+Internal plans carry no plan budget and need no period funding. They draw from the
+project budget bounded by their plan quota; their monthly allowance is the rolling RL
+quota window.
 
-Click **Renew now** for internal subscriptions.
-
-This will:
-
-- Create the billing period budget
-- Add the monthly amount to the period balance
-- Set the next charge date
+Admin UI: **Lookup Subscription (by user)** → **Reset quota** re-anchors the month +
+day windows and clears the hour buckets (all rolling counters start fresh).
 
 ### 6) Create pay‑as‑you‑go users (wallet)
 

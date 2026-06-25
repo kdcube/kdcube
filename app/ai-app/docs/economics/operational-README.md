@@ -64,7 +64,7 @@ Funding split (runtime):
 - Subscriptions and wallets never go negative; only project budget can absorb shortfalls.
 
 Absorption reporting:
-- Project budget absorption events are written to `tenant_project_budget_ledger` with notes `shortfall:wallet_subscription`, `shortfall:wallet_paid`, `shortfall:wallet_plan`, `shortfall:subscription_overage`, `shortfall:free_plan`.
+- Project budget absorption events are written to `tenant_project_budget_ledger` with notes `shortfall:wallet_subscription`, `shortfall:wallet_plan`, `shortfall:subscription_overage`, `shortfall:free_plan`.
 - View: `kdcube_control_plane.tenant_project_budget_absorption`
 - Detail view: `kdcube_control_plane.tenant_project_budget_absorption_detail`
 - API: `GET /app-budget/absorption-report?period=day|month&days=90&group_by=none|user|bundle&format=json|csv`
