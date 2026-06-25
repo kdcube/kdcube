@@ -461,6 +461,15 @@ response. A scope's filters may include provider-owned `factor_weights`,
 `thresholds`, or `scoring` objects — see
 [Providers → Search Scope Filters And Relevance Tuning](./providers-README.md#search-scope-filters-and-relevance-tuning).
 
+For a large realm, the recommended convention is that the realm-contributed
+`named_services.provider_about` response is a navigable top-level catalog
+(kinds · scopes · action vocabulary) plus a query playbook, and that the
+scopes/kinds it lists are the selectors the agent passes to a focused
+`named_services.object_schema`. For a big schema the agent should fetch by
+part rather than reading the whole thing; **projection selectors
+(kind/scope/field-subset/depth) on `object_schema` are a proposed extension,
+not current params.**
+
 For ReAct specifically, fully reading a provider-owned namespace ref means
 `react.pull(<provider_ref>)` first, then `react.read(<materialized fi:...>)`.
 This applies even when the provider object is JSON or markdown, not only when

@@ -285,6 +285,17 @@ purpose, base object summaries, and a short hint to call `object.schema` for
 concrete payload fields. Full object schemas, capability maps, and the complete
 provider spec belong to `object.schema` and `provider.capabilities`.
 
+For a large realm, a **recommended convention** for the realm-contributed
+`about` content is to make it a navigable **top-level catalog** (namespaces, a
+shallow list of kinds/scopes, the action vocabulary) plus a **query playbook**
+(per common intent: scope + filter template + example query, and a short
+"how to query this realm" note). The kinds/scopes that `about` lists are the
+selectors the agent passes to a focused `object.schema`. This is content
+guidance for `about`, not a new operation. For a big schema the agent should
+fetch by part rather than reading the whole thing; per-part projection
+selectors (kind/scope/field-subset/depth) on `object.schema` are a proposed
+extension, not current params.
+
 Providers that expose more than one searchable object space should declare
 bounded `search_scopes` on the provider spec. Search scopes are registration
 metadata, so consumers can render them in the agent tool catalog from service
