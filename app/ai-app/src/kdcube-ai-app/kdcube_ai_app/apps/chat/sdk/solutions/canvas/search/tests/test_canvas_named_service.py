@@ -396,3 +396,18 @@ async def test_canvas_provider_rejects_direct_hosted_object_upsert() -> None:
     assert response.ok is False
     assert response.error is not None
     assert response.error.code == "canvas_object_upsert_uses_card"
+
+
+def test_canvas_schemas_declare_update_strategies() -> None:
+    from kdcube_ai_app.apps.chat.sdk.solutions.canvas.search import (
+        CANVAS_BOARD_SCHEMA,
+        CANVAS_CARD_REPLACEMENT_SCHEMA,
+        CANVAS_OPERATION_BATCH_SCHEMA,
+    )
+
+    # A board upsert replaces the whole cards array (not a delta).
+    assert CANVAS_BOARD_SCHEMA["fields"]["cards"]["update_strategy"] == "replace"
+    # An operation batch is the complete op list for THIS upsert (replace).
+    assert CANVAS_OPERATION_BATCH_SCHEMA["fields"]["operations"]["update_strategy"] == "replace"
+    # An in_place card replacement shallow-merges (patch) onto the existing card.
+    assert CANVAS_CARD_REPLACEMENT_SCHEMA["fields"]["card"]["update_strategy"] == "patch"

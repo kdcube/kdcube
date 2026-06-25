@@ -415,3 +415,12 @@ async def test_memory_block_produce_projects_pulled_read_payload() -> None:
     assert "Prefer balanced legal/commercial wording" in block["text"]
     assert block["meta"]["object_ref"] == "mem:record:mem_1"
     assert block["meta"]["materialized_path"] == "fi:turn_read.files/mem_1.json"
+
+
+def test_memory_record_schema_appends_label_and_keyword_groups() -> None:
+    fields = MEMORY_RECORD_SCHEMA["fields"]
+
+    # Labels and keywords are set-union merged (append), never replaced, so an
+    # update that omits them does not drop earlier label/keyword groups.
+    assert fields["labels"]["update_strategy"] == "append"
+    assert fields["keywords"]["update_strategy"] == "append"

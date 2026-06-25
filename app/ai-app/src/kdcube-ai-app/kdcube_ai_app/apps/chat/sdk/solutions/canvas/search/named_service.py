@@ -84,7 +84,7 @@ CANVAS_BOARD_SCHEMA: dict[str, Any] = {
         "revision": {"type": "integer", "description": "Board revision."},
         "canvas_ref": {"type": "string", "description": "Versioned board ref such as cnv:main@7."},
         "latest_ref": {"type": "string", "description": "Latest board ref such as cnv:main."},
-        "cards": {"type": "array", "description": "Board cards."},
+        "cards": {"type": "array", "update_strategy": "replace", "description": "Board cards. A board upsert REPLACES the entire cards array — provide the full intended set of cards, not a delta. To change individual cards without overwriting the board, use the canvas card-level operations."},
     },
     "upsert": {
         "tool": "named_services.upsert_object",
@@ -277,7 +277,8 @@ CANVAS_OPERATION_BATCH_SCHEMA: dict[str, Any] = {
             "required": True,
             "items": "canvas operation object",
             "allowed_ops": list(CANVAS_PATCH_OPS),
-            "description": "Ordered operations applied in one store.patch call. Prefer typed schemas for single card comments/replacements/deletions.",
+            "update_strategy": "replace",
+            "description": "Ordered operations applied in one store.patch call. This array is the complete op batch for THIS upsert — operations are applied in order against the current revision, not merged with or appended to any earlier batch. Prefer typed schemas for single card comments/replacements/deletions.",
         },
         "reason": {"type": "string", "description": "Short reason recorded in canvas history."},
     },
@@ -340,7 +341,7 @@ CANVAS_CARD_REPLACEMENT_SCHEMA: dict[str, Any] = {
         "canvas_name": {"type": "string", "required": True},
         "card_id": {"type": "string", "required": True},
         "mode": {"type": "string", "enum": ["suggested", "in_place"], "default": "suggested"},
-        "card": {"type": "object", "required": True, "description": "Replacement card body. Suggested mode creates a new floating card linked to source_card_ids."},
+        "card": {"type": "object", "required": True, "update_strategy": "patch", "description": "Replacement card body. In_place mode shallow-merges these keys onto the existing card (top-level keys you provide overwrite; keys you omit are preserved; nested values are replaced wholesale, not deep-merged). Suggested mode (default) instead creates a new floating card from this body linked to source_card_ids."},
         "base_revision": {"type": "integer|string", "required": True},
     },
     "tools": {
