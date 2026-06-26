@@ -580,8 +580,10 @@ class UserMemoryTools:
         context: Annotated[str, "Why/provenance/examples/disambiguation only. Do not repeat the memory text unless needed."] = "",
         kind: Annotated[str, "Memory kind, e.g. fact, preference, decision, constraint, communication_style."] = "fact",
         event_type: Annotated[str, "Evidence event type, e.g. agent_observation, user_edit, confirmation, refinement."] = "agent_observation",
-        labels: Annotated[str, "Optional comma/space separated stable facets for grouping/filtering."] = "",
-        keywords: Annotated[str, "Optional comma/space separated retrieval hooks, aliases, names, and likely future terms."] = "",
+        labels: Annotated[str, "Optional comma/space separated stable facets for grouping/filtering. On update, replaces the whole label set (omit to preserve). To edit incrementally, leave this empty and use labels_remove."] = "",
+        keywords: Annotated[str, "Optional comma/space separated retrieval hooks, aliases, names, and likely future terms. On update, replaces the whole keyword set (omit to preserve). To edit incrementally, leave this empty and use keywords_remove."] = "",
+        labels_remove: Annotated[str, "Optional comma/space separated labels to remove on update (incremental delta; combine with labels to add). Omit to leave labels untouched."] = "",
+        keywords_remove: Annotated[str, "Optional comma/space separated keywords to remove on update (incremental delta; combine with keywords to add). Omit to leave keywords untouched."] = "",
         visibility: Annotated[str, "Visibility value. user/owner/public are user-visible; private/internal are not user-visible."] = "user",
         confidence: Annotated[float, "Confidence score from 0.0 to 1.0."] = 0.5,
         importance: Annotated[float, "Importance score from 0.0 to 1.0."] = 0.5,
@@ -597,13 +599,28 @@ class UserMemoryTools:
             embedding = await self._embed_one("\n".join(part for part in [memory, context] if str(part).strip()))
             labels_list = normalize_terms(labels)
             keywords_list = normalize_terms(keywords)
+            labels_remove_list = normalize_terms(labels_remove)
+            keywords_remove_list = normalize_terms(keywords_remove)
+            # Shape the update: a *_remove arg makes it an incremental delta
+            # ({add, remove}); otherwise a bare list replaces on provide and
+            # None preserves on omit.
+            labels_update = (
+                {"add": labels_list, "remove": labels_remove_list}
+                if labels_remove_list
+                else (labels_list if labels else None)
+            )
+            keywords_update = (
+                {"add": keywords_list, "remove": keywords_remove_list}
+                if keywords_remove_list
+                else (keywords_list if keywords else None)
+            )
             payload = {
                 "memory": memory,
                 "context": context,
                 "kind": kind,
                 "event_type": event_type,
-                "labels": labels_list,
-                "keywords": keywords_list,
+                "labels": labels_update,
+                "keywords": keywords_update,
                 "visibility": visibility,
                 "match_memory_id": match_memory_id,
             }
@@ -617,11 +634,8 @@ class UserMemoryTools:
                     kind=kind,
                     event_type=event_type,
                     originator=str(raw.get("originator") or "agent"),
-                    # Replace-on-provide / preserve-on-omit: pass None when the
-                    # caller did not supply labels/keywords so an update keeps the
-                    # existing set; provide the list to replace it.
-                    labels=(labels_list if labels else None),
-                    keywords=(keywords_list if keywords else None),
+                    labels=labels_update,
+                    keywords=keywords_update,
                     visibility=visibility,
                     confidence=confidence,
                     importance=importance,

@@ -5,11 +5,16 @@ from datetime import datetime, timezone
 
 import pytest
 
-from kdcube_ai_app.apps.chat.sdk.context.memory.models import MemoryRecord, MemoryScope
+from kdcube_ai_app.apps.chat.sdk.context.memory.models import (
+    MemoryRecord,
+    MemoryScope,
+    resolve_collection_update,
+)
 from kdcube_ai_app.apps.chat.sdk.context.memory.named_service import (
     KNOWN_MEMORY_KINDS,
     MEMORY_RECORD_SCHEMA,
     MEMORY_SEARCH_SCOPES,
+    _collection_update,
     make_memory_named_service_provider,
     memory_named_service_spec,
 )
@@ -425,3 +430,52 @@ def test_memory_record_schema_replaces_label_and_keyword_groups() -> None:
     # replaces the stored set; omitting the field preserves the existing set.
     assert fields["labels"]["update_strategy"] == "replace"
     assert fields["keywords"]["update_strategy"] == "replace"
+
+
+def test_memory_record_schema_documents_add_remove_delta() -> None:
+    fields = MEMORY_RECORD_SCHEMA["fields"]
+
+    # Bare list still replaces; the description also advertises the incremental
+    # {add, remove} delta shape for removing one item without re-sending the set.
+    for key in ("labels", "keywords"):
+        description = fields[key]["description"]
+        assert '"add"' in description and '"remove"' in description
+        assert "replace" in description.lower()
+
+
+def test_resolve_collection_update_replaces_on_bare_list() -> None:
+    # Bare list replaces the stored set regardless of what was there.
+    assert resolve_collection_update(["draft", "ready"], ["final"]) == ["final"]
+    assert resolve_collection_update(["draft"], []) == []
+    # Insert semantics: resolving against no existing set yields the list.
+    assert resolve_collection_update(None, ["A", "b"]) == ["a", "b"]
+
+
+def test_resolve_collection_update_delta_removes_only_named_item() -> None:
+    # {remove: ["draft"]} drops only that item, preserving the rest.
+    assert resolve_collection_update(
+        ["draft", "ready", "legal"], {"remove": ["draft"]}
+    ) == ["legal", "ready"]
+
+
+def test_resolve_collection_update_delta_swaps_add_and_remove() -> None:
+    # {add, remove} swaps: remove draft, add ready (removes applied first).
+    assert resolve_collection_update(
+        ["draft", "legal"], {"add": ["ready"], "remove": ["draft"]}
+    ) == ["legal", "ready"]
+    # Adding an item already present is idempotent; either side is optional.
+    assert resolve_collection_update(["legal"], {"add": ["legal", "new"]}) == [
+        "legal",
+        "new",
+    ]
+
+
+def test_collection_update_coercion_shapes() -> None:
+    # Omitted -> None (preserve). Bare list -> normalized list (replace).
+    assert _collection_update({}, "labels") is None
+    assert _collection_update({"labels": ["A", "b"]}, "labels") == ["a", "b"]
+    assert _collection_update({"labels": []}, "labels") == []
+    # Delta mapping is normalized and passed through for incremental apply.
+    assert _collection_update(
+        {"labels": {"add": ["Ready"], "remove": ["Draft"]}}, "labels"
+    ) == {"add": ["ready"], "remove": ["draft"]}

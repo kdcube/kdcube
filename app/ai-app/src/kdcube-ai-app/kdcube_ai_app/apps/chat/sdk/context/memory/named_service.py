@@ -38,6 +38,7 @@ from .models import (
     MemorySearchRequest,
     MemorySearchResult,
     MemorySignal,
+    is_collection_delta,
     is_user_visible,
     normalize_scope_filter,
     normalize_term,
@@ -163,8 +164,8 @@ MEMORY_RECORD_SCHEMA: dict[str, Any] = {
         },
         "status": {"type": "string", "default": "active"},
         "visibility": {"type": "string", "default": "user"},
-        "labels": {"type": "array", "items": "string", "update_strategy": "replace", "description": "Label/alias groups. The provided list replaces the existing labels on update (send the full set; omit an item to remove it). Omit the field entirely to preserve existing labels."},
-        "keywords": {"type": "array", "items": "string", "update_strategy": "replace", "description": "Search keywords. The provided list replaces the existing keywords on update (send the full set; omit a term to remove it). Omit the field entirely to preserve existing keywords."},
+        "labels": {"type": "array", "items": "string", "update_strategy": "replace", "description": "Label/alias groups. A bare list replaces the existing labels on update (send the full set; omit the field entirely to preserve them). Also accepts a delta object {\"add\": [...], \"remove\": [...]} for incremental edits (e.g. remove one label without re-sending the list); removes are applied before adds."},
+        "keywords": {"type": "array", "items": "string", "update_strategy": "replace", "description": "Search keywords. A bare list replaces the existing keywords on update (send the full set; omit the field entirely to preserve them). Also accepts a delta object {\"add\": [...], \"remove\": [...]} for incremental edits (e.g. remove one keyword without re-sending the list); removes are applied before adds."},
         "confidence": {"type": "number", "description": "Confidence for the new evidence event."},
         "importance": {"type": "number", "description": "Importance for ranking and tiering."},
         "pinned": {"type": "boolean"},
@@ -321,6 +322,24 @@ def _bool_or_none(value: Any) -> bool | None:
     if normalized in {"0", "false", "no", "off", "disabled"}:
         return False
     return None
+
+
+def _collection_update(body: Mapping[str, Any], key: str) -> Any:
+    """Coerce a labels/keywords update from request body.
+
+    Omitted -> None (preserve existing on update). A bare list/str ->
+    normalized list (replace). A {add, remove} mapping -> normalized delta,
+    passed through for incremental apply against the existing stored set.
+    """
+    if key not in body:
+        return None
+    value = body.get(key)
+    if is_collection_delta(value):
+        return {
+            "add": normalize_terms(value.get("add")),
+            "remove": normalize_terms(value.get("remove")),
+        }
+    return normalize_terms(value)
 
 
 def _text(value: Any) -> str:
@@ -1148,10 +1167,10 @@ class MemoryNamedServiceProvider(NamedServiceProvider):
             originator=_text(body.get("originator") or "agent"),
             status=_text(body.get("status") or "active"),
             visibility=_text(body.get("visibility") or "user"),
-            # Pass through presence: omitted -> None (preserve existing on
-            # update); provided (even empty) -> normalized list (replace).
-            labels=(normalize_terms(body.get("labels")) if "labels" in body else None),
-            keywords=(normalize_terms(body.get("keywords")) if "keywords" in body else None),
+            # Presence + shape: omitted -> None (preserve existing); bare list
+            # (even empty) -> replace; {add, remove} mapping -> incremental delta.
+            labels=_collection_update(body, "labels"),
+            keywords=_collection_update(body, "keywords"),
             confidence=_float(body.get("confidence"), 0.6),
             importance=_float(body.get("importance"), 0.5),
             pinned=_bool_or_none(body.get("pinned")),

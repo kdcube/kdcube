@@ -45,6 +45,34 @@ def normalize_terms(values: str | Iterable[str] | None) -> list[str]:
     return out
 
 
+def is_collection_delta(value: Any) -> bool:
+    """A collection update is a delta when it is a mapping carrying add/remove."""
+    return isinstance(value, Mapping) and ("add" in value or "remove" in value)
+
+
+def resolve_collection_update(existing: Iterable[str] | None, value: Any) -> list[str]:
+    """Resolve a labels/keywords update against the existing stored set.
+
+    - bare list/str -> replace: the provided (normalized) set wins.
+    - delta dict {add, remove} -> start from existing, drop removes, union adds.
+
+    Caller decides "not provided -> preserve" (value is None) before calling
+    this; here None resolves to an empty set so a fresh insert starts clean.
+    """
+    if is_collection_delta(value):
+        removed = set(normalize_terms(value.get("remove")))
+        added = normalize_terms(value.get("add"))
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in list(normalize_terms(existing)) + added:
+            if item in removed or item in seen:
+                continue
+            seen.add(item)
+            out.append(item)
+        return sorted(out)
+    return sorted(set(normalize_terms(value)))
+
+
 def normalize_status(value: str | None) -> str:
     status = normalize_term(value or "active")
     if status in {"active", "weakened", "unsupported", "retired", "merged"}:
@@ -119,10 +147,11 @@ class MemorySignal:
     status: str = "active"
     visibility: str = "user"
     # None means "not provided" (preserve existing on update); an empty list
-    # means "provided empty" (clear the stored set). Both normalize to [] for
-    # writes, but the supplied/omitted distinction drives replace-vs-preserve.
-    labels: Optional[Sequence[str]] = None
-    keywords: Optional[Sequence[str]] = None
+    # means "provided empty" (clear the stored set). A bare list replaces the
+    # stored set; a {add, remove} mapping applies an incremental delta against
+    # it. The supplied/omitted distinction drives replace-vs-preserve.
+    labels: Optional[Sequence[str] | Mapping[str, Any]] = None
+    keywords: Optional[Sequence[str] | Mapping[str, Any]] = None
     confidence: float = 0.5
     importance: float = 0.5
     pinned: Optional[bool] = None
@@ -133,10 +162,10 @@ class MemorySignal:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def normalized_labels(self) -> list[str]:
-        return normalize_terms(self.labels)
+        return resolve_collection_update(None, self.labels)
 
     def normalized_keywords(self) -> list[str]:
-        return normalize_terms(self.keywords)
+        return resolve_collection_update(None, self.keywords)
 
 
 @dataclass(frozen=True)

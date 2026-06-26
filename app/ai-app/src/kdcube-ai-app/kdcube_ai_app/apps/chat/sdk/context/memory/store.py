@@ -21,6 +21,7 @@ from .models import (
     normalize_term,
     normalize_terms,
     normalize_visibility,
+    resolve_collection_update,
 )
 from .scoring import (
     DEFAULT_MEMORY_SCORING,
@@ -1431,6 +1432,18 @@ class UserMemoryStore:
                     last_event_at=now,
                     pinned=pinned_value,
                 )
+                # Resolve labels/keywords against the existing row so a
+                # {add, remove} delta is incremental and a bare list replaces.
+                edit_labels = (
+                    resolve_collection_update(_array(row.get("labels")), normalized_signal["labels_raw"])
+                    if normalized_signal.get("labels_supplied")
+                    else _array(row.get("labels"))
+                )
+                edit_keywords = (
+                    resolve_collection_update(_array(row.get("keywords")), normalized_signal["keywords_raw"])
+                    if normalized_signal.get("keywords_supplied")
+                    else _array(row.get("keywords"))
+                )
                 updated = await con.fetchrow(
                     f"""
                     UPDATE {self.schema}.{MEMORY_TABLE}
@@ -1472,10 +1485,10 @@ class UserMemoryStore:
                     normalized_signal["status"],
                     normalized_signal["visibility"],
                     normalized_signal["visible_to_user"],
-                    normalized_signal["labels"],
-                    normalized_signal["keywords"],
+                    edit_labels,
+                    edit_keywords,
                     pinned_value,
-                    self._search_text(normalized_signal),
+                    self._search_text({**normalized_signal, "labels": edit_labels, "keywords": edit_keywords}),
                     normalized_signal["embedding"],
                     normalized_signal["embedding_model"],
                     evidence_count,
@@ -1497,8 +1510,8 @@ class UserMemoryStore:
                 await self._upsert_aliases(
                     con,
                     memory_id=str(row["id"]),
-                    labels=normalized_signal["labels"],
-                    keywords=normalized_signal["keywords"],
+                    labels=edit_labels,
+                    keywords=edit_keywords,
                 )
         return self._record_from_row(dict(updated)) if updated else None
 
@@ -2026,8 +2039,14 @@ class UserMemoryStore:
             raise ValueError("memory signal requires non-empty memory")
         labels_supplied = signal.labels is not None
         keywords_supplied = signal.keywords is not None
-        labels = normalize_terms(signal.labels)
-        keywords = normalize_terms(signal.keywords)
+        labels_raw = signal.labels
+        keywords_raw = signal.keywords
+        # Resolved against an empty set: the value used for a fresh insert,
+        # canonical-key derivation, and search text. On update the apply path
+        # re-resolves the raw value against the existing stored set so a
+        # {add, remove} delta is incremental rather than replacing.
+        labels = resolve_collection_update(None, labels_raw)
+        keywords = resolve_collection_update(None, keywords_raw)
         canonical_key_supplied = bool(str(signal.canonical_key or "").strip())
         canonical_key = str(signal.canonical_key or "").strip() or build_canonical_key(
             user_id=scope.user_id,
@@ -2050,6 +2069,8 @@ class UserMemoryStore:
             "visible_to_user": is_user_visible(visibility),
             "labels": labels,
             "keywords": keywords,
+            "labels_raw": labels_raw,
+            "keywords_raw": keywords_raw,
             "labels_supplied": labels_supplied,
             "keywords_supplied": keywords_supplied,
             "pinned": signal.pinned if signal.pinned is not None else None,
@@ -2306,13 +2327,22 @@ class UserMemoryStore:
             last_event_at=now,
             pinned=pinned,
         )
-        # Replace-on-provide / preserve-on-omit: labels/keywords are value-lists
-        # (bare strings), so removal is only possible by re-sending the list
-        # without the item. When the signal provides the field, the stored set
-        # becomes exactly the provided set (an empty list clears it); when the
-        # field is omitted, the existing stored set is kept unchanged.
-        labels = sorted(set(signal["labels"])) if signal.get("labels_supplied") else _array(row.get("labels"))
-        keywords = sorted(set(signal["keywords"])) if signal.get("keywords_supplied") else _array(row.get("keywords"))
+        # labels/keywords are value-lists (bare strings), so removal is only
+        # possible by re-sending the set without an item. The update accepts
+        # either shape: a bare list replaces the stored set (an empty list
+        # clears it); a {add, remove} delta is applied incrementally against the
+        # existing stored set (removes then adds). When the field is omitted
+        # (None), the existing stored set is preserved unchanged.
+        labels = (
+            resolve_collection_update(_array(row.get("labels")), signal["labels_raw"])
+            if signal.get("labels_supplied")
+            else _array(row.get("labels"))
+        )
+        keywords = (
+            resolve_collection_update(_array(row.get("keywords")), signal["keywords_raw"])
+            if signal.get("keywords_supplied")
+            else _array(row.get("keywords"))
+        )
         memory_text = signal["memory"] if signal["event_type"] in {"user_edit", "manual_update", "refinement", "squash"} else row["memory"]
         context = signal["context"] or row.get("context") or ""
         updated = await con.fetchrow(
