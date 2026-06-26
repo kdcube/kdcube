@@ -6,6 +6,7 @@ tags: ["service", "index", "infrastructure"]
 keywords: ["service docs index", "runtime infrastructure docs", "gateway and auth guides", "monitoring and scaling docs", "environment setup docs", "descriptor and secrets wiring", "service operations"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/oauth-mcp-integration-access-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/servicing-interfaces-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/streams/README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/synch-mechanisms/critical-section-README.md
@@ -18,6 +19,7 @@ see_also:
 
 Core entry points:
 - Auth overview: [auth-README.md](auth/auth-README.md)
+- OAuth/MCP integration access: [oauth-mcp-integration-access-README.md](auth/oauth-mcp-integration-access-README.md)
 - Service-facing chat interfaces: [servicing-interfaces-README.md](servicing-interfaces-README.md)
 - Service streams: [streams/README.md](streams/README.md)
 - Synchronization mechanisms and locks: [synch-mechanisms/critical-section-README.md](synch-mechanisms/critical-section-README.md)
