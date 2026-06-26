@@ -146,15 +146,16 @@ surface applies, filtered by `identity`:
     defaultTenant,
     defaultProject,
     defaultAppBundleId,
-    authContext: { headers: { /* host-owned request headers */ } }
+    authContext: { headers: { /* server-authored request headers template */ } }
   }
 }
 ```
 
-The host supplies whatever proof it owns as runtime config. Browser hosts may
-fill `accessToken` / `idToken`; the surface attaches those as `Authorization` /
-its ID-token header. Hosts with channel-specific auth material put the concrete
-request headers into `authContext.headers`.
+The host gets runtime config from its backend. Browser hosts may receive
+`accessToken` / `idToken`; the surface attaches those as `Authorization` / its
+ID-token header. Hosts with channel-specific auth material receive a
+server-authored `authContext.headers` template and promote that template to
+hosted surfaces.
 
 The surface does not interpret `authContext.headers`. It only promotes them on
 its KDCube API calls:
@@ -174,8 +175,10 @@ available. Auth material that is not cookie-based travels in
 
 ### Telegram proof and connection id as authContext headers
 
-A Telegram Mini App host constructs the Telegram-specific headers, then sends
-them as opaque `authContext.headers` in the **same** `config` payload:
+A Telegram Mini App backend returns the selector headers in
+`authContext.headers`. The host promotes that template and adds the
+browser-owned Telegram `initData` proof only when the server template says the
+provider is Telegram:
 
 ```js
 {
@@ -195,10 +198,11 @@ them as opaque `authContext.headers` in the **same** `config` payload:
 ```
 
 The `X-KDCube-Auth-Connection-ID` value is a non-secret selector handle, not a
-bot id. The host reads `window.Telegram.WebApp.initData`, reads the connection
-id from server config, and builds the headers. It never sends a bot token or
-any server secret. The iframe only transports the header map; the gateway and
-Connection Hub authenticate centrally (see
+bot id, and it comes from server config. The host only reads
+`window.Telegram.WebApp.initData` and inserts that browser-owned proof into the
+server-authored header map. It never sends a bot token or any server secret. The
+iframe only transports the header map; the gateway and Connection Hub
+authenticate centrally (see
 [ecosystem-component](../ecosystem-component/ecosystem-component-README.md) for
 the backend split).
 

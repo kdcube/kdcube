@@ -187,7 +187,7 @@ def _tenant_project(entrypoint: Any) -> tuple[str, str]:
     )
 
 
-def _auth_config(entrypoint: Any) -> Dict[str, Any]:
+def _auth_connection_id(entrypoint: Any) -> str:
     bundle_prop = getattr(entrypoint, "bundle_prop", None)
     connection_id = ""
     if callable(bundle_prop):
@@ -198,6 +198,21 @@ def _auth_config(entrypoint: Any) -> Dict[str, Any]:
         ).strip()
     if not connection_id:
         connection_id = "telegram.default"
+    return connection_id
+
+
+def _auth_context_config(entrypoint: Any) -> Dict[str, Any]:
+    connection_id = _auth_connection_id(entrypoint)
+    return {
+        "headers": {
+            "X-KDCube-Auth-Provider": "telegram",
+            "X-KDCube-Auth-Connection-ID": connection_id,
+        }
+    }
+
+
+def _legacy_auth_config(entrypoint: Any) -> Dict[str, Any]:
+    connection_id = _auth_connection_id(entrypoint)
     return {
         "provider": "telegram",
         "connection_id": connection_id,
@@ -348,7 +363,10 @@ async def payload(
     data = {
         "ok": True,
         "bundle_id": _bundle_id(entrypoint),
-        "auth": _auth_config(entrypoint),
+        "authContext": _auth_context_config(entrypoint),
+        # Back-compat for older Telegram Mini App builds. New hosts should use
+        # authContext.headers and only add browser-owned proof material.
+        "auth": _legacy_auth_config(entrypoint),
         "active_tab": active_tab,
         "path": str(widget_path or "").strip("/"),
         "tabs": tabs,

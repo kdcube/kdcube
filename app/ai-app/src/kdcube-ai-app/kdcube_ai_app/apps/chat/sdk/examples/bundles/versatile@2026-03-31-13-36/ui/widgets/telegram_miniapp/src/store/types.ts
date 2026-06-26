@@ -10,8 +10,7 @@ export interface AppSettings {
   accessToken: string | null;
   idToken: string | null;
   idTokenHeader: string;
-  authProvider: string;
-  authConnectionId: string;
+  authContextHeaders: Record<string, string>;
   defaultTenant: string;
   defaultProject: string;
   defaultAppBundleId: string;
@@ -137,6 +136,9 @@ export interface WebAppPayload {
   };
   permissions?: {
     show_admin_component?: boolean;
+  };
+  authContext?: {
+    headers?: Record<string, unknown>;
   };
   auth?: {
     provider?: string;

@@ -27,6 +27,9 @@ interface RuntimeConfigPayload {
     connection_id?: string;
     connectionId?: string;
   };
+  authContext?: {
+    headers?: Record<string, unknown>;
+  };
   authProvider?: string;
   authConnectionId?: string;
   connection_id?: string;
@@ -77,15 +80,32 @@ export function routeContextFromLocation(): RouteContext {
 
 export const ROUTE_CONTEXT = routeContextFromLocation();
 
-function authConnectionIdFromLocation(): string {
-  const params = new URLSearchParams(window.location.search);
-  return (
-    params.get('auth_connection_id') ||
-    params.get('authConnectionId') ||
-    params.get('connection_id') ||
-    params.get('connectionId') ||
-    ''
-  ).trim();
+function normalizeAuthContextHeaders(input?: Record<string, unknown>): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!input || typeof input !== 'object') return out;
+  Object.entries(input).forEach(([key, value]) => {
+    const name = String(key || '').trim();
+    if (!name || value === undefined || value === null) return;
+    const text = String(value);
+    if (!text) return;
+    out[name] = text;
+  });
+  return out;
+}
+
+function legacyAuthContextHeaders(config: RuntimeConfigPayload): Record<string, string> {
+  const provider = config.authProvider || config.auth?.provider;
+  const connectionId = (
+    config.authConnectionId ||
+    config.connection_id ||
+    config.connectionId ||
+    config.auth?.connection_id ||
+    config.auth?.connectionId
+  );
+  const out: Record<string, string> = {};
+  if (provider) out['X-KDCube-Auth-Provider'] = String(provider);
+  if (connectionId) out['X-KDCube-Auth-Connection-ID'] = String(connectionId);
+  return out;
 }
 
 export function activeTabFromPath(widgetPath: string): TabId {
@@ -122,8 +142,7 @@ class SettingsManager {
     accessToken: PLACEHOLDER_ACCESS_TOKEN,
     idToken: PLACEHOLDER_ID_TOKEN,
     idTokenHeader: PLACEHOLDER_ID_TOKEN_HEADER,
-    authProvider: 'telegram',
-    authConnectionId: authConnectionIdFromLocation() || 'telegram.default',
+    authContextHeaders: {},
     defaultTenant: PLACEHOLDER_TENANT,
     defaultProject: PLACEHOLDER_PROJECT,
     defaultAppBundleId: PLACEHOLDER_BUNDLE_ID,
@@ -165,12 +184,8 @@ class SettingsManager {
     return !this.settings.idToken || isPlaceholder(this.settings.idToken) ? null : this.settings.idToken;
   }
 
-  getAuthProvider(): string {
-    return this.settings.authProvider || 'telegram';
-  }
-
-  getAuthConnectionId(): string {
-    return this.settings.authConnectionId || '';
+  getAuthContextHeaders(): Record<string, string> {
+    return { ...this.settings.authContextHeaders };
   }
 
   // Build a served-widget iframe URL for another bundle (mirrors how the
@@ -210,14 +225,13 @@ class SettingsManager {
   private applyRuntimeConfig(config: RuntimeConfigPayload, options: { notify?: boolean } = {}): void {
     const tenant = config.defaultTenant || config.tenant || config.tenant_id;
     const project = config.defaultProject || config.project || config.project_id;
-    const authProvider = config.authProvider || config.auth?.provider;
-    const authConnectionId = (
-      config.authConnectionId ||
-      config.connection_id ||
-      config.connectionId ||
-      config.auth?.connection_id ||
-      config.auth?.connectionId
-    );
+    const authContextHeaders = normalizeAuthContextHeaders(config.authContext?.headers);
+    const legacyHeaders = legacyAuthContextHeaders(config);
+    const nextAuthContextHeaders = Object.keys(authContextHeaders).length > 0
+      ? authContextHeaders
+      : Object.keys(legacyHeaders).length > 0
+        ? legacyHeaders
+        : this.settings.authContextHeaders;
     this.settings = {
       ...this.settings,
       baseUrl: config.baseUrl || this.settings.baseUrl,
@@ -228,8 +242,7 @@ class SettingsManager {
         config.idTokenHeaderName ||
         config.auth?.idTokenHeaderName ||
         this.settings.idTokenHeader,
-      authProvider: authProvider || this.settings.authProvider,
-      authConnectionId: authConnectionId || this.settings.authConnectionId,
+      authContextHeaders: nextAuthContextHeaders,
       defaultTenant: tenant || this.settings.defaultTenant,
       defaultProject: project || this.settings.defaultProject,
       defaultAppBundleId: config.defaultAppBundleId || this.settings.defaultAppBundleId,
@@ -296,8 +309,7 @@ class SettingsManager {
                 'accessToken',
                 'idToken',
                 'idTokenHeader',
-                'authProvider',
-                'authConnectionId',
+                'authContext',
                 'defaultTenant',
                 'defaultProject',
                 'defaultAppBundleId',

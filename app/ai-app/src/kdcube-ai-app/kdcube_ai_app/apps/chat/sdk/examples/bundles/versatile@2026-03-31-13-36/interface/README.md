@@ -335,9 +335,11 @@ In the Telegram Mini App, the same logical calls use signed Telegram initData.
 
 SDK durable memory maintenance uses the shared `memories_widget_*` operations.
 When the memory widget is embedded inside the Telegram Mini App, the host passes
-`telegramInitData` through the standard widget config handshake and the widget
-sends it as `X-Telegram-Init-Data` on the same `memories_widget_*` operations.
-Gateway request-auth delegates the proof to Connection Hub.
+a server-authored `authContext.headers` template through the standard widget
+config handshake. The host adds Telegram `initData` to that header map only
+because the backend template declares Telegram as the provider. The widget
+blindly promotes the resulting headers on the same `memories_widget_*`
+operations. Gateway request-auth delegates the proof to Connection Hub.
 
 The `telegram_memories_widget_*` public operations are legacy app-owned
 compatibility wrappers. New reusable widgets should not map shared operation

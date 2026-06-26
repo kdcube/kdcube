@@ -190,8 +190,9 @@ host -> memory iframe
 ```
 
 Browser/scene hosts may supply `accessToken`, `idToken`, `idTokenHeader`, or rely
-on cookies. Any host with additional request auth material supplies it as an
-opaque `authContext.headers` map in the same `config` object:
+on cookies. Any host with additional request auth material gets a
+server-authored `authContext.headers` template from its backend and supplies it
+in the same `config` object:
 
 ```json
 {
@@ -206,11 +207,14 @@ opaque `authContext.headers` map in the same `config` object:
 The memory widget does not interpret those headers. It still calls the standard
 `/operations/memories_widget_*` routes, always uses `credentials: 'include'` for
 the cookie/session path, and blindly promotes `authContext.headers` on each
-request. It does not switch itself to a provider-specific public API. It does
-not read `window.parent.Telegram`, validate Telegram, call Connection Hub
-directly, or use any `kdcube.auth.*` message family. The gateway and Connection
-Hub validate provider proofs centrally and project linked authority into the
-request session before the operation sees the request.
+request. If the host is a Telegram Mini App, the host adds browser-owned
+`initData` only because its backend template declares
+`X-KDCube-Auth-Provider: telegram`; the memory widget still does not know what
+those headers mean. It does not switch itself to a provider-specific public API.
+It does not read `window.parent.Telegram`, validate Telegram, call Connection
+Hub directly, or use any `kdcube.auth.*` message family. The gateway and
+Connection Hub validate provider proofs centrally and project linked authority
+into the request session before the operation sees the request.
 
 If the host session or auth context changes, the host announces
 `kdcube-auth-changed`.

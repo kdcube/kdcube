@@ -5,9 +5,9 @@
 //   iframe -> host: { type: 'CONFIG_REQUEST', data: { identity, requestedFields } }
 //   host -> iframe: { type: 'CONFIG_RESPONSE', identity, config: { ... } }
 //
-// The host owns its surface-specific auth context. In Telegram it builds an
-// opaque `authContext.headers` map containing the surface proof and connection
-// selector; the iframe only promotes those headers on KDCube API calls. The
+// The host gets a server-authored authContext header template and promotes it
+// to the iframe. For Telegram, the host adds the browser-owned initData proof
+// only when the server template declares X-KDCube-Auth-Provider=telegram. The
 // host NEVER sends provider tokens or server secrets.
 //
 // When initData becomes available after the iframe mounted, the host posts the
@@ -27,6 +27,13 @@ function telegramInitData(): string {
   return window.Telegram?.WebApp?.initData || '';
 }
 
+function providerFrom(headers: Record<string, string>): string {
+  const direct = headers['X-KDCube-Auth-Provider'] || headers['x-kdcube-auth-provider'] || '';
+  if (direct) return direct.toLowerCase();
+  const found = Object.entries(headers).find(([name]) => name.toLowerCase() === 'x-kdcube-auth-provider');
+  return String(found?.[1] || '').toLowerCase();
+}
+
 function buildConfig(): Record<string, unknown> {
   const config: Record<string, unknown> = {
     baseUrl: settings.getBaseUrl(),
@@ -44,15 +51,13 @@ function buildConfig(): Record<string, unknown> {
     config.idTokenHeader = settings.getIdTokenHeader();
   }
   // Surface auth rides the same config payload as an opaque header map. The
-  // iframe does not know whether these headers are Telegram, Slack, OIDC, or
-  // another host-owned proof.
-  const authHeaders: Record<string, string> = {};
-  const initData = telegramInitData();
-  if (initData) authHeaders['X-Telegram-Init-Data'] = initData;
-  const provider = settings.getAuthProvider();
-  if (provider) authHeaders['X-KDCube-Auth-Provider'] = provider;
-  const connectionId = settings.getAuthConnectionId();
-  if (connectionId) authHeaders['X-KDCube-Auth-Connection-ID'] = connectionId;
+  // backend provides the selector headers; the host only fills browser-owned
+  // proof material that the backend cannot know.
+  const authHeaders = settings.getAuthContextHeaders();
+  if (providerFrom(authHeaders) === 'telegram') {
+    const initData = telegramInitData();
+    if (initData) authHeaders['X-Telegram-Init-Data'] = initData;
+  }
   if (Object.keys(authHeaders).length > 0) {
     config.authContext = { headers: authHeaders };
   }

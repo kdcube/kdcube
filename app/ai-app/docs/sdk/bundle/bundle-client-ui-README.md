@@ -187,10 +187,11 @@ For one widget codebase that runs in both KDCube and Telegram:
   and call `/operations/{alias}`
 - if that endpoint is unavailable, fall back to iframe parent
   `CONFIG_REQUEST` / `CONFIG_RESPONSE`
-- in Telegram, the host includes an opaque `authContext.headers` map in the
-  same `CONFIG_RESPONSE` config object used for `baseUrl`, tenant/project, and
-  token fields; the hosted widget blindly promotes those headers on backend
-  requests
+- in Telegram, the host gets an opaque `authContext.headers` template from its
+  backend, adds browser-owned `initData` only when the template declares
+  Telegram as the provider, and includes that map in the same `CONFIG_RESPONSE`
+  config object used for `baseUrl`, tenant/project, and token fields; the hosted
+  widget blindly promotes those headers on backend requests
 - do not invent a second auth postMessage protocol such as `kdcube.auth.*`;
   `kdcube-auth-changed` is the refresh signal, and the hosted widget re-sends
   `CONFIG_REQUEST`

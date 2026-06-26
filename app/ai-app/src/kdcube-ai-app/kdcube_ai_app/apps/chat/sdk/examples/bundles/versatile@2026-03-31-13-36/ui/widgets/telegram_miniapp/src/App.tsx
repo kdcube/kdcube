@@ -86,10 +86,13 @@ export default function App() {
         widget_path: tab === 'conversations' ? 'chats' : tab === 'telegram_admin' ? 'telegram-admin' : 'memory',
         mark_memory_seen: tab === 'memory',
       });
-      if (data.auth) {
+      if (data.authContext?.headers) {
         settings.update({
-          authProvider: data.auth.provider || 'telegram',
-          authConnectionId: data.auth.connection_id || data.auth.connectionId || '',
+          authContextHeaders: Object.fromEntries(
+            Object.entries(data.authContext.headers)
+              .filter(([name, value]) => name && value !== undefined && value !== null && String(value) !== '')
+              .map(([name, value]) => [name, String(value)]),
+          ),
         });
       }
       setPayload(data);

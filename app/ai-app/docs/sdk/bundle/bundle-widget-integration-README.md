@@ -572,8 +572,10 @@ Telegram-hosted iframe runtime:
 
 - the Telegram host reads `window.Telegram.WebApp.initData`
 - the hosted widget still sends `CONFIG_REQUEST`
-- the host answers the same `CONFIG_RESPONSE` / `CONN_RESPONSE` with normal
-  runtime config plus `authContext.headers`
+- the host gets `authContext.headers` from its backend, adds browser-owned
+  `initData` only when that template declares Telegram as the provider, and
+  answers the same `CONFIG_RESPONSE` / `CONN_RESPONSE` with normal runtime
+  config plus that header map
 - the widget calls `/operations/{alias}` and blindly promotes
   `authContext.headers` on backend requests
 - `kdcube-auth-changed` is the refresh signal; the widget re-sends

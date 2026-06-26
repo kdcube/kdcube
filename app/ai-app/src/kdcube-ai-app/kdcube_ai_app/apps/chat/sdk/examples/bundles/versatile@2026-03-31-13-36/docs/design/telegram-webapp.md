@@ -20,18 +20,22 @@ KDCube control plane iframe
 Telegram Mini App
   -> public/telegram_miniapp_data
   -> embedded user-memories iframe
-       -> operations/memories_widget_* with X-Telegram-Init-Data
+       -> operations/memories_widget_* with authContext.headers
   -> public/telegram_conversations_*
   -> public/telegram_webapp_user_admin_* (Telegram admin role)
 ```
 
 The frontend always sends platform tokens when embedded in KDCube and sends raw
 Telegram `initData` as `X-Telegram-Init-Data` when running inside Telegram.
-For reusable SDK widgets, the Telegram shell passes `telegramInitData` through
-the standard `CONFIG_REQUEST` / `CONFIG_RESPONSE` iframe handshake; the widget
-then calls its normal `operations/*` routes. Gateway request-auth delegates the
-Telegram proof to Connection Hub, whose Telegram authenticator module validates
-the signed initData, resolves any identity link, and stamps platform authority.
+For reusable SDK widgets, the Telegram shell first gets a server-authored
+`authContext.headers` template from `telegram_miniapp_data`, adds browser-owned
+`initData` only because that template declares Telegram as the provider, and
+passes the resulting opaque header map through the standard `CONFIG_REQUEST` /
+`CONFIG_RESPONSE` iframe handshake. The widget then calls its normal
+`operations/*` routes and blindly promotes those headers. Gateway request-auth
+delegates the Telegram proof to Connection Hub, whose Telegram authenticator
+module validates the signed initData, resolves any identity link, and stamps
+platform authority.
 
 The older `public/telegram_memories_widget_*` wrappers remain an app-owned
 compatibility lane. They are not the generic SDK-widget embedding contract.
@@ -52,10 +56,13 @@ Telegram Mini App
   Telegram.WebApp.initData
   |
   v
-standard widget CONFIG_RESPONSE carries telegramInitData
+public/telegram_miniapp_data returns authContext.headers
   |
   v
-operations/* APIs + X-Telegram-Init-Data
+standard widget CONFIG_RESPONSE carries authContext.headers + initData
+  |
+  v
+operations/* APIs + promoted authContext.headers
   gateway request-auth calls Connection Hub
   Connection Hub validates initData and resolves linked platform authority
 

@@ -30,16 +30,27 @@ function telegramOperationAlias(operation: string): string {
   return '';
 }
 
+function providerFrom(headers: Record<string, string>): string {
+  const found = Object.entries(headers).find(([name]) => name.toLowerCase() === 'x-kdcube-auth-provider');
+  return String(found?.[1] || '').toLowerCase();
+}
+
 function authHeaders(base?: HeadersInit): Headers {
   const headers = new Headers(base);
   const initData = telegramInitData();
   const accessToken = settings.getAccessToken();
   const idToken = settings.getIdToken();
-  if (initData) headers.set('X-Telegram-Init-Data', initData);
-  const authProvider = settings.getAuthProvider();
-  const authConnectionId = settings.getAuthConnectionId();
-  if (authProvider) headers.set('X-KDCube-Auth-Provider', authProvider);
-  if (authConnectionId) headers.set('X-KDCube-Auth-Connection-ID', authConnectionId);
+  const authContextHeaders = settings.getAuthContextHeaders();
+  Object.entries(authContextHeaders).forEach(([name, value]) => {
+    if (name && value) headers.set(name, value);
+  });
+  // The first public Telegram calls happen before telegram_miniapp_data returns
+  // server-authored authContext. They still need initData so the app backend can
+  // produce that config. After config arrives, add initData only when the
+  // server-authored template declares Telegram as the provider.
+  if (initData && (Object.keys(authContextHeaders).length === 0 || providerFrom(authContextHeaders) === 'telegram')) {
+    headers.set('X-Telegram-Init-Data', initData);
+  }
   if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
   if (idToken) headers.set(settings.getIdTokenHeader(), idToken);
   return headers;
