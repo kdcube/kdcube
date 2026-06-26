@@ -528,6 +528,180 @@ def test_sync_runtime_ctx_bundle_props_refreshes_render_thinking(monkeypatch):
     assert wf.runtime_ctx.debug_timeline_keep_files == 17
 
 
+def _announce_settings_stub():
+    return SimpleNamespace(
+        AI_REACT_RENDER_THINKING=True,
+        HOST_REACT_DEBUG_PATH="/host/react-debug",
+        PLATFORM=SimpleNamespace(
+            REACT_DEBUG=SimpleNamespace(
+                REACT_DEBUG_ROOT="/react-debug",
+                REACT_DEBUG_KEEP_FILES=5,
+            )
+        ),
+    )
+
+
+def test_announce_config_resolves_from_as_consumer_mem_namespace(monkeypatch):
+    """Announce (hotset) settings are a consumer concern: read them from the
+    agent's ``as_consumer.agents.<agent>.tools[].namespaces.mem.announce``."""
+    monkeypatch.setattr(workflow_mod, "get_settings", _announce_settings_stub)
+    wf = BaseWorkflow.__new__(BaseWorkflow)
+    wf.bundle_props = {
+        "memory": {"enabled": True},
+        "surfaces": {
+            "as_consumer": {
+                "agents": {
+                    "main": {
+                        "tools": [
+                            {
+                                "kind": "named_service",
+                                "alias": "named_services",
+                                "namespaces": {
+                                    "mem": {
+                                        "allowed": ["provider.about", "object.search"],
+                                        "announce": {
+                                            "enabled": True,
+                                            "limit": 12,
+                                            "scope_filter": "all_user_memories",
+                                            "timeout_seconds": 2.0,
+                                        },
+                                    }
+                                },
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+    }
+    wf.runtime_ctx = RuntimeCtx()
+
+    wf._sync_runtime_ctx_bundle_props()
+
+    assert wf.runtime_ctx.memory_announce_enabled is True
+    assert wf.runtime_ctx.memory_hotset_limit == 12
+    assert wf.runtime_ctx.memory_scope_filter == "all_user_memories"
+    assert wf.runtime_ctx.memory_announce_timeout_seconds == 2.0
+
+
+def test_announce_config_falls_back_to_legacy_memory_announce(monkeypatch):
+    """Un-migrated bundles (no as_consumer announce) keep working via the
+    legacy ``memory.announce.*`` fallback in ``_resolve_announce_config``."""
+    monkeypatch.setattr(workflow_mod, "get_settings", _announce_settings_stub)
+    wf = BaseWorkflow.__new__(BaseWorkflow)
+    wf.bundle_props = {
+        "memory": {
+            "enabled": True,
+            "announce": {
+                "enabled": True,
+                "limit": 6,
+                "scope_filter": "current_bundle",
+            },
+        },
+        # mem namespace connected but without an announce sub-config
+        "surfaces": {
+            "as_consumer": {
+                "agents": {
+                    "main": {
+                        "tools": [
+                            {
+                                "kind": "named_service",
+                                "alias": "named_services",
+                                "namespaces": {"mem": {"allowed": ["object.search"]}},
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+    }
+    wf.runtime_ctx = RuntimeCtx()
+
+    wf._sync_runtime_ctx_bundle_props()
+
+    assert wf.runtime_ctx.memory_announce_enabled is True
+    assert wf.runtime_ctx.memory_hotset_limit == 6
+    assert wf.runtime_ctx.memory_scope_filter == "current_bundle"
+
+
+def test_announce_enabled_for_pure_consumer_without_memory_block(monkeypatch):
+    """A pure memory *consumer* (no ``memory:`` owner block) still gets the
+    hotset: enablement gates on consuming the ``mem`` namespace via
+    ``as_consumer`` + ``announce.enabled``, never on owner ``memory.enabled``."""
+    monkeypatch.setattr(workflow_mod, "get_settings", _announce_settings_stub)
+    wf = BaseWorkflow.__new__(BaseWorkflow)
+    wf.bundle_props = {
+        # NO "memory" block at all — versatile is a pure consumer.
+        "surfaces": {
+            "as_consumer": {
+                "agents": {
+                    "main": {
+                        "tools": [
+                            {
+                                "kind": "named_service",
+                                "alias": "named_services",
+                                "namespaces": {
+                                    "mem": {
+                                        "allowed": ["provider.about", "object.search"],
+                                        "announce": {
+                                            "enabled": True,
+                                            "limit": 8,
+                                            "scope_filter": "all_user_memories",
+                                        },
+                                    }
+                                },
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+    }
+    wf.runtime_ctx = RuntimeCtx()
+
+    wf._sync_runtime_ctx_bundle_props()
+
+    assert wf.runtime_ctx.memory_enabled is False
+    assert wf.runtime_ctx.memory_announce_enabled is True
+    assert wf.runtime_ctx.memory_hotset_limit == 8
+    assert wf.runtime_ctx.memory_scope_filter == "all_user_memories"
+
+
+def test_announce_disabled_when_mem_not_consumed(monkeypatch):
+    """Without the ``mem`` namespace in ``as_consumer``, the agent is not a
+    memory consumer, so announce stays off even with a legacy
+    ``memory.announce.enabled: true`` block."""
+    monkeypatch.setattr(workflow_mod, "get_settings", _announce_settings_stub)
+    wf = BaseWorkflow.__new__(BaseWorkflow)
+    wf.bundle_props = {
+        "memory": {
+            "enabled": True,
+            "announce": {"enabled": True, "limit": 6, "scope_filter": "current_bundle"},
+        },
+        # as_consumer connects a different namespace, not "mem".
+        "surfaces": {
+            "as_consumer": {
+                "agents": {
+                    "main": {
+                        "tools": [
+                            {
+                                "kind": "named_service",
+                                "alias": "named_services",
+                                "namespaces": {"task": {"allowed": ["object.search"]}},
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+    }
+    wf.runtime_ctx = RuntimeCtx()
+
+    wf._sync_runtime_ctx_bundle_props()
+
+    assert wf.runtime_ctx.memory_announce_enabled is False
+
+
 def test_base_workflow_constructor_binds_external_event_source_when_redis_present(monkeypatch):
     sentinel = object()
     calls = []

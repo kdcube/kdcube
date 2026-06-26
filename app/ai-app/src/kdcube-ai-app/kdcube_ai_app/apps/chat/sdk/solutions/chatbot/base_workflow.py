@@ -784,6 +784,43 @@ class BaseWorkflow():
         env_json = os.environ.get("MCP_SERVICES") or ""
         return env_json or None
 
+    def _mem_consumer_namespace_config(self) -> Mapping[str, Any]:
+        """Return the agent's ``as_consumer`` ``mem`` namespace config (or empty).
+
+        Non-empty means this agent is wired to *consume* durable user memory via a
+        ``named_service`` connection. This is the consumer-side signal that gates
+        announce/hotset injection — it is independent of the owner/provider
+        ``memory.enabled`` flag.
+        """
+        try:
+            from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client_tools import (
+                named_service_namespace_config,
+            )
+
+            mem_ns_cfg = named_service_namespace_config(self.bundle_props or {}, namespace="mem")
+            if isinstance(mem_ns_cfg, Mapping):
+                return mem_ns_cfg
+        except Exception:
+            pass
+        return {}
+
+    def _resolve_announce_config(self, memory_cfg: Dict[str, Any]) -> Dict[str, Any]:
+        """Resolve the memory-announce (hotset) config for the active agent.
+
+        Announce is a consumer concern, so the source of truth is the agent's
+        ``surfaces.as_consumer.agents.<agent>.tools[].namespaces.mem.announce``
+        declaration. When that is absent (un-migrated bundle), fall back to the
+        legacy ``memory.announce.*`` block. This is the single place the legacy
+        fallback lives; once all bundles declare announce via ``as_consumer`` the
+        ``memory.announce`` reader can be retired without touching callers.
+        """
+        mem_ns_cfg = self._mem_consumer_namespace_config()
+        announce = mem_ns_cfg.get("announce") if isinstance(mem_ns_cfg, Mapping) else None
+        if isinstance(announce, Mapping):
+            return dict(announce)
+        legacy = memory_cfg.get("announce") if isinstance(memory_cfg, dict) else None
+        return legacy if isinstance(legacy, dict) else {}
+
     def _sync_runtime_ctx_bundle_props(self) -> None:
         runtime_ctx = getattr(self, "runtime_ctx", None)
         if runtime_ctx is None:
@@ -820,11 +857,23 @@ class BaseWorkflow():
             memory_cfg = {}
         memory_enabled_raw = _bool_or_none(memory_cfg.get("enabled"))
         memory_enabled = bool(memory_enabled_raw) if memory_enabled_raw is not None else False
-        announce_cfg = memory_cfg.get("announce") if isinstance(memory_cfg.get("announce"), dict) else {}
+        # Announce (hotset injection) is a *consumer* concern: an agent asking
+        # for durable user memory to be injected into its context. Read it from
+        # the agent's ``surfaces.as_consumer.agents.<agent>.tools[].namespaces.mem.announce``
+        # declaration first, and fall back to the legacy ``memory.announce.*``
+        # block so un-migrated bundles keep working. The fallback lives entirely
+        # in ``_resolve_announce_config`` below.
+        announce_cfg = self._resolve_announce_config(memory_cfg)
         announce_enabled_raw = _bool_or_none(announce_cfg.get("enabled"))
         announce_enabled = bool(announce_enabled_raw) if announce_enabled_raw is not None else False
+        # Announce is a *consumer* gate: the hotset injects iff this agent is
+        # wired to consume the ``mem`` namespace via ``as_consumer`` AND its
+        # announce block is enabled. It must NOT depend on the owner/provider
+        # ``memory.enabled`` flag — a pure memory consumer (no ``memory:`` block)
+        # still gets the hotset.
+        mem_consumed = bool(self._mem_consumer_namespace_config())
         runtime_ctx.memory_enabled = memory_enabled
-        runtime_ctx.memory_announce_enabled = bool(memory_enabled and announce_enabled)
+        runtime_ctx.memory_announce_enabled = bool(mem_consumed and announce_enabled)
         runtime_ctx.memory_scope_filter = str(announce_cfg.get("scope_filter") or "current_bundle").strip() or "current_bundle"
         runtime_ctx.memory_hotset_limit = _positive_int(announce_cfg.get("limit")) or 8
         try:
