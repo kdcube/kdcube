@@ -20,6 +20,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/providers-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/discovery-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/react-object-materialization-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/react-object-policy-bridge-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/runtime/cross-runtime-context-README.md
@@ -419,6 +420,57 @@ surfaces:
 The current ReAct integration passes the ReAct agent id as the namespace
 service client id. Other runtimes can pass their own client id when their tool
 adapters are wired.
+
+### Namespace Roster In Agent Instructions
+
+A consumer can teach its agent the namespaces it is connected to by inserting a
+`[NAMED SERVICES …]` teaching block plus a **namespace roster** — one line per
+connected namespace, each rendered with that namespace's provider-published
+`intro` (provider `label` fallback). Inserting this block is opt-in and
+app-customizable.
+
+The helper lives on `BaseWorkflow`
+(`apps/chat/sdk/solutions/chatbot/base_workflow.py`):
+
+```python
+async def named_service_react_instructions(self, *, client_id=None) -> str
+```
+
+It resolves the agent's `surfaces.as_consumer`-connected namespaces, reads each
+namespace's `intro`/`label` through the **discovery module**
+(`fetch_namespace_intros` → `RedisNamedServiceDiscovery.namespace_intros`), and
+returns the composed block (empty string when the agent has no connected
+namespaces). The intro read is the canonical discovery read; tenant, project,
+redis, and `bundle_props` are pulled from `self`.
+
+A bundle inserts it where it builds ReAct. Because `build_react(...)` is
+synchronous, call the async helper first and append the result to
+`additional_instructions`:
+
+```python
+# in the bundle's async react node, before build_react(...)
+named_service_block = await self.named_service_react_instructions(client_id=client_id)
+if named_service_block:
+    additional_instructions = (
+        f"{additional_instructions}\n\n{named_service_block}".strip()
+        if str(additional_instructions or "").strip()
+        else named_service_block
+    )
+
+react = self.build_react(
+    ...,
+    additional_instructions=additional_instructions,
+)
+```
+
+The helper is a normal `BaseWorkflow` method on purpose: any bundle can call it
+as-is, or override it to customize or fully rebuild the section at the app
+layer. That is why it lives on the workflow base rather than inside the SDK
+runtime.
+
+The intros come from the discovery registry — see
+[Discovery Registry](discovery-README.md) — and each namespace's `intro` is set
+by its provider — see [Providers → Namespace Intro](providers-README.md#namespace-intro).
 
 The ReAct tool catalog is built from the consumer allow-list plus provider
 metadata. For `named_services.search_objects`, the rendered tool block lists:
