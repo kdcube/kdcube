@@ -115,7 +115,7 @@ throttled and Stripe will retry — causing duplicate processing attempts.
 ### 4) Stripe Dashboard setup
 
 - Create products and prices in Stripe Dashboard.
-- Store `stripe_price_id` in `subscription_plans` table for each plan.
+- Store `stripe_price_id` in `plans` table for each plan.
 - Configure webhook endpoint: `POST https://<your-domain>/api/economics/webhooks/stripe`
 - Select events to listen for (see "Webhook Events Handled" below).
 - Copy signing secret → `services.stripe.webhook_secret` in `secrets.yaml`.
@@ -277,8 +277,8 @@ sequenceDiagram
     Stripe-->>U: Redirect to success_url
 
     Stripe->>WH: invoice.paid (first invoice)
-    WH->>DB: UPDATE user_subscriptions (status, period dates)
-    WH->>DB: Top up user_subscription_period_budget
+    WH->>DB: UPDATE user_plans (status, period dates)
+    WH->>DB: Top up user_plan_period_budget
     WH->>DB: INSERT external_economics_events (idempotent by stripe_event_id)
 
     loop Every billing period
@@ -336,14 +336,14 @@ sequenceDiagram
     Note over Stripe,WH: New subscription is created in Stripe (new_sub_id)
 
     Stripe->>WH: invoice.paid (new_sub_id, first invoice)
-    WH->>DB: Read current user_subscriptions (prev_sub = old_sub_id)
+    WH->>DB: Read current user_plans (prev_sub = old_sub_id)
 
     WH->>DB: INSERT external_economics_events (idempotency lock)
 
     WH->>DB: Rollover unused balance from old period<br/>(prev_sub.next_charge_at, prev_sub.last_charged_at)<br/>→ project budget (idempotent by old period_key)
 
     WH->>DB: Top up new subscription period budget
-    WH->>DB: Upsert user_subscriptions (stripe_subscription_id = new_sub_id)
+    WH->>DB: Upsert user_plans (stripe_subscription_id = new_sub_id)
     WH->>DB: Mark external_economics_events = applied
 
     Note over WH,Stripe: Old Stripe subscription is still active at this point
@@ -383,14 +383,14 @@ sequenceDiagram
     API->>Stripe: Create new Stripe Subscription (new price_id, immediate)
     Stripe-->>API: {new_sub_id, status, latest_invoice}
 
-    API->>DB: Upsert user_subscriptions (stripe_subscription_id = new_sub_id)
+    API->>DB: Upsert user_plans (stripe_subscription_id = new_sub_id)
 
     Note over Stripe,API: Stripe fires invoice.paid for the new subscription<br/>Webhook handler applies it idempotently (rollover already done)
 ```
 
 > **Race condition prevented:** Without the explicit rollover before cancel,
 > `customer.subscription.deleted` for `old_sub_id` could arrive after
-> `user_subscriptions` already holds `new_sub_id`. At that point
+> `user_plans` already holds `new_sub_id`. At that point
 > `get_subscription_by_stripe_id(old_sub_id)` returns `None` and the rollover
 > would be silently skipped.
 
@@ -402,7 +402,7 @@ sequenceDiagram
 When Stripe attempts to charge for a subscription renewal but the card is declined:
 
 1. Stripe fires `customer.subscription.updated` with `status=past_due`.
-2. The webhook handler syncs the status to `past_due` in `user_subscriptions`;
+2. The webhook handler syncs the status to `past_due` in `user_plans`;
    `next_charge_at` stays unchanged.
 3. Stripe retries the charge according to its retry schedule (typically 3–4 attempts
    over several days). If all retries fail, Stripe fires `customer.subscription.deleted`.
@@ -425,7 +425,7 @@ sequenceDiagram
     Note over Stripe: Renewal date arrives — charge attempt fails (insufficient funds)
 
     Stripe->>WH: customer.subscription.updated (status=past_due)
-    WH->>DB: UPDATE user_subscriptions SET status='past_due'
+    WH->>DB: UPDATE user_plans SET status='past_due'
     Note over WH: next_charge_at unchanged (already in the past)
 
     Note over Job: Runs on cron — sweeps status IN (active, past_due, unpaid)<br/>where next_charge_at <= now
@@ -436,11 +436,11 @@ sequenceDiagram
     alt Stripe retries succeed
         Stripe->>WH: invoice.paid (new period)
         WH->>DB: Top up new subscription period budget
-        WH->>DB: UPDATE user_subscriptions (status=active, new next_charge_at)
+        WH->>DB: UPDATE user_plans (status=active, new next_charge_at)
     else All retries exhausted
         Stripe->>WH: customer.subscription.deleted
         WH->>DB: Rollover unused balance (idempotent — may already be done by job)
-        WH->>DB: UPDATE user_subscriptions SET status='canceled', next_charge_at=NULL
+        WH->>DB: UPDATE user_plans SET status='canceled', next_charge_at=NULL
     end
 ```
 
@@ -526,10 +526,10 @@ project budget.
 | `subscription:rollover:{tenant}:{project}` | String (NX+TTL) | Distributed lock |
 
 **Behaviour:**
-- Queries `user_subscriptions` for periods with `next_charge_at < now`.
+- Queries `user_plans` for periods with `next_charge_at < now`.
 - Sweeps up to `SUBSCRIPTION_ROLLOVER_SWEEP_LIMIT` records per invocation.
 - Loops until the batch is smaller than the limit (drains the backlog).
-- Moves remaining `user_subscription_period_budget` balance → `tenant_project_budget`.
+- Moves remaining `user_plan_period_budget` balance → `tenant_project_budget`.
 - Records idempotent event in `external_economics_events` per period key.
 
 ---
@@ -606,7 +606,7 @@ Set the password in `secrets.yaml` under `services.email.password` (alias: `EMAI
 
 ## Operational Checklist
 
-- [ ] Create Stripe products/prices; store `stripe_price_id` in `subscription_plans`
+- [ ] Create Stripe products/prices; store `stripe_price_id` in `plans`
 - [ ] Set `services.stripe.secret_key` and `services.stripe.webhook_secret` in `secrets.yaml`
 - [ ] Configure webhook URL in Stripe Dashboard: `POST /api/economics/webhooks/stripe`
 - [ ] Add `bypass_throttling_patterns` for `^.*/webhooks/stripe$` to `GATEWAY_CONFIG_JSON`

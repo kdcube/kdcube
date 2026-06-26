@@ -176,7 +176,7 @@ internal/operator-assigned. `anonymous`/`free`/`admin`/`wallet` are seeded from
 the built-in baseline automatically; you only list a plan here to override a
 baseline field or to add a chargeable catalog plan.
 
-Seeded into the `subscription_plans` table.
+Seeded into the `plans` table.
 
 ## Built-in baseline
 
@@ -216,7 +216,7 @@ Behaviour:
   decides `DO NOTHING` vs `DO UPDATE SET` for every entity.
 - Writes:
   - `plan_quota_policies` — baseline four + descriptor entries/extras;
-  - `subscription_plans` — baseline `anonymous`/`free`/`admin`/`wallet` + descriptor entries/extras;
+  - `plans` — baseline `anonymous`/`free`/`admin`/`wallet` + descriptor entries/extras;
   - `application_budget_policies` — descriptor providers only;
   - `tenant_project_budget` — `overdraft_limit_cents` only (balance untouched).
 - Idempotent: re-running with `enforce: false` is a no-op for existing rows.

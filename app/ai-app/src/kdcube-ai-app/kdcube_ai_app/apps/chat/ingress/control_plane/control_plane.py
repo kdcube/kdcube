@@ -2010,7 +2010,7 @@ async def get_request_lineage(
             SELECT reservation_id, user_id, period_key, amount_cents, actual_spent_cents, status,
                    created_at, expires_at, committed_at, released_at,
                    notes, bundle_id, provider, request_id
-            FROM {schema}.user_subscription_period_reservations
+            FROM {schema}.user_plan_period_reservations
             WHERE tenant=$1 AND project=$2 AND request_id=$3
             ORDER BY created_at ASC
         """, settings.TENANT, settings.PROJECT, request_id)
@@ -2018,7 +2018,7 @@ async def get_request_lineage(
         sub_ledger = await conn.fetch(f"""
             SELECT id, user_id, period_key, amount_cents, kind, note,
                    bundle_id, provider, request_id, created_at
-            FROM {schema}.user_subscription_period_ledger
+            FROM {schema}.user_plan_period_ledger
             WHERE tenant=$1 AND project=$2 AND request_id=$3
             ORDER BY created_at ASC
         """, settings.TENANT, settings.PROJECT, request_id)

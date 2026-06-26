@@ -60,9 +60,9 @@ class SubscriptionBudgetLimiter:
     with reservation support for in-flight requests.
     """
 
-    BUDGET_TABLE = "user_subscription_period_budget"
-    RESERVATIONS_TABLE = "user_subscription_period_reservations"
-    LEDGER_TABLE = "user_subscription_period_ledger"
+    BUDGET_TABLE = "user_plan_period_budget"
+    RESERVATIONS_TABLE = "user_plan_period_reservations"
+    LEDGER_TABLE = "user_plan_period_ledger"
 
     def __init__(
         self,

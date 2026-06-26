@@ -4673,7 +4673,7 @@ Shortfall ledger notes:
                             <Card>
                                 <CardHeader
                                     title="Lookup Subscription (by user)"
-                                    subtitle="Shows the current subscription row stored in user_subscriptions."
+                                    subtitle="Shows the current subscription row stored in user_plans."
                                 />
                                 <CardBody className="space-y-6">
                                     <form onSubmit={handleLookupSubscription} className="space-y-4">

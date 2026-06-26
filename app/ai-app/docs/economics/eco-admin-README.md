@@ -126,9 +126,9 @@ Plans are later referenced by subscriptions and used by plan quota policies.
 
 UI card: **Create Subscription**
 
-- Internal subscription: creates a row in `user_subscriptions` with provider `internal`.
+- Internal subscription: creates a row in `user_plans` with provider `internal`.
 - Stripe subscription: creates a Stripe subscription and stores a snapshot.
-- Plan ID is required and must exist in `subscription_plans`.
+- Plan ID is required and must exist in `plans`.
 
 Backend: `POST /subscriptions/create`
 

@@ -93,13 +93,13 @@ class _FakeConn:
         self.executed: list = []
 
     async def fetchrow(self, sql, *args):
-        if "subscription_plans" in sql:
+        if ".plans" in sql:
             return self.plan_row
         if "INSERT INTO" in sql:
             return self.insert_row
         if "rl_month_anchor_at" in sql and sql.strip().upper().startswith("SELECT"):
             return self.anchor_row
-        if "SELECT * FROM" in sql and "user_subscriptions" in sql:
+        if "SELECT * FROM" in sql and "user_plans" in sql:
             return self.existing_row
         return None
 

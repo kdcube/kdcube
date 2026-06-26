@@ -27,9 +27,9 @@ Key table groups:
 - Lifetime credits: `user_lifetime_credits`
 - Credit reservations: `user_token_reservations`
 - Project budget: `tenant_project_budget`, `tenant_project_budget_reservations`, `tenant_project_budget_ledger`
-- Subscription plans: `subscription_plans`
-- Subscriptions: `user_subscriptions`
-- Subscription period budgets: `user_subscription_period_budget`, `user_subscription_period_reservations`, `user_subscription_period_ledger`
+- Subscription plans: `plans`
+- Subscriptions: `user_plans`
+- Subscription period budgets: `user_plan_period_budget`, `user_plan_period_reservations`, `user_plan_period_ledger`
 - Idempotency and audit: `external_economics_events`
 
 ## Plan Policy Seeding

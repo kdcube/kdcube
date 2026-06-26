@@ -15,7 +15,7 @@ seed_economics(): descriptor (+ baked-in baseline) -> DB.
 Entities:
   - quota_policies          (4 mandatory baked-in plans + descriptor extras)
   - application_budget_policies   (descriptor opt-in)
-  - subscription_plans            (anonymous/free/admin/wallet baked-in + descriptor extras)
+  - plans                         (anonymous/free/admin/wallet baked-in + descriptor extras)
   - tenant_project_budget         (overdraft limit only; balance untouched)
 Reservation floors are runtime config (not seeded).
 """
@@ -220,7 +220,7 @@ def seed_economics(tenant: str, project: str, *, mgr=None, path: Optional[str] =
                "active": bool(fields.get("active", True)),
                "metadata": Json(metadata) if metadata is not None else None,
                "created_by": _SEED_CREATED_BY, "notes": _SEED_NOTES}
-        _upsert(mgr, schema, "subscription_plans", ("tenant", "project", "plan_id"), row, enforce)
+        _upsert(mgr, schema, "plans", ("tenant", "project", "plan_id"), row, enforce)
     _log(f"plans: {len(plans)} ({', '.join(plans)})")
 
     # 4) project budget — overdraft limit only; balance is never written here.

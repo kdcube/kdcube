@@ -125,14 +125,14 @@ async def _resolve_stripe_customer(mgr, stripe_client, tenant: str, project: str
                 # (upsert_from_stripe_invoice_paid). A customer-only row is an internal
                 # baseline with a payment artifact attached, not an active subscription.
                 await conn.execute(f"""
-                    INSERT INTO {_schema}.user_subscriptions (
+                    INSERT INTO {_schema}.user_plans (
                         tenant, project, user_id, status, provider, stripe_customer_id, updated_at
                     ) VALUES ($1, $2, $3, 'active', 'internal', $4, NOW())
                     ON CONFLICT (tenant, project, user_id)
                     DO UPDATE SET
                         stripe_customer_id = EXCLUDED.stripe_customer_id,
                         updated_at = NOW()
-                    WHERE {_schema}.user_subscriptions.stripe_customer_id IS NULL
+                    WHERE {_schema}.user_plans.stripe_customer_id IS NULL
                 """, tenant, project, user_id, stripe_customer_id)
 
     return stripe_customer_id

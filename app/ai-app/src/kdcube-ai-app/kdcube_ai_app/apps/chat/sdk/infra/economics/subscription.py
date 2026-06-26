@@ -129,7 +129,7 @@ class RLMonthAnchorStore:
     Durable mirror of the RL monthly-window anchor.
     """
 
-    TABLE = "user_subscriptions"
+    TABLE = "user_plans"
 
     def __init__(self, pg_pool: asyncpg.Pool):
         self.pg_pool = pg_pool
@@ -207,8 +207,8 @@ class RLMonthAnchorStore:
 
 
 class SubscriptionManager:
-    TABLE = "user_subscriptions"
-    PLAN_TABLE = "subscription_plans"
+    TABLE = "user_plans"
+    PLAN_TABLE = "plans"
     EXT_EVENTS_TABLE = "external_economics_events"
 
     def __init__(self, pg_pool: asyncpg.Pool):

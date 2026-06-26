@@ -612,7 +612,7 @@ async def _fetch_active_subscription_reservations(
     has_updated_at = await _table_has_column(
         pg_pool=pg_pool,
         schema=_schema,
-        table="user_subscription_period_reservations",
+        table="user_plan_period_reservations",
         column="updated_at",
     )
     updated_at_expr = "updated_at" if has_updated_at else "NULL::timestamptz AS updated_at"
@@ -620,7 +620,7 @@ async def _fetch_active_subscription_reservations(
         SELECT reservation_id, period_key, bundle_id, provider, request_id,
                amount_cents, actual_spent_cents, status,
                expires_at, created_at, {updated_at_expr}, released_at, committed_at, notes
-        FROM {_schema}.user_subscription_period_reservations
+        FROM {_schema}.user_plan_period_reservations
         WHERE tenant=$1 AND project=$2 AND user_id=$3 AND status='active'
         ORDER BY created_at DESC
         LIMIT $4

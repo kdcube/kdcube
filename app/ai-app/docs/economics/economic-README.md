@@ -101,7 +101,7 @@ Special handling for wallet users with no subscription:
 billing period. Zero‑cost baseline rows (`free`/`admin`) are intentionally *not*
 "active" here — only a chargeable plan flips a user onto a subscription plan.
 
-**Baseline rows.** Every authenticated user gets a `user_subscriptions` row on
+**Baseline rows.** Every authenticated user gets a `user_plans` row on
 first session (zero‑cost `free`, or `admin` for privileged) via a
 post‑session‑create hook. Resolution always reads the current row; anonymous users
 get no row.
@@ -208,7 +208,7 @@ Shortfall notes are tagged `shortfall:wallet_subscription`, `shortfall:wallet_pl
 ### Reservation types
 
 - Rate limiter token reservation (Redis) for the plan part
-- Subscription reservations in `user_subscription_period_reservations`
+- Subscription reservations in `user_plan_period_reservations`
 - Project budget reservations in `tenant_project_budget_reservations`
 - Wallet reservations in `user_token_reservations`
 
@@ -268,11 +268,11 @@ Key tables:
 - `tenant_project_budget_ledger` — project budget ledger
 - `tenant_project_budget_absorption` — view for shortfall absorption reporting
 - `tenant_project_budget_absorption_detail` — view for shortfall reporting by user/bundle
-- `subscription_plans` — plan catalog and Stripe price mapping (free/admin baseline + chargeable plans)
-- `user_subscriptions` — per‑user plan row (one per tenant/project/user). Carries a baseline `free`/`admin` row for every authenticated user (see Plan Resolution), `provider` (`internal`|`stripe`), Stripe linkage ids, and `rl_month_anchor_at` — a durable mirror of the Redis monthly‑quota window anchor so the window survives a Redis flush.
-- `user_subscription_period_budget` — per period subscription balance
-- `user_subscription_period_reservations` — subscription holds
-- `user_subscription_period_ledger` — subscription ledger
+- `plans` — plan catalog and Stripe price mapping (free/admin baseline + chargeable plans)
+- `user_plans` — per‑user plan row (one per tenant/project/user). Carries a baseline `free`/`admin` row for every authenticated user (see Plan Resolution), `provider` (`internal`|`stripe`), Stripe linkage ids, and `rl_month_anchor_at` — a durable mirror of the Redis monthly‑quota window anchor so the window survives a Redis flush.
+- `user_plan_period_budget` — per period subscription balance
+- `user_plan_period_reservations` — subscription holds
+- `user_plan_period_ledger` — subscription ledger
 - `external_economics_events` — idempotency and audit for external/internal economic operations
 
 ## Accounting and Costing

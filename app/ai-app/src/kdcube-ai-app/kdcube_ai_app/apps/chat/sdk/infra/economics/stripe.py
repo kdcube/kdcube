@@ -192,7 +192,7 @@ class StripeSubscriptionService:
             metadata: Optional[Dict[str, str]] = None,
     ) -> StripeCreateSubscriptionResult:
         """
-        Creates a Stripe subscription and stores a best-effort snapshot in user_subscriptions.
+        Creates a Stripe subscription and stores a best-effort snapshot in user_plans.
         NOTE: If the customer has no default payment method, the subscription may start as 'incomplete'
         until payment is completed.
         """
@@ -387,11 +387,11 @@ class StripeEconomicsWebhookHandler:
       - applies effects via managers:
           * UserCreditsManager (lifetime credits)
           * SubscriptionBudgetLimiter (per-user subscription balance)
-      - maintains subscription state in user_subscriptions (DB upsert)
+      - maintains subscription state in user_plans (DB upsert)
 
     Supported:
       - payment_intent.succeeded -> add lifetime user tokens
-      - invoice.paid -> if subscription invoice -> top up subscription balance + update user_subscriptions
+      - invoice.paid -> if subscription invoice -> top up subscription balance + update user_plans
     """
 
     def __init__(
@@ -739,7 +739,7 @@ class StripeEconomicsWebhookHandler:
 
                     # Update subscription snapshot with the real ID and plan_id
                     await conn.execute(f"""
-                        UPDATE {_project_schema(tenant, project)}.user_subscriptions
+                        UPDATE {_project_schema(tenant, project)}.user_plans
                         SET stripe_subscription_id = COALESCE(stripe_subscription_id, $4),
                             stripe_customer_id = COALESCE(stripe_customer_id, $5),
                             plan_id = COALESCE(plan_id, $6),
