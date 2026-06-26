@@ -184,23 +184,24 @@ portable context room documented in
 | Default ReAct automation job | Supported. The actor remains `state.user`; economics uses `state.economics_user`; roles/permissions are carried in the scoped request context and state. |
 | Custom `execute_automation_job(...)` | Supported if the custom executor runs through the SDK operation path. It receives a scoped request context and `bundle_call_context.identity_authority`. |
 | Manual automation run from an authenticated browser session | Usually does not need link projection because the browser request already has a platform `UserSession`. If the manual run is queued for later under a surface-local actor, the enqueue source must include the same authority envelope. |
-| Telegram Mini App interactive requests | Telegram init data proves the Telegram actor for that request. Full platform authority projection for every Telegram public endpoint requires a generic channel authorizer; scheduled automations currently use the configured scheduler identity resolver path. |
-| Generic API/MCP/Data Bus calls | Not automatic yet. They must either arrive with a platform-authenticated request context or be routed through a channel authorizer that resolves and stamps the authority envelope. |
+| Telegram Mini App interactive requests | Telegram init data proves the Telegram actor for that request. Platform authority projection should route through the Connection Hub request-auth bridge; scheduled automations use the configured scheduler identity resolver path because they are detached durable work. |
+| Generic API/MCP/Data Bus calls | They must either arrive with a platform-authenticated request context or carry proof/authority metadata that Connection Hub, the producing provider, or the app can resolve into the same authority envelope. |
 
-### The Missing Generic Authorizer
+### Request-Auth Bridge And Detached Work
 
-The current automation mechanism solves detached scheduled execution. It does
-not yet provide a universal ingress authorizer for every channel.
+The current automation mechanism solves detached scheduled execution. Interactive
+provider requests should use the Connection Hub request-auth bridge; scheduled
+jobs should store the resulting authority in the durable source before they run.
 
-The target design is:
+The shared shape is:
 
 ```text
 incoming request / event / job
   |
-  | authenticate channel proof
+  | authenticate proof
   |   browser cookie, Telegram initData, webhook signature, API key, MCP token...
   v
-channel authorizer
+request-auth selector or durable scheduler resolver
   |
   | emits actor identity
   | resolves linked platform principal through Connections

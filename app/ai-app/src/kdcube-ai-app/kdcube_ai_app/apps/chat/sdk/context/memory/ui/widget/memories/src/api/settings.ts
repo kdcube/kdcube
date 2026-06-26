@@ -12,7 +12,16 @@ type RuntimeConfigPayload = {
   idToken?: string | null;
   idTokenHeader?: string;
   idTokenHeaderName?: string;
-  auth?: { idTokenHeaderName?: string };
+  auth?: {
+    idTokenHeaderName?: string;
+    provider?: string;
+    connection_id?: string;
+    connectionId?: string;
+  };
+  authProvider?: string;
+  authConnectionId?: string;
+  connection_id?: string;
+  connectionId?: string;
   defaultTenant?: string;
   defaultProject?: string;
   defaultAppBundleId?: string;
@@ -62,6 +71,8 @@ class Settings {
     accessToken: PLACEHOLDER_ACCESS_TOKEN,
     idToken: PLACEHOLDER_ID_TOKEN,
     idTokenHeader: PLACEHOLDER_ID_TOKEN_HEADER,
+    authProvider: '',
+    authConnectionId: '',
     tenant: PLACEHOLDER_TENANT,
     project: PLACEHOLDER_PROJECT,
     bundleId: PLACEHOLDER_BUNDLE_ID,
@@ -98,6 +109,14 @@ class Settings {
     return this.values.telegramInitData || '';
   }
 
+  getAuthProvider(): string {
+    return this.values.authProvider || '';
+  }
+
+  getAuthConnectionId(): string {
+    return this.values.authConnectionId || '';
+  }
+
   authHeaders(base?: HeadersInit): Headers {
     const headers = new Headers(base);
     if (this.values.accessToken && !isPlaceholder(this.values.accessToken)) {
@@ -122,6 +141,14 @@ class Settings {
     const tenant = config.defaultTenant || config.tenant || config.tenant_id;
     const project = config.defaultProject || config.project || config.project_id;
     const idTokenHeader = config.idTokenHeader || config.idTokenHeaderName || config.auth?.idTokenHeaderName;
+    const authProvider = config.authProvider || config.auth?.provider;
+    const authConnectionId = (
+      config.authConnectionId ||
+      config.connection_id ||
+      config.connectionId ||
+      config.auth?.connection_id ||
+      config.auth?.connectionId
+    );
     const telegramInitData = typeof config.telegramInitData === 'string' ? config.telegramInitData : undefined;
     this.values = {
       ...this.values,
@@ -132,12 +159,14 @@ class Settings {
       tenant: tenant || this.values.tenant,
       project: project || this.values.project,
       bundleId: config.defaultAppBundleId || this.values.bundleId,
+      authProvider: authProvider || this.values.authProvider,
+      authConnectionId: authConnectionId || this.values.authConnectionId,
       telegramInitData: telegramInitData ?? this.values.telegramInitData,
     };
     return Boolean(
       tenant || project || config.baseUrl || config.accessToken !== undefined ||
       config.idToken !== undefined || idTokenHeader || config.defaultAppBundleId ||
-      telegramInitData,
+      telegramInitData || authProvider || authConnectionId,
     );
   }
 
@@ -187,7 +216,18 @@ class Settings {
           identity: 'MEMORIES_WIDGET',
           // telegramInitData rides the SAME config payload as the tokens —
           // hosts that have a Telegram proof include it, others omit it.
-          requestedFields: ['baseUrl', 'accessToken', 'idToken', 'idTokenHeader', 'defaultTenant', 'defaultProject', 'defaultAppBundleId', 'telegramInitData'],
+          requestedFields: [
+            'baseUrl',
+            'accessToken',
+            'idToken',
+            'idTokenHeader',
+            'defaultTenant',
+            'defaultProject',
+            'defaultAppBundleId',
+            'telegramInitData',
+            'authProvider',
+            'authConnectionId',
+          ],
         },
       }, '*');
     } catch {
@@ -219,9 +259,9 @@ class Settings {
       }
       if (data.type !== 'CONN_RESPONSE' && data.type !== 'CONFIG_RESPONSE') return;
       if (data.identity !== 'MEMORIES_WIDGET' || !data.config) return;
-      const before = `${this.values.accessToken}|${this.values.idToken}|${this.values.telegramInitData}`;
+      const before = `${this.values.accessToken}|${this.values.idToken}|${this.values.telegramInitData}|${this.values.authProvider}|${this.values.authConnectionId}`;
       this.applyRuntimeConfig(data.config);
-      const after = `${this.values.accessToken}|${this.values.idToken}|${this.values.telegramInitData}`;
+      const after = `${this.values.accessToken}|${this.values.idToken}|${this.values.telegramInitData}|${this.values.authProvider}|${this.values.authConnectionId}`;
       finish(true);
       if (resolved && after !== before) this.authChangedCallback?.();
     });

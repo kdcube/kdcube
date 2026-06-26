@@ -10,7 +10,7 @@ import os
 import uuid
 from dataclasses import asdict, dataclass
 from enum import Enum
-from typing import Optional, Dict, List
+from typing import Any, Optional, Dict, List
 
 from redis import asyncio as aioredis
 
@@ -141,6 +141,9 @@ local function merge_user_data(existing_obj, user_obj)
     end
     if user_obj["email"] ~= nil then
         existing_obj["email"] = user_obj["email"]
+    end
+    if user_obj["identity_authority"] ~= nil then
+        existing_obj["identity_authority"] = user_obj["identity_authority"]
     end
 end
 
@@ -353,6 +356,7 @@ class UserSession:
     email: Optional[str] = None
     timezone: Optional[str] = None
     request_context: Optional[RequestContext] = None
+    identity_authority: Optional[Dict[str, Any]] = None
 
     def __post_init__(self):
         if isinstance(self.user_type, str):
@@ -367,6 +371,8 @@ class UserSession:
                 self.request_context = RequestContext(**self.request_context)
             except Exception:
                 self.request_context = None
+        if self.identity_authority is not None and not isinstance(self.identity_authority, dict):
+            self.identity_authority = None
 
         if self.roles is None:
             self.roles = []
@@ -453,7 +459,8 @@ class SessionManager:
             permissions=user_data.get("permissions", []) if user_data else [],
             email=user_data.get("email") if user_data else None,
             request_context=context,
-            timezone=context.user_timezone
+            timezone=context.user_timezone,
+            identity_authority=user_data.get("identity_authority") if user_data else None,
         )
         if _auth_debug_enabled():
             logger.info(

@@ -187,15 +187,16 @@ For one widget codebase that runs in both KDCube and Telegram:
   and call `/operations/{alias}`
 - if that endpoint is unavailable, fall back to iframe parent
   `CONFIG_REQUEST` / `CONFIG_RESPONSE`
-- in Telegram, the host includes `telegramInitData` in the same
+- in Telegram, the host includes `telegramInitData` and `authConnectionId` in the same
   `CONFIG_RESPONSE` config object used for `baseUrl`, tenant/project, and token
-  fields; the child sends that value as `X-Telegram-Init-Data` on backend
-  requests
+  fields; the child sends those values as `X-Telegram-Init-Data` and
+  `X-KDCube-Auth-Connection-ID` on backend requests
 - do not invent a second auth postMessage protocol such as `kdcube.auth.*`;
   `kdcube-auth-changed` is the refresh signal, and the child re-sends
   `CONFIG_REQUEST`
 - when the target app is meant to use platform/gateway auth, keep calling the
-  normal `/operations/{alias}` route with `X-Telegram-Init-Data`; use a
+  normal `/operations/{alias}` route with `X-Telegram-Init-Data` and
+  `X-KDCube-Auth-Connection-ID`; use a
   `/public/{telegram_alias}` route only for an app that explicitly owns and
   documents a Telegram-specific public API
 - keep admin-only panels behind KDCube-authenticated operations, not Telegram

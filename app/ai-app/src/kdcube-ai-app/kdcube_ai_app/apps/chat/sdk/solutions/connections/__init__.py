@@ -37,6 +37,13 @@ from .identity_links import (
     connection_hub_bundle_id_from_entrypoint,
     request_origin,
 )
+from .authenticators import (
+    AuthenticatedRequest,
+    AuthenticatorRegistration,
+    ConnectionHubAuthenticatorsClient,
+    REQUEST_AUTHENTICATE_OPERATION,
+    RequestEnvelope,
+)
 
 __all__ = [
     "NAMESPACE",
@@ -60,4 +67,9 @@ __all__ = [
     "connection_hub_bundle_id",
     "connection_hub_bundle_id_from_entrypoint",
     "request_origin",
+    "AuthenticatedRequest",
+    "AuthenticatorRegistration",
+    "ConnectionHubAuthenticatorsClient",
+    "REQUEST_AUTHENTICATE_OPERATION",
+    "RequestEnvelope",
 ]

@@ -24,6 +24,7 @@ from kdcube_ai_app.apps.middleware.token_extract import (
     resolve_auth_from_headers,
     resolve_auth_from_headers_and_cookies,
 )
+from kdcube_ai_app.apps.middleware.request_auth import RequestAuthCandidate, RequestAuthSelector
 import logging
 import os
 
@@ -98,6 +99,15 @@ class FastAPIGatewayAdapter:
         self.gateway = gateway
         self.policy = policy_resolver
         self.econ_role_resolver = None
+        session_factory = getattr(gateway, "get_or_create_session_with_econ_role", None)
+        if session_factory is None:
+            async def _missing_session_factory(*_args, **_kwargs):
+                raise RuntimeError("FastAPIGatewayAdapter requires a RequestGateway before processing requests")
+            session_factory = _missing_session_factory
+        self.request_auth_selector = RequestAuthSelector(
+            auth_manager=getattr(gateway, "auth_manager", None),
+            session_factory=session_factory,
+        )
 
     def set_econ_role_resolver(self, resolver):
         self.econ_role_resolver = resolver
@@ -107,6 +117,9 @@ class FastAPIGatewayAdapter:
     def register_post_session_create_hook(self, hook):
         if hasattr(self.gateway, "register_post_session_create_hook"):
             self.gateway.register_post_session_create_hook(hook)
+
+    def register_request_auth_candidate(self, candidate: RequestAuthCandidate) -> None:
+        self.request_auth_selector.register_request_auth_candidate(candidate)
 
     def _extract_context(self, request: Request, *, header_only_auth: bool = False) -> RequestContext:
         """Extract request context from FastAPI request"""
@@ -228,6 +241,11 @@ class FastAPIGatewayAdapter:
         endpoint = request.url.path
 
         try:
+            session = await self.request_auth_selector.resolve_session(
+                request,
+                context,
+                allow_request_auth_candidates=not header_only_auth,
+            )
             session = await self.gateway.process_request(
                 context,
                 requirements,
@@ -235,6 +253,7 @@ class FastAPIGatewayAdapter:
                 bypass_throttling,
                 bypass_gate=bypass_gate,
                 bypass_backpressure=bypass_backpressure,
+                preauthenticated_session=session,
             )
             await self._enforce_user_session_ownership(request, session)
             return session

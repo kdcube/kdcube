@@ -36,6 +36,10 @@ function authHeaders(base?: HeadersInit): Headers {
   const accessToken = settings.getAccessToken();
   const idToken = settings.getIdToken();
   if (initData) headers.set('X-Telegram-Init-Data', initData);
+  const authProvider = settings.getAuthProvider();
+  const authConnectionId = settings.getAuthConnectionId();
+  if (authProvider) headers.set('X-KDCube-Auth-Provider', authProvider);
+  if (authConnectionId) headers.set('X-KDCube-Auth-Connection-ID', authConnectionId);
   if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
   if (idToken) headers.set(settings.getIdTokenHeader(), idToken);
   return headers;

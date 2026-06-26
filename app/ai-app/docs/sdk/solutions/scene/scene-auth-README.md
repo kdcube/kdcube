@@ -143,21 +143,34 @@ those as `Authorization` / its ID-token header on each request (and keeps
 `credentials: 'include'` for the cookie path). Per request, the surface picks
 the proof by what the config actually provided.
 
-### `telegramInitData` — a config-field extension
+### Telegram proof and connection id as config-field extensions
 
 A host that authenticates via a Telegram proof adds one more field to the
 **same** `config` payload:
 
 ```js
-{ type: 'CONFIG_RESPONSE', identity: 'MY_WIDGET', config: { /* …baseUrl/tenant/project… */, telegramInitData: '<Telegram.WebApp.initData>' } }
+{
+  type: 'CONFIG_RESPONSE',
+  identity: 'MY_WIDGET',
+  config: {
+    /* …baseUrl/tenant/project… */
+    telegramInitData: '<Telegram.WebApp.initData>',
+    authProvider: 'telegram',
+    authConnectionId: 'telegram.default'
+  }
+}
 ```
 
 It is just another config field, supplied the same way a Bearer host supplies
 `accessToken`. When present, the surface attaches it to every backend request as
-the `X-Telegram-Init-Data` header. The host (the Telegram Mini App) reads
-`window.Telegram.WebApp.initData` and includes it; it never sends a bot token or
-any server secret. The surface only transports the proof — the gateway and
-Connection Hub authenticate centrally (see
+the `X-Telegram-Init-Data` header. The `authConnectionId` field is a non-secret
+selector handle, not a bot id; the surface attaches it as
+`X-KDCube-Auth-Connection-ID`, usually with
+`X-KDCube-Auth-Provider: telegram`. The host (the Telegram Mini App) reads
+`window.Telegram.WebApp.initData`, reads `authConnectionId` from server config,
+and includes both; it never sends a bot token or any server secret. The surface
+only transports the proof and selector — the gateway and Connection Hub
+authenticate centrally (see
 [ecosystem-component](../ecosystem-component/ecosystem-component-README.md) for
 the backend split).
 
@@ -165,6 +178,10 @@ the backend split).
 `/public/telegram_*` API. A surface that is meant to use normal platform/gateway
 auth keeps calling its standard `/operations/{alias}` routes and sends the
 Telegram proof as a header.
+
+For KDCube-controlled surfaces, `authConnectionId` should be present whenever an
+external proof is present. Uncontrolled inbound hooks may lack this hint and can
+fall back to provider-specific request-shape matching inside Connection Hub.
 
 ### `kdcube-auth-changed` refreshes the handshake
 
@@ -182,10 +199,11 @@ The memories widget is the standard surface and is used unchanged across hosts.
 In a browser scene/website it receives `accessToken` / `idToken` (or relies on
 the session cookie) through `CONFIG_RESPONSE`. Hosted as an iframe in the
 Telegram Mini App, it receives `telegramInitData` through the **same**
-`CONFIG_RESPONSE` and attaches `X-Telegram-Init-Data`. The Mini App host answers
-the widget's `CONFIG_REQUEST` (matched on its `MEMORIES_WIDGET` identity) and
-nudges it with `kdcube-auth-changed` once `initData` is available — one
-handshake, both hosts, no Telegram-specific protocol.
+`CONFIG_RESPONSE`, plus `authConnectionId`, and attaches
+`X-Telegram-Init-Data` and `X-KDCube-Auth-Connection-ID`. The Mini App host
+answers the widget's `CONFIG_REQUEST` (matched on its `MEMORIES_WIDGET`
+identity) and nudges it with `kdcube-auth-changed` once `initData` is available
+— one handshake, both hosts, no Telegram-specific protocol.
 
 ## Reference implementations
 

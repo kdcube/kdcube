@@ -187,6 +187,23 @@ def _tenant_project(entrypoint: Any) -> tuple[str, str]:
     )
 
 
+def _auth_config(entrypoint: Any) -> Dict[str, Any]:
+    bundle_prop = getattr(entrypoint, "bundle_prop", None)
+    connection_id = ""
+    if callable(bundle_prop):
+        connection_id = str(
+            bundle_prop("integrations.telegram.auth_connection_id", "")
+            or bundle_prop("integrations.telegram.connection_id", "")
+            or ""
+        ).strip()
+    if not connection_id:
+        connection_id = "telegram.default"
+    return {
+        "provider": "telegram",
+        "connection_id": connection_id,
+    }
+
+
 async def list_conversations(
     entrypoint: Any,
     *,
@@ -331,6 +348,7 @@ async def payload(
     data = {
         "ok": True,
         "bundle_id": _bundle_id(entrypoint),
+        "auth": _auth_config(entrypoint),
         "active_tab": active_tab,
         "path": str(widget_path or "").strip("/"),
         "tabs": tabs,

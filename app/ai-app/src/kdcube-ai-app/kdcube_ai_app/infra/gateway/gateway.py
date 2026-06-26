@@ -171,7 +171,8 @@ class RequestGateway:
                               endpoint: str = "/api/chat",
                               bypass_throttling: bool = False,
                               bypass_gate: bool = False,
-                              bypass_backpressure: bool = False) -> UserSession:
+                              bypass_backpressure: bool = False,
+                              preauthenticated_session: UserSession | None = None) -> UserSession:
         """Process request through all gateway layers with optional bypass"""
 
         # Check if this is a privileged admin/monitoring endpoint
@@ -189,8 +190,11 @@ class RequestGateway:
         try:
             # Step 1: Authentication with circuit breaker
             try:
-                user_type, user_data = await self._authenticate(context)
-                session = await self.get_or_create_session_with_econ_role(context, user_type, user_data)
+                if preauthenticated_session is not None:
+                    session = preauthenticated_session
+                else:
+                    user_type, user_data = await self._authenticate(context)
+                    session = await self.get_or_create_session_with_econ_role(context, user_type, user_data)
 
                 # Check auth circuit breaker
                 await auth_circuit.check_request_allowed(session)

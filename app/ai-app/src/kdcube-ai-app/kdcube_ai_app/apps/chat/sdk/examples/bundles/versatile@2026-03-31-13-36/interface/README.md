@@ -334,8 +334,14 @@ response returns `ok: false` with `error.code == "telegram_mapping_required"`.
 In the Telegram Mini App, the same logical calls use signed Telegram initData.
 
 SDK durable memory maintenance uses the shared `memories_widget_*` operations.
-The Mini App maps those to `telegram_memories_widget_*` public operations when
-it runs inside Telegram.
+When the memory widget is embedded inside the Telegram Mini App, the host passes
+`telegramInitData` through the standard widget config handshake and the widget
+sends it as `X-Telegram-Init-Data` on the same `memories_widget_*` operations.
+Gateway request-auth delegates the proof to Connection Hub.
+
+The `telegram_memories_widget_*` public operations are legacy app-owned
+compatibility wrappers. New reusable widgets should not map shared operation
+names to Telegram-specific public aliases.
 The reconciliation flow is intentionally two phase: a dry run writes a proposal
 and artifacts; a later apply call mutates memory only after explicit
 confirmation.

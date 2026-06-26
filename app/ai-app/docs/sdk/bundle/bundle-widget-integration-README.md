@@ -573,16 +573,19 @@ Telegram-hosted iframe runtime:
 - the Telegram host reads `window.Telegram.WebApp.initData`
 - the hosted widget still sends `CONFIG_REQUEST`
 - the host answers the same `CONFIG_RESPONSE` / `CONN_RESPONSE` with normal
-  runtime config plus `telegramInitData`
+  runtime config plus `telegramInitData` and `authConnectionId`
 - the widget calls `/operations/{alias}` and sends `telegramInitData` as
-  `X-Telegram-Init-Data`
+  `X-Telegram-Init-Data`, plus `authConnectionId` as
+  `X-KDCube-Auth-Connection-ID`
 - `kdcube-auth-changed` is the refresh signal; the widget re-sends
   `CONFIG_REQUEST`
 
 This route lets gateway auth invoke the Connection Hub request-auth bridge:
 
 ```text
-widget /operations/{alias} + X-Telegram-Init-Data
+widget /operations/{alias}
+  + X-Telegram-Init-Data
+  + X-KDCube-Auth-Connection-ID
   -> gateway request-auth selector
   -> Connection Hub provider module
   -> linked platform authority

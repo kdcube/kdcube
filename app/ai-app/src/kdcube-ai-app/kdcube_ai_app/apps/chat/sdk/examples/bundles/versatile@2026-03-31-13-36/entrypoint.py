@@ -1257,6 +1257,7 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
                 },
                 "telegram": {
                     "enabled": False,
+                    "auth_connection_id": "telegram.default",
                     "webhook_url": "",
                     "send_responses": True,
                     "stream_activity": True,

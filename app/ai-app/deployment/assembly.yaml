@@ -41,6 +41,12 @@ auth:
         - "http://localhost/callback"
         - "http://127.0.0.1/callback"
 
+  authenticators:
+    connection_hub:
+      enabled: false
+      app_id: "connection-hub@1-0"
+      operation: "request_authenticate"
+
   # OIDC service account credentials → secrets.yaml: auth.oidc.{admin_email,admin_username,admin_password}
 
   # Cognito — fill in when auth.idp = "cognito"

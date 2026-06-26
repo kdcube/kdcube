@@ -86,6 +86,12 @@ export default function App() {
         widget_path: tab === 'conversations' ? 'chats' : tab === 'telegram_admin' ? 'telegram-admin' : 'memory',
         mark_memory_seen: tab === 'memory',
       });
+      if (data.auth) {
+        settings.update({
+          authProvider: data.auth.provider || 'telegram',
+          authConnectionId: data.auth.connection_id || data.auth.connectionId || '',
+        });
+      }
       setPayload(data);
       let nextShowAdmin = Boolean(data.permissions?.show_admin_component);
       if (isTelegramWebApp()) {

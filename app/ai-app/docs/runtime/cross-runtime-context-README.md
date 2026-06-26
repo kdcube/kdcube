@@ -160,11 +160,15 @@ BUNDLE_CALL_CONTEXT.identity_authority
   platform_permissions = [...]
   identity_provider  = telegram
   identity_provider_subject = 434804821
+
+UserSession.identity_authority
+  same authority envelope when the execution starts at the gateway selector
 ```
 
 `REQUEST_CONTEXT.user` is what generic role validators see after context is
-bound. `BUNDLE_CALL_CONTEXT.identity_authority` preserves provenance and the
-actor/economics split across subprocesses, isolated runtimes, and peer app calls.
+bound. `UserSession.identity_authority` preserves the same provenance at the
+gateway/session boundary. `BUNDLE_CALL_CONTEXT.identity_authority` carries it
+across subprocesses, isolated runtimes, and peer app calls.
 
 Rules:
 

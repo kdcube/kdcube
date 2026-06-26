@@ -23,7 +23,14 @@ interface RuntimeConfigPayload {
   project_id?: string;
   auth?: {
     idTokenHeaderName?: string;
+    provider?: string;
+    connection_id?: string;
+    connectionId?: string;
   };
+  authProvider?: string;
+  authConnectionId?: string;
+  connection_id?: string;
+  connectionId?: string;
 }
 
 function isPlaceholder(value: string | null | undefined): boolean {
@@ -70,6 +77,17 @@ export function routeContextFromLocation(): RouteContext {
 
 export const ROUTE_CONTEXT = routeContextFromLocation();
 
+function authConnectionIdFromLocation(): string {
+  const params = new URLSearchParams(window.location.search);
+  return (
+    params.get('auth_connection_id') ||
+    params.get('authConnectionId') ||
+    params.get('connection_id') ||
+    params.get('connectionId') ||
+    ''
+  ).trim();
+}
+
 export function activeTabFromPath(widgetPath: string): TabId {
   const first = String(widgetPath || '').trim().replace(/^\/+/, '').split('/', 1)[0].toLowerCase();
   if (first === 'chat' || first === 'chats' || first === 'conversation' || first === 'conversations') return 'conversations';
@@ -104,6 +122,8 @@ class SettingsManager {
     accessToken: PLACEHOLDER_ACCESS_TOKEN,
     idToken: PLACEHOLDER_ID_TOKEN,
     idTokenHeader: PLACEHOLDER_ID_TOKEN_HEADER,
+    authProvider: 'telegram',
+    authConnectionId: authConnectionIdFromLocation() || 'telegram.default',
     defaultTenant: PLACEHOLDER_TENANT,
     defaultProject: PLACEHOLDER_PROJECT,
     defaultAppBundleId: PLACEHOLDER_BUNDLE_ID,
@@ -145,6 +165,14 @@ class SettingsManager {
     return !this.settings.idToken || isPlaceholder(this.settings.idToken) ? null : this.settings.idToken;
   }
 
+  getAuthProvider(): string {
+    return this.settings.authProvider || 'telegram';
+  }
+
+  getAuthConnectionId(): string {
+    return this.settings.authConnectionId || '';
+  }
+
   // Build a served-widget iframe URL for another bundle (mirrors how the
   // scene host composes `widgetUrlForBundle`). Carries tenant/project/bundle
   // in the path and honours the public-vs-private route this host loaded from
@@ -182,6 +210,14 @@ class SettingsManager {
   private applyRuntimeConfig(config: RuntimeConfigPayload, options: { notify?: boolean } = {}): void {
     const tenant = config.defaultTenant || config.tenant || config.tenant_id;
     const project = config.defaultProject || config.project || config.project_id;
+    const authProvider = config.authProvider || config.auth?.provider;
+    const authConnectionId = (
+      config.authConnectionId ||
+      config.connection_id ||
+      config.connectionId ||
+      config.auth?.connection_id ||
+      config.auth?.connectionId
+    );
     this.settings = {
       ...this.settings,
       baseUrl: config.baseUrl || this.settings.baseUrl,
@@ -192,6 +228,8 @@ class SettingsManager {
         config.idTokenHeaderName ||
         config.auth?.idTokenHeaderName ||
         this.settings.idTokenHeader,
+      authProvider: authProvider || this.settings.authProvider,
+      authConnectionId: authConnectionId || this.settings.authConnectionId,
       defaultTenant: tenant || this.settings.defaultTenant,
       defaultProject: project || this.settings.defaultProject,
       defaultAppBundleId: config.defaultAppBundleId || this.settings.defaultAppBundleId,
@@ -258,6 +296,8 @@ class SettingsManager {
                 'accessToken',
                 'idToken',
                 'idTokenHeader',
+                'authProvider',
+                'authConnectionId',
                 'defaultTenant',
                 'defaultProject',
                 'defaultAppBundleId',

@@ -35,6 +35,10 @@ export async function callOperation<T>(operation: string, payload: Record<string
   const headers = settings.authHeaders({ 'Content-Type': 'application/json' });
   const initData = telegramInitData();
   if (initData) headers.set('X-Telegram-Init-Data', initData);
+  const authProvider = settings.getAuthProvider();
+  const authConnectionId = settings.getAuthConnectionId();
+  if (authProvider) headers.set('X-KDCube-Auth-Provider', authProvider);
+  if (authConnectionId) headers.set('X-KDCube-Auth-Connection-ID', authConnectionId);
   const response = await fetch(operationUrl(operation), {
     method: 'POST',
     credentials: 'include',

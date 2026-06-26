@@ -167,6 +167,26 @@ issue platform-recognized `kst1.*` cookies. It requires
 `services.session_token.secret` in `secrets.yaml`. See
 [Bundle Session Auth](../service/auth/bundle-session-auth-README.md).
 
+`auth.authenticators` configures optional request-auth selector bridge
+candidates. The selector returns a complete `UserSession`; downstream gateway
+policy does not need to know which bridge accepted the request.
+
+```yaml
+auth:
+  authenticators:
+    connection_hub:
+      enabled: false
+      app_id: "connection-hub@1-0"
+      operation: "request_authenticate"
+```
+
+When enabled, ingress/proc call the Connection Hub request-auth bridge before
+falling back to normal platform token/cookie auth. Provider-specific
+authenticators, such as Telegram Mini App `initData`, are Connection Hub modules
+with access to Connection Hub config, secrets, and identity-link data. See
+[Auth Selector](../service/auth/auth-selector-README.md) and
+[Connection Authenticators](../sdk/solutions/connections/authenticators-README.md).
+
 `auth.idp: multi-cognito` selects the multi-provider Cognito verifier. The
 browser-facing OIDC config still comes from `auth.cognito`; ingress/proc also
 trust every Cognito provider listed in `auth.providers` or

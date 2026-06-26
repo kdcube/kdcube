@@ -8,8 +8,9 @@ import type { MemoryPayload } from '../store/types';
 // a same-origin served-widget iframe (like the scene host does) instead of
 // embedding the widget bundle directly. The host answers the iframe's standard
 // CONFIG_REQUEST with a CONFIG_RESPONSE that — inside Telegram — also carries
-// telegramInitData, so the widget authenticates the same way it does under the
-// scene/website hosts (cookies/Bearer there, X-Telegram-Init-Data here).
+// telegramInitData and authConnectionId, so the widget authenticates the same
+// way it does under the scene/website hosts (cookies/Bearer there,
+// X-Telegram-Init-Data + X-KDCube-Auth-Connection-ID here).
 const MEMORY_WIDGET_BUNDLE_ID = 'user-memories@2026-06-26';
 const MEMORY_WIDGET_ALIAS = 'memories';
 const MEMORY_WIDGET_IDENTITY = 'MEMORIES_WIDGET';
@@ -31,9 +32,9 @@ export function MemoryPage({ memory, reload }: MemoryPageProps) {
   );
 
   // Answer the memory iframe's standard CONFIG_REQUEST. Inside Telegram the
-  // CONFIG_RESPONSE config also carries telegramInitData, which the widget
-  // attaches as X-Telegram-Init-Data. A kdcube-auth-changed nudge re-triggers
-  // the handshake if initData lands after the frame mounts.
+  // CONFIG_RESPONSE config also carries telegramInitData and authConnectionId,
+  // which the widget attaches as selector headers. A kdcube-auth-changed nudge
+  // re-triggers the handshake if initData lands after the frame mounts.
   useEffect(
     () => installConfigHandshakeHost(frameRef.current, { identity: MEMORY_WIDGET_IDENTITY }),
     [memoryWidgetSrc],

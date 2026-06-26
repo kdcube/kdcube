@@ -19,15 +19,22 @@ KDCube control plane iframe
 
 Telegram Mini App
   -> public/telegram_miniapp_data
-  -> public/telegram_memories_widget_*
+  -> embedded user-memories iframe
+       -> operations/memories_widget_* with X-Telegram-Init-Data
   -> public/telegram_conversations_*
   -> public/telegram_webapp_user_admin_* (Telegram admin role)
 ```
 
 The frontend always sends platform tokens when embedded in KDCube and sends raw
 Telegram `initData` as `X-Telegram-Init-Data` when running inside Telegram.
-The public Telegram APIs verify that signed initData on every request before
-reading or mutating data.
+For reusable SDK widgets, the Telegram shell passes `telegramInitData` through
+the standard `CONFIG_REQUEST` / `CONFIG_RESPONSE` iframe handshake; the widget
+then calls its normal `operations/*` routes. Gateway request-auth delegates the
+Telegram proof to Connection Hub, whose Telegram authenticator module validates
+the signed initData, resolves any identity link, and stamps platform authority.
+
+The older `public/telegram_memories_widget_*` wrappers remain an app-owned
+compatibility lane. They are not the generic SDK-widget embedding contract.
 
 ## Auth Lanes
 
@@ -45,9 +52,16 @@ Telegram Mini App
   Telegram.WebApp.initData
   |
   v
-public/telegram_* APIs
-  bundle validates initData HMAC using bot token
-  bundle resolves Telegram registry row and role
+standard widget CONFIG_RESPONSE carries telegramInitData
+  |
+  v
+operations/* APIs + X-Telegram-Init-Data
+  gateway request-auth calls Connection Hub
+  Connection Hub validates initData and resolves linked platform authority
+
+public/telegram_* APIs, for app-owned Telegram routes
+  app validates initData/webhook proof using bot token
+  app resolves Telegram registry row and app-local role
 ```
 
 Do not use KDCube operation tokens as a substitute for Telegram `initData` in

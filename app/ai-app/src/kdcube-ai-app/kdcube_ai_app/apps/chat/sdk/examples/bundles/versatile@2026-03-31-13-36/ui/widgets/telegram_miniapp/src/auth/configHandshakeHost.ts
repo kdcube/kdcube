@@ -6,10 +6,11 @@
 //   host -> iframe: { type: 'CONFIG_RESPONSE', identity, config: { ... } }
 //
 // The only Telegram-specific part is that, when running inside Telegram, the
-// host adds `telegramInitData: window.Telegram.WebApp.initData` to the SAME
-// config payload. The widget then attaches it as X-Telegram-Init-Data; the
-// gateway + Connection Hub validate it centrally. The host NEVER sends the bot
-// token or any server secret — only the public initData proof.
+// host adds `telegramInitData` and the server-configured `authConnectionId` to
+// the SAME config payload. The widget then attaches X-Telegram-Init-Data plus
+// X-KDCube-Auth-Connection-ID; the gateway + Connection Hub validate it
+// centrally. The host NEVER sends the bot token or any server secret — only
+// the public initData proof and a non-secret connection selector.
 //
 // When initData becomes available after the iframe mounted, the host posts the
 // standard `kdcube-auth-changed` nudge so the widget re-requests config. No new
@@ -34,6 +35,7 @@ function buildConfig(): Record<string, unknown> {
     defaultTenant: settings.getTenant(),
     defaultProject: settings.getProject(),
     defaultAppBundleId: settings.getBundleId(),
+    authProvider: settings.getAuthProvider(),
   };
   // Forward normal token fields only when the host actually has them; the
   // memory widget keeps its cookie/credentials fallback otherwise.
@@ -47,6 +49,8 @@ function buildConfig(): Record<string, unknown> {
   // The Telegram proof rides the same payload when present.
   const initData = telegramInitData();
   if (initData) config.telegramInitData = initData;
+  const connectionId = settings.getAuthConnectionId();
+  if (connectionId) config.authConnectionId = connectionId;
   return config;
 }
 

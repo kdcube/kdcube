@@ -5,6 +5,7 @@ summary: "Authentication providers and token transport across REST/SSE/Socket.IO
 tags: ["service", "auth", "security", "tokens"]
 keywords: ["delegated auth", "cookie auth", "JWT", "SSE auth", "Socket.IO"]
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-selector-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/oauth-mcp-integration-access-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connections-sdk-solution-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/bundle-session-auth-README.md
@@ -20,12 +21,18 @@ options across REST, SSE, and Socket.IO.
 
 ## How auth works (current)
 
-1) **Token extraction**  
-Tokens are extracted from headers or cookies (REST/SSE), or from Socket.IO auth payload.
+1) **Request-auth selector**
+The gateway runs the request through the auth selector. A valid platform
+token/cookie session wins first because it directly provides platform authority.
+If no platform session is established, the selector can accept the Connection
+Hub request-auth bridge. Provider-specific proof modules live inside Connection
+Hub.
 
-2) **Authentication**  
-The gateway authenticates the access token (and optional ID token) and builds a
-`UserSession`.
+2) **Authentication**
+The selected authenticator returns a complete `UserSession`. For classic
+platform requests this is Cognito/session/simple auth. For channel/provider
+requests this may be Connection Hub after one of its provider modules verifies
+proof and resolves linked authority.
 
 3) **User type classification**  
 User type is derived from roles:
@@ -48,19 +55,28 @@ mismatched sessions are rejected (401/403).
 
 Service auth validates platform credentials and produces a `UserSession` for
 platform REST/SSE/Socket.IO/MCP/API requests. It should not contain every
-channel-specific identity-link rule.
+provider-specific identity-link rule.
 
 When a request starts from another channel, such as Telegram init data, webhook
-signature, API key, or a bundle-owned proof, a channel authorizer should:
+signature, API key, or a bundle-owned proof, KDCube-controlled callers should
+send the external proof plus a stable non-secret `connection_id` selector
+(`X-KDCube-Auth-Connection-ID`). Uncontrolled hooks may lack that hint and are
+handled by provider-specific request-shape matching. Connection Hub should:
 
-1. validate the channel proof;
-2. resolve the channel identity to a linked platform principal through
+1. select the provider module from the request shape;
+2. validate the provider/request proof;
+3. resolve the provider identity to a linked platform principal through
    Connections;
-3. resolve platform roles/permissions for that principal;
-4. stamp the execution context before role checks, economics, ReAct, tools, or
+4. resolve platform roles/permissions for that principal;
+5. stamp the execution context before role checks, economics, ReAct, tools, or
    child runtimes run.
 
+Connection Hub authenticator rows store metadata and `secret_ref` only. Provider
+secrets remain in descriptor-backed bundle secrets, not in app tables or widget
+state.
+
 That authority projection is documented in
+[Auth Selector](auth-selector-README.md),
 [Connections SDK Solution](../../sdk/solutions/connections/connections-sdk-solution-README.md) and
 [Cross-Runtime Context](../../runtime/cross-runtime-context-README.md).
 
@@ -150,6 +166,7 @@ clients for routing/logging, but token claims remain authoritative.
 
 | Goal | Read |
 |---|---|
+| Understand how requests choose Cognito/session/Connection Hub authenticators | [Auth Selector](auth-selector-README.md) |
 | Bundle/front shell performs login and browser should become a platform user | [Bundle Session Auth](bundle-session-auth-README.md) |
 | Bundle writes a SimpleIDP token for local/embedded simple auth | [Bundle SimpleIDP Bridge](bundle-simple-idp-bridge-README.md) |
 | External tool should access a narrow MCP integration surface after admin consent | [OAuth MCP Integration Access](oauth-mcp-integration-access-README.md) |

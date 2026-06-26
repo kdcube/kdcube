@@ -98,8 +98,11 @@ documentation expected from real bundles:
   - `memories_widget_reconcile_export` exposes proposal artifacts for review
   - `memories_widget_reconcile_apply` applies a succeeded proposal only with
     explicit confirmation and first creates a safety snapshot
-  - Telegram Mini App wrappers expose the same maintenance flow as
-    `telegram_memories_widget_reconcile_*` public APIs
+  - when embedded in the Telegram Mini App, the reusable memory widget uses the
+    same `memories_widget_*` operations and sends `X-Telegram-Init-Data`; the
+    gateway delegates that proof to Connection Hub request-auth
+  - `telegram_memories_widget_reconcile_*` public APIs remain app-owned
+    compatibility wrappers, not the generic SDK-widget embedding contract
 
 Telegram requires external operator setup. Hosting this bundle in KDCube is not
 enough by itself: an operator must create or choose a bot in BotFather, expose
@@ -152,6 +155,7 @@ bundles:
         integrations:
           telegram:
             enabled: false
+            auth_connection_id: telegram.default
             webhook_url: ""
             send_responses: true
         mcp:

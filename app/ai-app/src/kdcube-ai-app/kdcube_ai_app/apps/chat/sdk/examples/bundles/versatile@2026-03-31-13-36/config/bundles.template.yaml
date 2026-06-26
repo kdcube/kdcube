@@ -378,6 +378,10 @@ bundles:
             bundle_id: connection-hub@1-0
           telegram:
             enabled: false
+            # Non-secret selector handle sent by the Telegram Mini App host as
+            # X-KDCube-Auth-Connection-ID. Must match a Connection Hub
+            # identity.authenticators[].connection_id row.
+            auth_connection_id: telegram.default
             webhook_url: "<domain name>/assembly.yaml service route/<tenant>/<project>/api/public/<alias>"
             send_responses: true
             stream_activity: true

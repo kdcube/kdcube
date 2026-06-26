@@ -195,18 +195,21 @@ when available, one extra field in the same `config` object:
 
 ```json
 {
-  "telegramInitData": "<Telegram.WebApp.initData>"
+  "telegramInitData": "<Telegram.WebApp.initData>",
+  "authProvider": "telegram",
+  "authConnectionId": "telegram.default"
 }
 ```
 
 When `telegramInitData` is present, the memory widget still calls the standard
 `/operations/memories_widget_*` routes and attaches the proof as
-`X-Telegram-Init-Data`. It does not switch itself to a Telegram-specific
-`/public/telegram_*` API. The widget does not read `window.parent.Telegram`,
-validate Telegram, call Connection Hub directly, or use any `kdcube.auth.*`
-message family. The gateway and Connection Hub validate the proof centrally and
-project linked authority into the request session before the operation sees the
-request.
+`X-Telegram-Init-Data`. If `authConnectionId` is present, it also attaches
+`X-KDCube-Auth-Connection-ID` and `X-KDCube-Auth-Provider`. It does not switch
+itself to a Telegram-specific `/public/telegram_*` API. The widget does not
+read `window.parent.Telegram`, validate Telegram, call Connection Hub directly,
+or use any `kdcube.auth.*` message family. The gateway and Connection Hub
+validate the proof centrally and project linked authority into the request
+session before the operation sees the request.
 
 If the host session or proof changes, the host announces `kdcube-auth-changed`.
 The widget re-sends `CONFIG_REQUEST`, applies the latest `CONFIG_RESPONSE`, and
