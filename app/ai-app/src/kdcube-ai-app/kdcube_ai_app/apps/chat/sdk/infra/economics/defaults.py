@@ -8,7 +8,7 @@ Platform-owned default economics.
 
 These are the mandatory baked-in quota policies for the four plan ids that are
 intrinsic to the runtime plan-resolution logic in the economics entrypoint
-(`anonymous`, `free`, `payasyougo`, `admin`). They are owned by the platform,
+(`anonymous`, `free`, `wallet`, `admin`). They are owned by the platform,
 not by any bundle.
 
 Two consumers share this single source of truth:
@@ -16,9 +16,12 @@ Two consumers share this single source of truth:
     them per field);
   - the runtime keeps a defensive fallback when a DB policy row is absent.
 
-Subscription plans have a small baked-in baseline too: `free` and `admin` are
-always seeded (descriptor entries override them per field), mirroring the quota
-baseline. Any other subscription plan is descriptor opt-in.
+Plans have a baked-in baseline too: the same four ids `anonymous`, `free`,
+`admin`, and `wallet` are always seeded (descriptor entries override them per
+field), mirroring the quota baseline. `free` and `admin` are internal grant
+plans; `wallet` and `anonymous` are built-in non-subscribable plans (they exist
+as catalog entities so users resolve onto them, but no one subscribes to them).
+Any other plan is descriptor opt-in.
 
 `budget_policies` has NO baked-in baseline: it is descriptor opt-in and
 admin-driven only, so there are no default constants here.
@@ -31,7 +34,7 @@ from typing import Any, Dict
 from kdcube_ai_app.apps.chat.sdk.infra.economics.policy import QuotaPolicy
 
 # The four plan ids that the runtime resolves users into. Order is informational.
-MANDATORY_QUOTA_PLAN_IDS = ("anonymous", "free", "payasyougo", "admin")
+MANDATORY_QUOTA_PLAN_IDS = ("anonymous", "free", "wallet", "admin")
 
 # Built-in baseline for the mandatory quota plans. A None dimension means
 # "unlimited" for that window.
@@ -54,7 +57,7 @@ DEFAULT_QUOTA_POLICIES: Dict[str, QuotaPolicy] = {
         tokens_per_day=333_333,
         tokens_per_month=666_666,
     ),
-    "payasyougo": QuotaPolicy(
+    "wallet": QuotaPolicy(
         max_concurrent=4,
         requests_per_day=200,
         requests_per_month=6000,
@@ -75,11 +78,14 @@ def default_quota_policy(plan_id: str) -> QuotaPolicy:
     )
 
 
-# Subscription plan ids that the platform always seeds (descriptor overrides per
-# field). Both are internal, free-of-charge catalog entries by default.
-MANDATORY_SUBSCRIPTION_PLAN_IDS = ("free", "admin")
+# Plan ids that the platform always seeds (descriptor overrides per field). All
+# are internal, free-of-charge catalog entries by default. `free`/`admin` are
+# grant plans; `wallet`/`anonymous` are built-in non-subscribable plans.
+MANDATORY_PLAN_IDS = ("anonymous", "free", "admin", "wallet")
 
-DEFAULT_SUBSCRIPTION_PLANS: Dict[str, Dict[str, Any]] = {
+DEFAULT_PLANS: Dict[str, Dict[str, Any]] = {
+    "anonymous": {"provider": "internal", "monthly_price_cents": 0, "active": True},
     "free": {"provider": "internal", "monthly_price_cents": 0, "active": True},
     "admin": {"provider": "internal", "monthly_price_cents": 0, "active": True},
+    "wallet": {"provider": "internal", "monthly_price_cents": 0, "active": True},
 }

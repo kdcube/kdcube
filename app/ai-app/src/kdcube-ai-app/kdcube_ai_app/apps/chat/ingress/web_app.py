@@ -277,12 +277,16 @@ async def lifespan(app: FastAPI):
     app.state.pg_pool = await get_pg_pool()
     try:
         from kdcube_ai_app.apps.middleware.economics_role import EconomicsRoleResolver
+        _econ_role_resolver = EconomicsRoleResolver(
+            pg_pool=app.state.pg_pool,
+            tenant=settings.TENANT,
+            project=settings.PROJECT,
+        )
         app.state.gateway_adapter.set_econ_role_resolver(
-            EconomicsRoleResolver(
-                pg_pool=app.state.pg_pool,
-                tenant=settings.TENANT,
-                project=settings.PROJECT,
-            ).resolve_role_for_user_id
+            _econ_role_resolver.resolve_role_for_user_id
+        )
+        app.state.gateway_adapter.register_post_session_create_hook(
+            _econ_role_resolver.ensure_baseline_subscription_for_session
         )
     except Exception as e:
         logger.warning("Failed to attach economics role resolver: %s", e)

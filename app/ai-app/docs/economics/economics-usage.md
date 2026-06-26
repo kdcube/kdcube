@@ -28,7 +28,7 @@ It is designed so:
 
 - **Plan** = quota policy identity (limits for requests/tokens/concurrency).
 - **Plan override** = temporary per‑user override of plan limits.
-- **Lane** = `plan` lane or `paid` lane.
+- **Funding split** = one pass: the primary source (subscription/project) covers `plan_part`, the wallet covers the over‑quota remainder.
 
 ## Namespaces (Redis)
 
@@ -63,19 +63,19 @@ Reservations are short-lived (TTL) and are either:
 
 - Base quota envelopes keyed by `plan_id`.
 - Runtime resolves `plan_id` per request and applies these limits.
- - Reservation floor is configured per bundle via props `economics.reservation_amount_dollars`.
+ - Reservation floor default lives in the economics descriptor (`reservation.chat`, editable in the admin UI **Reservation** card); a bundle may override it via `config.economics.reservation.<floor>` (legacy `economics.reservation_amount_dollars`).
 
 Wallet + no subscription behavior:
 - Plan remains `free`.
-- Service limits (requests/concurrency) come from `payasyougo`.
+- Service limits (requests/concurrency) come from `wallet`.
 - Token limits come from `free`.
 
 Subscription + wallet behavior:
 - Plan remains the subscription plan.
 - Subscription balance funds the maximum portion allowed by subscription balance and plan quota.
 - Wallet covers only the remaining overflow. Wallet-paid tokens do **not** consume plan quota.
-- If actual spend exceeds both plan funding and wallet, project budget absorbs the remainder (ledger note indicates shortfall). If plan quota remains, that absorbed remainder also consumes quota. Tags: `shortfall:wallet_subscription`, `shortfall:wallet_paid`, `shortfall:wallet_plan`, `shortfall:subscription_overage`, `shortfall:free_plan`.
-- If subscription funds **zero** for a turn, the request switches to **paid lane** and **payasyougo** quotas apply.
+- If actual spend exceeds both plan funding and wallet, project budget absorbs the remainder (ledger note indicates shortfall). If plan quota remains, that absorbed remainder also consumes quota. Tags: `shortfall:wallet_subscription`, `shortfall:wallet_plan`, `shortfall:subscription_overage`, `shortfall:free_plan`.
+- If the subscription budget can't fully fund a turn, the over‑quota remainder is covered by the **wallet** via the unified split.
 
 Subscription only (no wallet):
 - Subscription covers the full reservation.

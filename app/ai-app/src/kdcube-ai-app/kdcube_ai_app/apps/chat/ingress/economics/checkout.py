@@ -12,6 +12,7 @@ from kdcube_ai_app.auth.AuthManager import RequireUser
 from kdcube_ai_app.auth.sessions import UserSession
 from kdcube_ai_app.apps.chat.ingress.resolvers import require_auth
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
+from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription import PlanChangeNotAllowed
 
 from .stripe_router import router, _get_stripe, _get_control_plane_manager, _resolve_stripe_customer
 
@@ -105,6 +106,14 @@ async def create_checkout_subscription(
     )
     if not plan or not plan.stripe_price_id:
         raise HTTPException(status_code=404, detail=f"Active Stripe plan not found: {payload.plan_id}")
+
+    current = await mgr.subscription_mgr.get_subscription(
+        tenant=tenant, project=project, user_id=user_id
+    )
+    try:
+        mgr.subscription_mgr.assert_plan_change_allowed(current=current, target_plan=plan)
+    except PlanChangeNotAllowed as e:
+        raise HTTPException(status_code=409, detail={"code": e.code, "message": e.message})
 
     stripe_customer_id = await _resolve_stripe_customer(mgr, stripe_client, tenant, project, user_id)
 

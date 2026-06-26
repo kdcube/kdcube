@@ -47,7 +47,7 @@ router = APIRouter()
 REF_PROVIDER = anthropic
 REF_MODEL = sonnet_45
 DEFAULT_PLAN_FREE = "free"
-DEFAULT_PLAN_PAYG = "payasyougo"
+DEFAULT_PLAN_PAYG = "wallet"
 DEFAULT_PLAN_ADMIN = "admin"
 DEFAULT_PLAN_ANON = "anonymous"
 
@@ -178,10 +178,8 @@ class UpsertSubscriptionPlanRequest(BaseModel):
     metadata: Optional[dict] = None
 
 
-class InternalRenewOnceRequest(BaseModel):
-    user_id: str = Field(..., description="User id to renew")
-    charge_at: datetime | None = Field(None, description="Optional charge timestamp (default now UTC)")
-    idempotency_key: str | None = Field(None, description="Optional explicit idempotency key")
+class InternalQuotaResetRequest(BaseModel):
+    user_id: str = Field(..., description="User id whose internal-plan quota window to reset")
 
 class TopUpSubscriptionBudgetRequest(BaseModel):
     user_id: str
@@ -274,7 +272,7 @@ class AddLifetimeCreditsRequest(BaseModel):
 
 class SetQuotaPolicyRequest(BaseModel):
     """Set quota policy for a plan (base limits - NO bundle_id!)."""
-    plan_id: str = Field(..., description="Plan id (free, payasyougo, admin, etc.)")
+    plan_id: str = Field(..., description="Plan id (free, wallet, admin, etc.)")
     max_concurrent: Optional[int] = Field(None, description="Max concurrent requests")
     requests_per_day: Optional[int] = Field(None, description="Requests per day")
     requests_per_month: Optional[int] = Field(None, description="Requests per month")
@@ -1107,11 +1105,18 @@ async def reap_subscription_reservations_all(
         "period_keys": processed_keys,
     }
 
-@router.post("/subscriptions/internal/renew-once")
-async def renew_internal_subscription_once(
-        payload: InternalRenewOnceRequest,
+@router.post("/subscriptions/internal/reset-quota")
+async def reset_internal_quota(
+        payload: InternalQuotaResetRequest,
         session: UserSession = Depends(auth_without_pressure()),
 ):
+    """Reset an internal-plan user's rolling quota windows (month + day + hour).
+
+    Internal plans carry no plan budget; their allowance is the rolling RL quota. This
+    re-anchors the monthly and daily windows to now and clears the hour buckets, so the
+    request/token counters start fresh. Restricted to internal subscriptions (external
+    plans are budget-funded, not quota-funded).
+    """
     settings = get_settings()
 
     pg_pool = getattr(router.state, "pg_pool", None)
@@ -1120,28 +1125,36 @@ async def renew_internal_subscription_once(
         raise HTTPException(status_code=503, detail="Dependencies not initialized")
 
     mgr = _get_control_plane_manager(router)
+    tenant, project = settings.TENANT, settings.PROJECT
 
-    try:
-        res = await mgr.subscription_mgr.renew_internal_subscription_once(
-            tenant=settings.TENANT,
-            project=settings.PROJECT,
-            user_id=payload.user_id,
-            subscription_budget=None,
-            charged_at=payload.charge_at,
-            idempotency_key=payload.idempotency_key,
-            actor=session.username or session.user_id,
-        )
-        return {
-            "status": res.status,
-            "action": res.action,
-            "message": res.message,
-            "external_id": res.external_id,
-            "user_id": res.user_id,
-            "usd_amount": res.usd_amount,
-            "charged_at": res.charged_at.isoformat(),
-        }
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    sub = await mgr.subscription_mgr.get_subscription(
+        tenant=tenant, project=project, user_id=payload.user_id,
+    )
+    if not sub:
+        raise HTTPException(status_code=404, detail="subscription not found")
+    if getattr(sub, "provider", None) != "internal":
+        raise HTTPException(status_code=400, detail="quota reset applies only to internal subscriptions")
+
+    from kdcube_ai_app.apps.chat.sdk.infra.economics.limiter import subject_id_of, GLOBAL_BUNDLE_ID
+    from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription import RLMonthAnchorStore
+
+    rl = UserEconomicsRateLimiter(redis, rl_anchor_store=RLMonthAnchorStore(pg_pool))
+    subject_id = subject_id_of(tenant, project, payload.user_id)
+    period = await rl.reset_quota_windows(bundle_id=GLOBAL_BUNDLE_ID, subject_id=subject_id)
+
+    return {
+        "status": "ok",
+        "action": "reset",
+        "message": f"Reset quota windows (month + day + hour) for {payload.user_id}",
+        "user_id": payload.user_id,
+        "plan_id": getattr(sub, "plan_id", None),
+        "month_period_key": period["month_period_key"],
+        "month_period_start": period["month_period_start"].isoformat() if period["month_period_start"] else None,
+        "month_period_end": period["month_period_end"].isoformat() if period["month_period_end"] else None,
+        "day_period_key": period["day_period_key"],
+        "day_period_start": period["day_period_start"].isoformat() if period["day_period_start"] else None,
+        "day_period_end": period["day_period_end"].isoformat() if period["day_period_end"] else None,
+    }
 
 
 
@@ -1163,6 +1176,11 @@ async def topup_subscription_budget(
     )
     if not sub:
         raise HTTPException(status_code=404, detail="subscription not found")
+    if getattr(sub, "provider", None) == "internal":
+        raise HTTPException(
+            status_code=400,
+            detail="balance top-up applies only to external subscriptions; internal plans draw from the project budget bounded by quota (use Reset quota instead)",
+        )
     from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription import build_subscription_period_descriptor
     period_desc = build_subscription_period_descriptor(
         tenant=settings.TENANT,
@@ -1289,7 +1307,7 @@ async def list_quota_policies(
     """
     List plan quota policies (base policies by plan id).
 
-    Shows configured policies for different plans (free, payasyougo, admin, etc.).
+    Shows configured policies for different plans (free, wallet, admin, etc.).
     """
     try:
         mgr = _get_control_plane_manager(router)
@@ -1570,7 +1588,7 @@ async def delete_reservation_surface(
 @router.get("/users/{user_id}/quota-breakdown")
 async def get_user_quota_breakdown(
         user_id: str,
-        plan_id: Optional[str] = Query(None, description="Plan id override (free, payasyougo, admin, etc.)"),
+        plan_id: Optional[str] = Query(None, description="Plan id override (free, wallet, admin, etc.)"),
         role: Optional[str] = Query(None, description="Optional role hint (registered, paid, privileged, anonymous)"),
         user_type: Optional[str] = Query(None, description="Deprecated: role hint (registered, paid, privileged, anonymous)"),
         session: UserSession = Depends(auth_without_pressure())
@@ -1722,7 +1740,7 @@ async def get_user_quota_breakdown(
 @router.get("/users/{user_id}/budget-breakdown")
 async def get_user_budget_breakdown(
         user_id: str,
-        plan_id: Optional[str] = Query(None, description="Plan id override (free, payasyougo, admin, etc.)"),
+        plan_id: Optional[str] = Query(None, description="Plan id override (free, wallet, admin, etc.)"),
         role: Optional[str] = Query(None, description="Optional role hint (registered, paid, privileged, anonymous)"),
         user_type: Optional[str] = Query(None, description="Deprecated: role hint (registered, paid, privileged, anonymous)"),
         bundle_id: Optional[str] = Query(None, description="Optional bundle id for per-bundle windows"),
@@ -1894,7 +1912,6 @@ async def get_app_budget_absorption_report(
             {period_sql} AS period_start
             {group_select},
             SUM(CASE WHEN note LIKE 'shortfall:wallet_subscription%' THEN -amount_cents ELSE 0 END) AS wallet_subscription_shortfall_cents,
-            SUM(CASE WHEN note LIKE 'shortfall:wallet_paid%' THEN -amount_cents ELSE 0 END) AS wallet_paid_shortfall_cents,
             SUM(CASE WHEN note LIKE 'shortfall:wallet_plan%' THEN -amount_cents ELSE 0 END) AS wallet_plan_shortfall_cents,
             SUM(CASE WHEN note LIKE 'shortfall:subscription_overage%' THEN -amount_cents ELSE 0 END) AS subscription_overage_shortfall_cents,
             SUM(CASE WHEN note LIKE 'shortfall:free_plan%' THEN -amount_cents ELSE 0 END) AS free_plan_shortfall_cents,
@@ -1919,7 +1936,6 @@ async def get_app_budget_absorption_report(
             "group_key": r["group_key"] if group_by != "none" else None,
             "total_shortfall_usd": _usd_from_cents(int(r["total_shortfall_cents"] or 0)),
             "wallet_subscription_shortfall_usd": _usd_from_cents(int(r["wallet_subscription_shortfall_cents"] or 0)),
-            "wallet_paid_shortfall_usd": _usd_from_cents(int(r["wallet_paid_shortfall_cents"] or 0)),
             "wallet_plan_shortfall_usd": _usd_from_cents(int(r["wallet_plan_shortfall_cents"] or 0)),
             "subscription_overage_shortfall_usd": _usd_from_cents(int(r["subscription_overage_shortfall_cents"] or 0)),
             "free_plan_shortfall_usd": _usd_from_cents(int(r["free_plan_shortfall_cents"] or 0)),
@@ -1932,7 +1948,6 @@ async def get_app_budget_absorption_report(
             "group_key" if group_by != "none" else None,
             "total_shortfall_usd",
             "wallet_subscription_shortfall_usd",
-            "wallet_paid_shortfall_usd",
             "wallet_plan_shortfall_usd",
             "subscription_overage_shortfall_usd",
             "free_plan_shortfall_usd",
@@ -1946,7 +1961,6 @@ async def get_app_budget_absorption_report(
                 str(row.get("group_key") or "") if group_by != "none" else None,
                 f'{row["total_shortfall_usd"]:.2f}',
                 f'{row["wallet_subscription_shortfall_usd"]:.2f}',
-                f'{row["wallet_paid_shortfall_usd"]:.2f}',
                 f'{row["wallet_plan_shortfall_usd"]:.2f}',
                 f'{row["subscription_overage_shortfall_usd"]:.2f}',
                 f'{row["free_plan_shortfall_usd"]:.2f}',
@@ -1996,7 +2010,7 @@ async def get_request_lineage(
             SELECT reservation_id, user_id, period_key, amount_cents, actual_spent_cents, status,
                    created_at, expires_at, committed_at, released_at,
                    notes, bundle_id, provider, request_id
-            FROM {schema}.user_subscription_period_reservations
+            FROM {schema}.user_plan_period_reservations
             WHERE tenant=$1 AND project=$2 AND request_id=$3
             ORDER BY created_at ASC
         """, settings.TENANT, settings.PROJECT, request_id)
@@ -2004,7 +2018,7 @@ async def get_request_lineage(
         sub_ledger = await conn.fetch(f"""
             SELECT id, user_id, period_key, amount_cents, kind, note,
                    bundle_id, provider, request_id, created_at
-            FROM {schema}.user_subscription_period_ledger
+            FROM {schema}.user_plan_period_ledger
             WHERE tenant=$1 AND project=$2 AND request_id=$3
             ORDER BY created_at ASC
         """, settings.TENANT, settings.PROJECT, request_id)

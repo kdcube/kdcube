@@ -37,6 +37,7 @@ class PlanWalletSettlementInput:
     wallet_available_tokens: int = 0
     wallet_reserved_tokens: int = 0
 
+    primary_is_separate_budget: bool = False
 
 @dataclass(frozen=True)
 class PlanWalletSettlementAllocation:
@@ -45,8 +46,10 @@ class PlanWalletSettlementAllocation:
 
     primary_funding is the normal plan funding source for the request
     (project budget for registered/free plan users, subscription budget for
-    subscription users). project_absorption is always the project budget fallback
-    for the residual left after wallet payment.
+    subscription users). primary_overage is the over-quota residual charged back
+    to a SEPARATE primary budget (subscription) from its own remaining funds when
+    the wallet runs short; project_absorption is the final project budget fallback
+    for whatever neither the primary funds nor the wallet can cover.
     """
 
     actual_tokens: int
@@ -58,6 +61,8 @@ class PlanWalletSettlementAllocation:
 
     primary_funding_tokens: int
     wallet_tokens: int
+    primary_overage_tokens: int
+    primary_overage_headroom_tokens: int
     project_absorption_tokens: int
     quota_fallback_tokens: int
 
@@ -65,6 +70,7 @@ class PlanWalletSettlementAllocation:
 
     primary_funding_usd: float
     wallet_usd: float
+    primary_overage_usd: float
     project_absorption_usd: float
     quota_usd_equivalent: float
 
@@ -136,11 +142,14 @@ def allocate_plan_wallet_settlement(
             wallet_capacity_tokens=0,
             primary_funding_tokens=0,
             wallet_tokens=0,
+            primary_overage_tokens=0,
+            primary_overage_headroom_tokens=0,
             project_absorption_tokens=0,
             quota_fallback_tokens=0,
             quota_tokens=0,
             primary_funding_usd=0.0,
             wallet_usd=0.0,
+            primary_overage_usd=0.0,
             project_absorption_usd=0.0,
             quota_usd_equivalent=0.0,
         )
@@ -193,7 +202,32 @@ def allocate_plan_wallet_settlement(
     quota_fallback_tokens = min(residual_after_wallet_tokens, quota_remaining_after_primary)
 
     quota_tokens = primary_funding_tokens + quota_fallback_tokens
+
+    # Over-quota residual the wallet could not cover. When the primary funding is a
+    # separate budget (subscription), charge that residual back to the primary's OWN
+    # remaining funds before the project. primary_overage_headroom_tokens reports how
+    # much the primary budget can STILL pay after this planned split — a runtime wallet
+    # shortfall at settle (the wallet returns fewer tokens than its fresh balance read
+    # promised) draws from that headroom before the project absorbs anything.
+    primary_overage_tokens = 0
+    primary_overage_headroom_tokens = 0
     project_absorption_tokens = residual_after_wallet_tokens
+    if settlement.primary_is_separate_budget:
+        primary_real_capacity_tokens = _usd_to_token_capacity(
+            usd=primary_funding_capacity_usd,
+            actual_tokens=actual_tokens,
+            actual_cost_usd=actual_cost_usd,
+        )
+        if project_absorption_tokens > 0:
+            primary_overage_tokens = min(
+                project_absorption_tokens,
+                max(primary_real_capacity_tokens - primary_funding_tokens, 0),
+            )
+            project_absorption_tokens = project_absorption_tokens - primary_overage_tokens
+        primary_overage_headroom_tokens = max(
+            primary_real_capacity_tokens - primary_funding_tokens - primary_overage_tokens,
+            0,
+        )
 
     primary_funding_usd = _tokens_to_usd(
         tokens=primary_funding_tokens,
@@ -202,6 +236,11 @@ def allocate_plan_wallet_settlement(
     )
     wallet_usd = _tokens_to_usd(
         tokens=wallet_tokens,
+        actual_tokens=actual_tokens,
+        actual_cost_usd=actual_cost_usd,
+    )
+    primary_overage_usd = _tokens_to_usd(
+        tokens=primary_overage_tokens,
         actual_tokens=actual_tokens,
         actual_cost_usd=actual_cost_usd,
     )
@@ -224,11 +263,14 @@ def allocate_plan_wallet_settlement(
         wallet_capacity_tokens=wallet_capacity_tokens,
         primary_funding_tokens=primary_funding_tokens,
         wallet_tokens=wallet_tokens,
+        primary_overage_tokens=primary_overage_tokens,
+        primary_overage_headroom_tokens=primary_overage_headroom_tokens,
         project_absorption_tokens=project_absorption_tokens,
         quota_fallback_tokens=quota_fallback_tokens,
         quota_tokens=quota_tokens,
         primary_funding_usd=primary_funding_usd,
         wallet_usd=wallet_usd,
+        primary_overage_usd=primary_overage_usd,
         project_absorption_usd=project_absorption_usd,
         quota_usd_equivalent=quota_usd_equivalent,
     )

@@ -56,6 +56,13 @@ if __name__ == "__main__":
     ensure_control_plane()
     # deprovision_control_plane()
 
+    # TEMPORARY: apply the economics `plans` rename/field migration BEFORE
+    # provisioning, so an existing schema is renamed/extended in place instead of
+    # provision creating empty new-named tables next to the populated old ones.
+    # On a fresh schema this is a no-op. Remove once all environments are migrated.
+    from kdcube_ai_app.ops.deployment.sql.db_deployment import apply_project_migrations
+    apply_project_migrations(tenant, project)
+
     # Deploy project schemas
     step_provision(tenant, project, "chatbot")
     step_provision(tenant, project, "knowledge_base")

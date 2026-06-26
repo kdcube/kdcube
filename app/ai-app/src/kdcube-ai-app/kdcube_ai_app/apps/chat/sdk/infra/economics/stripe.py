@@ -19,7 +19,7 @@ from kdcube_ai_app.infra.accounting.usage import quote_tokens_for_usd
 from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription_budget import SubscriptionBudgetLimiter
 from kdcube_ai_app.apps.chat.sdk.infra.economics.project_budget import ProjectBudgetLimiter
 from kdcube_ai_app.infra.channel.email import send_admin_email
-from kdcube_ai_app.apps.chat.sdk.config import get_settings
+from kdcube_ai_app.apps.chat.sdk.config import get_settings, get_secret
 from kdcube_ai_app.ops.deployment.sql.db_deployment import project_schema as _project_schema
 
 logger = logging.getLogger(__name__)
@@ -44,6 +44,46 @@ def _configured_stripe_secret(key: str) -> str:
             or ""
         ).strip()
     return ""
+
+
+async def _resolve_stripe_secret_async(key: str) -> str:
+    """Resolve a Stripe secret secrets-manager-first, mirroring the ingress
+    _get_stripe() path (bundle scope `b:` then global), and falling back to the
+    env/settings reader. Async because the secrets-manager lookup is async; the
+    SDK economics services are constructed synchronously, so callers resolve the
+    key lazily on first async use rather than in __init__."""
+    name = {
+        "stripe.secret_key": "services.stripe.secret_key",
+        "stripe.webhook_secret": "services.stripe.webhook_secret",
+    }.get(key, key)
+    try:
+        val = await get_secret(f"b:{name}") or await get_secret(name)
+    except Exception:
+        val = None
+    val = str(val).strip() if val else ""
+    return val or _configured_stripe_secret(key)
+
+
+def _stripe_to_plain(obj: Any) -> Any:
+    # Recursively convert a stripe StripeObject (any version) to plain
+    # dict/list. Newer stripe-python makes StripeObject a dict subclass; older
+    # versions expose neither .get nor to_dict_recursive and only carry an
+    # internal _data mapping. Try, in order: dict / list / to_dict_recursive /
+    # _data, then pass through scalars.
+    if isinstance(obj, dict):
+        return {k: _stripe_to_plain(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_stripe_to_plain(v) for v in obj]
+    conv = getattr(obj, "to_dict_recursive", None)
+    if callable(conv):
+        try:
+            return _stripe_to_plain(conv())
+        except Exception:
+            pass
+    data = getattr(obj, "_data", None)
+    if isinstance(data, dict):
+        return {k: _stripe_to_plain(v) for k, v in data.items()}
+    return obj
 
 
 
@@ -131,6 +171,10 @@ class StripeSubscriptionService:
         stripe.api_key = self.stripe_api_key
         return stripe
 
+    async def _ensure_stripe_api_key(self) -> None:
+        if not self.stripe_api_key:
+            self.stripe_api_key = await _resolve_stripe_secret_async("stripe.secret_key")
+
     @staticmethod
     def _map_stripe_subscription_status_to_cp(status: str) -> str:
         return map_stripe_subscription_status_to_cp(status)
@@ -148,7 +192,7 @@ class StripeSubscriptionService:
             metadata: Optional[Dict[str, str]] = None,
     ) -> StripeCreateSubscriptionResult:
         """
-        Creates a Stripe subscription and stores a best-effort snapshot in user_subscriptions.
+        Creates a Stripe subscription and stores a best-effort snapshot in user_plans.
         NOTE: If the customer has no default payment method, the subscription may start as 'incomplete'
         until payment is completed.
         """
@@ -160,6 +204,7 @@ class StripeSubscriptionService:
         if plan.provider != "stripe":
             raise ValueError(f"plan provider must be stripe: {plan_id}")
 
+        await self._ensure_stripe_api_key()
         stripe = self._stripe()
 
         md = dict(metadata or {})
@@ -342,11 +387,11 @@ class StripeEconomicsWebhookHandler:
       - applies effects via managers:
           * UserCreditsManager (lifetime credits)
           * SubscriptionBudgetLimiter (per-user subscription balance)
-      - maintains subscription state in user_subscriptions (DB upsert)
+      - maintains subscription state in user_plans (DB upsert)
 
     Supported:
       - payment_intent.succeeded -> add lifetime user tokens
-      - invoice.paid -> if subscription invoice -> top up subscription balance + update user_subscriptions
+      - invoice.paid -> if subscription invoice -> top up subscription balance + update user_plans
     """
 
     def __init__(
@@ -383,6 +428,10 @@ class StripeEconomicsWebhookHandler:
             return None
         stripe.api_key = self.stripe_api_key
         return stripe
+
+    async def _ensure_stripe_api_key(self) -> None:
+        if not self.stripe_api_key:
+            self.stripe_api_key = await _resolve_stripe_secret_async("stripe.secret_key")
 
     def _merge_meta(self, *metas: Dict[str, str]) -> Dict[str, str]:
         out: Dict[str, str] = {}
@@ -495,6 +544,10 @@ class StripeEconomicsWebhookHandler:
         Process a Stripe event (either from webhook or from API).
         Idempotency is handled via external_economics_events table.
         """
+        await self._ensure_stripe_api_key()
+        # reconcile passes a stripe.Event (StripeObject, no .get); webhook passes a dict
+        if not isinstance(event, dict):
+            event = _stripe_to_plain(event)
         etype = event.get("type")
         obj = (event.get("data") or {}).get("object") or {}
 
@@ -525,7 +578,15 @@ class StripeEconomicsWebhookHandler:
             raise ValueError("Missing Stripe-Signature header")
 
         import stripe
-        return stripe.Webhook.construct_event(payload=body, sig_header=stripe_signature, secret=self.webhook_secret)
+        # Verify the signature, but hand the rest of the handler a plain dict.
+        # construct_event() returns a StripeObject (stripe.Event), and in current
+        # stripe-python StripeObject has no .get() — attribute access for 'get'
+        # routes through __getattr__ and raises AttributeError. process_event and
+        # every _handle_* walk the event via dict .get(), so parse the
+        # already-verified raw body ourselves. construct_event still raises on a
+        # bad signature; we just discard its object return.
+        stripe.Webhook.construct_event(payload=body, sig_header=stripe_signature, secret=self.webhook_secret)
+        return json.loads(body.decode("utf-8"))
 
     # ---------------- helpers ----------------
 
@@ -678,10 +739,11 @@ class StripeEconomicsWebhookHandler:
 
                     # Update subscription snapshot with the real ID and plan_id
                     await conn.execute(f"""
-                        UPDATE {_project_schema(tenant, project)}.user_subscriptions
+                        UPDATE {_project_schema(tenant, project)}.user_plans
                         SET stripe_subscription_id = COALESCE(stripe_subscription_id, $4),
                             stripe_customer_id = COALESCE(stripe_customer_id, $5),
                             plan_id = COALESCE(plan_id, $6),
+                            provider = 'stripe',
                             status = 'active',
                             updated_at = NOW()
                         WHERE tenant=$1 AND project=$2 AND user_id=$3
@@ -1270,6 +1332,10 @@ class StripeEconomicsAdminService:
         stripe.api_key = self.stripe_api_key
         return stripe
 
+    async def _ensure_stripe_api_key(self) -> None:
+        if not self.stripe_api_key:
+            self.stripe_api_key = await _resolve_stripe_secret_async("stripe.secret_key")
+
     async def _lock_or_create_internal_event(
         self,
         *,
@@ -1357,6 +1423,7 @@ class StripeEconomicsAdminService:
         notes: Optional[str] = None,
         actor: Optional[str] = None,
     ) -> Dict[str, Any]:
+        await self._ensure_stripe_api_key()
         stripe = self._stripe()
         pi = stripe.PaymentIntent.retrieve(payment_intent_id, expand=["charges"])
 
@@ -1543,6 +1610,7 @@ class StripeEconomicsAdminService:
         actor: Optional[str] = None,
         notes: Optional[str] = None,
     ) -> Dict[str, Any]:
+        await self._ensure_stripe_api_key()
         stripe = self._stripe()
 
         sub = None
@@ -1669,6 +1737,7 @@ class StripeEconomicsAdminService:
         kind: str = "all",
         limit: int = 200,
     ) -> Dict[str, Any]:
+        await self._ensure_stripe_api_key()
         stripe = self._stripe()
         kind = (kind or "all").lower()
         if kind not in ("all", "wallet_refund", "subscription_cancel"):
@@ -1841,6 +1910,7 @@ class StripeEconomicsAdminService:
         Fetch recent events from Stripe API since since_timestamp and process them.
         Returns result summary and the latest_event_timestamp for state tracking.
         """
+        await self._ensure_stripe_api_key()
         stripe = self._stripe()
         import time
         

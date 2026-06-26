@@ -3,7 +3,7 @@ id: repo:kdcube-ai-app/app/ai-app/docs/economics/economics-descriptor-README.md
 title: "Economics Descriptor"
 summary: "The per tenant/project economics.yaml descriptor and how it is seeded at deploy time."
 tags: ["economics", "descriptor", "seeding", "deployment"]
-keywords: ["economics.yaml", "seeder", "reservation floor", "quota policies", "budget policies", "subscription plans", "overdraft"]
+keywords: ["economics.yaml", "seeder", "reservation floor", "quota policies", "budget policies", "plans", "overdraft"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/economics/economic-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/economics/economic-enforcement-engine-README.md
@@ -71,15 +71,19 @@ project_budget:
 quota_policies:
   anonymous:  { max_concurrent: 1, requests_per_day: 2,   requests_per_month: 60, ... }
   free:       { max_concurrent: 2, requests_per_day: 100, requests_per_month: 30000, ... }
-  payasyougo: { max_concurrent: 4, requests_per_day: 200, requests_per_month: 6000 }
+  wallet: { max_concurrent: 4, requests_per_day: 200, requests_per_month: 6000 }
   admin:      { max_concurrent: 10 }
 
 budget_policies:
   anthropic:  { usd_per_hour: 10.0, usd_per_day: 200.0, usd_per_month: 5000.0 }
   duckduckgo: { usd_per_hour: null, usd_per_day: null,  usd_per_month: null }
 
-subscription_plans:
-  payasyougo: { provider: internal, monthly_price_cents: 0, active: true }
+plans:
+  free: { provider: internal, monthly_price_cents: 0, active: true }
+  
+price_tables:            # optional; whole-table replacement of the baseline (either/or)
+  llm:                   # must include the reference model, else the baseline is used
+    - { provider: anthropic, model: claude-sonnet-4-5-20250929, input_tokens_1M: 3.0, output_tokens_1M: 15.0 }
 ```
 
 ### `version`
@@ -111,6 +115,25 @@ The value is a **scalar**:
 The reservation section is **not** seeded into any table — it is runtime config
 read straight from the file (see [Runtime reads](#runtime-reads)).
 
+### `price_tables`
+
+Provider/model pricing catalog (`llm`, `embedding`, `web_search`) used for
+cost calculation and USD↔token conversion. Like `reservation`, it is a pure
+**runtime-read** section — never seeded, never in the DB.
+
+- **Optional.** The authoritative baseline is the in-code `DEFAULT_PRICE_TABLE`
+  (`infra/accounting/usage.py`); a missing section/file means the baseline is
+  used unchanged.
+- **Either/or, no merge.** When the descriptor provides `price_tables`, it is
+  used as the **whole** table and the baseline is **not** consulted; when it is
+  absent, the baseline is used in full. Sections are never combined — a
+  `price_tables` block must list every model/service you rely on.
+- **Reference model guard.** The block must carry the reference model
+  (`anthropic`/`claude-sonnet-4-5-…`, the currency of the token economy) in its
+  `llm` section. If it does not, the block is treated as **invalid** and the
+  baseline is used in full — the economy (reservation/credits/Stripe/balance)
+  can never break on a misconfigured descriptor.
+
 ### `project_budget`
 
 Only `overdraft_limit_usd` is seeded (into `tenant_project_budget`):
@@ -134,11 +157,26 @@ unlimited for that window. Seeded into `plan_quota_policies`.
 `usd_per_day`, `usd_per_month`; `null` means unlimited for that window. Seeded
 into `application_budget_policies`.
 
-### `subscription_plans`
+### `plans`
 
-`plan_id -> catalog entry`: `provider` (`internal` or `stripe`),
-`monthly_price_cents`, `active`, optional `stripe_price_id` (required when
-`provider: stripe`), optional `metadata`. Seeded into `subscription_plans`.
+Plans are the catalog/runtime entitlement records. A plan id appears in two
+sections that play complementary roles:
+
+- `quota_policies.<plan_id>` defines the **limits** (the RL token/request
+  windows) for users on that plan;
+- `plans.<plan_id>` defines the **catalog entry** — `provider` (`internal` or
+  `stripe`), `monthly_price_cents`, `active` state, optional `stripe_price_id`
+  (required when `provider: stripe`), optional `metadata` — i.e. price and
+  subscribe/grant behaviour.
+
+Most plans are subscribable. `wallet` and `anonymous` are built-in,
+**non-subscribable** plans (they exist as catalog entities so users can be
+resolved onto them, but no one subscribes to them). `admin` is
+internal/operator-assigned. `anonymous`/`free`/`admin`/`wallet` are seeded from
+the built-in baseline automatically; you only list a plan here to override a
+baseline field or to add a chargeable catalog plan.
+
+Seeded into the `plans` table.
 
 ## Built-in baseline
 
@@ -149,11 +187,11 @@ fields override the baseline per field.
 
 | Entity | Baseline | Descriptor behaviour |
 |---|---|---|
-| `quota_policies` | `anonymous`, `free`, `payasyougo`, `admin` (`DEFAULT_QUOTA_POLICIES`) | Always seeded; descriptor overrides per field; extra `plan_id`s seeded as-is. |
-| `subscription_plans` | `free`, `admin` — internal, `monthly_price_cents: 0`, `active: true` (`DEFAULT_SUBSCRIPTION_PLANS`) | Always seeded; descriptor overrides per field; extra `plan_id`s seeded as-is. |
+| `quota_policies` | `anonymous`, `free`, `wallet`, `admin` (`DEFAULT_QUOTA_POLICIES`) | Always seeded; descriptor overrides per field; extra `plan_id`s seeded as-is. |
+| `plans` | `anonymous`, `free`, `admin`, `wallet` — internal, `monthly_price_cents: 0`, `active: true` (`DEFAULT_PLANS`) | Always seeded; descriptor overrides per field; extra `plan_id`s seeded as-is. |
 | `budget_policies` | none | Opt-in; seeded only for the providers listed. |
 
-The four baseline quota plans (`anonymous` / `free` / `payasyougo` / `admin`)
+The four baseline quota plans (`anonymous` / `free` / `wallet` / `admin`)
 are intrinsic to the runtime plan-resolution logic, so they must always exist.
 
 ## Seeding
@@ -178,20 +216,23 @@ Behaviour:
   decides `DO NOTHING` vs `DO UPDATE SET` for every entity.
 - Writes:
   - `plan_quota_policies` — baseline four + descriptor entries/extras;
-  - `subscription_plans` — baseline `free`/`admin` + descriptor entries/extras;
+  - `plans` — baseline `anonymous`/`free`/`admin`/`wallet` + descriptor entries/extras;
   - `application_budget_policies` — descriptor providers only;
   - `tenant_project_budget` — `overdraft_limit_cents` only (balance untouched).
 - Idempotent: re-running with `enforce: false` is a no-op for existing rows.
 
 ## Runtime reads
 
-Only the **reservation** section is read by the runtime from the file; quota,
-budget, and subscription state are read from the economics tables each turn.
+The **reservation** and **price_tables** sections are read by the runtime from
+the file; quota, budget, and subscription state are read from the economics
+tables each turn.
 
 `config_scopes.economics_reservation_default(floor)` reads `reservation.<floor>`
-from the file. The reader is cached by file **mtime**, so edits (including
-write-backs) are picked up without a restart, and they propagate to every proc
-replica over the shared mount.
+and `config_scopes.economics_price_tables()` reads `price_tables`. Both readers
+are cached by file **mtime**, so edits (including write-backs) are picked up
+without a restart, and they propagate to every proc replica over the shared mount.
+`price_table()` (`infra/accounting/usage.py`) uses the descriptor section in
+full when present and valid, else the in-code baseline (no merge).
 
 Per-turn resolution in the economics entrypoint
 ([entrypoint_with_economic.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/chatbot/entrypoint_with_economic.py)):
@@ -212,9 +253,9 @@ from the live database state
 This keeps the file current so the next deploy-time seed does not regress the
 change.
 
-- Rebuilds `quota_policies`, `budget_policies`, `subscription_plans`, and
-  `project_budget.overdraft_limit_usd` from the database; **preserves/merges**
-  the `reservation` section (which is never stored in the database).
+- Rebuilds `quota_policies`, `budget_policies`, `plans`, and
+  `project_budget.overdraft_limit_usd` from the database; **preserves** the
+  `reservation` and `price_tables` sections (which are never stored in the database).
 - Writes atomically (temp file + `os.replace`) under an exclusive `flock`, so
   concurrent writes do not lose the reservation section.
 - Best-effort: a write failure logs a warning and never fails the originating

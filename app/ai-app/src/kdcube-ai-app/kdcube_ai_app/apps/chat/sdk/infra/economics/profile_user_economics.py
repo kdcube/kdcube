@@ -42,16 +42,24 @@ from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription import (
 )
 from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription_budget import SubscriptionBudgetLimiter
 from kdcube_ai_app.apps.chat.sdk.infra.economics.user_budget import UserBudgetBreakdownService
+from kdcube_ai_app.apps.chat.sdk.infra.economics.plan_resolution import (
+    PLAN_ADMIN,
+    PLAN_ANONYMOUS,
+    PLAN_FREE,
+    PLAN_WALLET,
+    resolve_plan_id,
+    subscription_is_active,
+)
 from kdcube_ai_app.infra.accounting.usage import llm_output_price_usd_per_token
 from kdcube_ai_app.ops.deployment.sql.db_deployment import project_schema as _project_schema
 from kdcube_ai_app.infra.namespaces import REDIS, ns_key
 from kdcube_ai_app.infra.redis.client import get_async_redis_client
 
 
-DEFAULT_PLAN_ADMIN = "admin"
-DEFAULT_PLAN_ANON = "anonymous"
-DEFAULT_PLAN_FREE = "free"
-DEFAULT_PLAN_PAYG = "payasyougo"
+DEFAULT_PLAN_ADMIN = PLAN_ADMIN
+DEFAULT_PLAN_ANON = PLAN_ANONYMOUS
+DEFAULT_PLAN_FREE = PLAN_FREE
+DEFAULT_PLAN_PAYG = PLAN_WALLET
 
 SAFETY_MARGIN = 1.15
 EST_TURN_TOKENS_FLOOR = 2000
@@ -208,19 +216,16 @@ async def _resolve_plan_id_for_user(
         user_id=user_id,
     )
     now = datetime.now(timezone.utc)
-    due_at = getattr(subscription, "next_charge_at", None) if subscription else None
-    chargeable = bool(subscription and int(getattr(subscription, "monthly_price_cents", 0) or 0) > 0)
-    past_due = bool(due_at and due_at <= now)
-    has_active_subscription = bool(
-        subscription
-        and getattr(subscription, "status", None) == "active"
-        and chargeable
-        and not past_due
+    has_active_subscription = subscription_is_active(subscription, now)
+    plan_id, plan_source = resolve_plan_id(
+        role=role_norm,
+        has_active_subscription=has_active_subscription,
+        subscription=subscription,
     )
     if has_active_subscription:
         return {
-            "plan_id": getattr(subscription, "plan_id", None) or DEFAULT_PLAN_PAYG,
-            "plan_source": "subscription",
+            "plan_id": plan_id,
+            "plan_source": plan_source,
             "role": role_norm,
             "role_source": role_source,
             "role_info": role_info,
@@ -229,8 +234,8 @@ async def _resolve_plan_id_for_user(
         }
 
     return {
-        "plan_id": DEFAULT_PLAN_FREE,
-        "plan_source": "role",
+        "plan_id": plan_id,
+        "plan_source": plan_source,
         "role": role_norm or "registered",
         "role_source": role_source or "default",
         "role_info": role_info,
@@ -607,7 +612,7 @@ async def _fetch_active_subscription_reservations(
     has_updated_at = await _table_has_column(
         pg_pool=pg_pool,
         schema=_schema,
-        table="user_subscription_period_reservations",
+        table="user_plan_period_reservations",
         column="updated_at",
     )
     updated_at_expr = "updated_at" if has_updated_at else "NULL::timestamptz AS updated_at"
@@ -615,7 +620,7 @@ async def _fetch_active_subscription_reservations(
         SELECT reservation_id, period_key, bundle_id, provider, request_id,
                amount_cents, actual_spent_cents, status,
                expires_at, created_at, {updated_at_expr}, released_at, committed_at, notes
-        FROM {_schema}.user_subscription_period_reservations
+        FROM {_schema}.user_plan_period_reservations
         WHERE tenant=$1 AND project=$2 AND user_id=$3 AND status='active'
         ORDER BY created_at DESC
         LIMIT $4

@@ -331,6 +331,244 @@ end
 return {1, "", req_d, req_m, req_t, tok_h_eff, tok_d_eff, tok_m_eff, in_flight, reserved, tok_h_reset_at}
 """
 
+
+# ── Unified split admit (wallet-aware) ────────────────────────────────────────
+# Same KEYS as _LUA_ADMIT_LOCK_AND_RESERVE, plus three ARGV at the tail:
+#   ARGV[17] has_wallet (0/1), ARGV[18] wallet_available (tokens), ARGV[19] r_total.
+# Differences from the legacy script (decision A — deny stays atomic in Lua):
+#   - Over a TOKEN window no longer hard-denies: the partial reserve already caps to
+#     what fits; the over-quota remainder (wallet_part = r_total - reserved) must be
+#     covered by the wallet -> deny iff wallet_part > wallet_available.
+#   - Indivisible windows (requests_per_*, total_requests, max_concurrent): a wallet
+#     holder passes the gate -> deny iff exhausted AND has_wallet == 0.
+#   - Compute-then-write: the reserve amount + deny decision are computed BEFORE any
+#     mutation, so a denied call performs no concurrency ZADD / reserve INCRBY (no rollback).
+#   - Returns wallet_part as element [12].
+_LUA_ADMIT_RESERVE_SPLIT = r"""
+local locks = KEYS[1]
+local req_d_k = KEYS[2]
+local req_m_k = KEYS[3]
+local req_t_k = KEYS[4]
+local tok_h_prefix = KEYS[5]
+local tok_d_k = KEYS[6]
+local tok_m_k = KEYS[7]
+local tok_hr_k = KEYS[8]
+local tok_dr_k = KEYS[9]
+local tok_mr_k = KEYS[10]
+local resv_idx = KEYS[11]
+local resv_map = KEYS[12]
+
+local now = tonumber(ARGV[1])
+local lock_id = ARGV[2]
+local maxc = tonumber(ARGV[3])
+local lock_exp = tonumber(ARGV[4])
+
+local lim_req_d = tonumber(ARGV[5])
+local lim_req_m = tonumber(ARGV[6])
+local lim_req_t = tonumber(ARGV[7])
+local lim_tok_h = tonumber(ARGV[8])
+local lim_tok_d = tonumber(ARGV[9])
+local lim_tok_m = tonumber(ARGV[10])
+
+local want_resv = tonumber(ARGV[11])
+local resv_id = ARGV[12]
+local resv_exp = tonumber(ARGV[13])
+
+local exp_day = tonumber(ARGV[14])
+local exp_mon = tonumber(ARGV[15])
+local exp_hour = tonumber(ARGV[16])
+
+local has_wallet = tonumber(ARGV[17]) or 0
+local wallet_avail = tonumber(ARGV[18]) or 0
+local r_total = tonumber(ARGV[19]) or 0
+
+local function parse_meta(meta)
+  if not meta then return 0, nil, nil, nil end
+  local a, k1, k2, k3 = string.match(meta, "^(%d+)|([^|]*)|([^|]*)|([^|]*)$")
+  return tonumber(a) or 0, k1, k2, k3
+end
+
+local function decr_if_exists(k, amt)
+  if (not k) or k == "" then return end
+  local cur = redis.call("GET", k)
+  if not cur then return end
+  local nv = redis.call("INCRBY", k, -amt)
+  if tonumber(nv) <= 0 then
+    redis.call("DEL", k)
+  end
+end
+
+-- Purge expired reservations (best-effort, BOUNDED)
+local MAX_PURGE = 200
+local expired = redis.call("ZRANGEBYSCORE", resv_idx, "-inf", now, "LIMIT", 0, MAX_PURGE)
+for i = 1, #expired do
+  local rid = expired[i]
+  local meta = redis.call("HGET", resv_map, rid)
+  if meta then
+    local amt, k1, k2, k3 = parse_meta(meta)
+    if amt > 0 then
+      decr_if_exists(k1, amt)
+      decr_if_exists(k2, amt)
+      decr_if_exists(k3, amt)
+    end
+    redis.call("HDEL", resv_map, rid)
+  end
+  redis.call("ZREM", resv_idx, rid)
+end
+
+-- Purge expired concurrency holders
+redis.call("ZREMRANGEBYSCORE", locks, "-inf", now)
+
+-- Read committed counters
+local req_d = tonumber(redis.call("GET", req_d_k) or "0")
+local req_m = tonumber(redis.call("GET", req_m_k) or "0")
+local req_t = tonumber(redis.call("GET", req_t_k) or "0")
+
+local function hour_bucket_key(minute)
+  return tok_h_prefix .. ":" .. tostring(minute)
+end
+
+local min_now = math.floor(now / 60)
+local tok_h = 0
+local buckets = {}
+for i = min_now - 59, min_now do
+  local v = tonumber(redis.call("GET", hour_bucket_key(i)) or "0")
+  if v and v > 0 then
+    tok_h = tok_h + v
+    table.insert(buckets, {i, v})
+  end
+end
+local tok_d = tonumber(redis.call("GET", tok_d_k) or "0")
+local tok_m = tonumber(redis.call("GET", tok_m_k) or "0")
+
+local tok_hr = tonumber(redis.call("GET", tok_hr_k) or "0")
+local tok_dr = tonumber(redis.call("GET", tok_dr_k) or "0")
+local tok_mr = tonumber(redis.call("GET", tok_mr_k) or "0")
+
+local tok_h_eff = tok_h + tok_hr
+local tok_h_reset_at = 0
+if lim_tok_h >= 0 and tok_h_eff > lim_tok_h then
+  local target = lim_tok_h - tok_hr
+  if target < 0 then target = 0 end
+  local running = tok_h
+  for j = 1, #buckets do
+    running = running - buckets[j][2]
+    if running <= target then
+      tok_h_reset_at = (buckets[j][1] * 60) + 3600
+      break
+    end
+  end
+  if tok_h_reset_at == 0 and #buckets > 0 then
+    tok_h_reset_at = (buckets[#buckets][1] * 60) + 3600
+  end
+end
+local tok_d_eff = tok_d + tok_dr
+local tok_m_eff = tok_m + tok_mr
+
+-- ── Compute the reserve amount (NO writes yet) ──
+-- Idempotent reuse: if already reserved under resv_id, reuse its amount.
+local reuse = false
+local reuse_k1, reuse_k2, reuse_k3 = nil, nil, nil
+local reserved = 0
+if want_resv and want_resv > 0 and resv_id and resv_id ~= "" then
+  local existing = redis.call("HGET", resv_map, resv_id)
+  if existing then
+    local amt, k1, k2, k3 = parse_meta(existing)
+    reserved = amt
+    reuse = true
+    reuse_k1, reuse_k2, reuse_k3 = k1, k2, k3
+  else
+    local r = want_resv
+    if lim_tok_h >= 0 then local rem = lim_tok_h - tok_h_eff; if rem < r then r = rem end end
+    if lim_tok_d >= 0 then local rem = lim_tok_d - tok_d_eff; if rem < r then r = rem end end
+    if lim_tok_m >= 0 then local rem = lim_tok_m - tok_m_eff; if rem < r then r = rem end end
+    if r < 0 then r = 0 end
+    reserved = r
+  end
+end
+
+local wallet_part = r_total - reserved
+if wallet_part < 0 then wallet_part = 0 end
+
+-- ── Deny checks (NO writes yet) ──
+local reason = ""
+local function add_violation(v)
+  if reason == "" then reason = v else reason = reason .. "|" .. v end
+end
+
+-- Indivisible request windows: a wallet holder passes the gate.
+if lim_req_d >= 0 and req_d >= lim_req_d and has_wallet == 0 then add_violation("requests_per_day") end
+if lim_req_m >= 0 and req_m >= lim_req_m and has_wallet == 0 then add_violation("requests_per_month") end
+if lim_req_t >= 0 and req_t >= lim_req_t and has_wallet == 0 then add_violation("total_requests") end
+
+-- Divisible token windows: the wallet must cover the over-quota remainder.
+if wallet_part > wallet_avail then add_violation("wallet_insufficient") end
+
+-- Concurrency: a wallet holder passes the gate.
+local in_flight = 0
+local existing_lock = nil
+if maxc and maxc > 0 then
+  local current = redis.call("ZCARD", locks)
+  existing_lock = redis.call("ZSCORE", locks, lock_id)
+  if existing_lock then
+    in_flight = current
+  else
+    if current >= maxc and has_wallet == 0 then
+      add_violation("concurrency")
+    end
+    in_flight = current + 1
+  end
+end
+
+if reason ~= "" then
+  return {0, reason, req_d, req_m, req_t, tok_h_eff, tok_d_eff, tok_m_eff, in_flight, 0, tok_h_reset_at, wallet_part}
+end
+
+-- ── ADMIT: perform writes ──
+-- Concurrency slot (acquire or refresh expiry)
+if maxc and maxc > 0 then
+  redis.call("ZADD", locks, lock_exp, lock_id)
+  local ttl = redis.call("TTL", locks)
+  if ttl > 0 then
+    local cur_exp = now + ttl
+    if cur_exp < lock_exp then redis.call("EXPIREAT", locks, lock_exp) end
+  elseif ttl == -1 then
+    -- no expiry -> leave it
+  else
+    redis.call("EXPIREAT", locks, lock_exp)
+  end
+end
+
+-- Token reservation
+if want_resv and want_resv > 0 and resv_id and resv_id ~= "" then
+  if reuse then
+    redis.call("ZADD", resv_idx, resv_exp, resv_id)
+    redis.call("EXPIREAT", resv_idx, exp_mon)
+    redis.call("EXPIREAT", resv_map, exp_mon)
+    if reuse_k1 and reuse_k1 ~= "" then redis.call("EXPIREAT", reuse_k1, exp_hour) end
+    if reuse_k2 and reuse_k2 ~= "" then redis.call("EXPIREAT", reuse_k2, exp_day)  end
+    if reuse_k3 and reuse_k3 ~= "" then redis.call("EXPIREAT", reuse_k3, exp_mon)  end
+  elseif reserved > 0 then
+    if lim_tok_h >= 0 then redis.call("INCRBY", tok_hr_k, reserved); redis.call("EXPIREAT", tok_hr_k, exp_hour) end
+    if lim_tok_d >= 0 then redis.call("INCRBY", tok_dr_k, reserved); redis.call("EXPIREAT", tok_dr_k, exp_day)  end
+    if lim_tok_m >= 0 then redis.call("INCRBY", tok_mr_k, reserved); redis.call("EXPIREAT", tok_mr_k, exp_mon)  end
+
+    local meta = tostring(reserved) .. "|" .. tok_hr_k .. "|" .. tok_dr_k .. "|" .. tok_mr_k
+    redis.call("HSET", resv_map, resv_id, meta)
+    redis.call("ZADD", resv_idx, resv_exp, resv_id)
+    redis.call("EXPIREAT", resv_idx, exp_mon)
+    redis.call("EXPIREAT", resv_map, exp_mon)
+
+    tok_h_eff = tok_h_eff + (lim_tok_h >= 0 and reserved or 0)
+    tok_d_eff = tok_d_eff + (lim_tok_d >= 0 and reserved or 0)
+    tok_m_eff = tok_m_eff + (lim_tok_m >= 0 and reserved or 0)
+  end
+end
+
+return {1, "", req_d, req_m, req_t, tok_h_eff, tok_d_eff, tok_m_eff, in_flight, reserved, tok_h_reset_at, wallet_part}
+"""
+
+
 # KEYS: resv_index_zset, resv_data_hash
 # ARGV: now_ts, resv_id
 _LUA_RELEASE_RESERVATION = r"""
@@ -751,6 +989,11 @@ class AdmitResult:
     reserved_tokens: int = 0
     reservation_id: Optional[str] = None
 
+    # Unified split model (wallet_aware admit): the over-quota/over-funds remainder
+    # the caller must cover from the wallet. wallet_part = r_total - reserved_tokens.
+    # 0 on the legacy (non-wallet_aware) admit path.
+    wallet_part: int = 0
+
 
 class UserEconomicsRateLimiter:
     """
@@ -790,7 +1033,8 @@ class UserEconomicsRateLimiter:
         redis: Redis,
         *,
         namespace: str = REDIS.ECONOMICS.RATE_LIMIT,
-        user_balance_snapshot_mgr: Optional['UserPlanBalanceSnapshotManager'] = None
+        user_balance_snapshot_mgr: Optional['UserPlanBalanceSnapshotManager'] = None,
+        rl_anchor_store: Optional[Any] = None,
     ):
         """
         Initialize RateLimiter.
@@ -799,10 +1043,15 @@ class UserEconomicsRateLimiter:
             redis: Redis client
             namespace: Namespace prefix (default: "kdcube:rl")
             user_balance_snapshot_mgr: Manager for querying user balances
+            rl_anchor_store: Optional durable mirror for the monthly-window anchor
+                (see RLMonthAnchorStore). When present, the rolling-month anchor is
+                restored from / written through to the DB so the quota-reset window
+                survives a Redis flush. When None, behavior is pure-Redis.
         """
         self.r = redis
         self.ns = namespace
         self.user_balance_snapshot_mgr = user_balance_snapshot_mgr
+        self.rl_anchor_store = rl_anchor_store
 
     async def admit(
         self,
@@ -818,6 +1067,16 @@ class UserEconomicsRateLimiter:
         reserve_tokens: int = 0,
         reservation_id: Optional[str] = None,
         reservation_ttl_sec: int = 1800,
+
+        # Unified split model (wallet-aware admit). When wallet_aware is set, the new
+        # _LUA_ADMIT_RESERVE_SPLIT runs: over-token-quota no longer hard-denies (the
+        # wallet covers wallet_part = r_total - reserved; deny iff wallet_part >
+        # wallet_available_tokens), and the indivisible gate (requests/concurrency) is
+        # lifted by has_wallet. Legacy callers leave wallet_aware=False (byte-identical).
+        wallet_aware: bool = False,
+        has_wallet: bool = False,
+        wallet_available_tokens: int = 0,
+        r_total: Optional[int] = None,
     ) -> AdmitResult:
         """
         Check request & token quotas (based on *already committed* usage),
@@ -898,6 +1157,75 @@ class UserEconomicsRateLimiter:
 
         def _lim(x: Optional[int]) -> int:
             return int(x) if x is not None else -1
+
+        if wallet_aware:
+            # Unified split admit: runs the wallet-aware Lua regardless of reserve_tokens
+            # (a fully wallet-funded turn has reserve_tokens=0 but still needs the gate,
+            # the wallet_part deny, and the concurrency slot).
+            resv_id = str(reservation_id or lock_id)
+            now_ts = int(now.timestamp())
+            rt = int(r_total if r_total is not None else reserve_tokens)
+
+            out = await self.r.eval(
+                _LUA_ADMIT_RESERVE_SPLIT,
+                12,
+                *_strs(
+                    k_locks,
+                    k_req_d, k_req_m, k_req_t,
+                    k_tok_h_prefix, k_tok_d, k_tok_m,
+                    k_tok_hr, k_tok_dr, k_tok_mr,
+                    k_resv_idx, k_resv_map,
+                ),
+                *_strs(
+                    now_ts,
+                    lock_id,
+                    int(effective_policy.max_concurrent or 0),
+                    now_ts + int(lock_ttl_sec),
+                    _lim(effective_policy.requests_per_day),
+                    _lim(effective_policy.requests_per_month),
+                    _lim(effective_policy.total_requests),
+                    _lim(effective_policy.tokens_per_hour),
+                    _lim(effective_policy.tokens_per_day),
+                    _lim(effective_policy.tokens_per_month),
+                    int(reserve_tokens or 0),
+                    resv_id,
+                    now_ts + int(reservation_ttl_sec),
+                    int(day_period_end.timestamp()),
+                    int(period_end.timestamp()),
+                    _eoh(now),
+                    int(1 if has_wallet else 0),
+                    int(wallet_available_tokens or 0),
+                    rt,
+                ),
+            )
+
+            allowed = bool(int(out[0] or 0))
+            reason = out[1].decode() if isinstance(out[1], (bytes, bytearray)) else (str(out[1]) if out[1] else None)
+            req_d = int(out[2] or 0); req_m = int(out[3] or 0); req_t = int(out[4] or 0)
+            tok_h_eff = int(out[5] or 0); tok_d_eff = int(out[6] or 0); tok_m_eff = int(out[7] or 0)
+            in_flight = int(out[8] or 0)
+            reserved = int(out[9] or 0)
+            tok_h_reset_at = int(out[10] or 0)
+            wallet_part = int(out[11] or 0)
+
+            return AdmitResult(
+                allowed=allowed,
+                reason=(reason or None) if not allowed else None,
+                lock_id=(lock_id if allowed else None),
+                snapshot={
+                    "req_day": req_d, "req_month": req_m, "req_total": req_t,
+                    "tok_hour": tok_h_eff, "tok_day": tok_d_eff, "tok_month": tok_m_eff,
+                    "in_flight": in_flight,
+                    "tok_hour_reset_at": tok_h_reset_at,
+                    "day_reset_at": int(day_period_end.timestamp()),
+                    "month_reset_at": int(period_end.timestamp()),
+                },
+                used_plan_override=used_plan_override,
+                effective_policy=asdict(effective_policy) if used_plan_override else None,
+                reserved_tokens=reserved,
+                reservation_id=(resv_id if reserved > 0 else None),
+                wallet_part=wallet_part,
+            )
 
         if int(reserve_tokens or 0) > 0:
             resv_id = str(reservation_id or lock_id)
@@ -1448,13 +1776,36 @@ class UserEconomicsRateLimiter:
 
         anchor_raw = await self.r.get(anchor_key)
         if anchor_raw is None:
-            if not create_if_missing:
+            restored_ts: Optional[int] = None
+            if self.rl_anchor_store is not None:
+                try:
+                    db_anchor = await self.rl_anchor_store.load(subject_id)
+                except Exception:
+                    db_anchor = None
+                if db_anchor is not None:
+                    if db_anchor.tzinfo is None:
+                        db_anchor = db_anchor.replace(tzinfo=timezone.utc)
+                    restored_ts = int(db_anchor.timestamp())
+
+            if restored_ts is not None:
+                anchor_ts = restored_ts
+                await self.r.set(anchor_key, anchor_ts)
+            elif not create_if_missing:
                 return None, None, None
-            if await self.r.setnx(anchor_key, now_ts):
-                anchor_ts = now_ts
             else:
-                anchor_raw = await self.r.get(anchor_key)
-                anchor_ts = int(anchor_raw or now_ts)
+                if await self.r.setnx(anchor_key, now_ts):
+                    anchor_ts = now_ts
+                else:
+                    anchor_raw = await self.r.get(anchor_key)
+                    anchor_ts = int(anchor_raw or now_ts)
+                if self.rl_anchor_store is not None:
+                    try:
+                        await self.rl_anchor_store.save_if_absent(
+                            subject_id,
+                            datetime.fromtimestamp(anchor_ts, tz=timezone.utc),
+                        )
+                    except Exception:
+                        pass
         else:
             anchor_ts = int(anchor_raw)
 
@@ -1472,6 +1823,61 @@ class UserEconomicsRateLimiter:
         period_end = datetime.fromtimestamp(period_end_ts, tz=timezone.utc)
         period_key = period_start.strftime("%Y%m%d%H%M")
         return period_start, period_end, period_key
+
+    async def reset_quota_windows(
+            self,
+            *,
+            bundle_id: str,
+            subject_id: str,
+            now: Optional[datetime] = None,
+    ) -> dict:
+        """Reset a user's rolling quota windows (month + day + hour) to a fresh start.
+
+        Re-anchors the monthly and daily windows to `now` (new period keys yield zeroed
+        reqs/toks counters and their reservation counterparts) and clears the rolling
+        hour token buckets. Overwrites the Redis anchors and, for the month, its durable
+        mirror. Returns the new month and day period descriptors.
+        """
+        now = now or datetime.utcnow().replace(tzinfo=timezone.utc)
+        now_ts = int(now.timestamp())
+
+        # Month: re-anchor (Redis + durable mirror).
+        month_anchor_key = _k(self.ns, bundle_id, subject_id, "month_anchor")
+        await self.r.set(month_anchor_key, now_ts)
+        if self.rl_anchor_store is not None:
+            try:
+                await self.rl_anchor_store.save(subject_id, now)
+            except Exception:
+                pass
+
+        # Day: re-anchor with the same 24h TTL the rolling-day helper uses.
+        day_anchor_key = _k(self.ns, bundle_id, subject_id, "day_anchor")
+        await self.r.set(day_anchor_key, now_ts)
+        try:
+            await self.r.expireat(day_anchor_key, now_ts + 24 * 60 * 60)
+        except Exception:
+            pass
+
+        # Hour: clear the rolling 60-minute token buckets (keyed by absolute minute,
+        # no anchor) so the summed hour usage reads zero.
+        bucket_prefix = _k(self.ns, bundle_id, subject_id, "toks:hour:bucket")
+        min_now = now_ts // 60
+        bucket_keys = [f"{bucket_prefix}:{m}" for m in range(min_now - 59, min_now + 1)]
+        try:
+            await self.r.delete(*bucket_keys)
+        except Exception:
+            pass
+
+        m_start, m_end, m_key = await self._rolling_month_period(
+            bundle_id=bundle_id, subject_id=subject_id, now=now, create_if_missing=True,
+        )
+        d_start, d_end, d_key = await self._rolling_day_period(
+            bundle_id=bundle_id, subject_id=subject_id, now=now, create_if_missing=True,
+        )
+        return {
+            "month_period_key": m_key, "month_period_start": m_start, "month_period_end": m_end,
+            "day_period_key": d_key, "day_period_start": d_start, "day_period_end": d_end,
+        }
 
     async def release_token_reservation(
             self,
@@ -1505,10 +1911,13 @@ class UserEconomicsRateLimiter:
         """
         Return settlement-time token capacity for one in-flight reservation.
 
-        Current availability is net of active reservations. This returns that
-        availability with other requests' reservations still excluded, and
-        returns this request's still-live reservation separately so settlement
-        can add back only the capacity this request already held.
+        `available_tokens` is RAW capacity: net of ALL active reservations,
+        including this request's own still-live hold. The own hold is returned
+        separately as `own_reserved_tokens` so settlement adds back exactly the
+        capacity this request already held (`available + own_reserved`). This is
+        the same "available is raw; add own back" convention the budget snapshots
+        follow — subtracting only OTHER reservations here would leave the own hold
+        inside `available` and the caller's add-back would double-count it.
         """
         now = (now or datetime.utcnow()).replace(tzinfo=timezone.utc)
 
@@ -1583,7 +1992,14 @@ class UserEconomicsRateLimiter:
             if limit is None:
                 return
             other_reserved = max(int(reserved_total or 0) - own_reserved, 0)
-            available = max(int(limit) - int(committed or 0) - int(other_reserved), 0)
+            # available is RAW capacity: net of ALL active reservations (including our
+            # own). The caller adds `own_reserved_tokens` back to size what THIS request
+            # may still commit — the same "available is raw; add own back" convention the
+            # budget snapshots follow (subscription/project available = balance − all
+            # active reservations). Subtracting only `other_reserved` here would leave our
+            # own reservation's room inside `available`, so the caller's add-back would
+            # double-count it and over-commit quota by the reservation size.
+            available = max(int(limit) - int(committed or 0) - int(reserved_total or 0), 0)
             windows.append({
                 "name": name,
                 "limit": int(limit),

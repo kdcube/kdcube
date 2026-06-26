@@ -70,6 +70,26 @@ def project_schema(tenant: str, project: str) -> str:
     return schema_name
 
 
+# --- TEMPORARY one-time migration -------------------------------------------
+# Remove this helper (and its call in deploy_project.py) once every environment
+# has been provisioned with the `plans` schema naming. It applies
+# chatbot/economics-plans-corrections.sql BEFORE provisioning, so an already
+# deployed schema is renamed/extended in place; on a fresh schema every guarded
+# statement is a no-op and the provision creates the new names directly.
+def apply_project_migrations(tenant, project):
+    from kdcube_ai_app.infra.relational.psql.psql_base import PostgreSqlDbMgr
+
+    schema = project_schema(tenant or "default", project or "default-project")
+    substitutions = {"SCHEMA": schema, "SYSTEM_SCHEMA": SYSTEM_SCHEMA}
+    migration_file = os.path.join(sql_location, "chatbot", "economics-plans-corrections.sql")
+    if not os.path.exists(migration_file):
+        return
+    mgr = PostgreSqlDbMgr()
+    mgr.execute_sql_file(migration_file, substitutions=substitutions)
+    print(f"Applied economics-plans-corrections migration on schema: {schema}")
+# ---------------------------------------------------------------------------
+
+
 def run(op, component, tenant=None, project=None, app=None):
     """
     Execute SQL deployment/deletion for a given component.

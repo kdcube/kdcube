@@ -26,8 +26,8 @@ From the Economics dashboard you can:
 - Create and manage subscription plans (plan_id → price mapping)
 - Create subscriptions (internal or Stripe)
 - Look up subscription status and balances
-- Manually top up subscription balances
-- Manually renew internal subscriptions (top up + advance next charge)
+- Manually top up external (Stripe) subscription balances
+- Reset an internal plan's quota windows (month + day + hour)
 - Reap expired subscription reservations (single user or all users in project)
 - Sweep expired subscription periods (rollover to project budget)
 - Top up the project budget
@@ -42,7 +42,7 @@ From the Economics dashboard you can:
 
 - **Plan** = quota policy (limits for requests/tokens/concurrency).
 - **Plan override** = temporary per‑user override of plan limits.
-- **Lane** = `plan` lane or `paid` lane.
+- **Funding split** = one pass: the primary source (subscription/project) covers `plan_part`, the wallet covers the over‑quota remainder.
 
 ## Plan Quotas and Limits
 
@@ -55,21 +55,31 @@ UI card: **Quota Policies**
 - Plan overrides (`user_plan_overrides`) can temporarily replace these values per user.
 - Quotas are enforced **per tenant/project** (global across bundles).
 - Hourly limits use a **rolling 60‑minute** window; daily limits use the **current 24‑hour quota period since the last daily reset**; monthly limits use the **current 30‑day quota period since the last monthly reset**.
-- Reservation floor is **per bundle**, configured via bundle props `economics.reservation_amount_dollars` (not in this UI).
+- Reservation floor default comes from the economics descriptor (`reservation.chat`), editable in the **Reservation** card below, and overridable per bundle.
 
-### Bundle reservation floor (per bundle)
+### Reservation floor (descriptor default + per-bundle override)
 
-This is configured via bundle props (not the economics UI):
+UI card: **Reservation**
 
-- Key: `economics.reservation_amount_dollars`
-- Scope: tenant/project + bundle_id
+The reservation floor (USD) sizes a turn's pre-run hold. It is resolved per turn from two layers:
 
-Admin API (Integrations):
-- `GET /admin/integrations/bundles/{bundle_id}/props`
-- `POST /admin/integrations/bundles/{bundle_id}/props`
+1. **Descriptor default** — `reservation.<floor>` in the economics descriptor (e.g. `chat: 2.0`),
+   seeded at deploy and read live per turn. Edit it from the **Reservation** card, which writes
+   straight into the descriptor (survives a re-seed; bundles pick it up live):
+   - `GET /economics/reservation` — current floors
+   - `POST /economics/reservation` — set `{floor, amount}` (amount `<= 0` disables the floor)
+   - `DELETE /economics/reservation/{floor}` — remove the floor (the surface inherits the default again)
+2. **Per-bundle override** — `config.economics.reservation.<floor>` in `bundles.yaml` (legacy bundle
+   prop `economics.reservation_amount_dollars` is still accepted), via the Integrations bundle props API:
+   - `GET /admin/integrations/bundles/{bundle_id}/props`
+   - `POST /admin/integrations/bundles/{bundle_id}/props`
+
+Runtime resolution (chat): the bundle override wins if set; otherwise the descriptor default
+applies. A positive value enables the floor (`est_turn_tokens = ceil(amount / (usd_per_token × SAFETY_MARGIN))`);
+`<= 0` disables it (token-based estimate).
 
 Special case (wallet + no subscription):
-- Plan stays `free`, but **service limits** (requests/concurrency) are taken from `payasyougo`.
+- Plan stays `free`, but **service limits** (requests/concurrency) are taken from `wallet`.
 - **Token limits** still come from `free`.
 
 Special case (subscription + wallet):
@@ -77,20 +87,22 @@ Special case (subscription + wallet):
 - **Subscription balance and subscription plan quota** cover the maximum eligible request share.
 - **Wallet** covers only overflow; wallet-paid tokens do **not** consume subscription plan quota.
 - If actual spend exceeds both plan funding and wallet, project budget absorbs the remainder (shortfall note in ledger). If plan quota remains, that absorbed fallback also consumes quota.
-- If subscription funds **zero** for the turn, the request switches to **paid lane** and **payasyougo** quotas apply.
+- If the subscription budget can't fully fund a turn, the over‑quota remainder is covered by the **wallet** via the unified split.
 - Subscriptions and wallets never go negative; only project budget can absorb shortfalls.
 
 ### How plan limits are initialized
 
-Plan quotas are seeded once by a master bundle:
+Plan quotas are **seeded at deploy time** from the economics descriptor
+(`deployment/economics.yaml`) by the postgres-setup job 
+(see [economics-descriptor-README.md](./economics-descriptor-README.md)). The mandatory
+plans (`anonymous`/`free`/`wallet`/`admin`) have a built-in baseline (`DEFAULT_QUOTA_POLICIES`);
+descriptor entries override it per field.
 
-- The entrypoint seeds from `app_quota_policies` if `plan_quota_policies` is missing records.
-- After seeding, updates should be made in the admin UI.
+- `enforce: false` (default) seeds only missing entries, preserving operator/admin edits.
+- `enforce: true` realigns every listed entity back to the descriptor.
 
-If you change `app_quota_policies` in code, you must either:
-
-- Update the policies directly in the admin UI, or
-- Clear the table and let the master bundle re‑seed
+After seeding, adjust limits in the admin UI, or re-run the seeder with an updated descriptor.
+The legacy bundle-runtime seeder (`ensure_policies_initialized()`) is a deprecated no-op shim.
 
 ## Subscription Plans
 
@@ -114,18 +126,31 @@ Plans are later referenced by subscriptions and used by plan quota policies.
 
 UI card: **Create Subscription**
 
-- Internal subscription: creates a row in `user_subscriptions` with provider `internal`.
+- Internal subscription: creates a row in `user_plans` with provider `internal`.
 - Stripe subscription: creates a Stripe subscription and stores a snapshot.
-- Plan ID is required and must exist in `subscription_plans`.
+- Plan ID is required and must exist in `plans`.
 
 Backend: `POST /subscriptions/create`
+
+**Change guard.** Both admin create and user checkout pass through
+`assert_plan_change_allowed`. A target that is a quota‑only policy (`wallet`,
+`anonymous`) is always rejected (`409 target_not_subscribable`) — these are not
+subscribable plans. Operator create skips the remaining self‑serve rules (an
+operator may grant `admin`/`free` or move an `admin` user).
+
+**Internal grant vs an existing Stripe row.** Granting an internal plan **does not
+touch an `active` `provider='stripe'` subscription** (the operation no‑ops and
+returns the unchanged row). A **non‑active** Stripe row (`canceled`/`past_due`/…)
+**can** be overridden onto an internal plan — the row flips to `provider='internal'`
+and its Stripe ids are cleared. So to move a Stripe subscriber to internal, cancel
+the Stripe subscription first, then grant internal.
 
 ### Lookup subscription
 
 UI card: **Lookup Subscription (by user)**
 
 - Shows subscription metadata and current period balance.
-- Displays a Renew now button for internal subscriptions.
+- Displays a Reset quota button for internal subscriptions.
 
 Backend: `GET /subscriptions/user/{user_id}`
 
@@ -145,27 +170,30 @@ Backend:
 
 Note: chat requests use the runtime `turn_id` as `request_id`; non-chat top-level flows use their own stable accountable request id.
 
-### Renew internal subscription
+### Reset internal quota
 
-UI button: **Renew now** (visible only for internal active subscriptions)
+UI button: **Reset quota** (visible for internal active subscriptions)
 
-- Tops up the subscription period balance.
-- Advances `next_charge_at`.
+- Re-anchors the monthly and daily windows to now and clears the hour buckets.
+- All rolling request/token counters (month, day, hour) start fresh.
 
-Backend: `POST /subscriptions/internal/renew-once`
+Backend: `POST /subscriptions/internal/reset-quota`
+
+Internal plans carry no plan budget. They draw from the project budget bounded by their quota; their allowance is the rolling RL quota.
 
 ### Manual subscription balance top‑up
 
 UI card: **Subscription Balance Admin**
 
-- Manually adds USD to the current subscription period budget.
+- Adds USD to the current subscription period budget.
 - Optional Force topup allows multiple topups within the same period.
+- Applies only to external (Stripe) subscriptions. Internal subscriptions return `400` (use Reset quota).
 
 Backend: `POST /subscriptions/budget/topup`
 
-Note: Manual top‑ups do not advance billing dates. Use Renew now for internal billing cycles.
+Note: Manual top‑ups do not advance billing dates.
 
-Subscriptions do not support overdraft. Any shortfall beyond subscription + wallet is absorbed by the project budget (shortfall note in the ledger).
+External subscription budgets do not support overdraft. Any shortfall beyond subscription + wallet is absorbed by the project budget (shortfall note in the ledger).
 
 ### Sweep expired subscription periods
 

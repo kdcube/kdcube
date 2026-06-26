@@ -382,7 +382,6 @@ Known `env.type` values:
 - `rate_limit.project_exhausted` — project budget exhausted
 - `rate_limit.subscription_exhausted` — subscription balance exhausted
 - `rate_limit.post_run_exceeded` — request completed but actual token usage exceeded the limit (next requests will be blocked)
-- `rate_limit.lane_switch` — informational; user silently switched from plan lane to paid lane
 
 
 **`data.rate_limit` shape** (present on `warning`, `denied`, `post_run_exceeded`):
@@ -820,7 +819,6 @@ Event `type` values:
 - `queue.enqueue_rejected`
 - `rate_limit.ai_services_quota`
 - `rate_limit.attachment_failure`
-- `rate_limit.lane_switch`
 - `rate_limit.warning`
 - `react.current_turn.compaction_checkpoint`
 - `react.decision.raw`

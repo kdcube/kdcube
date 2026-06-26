@@ -3,19 +3,19 @@ id: repo:kdcube-ai-app/app/ai-app/docs/economics/economic-enforcement-engine-REA
 title: "Economics Enforcement Engine"
 summary: "Reusable API for enforcing the economics model (quota, funding, settlement) on accountable flows outside the chat entrypoint."
 tags: ["economics", "enforcement", "engine", "api", "integration"]
-keywords: ["EconomicsGuard", "economic_preflight", "EconomicsSubject", "RoleResolver", "FlowPolicy", "reservation", "settlement", "scope_id", "quota lock", "paid lane", "lane switch", "allow_paid_lane_fallback", "enforce_quota_lock"]
+keywords: ["EconomicsGuard", "economic_preflight", "EconomicsSubject", "RoleResolver", "FlowPolicy", "reservation", "settlement", "scope_id", "quota lock", "wallet overflow", "enforce_quota_lock"]
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/economics/economic-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/economics/economics-events-README.md
 ---
 # Economics Enforcement Engine
 
-The economics model (roles, plans, funding lanes, reservations, settlement — see
+The economics model (roles, plans, funding sources, reservations, settlement — see
 [economic-README.md](./economic-README.md)) is enforced for chat turns by the chat
 entrypoint. The **enforcement engine** exposes that same model as a small, reusable
 API so that any accountable flow — one that runs model calls on a user's behalf
 without a chat turn — can verify feasibility, reserve funding, and settle actual
-cost through the **same** role → plan → funding resolution, lanes, project→wallet
+cost through the **same** role → plan → funding resolution, split, project→wallet
 overflow split, and shortfall absorption.
 
 Module:
@@ -69,7 +69,7 @@ subject = EconomicsSubject(tenant=tenant, project=project, user_id="u-123", user
 An async context manager around a single accountable flow. On enter it resolves the
 plan and funding, runs the rate-limit admit, reserves funding, and binds accounting
 to the flow's `scope_id`. On exit it aggregates the flow's accounting events for that
-`scope_id` and settles the actual cost across the funding lanes (committing or
+`scope_id` and settles the actual cost across the funding sources (committing or
 releasing the reservations).
 
 ```python
@@ -182,7 +182,7 @@ user id/type, and the stage-specific fields. Current stages:
 | Stage | Meaning |
 | --- | --- |
 | `preflight_start` / `preflight_ok` | verify-only feasibility check |
-| `plan_resolved` | resolved role, plan, funding lane, and reservation estimate |
+| `plan_resolved` | resolved role, plan, funding source, and reservation estimate |
 | `admit` | quota admission evaluated and token reservation state known |
 | `reserve_ok` | funding reservation created |
 | `accounting_bound` | accounting context bound under the operation scope |
@@ -212,14 +212,13 @@ Semantic-search economics denial logs a facade-level fallback line and returns
 | `reservation_ttl_sec` | `900` | reservation hold lifetime |
 | `lock_ttl_sec` | `180` | admit lock lifetime |
 | `emit_user_events` | `False` | emit `rate_limit.*` SSE events on denial (needs a `comm` channel); background flows log only |
-| `allow_paid_lane_fallback` | `False` | when the plan lane cannot cover but the user can pay, switch to a wallet‑only paid lane instead of denying (see *Paid‑lane switch* below) |
 | `enforce_quota_lock` | `False` | serialize the admit→reserve window per user with a distributed lock (reserving flows only; see *Quota lock* below) |
 | `quota_lock_ttl_sec` | `60` | quota‑lock key lifetime (safety net if the holder dies) |
 | `quota_lock_wait_sec` | `5.0` | how long to wait for the lock before denying as `quota_lock_timeout` |
 
 ### `EconomicsDecision` — outcome (returned by both APIs)
 
-Carries the resolved `lane` (`plan` / `paid` / `bypass`), `plan_id`,
+Carries the resolved `lane` (`plan` / `bypass`), `plan_id`,
 `funding_source` (`subscription` / `project` / `wallet` / `none`),
 `funding_available_usd`, `est_turn_tokens`, `est_turn_usd`, `budget_bypass`,
 `nested`, and `scope_id`. Useful for logging the decision and the applicable limits.
@@ -232,20 +231,15 @@ Carries the resolved `lane` (`plan` / `paid` / `bypass`), `plan_id`,
   `exc.data` carries the snapshot. See
   [economics-events-README.md](./economics-events-README.md) for the event payloads
   emitted when `emit_user_events` is on.
-- **Paid‑lane switch.** With `allow_paid_lane_fallback` on, a plan‑lane request that
-  cannot be served from the plan — the plan admit is rate‑limited, or plan funding is
-  exhausted and cannot be reserved — switches to the **paid lane** instead of denying,
-  provided the user can pay: the plan reservation is released and admit is retried
-  against the pay‑as‑you‑go policy. In the paid lane an active subscription pays first
-  from its budget (the wallet stays untouched); otherwise the wallet is the primary
-  funding. Off by default, so a flow denies rather than escalating to paid funding
-  unless it opts in.
-- **Settlement (guard only).** On exit, actual spend is charged across the same lanes
-  as chat — plan/subscription/project first, wallet for the overflow, with project
-  budget absorbing any shortfall. A paid‑lane flow settles from the subscription
-  budget or the wallet (whichever is the paid primary). A flow whose actual cost is
-  zero releases its holds rather than charging. Subscriptions and wallets never go
-  negative.
+- **Wallet overflow.** When the plan quota/funds are exhausted, the over‑quota remainder
+  (`wallet_part = R − plan_part`) is drawn from the user's wallet within the **same**
+  wallet‑aware admit — identical to chat `run()`, on every surface. The turn only denies
+  when there is no wallet (or the wallet can't cover the remainder).
+- **Settlement (guard only).** On exit, actual spend is settled with the same split as
+  chat — plan quota + primary funds (subscription/project) first, the wallet for the
+  over‑quota remainder, with the subscription budget's headroom and then the project
+  budget absorbing any residual shortfall. A flow whose actual cost is zero releases its
+  holds rather than charging. Subscriptions and wallets never go negative.
 - **Quota lock.** With `enforce_quota_lock` on (and Redis available on the
   entrypoint), the admit→reserve planning window is serialized per user with a
   distributed lock, closing the read‑remaining‑quota → reserve race between concurrent

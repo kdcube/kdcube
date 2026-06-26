@@ -497,6 +497,7 @@ class SessionManager:
         # Optional: keep runtime object aligned with current request instance
         # (does not persist, but helpful for the caller)
         stored.request_context = context
+        stored.is_new_session = bool(created_flag)
 
         return stored
 

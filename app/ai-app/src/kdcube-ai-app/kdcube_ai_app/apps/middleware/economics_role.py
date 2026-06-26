@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from kdcube_ai_app.apps.chat.sdk.infra.control_plane.manager import ControlPlaneManager
+from kdcube_ai_app.apps.chat.sdk.infra.economics.plan_resolution import subscription_is_active
 from kdcube_ai_app.auth.sessions import UserSession, UserType
 
 
@@ -35,12 +36,7 @@ class EconomicsRoleResolver:
             tenant=self._tenant, project=self._project, user_id=user_id
         )
         now = datetime.utcnow().replace(tzinfo=timezone.utc)
-        has_active_subscription = bool(
-            sub
-            and getattr(sub, "status", None) == "active"
-            and int(getattr(sub, "monthly_price_cents", 0) or 0) > 0
-            and (getattr(sub, "next_charge_at", None) is None or getattr(sub, "next_charge_at") > now)
-        )
+        has_active_subscription = subscription_is_active(sub, now)
 
         wallet_tokens = await self._cp.user_credits_mgr.get_lifetime_balance(
             tenant=self._tenant, project=self._project, user_id=user_id
@@ -56,3 +52,17 @@ class EconomicsRoleResolver:
         if not session or not session.user_id:
             return None
         return await self.resolve_role_for_user_id(session.user_id)
+
+    async def ensure_baseline_subscription_for_session(self, session: UserSession) -> None:
+        if not session or not session.user_id:
+            return
+        if session.user_type == UserType.ANONYMOUS:
+            return
+
+        plan_id = "admin" if session.user_type == UserType.PRIVILEGED else "free"
+        await self._cp.subscription_mgr.ensure_baseline_subscription(
+            tenant=self._tenant,
+            project=self._project,
+            user_id=session.user_id,
+            plan_id=plan_id,
+        )

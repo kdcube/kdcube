@@ -15,7 +15,7 @@ seed_economics(): descriptor (+ baked-in baseline) -> DB.
 Entities:
   - quota_policies          (4 mandatory baked-in plans + descriptor extras)
   - application_budget_policies   (descriptor opt-in)
-  - subscription_plans            (free/admin baked-in + descriptor extras)
+  - plans                         (anonymous/free/admin/wallet baked-in + descriptor extras)
   - tenant_project_budget         (overdraft limit only; balance untouched)
 Reservation floors are runtime config (not seeded).
 """
@@ -34,8 +34,8 @@ from kdcube_ai_app.ops.deployment.sql.db_deployment import project_schema
 from kdcube_ai_app.apps.chat.sdk.infra.economics.defaults import (
     DEFAULT_QUOTA_POLICIES,
     MANDATORY_QUOTA_PLAN_IDS,
-    DEFAULT_SUBSCRIPTION_PLANS,
-    MANDATORY_SUBSCRIPTION_PLAN_IDS,
+    DEFAULT_PLANS,
+    MANDATORY_PLAN_IDS,
 )
 
 _QUOTA_FIELDS = (
@@ -128,17 +128,17 @@ def _effective_quota_policies(descriptor: Dict[str, Any]) -> Dict[str, Dict[str,
     return effective
 
 
-def _effective_subscription_plans(descriptor: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+def _effective_plans(descriptor: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     """
-    Built-in baseline for the mandatory subscription plans (free, admin),
+    Built-in baseline for the mandatory plans (anonymous, free, admin, wallet),
     overridden per field by the descriptor; any extra plan_id in the descriptor
     is included as-is.
     """
-    desc_plans = dict(descriptor.get("subscription_plans") or {})
+    desc_plans = dict(descriptor.get("plans") or {})
     effective: Dict[str, Dict[str, Any]] = {}
 
-    for plan_id in MANDATORY_SUBSCRIPTION_PLAN_IDS:
-        base = dict(DEFAULT_SUBSCRIPTION_PLANS[plan_id])
+    for plan_id in MANDATORY_PLAN_IDS:
+        base = dict(DEFAULT_PLANS[plan_id])
         # Field present in the descriptor wins (including explicit null).
         base.update(desc_plans.get(plan_id) or {})
         effective[plan_id] = base
@@ -208,8 +208,8 @@ def seed_economics(tenant: str, project: str, *, mgr=None, path: Optional[str] =
     if budget:
         _log(f"budget_policies: {len(budget)} ({', '.join(budget)})")
 
-    # 3) subscription plans catalog — always includes the baked-in free/admin plans.
-    plans = _effective_subscription_plans(descriptor)
+    # 3) plans catalog — always includes the baked-in anonymous/free/admin/wallet plans.
+    plans = _effective_plans(descriptor)
     for plan_id, fields in plans.items():
         fields = fields or {}
         metadata = fields.get("metadata")
@@ -220,8 +220,8 @@ def seed_economics(tenant: str, project: str, *, mgr=None, path: Optional[str] =
                "active": bool(fields.get("active", True)),
                "metadata": Json(metadata) if metadata is not None else None,
                "created_by": _SEED_CREATED_BY, "notes": _SEED_NOTES}
-        _upsert(mgr, schema, "subscription_plans", ("tenant", "project", "plan_id"), row, enforce)
-    _log(f"subscription_plans: {len(plans)} ({', '.join(plans)})")
+        _upsert(mgr, schema, "plans", ("tenant", "project", "plan_id"), row, enforce)
+    _log(f"plans: {len(plans)} ({', '.join(plans)})")
 
     # 4) project budget — overdraft limit only; balance is never written here.
     pb = descriptor.get("project_budget")

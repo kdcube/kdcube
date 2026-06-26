@@ -70,10 +70,23 @@ class RequestGateway:
         )
         self._setup_circuit_breakers()
         self.econ_role_resolver = None
+        self._post_session_create_hooks = []
 
     def set_econ_role_resolver(self, resolver):
         self.econ_role_resolver = resolver
-    
+
+    def register_post_session_create_hook(self, hook):
+        """Register a general-purpose callback fired after a NEW session is created.
+
+        Called as ``await hook(session)`` once per session CREATION (i.e. when
+        ``session.is_new_session`` is set), for ALL session types — each handler
+        decides whether to act (e.g. skip anonymous). Multiple handlers may be
+        registered; they run inline in registration order. Non-fatal: a hook
+        raising is logged and never blocks authentication. Keeps the generic
+        gateway free of any domain (e.g. economics) dependency — the gateway only
+        knows that a session was created, not what handlers do with it."""
+        self._post_session_create_hooks.append(hook)
+
     async def get_or_create_session_with_econ_role(
             self,
             context: RequestContext,
@@ -94,7 +107,16 @@ class RequestGateway:
             except Exception as e:
                 logger.warning("Failed to pre-resolve economics role: %s", e)
 
-        return await self.session_manager.get_or_create_session(context, effective_user_type, user_data)
+        session = await self.session_manager.get_or_create_session(context, effective_user_type, user_data)
+
+        if getattr(session, "is_new_session", False):
+            for hook in self._post_session_create_hooks:
+                try:
+                    await hook(session)
+                except Exception as e:
+                    logger.warning("post-session-create hook failed: %s", e)
+
+        return session
 
     async def _ensure_capacity_calculator(self):
         """Ensure capacity calculator is initialized with Redis client"""

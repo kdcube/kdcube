@@ -104,6 +104,10 @@ class FastAPIGatewayAdapter:
         if hasattr(self.gateway, "set_econ_role_resolver"):
             self.gateway.set_econ_role_resolver(resolver)
 
+    def register_post_session_create_hook(self, hook):
+        if hasattr(self.gateway, "register_post_session_create_hook"):
+            self.gateway.register_post_session_create_hook(hook)
+
     def _extract_context(self, request: Request, *, header_only_auth: bool = False) -> RequestContext:
         """Extract request context from FastAPI request"""
         def _parse_int(v):

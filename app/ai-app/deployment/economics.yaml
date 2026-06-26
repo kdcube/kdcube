@@ -10,9 +10,9 @@
 #   true  → realign every listed entity to these defaults (incl. lowering a
 #           field back to null / unlimited)
 #
-# Mandatory quota policies (anonymous / free / payasyougo / admin) and the
-# subscription plans free / admin are always seeded from a built-in baseline
-# even if omitted below; entries here override that baseline per field.
+# Mandatory quota policies and plans (both keyed anonymous / free / wallet /
+# admin) are always seeded from a built-in baseline even if omitted below;
+# entries here override that baseline per field.
 # budget_policies have no baseline and are seeded only for the keys listed here.
 # ---------------------------------------------------------------------------
 version: 1
@@ -37,7 +37,7 @@ quota_policies:
                 tokens_per_hour: 150000, tokens_per_day: 1500000, tokens_per_month: 20000000 }
   free:       { max_concurrent: 2,  requests_per_day: 100, requests_per_month: 30000,
                 tokens_per_hour: 133333, tokens_per_day: 333333,  tokens_per_month: 666666 }
-  payasyougo: { max_concurrent: 4,  requests_per_day: 200, requests_per_month: 6000 }
+  wallet:     { max_concurrent: 4,  requests_per_day: 200, requests_per_month: 6000 }
   admin:      { max_concurrent: 10 }
 
 # provider -> budget policy (spending limits, USD). null = unlimited dimension.
@@ -47,9 +47,10 @@ budget_policies:
   brave:      { usd_per_hour: 1.0,  usd_per_day: 20.0,  usd_per_month: 500.0 }
   duckduckgo: { usd_per_hour: null, usd_per_day: null,  usd_per_month: null }
 
-# plan_id -> subscription catalog entry.
-# free + admin are baked-in baseline (always seeded; entries here override per
-# field). Any other plan_id is opt-in. provider ∈ {internal, stripe};
-# stripe requires stripe_price_id.
-subscription_plans:
+# plan_id -> catalog entry (provider, price, active state, subscribe/grant
+# behaviour). anonymous + free + admin + wallet are baked-in baseline (always
+# seeded; entries here override per field). free/admin are internal grant plans;
+# wallet/anonymous are built-in non-subscribable plans. Any other plan_id is
+# opt-in. provider ∈ {internal, stripe}; stripe requires stripe_price_id.
+plans:
   free: { provider: internal, monthly_price_cents: 0, active: true }

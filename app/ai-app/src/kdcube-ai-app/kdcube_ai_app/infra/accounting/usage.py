@@ -21,11 +21,9 @@ anthropic = "anthropic"
 # -----------------------------
 # Price calculation helpers
 # -----------------------------
-def price_table():
-    """Enhanced price table with separate cache type pricing."""
-
-
-    return {
+# In-code baseline price table (the safety floor). The economics descriptor's
+# `price_tables:` section overlays this per-section at runtime; see price_table().
+DEFAULT_PRICE_TABLE = {
         "llm": [
             {
                 "model": sonnet_46,
@@ -426,6 +424,45 @@ def price_table():
             }
         ]
     }
+
+# Reference model — the currency of the token economy (USD<->tokens for
+# reservation, credits, Stripe, balance). It MUST resolve in the effective table
+# (_ref_out_price_1m raises otherwise). A descriptor price_tables section that
+# omits it is treated as invalid and the baseline is used instead.
+REF_PROVIDER = anthropic
+REF_MODEL = sonnet_45
+
+
+def _has_ref_model(table: Dict[str, Any]) -> bool:
+    return any(
+        isinstance(e, dict) and e.get("provider") == REF_PROVIDER and e.get("model") == REF_MODEL
+        for e in (table.get("llm") or [])
+    )
+
+
+def _select_price_table(baseline: Dict[str, Any], overlay: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Either/or, no merge: use the descriptor `price_tables` section as the whole
+    table when present and valid (it must carry the reference model); otherwise use
+    the in-code baseline."""
+    if not isinstance(overlay, dict) or not overlay:
+        return baseline
+    if not _has_ref_model(overlay):
+        return baseline
+    return overlay
+
+
+def price_table():
+    """Effective price table: the descriptor's `price_tables:` section in full when
+    present and carrying the reference model, else the in-code DEFAULT_PRICE_TABLE.
+    No merge — one or the other. Read by every cost/quote consumer, so no call-site
+    changes."""
+    try:
+        from kdcube_ai_app.apps.chat.sdk.config_scopes import economics_price_tables
+        overlay = economics_price_tables()
+    except Exception:
+        overlay = None
+    return _select_price_table(DEFAULT_PRICE_TABLE, overlay)
+
 
 def load_accounting_services_config() -> Dict[str, Any]:
     """Load ACCOUNTING_SERVICES from config."""

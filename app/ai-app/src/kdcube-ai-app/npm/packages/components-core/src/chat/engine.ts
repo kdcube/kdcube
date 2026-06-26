@@ -389,7 +389,6 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
           (data.user_message as string | undefined) ||
           'Attachment was rejected.'
         break
-      case 'rate_limit.lane_switch':
       case 'economics.user_underfunded_absorbed':
         return
       default: {

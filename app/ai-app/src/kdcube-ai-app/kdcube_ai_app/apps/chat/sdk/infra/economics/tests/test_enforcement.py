@@ -44,12 +44,12 @@ class _PlanBalance:
 
 
 class _Sub:
-    def __init__(self, active: bool = True, plan_id: str = "beta-30"):
+    def __init__(self, active: bool = True, plan_id: str = "beta-30", provider: str = "internal"):
         self.status = "active" if active else "canceled"
         self.monthly_price_cents = 3000
         self.next_charge_at = None
         self.plan_id = plan_id
-        self.provider = "internal"
+        self.provider = provider
         self.stripe_subscription_id = None
         self.last_charged_at = None
 
@@ -142,13 +142,33 @@ class _RL:
     async def admit(self, **kw):
         first = not self.admit_calls
         self.admit_calls.append(kw)
-        allowed = self.allowed and not (self.deny_first and first)
+        base_allowed = self.allowed and not (self.deny_first and first)
         reserve = int(kw.get("reserve_tokens") or 0)
+        snapshot = {"tok_month": 0, "req_day": 0}
+        if kw.get("wallet_aware"):
+            # Model the wallet-aware Lua split: quota is unbounded in the fake, so the
+            # plan part is the caller-sized want_resv; the wallet covers the remainder.
+            r_total = int(kw.get("r_total") if kw.get("r_total") is not None else reserve)
+            wallet_avail = int(kw.get("wallet_available_tokens") or 0)
+            reserved = reserve if base_allowed else 0
+            wallet_part = max(r_total - reserved, 0)
+            allowed = base_allowed and (wallet_part <= wallet_avail)
+            reason = None if allowed else ("wallet_insufficient" if base_allowed else (self.reason or "tokens_per_month"))
+            return AdmitResult(
+                allowed=allowed,
+                reason=reason,
+                lock_id=kw.get("lock_id") if allowed else None,
+                snapshot=snapshot,
+                reserved_tokens=reserved if allowed else 0,
+                reservation_id=(kw.get("reservation_id") if (allowed and reserved > 0) else None),
+                wallet_part=wallet_part if allowed else 0,
+            )
+        allowed = base_allowed
         return AdmitResult(
             allowed=allowed,
             reason=None if allowed else (self.reason or "tokens_per_month"),
             lock_id=kw.get("lock_id") if allowed else None,
-            snapshot={"tok_month": 0, "req_day": 0},
+            snapshot=snapshot,
             reserved_tokens=reserve if allowed else 0,
             reservation_id=(kw.get("reservation_id") if (allowed and reserve > 0) else None),
         )
@@ -336,12 +356,26 @@ async def test_role_resolver_preserves_privileged_without_db():
 # Funding-source selection
 # --------------------------------------------------------------------------
 async def test_funding_summary_subscription():
-    ep = _ep(sub=_Sub(active=True))
+    # Only an EXTERNAL subscription funds a separate plan budget.
+    ep = _ep(sub=_Sub(active=True, provider="stripe"))
     g = EconomicsGuard(ep, subject=_subject("registered"), scope_id="s1", flow="f",
                        estimate=EconomicsEstimate(reservation_usd=0.05))
     r = await g._resolve_plan_and_funding()
     assert r["has_active_subscription"] is True
+    assert r["funds_from_subscription"] is True
     assert g._funding_summary(r)[0] == "subscription"
+
+
+async def test_funding_summary_internal_subscription_is_project():
+    # An internal subscription is active for plan resolution but draws from the
+    # project budget (no separate plan budget).
+    ep = _ep(sub=_Sub(active=True, provider="internal"))
+    g = EconomicsGuard(ep, subject=_subject("registered"), scope_id="s1", flow="f",
+                       estimate=EconomicsEstimate(reservation_usd=0.05))
+    r = await g._resolve_plan_and_funding()
+    assert r["has_active_subscription"] is True
+    assert r["funds_from_subscription"] is False
+    assert g._funding_summary(r)[0] == "project"
 
 
 async def test_funding_summary_project_for_registered():
@@ -352,13 +386,14 @@ async def test_funding_summary_project_for_registered():
     assert g._funding_summary(r)[0] == "project"
 
 
-async def test_funding_summary_wallet_when_no_project():
+async def test_funding_summary_anonymous_wallet_is_none():
+    # wallet is never a primary funding source (no plan/paid lanes). An anonymous
+    # user (no project/subscription) resolves to "none" even with a wallet present.
     ep = _ep(wallet=1_000_000)
     g = EconomicsGuard(ep, subject=_subject("anonymous"), scope_id="s1", flow="f",
                        estimate=EconomicsEstimate(reservation_usd=0.05))
     r = await g._resolve_plan_and_funding()
-    # anonymous: project not allowed, wallet present -> wallet
-    assert g._funding_summary(r)[0] == "wallet"
+    assert g._funding_summary(r)[0] == "none"
 
 
 async def test_funding_summary_paid_wallet_user_uses_project():
@@ -501,182 +536,60 @@ async def test_economics_guard_emits_centralized_trace_messages():
     assert any('"stage": "settle"' in msg for msg in trace_lines)
 
 
-async def test_paid_lane_switch_when_primary_exhausted_and_fallback_allowed():
-    # registered + wallet, project exhausted (overdraft 0 / available 0):
-    # allow_paid_lane_fallback -> switch plan->paid, reserve wallet, settle wallet.
-    class _ZeroBudget(_Budget):
-        async def get_app_budget_balance(self):
-            return {"available_usd": 0.0, "overdraft_limit_usd": 0.0}
+# --------------------------------------------------------------------------
+# Wallet overflow — the wallet always covers the over-funds remainder (== run())
+# --------------------------------------------------------------------------
+class _FiniteBudget(_Budget):
+    # $0.02 with no overdraft -> primary covers only part of the turn, forcing an
+    # over-funds remainder (wallet_part > 0) that the wallet must absorb.
+    async def get_app_budget_balance(self):
+        return {"available_usd": 0.02, "overdraft_limit_usd": 0.0}
 
+
+async def test_wallet_overflow_funds_over_funds_remainder():
+    # The guard funds like chat run(): primary covers what it can, the wallet holds
+    # the over-funds remainder (unified split, no per-surface opt-in gate).
     cp = _CP(wallet=1_000_000, plan_balance=_PlanBalance(wallet=True))
-    ep = _EP(cp=cp, rl=_RL(), budget=_ZeroBudget(), accounting_result=(1000, {"cost_total_usd": 0.02}))
-    g = EconomicsGuard(
-        ep, subject=_subject("registered"), scope_id="sw1", flow="f",
-        estimate=EconomicsEstimate(reservation_usd=0.05),
-        policy=FlowPolicy(allow_paid_lane_fallback=True),
-    )
+    ep = _EP(cp=cp, rl=_RL(), budget=_FiniteBudget())
+    g = EconomicsGuard(ep, subject=_subject("registered"), scope_id="wo2", flow="f",
+                       estimate=EconomicsEstimate(reservation_usd=0.05))
     decision = await g.__aenter__()
-    assert decision.lane == "paid"
-    assert decision.funding_source == "wallet"
-    assert decision.wallet_reservation_id == "sw1"
-    assert len(ep.cp_manager.user_credits_mgr.reserved) == 1   # wallet reserved as primary
-    assert ep.budget_limiter.reserved == []                    # no project hold taken
-    assert any(kind == "tok" for kind, _ in ep.rl.releases)    # plan RL reservation released
-    assert len(ep.rl.admit_calls) == 2                         # plan admit + paid re-admit
-
-    await g.__aexit__(None, None, None)
-    assert len(ep.cp_manager.user_credits_mgr.committed) == 1  # wallet committed at settle
-    assert len(ep.rl.commits) == 1
-    # paid lane consumes 0 plan token quota (wallet pays at payasyougo)
-    assert int(ep.rl.commits[-1].get("tokens") or 0) == 0
-
-
-async def test_paid_lane_wallet_zero_cost_releases_reservation():
-    # paid lane (switch), but the actual cost settles to 0 (e.g. free-tier provider).
-    # commit_reserved_lifetime_tokens no-ops on tokens<=0, so the hold must be
-    # RELEASED explicitly — otherwise the wallet stays debited until TTL.
-    class _ZeroBudget(_Budget):
-        async def get_app_budget_balance(self):
-            return {"available_usd": 0.0, "overdraft_limit_usd": 0.0}
-
-    cp = _CP(wallet=1_000_000, plan_balance=_PlanBalance(wallet=True))
-    ep = _EP(cp=cp, rl=_RL(), budget=_ZeroBudget(), accounting_result=(0, {"cost_total_usd": 0.0}))
-    g = EconomicsGuard(
-        ep, subject=_subject("registered"), scope_id="z1", flow="f",
-        estimate=EconomicsEstimate(reservation_usd=0.05),
-        policy=FlowPolicy(allow_paid_lane_fallback=True),
-    )
-    await g.__aenter__()
-    assert len(ep.cp_manager.user_credits_mgr.reserved) == 1
-    await g.__aexit__(None, None, None)
-    # zero actual cost -> reservation released, NOT committed
-    assert len(ep.cp_manager.user_credits_mgr.released) == 1
-    assert ep.cp_manager.user_credits_mgr.committed == []
-
-
-async def test_no_paid_switch_when_fallback_disabled_denies():
-    # same setup, but allow_paid_lane_fallback=False (default non-chat) -> deny.
-    class _ZeroBudget(_Budget):
-        async def get_app_budget_balance(self):
-            return {"available_usd": 0.0, "overdraft_limit_usd": 0.0}
-
-    cp = _CP(wallet=1_000_000, plan_balance=_PlanBalance(wallet=True))
-    ep = _EP(cp=cp, rl=_RL(), budget=_ZeroBudget())
-    g = EconomicsGuard(
-        ep, subject=_subject("registered"), scope_id="sw2", flow="f",
-        estimate=EconomicsEstimate(reservation_usd=0.05),
-        policy=FlowPolicy(allow_paid_lane_fallback=False),
-    )
-    # primary exhausted but wallet can pay -> stays plan lane, wallet covers overflow (no switch, no deny)
-    decision = await g.__aenter__()
-    assert decision.lane == "plan"
-    assert len(ep.rl.admit_calls) == 1                         # no paid re-admit
+    assert decision.funding_source == "project"
+    assert len(ep.budget_limiter.reserved) == 1             # primary partial hold
+    assert len(ep.cp_manager.user_credits_mgr.reserved) == 1  # wallet overflow hold
     await g.__aexit__(None, None, None)
 
 
-async def test_paid_lane_switch_on_admit_rate_limit_when_fallback_allowed():
-    # plan admit is rate-limited, but the user has a wallet + fallback is allowed:
-    # switch to the paid lane (re-admit paid policy + reserve wallet), DO NOT deny.
-    cp = _CP(wallet=1_000_000, plan_balance=_PlanBalance(wallet=True))
-    ep = _EP(cp=cp, rl=_RL(deny_first=True), budget=_Budget(),
-             accounting_result=(1000, {"cost_total_usd": 0.02}))
-    g = EconomicsGuard(
-        ep, subject=_subject("registered"), scope_id="sw3", flow="f",
-        estimate=EconomicsEstimate(reservation_usd=0.05),
-        policy=FlowPolicy(allow_paid_lane_fallback=True),
-    )
-    decision = await g.__aenter__()
-    assert decision.lane == "paid"
-    assert decision.funding_source == "wallet"
-    assert decision.wallet_reservation_id == "sw3"
-    assert len(ep.cp_manager.user_credits_mgr.reserved) == 1   # wallet reserved as primary
-    assert ep.budget_limiter.reserved == []                    # plan funding never reserved
-    assert len(ep.rl.admit_calls) == 2                         # denied plan admit + paid re-admit
-    await g.__aexit__(None, None, None)
-    assert len(ep.cp_manager.user_credits_mgr.committed) == 1  # wallet committed at settle
+class _ZeroBudget(_Budget):
+    # project fully exhausted: $0 available, no overdraft -> primary cap = 0
+    async def get_app_budget_balance(self):
+        return {"available_usd": 0.0, "overdraft_limit_usd": 0.0}
 
 
-async def test_admit_rate_limit_denies_without_wallet_even_if_fallback_allowed():
-    # plan admit rate-limited, fallback allowed, but NO wallet -> deny (nothing to switch to).
+async def test_guard_denies_project_exhausted_when_funds_zero_and_no_wallet():
+    # Project primary fully exhausted (cap=0) + no wallet: the wallet-aware admit denies
+    # with wallet_insufficient at admit (before reserve_funding). The deny maps to the
+    # project-exhausted signal, not a generic rate-limit.
     cp = _CP(plan_balance=_PlanBalance(False))
-    ep = _EP(cp=cp, rl=_RL(deny_first=True), budget=_Budget())
-    g = EconomicsGuard(
-        ep, subject=_subject("registered"), scope_id="sw4", flow="f",
-        estimate=EconomicsEstimate(reservation_usd=0.05),
-        policy=FlowPolicy(allow_paid_lane_fallback=True),
-    )
+    ep = _EP(cp=cp, rl=_RL(allowed=False, reason="wallet_insufficient"), budget=_ZeroBudget())
+    g = EconomicsGuard(ep, subject=_subject("registered"), scope_id="pe1", flow="f",
+                       estimate=EconomicsEstimate(reservation_usd=0.05))
+    with pytest.raises(EconomicsLimitException) as ei:
+        await g.__aenter__()
+    assert ei.value.code == "project_reservation_failed"
+    assert ei.value.data.get("funding_source") == "project"
+
+
+async def test_guard_quota_deny_stays_generic_when_funds_available():
+    # wallet_insufficient but the project still has funds (cap>0) -> quota exhaustion,
+    # which stays a generic rate-limit deny (not project-exhausted).
+    cp = _CP(plan_balance=_PlanBalance(False))
+    ep = _EP(cp=cp, rl=_RL(allowed=False, reason="wallet_insufficient"), budget=_Budget())
+    g = EconomicsGuard(ep, subject=_subject("registered"), scope_id="pe2", flow="f",
+                       estimate=EconomicsEstimate(reservation_usd=0.05))
     with pytest.raises(EconomicsLimitException) as ei:
         await g.__aenter__()
     assert ei.value.code == "rate_limited"
-    assert len(ep.rl.admit_calls) == 1                         # no paid re-admit
-
-
-async def test_paid_lane_switch_subscription_primary():
-    # active-subscription user (with a wallet so the admit-denied switch is allowed),
-    # plan admit rate-limited -> switch to paid; the SUBSCRIPTION pays, wallet untouched.
-    cp = _CP(sub=_Sub(active=True), wallet=1_000_000, plan_balance=_PlanBalance(wallet=True))
-    ep = _EP(cp=cp, rl=_RL(deny_first=True), budget=_Budget(),
-             accounting_result=(1000, {"cost_total_usd": 0.02}))
-    sub_limiter = _SubLimiter()
-    g = EconomicsGuard(
-        ep, subject=_subject("paid"), scope_id="ps1", flow="f",
-        estimate=EconomicsEstimate(reservation_usd=0.05),
-        policy=FlowPolicy(allow_paid_lane_fallback=True),
-    )
-    g._subscription_limiter = sub_limiter                       # inject the fake paid-lane limiter
-    decision = await g.__aenter__()
-    assert decision.lane == "paid"
-    assert decision.funding_source == "subscription"
-    assert len(sub_limiter.reserved) == 1                       # subscription reserved as primary
-    assert ep.cp_manager.user_credits_mgr.reserved == []        # wallet untouched
-    assert len(ep.rl.admit_calls) == 2                          # plan deny + paid re-admit
-
-    await g.__aexit__(None, None, None)
-    assert len(sub_limiter.committed) == 1                      # subscription spend committed
-    assert sub_limiter.committed[0]["spent_usd"] == 0.02
-    assert ep.cp_manager.user_credits_mgr.committed == []       # wallet never charged
-    # paid lane consumes 0 plan token quota (subscription pays at payasyougo)
-    assert int(ep.rl.commits[-1].get("tokens") or 0) == 0
-
-
-async def test_paid_lane_subscription_zero_cost_releases_hold():
-    # paid subscription lane, zero actual cost -> release the subscription hold.
-    cp = _CP(sub=_Sub(active=True), wallet=1_000_000, plan_balance=_PlanBalance(wallet=True))
-    ep = _EP(cp=cp, rl=_RL(deny_first=True), budget=_Budget(),
-             accounting_result=(0, {"cost_total_usd": 0.0}))
-    sub_limiter = _SubLimiter()
-    g = EconomicsGuard(
-        ep, subject=_subject("paid"), scope_id="ps2", flow="f",
-        estimate=EconomicsEstimate(reservation_usd=0.05),
-        policy=FlowPolicy(allow_paid_lane_fallback=True),
-    )
-    g._subscription_limiter = sub_limiter
-    await g.__aenter__()
-    await g.__aexit__(None, None, None)
-    assert sub_limiter.committed == []
-    assert len(sub_limiter.released) == 1                       # zero-cost hold released
-
-
-async def test_paid_lane_subscription_falls_back_to_wallet():
-    # active subscription but its budget cannot reserve -> fall back to wallet-primary.
-    cp = _CP(sub=_Sub(active=True), wallet=1_000_000, plan_balance=_PlanBalance(wallet=True))
-    ep = _EP(cp=cp, rl=_RL(deny_first=True), budget=_Budget(),
-             accounting_result=(1000, {"cost_total_usd": 0.02}))
-    sub_limiter = _SubLimiter(reserve_ok=False)                 # subscription reserve declines
-    g = EconomicsGuard(
-        ep, subject=_subject("paid"), scope_id="ps3", flow="f",
-        estimate=EconomicsEstimate(reservation_usd=0.05),
-        policy=FlowPolicy(allow_paid_lane_fallback=True),
-    )
-    g._subscription_limiter = sub_limiter
-    decision = await g.__aenter__()
-    assert decision.lane == "paid"
-    assert decision.funding_source == "wallet"                 # fell back to wallet
-    assert len(sub_limiter.reserved) == 1                      # tried subscription first
-    assert sub_limiter.committed == []
-    assert len(ep.cp_manager.user_credits_mgr.reserved) == 1   # wallet reserved as primary
-    await g.__aexit__(None, None, None)
-    assert len(ep.cp_manager.user_credits_mgr.committed) == 1
 
 
 async def test_top_level_releases_reservation_on_accounting_failure():

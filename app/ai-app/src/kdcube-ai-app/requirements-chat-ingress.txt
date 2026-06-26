@@ -36,7 +36,7 @@ croniter
 # Link preview (disabled in ingress; Playwright only in proc)
 
 # Payments (control plane)
-stripe
+stripe==14.3.0
 
 tiktoken
 langchain==1.2.0

@@ -821,7 +821,6 @@ SELECT
     date_trunc('month', created_at) AS month,
     CASE
         WHEN note LIKE 'shortfall:wallet_subscription%' THEN 'wallet_subscription'
-        WHEN note LIKE 'shortfall:wallet_paid%' THEN 'wallet_paid'
         WHEN note LIKE 'shortfall:wallet_plan%' THEN 'wallet_plan'
         WHEN note LIKE 'shortfall:subscription_overage%' THEN 'subscription_overage'
         WHEN note LIKE 'shortfall:free_plan%' THEN 'free_plan'
@@ -843,7 +842,6 @@ SELECT
     date_trunc('month', created_at) AS month,
     CASE
         WHEN note LIKE 'shortfall:wallet_subscription%' THEN 'wallet_subscription'
-        WHEN note LIKE 'shortfall:wallet_paid%' THEN 'wallet_paid'
         WHEN note LIKE 'shortfall:wallet_plan%' THEN 'wallet_plan'
         WHEN note LIKE 'shortfall:subscription_overage%' THEN 'subscription_overage'
         WHEN note LIKE 'shortfall:free_plan%' THEN 'free_plan'
@@ -874,7 +872,7 @@ FROM <SCHEMA>.tenant_project_budget;
 -- =========================================
 -- USER SUBSCRIPTION PERIOD BUDGET (per-billing-cycle)
 -- =========================================
-CREATE TABLE IF NOT EXISTS <SCHEMA>.user_subscription_period_budget (
+CREATE TABLE IF NOT EXISTS <SCHEMA>.user_plan_period_budget (
     tenant VARCHAR(255) NOT NULL,
     project VARCHAR(255) NOT NULL,
     user_id VARCHAR(255) NOT NULL,
@@ -904,14 +902,14 @@ CREATE TABLE IF NOT EXISTS <SCHEMA>.user_subscription_period_budget (
 );
 
 CREATE INDEX IF NOT EXISTS idx_cp_sub_period_budget_lookup
-  ON <SCHEMA>.user_subscription_period_budget(tenant, project, user_id, period_end DESC);
+  ON <SCHEMA>.user_plan_period_budget(tenant, project, user_id, period_end DESC);
 
-DROP TRIGGER IF EXISTS trg_cp_sub_period_budget_updated_at ON <SCHEMA>.user_subscription_period_budget;
+DROP TRIGGER IF EXISTS trg_cp_sub_period_budget_updated_at ON <SCHEMA>.user_plan_period_budget;
 CREATE TRIGGER trg_cp_sub_period_budget_updated_at
-  BEFORE UPDATE ON <SCHEMA>.user_subscription_period_budget
+  BEFORE UPDATE ON <SCHEMA>.user_plan_period_budget
   FOR EACH ROW EXECUTE FUNCTION <SCHEMA>.update_updated_at();
 
-CREATE TABLE IF NOT EXISTS <SCHEMA>.user_subscription_period_reservations (
+CREATE TABLE IF NOT EXISTS <SCHEMA>.user_plan_period_reservations (
     reservation_id UUID PRIMARY KEY,
 
     tenant  VARCHAR(255) NOT NULL,
@@ -936,7 +934,7 @@ CREATE TABLE IF NOT EXISTS <SCHEMA>.user_subscription_period_reservations (
 
     CONSTRAINT fk_cp_sub_period_resv_budget
       FOREIGN KEY (tenant, project, user_id, period_key)
-      REFERENCES <SCHEMA>.user_subscription_period_budget (tenant, project, user_id, period_key)
+      REFERENCES <SCHEMA>.user_plan_period_budget (tenant, project, user_id, period_key)
       ON DELETE CASCADE,
 
     CONSTRAINT chk_cp_sub_period_resv_amount_pos CHECK (amount_cents > 0),
@@ -944,15 +942,15 @@ CREATE TABLE IF NOT EXISTS <SCHEMA>.user_subscription_period_reservations (
 );
 
 CREATE INDEX IF NOT EXISTS idx_cp_sub_period_resv_active
-  ON <SCHEMA>.user_subscription_period_reservations (tenant, project, user_id, period_key, status, expires_at);
+  ON <SCHEMA>.user_plan_period_reservations (tenant, project, user_id, period_key, status, expires_at);
 
 CREATE INDEX IF NOT EXISTS idx_cp_sub_period_resv_lookup
-  ON <SCHEMA>.user_subscription_period_reservations (tenant, project, user_id, period_key, reservation_id);
+  ON <SCHEMA>.user_plan_period_reservations (tenant, project, user_id, period_key, reservation_id);
 
 CREATE INDEX IF NOT EXISTS idx_cp_sub_period_resv_request
-  ON <SCHEMA>.user_subscription_period_reservations (tenant, project, request_id);
+  ON <SCHEMA>.user_plan_period_reservations (tenant, project, request_id);
 
-CREATE TABLE IF NOT EXISTS <SCHEMA>.user_subscription_period_ledger (
+CREATE TABLE IF NOT EXISTS <SCHEMA>.user_plan_period_ledger (
     id BIGSERIAL PRIMARY KEY,
 
     tenant  VARCHAR(255) NOT NULL,
@@ -973,23 +971,23 @@ CREATE TABLE IF NOT EXISTS <SCHEMA>.user_subscription_period_ledger (
 
     CONSTRAINT fk_cp_sub_period_ledger_budget
       FOREIGN KEY (tenant, project, user_id, period_key)
-      REFERENCES <SCHEMA>.user_subscription_period_budget (tenant, project, user_id, period_key)
+      REFERENCES <SCHEMA>.user_plan_period_budget (tenant, project, user_id, period_key)
       ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_cp_sub_period_ledger_tp_user_time
-  ON <SCHEMA>.user_subscription_period_ledger (tenant, project, user_id, period_key, created_at DESC);
+  ON <SCHEMA>.user_plan_period_ledger (tenant, project, user_id, period_key, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_cp_sub_period_ledger_reservation
-  ON <SCHEMA>.user_subscription_period_ledger (reservation_id);
+  ON <SCHEMA>.user_plan_period_ledger (reservation_id);
 
 CREATE INDEX IF NOT EXISTS idx_cp_sub_period_ledger_request
-  ON <SCHEMA>.user_subscription_period_ledger (tenant, project, request_id);
+  ON <SCHEMA>.user_plan_period_ledger (tenant, project, request_id);
 
 -- =========================================
 -- SUBSCRIPTION PLANS (TIER + PRICE MAPPING)
 -- =========================================
-CREATE TABLE IF NOT EXISTS <SCHEMA>.subscription_plans (
+CREATE TABLE IF NOT EXISTS <SCHEMA>.plans (
     tenant text NOT NULL,
     project text NOT NULL,
     plan_id text NOT NULL,
@@ -1015,24 +1013,24 @@ CREATE TABLE IF NOT EXISTS <SCHEMA>.subscription_plans (
 );
 
 CREATE INDEX IF NOT EXISTS idx_cp_pl_provider_active
-  ON <SCHEMA>.subscription_plans (tenant, project, provider, active);
+  ON <SCHEMA>.plans (tenant, project, provider, active);
 
 DROP INDEX IF EXISTS uq_cp_pl_stripe_price_id;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_cp_pl_stripe_price_id
-  ON <SCHEMA>.subscription_plans (tenant, project, stripe_price_id)
+  ON <SCHEMA>.plans (tenant, project, stripe_price_id)
   WHERE provider='stripe' AND stripe_price_id IS NOT NULL;
 
-DROP TRIGGER IF EXISTS trg_cp_pl_updated_at ON <SCHEMA>.subscription_plans;
+DROP TRIGGER IF EXISTS trg_cp_pl_updated_at ON <SCHEMA>.plans;
 CREATE TRIGGER trg_cp_pl_updated_at
-  BEFORE UPDATE ON <SCHEMA>.subscription_plans
+  BEFORE UPDATE ON <SCHEMA>.plans
   FOR EACH ROW EXECUTE FUNCTION <SCHEMA>.update_updated_at();
 
 -- =========================================
 -- SUBSCRIPTIONS (PLAN RESOLUTION SNAPSHOT)
---  - plan_id points to subscription_plans
+--  - plan_id points to plans
 --  - plan/monthly_price_cents are denormalized from plan
 -- =========================================
-CREATE TABLE IF NOT EXISTS <SCHEMA>.user_subscriptions (
+CREATE TABLE IF NOT EXISTS <SCHEMA>.user_plans (
     tenant text NOT NULL,
     project text NOT NULL,
     user_id text NOT NULL,
@@ -1044,6 +1042,8 @@ CREATE TABLE IF NOT EXISTS <SCHEMA>.user_subscriptions (
     started_at timestamptz NOT NULL DEFAULT now(),
     next_charge_at timestamptz NULL,
     last_charged_at timestamptz NULL,
+
+    rl_month_anchor_at timestamptz NULL,
 
     provider text NOT NULL DEFAULT 'internal',
     stripe_customer_id text NULL,
@@ -1058,36 +1058,40 @@ CREATE TABLE IF NOT EXISTS <SCHEMA>.user_subscriptions (
     CONSTRAINT chk_cp_us_status CHECK (status IN ('active','canceled','suspended')),
     CONSTRAINT chk_cp_us_price_nonneg CHECK (monthly_price_cents >= 0),
 
+    -- On an internal subscription only the Stripe *subscription* id must be NULL;
+    -- a stripe_customer_id is a pre-payment artifact (the user is known to Stripe)
+    -- that may be attached while the row is still internal. provider flips to
+    -- 'stripe' only when a real Stripe subscription exists (invoice-paid webhook).
     CONSTRAINT chk_cp_us_stripe_ids_internal_null CHECK (
       provider <> 'internal'
-      OR (stripe_customer_id IS NULL AND stripe_subscription_id IS NULL)
+      OR stripe_subscription_id IS NULL
     ),
 
     CONSTRAINT fk_cp_us_plan
       FOREIGN KEY (tenant, project, plan_id)
-      REFERENCES <SCHEMA>.subscription_plans (tenant, project, plan_id)
+      REFERENCES <SCHEMA>.plans (tenant, project, plan_id)
       ON DELETE SET NULL
 );
 
-DROP TRIGGER IF EXISTS trg_cp_us_updated_at ON <SCHEMA>.user_subscriptions;
+DROP TRIGGER IF EXISTS trg_cp_us_updated_at ON <SCHEMA>.user_plans;
 CREATE TRIGGER trg_cp_us_updated_at
-  BEFORE UPDATE ON <SCHEMA>.user_subscriptions
+  BEFORE UPDATE ON <SCHEMA>.user_plans
   FOR EACH ROW EXECUTE FUNCTION <SCHEMA>.update_updated_at();
 
 CREATE INDEX IF NOT EXISTS idx_cp_us_due_internal
-  ON <SCHEMA>.user_subscriptions (tenant, project, next_charge_at)
+  ON <SCHEMA>.user_plans (tenant, project, next_charge_at)
   WHERE provider='internal' AND status='active' AND next_charge_at IS NOT NULL AND monthly_price_cents > 0;
 
 CREATE INDEX IF NOT EXISTS idx_cp_us_provider_status
-  ON <SCHEMA>.user_subscriptions (tenant, project, provider, status);
+  ON <SCHEMA>.user_plans (tenant, project, provider, status);
 
 DROP INDEX IF EXISTS uq_cp_us_stripe_sub_id;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_cp_us_stripe_sub_id
-  ON <SCHEMA>.user_subscriptions (stripe_subscription_id)
+  ON <SCHEMA>.user_plans (stripe_subscription_id)
   WHERE provider='stripe' AND stripe_subscription_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_cp_us_stripe_customer
-  ON <SCHEMA>.user_subscriptions (stripe_customer_id)
+  ON <SCHEMA>.user_plans (stripe_customer_id)
   WHERE provider='stripe' AND stripe_customer_id IS NOT NULL;
 
 -- =========================================

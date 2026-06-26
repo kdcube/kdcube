@@ -55,7 +55,7 @@ export interface RateLimitPayload {
 export type ServiceEventType = "rate_limit.warning" | "rate_limit.denied"
     | "rate_limit.project_exhausted" | "rate_limit.no_funding" | "rate_limit.subscription_exhausted"
     | "rate_limit.snapshot" | "rate_limit.attachment_failure"
-    | "rate_limit.lane_switch" | "economics.user_underfunded_absorbed"
+    | "economics.user_underfunded_absorbed"
     | "queue.enqueue_rejected";
 
 export interface ChatServiceEnvelope {

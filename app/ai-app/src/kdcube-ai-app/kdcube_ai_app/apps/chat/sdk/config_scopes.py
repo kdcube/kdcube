@@ -155,6 +155,13 @@ def economics_reservation_default(floor: str = "chat") -> float | None:
     return amount if (amount is not None and amount > 0) else None
 
 
+def economics_price_tables() -> dict | None:
+    """`price_tables:` section from economics.yaml — a runtime-read pricing
+    catalog. Returns the mapping, or None when the section/file is absent."""
+    node = _load_economics_plain("price_tables")
+    return node if isinstance(node, dict) else None
+
+
 def _load_global_secret_plain(dotted_path: str) -> Any:
     data = _load_plain_yaml(
         _descriptor_path(

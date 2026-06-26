@@ -84,7 +84,7 @@ python-multipart
 geopy
 folium
 
-stripe
+stripe==14.3.0
 mcp
 
 # faiss vector backend for the generic hybrid index (infra/index/faiss); used by any bundle.

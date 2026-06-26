@@ -16,6 +16,7 @@ from kdcube_ai_app.apps.chat.sdk.infra.economics.stripe import (
     StripeEconomicsAdminService,
     StripeSubscriptionService,
 )
+from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription import PlanChangeNotAllowed
 
 from .stripe_router import router, _get_control_plane_manager, _usd_from_cents, REF_PROVIDER, REF_MODEL
 from kdcube_ai_app.ops.deployment.sql.db_deployment import project_schema as _project_schema
@@ -77,6 +78,13 @@ async def create_subscription(
     )
     if not plan:
         raise HTTPException(status_code=404, detail="subscription plan not found")
+
+    try:
+        mgr.subscription_mgr.assert_plan_change_allowed(
+            current=None, target_plan=plan, operator=True
+        )
+    except PlanChangeNotAllowed as e:
+        raise HTTPException(status_code=409, detail={"code": e.code, "message": e.message})
 
     if payload.provider.lower() == "internal":
         if plan.provider != "internal":

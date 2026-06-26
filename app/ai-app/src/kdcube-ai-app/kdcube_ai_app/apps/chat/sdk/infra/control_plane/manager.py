@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class PlanQuotaPolicy:
-    """Base quota policy for a plan (free, payasyougo, admin, etc.)."""
+    """Base quota policy for a plan (free, wallet, admin, etc.)."""
     tenant: str
     project: str
     plan_id: str

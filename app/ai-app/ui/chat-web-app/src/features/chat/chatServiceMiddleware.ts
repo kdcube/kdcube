@@ -302,7 +302,6 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
                     showPopup(notificationType, message)
                     break;
                 }
-                case "rate_limit.lane_switch":
                 case "economics.user_underfunded_absorbed":
                     console.info(env)
                     break;

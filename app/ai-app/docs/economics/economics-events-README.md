@@ -31,7 +31,6 @@ Edit that file to change what users see — no entrypoint logic needs to change.
 | `rate_limit.subscription_exhausted` | `error` | `MSG_SUBSCRIPTION_EXHAUSTED` | The user's subscription budget is exhausted and the user has no personal credits to cover the turn. Request is rejected. |
 | `rate_limit.project_exhausted` | `error` | `MSG_PROJECT_EXHAUSTED` | The project budget is exhausted and the user has no personal credits to cover the turn. Request is rejected. |
 | `rate_limit.snapshot` | *(info, not shown to user)* | — | Emitted after every completed request with the current usage snapshot. Used for client-side display of quota meters. |
-| `rate_limit.lane_switch` | *(info, not shown to user)* | — | Emitted when the request switches from plan lane to paid (wallet) lane mid-flight. |
 | `economics.user_underfunded_absorbed` | *(info, not shown to user)* | — | Emitted when the project absorbs the cost because the user's personal budget was short; logged for accounting. |
 
 ### `rate_limit.warning` message selection
