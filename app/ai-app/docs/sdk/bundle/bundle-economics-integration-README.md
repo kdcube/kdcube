@@ -40,8 +40,8 @@ this page shows how a bundle wires the engine through SDK building blocks.
 | Task issue search | task tracker named-service scope `task` / `task:issue` | issue service receives `entrypoint.search_model_service(flow="task_tracker.issue.search")`; issue search calls `embed_search_query(...)` | inside a chat turn, the query embedding is charged by the parent turn; standalone issue search settles under a `task_tracker.issue.search` operation; denial falls back to lexical/recency ranking |
 | Task attachment search | task tracker named-service scope `task:attachment` | metadata scan over issue attachments and parent issue metadata | no semantic embedding spend is incurred; logs show `semantic_embedding=False` |
 | Custom searchable SDK component | any component that accepts a `model_service` | the entrypoint passes `search_model_service(flow="<your.surface>.search")` into the component; the component calls `embed_search_query(...)` | inside an active economics scope, the parent settles; outside one, the query embedding reserves and settles locally; denial falls back to lexical/recency ranking |
-| Task execution | tasks solution run-now / due execution, including `task-and-memo-app@1-0` and `user-automation@1-0` | `_task_verify_economics(...)` checks feasibility before enqueue/run; the actual ReAct work routes through the economics entrypoint | denied tasks are cancelled before work; admitted task React work is charged by the economic entrypoint |
-| Task list/search operations | tasks solution `tasks_search` and `task_executions_search` in task-and-memo and user-automation | SQLite FTS5/BM25 only | no semantic embedding spend is incurred; no semantic search guard is needed for these APIs |
+| Automation execution | automations solution run-now / due execution, including `task-and-memo-app@1-0` and `user-automation@1-0` | automation preflight checks feasibility before enqueue/run; the actual ReAct work routes through the economics entrypoint | denied automations are cancelled before work; admitted automation ReAct work is charged by the economic entrypoint |
+| Automation list/search operations | automations solution lexical search in task-and-memo and user-automation | SQLite FTS5/BM25 only | no semantic embedding spend is incurred; no semantic search guard is needed for these APIs |
 
 ## The Search Facade
 
@@ -145,7 +145,7 @@ async with EconomicsGuard(
     await run_paid_work()
 ```
 
-For task execution through the tasks solution, the SDK already performs a
+For automation execution through the automations solution, the SDK already performs a
 verify-only start check and then routes ReAct execution through
 `BaseEntrypointWithEconomics.run(...)`, which owns the reservation and settlement
 for the actual agent work.

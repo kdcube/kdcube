@@ -114,12 +114,12 @@ telegram_widget_auth.configure_telegram_widget_auth(
 webapp.configure_telegram_webapp(
     memory_widgets_module=memory_widgets,
     settings_widgets_module=settings_widgets,
-    task_widgets_module=task_widgets,
+    automation_widgets_module=automation_widgets,
     telegram_user_admin_module=telegram_user_admin,
     bundle_id=BUNDLE_ID,
 )
 telegram_widget_ops.configure_telegram_widget_ops(
-    task_operations_module=task_operations,
+    automation_operations_module=automation_operations,
     telegram_user_admin_module=telegram_user_admin,
     telegram_widget_auth_module=telegram_widget_auth,
     webapp_module=webapp,
@@ -128,8 +128,8 @@ telegram_widget_ops.configure_telegram_widget_ops(
 ```
 
 The concrete modules passed into `webapp` and `widget_ops` depend on the
-bundle. A task-only bundle may pass task widget modules; a simpler chat-only
-bundle may expose fewer Mini App aliases.
+bundle. An automation bundle may pass automation widget modules; a simpler
+chat-only bundle may expose fewer Mini App aliases.
 
 ### 3. Add Descriptor-Backed Defaults
 

@@ -14,7 +14,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.http_ops import BundleBinaryResponse
 BUNDLE_ID = ""
 TELEGRAM_WEBAPP_DOWNLOAD_ORIGIN = "https://web.telegram.org"
 
-task_operations: Any = None
+automation_operations: Any = None
 telegram_user_admin: Any = None
 telegram_widget_auth: Any = None
 webapp: Any = None
@@ -23,16 +23,16 @@ _CONFIGS: Dict[str, Dict[str, Any]] = {}
 
 def configure_telegram_widget_ops(
     *,
-    task_operations_module: Any,
+    automation_operations_module: Any,
     telegram_user_admin_module: Any,
     telegram_widget_auth_module: Any,
     webapp_module: Any,
     bundle_id: str = "",
 ) -> None:
-    """Bind bundle-owned task, Telegram admin, auth, and webapp modules."""
-    global BUNDLE_ID, task_operations, telegram_user_admin, telegram_widget_auth, webapp
+    """Bind bundle-owned automation, Telegram admin, auth, and webapp modules."""
+    global BUNDLE_ID, automation_operations, telegram_user_admin, telegram_widget_auth, webapp
     BUNDLE_ID = str(bundle_id or "").strip()
-    task_operations = task_operations_module
+    automation_operations = automation_operations_module
     telegram_user_admin = telegram_user_admin_module
     telegram_widget_auth = telegram_widget_auth_module
     webapp = webapp_module
@@ -40,7 +40,7 @@ def configure_telegram_widget_ops(
         _CONFIGS,
         bundle_id=BUNDLE_ID,
         config={
-            "task_operations": task_operations_module,
+            "automation_operations": automation_operations_module,
             "telegram_user_admin": telegram_user_admin_module,
             "telegram_widget_auth": telegram_widget_auth_module,
             "webapp": webapp_module,
@@ -50,7 +50,7 @@ def configure_telegram_widget_ops(
 
 def _config(entrypoint: Any = None) -> Dict[str, Any]:
     cfg = resolve_config(_CONFIGS, entrypoint=entrypoint, label="telegram widget operations integration")
-    if not cfg.get("task_operations") or not cfg.get("telegram_user_admin") or not cfg.get("telegram_widget_auth") or not cfg.get("webapp"):
+    if not cfg.get("automation_operations") or not cfg.get("telegram_user_admin") or not cfg.get("telegram_widget_auth") or not cfg.get("webapp"):
         raise RuntimeError("telegram widget operations integration is not configured")
     return cfg
 
@@ -381,7 +381,7 @@ async def admin_delete(
     return payload
 
 
-async def list_tasks(
+async def list_automations(
     entrypoint: Any,
     *,
     request: Any = None,
@@ -392,8 +392,8 @@ async def list_tasks(
     execution_limit: int = 3,
 ) -> Dict[str, Any]:
     identity = await _identity(entrypoint, request=request, telegram_init_data=telegram_init_data)
-    tasks = _config(entrypoint)["task_operations"]
-    return await tasks.list_tasks(
+    automations = _config(entrypoint)["automation_operations"]
+    return await automations.list_automations(
         entrypoint,
         query=query,
         status=status,
@@ -405,19 +405,19 @@ async def list_tasks(
     )
 
 
-async def get_task(
+async def get_automation(
     entrypoint: Any,
     *,
-    task_id: str,
+    automation_id: str,
     request: Any = None,
     telegram_init_data: str = "",
     execution_limit: int = 10,
 ) -> Dict[str, Any]:
     identity = await _identity(entrypoint, request=request, telegram_init_data=telegram_init_data)
-    tasks = _config(entrypoint)["task_operations"]
-    return await tasks.get_task(
+    automations = _config(entrypoint)["automation_operations"]
+    return await automations.get_automation(
         entrypoint,
-        task_id=task_id,
+        automation_id=automation_id,
         execution_limit=execution_limit,
         user_id=identity.user_id,
         fingerprint=identity.fingerprint,
@@ -425,7 +425,7 @@ async def get_task(
     )
 
 
-async def create_task(
+async def create_automation(
     entrypoint: Any,
     *,
     title: str,
@@ -440,8 +440,8 @@ async def create_task(
     conversation_id: str = "",
 ) -> Dict[str, Any]:
     identity = await _identity(entrypoint, request=request, telegram_init_data=telegram_init_data)
-    tasks = _config(entrypoint)["task_operations"]
-    return await tasks.create_task(
+    automations = _config(entrypoint)["automation_operations"]
+    return await automations.create_automation(
         entrypoint,
         title=title,
         description=description,
@@ -456,10 +456,10 @@ async def create_task(
     )
 
 
-async def update_task(
+async def update_automation(
     entrypoint: Any,
     *,
-    task_id: str,
+    automation_id: str,
     request: Any = None,
     telegram_init_data: str = "",
     title: Optional[str] = None,
@@ -477,10 +477,10 @@ async def update_task(
     revision_mode: str = "auto",
 ) -> Dict[str, Any]:
     identity = await _identity(entrypoint, request=request, telegram_init_data=telegram_init_data)
-    tasks = _config(entrypoint)["task_operations"]
-    return await tasks.update_task(
+    automations = _config(entrypoint)["automation_operations"]
+    return await automations.update_automation(
         entrypoint,
-        task_id=task_id,
+        automation_id=automation_id,
         title=title,
         description=description,
         status=status,
@@ -499,26 +499,26 @@ async def update_task(
     )
 
 
-async def delete_task(
+async def delete_automation(
     entrypoint: Any,
     *,
-    task_id: str,
+    automation_id: str,
     request: Any = None,
     telegram_init_data: str = "",
     hard: bool = False,
 ) -> Dict[str, Any]:
     identity = await _identity(entrypoint, request=request, telegram_init_data=telegram_init_data)
-    tasks = _config(entrypoint)["task_operations"]
-    return await tasks.delete_task(
+    automations = _config(entrypoint)["automation_operations"]
+    return await automations.delete_automation(
         entrypoint,
-        task_id=task_id,
+        automation_id=automation_id,
         hard=hard,
         user_id=identity.user_id,
         fingerprint=identity.fingerprint,
     )
 
 
-async def search_tasks(
+async def search_automations(
     entrypoint: Any,
     *,
     request: Any = None,
@@ -529,8 +529,8 @@ async def search_tasks(
     execution_limit: int = 3,
 ) -> Dict[str, Any]:
     identity = await _identity(entrypoint, request=request, telegram_init_data=telegram_init_data)
-    tasks = _config(entrypoint)["task_operations"]
-    return await tasks.search_tasks(
+    automations = _config(entrypoint)["automation_operations"]
+    return await automations.search_automations(
         entrypoint,
         query=query,
         status=status,
@@ -547,15 +547,15 @@ async def list_executions(
     *,
     request: Any = None,
     telegram_init_data: str = "",
-    task_id: str = "",
+    automation_id: str = "",
     status: str = "",
     limit: int = 50,
 ) -> Dict[str, Any]:
     identity = await _identity(entrypoint, request=request, telegram_init_data=telegram_init_data)
-    tasks = _config(entrypoint)["task_operations"]
-    return await tasks.list_executions(
+    automations = _config(entrypoint)["automation_operations"]
+    return await automations.list_executions(
         entrypoint,
-        task_id=task_id,
+        automation_id=automation_id,
         status=status,
         limit=limit,
         user_id=identity.user_id,
@@ -570,16 +570,16 @@ async def search_executions(
     request: Any = None,
     telegram_init_data: str = "",
     query: str = "",
-    task_id: str = "",
+    automation_id: str = "",
     status: str = "",
     limit: int = 50,
 ) -> Dict[str, Any]:
     identity = await _identity(entrypoint, request=request, telegram_init_data=telegram_init_data)
-    tasks = _config(entrypoint)["task_operations"]
-    return await tasks.search_executions(
+    automations = _config(entrypoint)["automation_operations"]
+    return await automations.search_executions(
         entrypoint,
         query=query,
-        task_id=task_id,
+        automation_id=automation_id,
         status=status,
         limit=limit,
         user_id=identity.user_id,
@@ -594,14 +594,14 @@ async def get_execution(
     execution_id: str,
     request: Any = None,
     telegram_init_data: str = "",
-    task_id: str = "",
+    automation_id: str = "",
 ) -> Dict[str, Any]:
     identity = await _identity(entrypoint, request=request, telegram_init_data=telegram_init_data)
-    tasks = _config(entrypoint)["task_operations"]
-    return await tasks.get_execution(
+    automations = _config(entrypoint)["automation_operations"]
+    return await automations.get_execution(
         entrypoint,
         execution_id=execution_id,
-        task_id=task_id,
+        automation_id=automation_id,
         user_id=identity.user_id,
         fingerprint=identity.fingerprint,
         public=True,
@@ -616,15 +616,15 @@ async def download_execution_artifact(
     telegram_init_data: str = "",
     execution_id: str = "",
     download_token: str = "",
-    task_id: str = "",
+    automation_id: str = "",
 ):
     identity = None if download_token else await _identity(entrypoint, request=request, telegram_init_data=telegram_init_data)
-    tasks = _config(entrypoint)["task_operations"]
-    result = await tasks.download_execution_artifact(
+    automations = _config(entrypoint)["automation_operations"]
+    result = await automations.download_execution_artifact(
         entrypoint,
         artifact_ref=artifact_ref,
         execution_id=execution_id,
-        task_id=task_id,
+        automation_id=automation_id,
         user_id=identity.user_id if identity else None,
         fingerprint=identity.fingerprint if identity else None,
         download_token=download_token,
@@ -632,19 +632,19 @@ async def download_execution_artifact(
     return _with_telegram_download_headers(result)
 
 
-async def run_task_now(
+async def run_automation_now(
     entrypoint: Any,
     *,
-    task_id: str,
+    automation_id: str,
     request: Any = None,
     telegram_init_data: str = "",
     conversation_id: str = "",
 ) -> Dict[str, Any]:
     identity = await _identity(entrypoint, request=request, telegram_init_data=telegram_init_data)
-    tasks = _config(entrypoint)["task_operations"]
-    return await tasks.run_task_now(
+    automations = _config(entrypoint)["automation_operations"]
+    return await automations.run_automation_now(
         entrypoint,
-        task_id=task_id,
+        automation_id=automation_id,
         conversation_id=conversation_id,
         user_id=identity.user_id,
         fingerprint=identity.fingerprint,

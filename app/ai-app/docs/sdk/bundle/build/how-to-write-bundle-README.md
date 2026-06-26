@@ -55,6 +55,12 @@ This document is written for a builder agent or engineer who must create or main
 It is not a conceptual overview.
 It is the working instruction set for doing the job correctly.
 
+Terminology note (rebrand in progress):
+
+- in prose, a "bundle" is an "app (bundle)"; the two words mean the same thing
+- technical identifiers stay verbatim during the rebrand: `bundle_id`,
+  `bundles.yaml`, `@bundle_entrypoint`, `@bundle_id`
+
 If you are not yet sure where this page fits in the full reading order, start
 with [how-to-navigate-kdcube-docs-README.md](how-to-navigate-kdcube-docs-README.md).
 
@@ -536,7 +542,7 @@ from .helpers import normalize_payload
 Import reusable SDK components by their real SDK package:
 
 ```python
-from kdcube_ai_app.apps.chat.sdk.solutions.tasks import AsyncTaskStorage
+from kdcube_ai_app.apps.chat.sdk.solutions.automations import AsyncAutomationStorage
 ```
 
 Do not add fallback top-level imports such as `from services...`,
@@ -673,6 +679,22 @@ Conversation-event rule:
 For the full boundary map, read
 [Conversation Events And ReAct Turns](how-to-understand-conversation-events-and-react-turns-README.md).
 
+### Base Entrypoint Class Decision Table
+
+Pick the entrypoint base class by what the app (bundle) needs. Each class is a
+strict extension of the bare base; deriving one auto-wires the listed surfaces so
+the subclass only enables/configures them instead of redeclaring them.
+
+| Need | Derive | Import | Auto-wires | You still set |
+| --- | --- | --- | --- | --- |
+| Plain chat/app | `BaseEntrypoint` | `from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint import BaseEntrypoint` | base UI build/prop-refresh contract | your graph, surfaces, config |
+| Budget + rate limiting | `BaseEntrypointWithEconomics` | `from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_economic import BaseEntrypointWithEconomics` | economics guard (budget + rate limiting) | economics props, `search_model_service(flow=...)` where needed |
+| Memory without economics | `BaseEntrypointWithMemory` | `from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_memory import BaseEntrypointWithMemory` | `memories` widget + ops, `mem` named service, reconciliation, snapshots, schema-ensure | `memory.enabled: true` plus the bits you want |
+| Memory + economics | `BaseEntrypointWithEconomicsAndMemory` | `from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_memory import BaseEntrypointWithEconomicsAndMemory` | economics guard plus everything `BaseEntrypointWithMemory` wires | `memory.enabled: true`, economics props |
+
+See [Bundle Entrypoint Classes](../bundle-entrypoint-classes-README.md) for the
+full family contract.
+
 ## 1D.1 Reuse SDK Building Blocks First
 
 Before creating a new `services/`, `subsystems/`, `tools/`, or provider adapter
@@ -703,6 +725,32 @@ Bundle code should normally supply:
 - UI composition;
 - deployment prop/secret paths;
 - domain-specific storage that is not already part of a reusable SDK block.
+
+### Shared SDK Widgets Via `sdk://`
+
+Some widgets ship inside the SDK and are reused by reference, not copied. The
+memories widget source lives at `context/memory/ui/widget/memories` and the
+economics usage_card at `infra/economics/ui/widget/usage-card`. An app (bundle)
+that wants such a widget needs **no `ui/` folder of its own**: it enables the
+widget and points `src_folder` at the `sdk://…` path.
+
+```yaml
+ui:
+  widgets:
+    memories:
+      enabled: true
+      src_folder: sdk://context/memory/ui/widget/memories
+      build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
+```
+
+When the app derives from the memory mixin, the mixin already supplies the
+memories widget's `src_folder`, so the app only needs
+`ui.widgets.memories.enabled: true`.
+
+The **`mem` named-service provider** is registered (and announced to Redis
+discovery) automatically while `memory.enabled` is true — no extra wiring. Another
+app's agent can consume that `mem` service instead of embedding the memory module
+itself.
 
 ## 1E. SDK Configuration And Secrets Cheat Sheet
 
@@ -929,6 +977,38 @@ If the bundle ships a React widget/web app:
 - for the full source-folder widget contract, use
   [bundle-widget-integration-README.md](../bundle-widget-integration-README.md)
 
+### Minimal Graph For Non-Chat Apps
+
+Even an app (bundle) with no chat product must still give the base a graph. In
+`__init__`, set `self.graph = self._build_graph()`, and implement
+`async def execute_core(self, *, state, thread_id, params)` that returns
+`await self.graph.ainvoke(state)`. The pattern for a no-op is a single node that
+sets `state["final_answer"]`:
+
+```python
+def __init__(self, **kwargs):
+    super().__init__(**kwargs)
+    self.graph = self._build_graph()
+
+def _build_graph(self):
+    g = StateGraph(BundleState)
+    g.add_node("noop", self._noop)
+    g.add_edge(START, "noop")
+    g.add_edge("noop", END)
+    return g.compile()
+
+async def _noop(self, state):
+    state["final_answer"] = ""
+    return state
+
+async def execute_core(self, *, state, thread_id, params):
+    return await self.graph.ainvoke(state)
+```
+
+See `examples/bundles/echo.ui@2026-03-30/entrypoint.py` and
+`examples/bundles/user-memories@2026-06-26/entrypoint.py` for real instances of
+this no-op shape.
+
 ## 4. Copy The Right Reference Pattern
 
 Use `versatile` as the default reference bundle.
@@ -1075,11 +1155,11 @@ surfaces:
     agents:
       main:
         tools:
-          - id: tasks
+          - id: automations
             kind: python
-            module: kdcube_ai_app.apps.chat.sdk.solutions.tasks.tools
-            alias: tasks
-            allowed: [list_tasks, search_tasks, create_task]
+            module: kdcube_ai_app.apps.chat.sdk.solutions.automations.tools
+            alias: automations
+            allowed: [list_automations, search_automations, create_automation]
           - id: user_memory
             kind: python
             ref: tools/user_memory_tools.py
@@ -1532,6 +1612,38 @@ Entrypoint should not contain:
 - business logic mixed with route handling
 - direct deployment/env assumptions
 - ad hoc local path construction next to the source tree
+
+### Two-Layer Config Merge
+
+App (bundle) config resolves in two layers, so a subclass only enables or
+overrides what it wants instead of redeclaring a mixin's full config.
+
+- the app declares its own defaults in `configuration_defaults()`
+- a mixin contributes its own defaults through a `*_configuration_defaults()`
+  method (for example `memory_configuration_defaults()` in
+  `entrypoint_with_memory.py`)
+- the `configuration` property deep-merges the mixin defaults into the effective
+  config as a merge-of-missing-keys: the mixin only fills keys the subclass did
+  not set
+
+So for the memory mixin, `configuration_defaults()` typically only needs to
+enable the bits the app wants (for example `memory.enabled: true`,
+`memory.widget.enabled: true`); the mixin fills in the rest (reconciliation,
+snapshots, schema, and the memories widget `src_folder`). Do not re-paste the
+whole subsystem config block into the subclass.
+
+### Validate The App
+
+Run the bundle-contract suite against your app before any reload or release:
+
+```bash
+python -m kdcube_ai_app.apps.chat.sdk.tests.bundle.run_bundle_suite --bundle-path <app-folder>
+```
+
+This is the contract gate. It runs 200+ checks (`import_contract`,
+`initialization`, `graph`, `execution_flow`, `storage`) against your app. See
+[how-to-test-bundle-README.md](how-to-test-bundle-README.md) for the full test
+workflow.
 
 ## 6. Runtime Context Rules
 

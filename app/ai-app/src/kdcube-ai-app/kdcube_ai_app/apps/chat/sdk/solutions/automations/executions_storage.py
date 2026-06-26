@@ -131,35 +131,35 @@ def _normalize_execution_artifact(item: Dict[str, Any]) -> Dict[str, Any]:
     return {key: value for key, value in normalized.items() if value not in ("", None)}
 
 
-class TaskExecutionsStorage:
-    """File + SQLite storage for task/subagent execution events.
+class AutomationExecutionsStorage:
+    """File + SQLite storage for automation/subagent execution events.
 
-    The current bundle uses this for task executions. The class deliberately keeps
-    parent-task coupling behind optional callbacks so the same layout and search
+    The current bundle uses this for automation executions. The class deliberately keeps
+    parent-automation coupling behind optional callbacks so the same layout and search
     contract can later back separate subagent/job event streams.
     """
 
-    SCHEMA_VERSION = "task-execution-index.v1"
+    SCHEMA_VERSION = "automation-execution-index.v1"
 
     def __init__(
         self,
         root: str | Path,
         *,
         user_id: str,
-        namespace: str = "task_executions",
-        task_loader: Callable[[str], Dict[str, Any] | None] | None = None,
-        task_summary_updater: Callable[[str, Dict[str, Any]], None] | None = None,
+        namespace: str = "automation_executions",
+        automation_loader: Callable[[str], Dict[str, Any] | None] | None = None,
+        automation_summary_updater: Callable[[str, Dict[str, Any]], None] | None = None,
     ):
         self.root = Path(root).resolve()
         self.user_id = user_id or "anonymous"
         self.safe_user_id = _safe_segment(self.user_id, fallback="anonymous")
-        self.namespace = _safe_segment(namespace, fallback="task_executions")
+        self.namespace = _safe_segment(namespace, fallback="automation_executions")
         self.executions_dir = self.root / self.namespace / self.safe_user_id
         self.index_dir = self.root / "indexes" / self.namespace / self.safe_user_id
         self.index_path = self.index_dir / "executions.sqlite"
         self.executions_dir.mkdir(parents=True, exist_ok=True)
-        self._task_loader = task_loader
-        self._task_summary_updater = task_summary_updater
+        self._automation_loader = automation_loader
+        self._automation_summary_updater = automation_summary_updater
 
     def _execution_signature(self) -> str:
         rows: List[str] = []
@@ -201,8 +201,8 @@ class TaskExecutionsStorage:
             CREATE TABLE executions (
                 docid INTEGER PRIMARY KEY,
                 id TEXT NOT NULL UNIQUE,
-                task_id TEXT NOT NULL,
-                task_title TEXT,
+                automation_id TEXT NOT NULL,
+                automation_title TEXT,
                 owner_user_id TEXT NOT NULL,
                 status TEXT NOT NULL,
                 trigger TEXT,
@@ -224,8 +224,8 @@ class TaskExecutionsStorage:
             );
             CREATE VIRTUAL TABLE executions_fts USING fts5(
                 id,
-                task_id,
-                task_title,
+                automation_id,
+                automation_title,
                 summary,
                 error,
                 log_excerpt,
@@ -263,7 +263,7 @@ class TaskExecutionsStorage:
             conn.execute(
                 """
                 INSERT INTO executions (
-                    docid, id, task_id, task_title, owner_user_id, status, trigger,
+                    docid, id, automation_id, automation_title, owner_user_id, status, trigger,
                     source_json, created_at, updated_at, started_at, finished_at, duration_ms,
                     conversation_id, turn_id, summary, error, log_excerpt,
                     artifact_count, artifacts_json, result_json, metadata_json
@@ -273,8 +273,8 @@ class TaskExecutionsStorage:
                 (
                     docid,
                     str(execution.get("id") or ""),
-                    str(execution.get("task_id") or ""),
-                    str(execution.get("task_title") or ""),
+                    str(execution.get("automation_id") or ""),
+                    str(execution.get("automation_title") or ""),
                     str(execution.get("owner_user_id") or self.user_id),
                     str(execution.get("status") or ""),
                     str(execution.get("trigger") or ""),
@@ -298,15 +298,15 @@ class TaskExecutionsStorage:
             conn.execute(
                 """
                 INSERT INTO executions_fts (
-                    rowid, id, task_id, task_title, summary, error, log_excerpt, artifacts, metadata
+                    rowid, id, automation_id, automation_title, summary, error, log_excerpt, artifacts, metadata
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     docid,
                     str(execution.get("id") or ""),
-                    str(execution.get("task_id") or ""),
-                    str(execution.get("task_title") or ""),
+                    str(execution.get("automation_id") or ""),
+                    str(execution.get("automation_title") or ""),
                     str(execution.get("summary") or ""),
                     str(execution.get("error") or ""),
                     str(execution.get("log_excerpt") or ""),
@@ -334,21 +334,21 @@ class TaskExecutionsStorage:
                 pass
         return self.rebuild_search_index()
 
-    def _execution_dir(self, task_id: str) -> Path:
-        safe_task_id = _safe_segment(task_id, fallback="task")
-        path = self.executions_dir / safe_task_id
+    def _execution_dir(self, automation_id: str) -> Path:
+        safe_automation_id = _safe_segment(automation_id, fallback="automation")
+        path = self.executions_dir / safe_automation_id
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def _execution_path(self, *, task_id: str, execution_id: str) -> Path:
-        return self._execution_dir(task_id) / f"{_safe_segment(execution_id, fallback='execution')}.json"
+    def _execution_path(self, *, automation_id: str, execution_id: str) -> Path:
+        return self._execution_dir(automation_id) / f"{_safe_segment(execution_id, fallback='execution')}.json"
 
-    def _find_execution_path(self, *, execution_id: str, task_id: str = "") -> Path | None:
+    def _find_execution_path(self, *, execution_id: str, automation_id: str = "") -> Path | None:
         safe_execution_id = _safe_segment(execution_id, fallback="")
         if not safe_execution_id:
             return None
-        if task_id:
-            path = self._execution_path(task_id=task_id, execution_id=safe_execution_id)
+        if automation_id:
+            path = self._execution_path(automation_id=automation_id, execution_id=safe_execution_id)
             return path if path.exists() else None
         matches = list(self.executions_dir.glob(f"*/{safe_execution_id}.json"))
         return matches[0] if matches else None
@@ -379,8 +379,8 @@ class TaskExecutionsStorage:
         tmp_path.replace(path)
         return data
 
-    def _write_execution_json(self, *, task_id: str, execution_id: str, execution: Dict[str, Any]) -> Dict[str, Any]:
-        self._write_json(self._execution_path(task_id=task_id, execution_id=execution_id), execution)
+    def _write_execution_json(self, *, automation_id: str, execution_id: str, execution: Dict[str, Any]) -> Dict[str, Any]:
+        self._write_json(self._execution_path(automation_id=automation_id, execution_id=execution_id), execution)
         try:
             self.rebuild_search_index()
         except Exception:
@@ -390,9 +390,9 @@ class TaskExecutionsStorage:
     def _decode_row(self, row: sqlite3.Row) -> Dict[str, Any]:
         return {
             "id": row["id"],
-            "schema_version": "task_execution.v1",
-            "task_id": row["task_id"],
-            "task_title": row["task_title"] or "",
+            "schema_version": "automation_execution.v1",
+            "automation_id": row["automation_id"],
+            "automation_title": row["automation_title"] or "",
             "owner_user_id": row["owner_user_id"],
             "status": row["status"],
             "trigger": row["trigger"] or "",
@@ -413,20 +413,20 @@ class TaskExecutionsStorage:
             "metadata": json.loads(row["metadata_json"] or "{}"),
         }
 
-    def _load_task(self, task_id: str) -> Dict[str, Any] | None:
-        if not self._task_loader:
+    def _load_automation(self, automation_id: str) -> Dict[str, Any] | None:
+        if not self._automation_loader:
             return None
-        return self._task_loader(task_id)
+        return self._automation_loader(automation_id)
 
-    def _notify_parent_summary(self, *, task_id: str, execution: Dict[str, Any]) -> None:
-        if not self._task_summary_updater:
+    def _notify_parent_summary(self, *, automation_id: str, execution: Dict[str, Any]) -> None:
+        if not self._automation_summary_updater:
             return
-        self._task_summary_updater(task_id, execution)
+        self._automation_summary_updater(automation_id, execution)
 
     def create_execution(
         self,
         *,
-        task_id: str,
+        automation_id: str,
         status: str = "queued",
         trigger: str = "manual",
         source: Dict[str, Any] | None = None,
@@ -439,21 +439,21 @@ class TaskExecutionsStorage:
         metadata: Dict[str, Any] | None = None,
         artifacts: List[Dict[str, Any]] | None = None,
     ) -> Dict[str, Any]:
-        task = self._load_task(task_id)
-        if self._task_loader and not task:
-            raise ValueError(f"task {task_id!r} was not found")
-        task = task or {}
+        automation = self._load_automation(automation_id)
+        if self._automation_loader and not automation:
+            raise ValueError(f"automation {automation_id!r} was not found")
+        automation = automation or {}
         now = _utc_now()
         normalized_status = self._normalize_status(status)
-        execution_id = f"exec_{_slug(str(task.get('title') or task_id), fallback='task')}_{uuid.uuid4().hex[:10]}"
+        execution_id = f"exec_{_slug(str(automation.get('title') or automation_id), fallback='automation')}_{uuid.uuid4().hex[:10]}"
         started_at = now if normalized_status == "running" else None
         finished_at = now if normalized_status in {"success", "failed", "cancelled"} else None
         normalized_artifacts = [_normalize_execution_artifact(item) for item in _json_dict_list(artifacts or [])]
         execution = {
-            "schema_version": "task_execution.v1",
+            "schema_version": "automation_execution.v1",
             "id": execution_id,
-            "task_id": task_id,
-            "task_title": str(task.get("title") or ""),
+            "automation_id": automation_id,
+            "automation_title": str(automation.get("title") or ""),
             "owner_user_id": self.user_id,
             "status": normalized_status,
             "trigger": str(trigger or "manual").strip() or "manual",
@@ -463,7 +463,7 @@ class TaskExecutionsStorage:
             "started_at": started_at,
             "finished_at": finished_at,
             "duration_ms": _duration_ms(started_at, finished_at),
-            "conversation_id": str(conversation_id or "").strip() or task.get("conversation_id") or None,
+            "conversation_id": str(conversation_id or "").strip() or automation.get("conversation_id") or None,
             "turn_id": str(turn_id or "").strip() or None,
             "summary": str(summary or "").strip(),
             "result": result or {},
@@ -473,12 +473,12 @@ class TaskExecutionsStorage:
             "artifacts": normalized_artifacts,
             "metadata": metadata or {},
         }
-        self._write_execution_json(task_id=task_id, execution_id=execution_id, execution=execution)
-        self._notify_parent_summary(task_id=task_id, execution=execution)
+        self._write_execution_json(automation_id=automation_id, execution_id=execution_id, execution=execution)
+        self._notify_parent_summary(automation_id=automation_id, execution=execution)
         return execution
 
-    def get_execution(self, *, execution_id: str, task_id: str = "") -> Dict[str, Any] | None:
-        path = self._find_execution_path(execution_id=execution_id, task_id=task_id)
+    def get_execution(self, *, execution_id: str, automation_id: str = "") -> Dict[str, Any] | None:
+        path = self._find_execution_path(execution_id=execution_id, automation_id=automation_id)
         if not path:
             return None
         execution = self._read_json(path)
@@ -487,14 +487,14 @@ class TaskExecutionsStorage:
     def list_executions(
         self,
         *,
-        task_id: str = "",
+        automation_id: str = "",
         status: str = "",
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         status_norm = (status or "").strip().lower()
         paths = (
-            sorted(self._execution_dir(task_id).glob("*.json"))
-            if task_id
+            sorted(self._execution_dir(automation_id).glob("*.json"))
+            if automation_id
             else sorted(self.executions_dir.glob("*/*.json"))
         )
         rows: List[Dict[str, Any]] = []
@@ -521,14 +521,14 @@ class TaskExecutionsStorage:
         self,
         *,
         query: str = "",
-        task_id: str = "",
+        automation_id: str = "",
         status: str = "",
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         try:
             self.ensure_search_index()
             status_norm = (status or "").strip().lower()
-            task_norm = (task_id or "").strip()
+            automation_norm = (automation_id or "").strip()
             fts = _fts_query(query)
             where: List[str] = []
             params: List[Any] = []
@@ -542,15 +542,15 @@ class TaskExecutionsStorage:
                 from_clause = "FROM executions e"
                 rank_expr = "0.0"
                 order_by = "e.updated_at DESC, e.created_at DESC"
-            if task_norm:
-                where.append("e.task_id = ?")
-                params.append(task_norm)
+            if automation_norm:
+                where.append("e.automation_id = ?")
+                params.append(automation_norm)
             if status_norm:
                 where.append("LOWER(e.status) = ?")
                 params.append(status_norm)
             sql = f"""
                 SELECT
-                    e.id, e.task_id, e.task_title, e.owner_user_id, e.status, e.trigger,
+                    e.id, e.automation_id, e.automation_title, e.owner_user_id, e.status, e.trigger,
                     e.source_json, e.created_at, e.updated_at, e.started_at, e.finished_at, e.duration_ms,
                     e.conversation_id, e.turn_id, e.summary, e.error, e.log_excerpt,
                     e.artifact_count, e.artifacts_json, e.result_json, e.metadata_json,
@@ -571,7 +571,7 @@ class TaskExecutionsStorage:
                 results.append(execution)
             return results
         except Exception:
-            fallback = self.list_executions(task_id=task_id, status=status, limit=max(1, int(limit or 50)))
+            fallback = self.list_executions(automation_id=automation_id, status=status, limit=max(1, int(limit or 50)))
             query_norm = (query or "").strip().lower()
             if not query_norm:
                 return fallback
@@ -581,8 +581,8 @@ class TaskExecutionsStorage:
                 haystack = "\n".join(
                     [
                         str(execution.get("id") or ""),
-                        str(execution.get("task_id") or ""),
-                        str(execution.get("task_title") or ""),
+                        str(execution.get("automation_id") or ""),
+                        str(execution.get("automation_title") or ""),
                         str(execution.get("summary") or ""),
                         str(execution.get("error") or ""),
                         str(execution.get("log_excerpt") or ""),
@@ -598,7 +598,7 @@ class TaskExecutionsStorage:
         self,
         *,
         execution_id: str,
-        task_id: str = "",
+        automation_id: str = "",
         status: str | None = None,
         conversation_id: str | None = None,
         turn_id: str | None = None,
@@ -610,7 +610,7 @@ class TaskExecutionsStorage:
         append_artifacts: bool = False,
         metadata_patch: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
-        path = self._find_execution_path(execution_id=execution_id, task_id=task_id)
+        path = self._find_execution_path(execution_id=execution_id, automation_id=automation_id)
         if not path:
             raise ValueError(f"execution {execution_id!r} was not found")
         execution = self._read_json(path)
@@ -655,17 +655,17 @@ class TaskExecutionsStorage:
         execution["updated_at"] = _utc_now()
         execution["duration_ms"] = _duration_ms(execution.get("started_at"), execution.get("finished_at"))
         self._write_execution_json(
-            task_id=str(execution.get("task_id") or task_id or "").strip(),
+            automation_id=str(execution.get("automation_id") or automation_id or "").strip(),
             execution_id=str(execution.get("id") or execution_id),
             execution=execution,
         )
-        task_id_for_summary = str(execution.get("task_id") or task_id or "").strip()
-        if task_id_for_summary:
-            self._notify_parent_summary(task_id=task_id_for_summary, execution=execution)
+        automation_id_for_summary = str(execution.get("automation_id") or automation_id or "").strip()
+        if automation_id_for_summary:
+            self._notify_parent_summary(automation_id=automation_id_for_summary, execution=execution)
         return execution
 
-    def delete_execution(self, *, execution_id: str, task_id: str = "") -> Dict[str, Any] | None:
-        path = self._find_execution_path(execution_id=execution_id, task_id=task_id)
+    def delete_execution(self, *, execution_id: str, automation_id: str = "") -> Dict[str, Any] | None:
+        path = self._find_execution_path(execution_id=execution_id, automation_id=automation_id)
         if not path:
             return None
         execution = self._read_json(path)

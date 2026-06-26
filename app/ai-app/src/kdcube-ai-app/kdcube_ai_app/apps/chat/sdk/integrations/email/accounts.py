@@ -604,15 +604,15 @@ class EmailAccountStore:
         path.unlink()
         return payload
 
-    def run_state_path(self, *, task_id: str, account_id: str) -> Path:
-        safe_task = _safe_segment(task_id or "manual", fallback="manual")
+    def run_state_path(self, *, automation_id: str, account_id: str) -> Path:
+        safe_task = _safe_segment(automation_id or "manual", fallback="manual")
         safe_account = _safe_segment(account_id or "account", fallback="account")
         path = self.run_dir / safe_task
         path.mkdir(parents=True, exist_ok=True)
         return path / f"{safe_account}.json"
 
-    def read_run_state(self, *, task_id: str, account_id: str) -> Dict[str, Any]:
-        path = self.run_state_path(task_id=task_id, account_id=account_id)
+    def read_run_state(self, *, automation_id: str, account_id: str) -> Dict[str, Any]:
+        path = self.run_state_path(automation_id=automation_id, account_id=account_id)
         if not path.exists():
             return {"schema_version": "email-run-state.v1"}
         try:
@@ -621,8 +621,8 @@ class EmailAccountStore:
             return {"schema_version": "email-run-state.v1"}
         return data if isinstance(data, dict) else {"schema_version": "email-run-state.v1"}
 
-    async def read_run_state_async(self, *, task_id: str, account_id: str) -> Dict[str, Any]:
-        path = self.run_state_path(task_id=task_id, account_id=account_id)
+    async def read_run_state_async(self, *, automation_id: str, account_id: str) -> Dict[str, Any]:
+        path = self.run_state_path(automation_id=automation_id, account_id=account_id)
         if not path.exists():
             return {"schema_version": "email-run-state.v1"}
         try:
@@ -632,19 +632,19 @@ class EmailAccountStore:
             return {"schema_version": "email-run-state.v1"}
         return data if isinstance(data, dict) else {"schema_version": "email-run-state.v1"}
 
-    def write_run_state(self, *, task_id: str, account_id: str, data: Mapping[str, Any]) -> Dict[str, Any]:
+    def write_run_state(self, *, automation_id: str, account_id: str, data: Mapping[str, Any]) -> Dict[str, Any]:
         payload = dict(data)
         payload["schema_version"] = "email-run-state.v1"
         payload["updated_at"] = _utc_now()
-        path = self.run_state_path(task_id=task_id, account_id=account_id)
+        path = self.run_state_path(automation_id=automation_id, account_id=account_id)
         path.write_text(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=True) + "\n", encoding="utf-8")
         return payload
 
-    async def write_run_state_async(self, *, task_id: str, account_id: str, data: Mapping[str, Any]) -> Dict[str, Any]:
+    async def write_run_state_async(self, *, automation_id: str, account_id: str, data: Mapping[str, Any]) -> Dict[str, Any]:
         payload = dict(data)
         payload["schema_version"] = "email-run-state.v1"
         payload["updated_at"] = _utc_now()
-        path = self.run_state_path(task_id=task_id, account_id=account_id)
+        path = self.run_state_path(automation_id=automation_id, account_id=account_id)
         async with aiofiles.open(path, "w", encoding="utf-8") as fh:
             await fh.write(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=True) + "\n")
         return payload
@@ -1277,15 +1277,15 @@ async def fetch_email_attachment(
     }
 
 
-def _run_state_task_id(
+def _run_state_automation_id(
     *,
-    task_id: str,
+    automation_id: str,
     mailbox: str,
     unread_only: bool,
     gmail_query: str,
     instruction: str,
 ) -> str:
-    explicit = str(task_id or "").strip()
+    explicit = str(automation_id or "").strip()
     if explicit:
         return explicit
     seed = json.dumps(
@@ -1552,25 +1552,25 @@ def _sync_email_mcp_task_state(
     *,
     storage_root: str | Path,
     user_id: str,
-    task_id: str,
+    automation_id: str,
     account_id: str,
     sdk_state: Mapping[str, Any],
     note: str,
     run_id: str = "",
     execution_id: str = "",
 ) -> None:
-    if not str(task_id or "").strip() or not str(account_id or "").strip():
+    if not str(automation_id or "").strip() or not str(account_id or "").strip():
         return
     try:
         from .mcp import EmailMCPRunStore
 
         mcp_store = EmailMCPRunStore(storage_root, user_id=user_id)
-        existing = mcp_store.read_task_state(task_id=task_id, account_id=account_id)
+        existing = mcp_store.read_task_state(automation_id=automation_id, account_id=account_id)
         current = existing.get("state") if isinstance(existing.get("state"), dict) else {}
         merged = dict(current)
         merged["sdk_email_run_state"] = dict(sdk_state)
         mcp_store.write_task_state(
-            task_id=task_id,
+            automation_id=automation_id,
             account_id=account_id,
             state=merged,
             note=note,
@@ -1579,9 +1579,9 @@ def _sync_email_mcp_task_state(
         )
     except Exception as exc:
         logger.warning(
-            "[email.process] failed to sync MCP task state | user_id=%s task_id=%s account_id=%s error=%s",
+            "[email.process] failed to sync MCP task state | user_id=%s automation_id=%s account_id=%s error=%s",
             user_id,
-            task_id,
+            automation_id,
             account_id,
             exc,
         )
@@ -1590,8 +1590,8 @@ def _sync_email_mcp_task_state(
 def _email_processor_failure_response(
     *,
     account: Mapping[str, Any],
-    task_id: str,
-    state_task_id: str,
+    automation_id: str,
+    state_automation_id: str,
     mailbox: str,
     unread_only: bool,
     provider_query: str,
@@ -1619,8 +1619,8 @@ def _email_processor_failure_response(
             "run_id": str(run_id or ""),
         },
         "account": account,
-        "task_id": task_id,
-        "state_task_id": state_task_id,
+        "automation_id": automation_id,
+        "state_automation_id": state_automation_id,
         "mailbox": mailbox or "inbox",
         "unread_only": bool(unread_only),
         "search_query": provider_query,
@@ -1660,13 +1660,13 @@ async def process_user_emails(
     limit: int = 20,
     gmail_query: str = "",
     search_query: str = "",
-    task_id: str = "",
+    automation_id: str = "",
     task_definition: str = "",
     instruction: str = "",
 ) -> Dict[str, Any]:
     logger.info(
         "[email.process] start | user_id=%s tenant=%s project=%s conversation_id=%s account_param=%s "
-        "mailbox=%s unread_only=%s limit=%s search_query=%r task_id=%s execution_id=%s",
+        "mailbox=%s unread_only=%s limit=%s search_query=%r automation_id=%s execution_id=%s",
         user_id,
         tenant,
         project,
@@ -1676,7 +1676,7 @@ async def process_user_emails(
         bool(unread_only),
         limit,
         search_query or gmail_query or "",
-        task_id or "",
+        automation_id or "",
         execution_id or "",
     )
     store = EmailAccountStore(storage_root, user_id=user_id, bundle_id=bundle_id)
@@ -1715,7 +1715,7 @@ async def process_user_emails(
                 ),
             },
             "user_id": user_id,
-            "task_id": task_id,
+            "automation_id": automation_id,
             "accounts": [],
         }
     else:
@@ -1734,13 +1734,13 @@ async def process_user_emails(
                 ),
             },
             "user_id": user_id,
-            "task_id": task_id,
+            "automation_id": automation_id,
             "accounts": accounts,
         }
 
     provider = str(selected.get("provider") or "google").strip().lower()
     provider_query = str(search_query or gmail_query or "").strip()
-    task_aware = bool(str(task_id or "").strip())
+    task_aware = bool(str(automation_id or "").strip())
     logger.info(
         "[email.process] selected account | user_id=%s account=%s provider=%s provider_query=%r",
         user_id,
@@ -1749,14 +1749,14 @@ async def process_user_emails(
         provider_query,
     )
     account_id = str(selected.get("account_id") or "")
-    state_task_id = _run_state_task_id(
-        task_id=task_id,
+    state_automation_id = _run_state_automation_id(
+        automation_id=automation_id,
         mailbox=mailbox,
         unread_only=unread_only,
         gmail_query=provider_query,
         instruction=instruction,
     )
-    run_state = await store.read_run_state_async(task_id=state_task_id, account_id=account_id)
+    run_state = await store.read_run_state_async(automation_id=state_automation_id, account_id=account_id)
 
     claude_result: Dict[str, Any] | None = None
     processing_mode = "react_agent_review"
@@ -1807,7 +1807,7 @@ async def process_user_emails(
                 _sync_email_mcp_task_state(
                     storage_root=storage_root,
                     user_id=user_id,
-                    task_id=task_id or state_task_id,
+                    automation_id=automation_id or state_automation_id,
                     account_id=account_id,
                     sdk_state={
                         "source": "email-run-state",
@@ -1830,10 +1830,10 @@ async def process_user_emails(
                     execution_id=execution_id,
                 )
             logger.info(
-                "[email.process] claude-code mcp start | user_id=%s account=%s task_id=%s execution_id=%s default_query=%r",
+                "[email.process] claude-code mcp start | user_id=%s account=%s automation_id=%s execution_id=%s default_query=%r",
                 user_id,
                 selected.get("email") or selected.get("account_id"),
-                task_id or "",
+                automation_id or "",
                 execution_id or "",
                 provider_query,
             )
@@ -1849,7 +1849,7 @@ async def process_user_emails(
                 unread_only=unread_only,
                 limit=limit,
                 gmail_query=provider_query,
-                task_id=task_id,
+                automation_id=automation_id,
                 task_definition=task_definition,
                 instruction=instruction,
                 messages=[],
@@ -1912,11 +1912,11 @@ async def process_user_emails(
                 )
                 if task_aware:
                     await store.write_run_state_async(
-                        task_id=state_task_id,
+                        automation_id=state_automation_id,
                         account_id=account_id,
                         data={
                             **dict(run_state or {}),
-                            "task_id": task_id,
+                            "automation_id": automation_id,
                             "account_id": account_id,
                             "mailbox": mailbox or "inbox",
                             "unread_only": bool(unread_only),
@@ -1934,17 +1934,17 @@ async def process_user_emails(
                     )
                     logger.warning(
                         "[email.process] task-aware processor failed closed | "
-                        "user_id=%s account=%s task_id=%s run_id=%s code=%s",
+                        "user_id=%s account=%s automation_id=%s run_id=%s code=%s",
                         user_id,
                         selected.get("email") or selected.get("account_id"),
-                        task_id,
+                        automation_id,
                         claude_result.get("run_id"),
                         error_code,
                     )
                     return _email_processor_failure_response(
                         account=selected,
-                        task_id=task_id,
-                        state_task_id=state_task_id,
+                        automation_id=automation_id,
+                        state_automation_id=state_automation_id,
                         mailbox=mailbox,
                         unread_only=unread_only,
                         provider_query=provider_query,
@@ -1957,10 +1957,10 @@ async def process_user_emails(
                         claude_result=claude_result,
                     )
                 await store.write_run_state_async(
-                    task_id=state_task_id,
+                    automation_id=state_automation_id,
                     account_id=account_id,
                     data={
-                        "task_id": task_id,
+                        "automation_id": automation_id,
                         "account_id": account_id,
                         "mailbox": mailbox or "inbox",
                         "unread_only": bool(unread_only),
@@ -2024,10 +2024,10 @@ async def process_user_emails(
             error_message = str(exc)
             logger.exception(
                 "[email.process] claude-code mcp exception | "
-                "user_id=%s account=%s task_id=%s execution_id=%s",
+                "user_id=%s account=%s automation_id=%s execution_id=%s",
                 user_id,
                 selected.get("email") or selected.get("account_id"),
-                task_id or "",
+                automation_id or "",
                 execution_id or "",
             )
             warnings.append(
@@ -2039,11 +2039,11 @@ async def process_user_emails(
             )
             if task_aware:
                 await store.write_run_state_async(
-                    task_id=state_task_id,
+                    automation_id=state_automation_id,
                     account_id=account_id,
                     data={
                         **dict(run_state or {}),
-                        "task_id": task_id,
+                        "automation_id": automation_id,
                         "account_id": account_id,
                         "mailbox": mailbox or "inbox",
                         "unread_only": bool(unread_only),
@@ -2060,16 +2060,16 @@ async def process_user_emails(
                 )
                 logger.warning(
                     "[email.process] task-aware processor exception failed closed | "
-                    "user_id=%s account=%s task_id=%s error=%s",
+                    "user_id=%s account=%s automation_id=%s error=%s",
                     user_id,
                     selected.get("email") or selected.get("account_id"),
-                    task_id,
+                    automation_id,
                     error_message,
                 )
                 return _email_processor_failure_response(
                     account=selected,
-                    task_id=task_id,
-                    state_task_id=state_task_id,
+                    automation_id=automation_id,
+                    state_automation_id=state_automation_id,
                     mailbox=mailbox,
                     unread_only=unread_only,
                     provider_query=provider_query,
@@ -2081,10 +2081,10 @@ async def process_user_emails(
                     claude_result=claude_result,
                 )
             await store.write_run_state_async(
-                task_id=state_task_id,
+                automation_id=state_automation_id,
                 account_id=account_id,
                 data={
-                    "task_id": task_id,
+                    "automation_id": automation_id,
                     "account_id": account_id,
                     "mailbox": mailbox or "inbox",
                     "unread_only": bool(unread_only),
@@ -2128,10 +2128,10 @@ async def process_user_emails(
 
     checked_count = max(checked_count, len(fetched_messages), len(new_messages), len(processed_ids))
     logger.info(
-        "[email.process] candidate state | user_id=%s account=%s state_task_id=%s checked=%s previously_processed=%s selected=%s",
+        "[email.process] candidate state | user_id=%s account=%s state_automation_id=%s checked=%s previously_processed=%s selected=%s",
         user_id,
         selected.get("email") or selected.get("account_id"),
-        state_task_id,
+        state_automation_id,
         checked_count,
         0,
         len(new_messages),
@@ -2146,10 +2146,10 @@ async def process_user_emails(
     )
     last_claude_code_run_id = (claude_result or {}).get("run_id") if isinstance(claude_result, dict) else ""
     await store.write_run_state_async(
-        task_id=state_task_id,
+        automation_id=state_automation_id,
         account_id=account_id,
         data={
-            "task_id": task_id,
+            "automation_id": automation_id,
             "account_id": account_id,
             "mailbox": mailbox or "inbox",
             "unread_only": bool(unread_only),
@@ -2171,7 +2171,7 @@ async def process_user_emails(
     _sync_email_mcp_task_state(
         storage_root=storage_root,
         user_id=user_id,
-        task_id=task_id or state_task_id,
+        automation_id=automation_id or state_automation_id,
         account_id=account_id,
         sdk_state={
             "source": "email.process_user_emails",
@@ -2224,8 +2224,8 @@ async def process_user_emails(
     response = {
         "ok": True,
         "account": selected,
-        "task_id": task_id,
-        "state_task_id": state_task_id,
+        "automation_id": automation_id,
+        "state_automation_id": state_automation_id,
         "task_definition": task_definition,
         "instruction": instruction,
         "mailbox": mailbox or "inbox",

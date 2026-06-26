@@ -5,6 +5,7 @@ summary: "Authentication providers and token transport across REST/SSE/Socket.IO
 tags: ["service", "auth", "security", "tokens"]
 keywords: ["delegated auth", "cookie auth", "JWT", "SSE auth", "Socket.IO"]
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connections-sdk-solution-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/bundle-session-auth-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/bundle-simple-idp-bridge-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/comm/README-comm.md
@@ -41,6 +42,26 @@ User type is derived from roles:
 If a request includes `User-Session-ID` (header) or `user_session_id` (query param),
 the gateway verifies that this session belongs to the authenticated user. Unknown or
 mismatched sessions are rejected (401/403).
+
+## Boundary With Connections
+
+Service auth validates platform credentials and produces a `UserSession` for
+platform REST/SSE/Socket.IO/MCP/API requests. It should not contain every
+channel-specific identity-link rule.
+
+When a request starts from another channel, such as Telegram init data, webhook
+signature, API key, or a bundle-owned proof, a channel authorizer should:
+
+1. validate the channel proof;
+2. resolve the channel identity to a linked platform principal through
+   Connections;
+3. resolve platform roles/permissions for that principal;
+4. stamp the execution context before role checks, economics, ReAct, tools, or
+   child runtimes run.
+
+That authority projection is documented in
+[Connections SDK Solution](../../sdk/solutions/connections/connections-sdk-solution-README.md) and
+[Cross-Runtime Context](../../runtime/cross-runtime-context-README.md).
 
 ## Supported auth providers
 

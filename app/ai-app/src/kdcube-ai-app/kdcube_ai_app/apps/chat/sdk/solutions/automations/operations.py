@@ -15,7 +15,7 @@ from kdcube_ai_app.apps.chat.sdk.infra.bundle_urls import bundle_operation_url
 from kdcube_ai_app.infra.jobs.stream import RedisBackgroundJobStream
 from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_request_context
 from kdcube_ai_app.apps.chat.sdk.runtime.http_ops import BundleBinaryResponse
-from .async_storage import AsyncTaskStorage
+from .async_storage import AsyncAutomationStorage
 from .execution_artifacts import (
     artifact_ref_for_execution_artifact,
     downloadable_execution_artifacts,
@@ -28,18 +28,23 @@ from kdcube_ai_app.apps.chat.sdk.integrations.telegram import (
     render_telegram_messages_from_timeline,
     send_telegram_messages,
 )
+from kdcube_ai_app.apps.chat.sdk.identity_authority import (
+    apply_authority_to_comm_context,
+    authority_from_source,
+    normalize_execution_authority,
+)
 
 
 logger = logging.getLogger(__name__)
 
 BUNDLE_ID = ""
-WORK_KIND_TASK_RUN_NOW = "task.execution.manual"
+WORK_KIND_AUTOMATION_RUN_NOW = "automation.execution.manual"
 
 _storage_root_or_error = None
 _target_user_id = None
 
 
-def configure_task_operations(
+def configure_automation_operations(
     *,
     storage_root_or_error: Any,
     target_user_id: Any,
@@ -53,17 +58,17 @@ def configure_task_operations(
 
 
 def _storage_root(entrypoint: Any) -> str:
-    for method_name in ("task_storage_root", "storage_root_or_error"):
+    for method_name in ("automation_storage_root", "storage_root_or_error"):
         resolver = getattr(entrypoint, method_name, None)
         if callable(resolver):
             return str(resolver())
     if not callable(_storage_root_or_error):
-        raise RuntimeError("task operations are not configured: storage_root_or_error is missing")
+        raise RuntimeError("automation operations are not configured: storage_root_or_error is missing")
     return str(_storage_root_or_error(entrypoint))
 
 
 def _target_user(entrypoint: Any, *, user_id: Optional[str] = None, fingerprint: Optional[str] = None) -> str:
-    resolver = getattr(entrypoint, "target_task_user_id", None)
+    resolver = getattr(entrypoint, "target_automation_user_id", None)
     if callable(resolver):
         return str(resolver(user_id=user_id, fingerprint=fingerprint))
     if callable(_target_user_id):
@@ -81,9 +86,9 @@ def storage_for(
     *,
     user_id: Optional[str] = None,
     fingerprint: Optional[str] = None,
-) -> tuple[AsyncTaskStorage, str]:
+) -> tuple[AsyncAutomationStorage, str]:
     target_user = _target_user(entrypoint, user_id=user_id, fingerprint=fingerprint)
-    return AsyncTaskStorage(_storage_root(entrypoint), user_id=target_user), target_user
+    return AsyncAutomationStorage(_storage_root(entrypoint), user_id=target_user), target_user
 
 
 def _bundle_route_parts(entrypoint: Any) -> tuple[str, str, str]:
@@ -106,7 +111,7 @@ def _execution_scope(entrypoint: Any, *, user_id: str) -> Dict[str, Any]:
         # NOTE: user_type here scopes ARTIFACT storage paths (execution_artifacts),
         # not economics. It is intentionally left constant so artifact read/write
         # paths stay consistent across executions regardless of the funding role.
-        # Economics uses an independently resolved role via _task_econ_subject.
+        # Economics uses an independently resolved role via _automation_econ_subject.
         "user_type": "registered",
         "storage_root": _storage_root(entrypoint),
     }
@@ -115,7 +120,7 @@ def _execution_scope(entrypoint: Any, *, user_id: str) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Economics enforcement (Option A: estimate + post-run settle, funding_flow parity)
 # ---------------------------------------------------------------------------
-def _task_economics_enabled(entrypoint: Any) -> bool:
+def _automation_economics_enabled(entrypoint: Any) -> bool:
     return bool(
         getattr(entrypoint, "cp_manager", None)
         and getattr(entrypoint, "rl", None)
@@ -123,26 +128,41 @@ def _task_economics_enabled(entrypoint: Any) -> bool:
     )
 
 
-def _task_reservation_usd(entrypoint: Any) -> float:
-    """Feasibility estimate for a task pipeline (bundle-configurable).
+def _automation_reservation_usd(entrypoint: Any) -> float:
+    """Feasibility estimate for a automation pipeline (bundle-configurable).
 
-    Tasks verify economic feasibility at the start (economic_preflight); this
-    only sizes the estimate the preflight admits against. The task's actual cost
+    Automations verify economic feasibility at the start (economic_preflight); this
+    only sizes the estimate the preflight admits against. The automation's actual cost
     is metered by the inner ReAct turn (self.run()), not reserved/settled here.
     """
     try:
-        return float(_bundle_prop(entrypoint, "economics.task.reservation_amount_dollars", 0.50) or 0.50)
+        return float(_bundle_prop(entrypoint, "economics.automation.reservation_amount_dollars", 0.50) or 0.50)
     except Exception:
         return 0.50
 
 
-async def _task_econ_subject(entrypoint: Any, *, target_user: str, source: Dict[str, Any]):
-    """Build an EconomicsSubject for a task execution.
+def _source_text(source: Dict[str, Any] | None, *keys: str) -> str:
+    for key in keys:
+        value = (source or {}).get(key)
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
 
-    privileged/admin is preserved from the carried (enqueue-time) role; the
-    carried role rides in the job source (enqueue_task_job persists user_type),
-    falling back to the worker comm_context. paid/registered is re-resolved at
-    run time from economics state via RoleResolver.
+
+def _automation_economics_user_id(*, target_user: str, source: Dict[str, Any] | None) -> str:
+    return _source_text(source, "economics_user_id", "platform_user_id", "authority_user_id") or target_user
+
+
+async def _automation_econ_subject(entrypoint: Any, *, target_user: str, source: Dict[str, Any]):
+    """Build an EconomicsSubject for a automation execution.
+
+    The automation actor/storage user can be a surface-local identity such as
+    ``telegram_...``. Economics is allowed to use a separately carried platform
+    authority identity when the surface identity was linked to a platform user.
+    privileged/admin is preserved only from that platform authority role; paid
+    and registered are re-resolved at run time from economics state via
+    RoleResolver.
     """
     from kdcube_ai_app.apps.chat.sdk.infra.economics.enforcement import (
         EconomicsSubject,
@@ -152,48 +172,51 @@ async def _task_econ_subject(entrypoint: Any, *, target_user: str, source: Dict[
     tenant, project, _bundle_id = _bundle_route_parts(entrypoint)
     comm_context = getattr(entrypoint, "comm_context", None)
     comm_user = getattr(comm_context, "user", None)
+    economics_user_id = _automation_economics_user_id(target_user=target_user, source=source)
     carried_role = str(
-        (source or {}).get("user_type")
+        (source or {}).get("economics_user_type")
+        or (source or {}).get("platform_user_type")
+        or (source or {}).get("user_type")
         or getattr(comm_user, "user_type", "")
         or "registered"
     ).strip() or "registered"
     role = carried_role
     try:
         pg_pool = getattr(entrypoint, "pg_pool", None)
-        if pg_pool is not None and tenant and project and target_user:
+        if pg_pool is not None and tenant and project and economics_user_id:
             resolver = RoleResolver(pg_pool=pg_pool, tenant=tenant, project=project)
-            role = await resolver.resolve(user_id=target_user, carried_role=carried_role)
+            role = await resolver.resolve(user_id=economics_user_id, carried_role=carried_role)
     except Exception as exc:
         logger.warning(
-            "[tasks.economics] role resolve failed; using carried role: user=%s carried=%s err=%s",
-            target_user, carried_role, exc,
+            "[automations.economics] role resolve failed; using carried role: actor=%s economics_user=%s carried=%s err=%s",
+            target_user, economics_user_id, carried_role, exc,
         )
         role = carried_role
     timezone = str((source or {}).get("timezone") or getattr(comm_user, "timezone", "") or "") or None
     return EconomicsSubject(
-        tenant=tenant, project=project, user_id=target_user,
+        tenant=tenant, project=project, user_id=economics_user_id,
         user_type=role, timezone=timezone,
     )
 
 
-async def _task_verify_economics(
+async def _automation_verify_economics(
     entrypoint: Any,
     *,
     target_user: str,
     source: Dict[str, Any],
 ):
-    """Verify the task pipeline is economically feasible for the carried user.
+    """Verify the automation pipeline is economically feasible for the carried user.
 
     Returns (subject, decision) on success; raises EconomicsLimitException when
     the user's quota/funding cannot support the pipeline. Returns (None, None)
-    when economics is not configured (task runs unmetered, as before).
+    when economics is not configured (automation runs unmetered, as before).
 
-    Verify-only (economic_preflight): NO reservation, NO settlement. The task's
+    Verify-only (economic_preflight): NO reservation, NO settlement. The automation's
     ReAct work routes through self.run(), which already reserves+settles the real
-    cost under the task's user identity; an outer guard would only duplicate it.
+    cost under the automation's user identity; an outer guard would only duplicate it.
     This gates the START of the flow and surfaces the economic limits for logging.
     """
-    if not _task_economics_enabled(entrypoint):
+    if not _automation_economics_enabled(entrypoint):
         return None, None
     from kdcube_ai_app.apps.chat.sdk.infra.economics.enforcement import (
         economic_preflight,
@@ -201,20 +224,20 @@ async def _task_verify_economics(
         FlowPolicy,
     )
 
-    subject = await _task_econ_subject(entrypoint, target_user=target_user, source=source)
+    subject = await _automation_econ_subject(entrypoint, target_user=target_user, source=source)
     if not (subject.tenant and subject.project and subject.user_id):
         return None, None
     decision = await economic_preflight(
         entrypoint,
         subject=subject,
-        estimate=EconomicsEstimate(reservation_usd=_task_reservation_usd(entrypoint)),
-        flow="tasks",
+        estimate=EconomicsEstimate(reservation_usd=_automation_reservation_usd(entrypoint)),
+        flow="automations",
         policy=FlowPolicy(enforce_concurrency=False, emit_user_events=False),
     )
     return subject, decision
 
 
-def _task_economics_metadata(decision) -> Dict[str, Any]:
+def _automation_economics_metadata(decision) -> Dict[str, Any]:
     """Compact economic decision + limits for the execution journal/metadata."""
     if decision is None:
         return {}
@@ -316,7 +339,7 @@ async def _verify_download_token(entrypoint: Any, *, artifact_ref: str, download
 def _artifact_download_url(entrypoint: Any, *, artifact_ref: str, public: bool, download_token: str = "") -> str:
     tenant, project, bundle_id = _bundle_route_parts(entrypoint)
     route = "public" if public else "operations"
-    alias = "telegram_task_execution_artifact_download" if public else "task_execution_artifact_download"
+    alias = "telegram_automation_execution_artifact_download" if public else "automation_execution_artifact_download"
     query_payload = {"artifact_ref": artifact_ref}
     if download_token:
         query_payload["download_token"] = download_token
@@ -387,7 +410,7 @@ async def _decorate_executions(
     return out
 
 
-async def list_tasks(
+async def list_automations(
     entrypoint: Any,
     *,
     query: str = "",
@@ -399,17 +422,17 @@ async def list_tasks(
     public: bool = False,
 ) -> Dict[str, Any]:
     storage, target_user = storage_for(entrypoint, user_id=user_id, fingerprint=fingerprint)
-    tasks = await storage.list_tasks(query=query, status=status, limit=limit)
-    tasks = await storage.attach_execution_history(tasks, execution_limit=execution_limit)
-    for task in tasks:
-        if isinstance(task.get("executions"), list):
-            task["executions"] = await _decorate_executions(entrypoint, task["executions"], user_id=target_user, public=public)
-        if isinstance(task.get("last_execution"), dict):
-            task["last_execution"] = await _decorate_execution_artifacts(entrypoint, task["last_execution"], user_id=target_user, public=public)
-    return {"ok": True, "user_id": target_user, "count": len(tasks), "tasks": tasks}
+    automations = await storage.list_automations(query=query, status=status, limit=limit)
+    automations = await storage.attach_execution_history(automations, execution_limit=execution_limit)
+    for automation in automations:
+        if isinstance(automation.get("executions"), list):
+            automation["executions"] = await _decorate_executions(entrypoint, automation["executions"], user_id=target_user, public=public)
+        if isinstance(automation.get("last_execution"), dict):
+            automation["last_execution"] = await _decorate_execution_artifacts(entrypoint, automation["last_execution"], user_id=target_user, public=public)
+    return {"ok": True, "user_id": target_user, "count": len(automations), "automations": automations}
 
 
-async def search_tasks(
+async def search_automations(
     entrypoint: Any,
     *,
     query: str = "",
@@ -421,49 +444,49 @@ async def search_tasks(
     public: bool = False,
 ) -> Dict[str, Any]:
     storage, target_user = storage_for(entrypoint, user_id=user_id, fingerprint=fingerprint)
-    tasks = await storage.search_tasks(query=query, status=status, limit=limit)
-    tasks = await storage.attach_execution_history(tasks, execution_limit=execution_limit)
-    for task in tasks:
-        if isinstance(task.get("executions"), list):
-            task["executions"] = await _decorate_executions(entrypoint, task["executions"], user_id=target_user, public=public)
-        if isinstance(task.get("last_execution"), dict):
-            task["last_execution"] = await _decorate_execution_artifacts(entrypoint, task["last_execution"], user_id=target_user, public=public)
+    automations = await storage.search_automations(query=query, status=status, limit=limit)
+    automations = await storage.attach_execution_history(automations, execution_limit=execution_limit)
+    for automation in automations:
+        if isinstance(automation.get("executions"), list):
+            automation["executions"] = await _decorate_executions(entrypoint, automation["executions"], user_id=target_user, public=public)
+        if isinstance(automation.get("last_execution"), dict):
+            automation["last_execution"] = await _decorate_execution_artifacts(entrypoint, automation["last_execution"], user_id=target_user, public=public)
     index_path = await storage.ensure_search_index()
     return {
         "ok": True,
         "user_id": target_user,
-        "count": len(tasks),
+        "count": len(automations),
         "index_path": str(index_path),
-        "tasks": tasks,
+        "automations": automations,
     }
 
 
-async def get_task(
+async def get_automation(
     entrypoint: Any,
     *,
-    task_id: str,
+    automation_id: str,
     execution_limit: int = 10,
     user_id: Optional[str] = None,
     fingerprint: Optional[str] = None,
     public: bool = False,
 ) -> Dict[str, Any]:
     storage, target_user = storage_for(entrypoint, user_id=user_id, fingerprint=fingerprint)
-    task = await storage.get_task(task_id)
-    if task:
-        task = (await storage.attach_execution_history([task], execution_limit=execution_limit))[0]
-        if isinstance(task.get("executions"), list):
-            task["executions"] = await _decorate_executions(entrypoint, task["executions"], user_id=target_user, public=public)
-        if isinstance(task.get("last_execution"), dict):
-            task["last_execution"] = await _decorate_execution_artifacts(entrypoint, task["last_execution"], user_id=target_user, public=public)
+    automation = await storage.get_automation(automation_id)
+    if automation:
+        automation = (await storage.attach_execution_history([automation], execution_limit=execution_limit))[0]
+        if isinstance(automation.get("executions"), list):
+            automation["executions"] = await _decorate_executions(entrypoint, automation["executions"], user_id=target_user, public=public)
+        if isinstance(automation.get("last_execution"), dict):
+            automation["last_execution"] = await _decorate_execution_artifacts(entrypoint, automation["last_execution"], user_id=target_user, public=public)
     return {
-        "ok": task is not None,
+        "ok": automation is not None,
         "user_id": target_user,
-        "task": task,
-        "error": None if task else {"code": "task_not_found", "message": f"Task {task_id!r} was not found."},
+        "automation": automation,
+        "error": None if automation else {"code": "automation_not_found", "message": f"Automation {automation_id!r} was not found."},
     }
 
 
-async def create_task(
+async def create_automation(
     entrypoint: Any,
     *,
     title: str,
@@ -478,7 +501,7 @@ async def create_task(
     fingerprint: Optional[str] = None,
 ) -> Dict[str, Any]:
     storage, target_user = storage_for(entrypoint, user_id=user_id, fingerprint=fingerprint)
-    task = await storage.create_task(
+    automation = await storage.create_automation(
         title=title,
         description=description,
         schedule_cron=schedule_cron,
@@ -488,13 +511,13 @@ async def create_task(
         source=source,
         conversation_id=conversation_id or None,
     )
-    return {"ok": True, "user_id": target_user, "task": task}
+    return {"ok": True, "user_id": target_user, "automation": automation}
 
 
-async def update_task(
+async def update_automation(
     entrypoint: Any,
     *,
-    task_id: str,
+    automation_id: str,
     title: str | None = None,
     description: str | None = None,
     status: str | None = None,
@@ -512,8 +535,8 @@ async def update_task(
     fingerprint: Optional[str] = None,
 ) -> Dict[str, Any]:
     storage, target_user = storage_for(entrypoint, user_id=user_id, fingerprint=fingerprint)
-    task = await storage.update_task(
-        task_id=task_id,
+    automation = await storage.update_automation(
+        automation_id=automation_id,
         title=title,
         description=description,
         status=status,
@@ -528,26 +551,26 @@ async def update_task(
         relations_patch=relations_patch,
         revision_mode=revision_mode,
     )
-    return {"ok": True, "user_id": target_user, "task": task}
+    return {"ok": True, "user_id": target_user, "automation": automation}
 
 
-async def delete_task(
+async def delete_automation(
     entrypoint: Any,
     *,
-    task_id: str,
+    automation_id: str,
     hard: bool = False,
     user_id: Optional[str] = None,
     fingerprint: Optional[str] = None,
 ) -> Dict[str, Any]:
     storage, target_user = storage_for(entrypoint, user_id=user_id, fingerprint=fingerprint)
-    task = await storage.delete_task(task_id=task_id, hard=hard)
-    return {"ok": task is not None, "user_id": target_user, "deleted": task is not None, "task": task}
+    automation = await storage.delete_automation(automation_id=automation_id, hard=hard)
+    return {"ok": automation is not None, "user_id": target_user, "deleted": automation is not None, "automation": automation}
 
 
 async def list_executions(
     entrypoint: Any,
     *,
-    task_id: str = "",
+    automation_id: str = "",
     status: str = "",
     limit: int = 50,
     user_id: Optional[str] = None,
@@ -555,7 +578,7 @@ async def list_executions(
     public: bool = False,
 ) -> Dict[str, Any]:
     storage, target_user = storage_for(entrypoint, user_id=user_id, fingerprint=fingerprint)
-    executions = await storage.list_executions(task_id=task_id, status=status, limit=limit)
+    executions = await storage.list_executions(automation_id=automation_id, status=status, limit=limit)
     executions = await _decorate_executions(entrypoint, executions, user_id=target_user, public=public)
     return {"ok": True, "user_id": target_user, "count": len(executions), "executions": executions}
 
@@ -564,7 +587,7 @@ async def search_executions(
     entrypoint: Any,
     *,
     query: str = "",
-    task_id: str = "",
+    automation_id: str = "",
     status: str = "",
     limit: int = 50,
     user_id: Optional[str] = None,
@@ -572,7 +595,7 @@ async def search_executions(
     public: bool = False,
 ) -> Dict[str, Any]:
     storage, target_user = storage_for(entrypoint, user_id=user_id, fingerprint=fingerprint)
-    executions = await storage.search_executions(query=query, task_id=task_id, status=status, limit=limit)
+    executions = await storage.search_executions(query=query, automation_id=automation_id, status=status, limit=limit)
     executions = await _decorate_executions(entrypoint, executions, user_id=target_user, public=public)
     index_path = await storage.ensure_execution_search_index()
     return {
@@ -588,13 +611,13 @@ async def get_execution(
     entrypoint: Any,
     *,
     execution_id: str,
-    task_id: str = "",
+    automation_id: str = "",
     user_id: Optional[str] = None,
     fingerprint: Optional[str] = None,
     public: bool = False,
 ) -> Dict[str, Any]:
     storage, target_user = storage_for(entrypoint, user_id=user_id, fingerprint=fingerprint)
-    execution = await storage.get_execution(task_id=task_id, execution_id=execution_id)
+    execution = await storage.get_execution(automation_id=automation_id, execution_id=execution_id)
     execution = await _decorate_execution_artifacts(entrypoint, execution, user_id=target_user, public=public)
     return {
         "ok": execution is not None,
@@ -609,7 +632,7 @@ async def download_execution_artifact(
     *,
     artifact_ref: str,
     execution_id: str = "",
-    task_id: str = "",
+    automation_id: str = "",
     user_id: Optional[str] = None,
     fingerprint: Optional[str] = None,
     download_token: str = "",
@@ -628,7 +651,7 @@ async def download_execution_artifact(
     selected_execution_id = str(execution_id or "").strip()
     if not selected_execution_id:
         selected_execution_id = execution_id_from_artifact_ref(artifact_ref)
-    execution = await storage.get_execution(task_id=task_id, execution_id=selected_execution_id)
+    execution = await storage.get_execution(automation_id=automation_id, execution_id=selected_execution_id)
     if not execution:
         return {
             "ok": False,
@@ -655,7 +678,7 @@ async def download_execution_artifact(
 async def upsert_execution(
     entrypoint: Any,
     *,
-    task_id: str,
+    automation_id: str,
     execution_id: str = "",
     status: str = "",
     trigger: str = "agent",
@@ -674,7 +697,7 @@ async def upsert_execution(
     if execution_id:
         execution = await storage.update_execution(
             execution_id=execution_id,
-            task_id=task_id,
+            automation_id=automation_id,
             status=status or None,
             conversation_id=conversation_id,
             turn_id=turn_id,
@@ -687,7 +710,7 @@ async def upsert_execution(
         )
     else:
         execution = await storage.create_execution(
-            task_id=task_id,
+            automation_id=automation_id,
             status=status or "queued",
             trigger=trigger,
             conversation_id=conversation_id,
@@ -706,38 +729,38 @@ async def delete_execution(
     entrypoint: Any,
     *,
     execution_id: str,
-    task_id: str = "",
+    automation_id: str = "",
     user_id: Optional[str] = None,
     fingerprint: Optional[str] = None,
 ) -> Dict[str, Any]:
     storage, target_user = storage_for(entrypoint, user_id=user_id, fingerprint=fingerprint)
-    execution = await storage.delete_execution(execution_id=execution_id, task_id=task_id)
+    execution = await storage.delete_execution(execution_id=execution_id, automation_id=automation_id)
     return {"ok": execution is not None, "user_id": target_user, "deleted": execution is not None, "execution": execution}
 
 
-def _run_prompt(*, task: Dict[str, Any], execution: Dict[str, Any], trigger: str) -> str:
+def _run_prompt(*, automation: Dict[str, Any], execution: Dict[str, Any], trigger: str) -> str:
     return "\n".join(
         [
-            "Run this saved task as a fresh job execution.",
+            "Run this saved automation as a fresh job execution.",
             "",
-            f"Task id: {task.get('id')}",
+            f"Automation id: {automation.get('id')}",
             f"Execution id: {execution.get('id')}",
             f"Execution trigger: {trigger}",
-            f"Title: {task.get('title')}",
+            f"Title: {automation.get('title')}",
             "",
             "Instructions:",
-            str(task.get("body") or task.get("description") or "").strip(),
+            str(automation.get("body") or automation.get("description") or "").strip(),
             "",
-            "Use task_job.get_current_task if you need to inspect the task or linked task definitions.",
+            "Use automation_job.get_current_automation if you need to inspect the automation or linked automation definitions.",
             "Use job_memory.search_memo only when durable user context materially changes this execution.",
-            "Use email.process_user_emails for email-processing tasks; pass the concrete connected email address as account, the specific mailbox rule as instruction, and a bounded search_query when the task has a date/topic/sender/label constraint.",
-            "If email.process_user_emails returns email_processor_failed in a saved task, retry the same email tool call if rounds remain; otherwise record a task failure. Do not treat it as zero new emails or process web/search fallback.",
-            "Use delivery.send_report when the task explicitly asks to deliver the generated report by email, Telegram, or both; pass generated artifact physical paths as attachments.",
-            "Do not invent or pass task id, execution id, or task definition to email tools; those are injected from the bundle call context.",
+            "Use email.process_user_emails for email-processing automations; pass the concrete connected email address as account, the specific mailbox rule as instruction, and a bounded search_query when the automation has a date/topic/sender/label constraint.",
+            "If email.process_user_emails returns email_processor_failed in a saved automation, retry the same email tool call if rounds remain; otherwise record a automation failure. Do not treat it as zero new emails or process web/search fallback.",
+            "Use delivery.send_report when the automation explicitly asks to deliver the generated report by email, Telegram, or both; pass generated artifact physical paths as attachments.",
+            "Do not invent or pass automation id, execution id, or automation definition to email tools; those are injected from the bundle call context.",
             "Never ask for email passwords or raw credentials.",
-            "Use task_job.update_execution_journal for substantial progress, errors, result data, and produced artifacts.",
-            "Call task_job tools directly as ReAct tool calls, not from inside exec_tools.execute_code_python code.",
-            "At the end, call task_job.update_execution_journal directly with the final status and then summarize the outcome briefly.",
+            "Use automation_job.update_execution_journal for substantial progress, errors, result data, and produced artifacts.",
+            "Call automation_job tools directly as ReAct tool calls, not from inside exec_tools.execute_code_python code.",
+            "At the end, call automation_job.update_execution_journal directly with the final status and then summarize the outcome briefly.",
         ]
     ).strip()
 
@@ -760,7 +783,7 @@ def _result_status(result: Any) -> str:
     return status if status in {"success", "failed", "cancelled"} else ""
 
 
-def _build_task_scoped_context(
+def _build_automation_scoped_context(
     entrypoint: Any,
     *,
     target_user: str,
@@ -771,16 +794,22 @@ def _build_task_scoped_context(
 ):
     comm_context = getattr(entrypoint, "comm_context", None)
     if comm_context is None or not hasattr(comm_context, "model_copy"):
-        raise RuntimeError("task execution requires a request context with comm_context")
+        raise RuntimeError("automation execution requires a request context with comm_context")
 
     scoped_ctx = comm_context.model_copy(deep=True)
     scoped_ctx.routing.session_id = run_conversation_id
     scoped_ctx.routing.conversation_id = run_conversation_id
     scoped_ctx.routing.turn_id = turn_id
     scoped_ctx.user.user_id = target_user
+    authority_source = (
+        bundle_call_context.get("identity_authority")
+        if isinstance(bundle_call_context.get("identity_authority"), dict)
+        else bundle_call_context.get("source")
+    )
+    apply_authority_to_comm_context(scoped_ctx, source=authority_source)
     # Carry the economics-resolved role so the inner run() applies the correct
     # plan/limits + funding for this user (the worker comm_context may carry a
-    # stale/default role for scheduled tasks).
+    # stale/default role for scheduled automations).
     if resolved_user_type:
         scoped_ctx.user.user_type = resolved_user_type
     scoped_ctx.bundle_call_context = bundle_call_context
@@ -803,10 +832,10 @@ async def _run_with_entrypoint_request_context(
         return await runner()
 
 
-async def _run_default_react_task_job(
+async def _run_default_react_automation_job(
     entrypoint: Any,
     *,
-    task: Dict[str, Any],
+    automation: Dict[str, Any],
     execution: Dict[str, Any],
     trigger: str,
     target_user: str,
@@ -814,8 +843,9 @@ async def _run_default_react_task_job(
     turn_id: str,
     bundle_call_context: Dict[str, Any],
     resolved_user_type: Optional[str] = None,
+    economics_user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    scoped_ctx = _build_task_scoped_context(
+    scoped_ctx = _build_automation_scoped_context(
         entrypoint,
         target_user=target_user,
         run_conversation_id=run_conversation_id,
@@ -831,41 +861,53 @@ async def _run_default_react_task_job(
                 "tenant": scoped_ctx.actor.tenant_id,
                 "project": scoped_ctx.actor.project_id,
                 "user": target_user,
+                "economics_user": economics_user_id or target_user,
                 "user_type": scoped_ctx.user.user_type,
                 "session_id": run_conversation_id,
                 "conversation_id": run_conversation_id,
                 "turn_id": turn_id,
-                "text": _run_prompt(task=task, execution=execution, trigger=trigger),
+                "text": _run_prompt(automation=automation, execution=execution, trigger=trigger),
                 "attachments": [],
             }
         )
         state["turn_id"] = turn_id
-        state["agent_surface"] = "task_job"
-        state["task_execution"] = {
-            "task_id": task.get("id"),
+        state["agent_surface"] = "automation_job"
+        authority = authority_from_source(bundle_call_context.get("identity_authority"))
+        if authority.get("roles"):
+            state["roles"] = authority["roles"]
+        if authority.get("permissions"):
+            state["permissions"] = authority["permissions"]
+        if authority.get("actor_user_id"):
+            state["actor_user"] = authority["actor_user_id"]
+        if authority.get("economics_user_id"):
+            state["economics_user"] = authority["economics_user_id"]
+        state["automation_execution"] = {
+            "automation_id": automation.get("id"),
             "execution_id": execution["id"],
             "trigger": trigger,
             "conversation_id": run_conversation_id,
             "turn_id": turn_id,
-            "task_definition": bundle_call_context["task_definition"],
+            "actor_user_id": target_user,
+            "economics_user_id": economics_user_id or target_user,
+            "automation_definition": bundle_call_context["automation_definition"],
         }
-        run_task_job_turn = getattr(entrypoint, "run_task_job_turn", None)
-        if not callable(run_task_job_turn):
+        run_automation_job_turn = getattr(entrypoint, "run_automation_job_turn", None)
+        if not callable(run_automation_job_turn):
             raise RuntimeError(
-                "Task execution requires entrypoint.execute_task_job(...) or entrypoint.run_task_job_turn(...)."
+                "Automation execution requires entrypoint.execute_automation_job(...) or entrypoint.run_automation_job_turn(...)."
             )
-        result = await run_task_job_turn(state=state)
+        result = await run_automation_job_turn(state=state)
         return result if isinstance(result, dict) else {"final_answer": str(result or "")}
 
     return await _run_with_entrypoint_request_context(entrypoint, scoped_ctx, _run_scoped)
 
 
-async def _execute_task_job(
+async def _execute_automation_job(
     entrypoint: Any,
     *,
-    task: Dict[str, Any],
+    automation: Dict[str, Any],
     execution: Dict[str, Any],
-    storage: AsyncTaskStorage,
+    storage: AsyncAutomationStorage,
     target_user: str,
     trigger: str,
     source: Dict[str, Any],
@@ -873,12 +915,13 @@ async def _execute_task_job(
     turn_id: str,
     bundle_call_context: Dict[str, Any],
     resolved_user_type: Optional[str] = None,
+    economics_user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    executor = getattr(entrypoint, "execute_task_job", None)
+    executor = getattr(entrypoint, "execute_automation_job", None)
     if callable(executor):
         async def _run_custom() -> Dict[str, Any]:
             result = await executor(
-                task=task,
+                automation=automation,
                 execution=execution,
                 storage=storage,
                 user_id=target_user,
@@ -891,7 +934,7 @@ async def _execute_task_job(
             return result if isinstance(result, dict) else {"answer": str(result or "")}
 
         try:
-            scoped_ctx = _build_task_scoped_context(
+            scoped_ctx = _build_automation_scoped_context(
                 entrypoint,
                 target_user=target_user,
                 run_conversation_id=run_conversation_id,
@@ -904,9 +947,9 @@ async def _execute_task_job(
 
         return await _run_with_entrypoint_request_context(entrypoint, scoped_ctx, _run_custom)
 
-    return await _run_default_react_task_job(
+    return await _run_default_react_automation_job(
         entrypoint,
-        task=task,
+        automation=automation,
         execution=execution,
         trigger=trigger,
         target_user=target_user,
@@ -914,6 +957,7 @@ async def _execute_task_job(
         turn_id=turn_id,
         bundle_call_context=bundle_call_context,
         resolved_user_type=resolved_user_type,
+        economics_user_id=economics_user_id,
     )
 
 
@@ -1028,12 +1072,12 @@ async def _deliver_execution_to_telegram(
             if isinstance(react_result.get("turn_log"), dict) and react_result.get("turn_log")
             else react_result.get("timeline") if isinstance(react_result.get("timeline"), dict) else None
         ),
-        react_turn={"answer": answer or execution.get("summary") or "Task execution completed."},
+        react_turn={"answer": answer or execution.get("summary") or "Automation execution completed."},
     )
     messages.extend(_execution_artifact_messages(execution))
     messages = _dedupe_telegram_messages(messages)
     if not messages:
-        messages = [TelegramMessage(kind="text", text=str(execution.get("summary") or "Task execution completed."))]
+        messages = [TelegramMessage(kind="text", text=str(execution.get("summary") or "Automation execution completed."))]
 
     delivery = await send_telegram_messages(
         bot_token=await _telegram_bot_token(),
@@ -1048,10 +1092,10 @@ async def _deliver_execution_to_telegram(
     }
 
 
-async def run_task_execution(
+async def run_automation_execution(
     entrypoint: Any,
     *,
-    task_id: str,
+    automation_id: str,
     trigger: str,
     source: Dict[str, Any] | None = None,
     execution_id: str = "",
@@ -1060,27 +1104,45 @@ async def run_task_execution(
     fingerprint: Optional[str] = None,
 ) -> Dict[str, Any]:
     storage, target_user = storage_for(entrypoint, user_id=user_id, fingerprint=fingerprint)
-    task = await storage.get_task(task_id)
-    if not task:
+    automation = await storage.get_automation(automation_id)
+    if not automation:
         return {
             "ok": False,
             "user_id": target_user,
-            "error": {"code": "task_not_found", "message": f"Task {task_id!r} was not found."},
+            "error": {"code": "automation_not_found", "message": f"Automation {automation_id!r} was not found."},
             "execution": None,
         }
-    task_status = str(task.get("status") or "").strip().lower()
+    automation_status = str(automation.get("status") or "").strip().lower()
     trigger_norm = str(trigger or "").strip().lower()
-    if task_status in {"archived", "deleted"} or (trigger_norm == "scheduled" and task_status != "enabled"):
-        execution = await storage.get_execution(execution_id=execution_id, task_id=task_id) if execution_id else None
+    execution = await storage.get_execution(execution_id=execution_id, automation_id=automation_id) if execution_id else None
+
+    def _is_scheduler_disabled_one_shot_pickup() -> bool:
+        if trigger_norm != "scheduled" or automation_status != "disabled" or not isinstance(execution, dict):
+            return False
+        if str(execution.get("trigger") or "").strip().lower() != "scheduled":
+            return False
+        if str(execution.get("status") or "").strip().lower() not in {"queued", "running"}:
+            return False
+        execution_source = execution.get("source") if isinstance(execution.get("source"), dict) else {}
+        automation_meta = automation.get("metadata") if isinstance(automation.get("metadata"), dict) else {}
+        execution_due_slot = str(execution_source.get("due_slot") or "").strip()
+        completed_due_slot = str(automation_meta.get("one_shot_completed_due_slot") or "").strip()
+        return bool(execution_due_slot and completed_due_slot and execution_due_slot == completed_due_slot)
+
+    if automation_status in {"archived", "deleted"} or (
+        trigger_norm == "scheduled"
+        and automation_status != "enabled"
+        and not _is_scheduler_disabled_one_shot_pickup()
+    ):
         summary = (
-            f"Scheduled execution skipped because task status is {task_status or 'unknown'}."
+            f"Scheduled execution skipped because automation status is {automation_status or 'unknown'}."
             if trigger_norm == "scheduled"
-            else f"Task execution skipped because task status is {task_status or 'unknown'}."
+            else f"Automation execution skipped because automation status is {automation_status or 'unknown'}."
         )
         if execution:
             execution = await storage.update_execution(
                 execution_id=str(execution.get("id") or execution_id),
-                task_id=task_id,
+                automation_id=automation_id,
                 status="cancelled",
                 summary=summary,
                 log_excerpt=summary,
@@ -1088,76 +1150,76 @@ async def run_task_execution(
         return {
             "ok": True,
             "skipped": True,
-            "reason": "task_not_runnable",
+            "reason": "automation_not_runnable",
             "user_id": target_user,
-            "task": task,
+            "automation": automation,
             "execution": execution,
             "answer": summary,
         }
 
-    run_conversation_id = str(run_conversation_id or "").strip() or f"task_job_{uuid.uuid4().hex}"
-    execution = await storage.get_execution(execution_id=execution_id, task_id=task_id) if execution_id else None
+    run_conversation_id = str(run_conversation_id or "").strip() or f"automation_job_{uuid.uuid4().hex}"
     if execution:
         execution = await storage.update_execution(
             execution_id=str(execution.get("id") or execution_id),
-            task_id=task_id,
+            automation_id=automation_id,
             status="running",
             conversation_id=run_conversation_id,
             summary="Execution started.",
-            metadata_patch={"agent_surface": "task_job"},
+            metadata_patch={"agent_surface": "automation_job"},
         )
     else:
         execution = await storage.create_execution(
-            task_id=task_id,
+            automation_id=automation_id,
             status="running",
             trigger=trigger,
             source=source or {},
             conversation_id=run_conversation_id,
             summary="Execution started.",
-            metadata={"agent_surface": "task_job"},
+            metadata={"agent_surface": "automation_job"},
         )
     turn_id = f"turn_{execution['id']}"
-    task_definition = {
-        "id": task.get("id"),
-        "title": task.get("title"),
-        "body": task.get("body"),
-        "description": task.get("description"),
-        "schedule": task.get("schedule"),
-        "relations": task.get("relations"),
-        "metadata": task.get("metadata"),
+    automation_definition = {
+        "id": automation.get("id"),
+        "title": automation.get("title"),
+        "body": automation.get("body"),
+        "description": automation.get("description"),
+        "schedule": automation.get("schedule"),
+        "relations": automation.get("relations"),
+        "metadata": automation.get("metadata"),
     }
     bundle_call_context = {
-        "kind": "task_execution",
-        "task_id": task_id,
+        "kind": "automation_execution",
+        "automation_id": automation_id,
         "execution_id": execution["id"],
         "trigger": trigger,
         "conversation_id": run_conversation_id,
         "turn_id": turn_id,
         "source": source or {},
-        "task": task_definition,
-        "task_definition": json.dumps(task_definition, sort_keys=True, ensure_ascii=True),
+        "automation": automation_definition,
+        "automation_definition": json.dumps(automation_definition, sort_keys=True, ensure_ascii=True),
     }
 
     from kdcube_ai_app.apps.chat.sdk.infra.economics.policy import EconomicsLimitException
     econ_subject = None
     econ_decision = None
+    economics_user_id = _automation_economics_user_id(target_user=target_user, source=source or {})
     try:
-        # Carry the user identity and verify the task pipeline is economically
+        # Carry the user identity and verify the automation pipeline is economically
         # feasible BEFORE running it (verify-only). The ReAct work routes through
         # self.run(), which reserves+settles the real cost under the same user, so
         # we do NOT reserve/settle here. Denial -> execution cancelled, no run.
-        econ_subject, econ_decision = await _task_verify_economics(
+        econ_subject, econ_decision = await _automation_verify_economics(
             entrypoint, target_user=target_user, source=source or {},
         )
     except EconomicsLimitException as exc:
         code = getattr(exc, "code", "rate_limited")
         execution = await storage.update_execution(
             execution_id=execution["id"],
-            task_id=task_id,
+            automation_id=automation_id,
             status="cancelled",
             conversation_id=run_conversation_id,
             turn_id=turn_id,
-            summary=f"Task execution denied by economics ({code}).",
+            summary=f"Automation execution denied by economics ({code}).",
             error=str(exc),
             log_excerpt=str(exc)[:1000],
             metadata_patch={"economics": {
@@ -1166,27 +1228,44 @@ async def run_task_execution(
             }},
         )
         logger.warning(
-            "[tasks.economics] execution denied: execution_id=%s user=%s code=%s",
+            "[automations.economics] execution denied: execution_id=%s user=%s code=%s",
             execution.get("id"), target_user, code,
         )
         return {
             "ok": False,
             "denied": True,
             "user_id": target_user,
-            "task": await storage.get_task(task_id),
+            "automation": await storage.get_automation(automation_id),
             "execution": execution,
             "error": {"code": "economics_denied", "message": str(exc)},
         }
     if econ_decision is not None:
         logger.info(
-            "[tasks.economics] preflight ok: execution_id=%s user=%s role=%s lane=%s funding=%s plan=%s",
-            execution["id"], target_user, getattr(econ_subject, "user_type", None),
+            "[automations.economics] preflight ok: execution_id=%s actor=%s economics_user=%s role=%s lane=%s funding=%s plan=%s",
+            execution["id"], target_user, getattr(econ_subject, "user_id", None),
+            getattr(econ_subject, "user_type", None),
             econ_decision.lane, econ_decision.funding_source, econ_decision.plan_id,
         )
     # Point (2): propagate the resolved role so the inner ReAct run() applies the
-    # correct plan/limits for this user (esp. scheduled tasks enqueued in a system
+    # correct plan/limits for this user (esp. scheduled automations enqueued in a system
     # context where the carried role may default to "registered").
     resolved_user_type = getattr(econ_subject, "user_type", None)
+    if econ_subject is not None and getattr(econ_subject, "user_id", None):
+        economics_user_id = str(econ_subject.user_id)
+    authority_context = normalize_execution_authority(
+        source or {},
+        actor_user_id=target_user,
+        economics_user_id=economics_user_id,
+        user_type=resolved_user_type or (source or {}).get("user_type") or "registered",
+    )
+    execution_source = {**(source or {}), **authority_context}
+    if resolved_user_type:
+        execution_source["user_type"] = resolved_user_type
+    bundle_call_context["actor_user_id"] = target_user
+    bundle_call_context["economics_user_id"] = economics_user_id
+    bundle_call_context["economics_user_type"] = resolved_user_type
+    bundle_call_context["identity_authority"] = authority_context
+    bundle_call_context["source"] = execution_source
 
     try:
         try:
@@ -1199,35 +1278,36 @@ async def run_task_execution(
             else nullcontext()
         )
         with context_binding:
-            result = await _execute_task_job(
+            result = await _execute_automation_job(
                 entrypoint,
-                task=task,
+                automation=automation,
                 execution=execution,
                 storage=storage,
                 target_user=target_user,
                 trigger=trigger,
-                source=source or {},
+                source=execution_source,
                 run_conversation_id=run_conversation_id,
                 turn_id=turn_id,
                 bundle_call_context=bundle_call_context,
                 resolved_user_type=resolved_user_type,
+                economics_user_id=economics_user_id,
             )
         answer = _result_answer(result)
-        current_execution = await storage.get_execution(execution_id=execution["id"], task_id=task_id) or execution
+        current_execution = await storage.get_execution(execution_id=execution["id"], automation_id=automation_id) or execution
         current_status = str(current_execution.get("status") or "").strip().lower()
         requested_status = _result_status(result)
         final_status = current_status if current_status in {"success", "failed", "cancelled"} else (requested_status or "success")
         artifacts = result.get("artifacts") if isinstance(result.get("artifacts"), list) else None
         metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else None
         if econ_decision is not None:
-            metadata = {**(metadata or {}), **_task_economics_metadata(econ_decision)}
+            metadata = {**(metadata or {}), **_automation_economics_metadata(econ_decision)}
         execution = await storage.update_execution(
             execution_id=execution["id"],
-            task_id=task_id,
+            automation_id=automation_id,
             status=final_status,
             conversation_id=run_conversation_id,
             turn_id=turn_id,
-            summary=answer or str(current_execution.get("summary") or "").strip() or "Task execution completed.",
+            summary=answer or str(current_execution.get("summary") or "").strip() or "Automation execution completed.",
             result=result or {},
             log_excerpt=answer[:1000],
             artifacts=artifacts,
@@ -1243,41 +1323,41 @@ async def run_task_execution(
         if delivery:
             execution = await storage.update_execution(
                 execution_id=execution["id"],
-                task_id=task_id,
+                automation_id=automation_id,
                 metadata_patch={"last_delivery": delivery},
             )
         return {
             "ok": True,
             "user_id": target_user,
-            "task": await storage.get_task(task_id),
+            "automation": await storage.get_automation(automation_id),
             "execution": execution,
             "answer": answer,
         }
     except Exception as exc:
         execution = await storage.update_execution(
             execution_id=execution["id"],
-            task_id=task_id,
+            automation_id=automation_id,
             status="failed",
             conversation_id=run_conversation_id,
             turn_id=turn_id,
-            summary="Task execution failed.",
+            summary="Automation execution failed.",
             error=str(exc),
             log_excerpt=str(exc)[:1000],
         )
         return {
             "ok": False,
             "user_id": target_user,
-            "task": await storage.get_task(task_id),
+            "automation": await storage.get_automation(automation_id),
             "execution": execution,
-            "error": {"code": "run_task_failed", "message": str(exc)},
+            "error": {"code": "run_automation_failed", "message": str(exc)},
         }
 
 
-async def enqueue_task_job(
+async def enqueue_automation_job(
     entrypoint: Any,
     *,
     work_kind: str,
-    task_id: str,
+    automation_id: str,
     trigger: str,
     source: Dict[str, Any],
     conversation_id: str = "",
@@ -1285,23 +1365,23 @@ async def enqueue_task_job(
     fingerprint: Optional[str] = None,
 ) -> Dict[str, Any]:
     storage, target_user = storage_for(entrypoint, user_id=user_id, fingerprint=fingerprint)
-    task = await storage.get_task(task_id)
-    if not task:
+    automation = await storage.get_automation(automation_id)
+    if not automation:
         return {
             "ok": False,
             "user_id": target_user,
-            "error": {"code": "task_not_found", "message": f"Task {task_id!r} was not found."},
+            "error": {"code": "automation_not_found", "message": f"Automation {automation_id!r} was not found."},
             "execution": None,
         }
-    run_conversation_id = str(conversation_id or "").strip() or f"task_job_{uuid.uuid4().hex}"
+    run_conversation_id = str(conversation_id or "").strip() or f"automation_job_{uuid.uuid4().hex}"
     execution = await storage.create_execution(
-        task_id=task_id,
+        automation_id=automation_id,
         status="queued",
         trigger=trigger,
         source=source,
         conversation_id=run_conversation_id,
-        summary="Queued for task execution.",
-        metadata={"agent_surface": "task_job"},
+        summary="Queued for automation execution.",
+        metadata={"agent_surface": "automation_job"},
     )
     turn_id = f"turn_{execution['id']}"
     tenant = str(getattr(entrypoint.config, "tenant", "") or getattr(entrypoint.settings, "TENANT", "") or "")
@@ -1310,16 +1390,16 @@ async def enqueue_task_job(
     if getattr(entrypoint, "redis", None) is None:
         execution = await storage.update_execution(
             execution_id=execution["id"],
-            task_id=task_id,
+            automation_id=automation_id,
             status="cancelled",
-            summary="Task job could not be queued because Redis is unavailable.",
+            summary="Automation job could not be queued because Redis is unavailable.",
         )
         return {
             "ok": False,
             "user_id": target_user,
-            "task": task,
+            "automation": automation,
             "execution": execution,
-            "error": {"code": "redis_unavailable", "message": "Redis is required to enqueue task jobs."},
+            "error": {"code": "redis_unavailable", "message": "Redis is required to enqueue automation jobs."},
         }
     comm_context = getattr(entrypoint, "comm_context", None)
     comm_user = getattr(comm_context, "user", None)
@@ -1337,24 +1417,24 @@ async def enqueue_task_job(
         metadata={
             "conversation_id": run_conversation_id,
             "turn_id": turn_id,
-            "text": f"Run task: {task.get('title') or task_id}",
+            "text": f"Run automation: {automation.get('title') or automation_id}",
         },
         payload={
-            "task_id": task_id,
+            "automation_id": automation_id,
             "execution_id": execution["id"],
         },
     )
     if not enqueue.enqueued:
         execution = await storage.update_execution(
             execution_id=execution["id"],
-            task_id=task_id,
+            automation_id=automation_id,
             status="cancelled",
-            summary=f"Task job was not enqueued ({enqueue.reason}).",
+            summary=f"Automation job was not enqueued ({enqueue.reason}).",
         )
     return {
         "ok": bool(enqueue.enqueued),
         "user_id": target_user,
-        "task": task,
+        "automation": automation,
         "execution": execution,
         "job": {
             "job_id": enqueue.job_id,
@@ -1365,22 +1445,22 @@ async def enqueue_task_job(
     }
 
 
-async def run_task_now(
+async def run_automation_now(
     entrypoint: Any,
     *,
-    task_id: str,
+    automation_id: str,
     conversation_id: str = "",
     user_id: Optional[str] = None,
     fingerprint: Optional[str] = None,
 ) -> Dict[str, Any]:
-    source: Dict[str, Any] = {"surface": "operation", "operation": "run_task_now"}
+    source: Dict[str, Any] = {"surface": "operation", "operation": "run_automation_now"}
     if str(conversation_id or "").strip():
         source["requested_conversation_id"] = str(conversation_id or "").strip()
         source["conversation_policy"] = "ignored_fresh_job_conversation"
-    return await enqueue_task_job(
+    return await enqueue_automation_job(
         entrypoint,
-        work_kind=WORK_KIND_TASK_RUN_NOW,
-        task_id=task_id,
+        work_kind=WORK_KIND_AUTOMATION_RUN_NOW,
+        automation_id=automation_id,
         trigger="manual",
         source=source,
         user_id=user_id,

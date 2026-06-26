@@ -3,7 +3,7 @@ id: repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-assemble-bundle-w
 title: "How To Assemble A Bundle With SDK Building Blocks"
 summary: "Tier 1 bundle-builder map for choosing reusable KDCube SDK and platform blocks before writing custom bundle services: tools, event sources, agents, storage, widgets, jobs, integrations, and solutions."
 tags: ["sdk", "bundle", "tier-1", "building-blocks", "integrations", "solutions", "tools"]
-keywords: ["bundle building blocks", "sdk integrations", "sdk solutions", "bundle assembly map", "reuse sdk components", "telegram integration", "email integration", "tasks solution", "delivery integration", "shared sdk widget components", "built in tools", "react tools", "bundle events", "event sources", "artifact rehosters"]
+keywords: ["bundle building blocks", "sdk integrations", "sdk solutions", "bundle assembly map", "reuse sdk components", "telegram integration", "email integration", "automations solution", "delivery integration", "shared sdk widget components", "built in tools", "react tools", "bundle events", "event sources", "artifact rehosters"]
 updated_at: 2026-06-20
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/how-to-integrate-with-kdcube-apps-README.md
@@ -14,7 +14,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-avoid-common-bundle-integration-failures-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-understand-conversation-events-and-react-turns-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-bootstrap-local-bundle-runtime-as-coding-agent-README.md
-  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/tasks-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/automations/automations-sdk-solution-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/email/README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/integrations/telegram/README.md
@@ -127,8 +127,8 @@ ownership.
 | --- | --- | --- |
 | Durable user memories, memory widget, memory tools, reconciliation, and `mem:` refs | `MemoryEntrypointMixin` / `BaseEntrypointWithMemory` plus `kdcube_ai_app.apps.chat.sdk.context.memory` | [Bundle Subsystem Integration](../bundle-subsystem-integration-README.md), [User Memories Overview](../../memory/user-memories-overview-README.md) |
 | Versioned collaborative board, pins, canvas tools, canvas ANNOUNCE/timeline policies, and object resolver registry | `kdcube_ai_app.apps.chat.sdk.solutions.canvas` | [Canvas SDK Solution](../../solutions/canvas/canvas-sdk-solution-README.md), [Bundle Subsystem Integration](../bundle-subsystem-integration-README.md) |
-| Saved tasks, schedules, fresh executions, execution journals, output recovery | `kdcube_ai_app.apps.chat.sdk.solutions.tasks` | [Tasks SDK Solution](../../solutions/tasks-README.md) |
-| Economics-aware chat turns, semantic search, memory reconciliation, canvas pin search, and task execution | `BaseEntrypointWithEconomics`, `search_model_service(flow=...)`, and `EconomicsGuard` | [Bundle Economics Integration](../bundle-economics-integration-README.md), [Economic Enforcement Engine](../../../economics/economic-enforcement-engine-README.md) |
+| Saved automations, schedules, fresh executions, execution journals, output recovery | `kdcube_ai_app.apps.chat.sdk.solutions.automations` | [Automations SDK Solution](../../solutions/automations/automations-sdk-solution-README.md) |
+| Economics-aware chat turns, semantic search, memory reconciliation, canvas pin search, and automation execution | `BaseEntrypointWithEconomics`, `search_model_service(flow=...)`, and `EconomicsGuard` | [Bundle Economics Integration](../bundle-economics-integration-README.md), [Economic Enforcement Engine](../../../economics/economic-enforcement-engine-README.md) |
 | Gmail/iCloud accounts, OAuth/settings, email attachment materialization, Email MCP, Claude Code email processing | `kdcube_ai_app.apps.chat.sdk.integrations.email` | [Email Integration](../../integrations/email/README.md) |
 | Telegram webhook, Bot API rendering, progress streaming, Mini App auth, widget operations, user registry, signed downloads | `kdcube_ai_app.apps.chat.sdk.integrations.telegram` | [Telegram Integration](../../integrations/telegram/README.md) |
 | Local public HTTPS origin for provider callbacks, Telegram webhooks, OAuth callbacks, and remote-control style integrations while KDCube runs on localhost | one ngrok HTTPS URL through a local reverse proxy into frontend, ingress, and proc | [Serving Local KDCube With Ngrok](../../../service/cicd/ngrok-README.md) |
@@ -155,7 +155,7 @@ ownership.
 | Tenant/project widget refresh events | SSE `/sse/stream?project_events=true`; bundle emits compact `comm.project_event(...)` snapshots | [Client Transport Protocols](../../../service/comm/client-transport-protocols-README.md#tenantproject-sse-broadcast), [Bundle Platform Integration](../bundle-platform-integration-README.md#bundle-to-client-event-scopes) |
 | Durable browser/widget mutations for bundle-owned objects | Socket.IO `data_bus.publish` or `POST /sse/data_bus.publish` with `messages[]`; bundle handles via `@data_bus_handler(...)` | [Conversation Event Bus And Data Bus](../../../service/comm/conversation-event-bus-and-data-bus-README.md), [Data Bus](../../../service/comm/data-bus-README.md), [How To Write A Bundle](how-to-write-bundle-README.md#data-bus-handler-path) |
 | Shared widget UI pieces such as User Memory and Telegram admin/channels panels | `ui.widgets.<alias>.shared_sources`; SDK source is materialized into the consuming bundle's widget build and served from that bundle's storage root | [Shared UI Source Materialization](../bundle-widget-integration-README.md#shared-ui-source-materialization) |
-| Scheduled scan and background execution | `@cron(...)`, `@on_job`, jobs stream; use Tasks Solution for saved task execution | [Scheduled Jobs](../bundle-scheduled-jobs-README.md), [Tasks SDK Solution](../../solutions/tasks-README.md) |
+| Scheduled scan and background execution | `@cron(...)`, `@on_job`, jobs stream; use Automations SDK Solution for saved automation execution | [Scheduled Jobs](../bundle-scheduled-jobs-README.md), [Automations SDK Solution](../../solutions/automations/automations-sdk-solution-README.md) |
 | Local mutable files, generated indexes, git working copies, runtime caches | bundle storage helpers, `BundleArtifactStorage`, KV cache, git helpers | [Bundle Storage And Cache](../bundle-storage-and-cache-README.md) |
 | Node/TypeScript backend inside a bundle | Python bundle shell + Node sidecar bridge | [Bundle Node Backend Bridge](../bundle-node-backend-bridge-README.md) |
 | Bundle-specific Python dependencies | `@venv(...)` | [Bundle Venv](../bundle-venv-README.md) |
@@ -210,22 +210,22 @@ React workflow
 Bundle code owns the prompt, allowed tool aliases, delivery target policy, and
 UI route aliases.
 
-### Task Automation App
+### Automation App
 
 ```text
-Tasks SDK Solution
-  -> task storage and search
+Automations SDK Solution
+  -> automation storage and search
   -> execution journals and artifacts
   -> due scan + job handler
-  -> task/job skills and tools
+  -> automation/job skills and tools
   -> widget operation helpers
 ```
 
-Bundle code owns product-specific task wording, user identity resolution,
+Bundle code owns product-specific automation wording, user identity resolution,
 widget composition, and route exposure.
 
-Tasks skills are discovered from the SDK solution root even without a
-bundle-local `skills/` folder. They declare required task tools, so they are
+Automation skills are discovered from the SDK solution root even without a
+bundle-local `skills/` folder. They declare required automation tools, so they are
 normally omitted automatically when those tools are not in the active React tool
 catalog. Use agent skill `consumers` only when the bundle needs an explicit policy
 override such as an allow-list or a hard deny.

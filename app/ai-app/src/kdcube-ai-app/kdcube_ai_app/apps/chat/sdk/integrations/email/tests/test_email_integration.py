@@ -166,7 +166,7 @@ async def test_email_claude_accepts_recorded_result_when_process_times_out(tmp_p
         unread_only=False,
         limit=20,
         gmail_query="after:2026/05/01 before:2026/05/02",
-        task_id="",
+        automation_id="",
         task_definition="",
         instruction="Find tech news.",
         messages=[{"message_id": "m-1", "subject": "Tech news"}],
@@ -402,7 +402,7 @@ async def test_process_user_emails_keeps_run_metadata_without_processed_id_ledge
         bundle_id="task-and-memo-app@1-0",
         tenant="demo-tenant",
         project="demo-project",
-        task_id="task-email",
+        automation_id="task-email",
         gmail_query="after:2026/05/02 before:2026/05/03 technology",
         task_definition=json.dumps({"title": "Monitor Gmail"}),
         instruction="Find customer escalations.",
@@ -414,7 +414,7 @@ async def test_process_user_emails_keeps_run_metadata_without_processed_id_ledge
         bundle_id="task-and-memo-app@1-0",
         tenant="demo-tenant",
         project="demo-project",
-        task_id="task-email",
+        automation_id="task-email",
         instruction="Find customer escalations.",
     )
 
@@ -481,7 +481,7 @@ async def test_process_user_emails_does_not_hide_previous_messages_by_default(tm
         bundle_id="task-and-memo-app@1-0",
         tenant="demo-tenant",
         project="demo-project",
-        task_id="task-email",
+        automation_id="task-email",
         gmail_query="after:2026/05/02 before:2026/05/03 technology",
         instruction="Find technology newsletters.",
     )
@@ -492,7 +492,7 @@ async def test_process_user_emails_does_not_hide_previous_messages_by_default(tm
         bundle_id="task-and-memo-app@1-0",
         tenant="demo-tenant",
         project="demo-project",
-        task_id="task-email",
+        automation_id="task-email",
         gmail_query="after:2026/05/02 before:2026/05/03 technology",
         instruction="Find vendor updates instead.",
     )
@@ -724,7 +724,7 @@ async def test_process_user_emails_marks_seen_after_claude_mcp_success(tmp_path,
         bundle_id="task-and-memo-app@1-0",
         tenant="demo-tenant",
         project="demo-project",
-        task_id="task-email",
+        automation_id="task-email",
         execution_id="exec-1",
         task_definition=json.dumps({"title": "Monitor Gmail"}),
         instruction="Find customer escalations.",
@@ -736,7 +736,7 @@ async def test_process_user_emails_marks_seen_after_claude_mcp_success(tmp_path,
         bundle_id="task-and-memo-app@1-0",
         tenant="demo-tenant",
         project="demo-project",
-        task_id="task-email",
+        automation_id="task-email",
         execution_id="exec-2",
         instruction="Find customer escalations.",
     )
@@ -758,7 +758,7 @@ async def test_process_user_emails_marks_seen_after_claude_mcp_success(tmp_path,
     assert second["new_count"] == 2
     mcp_mod = email_mcp
     synced = mcp_mod.EmailMCPRunStore(tmp_path, user_id="user-a").read_task_state(
-        task_id="task-email",
+        automation_id="task-email",
         account_id=account["account_id"],
     )
     assert synced["exists"] is True
@@ -837,7 +837,7 @@ async def test_process_user_emails_delegates_gmail_scope_to_claude_when_enabled(
         bundle_id="task-and-memo-app@1-0",
         tenant="demo-tenant",
         project="demo-project",
-        task_id="task-email",
+        automation_id="task-email",
         execution_id="exec-1",
         task_definition=json.dumps({"title": "Monitor Gmail"}),
         instruction="Find customer escalations.",
@@ -982,7 +982,7 @@ async def test_process_user_emails_saved_task_fails_closed_when_claude_mcp_did_n
         bundle_id="task-and-memo-app@1-0",
         tenant="demo-tenant",
         project="demo-project",
-        task_id="task-email",
+        automation_id="task-email",
         execution_id="exec-1",
         instruction="Summarize new emails since last run.",
     )
@@ -995,7 +995,7 @@ async def test_process_user_emails_saved_task_fails_closed_when_claude_mcp_did_n
     assert result["new_count"] == 0
     assert result["checked_count"] == 50
     assert fetch_called is False
-    state = await store.read_run_state_async(task_id="task-email", account_id=account["account_id"])
+    state = await store.read_run_state_async(automation_id="task-email", account_id=account["account_id"])
     assert "last_failed_at" in state
     assert "last_checked_at" not in state
     assert "last_new_count" not in state
@@ -1015,7 +1015,7 @@ async def test_email_mcp_token_is_task_scoped_and_verifiable(tmp_path):
         entrypoint=_Entry(),
         storage_root=tmp_path,
         user_id="user-a",
-        task_id="task-email",
+        automation_id="task-email",
         execution_id="exec-1",
         account={"account_id": "google_1", "provider": "google", "email": "user@example.test"},
         mailbox="inbox",
@@ -1031,7 +1031,7 @@ async def test_email_mcp_token_is_task_scoped_and_verifiable(tmp_path):
     run = mcp_mod.EmailMCPRunStore(tmp_path, user_id="user-a").read_run(payload["run_id"])
 
     assert payload["scope"] == mcp_mod.EMAIL_MCP_TOKEN_SCOPE
-    assert payload["task_id"] == "task-email"
+    assert payload["automation_id"] == "task-email"
     assert payload["execution_id"] == "exec-1"
     assert run["candidate_message_ids"] == ["m-1"]
     assert "mcp__task_memo_email__restore_current_task_state" in prepared["allowed_tools"]
@@ -1051,27 +1051,27 @@ def test_email_mcp_task_state_is_user_task_account_scoped(tmp_path):
     mcp_mod = email_mcp
 
     store = mcp_mod.EmailMCPRunStore(tmp_path, user_id="user-a")
-    empty = store.read_task_state(task_id="task-email", account_id="google_1")
+    empty = store.read_task_state(automation_id="task-email", account_id="google_1")
     assert empty["exists"] is False
     assert empty["state"] == {}
 
     written = store.write_task_state(
-        task_id="task-email",
+        automation_id="task-email",
         account_id="google_1",
         state={"cursor": "m-9", "last_range": "after:2026/05/01"},
         note="next run should continue after this cursor",
         run_id="email_mcp_123",
         execution_id="exec-1",
     )
-    restored = store.read_task_state(task_id="task-email", account_id="google_1")
+    restored = store.read_task_state(automation_id="task-email", account_id="google_1")
 
     assert written["state"]["cursor"] == "m-9"
     assert restored["exists"] is True
     assert restored["state"]["last_range"] == "after:2026/05/01"
     assert restored["last_run_id"] == "email_mcp_123"
-    assert store.read_task_state(task_id="task-other", account_id="google_1")["exists"] is False
+    assert store.read_task_state(automation_id="task-other", account_id="google_1")["exists"] is False
     assert mcp_mod.EmailMCPRunStore(tmp_path, user_id="user-b").read_task_state(
-        task_id="task-email",
+        automation_id="task-email",
         account_id="google_1",
     )["exists"] is False
 

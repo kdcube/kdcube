@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 try:
-    from .storage import TaskStorage
-    from .executions_storage import TaskExecutionsStorage
+    from .storage import AutomationStorage
+    from .executions_storage import AutomationExecutionsStorage
 except ImportError:
     import importlib.util
     import sys
@@ -21,45 +21,45 @@ except ImportError:
         spec.loader.exec_module(module)
         return module
 
-    _storage_mod = _load_sibling("_kdcube_tasks_storage", "storage.py")
-    _executions_mod = _load_sibling("_kdcube_tasks_executions_storage", "executions_storage.py")
-    TaskStorage = _storage_mod.TaskStorage
-    TaskExecutionsStorage = _executions_mod.TaskExecutionsStorage
+    _storage_mod = _load_sibling("_kdcube_automations_storage", "storage.py")
+    _executions_mod = _load_sibling("_kdcube_automations_executions_storage", "executions_storage.py")
+    AutomationStorage = _storage_mod.AutomationStorage
+    AutomationExecutionsStorage = _executions_mod.AutomationExecutionsStorage
 
 
-class AsyncTaskExecutionsStorage:
+class AsyncAutomationExecutionsStorage:
     """Async boundary for execution/subagent event storage."""
 
-    def __init__(self, inner: TaskExecutionsStorage):
+    def __init__(self, inner: AutomationExecutionsStorage):
         self._inner = inner
 
     async def list_executions(
         self,
         *,
-        task_id: str = "",
+        automation_id: str = "",
         status: str = "",
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
-        return await asyncio.to_thread(self._inner.list_executions, task_id=task_id, status=status, limit=limit)
+        return await asyncio.to_thread(self._inner.list_executions, automation_id=automation_id, status=status, limit=limit)
 
     async def search_executions(
         self,
         *,
         query: str = "",
-        task_id: str = "",
+        automation_id: str = "",
         status: str = "",
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         return await asyncio.to_thread(
             self._inner.search_executions,
             query=query,
-            task_id=task_id,
+            automation_id=automation_id,
             status=status,
             limit=limit,
         )
 
-    async def get_execution(self, *, execution_id: str, task_id: str = "") -> Dict[str, Any] | None:
-        return await asyncio.to_thread(self._inner.get_execution, execution_id=execution_id, task_id=task_id)
+    async def get_execution(self, *, execution_id: str, automation_id: str = "") -> Dict[str, Any] | None:
+        return await asyncio.to_thread(self._inner.get_execution, execution_id=execution_id, automation_id=automation_id)
 
     async def create_execution(self, **kwargs) -> Dict[str, Any]:
         return await asyncio.to_thread(self._inner.create_execution, **kwargs)
@@ -67,8 +67,8 @@ class AsyncTaskExecutionsStorage:
     async def update_execution(self, **kwargs) -> Dict[str, Any]:
         return await asyncio.to_thread(self._inner.update_execution, **kwargs)
 
-    async def delete_execution(self, *, execution_id: str, task_id: str = "") -> Dict[str, Any] | None:
-        return await asyncio.to_thread(self._inner.delete_execution, execution_id=execution_id, task_id=task_id)
+    async def delete_execution(self, *, execution_id: str, automation_id: str = "") -> Dict[str, Any] | None:
+        return await asyncio.to_thread(self._inner.delete_execution, execution_id=execution_id, automation_id=automation_id)
 
     async def ensure_search_index(self) -> Path:
         return await asyncio.to_thread(self._inner.ensure_search_index)
@@ -77,8 +77,8 @@ class AsyncTaskExecutionsStorage:
         return await asyncio.to_thread(self._inner.rebuild_search_index)
 
 
-class AsyncTaskStorage:
-    """Async boundary for the bundle's local task storage.
+class AsyncAutomationStorage:
+    """Async boundary for the bundle's local automation storage.
 
     The current storage backend is file + SQLite based and intentionally small.
     Async callers must use this boundary so filesystem and SQLite work does not
@@ -86,8 +86,8 @@ class AsyncTaskStorage:
     """
 
     def __init__(self, root: str | Path, *, user_id: str):
-        self._inner = TaskStorage(root, user_id=user_id)
-        self.executions = AsyncTaskExecutionsStorage(self._inner.executions)
+        self._inner = AutomationStorage(root, user_id=user_id)
+        self.executions = AsyncAutomationExecutionsStorage(self._inner.executions)
 
     @property
     def user_id(self) -> str:
@@ -101,16 +101,16 @@ class AsyncTaskStorage:
     def root(self) -> Path:
         return self._inner.root
 
-    async def list_tasks(self, *, status: str = "", query: str = "", limit: int = 50) -> List[Dict[str, Any]]:
-        return await asyncio.to_thread(self._inner.list_tasks, status=status, query=query, limit=limit)
+    async def list_automations(self, *, status: str = "", query: str = "", limit: int = 50) -> List[Dict[str, Any]]:
+        return await asyncio.to_thread(self._inner.list_automations, status=status, query=query, limit=limit)
 
-    async def search_tasks(self, *, query: str = "", status: str = "", limit: int = 50) -> List[Dict[str, Any]]:
-        return await asyncio.to_thread(self._inner.search_tasks, query=query, status=status, limit=limit)
+    async def search_automations(self, *, query: str = "", status: str = "", limit: int = 50) -> List[Dict[str, Any]]:
+        return await asyncio.to_thread(self._inner.search_automations, query=query, status=status, limit=limit)
 
-    async def get_task(self, task_id: str) -> Dict[str, Any] | None:
-        return await asyncio.to_thread(self._inner.get_task, task_id)
+    async def get_automation(self, automation_id: str) -> Dict[str, Any] | None:
+        return await asyncio.to_thread(self._inner.get_automation, automation_id)
 
-    async def create_task(
+    async def create_automation(
         self,
         *,
         title: str,
@@ -123,7 +123,7 @@ class AsyncTaskStorage:
         conversation_id: str | None = None,
     ) -> Dict[str, Any]:
         return await asyncio.to_thread(
-            self._inner.create_task,
+            self._inner.create_automation,
             title=title,
             description=description,
             schedule_cron=schedule_cron,
@@ -134,27 +134,27 @@ class AsyncTaskStorage:
             conversation_id=conversation_id,
         )
 
-    async def update_task(self, **kwargs) -> Dict[str, Any]:
-        return await asyncio.to_thread(self._inner.update_task, **kwargs)
+    async def update_automation(self, **kwargs) -> Dict[str, Any]:
+        return await asyncio.to_thread(self._inner.update_automation, **kwargs)
 
-    async def delete_task(self, *, task_id: str, hard: bool = False) -> Dict[str, Any] | None:
-        return await asyncio.to_thread(self._inner.delete_task, task_id=task_id, hard=hard)
+    async def delete_automation(self, *, automation_id: str, hard: bool = False) -> Dict[str, Any] | None:
+        return await asyncio.to_thread(self._inner.delete_automation, automation_id=automation_id, hard=hard)
 
-    async def set_task_status(self, *, task_id: str, status: str) -> Dict[str, Any]:
-        return await asyncio.to_thread(self._inner.set_task_status, task_id=task_id, status=status)
+    async def set_automation_status(self, *, automation_id: str, status: str) -> Dict[str, Any]:
+        return await asyncio.to_thread(self._inner.set_automation_status, automation_id=automation_id, status=status)
 
-    async def link_task(
+    async def link_automation(
         self,
         *,
-        task_id: str,
-        target_task_id: str,
+        automation_id: str,
+        target_automation_id: str,
         relation: str = "related",
         reciprocal: bool = True,
     ) -> Dict[str, Any]:
         return await asyncio.to_thread(
-            self._inner.link_task,
-            task_id=task_id,
-            target_task_id=target_task_id,
+            self._inner.link_automation,
+            automation_id=automation_id,
+            target_automation_id=target_automation_id,
             relation=relation,
             reciprocal=reciprocal,
         )
@@ -162,29 +162,29 @@ class AsyncTaskStorage:
     async def list_executions(
         self,
         *,
-        task_id: str = "",
+        automation_id: str = "",
         status: str = "",
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
-        return await self.executions.list_executions(task_id=task_id, status=status, limit=limit)
+        return await self.executions.list_executions(automation_id=automation_id, status=status, limit=limit)
 
     async def search_executions(
         self,
         *,
         query: str = "",
-        task_id: str = "",
+        automation_id: str = "",
         status: str = "",
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
         return await self.executions.search_executions(
             query=query,
-            task_id=task_id,
+            automation_id=automation_id,
             status=status,
             limit=limit,
         )
 
-    async def get_execution(self, *, execution_id: str, task_id: str = "") -> Dict[str, Any] | None:
-        return await self.executions.get_execution(execution_id=execution_id, task_id=task_id)
+    async def get_execution(self, *, execution_id: str, automation_id: str = "") -> Dict[str, Any] | None:
+        return await self.executions.get_execution(execution_id=execution_id, automation_id=automation_id)
 
     async def create_execution(self, **kwargs) -> Dict[str, Any]:
         return await self.executions.create_execution(**kwargs)
@@ -192,18 +192,18 @@ class AsyncTaskStorage:
     async def update_execution(self, **kwargs) -> Dict[str, Any]:
         return await self.executions.update_execution(**kwargs)
 
-    async def delete_execution(self, *, execution_id: str, task_id: str = "") -> Dict[str, Any] | None:
-        return await self.executions.delete_execution(execution_id=execution_id, task_id=task_id)
+    async def delete_execution(self, *, execution_id: str, automation_id: str = "") -> Dict[str, Any] | None:
+        return await self.executions.delete_execution(execution_id=execution_id, automation_id=automation_id)
 
     async def attach_execution_history(
         self,
-        tasks: Iterable[Dict[str, Any]],
+        automations: Iterable[Dict[str, Any]],
         *,
         execution_limit: int = 3,
     ) -> List[Dict[str, Any]]:
         return await asyncio.to_thread(
             self._inner.attach_execution_history,
-            tasks,
+            automations,
             execution_limit=execution_limit,
         )
 
@@ -217,11 +217,11 @@ class AsyncTaskStorage:
         return await self.executions.ensure_search_index()
 
 
-async def list_task_user_ids(root: str | Path) -> list[str]:
+async def list_automation_user_ids(root: str | Path) -> list[str]:
     def _scan() -> list[str]:
-        tasks_root = Path(root).resolve() / "tasks"
-        if not tasks_root.exists():
+        automations_root = Path(root).resolve() / "automations"
+        if not automations_root.exists():
             return []
-        return [path.name for path in sorted(tasks_root.iterdir()) if path.is_dir()]
+        return [path.name for path in sorted(automations_root.iterdir()) if path.is_dir()]
 
     return await asyncio.to_thread(_scan)

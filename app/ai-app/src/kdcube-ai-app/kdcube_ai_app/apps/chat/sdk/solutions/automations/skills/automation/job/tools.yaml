@@ -1,0 +1,16 @@
+tools:
+  - id: automation_job.get_current_automation
+    role: read current automation definition
+    why: Load the exact automation and explicitly linked automations from injected job context for bounded execution context.
+    required: true
+  - id: automation_job.search_automation_executions
+    role: read prior execution history
+    why: Inspect prior outcomes, failures, logs, or artifacts for the injected current automation, and linked automations when requested.
+    required: true
+  - id: automation_job.update_execution_journal
+    role: persist progress and final job outcome
+    why: Keep substantial progress, result data, errors, and generated artifact metadata durable using injected automation/execution ids.
+    required: true
+  - id: job_memory.search_memo
+    role: read durable user context
+    why: Use only when existing memory materially changes how the job should run.

@@ -14,7 +14,7 @@ BUNDLE_ID = ""
 
 memory_widgets: Any = None
 settings_widgets: Any = None
-task_widgets: Any = None
+automation_widgets: Any = None
 telegram_user_admin: Any = None
 _CONFIGS: Dict[str, Dict[str, Any]] = {}
 
@@ -23,16 +23,16 @@ def configure_telegram_webapp(
     *,
     memory_widgets_module: Any,
     settings_widgets_module: Any,
-    task_widgets_module: Any,
+    automation_widgets_module: Any,
     telegram_user_admin_module: Any,
     bundle_id: str = "",
 ) -> None:
     """Bind bundle-owned widget modules used to build the common webapp payload."""
-    global BUNDLE_ID, memory_widgets, settings_widgets, task_widgets, telegram_user_admin
+    global BUNDLE_ID, memory_widgets, settings_widgets, automation_widgets, telegram_user_admin
     BUNDLE_ID = str(bundle_id or "").strip()
     memory_widgets = memory_widgets_module
     settings_widgets = settings_widgets_module
-    task_widgets = task_widgets_module
+    automation_widgets = automation_widgets_module
     telegram_user_admin = telegram_user_admin_module
     register_config(
         _CONFIGS,
@@ -40,7 +40,7 @@ def configure_telegram_webapp(
         config={
             "memory_widgets": memory_widgets_module,
             "settings_widgets": settings_widgets_module,
-            "task_widgets": task_widgets_module,
+            "automation_widgets": automation_widgets_module,
             "telegram_user_admin": telegram_user_admin_module,
         },
     )
@@ -48,7 +48,7 @@ def configure_telegram_webapp(
 
 def _config(entrypoint: Any = None) -> Dict[str, Any]:
     cfg = resolve_config(_CONFIGS, entrypoint=entrypoint, label="telegram webapp integration")
-    if not cfg.get("memory_widgets") or not cfg.get("settings_widgets") or not cfg.get("task_widgets") or not cfg.get("telegram_user_admin"):
+    if not cfg.get("memory_widgets") or not cfg.get("settings_widgets") or not cfg.get("automation_widgets") or not cfg.get("telegram_user_admin"):
         raise RuntimeError("telegram webapp integration is not configured")
     return cfg
 
@@ -85,9 +85,9 @@ def user_has_role(entrypoint: Any, role: str) -> bool:
 def _active_tab(widget_path: str = "") -> str:
     first = str(widget_path or "").strip("/").split("/", 1)[0].strip().lower()
     aliases = {
-        "": "tasks",
-        "task": "tasks",
-        "tasks": "tasks",
+        "": "automations",
+        "automation": "automations",
+        "automations": "automations",
         "memory": "memory",
         "memories": "memory",
         "settings": "settings",
@@ -100,7 +100,7 @@ def _active_tab(widget_path: str = "") -> str:
         "telegram-admin": "telegram_admin",
         "telegram_admin": "telegram_admin",
     }
-    return aliases.get(first, "tasks")
+    return aliases.get(first, "automations")
 
 
 def _effective_user_id(entrypoint: Any, user_id: Optional[str] = None) -> str:
@@ -306,11 +306,11 @@ async def payload(
     cfg = _config(entrypoint)
     memory_module = cfg["memory_widgets"]
     settings_module = cfg["settings_widgets"]
-    task_module = cfg["task_widgets"]
+    automation_module = cfg["automation_widgets"]
     admin = cfg["telegram_user_admin"]
     tabs = [
         {"id": "conversations", "label": "Chats"},
-        {"id": "tasks", "label": "Tasks"},
+        {"id": "automations", "label": "Automations"},
         {"id": "memory", "label": "Memory"},
         {"id": "settings", "label": "Settings"},
     ]
@@ -318,7 +318,7 @@ async def payload(
         tabs.append({"id": "telegram_admin", "label": "Telegram Admin"})
     active_tab = _active_tab(widget_path)
     if active_tab == "telegram_admin" and not include_admin:
-        active_tab = "tasks"
+        active_tab = "automations"
     memory_payload = memory_module.payload(
         entrypoint,
         user_id=user_id,
@@ -337,7 +337,7 @@ async def payload(
         "permissions": {
             "show_admin_component": bool(include_admin),
         },
-        "tasks": await task_module.payload(
+        "automations": await automation_module.payload(
             entrypoint,
             user_id=user_id,
             fingerprint=fingerprint,
@@ -391,6 +391,6 @@ def render(
     del entrypoint, user_id, fingerprint, widget_path
     return (
         "<div style=\"font-family:system-ui,sans-serif;padding:16px\">"
-        "Task And Memo web app is served from the built widget source folder."
+        "Automation And Memo web app is served from the built widget source folder."
         "</div>"
     )

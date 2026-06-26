@@ -11,20 +11,38 @@ except Exception:
     from semantic_kernel.utils.function_decorator import kernel_function
 
 try:
-    from .async_storage import AsyncTaskStorage
+    from .async_storage import AsyncAutomationStorage
 except ImportError:
-    from kdcube_ai_app.apps.chat.sdk.solutions.tasks.async_storage import AsyncTaskStorage
+    from kdcube_ai_app.apps.chat.sdk.solutions.automations.async_storage import AsyncAutomationStorage
 
 try:
-    from .common import bind_integrations, error, log_tool_error, log_tool_start, log_tool_success, ok, scope
+    from .common import (
+        bind_integrations,
+        error,
+        extract_automation_execution_context_from_scope,
+        log_tool_error,
+        log_tool_start,
+        log_tool_success,
+        ok,
+        scope,
+    )
 except ImportError:
-    from kdcube_ai_app.apps.chat.sdk.solutions.tasks.common import bind_integrations, error, log_tool_error, log_tool_start, log_tool_success, ok, scope
+    from kdcube_ai_app.apps.chat.sdk.solutions.automations.common import (
+        bind_integrations,
+        error,
+        extract_automation_execution_context_from_scope,
+        log_tool_error,
+        log_tool_start,
+        log_tool_success,
+        ok,
+        scope,
+    )
 
 
-def _linked_task_ids(task: Dict[str, Any]) -> List[str]:
-    relations = task.get("relations") if isinstance(task.get("relations"), dict) else {}
+def _linked_automation_ids(automation: Dict[str, Any]) -> List[str]:
+    relations = automation.get("relations") if isinstance(automation.get("relations"), dict) else {}
     ids: List[str] = []
-    for key in ("parent_task_id", "child_task_ids", "depends_on_task_ids", "blocks_task_ids", "related_task_ids"):
+    for key in ("parent_automation_id", "child_automation_ids", "depends_on_automation_ids", "blocks_automation_ids", "related_automation_ids"):
         value = relations.get(key)
         if isinstance(value, list):
             ids.extend(str(item).strip() for item in value if str(item).strip())
@@ -40,14 +58,7 @@ def _linked_task_ids(task: Dict[str, Any]) -> List[str]:
 
 
 def _job_context(sc: Dict[str, Any]) -> Dict[str, Any]:
-    raw = sc.get("bundle_call_context") if isinstance(sc, dict) else {}
-    context = dict(raw or {}) if isinstance(raw, dict) else {}
-    if str(context.get("kind") or "") == "background_job":
-        payload = context.get("payload") if isinstance(context.get("payload"), dict) else {}
-        merged = dict(payload)
-        merged.update({key: value for key, value in context.items() if key != "payload"})
-        return merged
-    return context
+    return extract_automation_execution_context_from_scope(sc)
 
 
 def _context_value(context: Dict[str, Any], key: str) -> str:
@@ -68,84 +79,84 @@ def _tool_failed(tool_name: str, code: str, exc: Exception, sc: Dict[str, Any] |
     return error(code, str(exc))
 
 
-class JobTaskTools:
+class JobAutomationTools:
     @kernel_function(
-        name="get_current_task",
+        name="get_current_automation",
         description=(
-            "Load the task definition that this job is executing. Optionally includes explicitly linked task "
+            "Load the automation definition that this job is executing. Optionally includes explicitly linked automation "
             "definitions for bounded context. This tool is read-only."
         ),
     )
-    async def get_current_task(
+    async def get_current_automation(
         self,
-        include_linked: Annotated[bool, "Whether to include explicitly linked task definitions."] = True,
-        execution_limit: Annotated[int, "Recent execution records to include for the current task."] = 3,
+        include_linked: Annotated[bool, "Whether to include explicitly linked automation definitions."] = True,
+        execution_limit: Annotated[int, "Recent execution records to include for the current automation."] = 3,
     ) -> Dict[str, Any]:
         sc = None
         try:
-            sc = _scope_for_tool("task_job.get_current_task", include_linked=include_linked, execution_limit=execution_limit)
+            sc = _scope_for_tool("automation_job.get_current_automation", include_linked=include_linked, execution_limit=execution_limit)
             context = _job_context(sc)
-            task_id = _context_value(context, "task_id")
-            if not task_id:
-                log_tool_success("task_job.get_current_task", sc, task_id="", found=False)
-                return error("job_context_missing_task_id", "Current task id is missing from bundle call context.")
-            storage = AsyncTaskStorage(sc["storage_root"], user_id=sc["user_id"])
-            task = await storage.get_task(task_id)
-            if not task:
-                log_tool_success("task_job.get_current_task", sc, task_id=task_id, found=False)
-                return error("task_not_found", f"Task {task_id!r} was not found")
-            task = (await storage.attach_execution_history([task], execution_limit=execution_limit))[0]
+            automation_id = _context_value(context, "automation_id")
+            if not automation_id:
+                log_tool_success("automation_job.get_current_automation", sc, automation_id="", found=False)
+                return error("job_context_missing_automation_id", "Current automation id is missing from bundle call context.")
+            storage = AsyncAutomationStorage(sc["storage_root"], user_id=sc["user_id"])
+            automation = await storage.get_automation(automation_id)
+            if not automation:
+                log_tool_success("automation_job.get_current_automation", sc, automation_id=automation_id, found=False)
+                return error("automation_not_found", f"Automation {automation_id!r} was not found")
+            automation = (await storage.attach_execution_history([automation], execution_limit=execution_limit))[0]
             linked = []
             if include_linked:
-                for linked_id in _linked_task_ids(task):
-                    linked_task = await storage.get_task(linked_id)
-                    if linked_task:
-                        linked.append(linked_task)
-            log_tool_success("task_job.get_current_task", sc, task_id=task_id, linked_count=len(linked))
-            return ok({"task": task, "linked_tasks": linked})
+                for linked_id in _linked_automation_ids(automation):
+                    linked_automation = await storage.get_automation(linked_id)
+                    if linked_automation:
+                        linked.append(linked_automation)
+            log_tool_success("automation_job.get_current_automation", sc, automation_id=automation_id, linked_count=len(linked))
+            return ok({"automation": automation, "linked_automations": linked})
         except Exception as exc:
-            return _tool_failed("task_job.get_current_task", "get_current_task_failed", exc, sc)
+            return _tool_failed("automation_job.get_current_automation", "get_current_automation_failed", exc, sc)
 
     @kernel_function(
-        name="search_task_executions",
-        description="Read-only search over prior execution records for this user and task family.",
+        name="search_automation_executions",
+        description="Read-only search over prior execution records for this user and automation family.",
     )
-    async def search_task_executions(
+    async def search_automation_executions(
         self,
         query: Annotated[str, "Search text across summaries, logs, errors, and artifacts."] = "",
         status: Annotated[str, "Optional status filter."] = "",
-        include_linked: Annotated[bool, "Whether to include explicitly linked task executions."] = False,
+        include_linked: Annotated[bool, "Whether to include explicitly linked automation executions."] = False,
         limit: Annotated[int, "Maximum execution records to return."] = 10,
     ) -> Dict[str, Any]:
         sc = None
         try:
             sc = _scope_for_tool(
-                "task_job.search_task_executions",
+                "automation_job.search_automation_executions",
                 query=query,
                 status=status,
                 include_linked=include_linked,
                 limit=limit,
             )
             context = _job_context(sc)
-            task_id = _context_value(context, "task_id")
-            if not task_id:
-                log_tool_success("task_job.search_task_executions", sc, task_id="", count=0)
-                return error("job_context_missing_task_id", "Current task id is missing from bundle call context.")
-            storage = AsyncTaskStorage(sc["storage_root"], user_id=sc["user_id"])
-            task_ids = [task_id]
+            automation_id = _context_value(context, "automation_id")
+            if not automation_id:
+                log_tool_success("automation_job.search_automation_executions", sc, automation_id="", count=0)
+                return error("job_context_missing_automation_id", "Current automation id is missing from bundle call context.")
+            storage = AsyncAutomationStorage(sc["storage_root"], user_id=sc["user_id"])
+            automation_ids = [automation_id]
             if include_linked:
-                task = await storage.get_task(task_id)
-                if task:
-                    task_ids.extend(_linked_task_ids(task))
+                automation = await storage.get_automation(automation_id)
+                if automation:
+                    automation_ids.extend(_linked_automation_ids(automation))
             executions = []
             seen: set[str] = set()
-            per_task_limit = max(1, int(limit or 10))
-            for current_task_id in task_ids:
+            per_automation_limit = max(1, int(limit or 10))
+            for current_automation_id in automation_ids:
                 for item in await storage.search_executions(
                     query=query,
-                    task_id=current_task_id,
+                    automation_id=current_automation_id,
                     status=status,
-                    limit=per_task_limit,
+                    limit=per_automation_limit,
                 ):
                     execution_id = str(item.get("id") or "")
                     if execution_id and execution_id not in seen:
@@ -161,11 +172,11 @@ class JobTaskTools:
                 ),
                 reverse=True,
             )
-            executions = executions[:per_task_limit]
-            log_tool_success("task_job.search_task_executions", sc, task_id=task_id, count=len(executions))
+            executions = executions[:per_automation_limit]
+            log_tool_success("automation_job.search_automation_executions", sc, automation_id=automation_id, count=len(executions))
             return ok({"executions": executions, "count": len(executions)})
         except Exception as exc:
-            return _tool_failed("task_job.search_task_executions", "search_task_executions_failed", exc, sc)
+            return _tool_failed("automation_job.search_automation_executions", "search_automation_executions_failed", exc, sc)
 
     @kernel_function(
         name="update_execution_journal",
@@ -189,7 +200,7 @@ class JobTaskTools:
         sc = None
         try:
             sc = _scope_for_tool(
-                "task_job.update_execution_journal",
+                "automation_job.update_execution_journal",
                 status=status,
                 summary_chars=len(summary or ""),
                 log_chars=len(log_excerpt or ""),
@@ -197,19 +208,19 @@ class JobTaskTools:
                 has_artifacts=bool(str(artifacts_json or "").strip()),
             )
             context = _job_context(sc)
-            task_id = _context_value(context, "task_id")
+            automation_id = _context_value(context, "automation_id")
             execution_id = _context_value(context, "execution_id")
-            if not task_id or not execution_id:
+            if not automation_id or not execution_id:
                 log_tool_success(
-                    "task_job.update_execution_journal",
+                    "automation_job.update_execution_journal",
                     sc,
-                    task_id=task_id,
+                    automation_id=automation_id,
                     execution_id=execution_id,
                     updated=False,
                 )
                 return error(
                     "job_context_missing_execution_identity",
-                    "Current task id or execution id is missing from bundle call context.",
+                    "Current automation id or execution id is missing from bundle call context.",
                 )
             result: Dict[str, Any] = {}
             if result_json.strip():
@@ -219,9 +230,9 @@ class JobTaskTools:
             if artifacts_json.strip():
                 parsed_artifacts = json.loads(artifacts_json)
                 artifacts = parsed_artifacts if isinstance(parsed_artifacts, list) else []
-            execution = await AsyncTaskStorage(sc["storage_root"], user_id=sc["user_id"]).update_execution(
+            execution = await AsyncAutomationStorage(sc["storage_root"], user_id=sc["user_id"]).update_execution(
                 execution_id=execution_id,
-                task_id=task_id,
+                automation_id=automation_id,
                 status=status or None,
                 conversation_id=sc.get("conversation_id") or None,
                 turn_id=sc.get("turn_id") or None,
@@ -232,18 +243,18 @@ class JobTaskTools:
                 append_artifacts=True,
             )
             log_tool_success(
-                "task_job.update_execution_journal",
+                "automation_job.update_execution_journal",
                 sc,
-                task_id=task_id,
+                automation_id=automation_id,
                 execution_id=execution.get("id"),
                 status=execution.get("status"),
                 artifact_count=execution.get("artifact_count"),
             )
             return ok(execution)
         except Exception as exc:
-            return _tool_failed("task_job.update_execution_journal", "update_execution_journal_failed", exc, sc)
+            return _tool_failed("automation_job.update_execution_journal", "update_execution_journal_failed", exc, sc)
 
 
 kernel = sk.Kernel()
-tools = JobTaskTools()
-kernel.add_plugin(tools, "task_job")
+tools = JobAutomationTools()
+kernel.add_plugin(tools, "automation_job")

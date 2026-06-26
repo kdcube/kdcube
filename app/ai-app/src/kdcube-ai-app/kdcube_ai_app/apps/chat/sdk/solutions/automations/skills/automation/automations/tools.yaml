@@ -1,0 +1,53 @@
+tools:
+  - id: automations.create_automation
+    role: create executable automation assets
+    why: Persist actionable or scheduled work for the current user.
+    required: true
+  - id: automations.list_automations
+    role: list and search automation assets
+    why: Find existing automations and avoid duplicates.
+    required: true
+  - id: automations.search_automations
+    role: SQLite-indexed automation search
+    why: Find the exact existing automation before editing, deleting, or linking it.
+    required: true
+  - id: automations.get_automation
+    role: load one automation with recent execution history
+    why: Inspect the exact definition and latest runs before acting on a automation.
+    required: true
+  - id: automations.update_automation
+    role: update automation definitions
+    why: Change title, instructions, schedule, labels, or status after the exact automation is identified.
+    required: true
+  - id: automations.delete_automation
+    role: delete automation definitions
+    why: Soft-delete by default when the user asks to remove a automation.
+    required: true
+  - id: automations.set_automation_status
+    role: update automation lifecycle
+    why: Enable, disable, archive, delete, or restore automation assets without changing the automation definition.
+    required: true
+  - id: automations.link_automation
+    role: connect automation assets
+    why: Represent follow-up, dependency, blocker, parent-child, and related-automation links.
+    required: true
+  - id: automations.list_automation_executions
+    role: read execution history
+    why: Answer questions about recent runs and inspect status/history for the UI.
+    required: true
+  - id: automations.search_automation_executions
+    role: search execution history and artifacts
+    why: Find prior run output, failures, log excerpts, and generated files.
+    required: true
+  - id: automations.search_recent_outputs
+    role: search delivered outputs and generated artifacts
+    why: Resolve follow-up references such as "it", "that report", "the spreadsheet", or "the file you sent".
+    required: true
+  - id: automations.get_automation_execution
+    role: load one execution result
+    why: Inspect exact execution result, job conversation id, turn id, and artifact metadata after search/list returns an execution id.
+    required: true
+  - id: automations.materialize_execution_artifact
+    role: copy prior job artifact into the current React turn
+    why: "Make a selected external job output available as a current-turn fi: output before reading, editing, or regenerating from it. Pass only the returned artifact_ref."
+    required: true

@@ -1159,7 +1159,7 @@ class ExecTools:
             "- This is for computation or for producing smaller derived artifacts. It is not an uncapped way\n"
             "  to put large content into model-visible context; exec stdout and previews are capped too.\n"
             "- Only execution-enabled runtime tool handles are available inside snippets. Orchestration/job tools\n"
-            "  such as task_job.* must be called as direct ReAct tool calls, not from generated Python.\n"
+            "  such as automation_job.* must be called as direct ReAct tool calls, not from generated Python.\n"
             "- Do NOT rely on fetch_ctx unless you are the code author for this run.\n"
             "\n"
             "Example:\n"

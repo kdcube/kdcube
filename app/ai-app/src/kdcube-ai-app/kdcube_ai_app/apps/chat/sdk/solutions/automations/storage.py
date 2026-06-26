@@ -13,26 +13,26 @@ from typing import Any, Dict, Iterable, List
 import yaml
 
 try:
-    from .executions_storage import TaskExecutionsStorage
+    from .executions_storage import AutomationExecutionsStorage
 except ImportError:
     import importlib.util
     import sys
 
-    _task_executions_storage_path = Path(__file__).with_name("executions_storage.py")
-    _task_executions_storage_spec = importlib.util.spec_from_file_location(
-        "_kdcube_tasks_executions_storage",
-        _task_executions_storage_path,
+    _automation_executions_storage_path = Path(__file__).with_name("executions_storage.py")
+    _automation_executions_storage_spec = importlib.util.spec_from_file_location(
+        "_kdcube_automations_executions_storage",
+        _automation_executions_storage_path,
     )
-    if _task_executions_storage_spec is None or _task_executions_storage_spec.loader is None:
+    if _automation_executions_storage_spec is None or _automation_executions_storage_spec.loader is None:
         raise
-    _task_executions_storage_mod = importlib.util.module_from_spec(_task_executions_storage_spec)
-    sys.modules.setdefault("_kdcube_tasks_executions_storage", _task_executions_storage_mod)
-    _task_executions_storage_spec.loader.exec_module(_task_executions_storage_mod)
-    TaskExecutionsStorage = _task_executions_storage_mod.TaskExecutionsStorage
+    _automation_executions_storage_mod = importlib.util.module_from_spec(_automation_executions_storage_spec)
+    sys.modules.setdefault("_kdcube_automations_executions_storage", _automation_executions_storage_mod)
+    _automation_executions_storage_spec.loader.exec_module(_automation_executions_storage_mod)
+    AutomationExecutionsStorage = _automation_executions_storage_mod.AutomationExecutionsStorage
 
 
-TASK_STATUSES = {"enabled", "disabled", "archived", "deleted"}
-DEFAULT_VISIBLE_TASK_STATUSES = {"enabled", "disabled"}
+AUTOMATION_STATUSES = {"enabled", "disabled", "archived", "deleted"}
+DEFAULT_VISIBLE_AUTOMATION_STATUSES = {"enabled", "disabled"}
 
 
 def _utc_now() -> str:
@@ -132,7 +132,7 @@ def _dedupe(values: Iterable[str]) -> List[str]:
     return out
 
 
-def _normalize_task_schedule(asset: Dict[str, Any]) -> None:
+def _normalize_automation_schedule(asset: Dict[str, Any]) -> None:
     schedule = asset.get("schedule") if isinstance(asset.get("schedule"), dict) else {}
     schedule["cron"] = str(schedule.get("cron") or "").strip()
     schedule["timezone"] = str(schedule.get("timezone") or "UTC").strip() or "UTC"
@@ -181,10 +181,10 @@ def _filter_markdown_assets(
         meta["body"] = body
         meta["description"] = body
         meta["path"] = str(path.relative_to(root))
-        _normalize_task_schedule(meta)
+        _normalize_automation_schedule(meta)
         if status_norm and str(meta.get("status") or "").lower() != status_norm:
             continue
-        if not status_norm and str(meta.get("status") or "").lower() not in DEFAULT_VISIBLE_TASK_STATUSES:
+        if not status_norm and str(meta.get("status") or "").lower() not in DEFAULT_VISIBLE_AUTOMATION_STATUSES:
             continue
         haystack = "\n".join(
             [
@@ -227,38 +227,38 @@ def _is_user_visible(asset: Dict[str, Any]) -> bool:
     return visibility in {"user", "owner", "public"}
 
 
-class TaskStorage:
-    """Markdown plus YAML-front-matter storage for executable task assets."""
+class AutomationStorage:
+    """Markdown plus YAML-front-matter storage for executable automation assets."""
 
-    SCHEMA_VERSION = "task-index.v2"
+    SCHEMA_VERSION = "automation-index.v2"
 
     def __init__(self, root: str | Path, *, user_id: str):
         self.root = Path(root).resolve()
         self.user_id = user_id or "anonymous"
         self.safe_user_id = _safe_segment(self.user_id, fallback="anonymous")
-        self.tasks_dir = self.root / "tasks" / self.safe_user_id
-        self.index_dir = self.root / "indexes" / "tasks" / self.safe_user_id
-        self.index_path = self.index_dir / "tasks.sqlite"
-        self.tasks_dir.mkdir(parents=True, exist_ok=True)
-        self.executions = TaskExecutionsStorage(
+        self.automations_dir = self.root / "automations" / self.safe_user_id
+        self.index_dir = self.root / "indexes" / "automations" / self.safe_user_id
+        self.index_path = self.index_dir / "automations.sqlite"
+        self.automations_dir.mkdir(parents=True, exist_ok=True)
+        self.executions = AutomationExecutionsStorage(
             self.root,
             user_id=self.user_id,
-            task_loader=self.get_task,
-            task_summary_updater=self._touch_task_execution_summary,
+            automation_loader=self.get_automation,
+            automation_summary_updater=self._touch_automation_execution_summary,
         )
 
     def _path(self, asset_id: str) -> Path:
         safe = _safe_segment(asset_id)
         if not safe:
             raise ValueError("asset id is required")
-        return self.tasks_dir / f"{safe}.md"
+        return self.automations_dir / f"{safe}.md"
 
     def _read_asset(self, path: Path) -> Dict[str, Any]:
         meta, body = _split_frontmatter(path.read_text(encoding="utf-8"))
         meta["body"] = body
         meta["description"] = body
         meta["path"] = str(path.relative_to(self.root))
-        _normalize_task_schedule(meta)
+        _normalize_automation_schedule(meta)
         return meta
 
     def _write_asset(self, data: Dict[str, Any], body: str) -> Dict[str, Any]:
@@ -277,7 +277,7 @@ class TaskStorage:
 
     def _signature(self) -> str:
         rows: List[str] = []
-        for path in sorted(self.tasks_dir.glob("*.md")):
+        for path in sorted(self.automations_dir.glob("*.md")):
             try:
                 stat = path.stat()
             except FileNotFoundError:
@@ -308,7 +308,7 @@ class TaskStorage:
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
-            CREATE TABLE tasks (
+            CREATE TABLE automations (
                 docid INTEGER PRIMARY KEY,
                 id TEXT NOT NULL UNIQUE,
                 owner_user_id TEXT NOT NULL,
@@ -327,7 +327,7 @@ class TaskStorage:
                 relations_json TEXT NOT NULL,
                 metadata_json TEXT NOT NULL
             );
-            CREATE VIRTUAL TABLE tasks_fts USING fts5(
+            CREATE VIRTUAL TABLE automations_fts USING fts5(
                 id,
                 title,
                 body,
@@ -340,7 +340,7 @@ class TaskStorage:
         )
 
         docid = 0
-        for path in sorted(self.tasks_dir.glob("*.md")):
+        for path in sorted(self.automations_dir.glob("*.md")):
             asset = self._read_asset(path)
             docid += 1
             metadata = asset.get("metadata") if isinstance(asset.get("metadata"), dict) else {}
@@ -358,7 +358,7 @@ class TaskStorage:
             execution_conversation_id = str(execution.get("conversation_id") or conversation_id or "").strip()
             conn.execute(
                 """
-                INSERT INTO tasks (
+                INSERT INTO automations (
                     docid, id, owner_user_id, title, status, created_at, updated_at,
                     schedule_cron, schedule_timezone, schedule_recurring, conversation_id,
                     execution_conversation_id, path, body, labels_json,
@@ -388,7 +388,7 @@ class TaskStorage:
             )
             conn.execute(
                 """
-                INSERT INTO tasks_fts (
+                INSERT INTO automations_fts (
                     rowid, id, title, body, labels, relations, conversation_id
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -423,8 +423,8 @@ class TaskStorage:
                 pass
         return self.rebuild_search_index()
 
-    def _decode_task_row(self, row: sqlite3.Row) -> Dict[str, Any]:
-        task = {
+    def _decode_automation_row(self, row: sqlite3.Row) -> Dict[str, Any]:
+        automation = {
             "id": row["id"],
             "title": row["title"],
             "status": row["status"],
@@ -446,9 +446,9 @@ class TaskStorage:
             "metadata": json.loads(row["metadata_json"] or "{}"),
             "relations": json.loads(row["relations_json"] or "{}"),
         }
-        return task
+        return automation
 
-    def create_task(
+    def create_automation(
         self,
         *,
         title: str,
@@ -461,11 +461,11 @@ class TaskStorage:
         conversation_id: str | None = None,
     ) -> Dict[str, Any]:
         now = _utc_now()
-        asset_id = f"task_{_slug(title, fallback='task')}_{uuid.uuid4().hex[:8]}"
+        asset_id = f"automation_{_slug(title, fallback='automation')}_{uuid.uuid4().hex[:8]}"
         body = description or title
         data = {
             "id": asset_id,
-            "title": title.strip() or "Untitled task",
+            "title": title.strip() or "Untitled automation",
             "status": "enabled",
             "created_at": now,
             "updated_at": now,
@@ -485,14 +485,14 @@ class TaskStorage:
             "metadata": {
                 "labels": _csv(labels),
                 "traits": {},
-                "related_tasks": [],
+                "related_automations": [],
             },
             "relations": {
-                "parent_task_id": None,
-                "child_task_ids": [],
-                "depends_on_task_ids": [],
-                "blocks_task_ids": [],
-                "related_task_ids": [],
+                "parent_automation_id": None,
+                "child_automation_ids": [],
+                "depends_on_automation_ids": [],
+                "blocks_automation_ids": [],
+                "related_automation_ids": [],
             },
             "conversation_id": conversation_id,
             "execution": {
@@ -503,18 +503,18 @@ class TaskStorage:
         }
         return self._write_asset(data, body)
 
-    def list_tasks(self, *, status: str = "", query: str = "", limit: int = 50) -> List[Dict[str, Any]]:
+    def list_automations(self, *, status: str = "", query: str = "", limit: int = 50) -> List[Dict[str, Any]]:
         if query:
-            return self.search_tasks(query=query, status=status, limit=limit)
+            return self.search_automations(query=query, status=status, limit=limit)
         return _filter_markdown_assets(
-            self.tasks_dir.glob("*.md"),
+            self.automations_dir.glob("*.md"),
             root=self.root,
             status=status,
             query=query,
             limit=limit,
         )
 
-    def search_tasks(self, *, query: str = "", status: str = "", limit: int = 50) -> List[Dict[str, Any]]:
+    def search_automations(self, *, query: str = "", status: str = "", limit: int = 50) -> List[Dict[str, Any]]:
         try:
             self.ensure_search_index()
             status_norm = (status or "").strip().lower()
@@ -522,13 +522,13 @@ class TaskStorage:
             where: List[str] = []
             params: List[Any] = []
             if fts:
-                where.append("tasks_fts MATCH ?")
+                where.append("automations_fts MATCH ?")
                 params.append(fts)
-                from_clause = "FROM tasks_fts JOIN tasks t ON t.docid = tasks_fts.rowid"
-                rank_expr = "bm25(tasks_fts, 4.0, 8.0, 2.0, 2.0, 1.0, 1.0)"
+                from_clause = "FROM automations_fts JOIN automations t ON t.docid = automations_fts.rowid"
+                rank_expr = "bm25(automations_fts, 4.0, 8.0, 2.0, 2.0, 1.0, 1.0)"
                 order_by = "rank ASC, t.updated_at DESC, t.title ASC"
             else:
-                from_clause = "FROM tasks t"
+                from_clause = "FROM automations t"
                 rank_expr = "0.0"
                 order_by = "t.updated_at DESC, t.title ASC"
             if status_norm:
@@ -554,30 +554,30 @@ class TaskStorage:
             conn.close()
             results = []
             for row in rows:
-                task = self._decode_task_row(row)
-                task["score"] = round(-float(row["rank"] or 0.0), 3)
-                results.append(task)
+                automation = self._decode_automation_row(row)
+                automation["score"] = round(-float(row["rank"] or 0.0), 3)
+                results.append(automation)
             return results
         except Exception:
             return _filter_markdown_assets(
-                self.tasks_dir.glob("*.md"),
+                self.automations_dir.glob("*.md"),
                 root=self.root,
                 status=status,
                 query=query,
                 limit=limit,
             )
 
-    def get_task(self, task_id: str) -> Dict[str, Any] | None:
-        path = self._path(task_id)
+    def get_automation(self, automation_id: str) -> Dict[str, Any] | None:
+        path = self._path(automation_id)
         if not path.exists():
             return None
         return self._read_asset(path)
 
-    def set_task_status(self, *, task_id: str, status: str) -> Dict[str, Any]:
+    def set_automation_status(self, *, automation_id: str, status: str) -> Dict[str, Any]:
         normalized = (status or "").strip().lower()
-        if normalized not in TASK_STATUSES:
+        if normalized not in AUTOMATION_STATUSES:
             raise ValueError("status must be enabled, disabled, archived, or deleted")
-        path = self._path(task_id)
+        path = self._path(automation_id)
         asset = self._read_asset(path)
         body = str(asset.pop("body", "") or "")
         asset.pop("path", None)
@@ -585,26 +585,26 @@ class TaskStorage:
         asset["updated_at"] = _utc_now()
         return self._write_asset(asset, body)
 
-    def link_task(
+    def link_automation(
         self,
         *,
-        task_id: str,
-        target_task_id: str,
+        automation_id: str,
+        target_automation_id: str,
         relation: str = "related",
         reciprocal: bool = True,
     ) -> Dict[str, Any]:
         normalized = (relation or "related").strip().lower()
         if normalized not in {"related", "child", "depends_on", "blocks"}:
             raise ValueError("relation must be related, child, depends_on, or blocks")
-        if task_id == target_task_id:
-            raise ValueError("task cannot be related to itself")
+        if automation_id == target_automation_id:
+            raise ValueError("automation cannot be related to itself")
 
-        path = self._path(task_id)
-        target_path = self._path(target_task_id)
+        path = self._path(automation_id)
+        target_path = self._path(target_automation_id)
         if not path.exists():
-            raise ValueError(f"task {task_id!r} was not found")
+            raise ValueError(f"automation {automation_id!r} was not found")
         if not target_path.exists():
-            raise ValueError(f"target task {target_task_id!r} was not found")
+            raise ValueError(f"target automation {target_automation_id!r} was not found")
 
         asset = self._read_asset(path)
         target = self._read_asset(target_path)
@@ -615,42 +615,42 @@ class TaskStorage:
 
         def ensure_relations(item: Dict[str, Any]) -> Dict[str, Any]:
             relations = item.get("relations") if isinstance(item.get("relations"), dict) else {}
-            relations.setdefault("parent_task_id", None)
-            relations["child_task_ids"] = _dedupe(_json_list(relations.get("child_task_ids")))
-            relations["depends_on_task_ids"] = _dedupe(_json_list(relations.get("depends_on_task_ids")))
-            relations["blocks_task_ids"] = _dedupe(_json_list(relations.get("blocks_task_ids")))
-            relations["related_task_ids"] = _dedupe(_json_list(relations.get("related_task_ids")))
+            relations.setdefault("parent_automation_id", None)
+            relations["child_automation_ids"] = _dedupe(_json_list(relations.get("child_automation_ids")))
+            relations["depends_on_automation_ids"] = _dedupe(_json_list(relations.get("depends_on_automation_ids")))
+            relations["blocks_automation_ids"] = _dedupe(_json_list(relations.get("blocks_automation_ids")))
+            relations["related_automation_ids"] = _dedupe(_json_list(relations.get("related_automation_ids")))
             item["relations"] = relations
             return relations
 
         rel = ensure_relations(asset)
         target_rel = ensure_relations(target)
         if normalized == "related":
-            rel["related_task_ids"] = _dedupe(rel["related_task_ids"] + [target_task_id])
+            rel["related_automation_ids"] = _dedupe(rel["related_automation_ids"] + [target_automation_id])
             if reciprocal:
-                target_rel["related_task_ids"] = _dedupe(target_rel["related_task_ids"] + [task_id])
+                target_rel["related_automation_ids"] = _dedupe(target_rel["related_automation_ids"] + [automation_id])
         elif normalized == "child":
-            rel["child_task_ids"] = _dedupe(rel["child_task_ids"] + [target_task_id])
+            rel["child_automation_ids"] = _dedupe(rel["child_automation_ids"] + [target_automation_id])
             if reciprocal:
-                target_rel["parent_task_id"] = task_id
+                target_rel["parent_automation_id"] = automation_id
         elif normalized == "depends_on":
-            rel["depends_on_task_ids"] = _dedupe(rel["depends_on_task_ids"] + [target_task_id])
+            rel["depends_on_automation_ids"] = _dedupe(rel["depends_on_automation_ids"] + [target_automation_id])
             if reciprocal:
-                target_rel["blocks_task_ids"] = _dedupe(target_rel["blocks_task_ids"] + [task_id])
+                target_rel["blocks_automation_ids"] = _dedupe(target_rel["blocks_automation_ids"] + [automation_id])
         elif normalized == "blocks":
-            rel["blocks_task_ids"] = _dedupe(rel["blocks_task_ids"] + [target_task_id])
+            rel["blocks_automation_ids"] = _dedupe(rel["blocks_automation_ids"] + [target_automation_id])
             if reciprocal:
-                target_rel["depends_on_task_ids"] = _dedupe(target_rel["depends_on_task_ids"] + [task_id])
+                target_rel["depends_on_automation_ids"] = _dedupe(target_rel["depends_on_automation_ids"] + [automation_id])
 
         for item in (asset, target):
             all_related = []
             relations = item.get("relations") or {}
-            for key in ("child_task_ids", "depends_on_task_ids", "blocks_task_ids", "related_task_ids"):
+            for key in ("child_automation_ids", "depends_on_automation_ids", "blocks_automation_ids", "related_automation_ids"):
                 all_related.extend(_json_list(relations.get(key)))
-            if relations.get("parent_task_id"):
-                all_related.append(str(relations.get("parent_task_id")))
+            if relations.get("parent_automation_id"):
+                all_related.append(str(relations.get("parent_automation_id")))
             metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-            metadata["related_tasks"] = _dedupe(all_related)
+            metadata["related_automations"] = _dedupe(all_related)
             item["metadata"] = metadata
             item["updated_at"] = _utc_now()
 
@@ -658,10 +658,10 @@ class TaskStorage:
         self._write_asset(target, target_body)
         return updated
 
-    def update_task(
+    def update_automation(
         self,
         *,
-        task_id: str,
+        automation_id: str,
         title: str | None = None,
         description: str | None = None,
         status: str | None = None,
@@ -676,9 +676,9 @@ class TaskStorage:
         relations_patch: Dict[str, Any] | None = None,
         revision_mode: str = "auto",
     ) -> Dict[str, Any]:
-        path = self._path(task_id)
+        path = self._path(automation_id)
         if not path.exists():
-            raise ValueError(f"task {task_id!r} was not found")
+            raise ValueError(f"automation {automation_id!r} was not found")
         asset = self._read_asset(path)
         body = str(asset.get("body") or "")
         revision_mode_norm = str(revision_mode or "auto").strip().lower()
@@ -687,7 +687,7 @@ class TaskStorage:
         status_norm = None
         if status is not None:
             status_norm = str(status or "").strip().lower()
-            if status_norm not in TASK_STATUSES:
+            if status_norm not in AUTOMATION_STATUSES:
                 raise ValueError("status must be enabled, disabled, archived, or deleted")
 
         semantic_change = any(
@@ -712,9 +712,9 @@ class TaskStorage:
             old_asset = json.loads(json.dumps({key: value for key, value in asset.items() if key not in {"path", "body", "description"}}))
             old_body = body
 
-            next_title = str(title or old_asset.get("title") or "Untitled task").strip() or "Untitled task"
+            next_title = str(title or old_asset.get("title") or "Untitled automation").strip() or "Untitled automation"
             next_body = str(description).strip() if description is not None else old_body
-            new_id = f"task_{_slug(next_title, fallback='task')}_{uuid.uuid4().hex[:8]}"
+            new_id = f"automation_{_slug(next_title, fallback='automation')}_{uuid.uuid4().hex[:8]}"
 
             new_asset = json.loads(json.dumps(old_asset))
             new_asset["id"] = new_id
@@ -755,8 +755,8 @@ class TaskStorage:
             revision = metadata.get("revision") if isinstance(metadata.get("revision"), dict) else {}
             revision.update(
                 {
-                    "revision_of_task_id": task_id,
-                    "revision_reason": "task_definition_updated",
+                    "revision_of_automation_id": automation_id,
+                    "revision_reason": "automation_definition_updated",
                     "revision_created_at": now,
                 }
             )
@@ -776,8 +776,8 @@ class TaskStorage:
             old_revision = old_metadata.get("revision") if isinstance(old_metadata.get("revision"), dict) else {}
             old_revision.update(
                 {
-                    "superseded_by_task_id": new_id,
-                    "archived_reason": "task_definition_replaced",
+                    "superseded_by_automation_id": new_id,
+                    "archived_reason": "automation_definition_replaced",
                     "archived_at": now,
                 }
             )
@@ -833,12 +833,12 @@ class TaskStorage:
         asset["updated_at"] = _utc_now()
         return self._write_asset(asset, body)
 
-    def delete_task(self, *, task_id: str, hard: bool = False) -> Dict[str, Any] | None:
-        path = self._path(task_id)
+    def delete_automation(self, *, automation_id: str, hard: bool = False) -> Dict[str, Any] | None:
+        path = self._path(automation_id)
         if not path.exists():
             return None
         if not hard:
-            return self.set_task_status(task_id=task_id, status="deleted")
+            return self.set_automation_status(automation_id=automation_id, status="deleted")
         deleted = self._read_asset(path)
         path.unlink()
         try:
@@ -847,75 +847,75 @@ class TaskStorage:
             pass
         return deleted
 
-    def _touch_task_execution_summary(self, task_id: str, execution: Dict[str, Any]) -> None:
-        task = self.get_task(task_id)
-        if not task:
+    def _touch_automation_execution_summary(self, automation_id: str, execution: Dict[str, Any]) -> None:
+        automation = self.get_automation(automation_id)
+        if not automation:
             return
-        body = str(task.get("body") or "")
-        task.pop("path", None)
-        task.pop("body", None)
-        task.pop("description", None)
-        task_execution = task.get("execution") if isinstance(task.get("execution"), dict) else {}
+        body = str(automation.get("body") or "")
+        automation.pop("path", None)
+        automation.pop("body", None)
+        automation.pop("description", None)
+        automation_execution = automation.get("execution") if isinstance(automation.get("execution"), dict) else {}
         if execution.get("conversation_id"):
-            task_execution["conversation_id"] = execution.get("conversation_id")
+            automation_execution["conversation_id"] = execution.get("conversation_id")
         if execution.get("turn_id"):
-            task_execution["last_turn_id"] = execution.get("turn_id")
-        task_execution["last_execution_id"] = execution.get("id")
-        task_execution["last_status"] = execution.get("status")
-        task_execution["last_run_at"] = (
+            automation_execution["last_turn_id"] = execution.get("turn_id")
+        automation_execution["last_execution_id"] = execution.get("id")
+        automation_execution["last_status"] = execution.get("status")
+        automation_execution["last_run_at"] = (
             execution.get("finished_at")
             or execution.get("started_at")
             or execution.get("updated_at")
             or execution.get("created_at")
         )
-        task["execution"] = task_execution
-        task["updated_at"] = _utc_now()
-        self._write_asset(task, body)
+        automation["execution"] = automation_execution
+        automation["updated_at"] = _utc_now()
+        self._write_asset(automation, body)
 
     def create_execution(self, **kwargs) -> Dict[str, Any]:
         return self.executions.create_execution(**kwargs)
 
-    def get_execution(self, *, execution_id: str, task_id: str = "") -> Dict[str, Any] | None:
-        return self.executions.get_execution(execution_id=execution_id, task_id=task_id)
+    def get_execution(self, *, execution_id: str, automation_id: str = "") -> Dict[str, Any] | None:
+        return self.executions.get_execution(execution_id=execution_id, automation_id=automation_id)
 
     def list_executions(
         self,
         *,
-        task_id: str = "",
+        automation_id: str = "",
         status: str = "",
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
-        return self.executions.list_executions(task_id=task_id, status=status, limit=limit)
+        return self.executions.list_executions(automation_id=automation_id, status=status, limit=limit)
 
     def search_executions(
         self,
         *,
         query: str = "",
-        task_id: str = "",
+        automation_id: str = "",
         status: str = "",
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
-        return self.executions.search_executions(query=query, task_id=task_id, status=status, limit=limit)
+        return self.executions.search_executions(query=query, automation_id=automation_id, status=status, limit=limit)
 
     def update_execution(self, **kwargs) -> Dict[str, Any]:
         return self.executions.update_execution(**kwargs)
 
-    def delete_execution(self, *, execution_id: str, task_id: str = "") -> Dict[str, Any] | None:
-        return self.executions.delete_execution(execution_id=execution_id, task_id=task_id)
+    def delete_execution(self, *, execution_id: str, automation_id: str = "") -> Dict[str, Any] | None:
+        return self.executions.delete_execution(execution_id=execution_id, automation_id=automation_id)
 
     def attach_execution_history(
         self,
-        tasks: Iterable[Dict[str, Any]],
+        automations: Iterable[Dict[str, Any]],
         *,
         execution_limit: int = 3,
     ) -> List[Dict[str, Any]]:
         enriched: List[Dict[str, Any]] = []
-        for task in tasks:
-            item = dict(task)
-            task_id = str(item.get("id") or "").strip()
-            executions = self.list_executions(task_id=task_id, limit=execution_limit) if task_id else []
+        for automation in automations:
+            item = dict(automation)
+            automation_id = str(item.get("id") or "").strip()
+            executions = self.list_executions(automation_id=automation_id, limit=execution_limit) if automation_id else []
             item["executions"] = executions
-            item["execution_count"] = len(self.list_executions(task_id=task_id, limit=100000)) if task_id else 0
+            item["execution_count"] = len(self.list_executions(automation_id=automation_id, limit=100000)) if automation_id else 0
             item["last_execution"] = executions[0] if executions else None
             enriched.append(item)
         return enriched

@@ -85,7 +85,7 @@ def _artifact_ref(execution: Dict[str, Any], artifact: Dict[str, Any], *, index:
     execution_id = str(execution.get("id") or "").strip()
     selector_kind, selector_value = _artifact_selector(artifact, index=index)
     return (
-        f"task-artifact://{quote(execution_id, safe='')}/"
+        f"automation-artifact://{quote(execution_id, safe='')}/"
         f"{quote(selector_kind, safe='')}/{quote(selector_value, safe='')}"
     )
 
@@ -96,8 +96,8 @@ def artifact_ref_for_execution_artifact(execution: Dict[str, Any], artifact: Dic
 
 def _parse_artifact_ref(artifact_ref: str) -> tuple[str, str, str]:
     parsed = urlparse(str(artifact_ref or "").strip())
-    if parsed.scheme != "task-artifact" or not parsed.netloc:
-        raise ValueError("artifact_ref must use task-artifact://<execution_id>/<selector-kind>/<selector>")
+    if parsed.scheme != "automation-artifact" or not parsed.netloc:
+        raise ValueError("artifact_ref must use automation-artifact://<execution_id>/<selector-kind>/<selector>")
     parts = [part for part in parsed.path.split("/") if part]
     if len(parts) != 2:
         raise ValueError("artifact_ref must include selector kind and selector value")
@@ -310,7 +310,7 @@ def _artifact_access_payload(
         "job_conversation_id": str(execution.get("conversation_id") or "").strip(),
         "job_turn_id": execution.get("turn_id"),
         "materialize": {
-            "tool": "tasks.materialize_execution_artifact",
+            "tool": "automations.materialize_execution_artifact",
             "params": {"artifact_ref": artifact_ref},
             "then": (
                 "Use the returned current_turn.logical_path with react.read, or the returned "
@@ -352,8 +352,8 @@ async def execution_for_agent(execution: Dict[str, Any], *, sc: Dict[str, Any]) 
     artifacts = await execution_artifacts(execution, sc=sc)
     result = {
         "execution_id": execution.get("id"),
-        "task_id": execution.get("task_id"),
-        "task_title": execution.get("task_title"),
+        "automation_id": execution.get("automation_id"),
+        "automation_title": execution.get("automation_title"),
         "status": execution.get("status"),
         "trigger": execution.get("trigger"),
         "completed_at": execution_completed_at(execution),
@@ -442,7 +442,7 @@ async def materialize_execution_artifact_for_current_turn(
     mime_type = str(selected.get("mime_type") or selected.get("mime") or mimetypes.guess_type(target_name)[0] or "").strip()
     return {
         "execution_id": execution.get("id"),
-        "task_id": execution.get("task_id"),
+        "automation_id": execution.get("automation_id"),
         "artifact_ref": artifact_ref,
         "artifact": selected,
         "current_turn": {
@@ -487,7 +487,7 @@ async def read_execution_artifact_for_download(
     ).strip()
     return {
         "execution_id": execution.get("id"),
-        "task_id": execution.get("task_id"),
+        "automation_id": execution.get("automation_id"),
         "artifact_ref": artifact_ref,
         "artifact": selected,
         "filename": filename,

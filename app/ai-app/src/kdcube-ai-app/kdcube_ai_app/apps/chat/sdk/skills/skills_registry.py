@@ -22,7 +22,7 @@ log = logging.getLogger("skills_registry")
 BUILTIN_SKILLS_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parent
 SDK_ROOT: pathlib.Path = BUILTIN_SKILLS_ROOT.parent
 SOLUTION_SKILLS_ROOTS: List[pathlib.Path] = [
-    SDK_ROOT / "solutions" / "tasks" / "skills",
+    SDK_ROOT / "solutions" / "automations" / "skills",
 ]
 try:
     from kdcube_ai_app.apps.chat.sdk.tools.backends.web.ranking import estimate_tokens  # type: ignore

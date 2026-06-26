@@ -4091,7 +4091,7 @@ class Timeline:
             if preview:
                 bits.append(f"{label}={json.dumps(preview, ensure_ascii=False)}")
 
-        for key in ("account", "mailbox", "message_id", "task_id", "path", "filename"):
+        for key in ("account", "mailbox", "message_id", "task_id", "automation_id", "path", "filename"):
             if params.get(key):
                 add_value(key, params.get(key), limit=80)
 
