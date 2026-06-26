@@ -229,21 +229,21 @@ class EmailMCPRunStore:
             data["last_search"] = dict(search)
         return self.write_run(data)
 
-    def task_state_path(self, *, task_id: str, account_id: str) -> Path:
-        task_key = safe_segment(task_id or "manual", fallback="manual")
+    def task_state_path(self, *, automation_id: str, account_id: str) -> Path:
+        task_key = safe_segment(automation_id or "manual", fallback="manual")
         account_key = safe_segment(account_id or "account", fallback="account")
         state_task_dir = self.state_dir / task_key
         state_task_dir.mkdir(parents=True, exist_ok=True)
         return state_task_dir / f"{account_key}.json"
 
-    def read_task_state(self, *, task_id: str, account_id: str) -> Dict[str, Any]:
-        path = self.task_state_path(task_id=task_id, account_id=account_id)
+    def read_task_state(self, *, automation_id: str, account_id: str) -> Dict[str, Any]:
+        path = self.task_state_path(automation_id=automation_id, account_id=account_id)
         if not path.exists():
             return {
                 "schema_version": "email-mcp-task-state.v1",
                 "exists": False,
                 "user_id": self.user_id,
-                "task_id": task_id or "",
+                "automation_id": automation_id or "",
                 "account_id": account_id or "",
                 "state": {},
                 "updated_at": "",
@@ -258,7 +258,7 @@ class EmailMCPRunStore:
     def write_task_state(
         self,
         *,
-        task_id: str,
+        automation_id: str,
         account_id: str,
         state: Mapping[str, Any],
         note: str = "",
@@ -269,7 +269,7 @@ class EmailMCPRunStore:
             "schema_version": "email-mcp-task-state.v1",
             "exists": True,
             "user_id": self.user_id,
-            "task_id": task_id or "",
+            "automation_id": automation_id or "",
             "account_id": account_id or "",
             "state": dict(state),
             "note": str(note or "").strip(),
@@ -282,7 +282,7 @@ class EmailMCPRunStore:
             raise ValueError(
                 f"email MCP task state exceeds {EMAIL_MCP_TASK_STATE_MAX_BYTES} bytes"
             )
-        path = self.task_state_path(task_id=task_id, account_id=account_id)
+        path = self.task_state_path(automation_id=automation_id, account_id=account_id)
         tmp = path.with_suffix(".json.tmp")
         tmp.write_text(raw, encoding="utf-8")
         tmp.replace(path)
@@ -294,7 +294,7 @@ async def create_email_mcp_run(
     entrypoint: Any,
     storage_root: str | Path,
     user_id: str,
-    task_id: str,
+    automation_id: str,
     account: Mapping[str, Any],
     mailbox: str,
     unread_only: bool,
@@ -318,7 +318,7 @@ async def create_email_mcp_run(
             "status": "prepared",
             "user_id": user_id,
             "bundle_id": bundle_id,
-            "task_id": task_id,
+            "automation_id": automation_id,
             "execution_id": execution_id,
             "account_id": account_id,
             "account": {
@@ -348,7 +348,7 @@ async def create_email_mcp_run(
         "run_id": run_id,
         "user_id": user_id,
         "bundle_id": bundle_id,
-        "task_id": task_id,
+        "automation_id": automation_id,
         "execution_id": execution_id,
         "account_id": account_id,
         "message_ids_sha256": hashlib.sha256("|".join(message_ids).encode("utf-8")).hexdigest(),
@@ -419,7 +419,7 @@ async def build_email_mcp_app(*, entrypoint: Any, request: Any, storage_root: st
         for item in (run_doc.get("messages") or [])
         if isinstance(item, Mapping) and str(item.get("message_id") or "")
     }
-    current_task_id = str(run_doc.get("task_id") or "").strip()
+    current_automation_id = str(run_doc.get("automation_id") or "").strip()
     current_account_id = str(run_doc.get("account_id") or "").strip()
     account = run_doc.get("account") if isinstance(run_doc.get("account"), Mapping) else {}
     EmailAccountStore, fetch_email_messages, fetch_email_message, fetch_email_attachment = _email_accounts_api()
@@ -455,7 +455,7 @@ async def build_email_mcp_app(*, entrypoint: Any, request: Any, storage_root: st
     async def _task_context() -> Dict[str, Any]:
         current_run_doc, _, current_messages = _refresh_scope()
         return {
-            "task_id": current_run_doc.get("task_id"),
+            "automation_id": current_run_doc.get("automation_id"),
             "execution_id": current_run_doc.get("execution_id"),
             "task_definition": current_run_doc.get("task_definition") or "",
             "instruction": current_run_doc.get("instruction") or "",
@@ -481,7 +481,7 @@ async def build_email_mcp_app(*, entrypoint: Any, request: Any, storage_root: st
     )
     async def _restore_current_task_state() -> Dict[str, Any]:
         try:
-            state_doc = store.read_task_state(task_id=current_task_id, account_id=current_account_id)
+            state_doc = store.read_task_state(automation_id=current_automation_id, account_id=current_account_id)
         except Exception as exc:
             return {"ok": False, "error": {"code": "task_state_restore_failed", "message": str(exc)}}
         return {"ok": True, **state_doc}
@@ -650,7 +650,7 @@ async def build_email_mcp_app(*, entrypoint: Any, request: Any, storage_root: st
             }
         try:
             state_doc = store.write_task_state(
-                task_id=current_task_id,
+                automation_id=current_automation_id,
                 account_id=current_account_id,
                 state=parsed,
                 note=note,
@@ -661,7 +661,7 @@ async def build_email_mcp_app(*, entrypoint: Any, request: Any, storage_root: st
             return {"ok": False, "error": {"code": "task_state_store_failed", "message": str(exc)}}
         return {
             "ok": True,
-            "task_id": state_doc.get("task_id") or "",
+            "automation_id": state_doc.get("automation_id") or "",
             "account_id": state_doc.get("account_id") or "",
             "updated_at": state_doc.get("updated_at") or "",
             "bytes_limit": EMAIL_MCP_TASK_STATE_MAX_BYTES,

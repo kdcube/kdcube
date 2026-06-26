@@ -3,9 +3,11 @@ from __future__ import annotations
 from typing import Any, Mapping, Sequence
 
 
+CANVAS_NAMESPACE_INTRO = "Canvas (also called the pin board — both names mean this same board) — a board of pinned cards for quick access later. A pin (card) can point to an object from any connected namespace (a task, a memory, a file), a file you produced, or an entire conversation. Pin when the user signals they want to keep, bookmark, or set something aside for later — in particular, when they want to remember a specific thing that isn't a durable memory, that's the cue to pin it here; if you're unsure, you can suggest pinning. You don't need to ask which board: unless the user names a specific board, just pin to the board, and the pin board service decides which canvas it lands on. It's one of the user's memory realms — the context-board kind: things pinned or set aside for later. When recalling what the user kept for quick access, look here alongside their durable memories (`mem`) and past conversations."
+
 CANVAS_BOARD_EDIT_PROTOCOL_LINES = (
     "edit_protocol:",
-    "- Use named_services.upsert_object(namespace=\"cnv\", object_ref=\"cnv:<board>\", base_revision=revision, object_json=<typed canvas object>).",
+    "- Use named_services.upsert_object(namespace=\"cnv\", object_ref=<board object_ref from visible canvas context or named_services.list_objects>, base_revision=revision, object_json=<typed canvas object>).",
     "- Ask named_services.object_schema(namespace=\"cnv\", object_kind=...) for exact mutation payloads.",
     "- Treat this JSON as exact state for planning only; do not edit or save it directly.",
     "- Use map labels for spatial reasoning; use card_id values from the legend when mutating existing cards.",
@@ -99,9 +101,17 @@ Canvas read/write behavior:
 - `cnv:` refs identify canvas-owned board/object state. They are external owner
   refs until pulled into the ReAct workspace.
 - Collaborate through the `cnv` named-service provider. Call
+  `named_services.list_objects(namespace="cnv")` to discover boards when no
+  board is visible in context. Do not use `search_objects(namespace="cnv",
+  query="canvas board")` for board discovery; canvas search semantically
+  matches card snapshots/content.
+- Use `canvas_id` only as returned metadata. Do not convert storage ids such as
+  `cnv:<user>:<board>` into guessed refs such as `cnv:<user>_<board>`.
+- Call
   `named_services.object_schema(namespace="cnv", object_kind=...)` when you
-  need exact payload shape. Mutate with
-  `named_services.upsert_object(namespace="cnv", object_ref="cnv:<name>",
+  need exact payload shape. Mutate with the board `object_ref` from visible
+  canvas context, `named_services.list_objects`, or a recent canvas pull/read:
+  `named_services.upsert_object(namespace="cnv", object_ref=<board object_ref>,
   base_revision=<visible revision>, object_json=...)`.
 - Use typed canvas object kinds in the upsert payload instead of editing raw
   board JSON: `canvas.card`, `canvas.card.comment`,
@@ -157,7 +167,8 @@ Card placement and ref behavior:
 - New assistant output should usually be a suggested card, not an automatic
   placed card, so the user can arrange, accept, or discard it.
 - Producing a file/report/output does not pin it. First produce the artifact,
-  then call `named_services.upsert_object(namespace="cnv", object_ref="cnv:<name>",
+  discover/reuse the board `object_ref`, then call
+  `named_services.upsert_object(namespace="cnv", object_ref=<board object_ref>,
   base_revision=<visible revision>, object_json={"object_kind":"canvas.card",
   ...})` with `card.logical_path` pointing at the produced `fi:` or `cnv:` ref.
 
@@ -176,6 +187,7 @@ Semantics:
 
 __all__ = [
     "CANVAS_BOARD_EDIT_PROTOCOL_LINES",
+    "CANVAS_NAMESPACE_INTRO",
     "CANVAS_REACT_ADDITIONAL_INSTRUCTIONS",
     "render_canvas_board_text",
 ]

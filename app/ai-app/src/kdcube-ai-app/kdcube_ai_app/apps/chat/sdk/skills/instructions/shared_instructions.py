@@ -720,7 +720,7 @@ ISO_TOOL_EXECUTION_INSTRUCTION = """
 - Do NOT import built-in tool modules (web_tools, rendering_tools, ctx_tools, etc.). Imports will fail.
 - To invoke any built-in tool from generated code, ALWAYS use `await agent_io_tools.tool_call(...)`.
 - Only execution-enabled runtime tool handles are available inside generated code. Orchestration/job tools such
-  as `task_job.*` are not Python globals inside exec snippets; call them as normal top-level ReAct tool calls,
+  as `automation_job.*` are not Python globals inside exec snippets; call them as normal top-level ReAct tool calls,
   not from `exec_tools.execute_code_python`.
 - Do not use this pattern to call document renderers for ordinary PDF/PPTX/DOCX
   deliverables. Prefer source content from `react.write channel=canvas`, then call
@@ -865,7 +865,7 @@ EXEC_SNIPPET_RULES = f"""
 - The snippet SHOULD use async operations (await where needed).
 - Do NOT import tools from the catalog; invoke tools via `await agent_io_tools.tool_call(...)`.
 - Only execution-enabled runtime tool handles are available in snippets. Do not call orchestration/job tools such
-  as `task_job.*` inside exec code; call them as top-level ReAct tools in their own round.
+  as `automation_job.*` inside exec code; call them as top-level ReAct tools in their own round.
 - OUTPUT_DIR is the output data/artifact root.
 - OUT_DIR is also available as `Path(OUTPUT_DIR)` if that is more convenient.
 - Do NOT assign, redefine, or shadow `OUTPUT_DIR` or `OUT_DIR`. They are provided by the runtime.

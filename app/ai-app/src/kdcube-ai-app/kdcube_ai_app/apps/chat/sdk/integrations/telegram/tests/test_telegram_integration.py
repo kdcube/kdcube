@@ -430,7 +430,7 @@ async def test_telegram_profile_creates_pending_admin_row(tmp_path):
         bundle_id=bundle_id,
     )
     widget_ops.configure_telegram_widget_ops(
-        task_operations_module=SimpleNamespace(),
+        automation_operations_module=SimpleNamespace(),
         telegram_user_admin_module=SimpleNamespace(storage=lambda entrypoint: storage),
         telegram_widget_auth_module=widget_auth,
         webapp_module=SimpleNamespace(),
@@ -478,7 +478,7 @@ async def test_telegram_widget_auth_accepts_async_bot_token(tmp_path):
         bundle_id=bundle_id,
     )
     widget_ops.configure_telegram_widget_ops(
-        task_operations_module=SimpleNamespace(),
+        automation_operations_module=SimpleNamespace(),
         telegram_user_admin_module=SimpleNamespace(storage=lambda entrypoint: storage),
         telegram_widget_auth_module=widget_auth,
         webapp_module=SimpleNamespace(),

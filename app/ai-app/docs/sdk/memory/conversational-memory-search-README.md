@@ -39,6 +39,15 @@ needs to recover something it cannot already see.
 `react.memsearch` is the only access path. There is no other read API and no
 widget. Bundle code is not expected to query this index directly.
 
+From the agent's point of view, this conversational memory is one of the user's
+**memory realms** — alongside durable memories (`mem`) and context boards / the
+pin board (`cnv`). The three are semantically and originally different sources —
+what was actually said, versus curated facts, versus things pinned for later —
+but all of them are districts of one thing: the user's memory. When it is worth
+recalling what the user said, saved, or set aside, all three are candidates;
+`react.memsearch` covers this one (and searches what the user said, what the
+assistant said, and the user's uploaded attachments — not bot-produced files).
+
 ## Why This Exists
 
 The agent's context window is finite. Conversations grow past it. Compaction

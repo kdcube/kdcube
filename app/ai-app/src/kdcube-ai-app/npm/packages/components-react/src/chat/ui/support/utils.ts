@@ -127,23 +127,38 @@ export function escapeHtml(text: string): string {
  *  Prefers the secure-context `navigator.clipboard.writeText` API and falls
  *  back to a hidden `<textarea>` + `document.execCommand('copy')` when
  *  running outside a secure context. */
-export function copyToClipboard(text: string): Promise<void> {
-  if (navigator.clipboard?.writeText) {
-    return navigator.clipboard.writeText(text)
-  }
+function copyToClipboardWithTextarea(text: string): Promise<void> {
   return new Promise((resolve, reject) => {
+    let ta: HTMLTextAreaElement | null = null
     try {
-      const ta = document.createElement('textarea')
+      ta = document.createElement('textarea')
       ta.value = text
       ta.style.position = 'fixed'
       ta.style.opacity = '0'
       document.body.appendChild(ta)
+      ta.focus()
       ta.select()
-      document.execCommand('copy')
-      document.body.removeChild(ta)
+      const ok = document.execCommand('copy')
+      if (!ok) throw new Error('document.execCommand("copy") returned false')
       resolve()
     } catch (error) {
       reject(error)
+    } finally {
+      if (ta && ta.parentNode) ta.parentNode.removeChild(ta)
     }
   })
+}
+
+export async function copyToClipboard(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return
+    } catch {
+      // Cross-origin iframes can expose navigator.clipboard but reject writes
+      // when the host did not delegate clipboard-write. Try the legacy path
+      // before surfacing the failure to the caller.
+    }
+  }
+  await copyToClipboardWithTextarea(text)
 }

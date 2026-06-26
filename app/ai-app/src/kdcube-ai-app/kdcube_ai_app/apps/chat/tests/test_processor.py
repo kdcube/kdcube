@@ -392,13 +392,13 @@ def _build_task_payload(task_id="task-1", *, user_type="registered"):
 
 def test_comm_ctx_snapshots_bundle_call_context():
     payload = ExternalEventPayload.model_validate(_build_task_payload("bundle-call-context"))
-    payload.bundle_call_context = {"task_id": "task-a", "execution_id": "exec-a"}
+    payload.bundle_call_context = {"automation_id": "task-a", "execution_id": "exec-a"}
     with bind_current_request_context(payload):
         snapshot = snapshot_comm_ctxvars()
 
     try:
         restore_comm_ctxvars(snapshot)
-        assert get_current_bundle_call_context() == {"task_id": "task-a", "execution_id": "exec-a"}
+        assert get_current_bundle_call_context() == {"automation_id": "task-a", "execution_id": "exec-a"}
         assert get_current_request_context().bundle_call_context["execution_id"] == "exec-a"
     finally:
         set_current_request_context(None)
@@ -407,18 +407,18 @@ def test_comm_ctx_snapshots_bundle_call_context():
 
 def test_comm_ctx_update_syncs_request_context_and_snapshots():
     payload = ExternalEventPayload.model_validate(_build_task_payload("bundle-call-context-update"))
-    payload.bundle_call_context = {"task_id": "task-a"}
+    payload.bundle_call_context = {"automation_id": "task-a"}
     with bind_current_request_context(payload):
         update_current_bundle_call_context({"execution_id": "exec-b"})
         assert get_current_request_context().bundle_call_context == {
-            "task_id": "task-a",
+            "automation_id": "task-a",
             "execution_id": "exec-b",
         }
         snapshot = snapshot_comm_ctxvars()
 
     try:
         restore_comm_ctxvars(snapshot)
-        assert get_current_bundle_call_context() == {"task_id": "task-a", "execution_id": "exec-b"}
+        assert get_current_bundle_call_context() == {"automation_id": "task-a", "execution_id": "exec-b"}
         assert get_current_request_context().bundle_call_context["execution_id"] == "exec-b"
     finally:
         set_current_request_context(None)
@@ -697,12 +697,12 @@ def test_background_job_chat_task_carries_accounting_context(_patch_processor_de
             user_id="user-123",
             user_type="registered",
             metadata={
-                "conversation_id": "task_job_abc",
+                "conversation_id": "automation_job_abc",
                 "turn_id": "turn_exec_1",
                 "request_id": "req-job-1",
                 "timezone": "Europe/Berlin",
             },
-            payload={"task_id": "task-1", "execution_id": "exec-1"},
+            payload={"automation_id": "task-1", "execution_id": "exec-1"},
         ),
     )
 
@@ -718,7 +718,7 @@ def test_background_job_chat_task_carries_accounting_context(_patch_processor_de
     assert envelope["user_id"] == "user-123"
     assert envelope["component"] == "task-and-memo-app@1-0"
     assert envelope["app_bundle_id"] == "task-and-memo-app@1-0"
-    assert envelope["metadata"]["conversation_id"] == "task_job_abc"
+    assert envelope["metadata"]["conversation_id"] == "automation_job_abc"
     assert envelope["metadata"]["turn_id"] == "turn_exec_1"
 
 

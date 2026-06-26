@@ -29,10 +29,10 @@ logger = logging.getLogger(__name__)
 # handler_status="open" under a now-dead handler_turn_id, and every later turn's
 # open_handler() used to defer to it forever -> a permanent close-gate wedge.
 #
-# Liveness is a Reader/Consumer property, not a handler-status property. The
-# reclaim decision is based on consumer_status_at, the last "I ate the stream"
-# timestamp. Handler status timestamps are state-change timestamps and do not
-# prove that the owner is still consuming.
+# Liveness is a Reader/Consumer property, not a handler-status property. Only
+# an active consumer heartbeat proves that the owner is still consuming. A
+# scheduled wake may be written by a later user event before the next turn opens
+# the handler, so it must not protect a stale handler owner.
 def _consumer_turn_ttl_ms() -> int:
     try:
         raw = os.getenv("KDCUBE_EVENT_BUS_OPEN_HANDLER_CONSUMER_TTL_SECONDS") or "30"
@@ -52,7 +52,7 @@ def _consumer_ack_is_fresh(status_at: str, now: str) -> bool:
 
 def _consumer_state_is_fresh(state: EventLaneState, now: str) -> bool:
     return (
-        state.consumer_status in {"active", "scheduled"}
+        state.consumer_status == "active"
         and _consumer_ack_is_fresh(state.consumer_status_at, now)
     )
 

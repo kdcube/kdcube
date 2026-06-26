@@ -14,7 +14,7 @@ keywords:
     "PORTABLE_SPEC_JSON",
     "ContextVar restore",
   ]
-updated_at: 2026-06-11
+updated_at: 2026-06-26
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/runtime/README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/agents/subagents/subagents-runtime-bootstrap-and-reduce-README.md
@@ -127,6 +127,57 @@ For subagents, the host binds the subagent `agent_id` before it calls
 snapshot carries the subagent identity through comm metadata and accounting
 context. A snapshot built before the subagent scope is bound represents the
 host/coordinator identity.
+
+## Actor Identity And Authority
+
+Some executions start from a surface identity that is not the platform account
+which owns roles or funding. For example, a Telegram-triggered scheduled
+automation can execute as `telegram_434804821` for app storage and audit, while
+the Telegram identity is linked to a platform user that owns the effective
+roles and economics authority.
+
+The conversion is done once at the execution boundary. After that, role checks
+and economics checks must read the already-carried context; they should not ask
+every surface how to reinterpret the actor.
+
+The portable shape is:
+
+```text
+REQUEST_CONTEXT.user
+  user_id       = telegram_434804821        # actor/storage identity
+  user_type     = privileged                # resolved authority role
+  roles         = ["kdcube:role:super-admin"]
+  permissions   = [...]
+
+BUNDLE_CALL_CONTEXT.identity_authority
+  actor_user_id      = telegram_434804821
+  storage_user_id    = telegram_434804821
+  platform_user_id   = 02e53484-...
+  economics_user_id  = 02e53484-...
+  user_type          = privileged
+  economics_user_type = privileged
+  platform_roles     = ["kdcube:role:super-admin"]
+  platform_permissions = [...]
+  identity_provider  = telegram
+  identity_provider_subject = 434804821
+```
+
+`REQUEST_CONTEXT.user` is what generic role validators see after context is
+bound. `BUNDLE_CALL_CONTEXT.identity_authority` preserves provenance and the
+actor/economics split across subprocesses, isolated runtimes, and peer app calls.
+
+Rules:
+
+- actor identity remains the surface/app identity unless the product explicitly
+  migrates storage scope;
+- platform roles must come from the platform principal/authority resolver, not
+  from a surface-local role such as a Telegram admin flag;
+- economics may bill/check `economics_user_id` while app storage continues to
+  use `actor_user_id`;
+- the authority object must be JSON-safe because it travels in
+  `bundle_call_context` through `PORTABLE_SPEC_JSON`;
+- detached work must bind this context before invoking ReAct, tools, peer app
+  calls, or isolated runtimes.
 
 ## Flow
 

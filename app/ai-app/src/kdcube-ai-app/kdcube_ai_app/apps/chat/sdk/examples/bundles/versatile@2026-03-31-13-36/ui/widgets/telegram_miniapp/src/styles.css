@@ -403,6 +403,138 @@ input:focus, select:focus, textarea:focus {
   border-color: var(--line-soft);
 }
 
+.link-card {
+  width: min(100%, 560px);
+  margin: 18px auto 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  padding: 18px;
+  box-shadow: 0 1px 2px rgba(13, 30, 44, 0.04);
+}
+
+.link-card h1 {
+  margin: 8px 0 0;
+  font-size: 18px;
+}
+
+.link-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border: 1px solid rgba(1, 190, 178, 0.26);
+  border-radius: 999px;
+  background: rgba(198, 243, 241, 0.55);
+  color: var(--teal-dark);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 3px 8px;
+  text-transform: uppercase;
+}
+
+.link-steps {
+  margin: 14px 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.link-steps li {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  color: var(--text-2);
+  padding: 8px 10px;
+}
+
+.link-steps li.active {
+  border-color: rgba(67, 114, 195, 0.35);
+  background: var(--blue-pale);
+  color: var(--blue-dark);
+}
+
+.link-steps li.done {
+  border-color: rgba(82, 176, 68, 0.28);
+  background: rgba(232, 247, 229, 0.6);
+  color: var(--green-dark);
+}
+
+.link-steps strong,
+.link-steps span {
+  display: block;
+}
+
+.link-steps span {
+  margin-top: 2px;
+  font-size: 12px;
+}
+
+.link-field {
+  margin: 12px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  padding: 8px 10px;
+  color: var(--text-2);
+}
+
+.link-field code {
+  max-width: 72%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.link-input {
+  min-width: 0;
+  flex: 1;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  padding: 6px 8px;
+}
+
+.link-button {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  background: var(--blue);
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  padding: 7px 11px;
+  cursor: pointer;
+}
+
+.link-button.link-anchor {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 8px;
+  text-decoration: none;
+}
+
+.link-button.secondary {
+  margin-left: 8px;
+  border-color: var(--line);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.link-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* ─── Telegram pending approval card ─── */
 .telegram-pending-card {
   width: min(100%, 520px);

@@ -553,6 +553,37 @@ class SessionManager:
             # If schema changed or stored data is partial/corrupt
             return None
 
+    async def get_session_by_user_id(self, user_id: str) -> Optional[UserSession]:
+        """Retrieve the active platform session currently stored for a user id.
+
+        This is intentionally session-store based: it answers "what active
+        platform session authority do we currently know for this platform user?"
+        Detached work that needs durable identity/role truth should use a
+        higher-level identity authority when one is available.
+        """
+        user_id_value = str(user_id or "").strip()
+        if not user_id_value:
+            return None
+        await self.init_redis()
+        # Privileged sessions are stored under the registered user key by
+        # get_or_create_session(); paid users may use the paid key.
+        candidates = (
+            f"{self.SESSION_PREFIX}:registered:{user_id_value}",
+            f"{self.SESSION_PREFIX}:paid:{user_id_value}",
+        )
+        best: Optional[UserSession] = None
+        for session_key in candidates:
+            session_dict = self._loads_json(await self.redis.get(session_key))
+            if not session_dict:
+                continue
+            try:
+                session = UserSession(**session_dict)
+            except Exception:
+                continue
+            if best is None or float(session.last_seen or 0) >= float(best.last_seen or 0):
+                best = session
+        return best
+
     def _as_str(self, v: Optional[object]) -> Optional[str]:
         if v is None:
             return None

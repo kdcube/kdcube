@@ -384,6 +384,15 @@ class SSEHub:
                         for client in clients
                         if client.project_events and client.tenant == tenant and client.project == project
                     ]
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "[SSEHub._on_relay] project event event=%s type=%s tenant=%s project=%s recipients=%d",
+                        event,
+                        (data or {}).get("type"),
+                        tenant,
+                        project,
+                        len(recipients),
+                    )
                 if not recipients:
                     return
                 frame = _sse_frame(event, data, event_id=str(uuid.uuid4()))

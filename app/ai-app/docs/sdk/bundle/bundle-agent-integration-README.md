@@ -58,7 +58,7 @@ There are two different agent runtimes in this SDK surface.
 
 | Runtime | Who runs it | Tool source | Skill source | Typical use |
 | --- | --- | --- | --- | --- |
-| React | KDCube chat runtime | `surfaces.as_consumer.agents.<agent>.tools`, SDK tools, MCP, named services | `surfaces.as_consumer.agents.<agent>.skills`, plus bundle `skills/` | normal chat turns, task execution turns, transport-backed assistant work |
+| React | KDCube chat runtime | `surfaces.as_consumer.agents.<agent>.tools`, SDK tools, MCP, named services | `surfaces.as_consumer.agents.<agent>.skills`, plus bundle `skills/` | normal chat turns, automation execution turns, transport-backed assistant work |
 | Claude Code | `claude` CLI subprocess | Claude built-ins plus Claude MCP config written into workspace | `CLAUDE.md`, Claude settings, future custom Claude skill support | scoped code/file/research subagent work, private sub-processing, specialized tool loops |
 
 Important:
@@ -514,8 +514,8 @@ core SDK skills
 ```
 
 Bundle authors can narrow this explicitly, but subsystem skills that declare
-required tools are also filtered by the active tool catalog. For example, Tasks
-solution skills are omitted automatically when `tasks.*` / `task_job.*` tools
+required tools are also filtered by the active tool catalog. For example,
+automation solution skills are omitted automatically when `automations.*` / `automation_job.*` tools
 are not exposed. Use the agent skill `consumers` config when the bundle needs an explicit
 allow-list or hard deny:
 

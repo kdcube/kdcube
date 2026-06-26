@@ -5,11 +5,16 @@ from datetime import datetime, timezone
 
 import pytest
 
-from kdcube_ai_app.apps.chat.sdk.context.memory.models import MemoryRecord, MemoryScope
+from kdcube_ai_app.apps.chat.sdk.context.memory.models import (
+    MemoryRecord,
+    MemoryScope,
+    resolve_collection_update,
+)
 from kdcube_ai_app.apps.chat.sdk.context.memory.named_service import (
     KNOWN_MEMORY_KINDS,
     MEMORY_RECORD_SCHEMA,
     MEMORY_SEARCH_SCOPES,
+    _collection_update,
     make_memory_named_service_provider,
     memory_named_service_spec,
 )
@@ -66,7 +71,6 @@ def _provider():
         store_factory=lambda ctx: object(),  # not used by about/schema tests
         scope_factory=lambda ctx: MemoryScope(tenant="tenant-a", project="project-a", user_id="user-a"),
         bundle_id="bundle@1",
-        allow_write=True,
     )
 
 
@@ -120,7 +124,6 @@ def _provider_with_store(store: _Store, *, model_service=None, embedding_factory
         store_factory=lambda ctx: store,
         scope_factory=lambda ctx: MemoryScope(tenant="tenant-a", project="project-a", user_id="user-a", bundle_id="bundle@1"),
         bundle_id="bundle@1",
-        allow_write=True,
         model_service=model_service,
         embedding_factory=embedding_factory,
         search_embedding_factory=search_embedding_factory,
@@ -415,3 +418,140 @@ async def test_memory_block_produce_projects_pulled_read_payload() -> None:
     assert "Prefer balanced legal/commercial wording" in block["text"]
     assert block["meta"]["object_ref"] == "mem:record:mem_1"
     assert block["meta"]["materialized_path"] == "fi:turn_read.files/mem_1.json"
+
+
+def test_memory_record_schema_replaces_label_and_keyword_groups() -> None:
+    fields = MEMORY_RECORD_SCHEMA["fields"]
+
+    # Labels and keywords are value-lists (bare strings), so the only way to
+    # remove an item is to re-send the list without it. The provided list
+    # replaces the stored set; omitting the field preserves the existing set.
+    assert fields["labels"]["update_strategy"] == "replace"
+    assert fields["keywords"]["update_strategy"] == "replace"
+
+
+def test_memory_record_schema_documents_add_remove_delta() -> None:
+    fields = MEMORY_RECORD_SCHEMA["fields"]
+
+    # Bare list still replaces; the description also advertises the incremental
+    # {add, remove} delta shape for removing one item without re-sending the set.
+    for key in ("labels", "keywords"):
+        description = fields[key]["description"]
+        assert '"add"' in description and '"remove"' in description
+        assert "replace" in description.lower()
+
+
+def test_resolve_collection_update_replaces_on_bare_list() -> None:
+    # Bare list replaces the stored set regardless of what was there.
+    assert resolve_collection_update(["draft", "ready"], ["final"]) == ["final"]
+    assert resolve_collection_update(["draft"], []) == []
+    # Insert semantics: resolving against no existing set yields the list.
+    assert resolve_collection_update(None, ["A", "b"]) == ["a", "b"]
+
+
+def test_resolve_collection_update_delta_removes_only_named_item() -> None:
+    # {remove: ["draft"]} drops only that item, preserving the rest.
+    assert resolve_collection_update(
+        ["draft", "ready", "legal"], {"remove": ["draft"]}
+    ) == ["legal", "ready"]
+
+
+def test_resolve_collection_update_delta_swaps_add_and_remove() -> None:
+    # {add, remove} swaps: remove draft, add ready (removes applied first).
+    assert resolve_collection_update(
+        ["draft", "legal"], {"add": ["ready"], "remove": ["draft"]}
+    ) == ["legal", "ready"]
+    # Adding an item already present is idempotent; either side is optional.
+    assert resolve_collection_update(["legal"], {"add": ["legal", "new"]}) == [
+        "legal",
+        "new",
+    ]
+
+
+def test_collection_update_coercion_shapes() -> None:
+    # Omitted -> None (preserve). Bare list -> normalized list (replace).
+    assert _collection_update({}, "labels") is None
+    assert _collection_update({"labels": ["A", "b"]}, "labels") == ["a", "b"]
+    assert _collection_update({"labels": []}, "labels") == []
+    # Delta mapping is normalized and passed through for incremental apply.
+    assert _collection_update(
+        {"labels": {"add": ["Ready"], "remove": ["Draft"]}}, "labels"
+    ) == {"add": ["ready"], "remove": ["draft"]}
+
+
+class _UpsertStore:
+    """Fake store reproducing the apply-path canonical-text + labels rule.
+
+    Mirrors store.UserMemoryStore._append_event_and_update_scores: an
+    authoritative-edit event promotes its text to canonical; labels accept a
+    bare list (replace) or a {add, remove} delta against the existing set.
+    """
+
+    def __init__(self, record: MemoryRecord) -> None:
+        self.record = record
+        self.signals = []
+
+    async def ensure_schema(self) -> None:
+        return None
+
+    async def record_signal(self, *, scope, signal, match_memory_id=None, require_match=False):
+        from dataclasses import replace as _dc_replace
+
+        from kdcube_ai_app.apps.chat.sdk.context.memory.store import (
+            AUTHORITATIVE_EDIT_EVENTS,
+        )
+
+        self.signals.append(signal)
+        event_type = (signal.event_type or "").strip()
+        # Canonical text: promoted only for authoritative edits (latest wins).
+        memory_text = (
+            signal.memory if event_type in AUTHORITATIVE_EDIT_EVENTS else self.record.memory
+        )
+        # Labels: bare list replaces; {add, remove} delta applies incrementally.
+        labels = resolve_collection_update(self.record.labels, signal.labels) if signal.labels is not None else list(self.record.labels)
+        self.record = _dc_replace(
+            self.record,
+            memory=memory_text,
+            labels=tuple(labels),
+            revision=self.record.revision + 1,
+            evidence_count=self.record.evidence_count + 1,
+            update_count=self.record.update_count + 1,
+        )
+        return self.record
+
+
+@pytest.mark.asyncio
+async def test_upsert_object_replaces_memory_text_on_existing_record() -> None:
+    from dataclasses import replace as _dc_replace
+
+    original = _dc_replace(
+        _record("mem_travel"),
+        memory="Cities: Aachen, Bonn",
+        labels=("travel",),
+        revision=1,
+    )
+    store = _UpsertStore(original)
+    provider = _provider_with_store(store)
+
+    new_text = "Cities: Aachen, Bonn, Rotterdam"
+    response = await provider.object_upsert(
+        NamedServiceContext(tenant="tenant-a", project="project-a", user_id="user-a"),
+        NamedServiceRequest(
+            operation="object.upsert",
+            namespace="mem",
+            object_ref="mem:record:mem_travel",
+            base_revision="1",
+            object={"memory": new_text, "labels": {"add": ["rotterdam"]}},
+        ),
+    )
+
+    assert response.ok is True
+    # The explicit edit's text is promoted to canonical (latest edit wins).
+    assert response.object["memory"] == new_text
+    # The labels delta still applies in the same call.
+    assert "rotterdam" in response.object["labels"]
+    assert "travel" in response.object["labels"]
+    # The update was routed as an authoritative edit, not a passive observation.
+    assert store.signals[0].event_type == "agent_refinement"
+    # Optimistic concurrency: base_revision flows through and revision advances.
+    assert response.revision == "2"

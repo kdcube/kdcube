@@ -17,6 +17,8 @@ export function CopyButton({ value, title = 'Copy' }: { value: string; title?: s
         void copyToClipboard(value).then(() => {
           setDone(true)
           window.setTimeout(() => setDone(false), 1200)
+        }).catch((error) => {
+          console.warn('[kdcube.chat] copy failed', error)
         })
       }}
     >

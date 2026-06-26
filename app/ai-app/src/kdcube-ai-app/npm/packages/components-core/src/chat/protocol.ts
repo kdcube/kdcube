@@ -95,9 +95,8 @@ export interface RateLimitPayload {
   notification_type?: BannerTone | null
 }
 
-export interface ChatServiceEnvelope {
-  type: string
-  data?: {
+export interface ChatServiceEnvelope extends BaseEnvelope {
+  data?: Record<string, unknown> & {
     rate_limit?: RateLimitPayload
     user_message?: string
     notification_type?: BannerTone

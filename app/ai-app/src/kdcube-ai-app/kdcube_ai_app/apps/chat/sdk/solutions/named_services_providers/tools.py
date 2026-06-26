@@ -616,7 +616,7 @@ async def list_objects(
 
 async def search_objects(
     namespace: Annotated[str, "Configured named-service namespace or provider-declared searchable scoped namespace, for example 'sensor:temperature' or 'sensor:humidity:aggr'."],
-    query: Annotated[str, "Search query. Namespace about/schema declares per-scope semantics and filters."],
+    query: Annotated[str, "Semantic/lexical content query for matching indexed object text, labels, summaries, or provider-declared searchable fields. Do not use this for inventory/discovery of containers or boards; use list_objects/provider_about/object_schema when available."],
     limit: Annotated[int, "Maximum objects to return. Keep this bounded."] = 10,
     cursor: Annotated[str, "Optional pagination cursor from a previous response."] = "",
     filters: Annotated[str, "Optional JSON object with provider-specific filters."] = "",
@@ -719,7 +719,11 @@ async def object_schema(
     object_kind: Annotated[str, "Namespace object kind, for example 'sensor.temperature' or 'sensor.humidity.aggr'."] = "",
     object_ref: Annotated[str, "Canonical object ref when asking for the schema of a concrete ref."] = "",
 ) -> Annotated[Dict[str, Any], "Named service response envelope with object fields, search filter contract, and usage guidance."]:
-    """Return provider-defined object fields, search filter contract, and tool payload guidance."""
+    """Return provider-defined object fields, search filter contract, and tool payload guidance.
+
+    When upserting, honor each collection field's declared `update_strategy`: for `replace` send the
+    full intended value, for `append`/`patch` send only the delta; scalar fields are set-if-provided.
+    """
 
     payload: Dict[str, Any] = {}
     if object_kind:
@@ -765,7 +769,11 @@ async def upsert_object(
     base_revision: Annotated[str, "Optional expected revision for optimistic concurrency."] = "",
     idempotency_key: Annotated[str, "Optional client operation id for idempotent creates/updates."] = "",
 ) -> Annotated[Dict[str, Any], "Named service response envelope with object/revision."]:
-    """Create or update an object when the client policy allows mutation."""
+    """Create or update an object when the client policy allows mutation.
+
+    Honor each collection field's declared `update_strategy`: for `replace` send the full intended
+    value, for `append`/`patch` send only the delta; scalar fields are set-if-provided.
+    """
 
     try:
         parsed_object = _json_object(object_json, field_name="object_json")

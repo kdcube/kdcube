@@ -209,7 +209,7 @@ def _claude_workspace_config(*, mcp_url: str, token_header: str, token: str):
 
 def _prompt(
     *,
-    task_id: str,
+    automation_id: str,
     task_definition: str,
     instruction: str,
     account: Mapping[str, Any],
@@ -222,7 +222,7 @@ def _prompt(
         [
             "Process this saved task's email goal by choosing the right scoped email search through MCP.",
             "",
-            f"Task id: {task_id or 'manual'}",
+            f"Task id: {automation_id or 'manual'}",
             f"Account: {account.get('email') or account.get('account_id')}",
             f"Provider: {account.get('provider') or 'google'}",
             f"Mailbox: {mailbox or 'inbox'}",
@@ -295,7 +295,7 @@ async def run_email_processor_with_claude_code(
     unread_only: bool,
     limit: int,
     gmail_query: str,
-    task_id: str,
+    automation_id: str,
     task_definition: str,
     instruction: str,
     messages: list[Mapping[str, Any]],
@@ -311,7 +311,7 @@ async def run_email_processor_with_claude_code(
         or ClaudeCodeWorkspaceConfig is None
         or run_claude_code_turn is None
     ):
-        logger.warning("[email.claude] SDK unavailable | user_id=%s task_id=%s", user_id, task_id or "manual")
+        logger.warning("[email.claude] SDK unavailable | user_id=%s automation_id=%s", user_id, automation_id or "manual")
         return {
             "ok": False,
             "error": {"code": "claude_code_sdk_unavailable", "message": "Claude Code SDK integration is unavailable in this runtime."},
@@ -321,7 +321,7 @@ async def run_email_processor_with_claude_code(
         entrypoint=entrypoint,
         storage_root=storage_root,
         user_id=user_id,
-        task_id=task_id,
+        automation_id=automation_id,
         execution_id=execution_id,
         account=account,
         mailbox=mailbox,
@@ -340,7 +340,7 @@ async def run_email_processor_with_claude_code(
         / "email"
         / "claude_code"
         / safe_segment(user_id, fallback="anonymous")
-        / safe_segment(task_id or "manual", fallback="manual")
+        / safe_segment(automation_id or "manual", fallback="manual")
         / safe_segment(run_id, fallback="run")
     )
     mcp_url = _mcp_url(entrypoint, tenant=tenant, project=project, bundle_id=bundle_id)
@@ -368,7 +368,7 @@ async def run_email_processor_with_claude_code(
     except Exception:
         timeout_seconds = 300.0
     prompt = _prompt(
-        task_id=task_id,
+        automation_id=automation_id,
         task_definition=task_definition,
         instruction=instruction,
         account=account,

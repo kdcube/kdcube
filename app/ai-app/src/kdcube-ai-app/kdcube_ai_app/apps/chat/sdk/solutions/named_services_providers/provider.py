@@ -29,6 +29,7 @@ def named_service_provider(
     operations: Mapping[str, Any] | None = None,
     label: str | None = None,
     description: str | None = None,
+    intro: str = "",
     metadata: Mapping[str, Any] | None = None,
 ):
     """Attach named service provider metadata to a class or factory.
@@ -48,6 +49,7 @@ def named_service_provider(
         operations=dict(operations or build_default_operations()),
         label=label,
         description=description,
+        intro=str(intro or "").strip(),
         metadata=dict(metadata or {}),
     )
 

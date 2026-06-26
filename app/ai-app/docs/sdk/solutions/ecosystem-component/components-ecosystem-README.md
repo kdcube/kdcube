@@ -308,6 +308,11 @@ No config layer should smuggle provider behavior into an unrelated component.
 The backend provider owns semantics; the scene/frontend config owns
 composition.
 
+Auth/session readiness is host-announced, not component-owned: the host
+broadcasts `kdcube-auth-changed` on every session transition and components
+react to it (rather than carrying credentials or polling identity endpoints).
+See the [scene auth contract](../scene/scene-auth-README.md).
+
 ## Event And Data Planes
 
 ```text

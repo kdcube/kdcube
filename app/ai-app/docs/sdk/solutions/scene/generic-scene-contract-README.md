@@ -23,6 +23,7 @@ see_also:
   - docs/sdk/solutions/scene/config/README.md
   - docs/sdk/solutions/scene/scene-composition-README.md
   - docs/sdk/solutions/scene/scene-event-orchestration-README.md
+  - docs/sdk/solutions/scene/scene-auth-README.md
   - docs/sdk/solutions/scene/cross-surface-context-drag-README.md
   - docs/sdk/solutions/scene/scene-surface-registry-README.md
   - docs/sdk/solutions/scene/surface-layering-README.md

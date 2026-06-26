@@ -22,9 +22,11 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/arch/architecture-of-what-you-build-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/components/README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/ecosystem-component/components-ecosystem-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/ontologic-tools-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/providers-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/clients-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/integration-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/discovery-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/object-ref-presentation-and-actions-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/react-object-materialization-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/react-object-policy-bridge-README.md
@@ -129,9 +131,11 @@ and provider-backed refs gain a live cross-app/object-owner bridge.
 | Document | Purpose |
 | --- | --- |
 | [Components Ecosystem Architecture](../solutions/ecosystem-component/components-ecosystem-README.md) | End-to-end architecture map for provider apps, consumer apps, scene, ReAct, Pinboard, chat, events, data bus, and config. |
+| [Ontologic Tools](ontologic-tools-README.md) | The model-facing tool surface for operating any realm by satisfying schemas: how the nine tools compose, the schema `tools` block as affordance, and the per-field `update` strategy. |
 | [Providers](providers-README.md) | Provider contract, operation vocabulary, auth context, and transport adapters. |
 | [Clients](clients-README.md) | Client config, tool exposure, current resolver behavior, and client ids. |
 | [Integration](integration-README.md) | Visual provider-host/client-app flow using task-tracker and versatile. |
+| [Discovery Registry](discovery-README.md) | The per-tenant/project Redis discovery table: the provider record, key schema, TTL/expiry, the registration write path, and the rule that reads go through the discovery module. |
 | [Object Refs, Presentation, And Actions](object-ref-presentation-and-actions-README.md) | Canonical UI/provider boundary: `object_ref` is opaque to components, visual identity comes from `namespace_presentation_config`, and actions come from provider resolvers. |
 | [ReAct Object Materialization](react-object-materialization-README.md) | Runtime-boundary diagram for `react.pull`, streamed `object.get`, `react.read`, owner `block.produce`, and prompt rendering. |
 | [ReAct Object Policy Bridge](react-object-policy-bridge-README.md) | Owner policy contract for namespace rehosters, event-source routing, block production, render hooks, and `original_object_stats`. |

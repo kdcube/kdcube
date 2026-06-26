@@ -802,6 +802,26 @@ Built-in example bundles are governed by the deployment switch in `assembly.yaml
 - an item in `bundles.yaml` for a packaged example may carry config/props, but it is not the enable switch
 - if examples are disabled, mentioning an example id in `bundles.yaml` must not make that example available
 
+SDK example apps under `apps/chat/sdk/examples/bundles/` are registered **by
+`id` alone** — no `path`, no `module`. They auto-resolve from the examples dir,
+so the `bundles.yaml` item carries only `id`, `singleton`, and optional `config`
+(the `versatile@2026-03-31-13-36` and `user-memories@2026-06-26` items follow
+this shape). Local/playground apps still use the `path` + `module` shape.
+
+```yaml
+# id-only example app (auto-resolves from the examples dir)
+items:
+  - id: "user-memories@2026-06-26"
+    singleton: false
+    config: {}
+
+# local/playground app (still uses path + module)
+  - id: "my.bundle@1-0"
+    path: "/Users/you/src/my-repo/src/my_bundle"
+    module: "entrypoint"
+    config: {}
+```
+
 Memory-enabled bundles use `config.memory` plus the Memory widget flag:
 
 ```yaml

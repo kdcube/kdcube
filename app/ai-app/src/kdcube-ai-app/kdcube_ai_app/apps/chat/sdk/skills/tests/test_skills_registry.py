@@ -28,8 +28,8 @@ class SkillsRegistryTests(unittest.TestCase):
         self.assertEqual(resolve_skill_ref(full_id, short_id_map=short_map), full_id)
 
     def test_solution_task_skills_are_builtin(self):
-        self.assertIsNotNone(get_skill("task.tasks"))
-        self.assertIsNotNone(get_skill("task.job"))
+        self.assertIsNotNone(get_skill("automation.automations"))
+        self.assertIsNotNone(get_skill("automation.job"))
 
     def test_hidden_disclosure_skill_is_loadable_but_not_advertised(self):
         with tempfile.TemporaryDirectory() as tmp:

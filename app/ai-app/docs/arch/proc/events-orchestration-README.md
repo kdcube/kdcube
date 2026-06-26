@@ -128,6 +128,12 @@ When proc claims work:
 8. invoke the bundle through the normal reactive-entrypoint path when the wake
    schedules work.
 
+`schedule_consumer_from_wake(...)` may mark `T.consumer.status = scheduled`.
+That is only a duplicate-start reservation for the proc/app-load boundary. It
+does not prove that an old open handler is still alive. When the invoked turn
+reaches `open_handler(...)`, stale-open reclaim is based on a fresh `active`
+consumer acknowledgement, not on `scheduled`.
+
 The resolved payload is still a full `ExternalEventPayload`, so communicator,
 economics, runtime context, and non-ReAct workflows can use the same processor
 execution machinery.

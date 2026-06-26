@@ -157,42 +157,6 @@ class MemoryEntrypointMixin:
         memory_cfg = self._memory_config()
         return _truthy(memory_cfg.get("enabled"), False)
 
-    def _memory_agent_named_service_allows(self, operation: str) -> bool:
-        operation = str(operation or "").strip()
-        if not operation:
-            return False
-        props = getattr(self, "bundle_props", None) or {}
-        surfaces = props.get("surfaces") if isinstance(props, dict) else {}
-        as_consumer = surfaces.get("as_consumer") if isinstance(surfaces, dict) else {}
-        agents = as_consumer.get("agents") if isinstance(as_consumer, dict) else {}
-        if not isinstance(agents, dict):
-            return False
-        for agent_cfg in agents.values():
-            tools = agent_cfg.get("tools") if isinstance(agent_cfg, dict) else []
-            if not isinstance(tools, list):
-                continue
-            for tool_cfg in tools:
-                if not isinstance(tool_cfg, dict) or tool_cfg.get("kind") != "named_service":
-                    continue
-                namespaces = tool_cfg.get("namespaces")
-                mem_cfg = namespaces.get("mem") if isinstance(namespaces, dict) else None
-                if not isinstance(mem_cfg, dict):
-                    continue
-                allowed = {str(item).strip() for item in (mem_cfg.get("allowed") or []) if str(item).strip()}
-                if operation in allowed:
-                    return True
-        return False
-
-    def _memory_named_service_write_enabled(self) -> bool:
-        memory_cfg = self._memory_config()
-        tools_cfg = memory_cfg.get("tools") if isinstance(memory_cfg.get("tools"), dict) else {}
-        if _truthy(tools_cfg.get("allow_write"), False):
-            return True
-        return any(
-            self._memory_agent_named_service_allows(operation)
-            for operation in ("object.upsert", "object.delete", "object.action")
-        )
-
     def _memory_named_service_default_scope_filter(self) -> str:
         memory_cfg = self._memory_config()
         tools_cfg = memory_cfg.get("tools") if isinstance(memory_cfg.get("tools"), dict) else {}
@@ -436,7 +400,6 @@ class MemoryEntrypointMixin:
             store_factory=self._memory_named_service_store,
             scope_factory=self._memory_named_service_scope,
             bundle_id=getattr(bundle_spec, "id", None) or "",
-            allow_write=self._memory_named_service_write_enabled(),
             default_scope_filter=self._memory_named_service_default_scope_filter(),
             model_service=self.search_model_service(flow="memory.search"),
             embedding_enabled=_truthy(tools_cfg.get("embedding_enabled"), True),
@@ -2528,6 +2491,96 @@ class MemoryEntrypointMixin:
             "events": [self._memory_event_payload(event) for event in events],
             "count": len(events),
         }
+
+    async def _memory_evidence_result(
+        self, *, memory_id: str, scope_filter: str, record: Any, limit: Any = None
+    ) -> Dict[str, Any]:
+        """Build the apply/drop response: the re-derived record + refreshed tail."""
+        if record is None:
+            return self._memory_error("memory_not_found")
+        scope = self._memory_scope()
+        normalized_scope_filter = self._memory_scope_filter(scope_filter)
+        events = await self._memory_store().list_memory_events(
+            scope=scope,
+            memory_id=memory_id,
+            visible_to_user=True,
+            scope_filter=normalized_scope_filter,
+            limit=self._memory_limit(limit),
+        )
+        return {
+            "ok": True,
+            "memory": self._memory_record_payload(record),
+            "events": [self._memory_event_payload(event) for event in events],
+            "count": len(events),
+        }
+
+    @api(method="POST", alias="memories_widget_evidence_apply", route="operations", user_types=("registered", "paid", "privileged"))
+    async def memories_widget_evidence_apply(
+        self,
+        memory_id: str,
+        event_id: str,
+        scope_filter: str = "current_bundle",
+        base_revision: Optional[int] = None,
+        limit: int = 25,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """Promote a chosen evidence entry's text to the canonical memory note."""
+        del kwargs
+        if not self._memory_widget_write_enabled():
+            return self._memory_error("memory_write_disabled")
+        disabled_error = await self._memory_usage_disabled_error()
+        if disabled_error:
+            return disabled_error
+        memory_id = _memory_id_from_ref(memory_id)
+        try:
+            record = await self._memory_store().apply_evidence(
+                scope=self._memory_scope(),
+                memory_id=memory_id,
+                event_id=str(event_id or "").strip(),
+                visible_to_user=True,
+                scope_filter=self._memory_scope_filter(scope_filter),
+                base_revision=base_revision,
+                ensure_schema=_truthy(self._memory_widget_config().get("ensure_schema"), True),
+            )
+        except ValueError as exc:
+            return self._memory_error(str(exc) or "evidence_apply_failed")
+        return await self._memory_evidence_result(
+            memory_id=memory_id, scope_filter=scope_filter, record=record, limit=limit
+        )
+
+    @api(method="POST", alias="memories_widget_evidence_delete", route="operations", user_types=("registered", "paid", "privileged"))
+    async def memories_widget_evidence_delete(
+        self,
+        memory_id: str,
+        event_id: str,
+        scope_filter: str = "current_bundle",
+        base_revision: Optional[int] = None,
+        limit: int = 25,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """Drop one evidence entry, then re-derive the record from the rest."""
+        del kwargs
+        if not self._memory_widget_write_enabled():
+            return self._memory_error("memory_write_disabled")
+        disabled_error = await self._memory_usage_disabled_error()
+        if disabled_error:
+            return disabled_error
+        memory_id = _memory_id_from_ref(memory_id)
+        try:
+            record = await self._memory_store().delete_evidence(
+                scope=self._memory_scope(),
+                memory_id=memory_id,
+                event_id=str(event_id or "").strip(),
+                visible_to_user=True,
+                scope_filter=self._memory_scope_filter(scope_filter),
+                base_revision=base_revision,
+                ensure_schema=_truthy(self._memory_widget_config().get("ensure_schema"), True),
+            )
+        except ValueError as exc:
+            return self._memory_error(str(exc) or "evidence_delete_failed")
+        return await self._memory_evidence_result(
+            memory_id=memory_id, scope_filter=scope_filter, record=record, limit=limit
+        )
 
     @api(method="POST", alias="memories_widget_create", route="operations", user_types=("registered", "paid", "privileged"))
     async def memories_widget_create(

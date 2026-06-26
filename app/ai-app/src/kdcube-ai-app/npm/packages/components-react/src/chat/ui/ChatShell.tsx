@@ -250,6 +250,13 @@ export function ChatShell({
   const handleConversationDelete = engine.deleteConversation
   const handleConversationRefresh = engine.refreshConversationList
   const handleStartNewChat = engine.newChat
+  const handleCompactConversationMenuToggle = useStableCallback(() => {
+    setConvMenuOpen((open) => {
+      const next = !open
+      if (next) handleConversationRefresh()
+      return next
+    })
+  })
   const handleCompactConvSelect = useStableCallback((conversationId: string) => {
     setConvMenuOpen(false)
     engine.loadConversation(conversationId)
@@ -290,7 +297,17 @@ export function ChatShell({
     if (files.length > 0) dispatch(chatActions.addComposerFiles(files))
   })
   const handleOpenWebapp = useStableCallback(() => setLeftPaneMode('webapp'))
-  const handleBackToChats = useStableCallback(() => setLeftPaneMode('chats'))
+  const handleBackToChats = useStableCallback(() => {
+    setLeftPaneMode('chats')
+    handleConversationRefresh()
+  })
+  const handleConversationPaneToggle = useStableCallback(() => {
+    setLeftPaneMode((mode) => {
+      const next = mode === 'collapsed' ? 'chats' : 'collapsed'
+      if (next === 'chats') handleConversationRefresh()
+      return next
+    })
+  })
   const handleCollapseLeftPane = useStableCallback(() => setLeftPaneMode('collapsed'))
   const handleExpandWebapp = useStableCallback(() => setWebappModalOpen(true))
   const handleCloseWebappModal = useStableCallback(() => setWebappModalOpen(false))
@@ -470,7 +487,7 @@ export function ChatShell({
             {compact && authed ? (
               <button
                 type="button"
-                onClick={() => setConvMenuOpen((open) => !open)}
+                onClick={handleCompactConversationMenuToggle}
                 className={`k-iconbtn ${convMenuOpen ? 'k-iconbtn-active' : ''}`}
                 aria-label="Conversations"
                 title="Conversations"
@@ -485,9 +502,7 @@ export function ChatShell({
             {!compact ? (
               <button
                 type="button"
-                onClick={() =>
-                  setLeftPaneMode(leftPaneMode === 'collapsed' ? 'chats' : 'collapsed')
-                }
+                onClick={handleConversationPaneToggle}
                 className="k-iconbtn"
                 aria-label={leftPaneMode === 'collapsed' ? 'Show side panel' : 'Hide side panel'}
                 title={leftPaneMode === 'collapsed' ? 'Show side panel' : 'Hide side panel'}

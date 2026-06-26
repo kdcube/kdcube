@@ -1,4 +1,4 @@
-export type TabId = 'memory' | 'conversations' | 'telegram_admin';
+export type TabId = 'memory' | 'conversations' | 'connections' | 'telegram_admin';
 
 export type TelegramWidgetCallOperation = <T>(
   operation: string,
@@ -143,4 +143,24 @@ export interface ExportPayload {
   mime?: string;
   content_b64?: string;
   error?: string;
+}
+
+export interface TelegramIdentityLinkResult {
+  ok?: boolean;
+  provider?: string;
+  provider_subject?: string;
+  platform_claim_url?: string;
+  challenge?: {
+    challenge_id?: string;
+    status?: string;
+    platform_user_id?: string;
+  };
+  link?: {
+    provider?: string;
+    provider_subject?: string;
+    platform_user_id?: string;
+    label?: string;
+  };
+  error?: string;
+  message?: string;
 }

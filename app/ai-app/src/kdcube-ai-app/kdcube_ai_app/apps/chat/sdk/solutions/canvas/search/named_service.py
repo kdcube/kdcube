@@ -11,6 +11,7 @@ provider later by passing handlers wired to its concrete canvas services.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, Awaitable, Callable, Mapping
 
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
@@ -24,6 +25,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import (
     NamedServiceOperationSpec,
+    OBJECT_LIST,
     OBJECT_SCHEMA,
     OBJECT_SEARCH,
     OBJECT_UPSERT,
@@ -33,6 +35,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import
 )
 
 from .pin_search import CANVAS_PIN_SEARCH_FILTERS
+from ..instructions import CANVAS_NAMESPACE_INTRO
 
 
 CANVAS_NAMESPACE = "cnv"
@@ -78,11 +81,11 @@ CANVAS_BOARD_SCHEMA: dict[str, Any] = {
     "description": "A canvas board document containing card snapshots, layout, and revision metadata.",
     "fields": {
         "canvas_name": {"type": "string", "description": "Human board name, for example main."},
-        "canvas_id": {"type": "string", "description": "Storage-level board id."},
+        "canvas_id": {"type": "string", "description": "Storage-level board id returned as metadata. Do not turn it into object_ref; reuse the listed board object_ref instead."},
         "revision": {"type": "integer", "description": "Board revision."},
         "canvas_ref": {"type": "string", "description": "Versioned board ref such as cnv:main@7."},
         "latest_ref": {"type": "string", "description": "Latest board ref such as cnv:main."},
-        "cards": {"type": "array", "description": "Board cards."},
+        "cards": {"type": "array", "update_strategy": "replace", "description": "Board cards. A board upsert REPLACES the entire cards array — provide the full intended set of cards, not a delta. To change individual cards without overwriting the board, use the canvas card-level operations."},
     },
     "upsert": {
         "tool": "named_services.upsert_object",
@@ -91,16 +94,17 @@ CANVAS_BOARD_SCHEMA: dict[str, Any] = {
             "canvas_name": "main",
             "canvas": {"cards": []},
         },
-        "description": "Replace/write a board document. Use base_revision when the caller must protect against concurrent edits.",
+        "description": "Replace/write a board document. Use the object_ref returned by list/read/pull plus base_revision when the caller must protect against concurrent edits.",
     },
     "tools": {
+        "list_boards": {"tool": "named_services.list_objects", "required": {"namespace": CANVAS_NAMESPACE}},
         "get_latest": {"tool": "react.pull", "required": {"paths": ["cnv:<board-name>"]}},
         "get_revision": {"tool": "react.pull", "required": {"paths": ["cnv:<board-name>@<revision>"]}},
         "replace_board": {
             "tool": "named_services.upsert_object",
             "required": {
                 "namespace": CANVAS_NAMESPACE,
-                "object_ref": "cnv:<board-name>",
+                "object_ref": "<board object_ref from named_services.list_objects or visible canvas context>",
                 "base_revision": "<visible revision>",
                 "object_json": {
                     "object_kind": CANVAS_BOARD_OBJECT_KIND,
@@ -113,7 +117,7 @@ CANVAS_BOARD_SCHEMA: dict[str, Any] = {
             "tool": "named_services.upsert_object",
             "required": {
                 "namespace": CANVAS_NAMESPACE,
-                "object_ref": "cnv:<board-name>",
+                "object_ref": "<board object_ref from named_services.list_objects or visible canvas context>",
                 "base_revision": "<visible revision>",
                 "object_json": {
                     "object_kind": CANVAS_OPERATION_BATCH_OBJECT_KIND,
@@ -218,7 +222,7 @@ CANVAS_CARD_SCHEMA: dict[str, Any] = {
             "tool": "named_services.upsert_object",
             "required": {
                 "namespace": CANVAS_NAMESPACE,
-                "object_ref": "cnv:<board-name>",
+                "object_ref": "<board object_ref from named_services.list_objects or visible canvas context>",
                 "base_revision": "<visible revision>",
                 "object_json": {
                     "object_kind": CANVAS_CARD_COMMENT_OBJECT_KIND,
@@ -232,7 +236,7 @@ CANVAS_CARD_SCHEMA: dict[str, Any] = {
             "tool": "named_services.upsert_object",
             "required": {
                 "namespace": CANVAS_NAMESPACE,
-                "object_ref": "cnv:<board-name>",
+                "object_ref": "<board object_ref from named_services.list_objects or visible canvas context>",
                 "base_revision": "<visible revision>",
                 "object_json": {
                     "object_kind": CANVAS_CARD_REPLACEMENT_OBJECT_KIND,
@@ -247,7 +251,7 @@ CANVAS_CARD_SCHEMA: dict[str, Any] = {
             "tool": "named_services.upsert_object",
             "required": {
                 "namespace": CANVAS_NAMESPACE,
-                "object_ref": "cnv:<board-name>",
+                "object_ref": "<board object_ref from named_services.list_objects or visible canvas context>",
                 "base_revision": "<visible revision>",
                 "object_json": {
                     "object_kind": CANVAS_CARD_DELETION_SUGGESTION_OBJECT_KIND,
@@ -274,7 +278,8 @@ CANVAS_OPERATION_BATCH_SCHEMA: dict[str, Any] = {
             "required": True,
             "items": "canvas operation object",
             "allowed_ops": list(CANVAS_PATCH_OPS),
-            "description": "Ordered operations applied in one store.patch call. Prefer typed schemas for single card comments/replacements/deletions.",
+            "update_strategy": "replace",
+            "description": "Ordered operations applied in one store.patch call. This array is the complete op batch for THIS upsert — operations are applied in order against the current revision, not merged with or appended to any earlier batch. Prefer typed schemas for single card comments/replacements/deletions.",
         },
         "reason": {"type": "string", "description": "Short reason recorded in canvas history."},
     },
@@ -283,7 +288,7 @@ CANVAS_OPERATION_BATCH_SCHEMA: dict[str, Any] = {
             "tool": "named_services.upsert_object",
             "required": {
                 "namespace": CANVAS_NAMESPACE,
-                "object_ref": "cnv:<board-name>",
+                "object_ref": "<board object_ref from named_services.list_objects or visible canvas context>",
                 "base_revision": "<visible revision>",
                 "object_json": {
                     "object_kind": CANVAS_OPERATION_BATCH_OBJECT_KIND,
@@ -314,7 +319,7 @@ CANVAS_CARD_COMMENT_SCHEMA: dict[str, Any] = {
             "tool": "named_services.upsert_object",
             "required": {
                 "namespace": CANVAS_NAMESPACE,
-                "object_ref": "cnv:<board-name>",
+                "object_ref": "<board object_ref from named_services.list_objects or visible canvas context>",
                 "base_revision": "<visible revision>",
                 "object_json": {
                     "object_kind": CANVAS_CARD_COMMENT_OBJECT_KIND,
@@ -337,7 +342,7 @@ CANVAS_CARD_REPLACEMENT_SCHEMA: dict[str, Any] = {
         "canvas_name": {"type": "string", "required": True},
         "card_id": {"type": "string", "required": True},
         "mode": {"type": "string", "enum": ["suggested", "in_place"], "default": "suggested"},
-        "card": {"type": "object", "required": True, "description": "Replacement card body. Suggested mode creates a new floating card linked to source_card_ids."},
+        "card": {"type": "object", "required": True, "update_strategy": "patch", "description": "Replacement card body. In_place mode shallow-merges these keys onto the existing card (top-level keys you provide overwrite; keys you omit are preserved; nested values are replaced wholesale, not deep-merged). Suggested mode (default) instead creates a new floating card from this body linked to source_card_ids."},
         "base_revision": {"type": "integer|string", "required": True},
     },
     "tools": {
@@ -345,7 +350,7 @@ CANVAS_CARD_REPLACEMENT_SCHEMA: dict[str, Any] = {
             "tool": "named_services.upsert_object",
             "required": {
                 "namespace": CANVAS_NAMESPACE,
-                "object_ref": "cnv:<board-name>",
+                "object_ref": "<board object_ref from named_services.list_objects or visible canvas context>",
                 "base_revision": "<visible revision>",
                 "object_json": {
                     "object_kind": CANVAS_CARD_REPLACEMENT_OBJECT_KIND,
@@ -376,7 +381,7 @@ CANVAS_CARD_DELETION_SUGGESTION_SCHEMA: dict[str, Any] = {
             "tool": "named_services.upsert_object",
             "required": {
                 "namespace": CANVAS_NAMESPACE,
-                "object_ref": "cnv:<board-name>",
+                "object_ref": "<board object_ref from named_services.list_objects or visible canvas context>",
                 "base_revision": "<visible revision>",
                 "object_json": {
                     "object_kind": CANVAS_CARD_DELETION_SUGGESTION_OBJECT_KIND,
@@ -405,7 +410,7 @@ CANVAS_CARD_DELETE_SCHEMA: dict[str, Any] = {
             "tool": "named_services.upsert_object",
             "required": {
                 "namespace": CANVAS_NAMESPACE,
-                "object_ref": "cnv:<board-name>",
+                "object_ref": "<board object_ref from named_services.list_objects or visible canvas context>",
                 "base_revision": "<visible revision>",
                 "object_json": {
                     "object_kind": CANVAS_CARD_DELETE_OBJECT_KIND,
@@ -438,7 +443,7 @@ CANVAS_CARD_LAYOUT_SCHEMA: dict[str, Any] = {
             "tool": "named_services.upsert_object",
             "required": {
                 "namespace": CANVAS_NAMESPACE,
-                "object_ref": "cnv:<board-name>",
+                "object_ref": "<board object_ref from named_services.list_objects or visible canvas context>",
                 "base_revision": "<visible revision>",
                 "object_json": {
                     "object_kind": CANVAS_CARD_LAYOUT_OBJECT_KIND,
@@ -521,17 +526,21 @@ CANVAS_PIN_SERVICE_ABOUT: dict[str, Any] = {
         "cnv:canvas/users/<user>/canvases/<board>/objects/<kind>/<card-id>/v000001.<ext>",
     ],
     "search_scopes": [scope.to_dict() for scope in CANVAS_PIN_SEARCH_SCOPES],
+    "list_hint": "Call named_services.list_objects(namespace='cnv') to discover the user's boards. Reuse the returned board object_ref exactly; do not derive it from search results or canvas_id.",
+    "search_hint": "Call named_services.search_objects(namespace='cnv', query=...) only to semantically/lexically match card snapshots by text/content. It is not board discovery.",
     "schema_hint": "Call named_services.object_schema with namespace='cnv' for canvas board/card/object fields, search filters, and upsert payloads.",
-    "mutation_hint": "Use named_services.upsert_object with object_kind canvas.card, canvas.card.comment, canvas.card.replacement, canvas.card.deletion_suggestion, canvas.card.delete, canvas.card.layout, or canvas.operation_batch. Always pass object_ref='cnv:<board-name>' and base_revision when mutating a visible board.",
+    "mutation_hint": "Use named_services.upsert_object with object_kind canvas.card, canvas.card.comment, canvas.card.replacement, canvas.card.deletion_suggestion, canvas.card.delete, canvas.card.layout, or canvas.operation_batch. Always pass the board object_ref returned by list/read/pull and base_revision when mutating a visible board.",
 }
 
 CANVAS_PIN_OPERATIONS = {
     PROVIDER_ABOUT: NamedServiceOperationSpec(PROVIDER_ABOUT, (TRANSPORT_LOCAL, TRANSPORT_API)),
+    OBJECT_LIST: NamedServiceOperationSpec(OBJECT_LIST, (TRANSPORT_LOCAL, TRANSPORT_API)),
     OBJECT_SEARCH: NamedServiceOperationSpec(OBJECT_SEARCH, (TRANSPORT_LOCAL, TRANSPORT_API)),
     OBJECT_SCHEMA: NamedServiceOperationSpec(OBJECT_SCHEMA, (TRANSPORT_LOCAL, TRANSPORT_API)),
     OBJECT_UPSERT: NamedServiceOperationSpec(OBJECT_UPSERT, (TRANSPORT_LOCAL, TRANSPORT_API)),
 }
 
+CanvasListHandler = Callable[[NamedServiceContext, NamedServiceRequest], Awaitable[Mapping[str, Any]]]
 CanvasSearchHandler = Callable[[NamedServiceContext, NamedServiceRequest], Awaitable[Mapping[str, Any]]]
 CanvasUpsertHandler = Callable[[NamedServiceContext, NamedServiceRequest], Awaitable[Mapping[str, Any] | NamedServiceResponse]]
 CanvasStoreFactory = Callable[[NamedServiceContext], Any]
@@ -547,6 +556,7 @@ def _provider_spec() -> NamedServiceProviderSpec:
         operations=CANVAS_PIN_OPERATIONS,
         label="Canvas",
         description="Named-service provider for canvas boards, cards, hosted objects, and card search.",
+        intro=CANVAS_NAMESPACE_INTRO,
     )
 
 
@@ -581,6 +591,47 @@ def _normalize_result_item(item: Any, *, namespace: str) -> dict[str, Any] | Non
     }
 
 
+def _board_ref(canvas_name: str) -> str:
+    name = _text(canvas_name) or "main"
+    return f"cnv:{name}"
+
+
+def _normalize_board_item(item: Any, *, active_canvas: str = "") -> dict[str, Any] | None:
+    if not isinstance(item, Mapping):
+        return None
+    record = dict(item)
+    canvas_name = _text(record.get("canvas_name") or record.get("name"))
+    canvas_id = _text(record.get("canvas_id"))
+    if not canvas_name and canvas_id.startswith("cnv:"):
+        body = canvas_id.split(":", 1)[1].split("@", 1)[0]
+        canvas_name = _text(body.split(":", 1)[-1])
+    if not canvas_name:
+        return None
+    try:
+        latest_revision = int(record.get("latest_revision") or 0)
+    except Exception:
+        latest_revision = 0
+    object_ref = _board_ref(canvas_name)
+    versioned_ref = _text(record.get("canvas_ref")) or (f"{object_ref}@{latest_revision}" if latest_revision else "")
+    return {
+        "object_ref": object_ref,
+        "namespace": CANVAS_NAMESPACE,
+        "object_kind": CANVAS_BOARD_OBJECT_KIND,
+        "label": canvas_name,
+        "summary": f"Canvas board {canvas_name}" + (f" at revision {latest_revision}" if latest_revision else ""),
+        "body": {
+            "canvas_name": canvas_name,
+            "canvas_id": canvas_id,
+            "latest_revision": latest_revision,
+            "canvas_ref": versioned_ref,
+            "latest_ref": object_ref,
+            "active": bool(active_canvas and active_canvas == canvas_name),
+            "archived": bool(record.get("archived")),
+            "updated_at": record.get("updated_at"),
+        },
+    }
+
+
 def _payload_object_kind(request: NamedServiceRequest) -> str:
     value = _text(request.payload.get("object_kind") or request.object.get("object_kind"))
     if value == "canvas.pin":
@@ -600,12 +651,144 @@ def _payload_object_kind(request: NamedServiceRequest) -> str:
 
 
 def _board_name_from_ref(ref: str) -> str:
+    name, _canvas_id = _target_from_board_ref(ref)
+    return name
+
+
+def _target_from_board_ref(ref: str, *, user_id: str = "") -> tuple[str, str]:
     if not ref.startswith("cnv:"):
-        return ""
-    body = ref.split(":", 1)[1]
+        return "", ""
+    body = ref.split(":", 1)[1].split("@", 1)[0].strip()
     if body.startswith("canvas/"):
-        return ""
-    return body.split("@", 1)[0].strip()
+        return "", ""
+    if ":" in body:
+        owner, board = body.split(":", 1)
+        owner = _text(owner)
+        board = _text(board)
+        if owner and board and (not user_id or owner == user_id):
+            return board, f"cnv:{owner}:{board}"
+    return _text(body), ""
+
+
+def _looks_like_sanitized_canvas_id(value: str, *, user_id: str) -> bool:
+    text = _text(value).split("@", 1)[0]
+    return bool(user_id and text.startswith(f"{user_id}_"))
+
+
+def _target_error_response(
+    *,
+    provider: Mapping[str, Any],
+    namespace: str,
+    request: NamedServiceRequest,
+    code: str,
+    message: str,
+    details: Mapping[str, Any],
+) -> NamedServiceResponse:
+    return NamedServiceResponse.error_response(
+        code=code,
+        message=message,
+        status=400,
+        provider=provider,
+        namespace=namespace,
+        object_ref=request.object_ref,
+        details=details,
+    )
+
+
+def _request_with_canvas_target(
+    ctx: NamedServiceContext,
+    request: NamedServiceRequest,
+    *,
+    provider: Mapping[str, Any],
+    namespace: str,
+) -> tuple[NamedServiceRequest, NamedServiceResponse | None]:
+    user_id = _text(ctx.user_id or request.object.get("user_id") or request.context.get("user_id"))
+    ref = _text(request.object_ref)
+    obj = dict(request.object or {})
+    raw_canvas_name = _text(
+        obj.get("canvas_name")
+        or obj.get("board")
+        or request.payload.get("canvas_name")
+        or request.context.get("canvas_name")
+    )
+    raw_canvas_id = _text(
+        obj.get("canvas_id")
+        or request.payload.get("canvas_id")
+        or request.context.get("canvas_id")
+    )
+
+    target_name = ""
+    target_id = ""
+    if ref.startswith("cnv:"):
+        body = ref.split(":", 1)[1].split("@", 1)[0].strip()
+        if _looks_like_sanitized_canvas_id(body, user_id=user_id):
+            return request, _target_error_response(
+                provider=provider,
+                namespace=namespace,
+                request=request,
+                code="canvas_object_ref_not_canonical",
+                message=(
+                    "Canvas object_ref looks like a storage id with ':' replaced by '_'. "
+                    "Use the board object_ref returned by named_services.list_objects or a visible canvas context."
+                ),
+                details={
+                    "object_ref": ref,
+                    "user_id": user_id,
+                    "hint": "Use cnv:<board-name> for a board ref; keep canvas_id as metadata only.",
+                },
+            )
+        target_name, target_id = _target_from_board_ref(ref, user_id=user_id)
+        if ":" in body and not target_id and not body.startswith("canvas/"):
+            return request, _target_error_response(
+                provider=provider,
+                namespace=namespace,
+                request=request,
+                code="canvas_object_ref_user_mismatch",
+                message="Canvas object_ref belongs to a different user or is not a valid board ref for this context.",
+                details={"object_ref": ref, "user_id": user_id},
+            )
+
+    if raw_canvas_name and _looks_like_sanitized_canvas_id(raw_canvas_name, user_id=user_id):
+        return request, _target_error_response(
+            provider=provider,
+            namespace=namespace,
+            request=request,
+            code="canvas_name_not_canonical",
+            message=(
+                "Canvas canvas_name looks like a storage id with ':' replaced by '_'. "
+                "Use the board name from list/read/pull, not a synthesized id."
+            ),
+            details={"canvas_name": raw_canvas_name, "user_id": user_id},
+        )
+    if target_name and raw_canvas_name and raw_canvas_name != target_name:
+        return request, _target_error_response(
+            provider=provider,
+            namespace=namespace,
+            request=request,
+            code="canvas_target_conflict",
+            message="Canvas object_ref and object_json identify different boards.",
+            details={"object_ref": ref, "object_ref_canvas_name": target_name, "object_canvas_name": raw_canvas_name},
+        )
+    if target_id and raw_canvas_id and raw_canvas_id != target_id:
+        return request, _target_error_response(
+            provider=provider,
+            namespace=namespace,
+            request=request,
+            code="canvas_target_conflict",
+            message="Canvas object_ref and object_json identify different canvas ids.",
+            details={"object_ref": ref, "object_ref_canvas_id": target_id, "object_canvas_id": raw_canvas_id},
+        )
+
+    changed = False
+    if target_name and not raw_canvas_name:
+        obj["canvas_name"] = target_name
+        changed = True
+    if target_id and not raw_canvas_id:
+        obj["canvas_id"] = target_id
+        changed = True
+    if changed:
+        return replace(request, object=obj), None
+    return request, None
 
 
 def _extract_canvas_target(request: NamedServiceRequest) -> tuple[str, str]:
@@ -616,7 +799,6 @@ def _extract_canvas_target(request: NamedServiceRequest) -> tuple[str, str]:
         or obj.get("board")
         or payload.get("canvas_name")
         or request.context.get("canvas_name")
-        or _board_name_from_ref(_text(request.object_ref))
         or "main"
     )
     canvas_id = _text(
@@ -808,6 +990,7 @@ def _patch_from_typed_object(obj: Mapping[str, Any], object_kind: str) -> dict[s
     operations=CANVAS_PIN_OPERATIONS,
     label="Canvas",
     description="Named-service provider for canvas boards, cards, hosted objects, and card search.",
+    intro=CANVAS_NAMESPACE_INTRO,
 )
 class CanvasPinSearchNamedServiceProvider(NamedServiceProvider):
     """Provider facade for canvas search and upsert.
@@ -821,12 +1004,14 @@ class CanvasPinSearchNamedServiceProvider(NamedServiceProvider):
     def __init__(
         self,
         *,
+        list_handler: CanvasListHandler | None = None,
         search_handler: CanvasSearchHandler | None = None,
         upsert_handler: CanvasUpsertHandler | None = None,
         store_factory: CanvasStoreFactory | None = None,
         spec: NamedServiceProviderSpec | None = None,
     ) -> None:
         super().__init__(spec or _provider_spec())
+        self._list_handler = list_handler
         self._search_handler = search_handler
         self._upsert_handler = upsert_handler
         self._store_factory = store_factory
@@ -862,6 +1047,46 @@ class CanvasPinSearchNamedServiceProvider(NamedServiceProvider):
                 "schemas": CANVAS_SCHEMAS,
                 "search_scopes": CANVAS_PIN_SERVICE_ABOUT["search_scopes"],
             },
+        )
+
+    async def object_list(self, ctx: NamedServiceContext, request: NamedServiceRequest) -> NamedServiceResponse:
+        namespace = request.namespace or CANVAS_NAMESPACE
+        if self._list_handler is not None:
+            result = await self._list_handler(ctx, request)
+        elif self._store_factory is not None:
+            store = self._store_factory(ctx)
+            include_archived = bool((request.filters or {}).get("include_archived"))
+            result = store.list_canvases(include_archived=include_archived)
+        else:
+            return NamedServiceResponse.error_response(
+                code="canvas_board_list_not_configured",
+                message="Canvas provider is registered without a board list handler or store factory.",
+                status=503,
+                provider=self.provider_identity(),
+                namespace=namespace,
+            )
+        raw_items = result.get("canvases") or result.get("items") if isinstance(result, Mapping) else []
+        active_canvas = _text(result.get("active_canvas")) if isinstance(result, Mapping) else ""
+        items = [
+            item
+            for item in (
+                _normalize_board_item(raw, active_canvas=active_canvas)
+                for raw in (raw_items if isinstance(raw_items, list) else [])
+            )
+            if item
+        ]
+        limit = max(1, int(request.limit or len(items) or 20))
+        return NamedServiceResponse.ok_response(
+            provider=self.provider_identity(),
+            namespace=namespace,
+            items=items[:limit],
+            attrs={
+                "count": min(len(items), limit),
+                "total_count": len(items),
+                "source": "canvas.board_list",
+                "active_canvas": active_canvas,
+            },
+            extra={"raw_result": dict(result)},
         )
 
     async def object_search(self, ctx: NamedServiceContext, request: NamedServiceRequest) -> NamedServiceResponse:
@@ -918,6 +1143,14 @@ class CanvasPinSearchNamedServiceProvider(NamedServiceProvider):
                 object_ref=request.object_ref,
                 details={"supported_object_kinds": sorted(CANVAS_MUTATION_OBJECT_KINDS)},
             )
+        request, target_error = _request_with_canvas_target(
+            ctx,
+            request,
+            provider=self.provider_identity(),
+            namespace=namespace,
+        )
+        if target_error is not None:
+            return target_error
         if self._upsert_handler is not None:
             response = await self._upsert_handler(ctx, request)
             if isinstance(response, NamedServiceResponse):

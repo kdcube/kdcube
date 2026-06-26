@@ -69,18 +69,18 @@ surfaces:
     agents:
       main:
         tools:
-          - id: tasks
+          - id: automations
             kind: python
-            module: kdcube_ai_app.apps.chat.sdk.solutions.tasks.tools
-            alias: tasks
-            allowed: [list_tasks, search_tasks, get_task, create_task]
-      task_job:
+            module: kdcube_ai_app.apps.chat.sdk.solutions.automations.tools
+            alias: automations
+            allowed: [list_automations, search_automations, get_automation, create_automation]
+      automation_job:
         tools:
-          - id: task_job
+          - id: automation_job
             kind: python
-            module: kdcube_ai_app.apps.chat.sdk.solutions.tasks.job_tools
-            alias: task_job
-            allowed: [get_current_task, update_execution_journal]
+            module: kdcube_ai_app.apps.chat.sdk.solutions.automations.job_tools
+            alias: automation_job
+            allowed: [get_current_automation, update_execution_journal]
 ```
 
 Notes:

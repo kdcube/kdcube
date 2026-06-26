@@ -562,7 +562,8 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
 
         tenant = state.get("tenant")
         project = state.get("project")
-        user_id = state.get("user") or state.get("fingerprint")
+        actor_user_id = state.get("user") or state.get("fingerprint")
+        user_id = state.get("economics_user") or state.get("authority_user") or actor_user_id
         user_type = state.get("user_type") or "anonymous"
         agent_id = normalize_agent_id(
             state.get("agent_id")
@@ -588,9 +589,19 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
             "Initialized run()",
             tenant=tenant, project=project,
             user_id=user_id, user_type=role,
+            actor_user_id=actor_user_id,
+            economics_user_id=user_id,
             thread_id=thread_id, turn_id=turn_id, bundle_id=bundle_id, rl_bundle_id=rl_bundle_id,
             event_count=len(state.get("external_events") or []),
         )
+        if actor_user_id and actor_user_id != user_id:
+            _log(
+                "identity.authority",
+                "Using linked platform authority for economics",
+                actor_user_id=actor_user_id,
+                economics_user_id=user_id,
+                user_type=role,
+            )
         if budget_bypass:
             _log("budget.bypass", "Budget bypass enabled for user type", user_type=role)
 

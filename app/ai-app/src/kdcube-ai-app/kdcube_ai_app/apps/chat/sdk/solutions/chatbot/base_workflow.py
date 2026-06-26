@@ -784,6 +784,43 @@ class BaseWorkflow():
         env_json = os.environ.get("MCP_SERVICES") or ""
         return env_json or None
 
+    def _mem_consumer_namespace_config(self) -> Mapping[str, Any]:
+        """Return the agent's ``as_consumer`` ``mem`` namespace config (or empty).
+
+        Non-empty means this agent is wired to *consume* durable user memory via a
+        ``named_service`` connection. This is the consumer-side signal that gates
+        announce/hotset injection — it is independent of the owner/provider
+        ``memory.enabled`` flag.
+        """
+        try:
+            from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client_tools import (
+                named_service_namespace_config,
+            )
+
+            mem_ns_cfg = named_service_namespace_config(self.bundle_props or {}, namespace="mem")
+            if isinstance(mem_ns_cfg, Mapping):
+                return mem_ns_cfg
+        except Exception:
+            pass
+        return {}
+
+    def _resolve_announce_config(self, memory_cfg: Dict[str, Any]) -> Dict[str, Any]:
+        """Resolve the memory-announce (hotset) config for the active agent.
+
+        Announce is a consumer concern, so the source of truth is the agent's
+        ``surfaces.as_consumer.agents.<agent>.tools[].namespaces.mem.announce``
+        declaration. When that is absent (un-migrated bundle), fall back to the
+        legacy ``memory.announce.*`` block. This is the single place the legacy
+        fallback lives; once all bundles declare announce via ``as_consumer`` the
+        ``memory.announce`` reader can be retired without touching callers.
+        """
+        mem_ns_cfg = self._mem_consumer_namespace_config()
+        announce = mem_ns_cfg.get("announce") if isinstance(mem_ns_cfg, Mapping) else None
+        if isinstance(announce, Mapping):
+            return dict(announce)
+        legacy = memory_cfg.get("announce") if isinstance(memory_cfg, dict) else None
+        return legacy if isinstance(legacy, dict) else {}
+
     def _sync_runtime_ctx_bundle_props(self) -> None:
         runtime_ctx = getattr(self, "runtime_ctx", None)
         if runtime_ctx is None:
@@ -820,11 +857,23 @@ class BaseWorkflow():
             memory_cfg = {}
         memory_enabled_raw = _bool_or_none(memory_cfg.get("enabled"))
         memory_enabled = bool(memory_enabled_raw) if memory_enabled_raw is not None else False
-        announce_cfg = memory_cfg.get("announce") if isinstance(memory_cfg.get("announce"), dict) else {}
+        # Announce (hotset injection) is a *consumer* concern: an agent asking
+        # for durable user memory to be injected into its context. Read it from
+        # the agent's ``surfaces.as_consumer.agents.<agent>.tools[].namespaces.mem.announce``
+        # declaration first, and fall back to the legacy ``memory.announce.*``
+        # block so un-migrated bundles keep working. The fallback lives entirely
+        # in ``_resolve_announce_config`` below.
+        announce_cfg = self._resolve_announce_config(memory_cfg)
         announce_enabled_raw = _bool_or_none(announce_cfg.get("enabled"))
         announce_enabled = bool(announce_enabled_raw) if announce_enabled_raw is not None else False
+        # Announce is a *consumer* gate: the hotset injects iff this agent is
+        # wired to consume the ``mem`` namespace via ``as_consumer`` AND its
+        # announce block is enabled. It must NOT depend on the owner/provider
+        # ``memory.enabled`` flag — a pure memory consumer (no ``memory:`` block)
+        # still gets the hotset.
+        mem_consumed = bool(self._mem_consumer_namespace_config())
         runtime_ctx.memory_enabled = memory_enabled
-        runtime_ctx.memory_announce_enabled = bool(memory_enabled and announce_enabled)
+        runtime_ctx.memory_announce_enabled = bool(mem_consumed and announce_enabled)
         runtime_ctx.memory_scope_filter = str(announce_cfg.get("scope_filter") or "current_bundle").strip() or "current_bundle"
         runtime_ctx.memory_hotset_limit = _positive_int(announce_cfg.get("limit")) or 8
         try:
@@ -2197,6 +2246,61 @@ class BaseWorkflow():
             bundle_root = pathlib.Path(__file__).resolve().parents[1]
         return bundle_root
 
+    async def named_service_react_instructions(self, *, client_id: Any = None) -> str:
+        """Compose the named-service ReAct block (teaching + namespace roster).
+
+        Returns the static ``[NAMED SERVICES …]`` teaching block plus this agent's
+        namespace roster, each ``as_consumer``-connected namespace rendered with its
+        discovery-published ``intro`` (provider ``label`` fallback). Empty string
+        when the agent has no connected named-service namespaces.
+
+        This is a normal ``BaseWorkflow`` method: a bundle that subclasses
+        ``BaseWorkflow`` can override it to customize or fully rebuild the section.
+        Intros are read through the canonical discovery API (no in-process registry,
+        no key scan). Self-contained: redis / tenant / project / bundle_props are
+        pulled from ``self``.
+        """
+        try:
+            from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client_tools import (
+                compose_named_service_react_instructions,
+                connected_named_service_namespaces,
+            )
+            from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.discovery import (
+                RedisNamedServiceDiscovery,
+                fetch_namespace_intros,
+            )
+        except Exception:
+            return ""
+
+        resolved_client_id = client_id if client_id is not None else getattr(
+            getattr(self, "runtime_ctx", None), "agent_id", None
+        )
+        bundle_props = self.bundle_props if isinstance(self.bundle_props, Mapping) else {}
+        namespaces = connected_named_service_namespaces(bundle_props, client_id=resolved_client_id)
+        if not namespaces:
+            return ""
+
+        intros: Dict[str, Dict[str, str]] = {}
+        try:
+            runtime_ctx = getattr(self, "runtime_ctx", None)
+            tenant = str(getattr(runtime_ctx, "tenant", "") or "").strip()
+            project = str(getattr(runtime_ctx, "project", "") or "").strip()
+            if self.redis is not None and tenant and project:
+                discovery = RedisNamedServiceDiscovery(self.redis, tenant=tenant, project=project)
+                intros = await fetch_namespace_intros(discovery, namespaces)
+        except Exception:
+            try:
+                self.logger.log("[named_services] roster intro fetch failed", level="WARNING")
+            except Exception:
+                pass
+            intros = {}
+
+        return compose_named_service_react_instructions(
+            bundle_props,
+            client_id=resolved_client_id,
+            intros=intros,
+        )
+
     def build_react(self,
                     scratchpad: TurnScratchpad,
                     mod_tools_spec: Optional[List[Dict[str, Any]]] = None,
@@ -3344,6 +3448,14 @@ class BaseWorkflow():
             await self.comm.delta(text=message, index=0, marker="answer", agent="turn_exception", completed=True)
 
         # no-op (kept for alignment with prior error handling)
+
+        try:
+            if self.ctx_browser:
+                close_external_event_handler = getattr(self.ctx_browser, "close_external_event_handler", None)
+                if callable(close_external_event_handler):
+                    await close_external_event_handler()
+        except Exception:
+            self.logger.log(traceback.format_exc(), "ERROR")
 
         # ---- rollback ----
         try:

@@ -7,6 +7,7 @@ import type {
   MemoryEntry,
   MemoryEvent,
   MemoryEventsPayload,
+  MemoryEvidencePayload,
   MemoryExportPayload,
   MemoryMutationPayload,
   MemoryPreferences,
@@ -58,6 +59,7 @@ interface MemoriesState {
   snapshotLoading: boolean;
   error: string;
   mutationError: string;
+  evidenceError: string;
   reconciliationError: string;
   reconciliationAnalysis?: ReconciliationAnalysis;
   reconciliationJobs: ReconciliationJob[];
@@ -108,6 +110,7 @@ const initialState: MemoriesState = {
   snapshotLoading: false,
   error: '',
   mutationError: '',
+  evidenceError: '',
   reconciliationError: '',
   reconciliationAnalysis: undefined,
   reconciliationJobs: [],
@@ -291,6 +294,42 @@ export const loadMemoryEvents = createAsyncThunk<MemoryEventsPayload, string, { 
     return callOperation<MemoryEventsPayload>('memories_widget_events', {
       memory_id: normalizeMemoryRef(memoryId),
       scope_filter: state.allowAllUserMemories ? 'all_user_memories' : state.scopeFilter,
+      limit: 25,
+    });
+  },
+);
+
+export const applyEvidence = createAsyncThunk<
+  MemoryEvidencePayload,
+  { memoryId: string; eventId: string; baseRevision?: number | null },
+  { state: { memories: MemoriesState } }
+>(
+  'memories/evidenceApply',
+  async ({ memoryId, eventId, baseRevision }, thunkApi) => {
+    const state = thunkApi.getState().memories;
+    return callOperation<MemoryEvidencePayload>('memories_widget_evidence_apply', {
+      memory_id: normalizeMemoryRef(memoryId),
+      event_id: eventId,
+      scope_filter: state.allowAllUserMemories ? 'all_user_memories' : state.scopeFilter,
+      base_revision: baseRevision ?? null,
+      limit: 25,
+    });
+  },
+);
+
+export const deleteEvidence = createAsyncThunk<
+  MemoryEvidencePayload,
+  { memoryId: string; eventId: string; baseRevision?: number | null },
+  { state: { memories: MemoriesState } }
+>(
+  'memories/evidenceDelete',
+  async ({ memoryId, eventId, baseRevision }, thunkApi) => {
+    const state = thunkApi.getState().memories;
+    return callOperation<MemoryEvidencePayload>('memories_widget_evidence_delete', {
+      memory_id: normalizeMemoryRef(memoryId),
+      event_id: eventId,
+      scope_filter: state.allowAllUserMemories ? 'all_user_memories' : state.scopeFilter,
+      base_revision: baseRevision ?? null,
       limit: 25,
     });
   },
@@ -518,6 +557,7 @@ const memoriesSlice = createSlice({
     selectMemory(state, action: PayloadAction<string>) {
       state.selectedId = normalizeMemoryRef(action.payload);
       state.selectedEvents = [];
+      state.evidenceError = '';
     },
     focusMemories(state, action: PayloadAction<string[] | string>) {
       const memoryIds = normalizeMemoryRefs(action.payload);
@@ -544,6 +584,7 @@ const memoriesSlice = createSlice({
     clearTransientErrors(state) {
       state.error = '';
       state.mutationError = '';
+      state.evidenceError = '';
     },
     selectSnapshot(state, action: PayloadAction<string>) {
       state.selectedSnapshotId = action.payload;
@@ -730,6 +771,42 @@ const memoriesSlice = createSlice({
         state.saving = false;
         if (!action.payload.ok) state.mutationError = action.payload.message || action.payload.error || 'Unable to save memory.';
         else upsertMemory(state, action.payload.memory);
+      })
+      .addCase(applyEvidence.pending, (state) => {
+        state.saving = true;
+        state.evidenceError = '';
+      })
+      .addCase(deleteEvidence.pending, (state) => {
+        state.saving = true;
+        state.evidenceError = '';
+      })
+      .addCase(applyEvidence.fulfilled, (state, action) => {
+        state.saving = false;
+        if (!action.payload.ok) {
+          state.evidenceError = action.payload.error || action.payload.message || 'Unable to apply revision.';
+          return;
+        }
+        state.evidenceError = '';
+        upsertMemory(state, action.payload.memory);
+        state.selectedEvents = action.payload.events || [];
+      })
+      .addCase(deleteEvidence.fulfilled, (state, action) => {
+        state.saving = false;
+        if (!action.payload.ok) {
+          state.evidenceError = action.payload.error || action.payload.message || 'Unable to drop revision.';
+          return;
+        }
+        state.evidenceError = '';
+        upsertMemory(state, action.payload.memory);
+        state.selectedEvents = action.payload.events || [];
+      })
+      .addCase(applyEvidence.rejected, (state, action) => {
+        state.saving = false;
+        state.evidenceError = action.error.message || 'Unable to apply revision.';
+      })
+      .addCase(deleteEvidence.rejected, (state, action) => {
+        state.saving = false;
+        state.evidenceError = action.error.message || 'Unable to drop revision.';
       })
       .addCase(analyzeReconciliation.fulfilled, (state, action) => {
         state.reconciliationLoading = false;

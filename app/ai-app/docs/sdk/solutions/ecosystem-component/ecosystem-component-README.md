@@ -314,12 +314,22 @@ Do not put fallback subscriptions in the scene to hide missing component
 claims. If a claim is missing, diagnostics should show whether the component
 did not send it, the scene rejected it, or the alias/runtime did not match.
 
+Auth state is a separate host→surface announcement, not a subscription claim:
+the host broadcasts `kdcube-auth-changed` on every session transition and the
+component re-derives its auth-dependent state from it (a component that mounts
+while the visitor is anonymous must react when the visitor signs in later). See
+the [scene auth contract](../scene/scene-auth-README.md).
+
 ## Frontend Requirements
 
 An ecosystem UI component should:
 
 1. accept host/runtime config through an explicit config handshake;
-2. avoid profile polling until authenticated state is already known;
+2. treat auth as inferred, not carried — read authenticated state from the
+   host's `kdcube-auth-changed` announcement and re-derive auth-dependent UI on
+   it, probing `/profile` only when authenticated and only for the privileges it
+   needs (never to discover sign-in); see the
+   [scene auth contract](../scene/scene-auth-README.md);
 3. emit canonical context drag payloads with `object_ref`;
 4. handle `kdcube.surface.command` for its declared target surfaces;
 5. render namespace visuals from the provided presentation config;

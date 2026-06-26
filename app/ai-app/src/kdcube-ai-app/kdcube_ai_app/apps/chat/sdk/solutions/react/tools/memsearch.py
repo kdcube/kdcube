@@ -6,17 +6,10 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 import json
+import logging
 
-import time
-from kdcube_ai_app.apps.chat.sdk.solutions.react.timeline import (
-    build_timeline_payload,
-    TimelineView,
-    extract_assistant_completion_blocks,
-    extract_user_attachments_from_blocks,
-)
 from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.common import (
     tool_call_block,
-    notice_block,
     add_block,
     tc_result_path,
 )
@@ -24,10 +17,26 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
     build_logical_artifact_path,
     split_logical_artifact_ref,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.conversation.api import (
+    ConversationSearchContext,
+    ConversationSearchParams,
+    run_conversation_search,
+)
+
+LOGGER = logging.getLogger("kdcube.sdk.react.memsearch")
 
 TOOL_SPEC = {
     "id": "react.memsearch",
     "purpose": (
+        "Conversations are one of the user's memory realms - what was actually said in chat - "
+        "alongside durable memories (`mem`) and context boards (`cnv`); together they are districts "
+        "of the user's memory. Searches what the USER said (prompts and follow-ups), what the ASSISTANT "
+        "said (replies and working summaries), and the user's UPLOADED attachments (their indexed "
+        "summaries): pick `targets` by what the user is recalling ('I said...' -> user/attachment; "
+        "'you said...' -> assistant). Reach for it whenever a look back would likely help: on an explicit "
+        "recall request, AND when the user's intent implies earlier context matters - they refer to "
+        "something from before, say it was clearer earlier, can't find or re-locate something, or resume "
+        "a dropped thread. "
         "Search prior conversation memory and return turn-level recovery handles. "
         "Use only when the exact needed path is not already visible. "
         "Behavior is inferred from which fields you set: "
@@ -65,46 +74,16 @@ TOOL_SPEC = {
     ],
 }
 
-# --- Mode labels (effective_mode in the result payload) ---
-# MODE_HYBRID is the topic-search path: parallel semantic + lexical retrieval
-# fused by Reciprocal Rank Fusion with a recency lift (see search_context
-# scoring_mode="rrf_hybrid" in ctx_rag.py). It is the only mode that runs
-# when the agent passes `query`.
-MODE_HYBRID = "hybrid"
-# Catalog modes: deterministic turn-catalog lookups, no ranking.
-MODE_ORDINAL = "ordinal"
-MODE_TEMPORAL = "temporal"
-MODE_TIMELINE = "timeline"
-MODE_CATALOG = "catalog"  # back-compat alias for an unspecified catalog request
-# Back-compat alias: older clients may still send `mode="semantic"` as input;
-# it routes to the topic-search path identically to omitting `mode`.
-MODE_SEMANTIC_LEGACY = "semantic"
-
-CATALOG_MODES = frozenset({MODE_TEMPORAL, MODE_ORDINAL, MODE_TIMELINE, MODE_CATALOG})
-
-# --- Scope ---
-SCOPE_CONVERSATION = "conversation"
-SCOPE_USER = "user"
-ALLOWED_SCOPES = frozenset({SCOPE_CONVERSATION, SCOPE_USER})
-
-# --- Order ---
-ORDER_ASC = "asc"
-ORDER_DESC = "desc"
-ALLOWED_ORDERS = frozenset({ORDER_ASC, ORDER_DESC})
+# The search routing/snippet/result shaping logic now lives in
+# `solutions.conversation.api`. This tool is a thin caller: it builds the
+# explicit `ConversationSearchContext` from `ctx_browser.runtime_ctx`, runs the
+# search, then shapes the user-facing envelope and contributes timeline blocks.
 
 # Per-snippet text preview cap in the JSON result envelope. Each hit's
 # snippets carry a trimmed `text` field so the agent can triage without
 # react.read'ing every path. Full text is still materialized as separate
 # react.tool.result blocks on the timeline.
 SNIPPET_PREVIEW_CHARS = 500
-
-# Maximum number of hits returned per source conversation in a single
-# memsearch response. Caps the visibility of a single conversation's
-# polluted/repetitive content (e.g., the agent's own recovery sessions
-# about a topic) so other conversations get representation in the top-k.
-# Cap of 2 keeps legitimate multi-turn matches inside one conversation
-# while preventing one conversation from monopolizing the result.
-MAX_HITS_PER_CONVERSATION = 2
 
 # Whitelist of hit-level fields surfaced in the JSON result envelope. Anything
 # else on the rich hit (sim/rec/rrf sub-scores, ranks, matched_via_role lists,
@@ -114,34 +93,8 @@ MAX_HITS_PER_CONVERSATION = 2
 _ENVELOPE_HIT_FIELDS = ("score", "turn_index_path", "ordinal", "total_turns")
 
 
-def _as_int(value: Any, default: Optional[int] = None) -> Optional[int]:
-    if value is None or value == "":
-        return default
-    try:
-        return int(value)
-    except Exception:
-        return default
-
-
 def _as_str(value: Any) -> str:
     return str(value or "").strip()
-
-
-def _timestamp_filters_from_params(params: Dict[str, Any]) -> List[Dict[str, Any]]:
-    from_ts = _as_str(params.get("from") or params.get("from_ts") or params.get("start") or params.get("start_at"))
-    to_ts = _as_str(params.get("to") or params.get("to_ts") or params.get("end") or params.get("end_at"))
-    filters: List[Dict[str, Any]] = []
-    if from_ts:
-        filters.append({"op": ">=", "value": from_ts})
-    if to_ts:
-        filters.append({"op": "<", "value": to_ts})
-    return filters
-
-
-def _ts_to_text(value: Any) -> str:
-    if hasattr(value, "isoformat"):
-        return value.isoformat()
-    return _as_str(value)
 
 
 def _clip(text: Any, limit: int = 4000) -> str:
@@ -201,89 +154,22 @@ def _scope_path_for_conversation(*, path: Any, source_conversation_id: str, curr
     return raw
 
 
-def _catalog_snippets(row: Dict[str, Any], targets: List[str]) -> List[Dict[str, Any]]:
-    tid = _as_str(row.get("turn_id"))
-    if not tid:
-        return []
-    conversation_id = _as_str(row.get("conversation_id"))
-    want_summary = "summary" in targets
-    want_user = "user" in targets
-    want_assistant = "assistant" in targets
-    snippets: List[Dict[str, Any]] = []
-    if want_summary and _as_str(row.get("working_summary_text")):
-        snippets.append({
-            "role": "summary",
-            "path": row.get("working_summary_path") or f"ws:{tid}.conv.working.summary",
-            "text": _clip(row.get("working_summary_text")),
-            "ts": _ts_to_text(row.get("working_summary_ts") or row.get("started_at") or row.get("ts")),
-            "meta": {"source": "turn_catalog", **({"conversation_id": conversation_id} if conversation_id else {})},
-        })
-    if want_user and _as_str(row.get("first_user_text")):
-        snippets.append({
-            "role": "user",
-            "path": row.get("user_path") or f"ar:{tid}.user.prompt",
-            "text": _clip(row.get("first_user_text")),
-            "ts": _ts_to_text(row.get("first_user_ts") or row.get("started_at") or row.get("ts")),
-            "meta": {"source": "turn_catalog", **({"conversation_id": conversation_id} if conversation_id else {})},
-        })
-    if want_assistant and _as_str(row.get("last_assistant_text")):
-        snippets.append({
-            "role": "assistant",
-            "path": row.get("assistant_path") or f"ar:{tid}.assistant.completion",
-            "text": _clip(row.get("last_assistant_text")),
-            "ts": _ts_to_text(row.get("last_assistant_ts") or row.get("ended_at") or row.get("ts")),
-            "meta": {"source": "turn_catalog", **({"conversation_id": conversation_id} if conversation_id else {})},
-        })
-    return snippets
-
-
 async def handle_react_memsearch(*, ctx_browser: Any, state: Dict[str, Any], tool_call_id: str) -> Dict[str, Any]:
     last_decision = state.get("last_decision") or {}
     tool_call = last_decision.get("tool_call") or {}
     tool_id = "react.memsearch"
-    params = tool_call.get("params") or {}
-    query = (params.get("query") or "").strip()
-    raw_targets = params.get("targets")
-    if raw_targets is None:
-        raw_targets = ["assistant", "user", "attachment", "summary"]
-    targets = [t for t in (raw_targets or []) if isinstance(t, str) and t.strip()]
-    top_k = int(params.get("top_k") or 5)
-    # `mode` is an input field kept for back-compat. Empty/unknown/explicit
-    # "semantic" all route to the topic-search path; only the catalog values
-    # actually steer routing. There is no agent-facing "semantic" default —
-    # the topic path runs hybrid retrieval (see MODE_HYBRID).
-    mode = _as_str(params.get("mode")).lower()
-    if mode and mode not in CATALOG_MODES and mode != MODE_SEMANTIC_LEGACY:
-        mode = ""
-    scope = _as_str(params.get("scope") or SCOPE_CONVERSATION).lower()
-    if scope not in ALLOWED_SCOPES:
-        scope = SCOPE_CONVERSATION
-    ordinal = _as_int(params.get("ordinal"))
-    from_ts = _as_str(params.get("from") or params.get("from_ts") or params.get("start") or params.get("start_at"))
-    to_ts = _as_str(params.get("to") or params.get("to_ts") or params.get("end") or params.get("end_at"))
-    has_temporal_bounds = bool(from_ts or to_ts)
-    order = _as_str(params.get("order") or ORDER_ASC).lower()
-    if order not in ALLOWED_ORDERS:
-        order = ORDER_ASC
-    include_recovery_sessions = bool(params.get("include_recovery_sessions"))
-    catalog_mode = mode in CATALOG_MODES or ordinal is not None or (has_temporal_bounds and not query)
-    if catalog_mode:
-        effective_mode = mode if mode in CATALOG_MODES else (
-            MODE_ORDINAL if ordinal is not None
-            else MODE_TEMPORAL if has_temporal_bounds
-            else MODE_TIMELINE
-        )
-    else:
-        effective_mode = MODE_HYBRID
-    ignored_catalog_query = bool(catalog_mode and query)
-    warnings: List[str] = []
-    if ignored_catalog_query:
-        warnings.append(
-            f"query ignored in {effective_mode} catalog mode; use query only for topic search, or omit catalog signals for topic+time search"
-        )
-    days = int(params.get("days") or (3650 if catalog_mode or has_temporal_bounds else 365))
+    raw_params = tool_call.get("params") or {}
 
-    if not query and not catalog_mode:
+    # Thin caller: parse the tool param envelope and build the EXPLICIT calling
+    # context from runtime, then hand both to the conversation search API. The
+    # API owns routing/search/snippet shaping; this tool keeps the user-facing
+    # envelope + timeline-block contribution (its UI side-effects).
+    search_params = ConversationSearchParams.from_tool_params(raw_params)
+    context = ConversationSearchContext.from_runtime_ctx(ctx_browser.runtime_ctx)
+    conversation_id = context.conversation_id
+    turn_id = context.turn_id
+
+    if not search_params.query and not search_params.is_catalog():
         state["exit_reason"] = "error"
         state["error"] = {"where": "tool_execution", "error": "missing_query", "managed": True}
         return state
@@ -299,261 +185,32 @@ async def handle_react_memsearch(*, ctx_browser: Any, state: Dict[str, Any], too
         },
     )
 
-    search_hits_formatted: List[Dict[str, Any]] = []
-    total_tokens = 0
-    user = ctx_browser.runtime_ctx.user_id
-    conversation_id = ctx_browser.runtime_ctx.conversation_id
-    turn_id = ctx_browser.runtime_ctx.turn_id
-    from kdcube_ai_app.apps.chat.sdk.util import token_count
+    LOGGER.info(
+        "[react.memsearch] -> conversation.search (scope=%s, mode=%s, has_query=%s)",
+        search_params.scope,
+        search_params.effective_mode(),
+        bool(search_params.query),
+    )
     try:
-        if catalog_mode:
-            rows = await ctx_browser.search_turn_catalog(
-                user=user,
-                conv=conversation_id,
-                scope=scope,
-                top_k=top_k,
-                days=days,
-                order=order,
-                ordinal=ordinal,
-                from_ts=from_ts or None,
-                to_ts=to_ts or None,
-            )
-            hits = []
-            for row in rows or []:
-                tid = _as_str(row.get("turn_id"))
-                if not tid:
-                    continue
-                snippets = _catalog_snippets(row, targets)
-                hit_conversation_id = _as_str(row.get("conversation_id") or conversation_id)
-                for sn in snippets:
-                    total_tokens += token_count(sn.get("text") or "")
-                hits.append({
-                    "conversation_id": hit_conversation_id,
-                    "turn_id": tid,
-                    "turn_index_path": row.get("turn_index_path") or f"ar:{tid}.react.turn.index",
-                    "working_summary_path": row.get("working_summary_path") or f"ws:{tid}.conv.working.summary",
-                    "snippets": snippets,
-                    "score": None,
-                    "sim_score": None,
-                    "recency_score": None,
-                    "matched_via_role": "turn_catalog",
-                    "source_query": "",
-                    **({"ignored_query": query} if ignored_catalog_query else {}),
-                    "mode": effective_mode,
-                    "scope": scope,
-                    "ordinal": row.get("ordinal"),
-                    "total_turns": row.get("total_turns"),
-                    "started_at": row.get("started_at") or row.get("ts"),
-                    "ended_at": row.get("ended_at") or "",
-                    "about": row.get("about") or "",
-                    "ts": row.get("started_at") or row.get("ts"),
-                    "best_turn_id": tid,
-                })
-            search_hits_formatted = hits
-        else:
-            # search_context expects list[dict] with {"where","query"}; map targets to that shape
-            search_targets: List[Dict[str, Any]] = []
-            seen_where = set()
-            for t in targets:
-                where = "user" if t == "attachment" else "assistant" if t == "summary" else "notes" if t == "notes" else t
-                if not where or where in seen_where:
-                    continue
-                search_targets.append({"where": where, "query": query})
-                seen_where.add(where)
-
-            # Over-fetch from the retriever so the per-conversation dedup
-            # below has enough material to fill the user-requested top_k
-            # after collapsing same-conversation runs.
-            retriever_top_k = max(top_k * MAX_HITS_PER_CONVERSATION + top_k, top_k + 10)
-            best_tid, hits = await ctx_browser.search(
-                targets=search_targets,
-                user=user,
-                conv=conversation_id,
-                scope=scope,
-                scoring_mode="rrf_hybrid",
-                half_life_days=7.0,
-                top_k=retriever_top_k,
-                days=days,
-                with_payload=True,
-                timestamp_filters=_timestamp_filters_from_params(params),
-                include_recovery_sessions=include_recovery_sessions,
-            )
-            # Per-conversation dedup: keep at most MAX_HITS_PER_CONVERSATION
-            # hits per source conversation, preserving the retriever's rank
-            # order, then trim to the user-requested top_k. Prevents one
-            # noisy / repetitive conversation from monopolizing the result.
-            if hits:
-                per_conv_count: Dict[str, int] = {}
-                deduped: List[Dict[str, Any]] = []
-                for h in hits:
-                    conv = _as_str(h.get("conversation_id") or conversation_id)
-                    if per_conv_count.get(conv, 0) >= MAX_HITS_PER_CONVERSATION:
-                        continue
-                    deduped.append(h)
-                    per_conv_count[conv] = per_conv_count.get(conv, 0) + 1
-                    if len(deduped) >= top_k:
-                        break
-                hits = deduped
-        for h in ([] if catalog_mode else (hits or [])):
-            tid = (h.get("turn_id") or "").strip()
-            if not tid:
-                continue
-            hit_conversation_id = _as_str(h.get("conversation_id") or conversation_id)
-            try:
-                turn_log = await ctx_browser.get_turn_log(turn_id=tid, conversation_id=hit_conversation_id)
-                blocks = list(turn_log.get("blocks") or [])
-                timeline_payload = build_timeline_payload(
-                    blocks=blocks,
-                    sources_pool=turn_log.get("sources_pool") or [],
-                )
-                tv = TimelineView.from_payload(timeline_payload)
-            except Exception as ex:
-                continue
-
-            snippets: List[Dict[str, Any]] = []
-            want_user = "user" in targets
-            want_assistant = "assistant" in targets
-            want_attachment = "attachment" in targets
-            want_summary = "summary" in targets
-            want_notes = "notes" in targets
-
-            if want_user:
-                for blk in blocks:
-                    if not isinstance(blk, dict):
-                        continue
-                    if (blk.get("turn_id") or "") != tid:
-                        continue
-                    btype = (blk.get("type") or "").strip()
-                    if btype not in {"user.prompt", "user.followup", "user.followup.preserved", "user.steer", "user.steer.preserved"}:
-                        continue
-                    path = (blk.get("path") or "").strip()
-                    text = (blk.get("text") or "").strip()
-                    if text:
-                        total_tokens += token_count(text)
-                    snippets.append({
-                        "conversation_id": hit_conversation_id,
-                        "role": "user",
-                        "path": path,
-                        "text": text,
-                        "ts": blk.get("ts") or "",
-                        "meta": blk.get("meta") if isinstance(blk.get("meta"), dict) else {},
-                    })
-            if want_assistant:
-                for blk in extract_assistant_completion_blocks(blocks):
-                    if (blk.get("turn_id") or "") != tid:
-                        continue
-                    path = (blk.get("path") or "").strip()
-                    text = (blk.get("text") or "").strip()
-                    if text:
-                        total_tokens += token_count(text)
-                    snippets.append({
-                        "conversation_id": hit_conversation_id,
-                        "role": "assistant",
-                        "path": path,
-                        "text": text,
-                        "ts": blk.get("ts") or "",
-                        "meta": blk.get("meta") if isinstance(blk.get("meta"), dict) else {},
-                    })
-            if want_summary:
-                for blk in blocks:
-                    if not isinstance(blk, dict):
-                        continue
-                    if (blk.get("turn_id") or "") != tid:
-                        continue
-                    if (blk.get("type") or "").strip() != "conv.working.summary":
-                        continue
-                    path = (blk.get("path") or "").strip()
-                    text = (blk.get("text") or "").strip()
-                    if text:
-                        total_tokens += token_count(text)
-                    snippets.append({
-                        "conversation_id": hit_conversation_id,
-                        "role": "summary",
-                        "path": path,
-                        "text": text,
-                        "ts": blk.get("ts") or "",
-                        "meta": blk.get("meta") if isinstance(blk.get("meta"), dict) else {},
-                    })
-            if want_notes:
-                for blk in blocks:
-                    if not isinstance(blk, dict):
-                        continue
-                    if (blk.get("turn_id") or "") != tid:
-                        continue
-                    if (blk.get("type") or "").strip() not in {"react.note", "react.note.preserved"}:
-                        continue
-                    path = (blk.get("path") or "").strip()
-                    text = (blk.get("text") or "").strip()
-                    if text:
-                        total_tokens += token_count(text)
-                    snippets.append({
-                        "conversation_id": hit_conversation_id,
-                        "role": "notes",
-                        "path": path,
-                        "text": text,
-                        "ts": blk.get("ts") or "",
-                        "meta": blk.get("meta") if isinstance(blk.get("meta"), dict) else {},
-                    })
-            if want_attachment:
-                attachment_text_by_path: Dict[str, str] = {}
-                attachment_meta_text_by_path: Dict[str, str] = {}
-                for blk in blocks:
-                    if not isinstance(blk, dict):
-                        continue
-                    path = (blk.get("path") or "").strip()
-                    if not path:
-                        continue
-                    btype = (blk.get("type") or "").strip()
-                    text = (blk.get("text") or "").strip()
-                    if btype == "user.attachment.text" and text:
-                        attachment_text_by_path[path] = text
-                    elif btype == "user.attachment.meta" and text:
-                        attachment_meta_text_by_path[path] = text
-
-                for att in extract_user_attachments_from_blocks(blocks):
-                    if not isinstance(att, dict):
-                        continue
-                    path = (att.get("artifact_path") or "").strip()
-                    if not path:
-                        continue
-                    text = (
-                        attachment_text_by_path.get(path)
-                        or str(att.get("summary") or "").strip()
-                        or attachment_meta_text_by_path.get(path)
-                        or ""
-                    )
-                    if text:
-                        total_tokens += token_count(text)
-                    snippets.append({
-                        "conversation_id": hit_conversation_id,
-                        "role": "attachment",
-                        "path": path,
-                        "text": text,
-                        "ts": att.get("ts") or "",
-                        "meta": dict(att),
-                    })
-
-            hit_out_meta = {
-                "conversation_id": hit_conversation_id,
-                "turn_id": tid,
-                "turn_index_path": f"ar:{tid}.react.turn.index",
-                "snippets": snippets,
-                "score": h.get("score"),
-                "sim_score": h.get("sim"),
-                "recency_score": h.get("rec"),
-                "matched_via_role": h.get("matched_via_role"),
-                "source_query": h.get("source_query"),
-                "ts": h["ts"].isoformat() if hasattr(h.get("ts"), "isoformat") else h.get("ts"),
-                "best_turn_id": best_tid,
-            }
-            for key in ("rrf_score", "sem_rank", "lex_rank", "trgm_rank", "primary_source"):
-                if key in h:
-                    hit_out_meta[key] = h[key]
-            search_hits_formatted.append(hit_out_meta)
+        result = await run_conversation_search(
+            context=context,
+            params=search_params,
+            search_backend=ctx_browser,
+        )
     except Exception as exc:
         state["exit_reason"] = "error"
         state["error"] = {"where": "tool_execution", "error": f"memsearch_failed:{exc}", "managed": True}
         return state
+
+    if result.missing_query:
+        state["exit_reason"] = "error"
+        state["error"] = {"where": "tool_execution", "error": "missing_query", "managed": True}
+        return state
+
+    search_hits_formatted = result.hits
+    effective_mode = result.effective_mode
+    warnings = list(result.warnings)
+    total_tokens = result.tokens
 
     summary_hits: List[Dict[str, Any]] = []
     for hit in search_hits_formatted:

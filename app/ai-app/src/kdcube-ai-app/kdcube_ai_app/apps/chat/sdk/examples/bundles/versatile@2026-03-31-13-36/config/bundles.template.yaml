@@ -5,10 +5,10 @@ bundles:
       config:
         memory:
           enabled: true
-          announce:
-            enabled: true
-            limit: 8
-            scope_filter: all_user_memories
+          # Announce (the [USER MEMORY HOTSET] injection) is a consumer concern
+          # and is declared under surfaces.as_consumer.agents.main.tools[mem].
+          # namespaces.mem.announce below. The legacy memory.announce.* block is
+          # still read as a back-compat fallback for un-migrated bundles.
           tools:
             enabled: true
             allow_write: true
@@ -79,33 +79,9 @@ bundles:
                     module: kdcube_ai_app.apps.chat.sdk.tools.ctx_tools
                     alias: ctx_tools
                     allowed: [merge_sources, fetch_ctx]
-                  # Legacy direct memory tools are kept here as the migration
-                  # template, but ReAct should use the generic named_services.*
-                  # connection below for durable user memories.
-                  # - name: memory
-                  #   kind: python
-                  #   module: kdcube_ai_app.apps.chat.sdk.context.memory.tools
-                  #   alias: memory
-                  #   allowed:
-                  #     - search_memory
-                  #     - recent_memories
-                  #     - read_memory
-                  #     - record_memory
-                  #     - confirm_memory
-                  #     - retire_memory
-                  #   tool_traits:
-                  #     search_memory:
-                  #       strategy: [exploration]
-                  #     recent_memories:
-                  #       strategy: [exploration]
-                  #     read_memory:
-                  #       strategy: [exploration]
-                  #     record_memory:
-                  #       strategy: [neutral]
-                  #     confirm_memory:
-                  #       strategy: [neutral]
-                  #     retire_memory:
-                  #       strategy: [neutral]
+                  # Durable user memories use the generic named_services.*
+                  # connection (the `mem` named service) below, not in-process
+                  # memory tools.
                   - name: exec
                     kind: python
                     module: kdcube_ai_app.apps.chat.sdk.tools.exec_tools
@@ -200,6 +176,17 @@ bundles:
                         # with react.pull; the pull policy below calls provider
                         # object.get and materializes an fi: artifact for
                         # react.read/ranged reads.
+                        #
+                        # announce: this agent asks for durable user memory to be
+                        # injected into its context as the [USER MEMORY HOTSET].
+                        # Consumer concern, so it lives on the mem namespace this
+                        # agent consumes. base_workflow reads this first and only
+                        # falls back to the legacy memory.announce.* block when it
+                        # is absent.
+                        announce:
+                          enabled: true
+                          limit: 8
+                          scope_filter: all_user_memories
                         allowed:
                           - provider.about
                           - object.list
@@ -224,6 +211,7 @@ bundles:
                         # implementation path only.
                         allowed:
                           - provider.about
+                          - object.list
                           - object.search
                           - object.schema
                           - object.upsert
@@ -386,6 +374,8 @@ bundles:
           # receiver sits behind a gateway that parses Authorization as JWT.
           auth_header: ""
         integrations:
+          connection_hub:
+            bundle_id: connection-hub@1-0
           telegram:
             enabled: false
             webhook_url: "<domain name>/assembly.yaml service route/<tenant>/<project>/api/public/<alias>"

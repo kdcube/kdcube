@@ -353,7 +353,7 @@ def test_build_announce_text_includes_current_turn_live_events(tmp_path):
     assert "old turn event should stay out of announce" not in announce_text
 
 
-def test_build_announce_text_includes_read_only_memory_hotset(tmp_path):
+def test_build_announce_text_includes_memory_hotset(tmp_path):
     runtime = RuntimeCtx(
         turn_id="turn_123",
         outdir=str(tmp_path / "out"),
@@ -390,7 +390,11 @@ def test_build_announce_text_includes_read_only_memory_hotset(tmp_path):
     )
 
     assert "[USER MEMORY HOTSET]" in announce_text
-    assert "policy: read-only durable user memory" in announce_text
+    assert "policy: durable user memory" in announce_text
+    # The hotset must not declare memory read-only; writability is conveyed by
+    # the memory write tools present in the agent's tool catalog, not here.
+    assert "read-only durable user memory" not in announce_text
+    assert "current user message and visible turn context override memory if they conflict." in announce_text
     assert "format: memory text carries the trigger+rule; context is why/provenance/examples only." in announce_text
     assert "scope_filter: current_bundle" in announce_text
     assert "mem:record:mem_1" in announce_text

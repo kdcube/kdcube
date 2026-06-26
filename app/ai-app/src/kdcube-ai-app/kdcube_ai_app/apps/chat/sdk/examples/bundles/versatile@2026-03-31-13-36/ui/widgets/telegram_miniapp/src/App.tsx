@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AppShell } from './components/AppShell';
+import { ConnectionLinkPage } from './pages/ConnectionLinkPage';
 import { ConversationsPage } from './pages/ConversationsPage';
 import { MemoryPage } from './pages/MemoryPage';
 import { TelegramAdminPage } from './pages/TelegramAdminPage';
@@ -12,7 +13,7 @@ import {
   settings,
 } from './store/settings';
 import type { TabId, TelegramProfile, WebAppPayload } from './store/types';
-import { isTelegramWebApp, prepareTelegramWebApp } from './telegram/utils';
+import { isTelegramWebApp, prepareTelegramWebApp, telegramLinkChallenge } from './telegram/utils';
 
 function telegramDeniedProfile(): TelegramProfile {
   return {
@@ -32,6 +33,9 @@ function telegramDeniedProfile(): TelegramProfile {
 
 export default function App() {
   const [tab, setTab] = useState<TabId>(activeTabFromPath(ROUTE_CONTEXT.widgetPath));
+  const linkChallenge = useMemo(() => telegramLinkChallenge(), []);
+  const linkMode = isTelegramWebApp() && Boolean(linkChallenge);
+  const connectionLinkSurface = isTelegramWebApp() && (linkMode || tab === 'connections');
   const [payload, setPayload] = useState<WebAppPayload>({});
   const [profile, setProfile] = useState<TelegramProfile | null>(null);
   const [error, setError] = useState('');
@@ -49,12 +53,17 @@ export default function App() {
     if (profile.telegram?.allowed === false) return true;
     return String(profile.telegram?.role || '').toLowerCase() === 'anonymous';
   }, [profile]);
-  const telegramGateActive = isTelegramWebApp() && (loading || !profile || pendingTelegramApproval);
+  const telegramGateActive = isTelegramWebApp() && !connectionLinkSurface && (loading || !profile || pendingTelegramApproval);
 
   async function load() {
     setLoading(true);
     setError('');
     try {
+      if (connectionLinkSurface) {
+        setProfile(null);
+        setPayload({});
+        return;
+      }
       let nextShowAdminFromProfile = false;
       if (isTelegramWebApp()) {
         const nextProfile = await callOperation<TelegramProfile>('telegram_profile', {});
@@ -104,19 +113,21 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (linkMode) return;
     setBrowserTabPath(tab);
     void load();
-  }, [tab]);
+  }, [tab, linkMode]);
 
   return (
     <AppShell
       activeTab={tab}
       showAdmin={showAdmin}
-      hideTabs={telegramGateActive}
+      hideTabs={telegramGateActive || linkMode}
       loading={loading}
       error={pendingTelegramApproval ? '' : error}
       onTabChange={setTab}
     >
+      {!loading && linkMode && <ConnectionLinkPage challengeId={linkChallenge} />}
       {!loading && pendingTelegramApproval && (
         <TelegramPendingApproval
           title="Access request received"
@@ -126,6 +137,7 @@ export default function App() {
       )}
       {!loading && !pendingTelegramApproval && tab === 'memory' && <MemoryPage memory={payload.memory} reload={load} callOperation={callOperation} />}
       {!loading && !pendingTelegramApproval && tab === 'conversations' && <ConversationsPage conversations={payload.conversations} reload={load} />}
+      {!loading && !pendingTelegramApproval && tab === 'connections' && !linkMode && <ConnectionLinkPage />}
       {!loading && !pendingTelegramApproval && tab === 'telegram_admin' && showAdmin && <TelegramAdminPage />}
     </AppShell>
   );

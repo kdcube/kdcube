@@ -24,6 +24,9 @@ export function AppShell({ activeTab, showAdmin, hideTabs = false, loading, erro
           <nav className="page-tabs" aria-label="Views">
             <button type="button" className={activeTab === 'memory' ? 'active' : ''} onClick={() => onTabChange('memory')}>Memory</button>
             <button type="button" className={activeTab === 'conversations' ? 'active' : ''} onClick={() => onTabChange('conversations')}>Chats</button>
+            {isTelegramWebApp() && (
+              <button type="button" className={activeTab === 'connections' ? 'active' : ''} onClick={() => onTabChange('connections')}>Connect</button>
+            )}
             {showAdmin && (
               <button type="button" className={activeTab === 'telegram_admin' ? 'active' : ''} onClick={() => onTabChange('telegram_admin')}>Admin</button>
             )}

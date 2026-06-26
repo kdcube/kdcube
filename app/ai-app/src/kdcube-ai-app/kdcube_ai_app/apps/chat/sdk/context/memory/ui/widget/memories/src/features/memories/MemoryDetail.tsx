@@ -1,7 +1,31 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useAppDispatch, useAppSelector } from '../../app/hooks';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
 import type { MemoryEntry } from '../../api/types';
-import { confirmMemory, loadMemories, loadMemoryEvents, pinMemory, retireMemory } from './memoriesSlice';
+import {
+  applyEvidence,
+  clearTransientErrors,
+  confirmMemory,
+  deleteEvidence,
+  loadMemories,
+  loadMemoryEvents,
+  pinMemory,
+  retireMemory,
+} from './memoriesSlice';
+
+// Map an evidence apply/drop failure to a design-system notice. The soft-tip
+// (green) variant is for the recoverable "keep one revision" guard; everything
+// else is a critical (red) notice.
+function evidenceNotice(error: string): { tone: 'success' | 'error'; message: string } | null {
+  if (!error) return null;
+  if (error === 'memory_requires_at_least_one_evidence') {
+    return { tone: 'success', message: 'A memory must keep at least one revision.' };
+  }
+  if (error === 'revision_conflict') {
+    return { tone: 'error', message: 'This memory changed elsewhere — reload to see the latest.' };
+  }
+  return { tone: 'error', message: error };
+}
 
 function formatDate(value: string): string {
   if (!value) return '';
@@ -68,13 +92,21 @@ interface MemoryDetailProps {
 
 export function MemoryDetail({ onEdit, single = false }: MemoryDetailProps) {
   const dispatch = useAppDispatch();
-  const { allowWrite, eventsLoading, memories, saving, selectedEvents, selectedId } = useAppSelector((state) => state.memories);
+  const { allowWrite, eventsLoading, evidenceError, memories, saving, selectedEvents, selectedId } = useAppSelector((state) => state.memories);
   const memory = memories.find((item) => item.id === selectedId);
   const terms = memory ? uniqueTerms(memory.labels, memory.keywords) : [];
+  const notice = evidenceNotice(evidenceError);
+  // The evidence entry pending a Drop confirmation (null = dialog closed).
+  const [dropEventId, setDropEventId] = useState<string | null>(null);
 
   useEffect(() => {
     if (selectedId) void dispatch(loadMemoryEvents(selectedId));
   }, [dispatch, selectedId]);
+
+  // Close any open Drop confirmation when the selected note changes.
+  useEffect(() => {
+    setDropEventId(null);
+  }, [selectedId]);
 
   if (!memory) return <aside className="memory-detail empty-detail">Select a note.</aside>;
 
@@ -175,6 +207,12 @@ export function MemoryDetail({ onEdit, single = false }: MemoryDetailProps) {
 
       <section className="events">
         <h3>Evidence</h3>
+        {notice ? (
+          <div className={`notice ${notice.tone}`} role="status">
+            <span>{notice.message}</span>
+            <button type="button" onClick={() => dispatch(clearTransientErrors())}>Dismiss</button>
+          </div>
+        ) : null}
         {eventsLoading && <div className="empty-state compact">Loading evidence...</div>}
         {!eventsLoading && selectedEvents.length === 0 && <div className="empty-state compact">No evidence events found.</div>}
         {!eventsLoading && selectedEvents.map((event) => (
@@ -185,9 +223,60 @@ export function MemoryDetail({ onEdit, single = false }: MemoryDetailProps) {
             </div>
             <p>{event.signal_text}</p>
             {event.context && <p className="event-context">{event.context}</p>}
+            {event.originator && (
+              <div className="event-meta">
+                by <span className="event-originator">{event.originator}</span>
+              </div>
+            )}
+            {allowWrite ? (
+              <div className="event-actions">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  title="Promote this revision's text to the canonical note"
+                  disabled={saving}
+                  onClick={() => void dispatch(applyEvidence({
+                    memoryId: memory.id,
+                    eventId: event.id,
+                    baseRevision: memory.revision,
+                  }))}
+                >
+                  Apply
+                </button>
+                <button
+                  type="button"
+                  className="danger-button"
+                  title="Delete this revision and re-derive the note"
+                  disabled={saving}
+                  onClick={() => setDropEventId(event.id)}
+                >
+                  Drop
+                </button>
+              </div>
+            ) : null}
           </article>
         ))}
       </section>
+
+      {dropEventId ? (
+        <ConfirmDialog
+          title="Drop this revision?"
+          message="Drop this revision? The note will be re-derived from the remaining evidence."
+          confirmLabel="Drop"
+          tone="danger"
+          busy={saving}
+          onCancel={() => setDropEventId(null)}
+          onConfirm={() => {
+            const eventId = dropEventId;
+            setDropEventId(null);
+            void dispatch(deleteEvidence({
+              memoryId: memory.id,
+              eventId,
+              baseRevision: memory.revision,
+            }));
+          }}
+        />
+      ) : null}
     </aside>
   );
 }

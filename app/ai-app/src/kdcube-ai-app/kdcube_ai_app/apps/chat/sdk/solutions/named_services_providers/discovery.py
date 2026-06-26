@@ -168,6 +168,7 @@ def _spec_from_provider_config(config: Mapping[str, Any], *, namespace: str = ""
         operations=_normalize_provider_operations(cfg.get("operations")),
         label=str(cfg.get("label") or "").strip() or None,
         description=str(cfg.get("description") or "").strip() or None,
+        intro=str(cfg.get("intro") or "").strip(),
         metadata=dict(cfg.get("metadata") or {}),
     )
 
@@ -367,6 +368,40 @@ class RedisNamedServiceDiscovery:
         )
         return entries
 
+    async def list_entries(self) -> list[NamedServiceDiscoveryEntry]:
+        """Return all live provider entries for this tenant/project (canonical read)."""
+        return await self.providers()
+
+    async def entries_for_namespace(self, namespace: str) -> list[NamedServiceDiscoveryEntry]:
+        """Return live provider entries that own ``namespace`` (canonical read)."""
+        return await self.providers(namespace=str(namespace or "").strip().lower().rstrip(":"))
+
+    async def namespace_intros(
+        self,
+        namespaces: Sequence[str] | None = None,
+    ) -> dict[str, dict[str, str]]:
+        """Return ``{base_namespace: {"intro","label"}}`` from live discovery entries.
+
+        Canonical read for the ReAct namespace roster: each provider's ``spec.intro``
+        (and ``spec.label`` fallback) is mapped to EVERY base namespace it owns
+        (e.g. the memory provider owns both ``me`` and ``mem``). Reads only the
+        existing ``:providers`` / ``:namespace:{ns}`` sets — no raw key scan.
+        """
+        wanted = [str(ns).strip().lower().rstrip(":") for ns in (namespaces or ()) if str(ns or "").strip()]
+        entries: list[NamedServiceDiscoveryEntry] = []
+        if wanted:
+            seen: set[tuple[str, str]] = set()
+            for ns in wanted:
+                for entry in await self.entries_for_namespace(ns):
+                    key = (entry.spec.bundle_id or "", entry.spec.provider_id)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    entries.append(entry)
+        else:
+            entries = await self.list_entries()
+        return intros_from_entries(entries)
+
     async def resolve(
         self,
         request: NamedServiceRequest,
@@ -446,6 +481,27 @@ class ConfiguredNamedServiceDiscovery:
                 )
             )
 
+    async def list_entries(self) -> list[NamedServiceDiscoveryEntry]:
+        return list(self._entries)
+
+    async def entries_for_namespace(self, namespace: str) -> list[NamedServiceDiscoveryEntry]:
+        ns = str(namespace or "").strip().lower().rstrip(":")
+        return [entry for entry in self._entries if ns in set(entry.spec.namespaces or ())]
+
+    async def namespace_intros(
+        self,
+        namespaces: Sequence[str] | None = None,
+    ) -> dict[str, dict[str, str]]:
+        wanted = {str(ns).strip().lower().rstrip(":") for ns in (namespaces or ()) if str(ns or "").strip()}
+        if wanted:
+            entries = [
+                entry for entry in self._entries
+                if wanted & set(entry.spec.namespaces or ())
+            ]
+        else:
+            entries = list(self._entries)
+        return intros_from_entries(entries)
+
     async def resolve(
         self,
         request: NamedServiceRequest,
@@ -506,6 +562,69 @@ def get_current_named_service_discovery() -> Any:
     return _discovery_from_request_context()
 
 
+def _entry_intro_and_label(entry: Any) -> tuple[list[str], str, str]:
+    spec = getattr(entry, "spec", None)
+    if spec is None and isinstance(entry, Mapping):
+        spec = entry.get("spec") or entry
+    if spec is None:
+        return [], "", ""
+    if isinstance(spec, Mapping):
+        raw_namespaces = spec.get("namespaces") or ([spec.get("namespace")] if spec.get("namespace") else [])
+        intro = str(spec.get("intro") or "").strip()
+        label = str(spec.get("label") or "").strip()
+    else:
+        raw_namespaces = list(getattr(spec, "namespaces", None) or ())
+        if not raw_namespaces and getattr(spec, "namespace", None):
+            raw_namespaces = [getattr(spec, "namespace")]
+        intro = str(getattr(spec, "intro", "") or "").strip()
+        label = str(getattr(spec, "label", "") or "").strip()
+    namespaces = [namespace_for_ref(ns) or str(ns).strip().lower().rstrip(":") for ns in raw_namespaces if str(ns or "").strip()]
+    return [ns for ns in namespaces if ns], intro, label
+
+
+def intros_from_entries(entries: Sequence[Any]) -> dict[str, dict[str, str]]:
+    """Build ``{base_namespace: {"intro","label"}}`` from discovery entries.
+
+    Single mapping implementation shared by every discovery backend's
+    ``namespace_intros``: each provider's intro/label is mapped to EVERY base
+    namespace it owns.
+    """
+    out: dict[str, dict[str, str]] = {}
+    for entry in entries or ():
+        ns_list, intro, label = _entry_intro_and_label(entry)
+        if not intro and not label:
+            continue
+        for namespace in ns_list:
+            bucket = out.setdefault(namespace, {})
+            if intro and not bucket.get("intro"):
+                bucket["intro"] = intro
+            if label and not bucket.get("label"):
+                bucket["label"] = label
+    return out
+
+
+async def fetch_namespace_intros(
+    discovery: Any,
+    namespaces: Sequence[str] | None = None,
+) -> dict[str, dict[str, str]]:
+    """Return ``{base_namespace: {"intro","label"}}`` for discovered providers.
+
+    Thin convenience that delegates to the discovery object's canonical
+    ``namespace_intros`` read (the discovery module is the single place that knows
+    how to read the registry). Safe to call with ``discovery is None`` (``{}``).
+    """
+    if discovery is None:
+        return {}
+    reader = getattr(discovery, "namespace_intros", None)
+    if not callable(reader):
+        return {}
+    try:
+        return await reader(namespaces)
+    except Exception:
+        LOGGER.debug("fetch_namespace_intros failed to query discovery", exc_info=True)
+        return {}
+
+
 __all__ = [
     "DEFAULT_DISCOVERY_TTL_SECONDS",
     "NAMED_SERVICE_DISCOVERY_SCHEMA",
@@ -513,5 +632,7 @@ __all__ = [
     "NamedServiceDiscoveryEntry",
     "RedisNamedServiceDiscovery",
     "bind_named_service_discovery",
+    "fetch_namespace_intros",
     "get_current_named_service_discovery",
+    "intros_from_entries",
 ]

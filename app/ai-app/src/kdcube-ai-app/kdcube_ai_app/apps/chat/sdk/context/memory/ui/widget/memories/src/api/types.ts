@@ -106,6 +106,15 @@ export interface MemoryMutationPayload {
   deleted?: boolean;
 }
 
+export interface MemoryEvidencePayload {
+  ok: boolean;
+  error?: string;
+  message?: string;
+  memory?: MemoryEntry;
+  events?: MemoryEvent[];
+  count?: number;
+}
+
 export interface MemoryExportPayload {
   ok: boolean;
   error?: string;

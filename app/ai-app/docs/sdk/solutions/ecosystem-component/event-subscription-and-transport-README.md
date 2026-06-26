@@ -336,6 +336,16 @@ The scene records the claim under the mounted component alias. When a matching
 backend event arrives from the runtime Event Bus, the scene forwards the
 configured browser message to the component iframe.
 
+### Host-pushed auth state
+
+Not every host→surface message is a claimed subscription. Auth state is pushed
+by the host *without* a claim: on every session transition the host broadcasts
+`kdcube-auth-changed` (a `postMessage` to surface iframes and a window event for
+in-page surfaces). A component reacts to it to re-derive auth-dependent state —
+it does not subscribe for it, and it must not poll an identity endpoint to
+discover sign-in. See the
+[scene auth contract](../scene/scene-auth-README.md).
+
 ## Widget-Owned SSE
 
 When `liveEventsTransport = "sse"`, the component keeps its current direct

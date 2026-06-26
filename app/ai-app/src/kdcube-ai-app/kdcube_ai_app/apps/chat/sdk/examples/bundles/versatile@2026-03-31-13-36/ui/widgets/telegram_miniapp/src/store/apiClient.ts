@@ -19,6 +19,8 @@ const TELEGRAM_OPERATION_ALIASES: Record<string, string> = {
   telegram_user_admin_data: 'telegram_webapp_user_admin_data',
   telegram_user_admin_upsert: 'telegram_webapp_user_admin_upsert',
   telegram_user_admin_delete: 'telegram_webapp_user_admin_delete',
+  telegram_identity_link_start: 'telegram_identity_link_start',
+  telegram_identity_link_complete: 'telegram_identity_link_complete',
 };
 
 const GET_OPERATIONS = new Set(['telegram_profile', 'conversations_list']);

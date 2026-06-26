@@ -135,7 +135,7 @@ backend-only apps — start with
 | Background jobs stream | [../../service/streams/background-jobs-README.md](../../service/streams/background-jobs-README.md) |
 | Mixin job dispatch (`super().handle_job(...)`) | [bundle-interfaces-README.md](bundle-interfaces-README.md), [bundle-platform-integration-README.md](bundle-platform-integration-README.md) |
 | SDK integrations | [../integrations/README.md](../integrations/README.md) |
-| Tasks SDK solution | [../solutions/tasks-README.md](../solutions/tasks-README.md) |
+| Automations SDK solution | [../solutions/automations/automations-sdk-solution-README.md](../solutions/automations/automations-sdk-solution-README.md) |
 | Cached subprocess virtualenv helpers (`@venv`) | [bundle-venv-README.md](bundle-venv-README.md) |
 | Outbound event filtering | [bundle-firewall-README.md](bundle-firewall-README.md) |
 | Python-to-Node backend bridge | [bundle-node-backend-bridge-README.md](bundle-node-backend-bridge-README.md) |

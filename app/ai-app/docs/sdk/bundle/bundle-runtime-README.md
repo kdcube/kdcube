@@ -199,9 +199,9 @@ Communicator behavior in this path:
 
 ## Portable bundle call context
 
-`bundle_call_context` is the bundle-owned, request-scoped context room.
+`bundle_call_context` is the app-owned, request-scoped context room.
 
-Use it when a bundle needs to put JSON-safe metadata into the current execution
+Use it when an app needs to put JSON-safe metadata into the current execution
 so nested agents, tools, background handlers, and isolated runtimes can inherit
 it without asking the model to pass those values as tool arguments.
 
@@ -210,18 +210,32 @@ This is the right place for per-invocation values such as:
 - task or execution ids
 - selected UI mode or user-requested agent strength
 - request-scoped role model overrides
-- bundle-owned correlation ids
+- app-owned correlation ids
 - a small policy snapshot that should follow nested tool execution
 
 It is not durable storage. It survives the current execution graph and child
-runtime boundaries. It does not survive a later request unless the bundle stores
-the relevant values somewhere durable, such as job payload/metadata, bundle/user
-props, or bundle storage, and re-applies them on the later invocation.
+runtime boundaries. It does not survive a later request unless the app stores
+the relevant values somewhere durable, such as job payload/metadata, app/user
+props, or app storage, and re-applies them on the later invocation.
+
+For automation apps, do not decode background-job payloads by hand. Use:
+
+```python
+from kdcube_ai_app.apps.chat.sdk.solutions.automations.common import (
+    extract_automation_execution_context,
+    extract_automation_execution_context_from_scope,
+)
+```
+
+The helper flattens both direct automation runs and queued background-job runs
+into one app-facing context with `automation_id` and `execution_id`. The platform
+processor/event envelope still uses `task_id`; automation code should not rename
+that platform identity.
 
 ### Concept diagram
 
 `bundle_call_context` is attached to the current `ExternalEventPayload`, then bound
-to task-local contextvars. That is what makes it visible to bundle code, tools,
+to task-local contextvars. That is what makes it visible to app code, tools,
 and child runtimes.
 
 ```text
@@ -232,7 +246,7 @@ HTTP/chat/job request
 | ExternalEventPayload               |
 | - routing / actor / user      |
 | - request                     |
-| - bundle_call_context  <------+  bundle code can add JSON-safe call metadata
+| - bundle_call_context  <------+  app code can add JSON-safe call metadata
 +---------------+---------------+
                 |
                 | bind_current_request_context(...)
@@ -270,8 +284,8 @@ isolated / Docker / Fargate runtime
 same get_current_bundle_call_context() contract
 ```
 
-`PORTABLE_SPEC_JSON` is platform-built. Bundle code does not extend it
-directly. Bundle-owned per-call metadata travels through
+`PORTABLE_SPEC_JSON` is platform-built. App code does not extend it
+directly. App-owned per-call metadata travels through
 `bundle_call_context`, which is included in the contextvar snapshot inside
 `RUNTIME_GLOBALS_JSON`.
 

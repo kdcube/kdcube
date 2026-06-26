@@ -163,6 +163,9 @@ class TestEventStructure:
         )
 
         assert project_client.queue.qsize() == 1
+        frame = await project_client.queue.get()
+        assert "event: chat_service" in frame
+        assert '"type": "demo.snapshot"' in frame
         assert session_only_client.queue.qsize() == 0
         assert other_project_client.queue.qsize() == 0
 

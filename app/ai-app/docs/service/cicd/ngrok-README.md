@@ -15,11 +15,15 @@ Use this when a local KDCube runtime must be reachable through a public HTTPS
 origin, for example for Telegram webhooks, Telegram Mini Apps, or Cognito
 callback testing.
 
-There are two local shapes:
+There are three local shapes:
 
 - **CLI-started runtime**: `kdcube start` runs Docker Compose and already puts
   the KDCube web proxy in front of frontend, ingress, and proc. This is the
   normal user path. Point ngrok directly at the web proxy port.
+- **Website root through Caddy**: a local website is served at `/`, while
+  KDCube runtime paths are routed to the CLI-started KDCube web proxy. This is
+  the normal shape for testing website pages that embed KDCube app widgets or a
+  scene. Point ngrok at Caddy, not directly at the KDCube web proxy.
 - **Manual split services**: frontend, ingress, and proc are started by hand.
   In that case use a local Caddy proxy first, then point ngrok at Caddy.
 
@@ -40,6 +44,12 @@ ngrok http 5173 --url https://<stable-ngrok-domain>
 ```
 
 For manual split services through Caddy:
+
+```bash
+ngrok http 18080 --url https://<stable-ngrok-domain>
+```
+
+For a website root served through Caddy, use the same ngrok target:
 
 ```bash
 ngrok http 18080 --url https://<stable-ngrok-domain>
@@ -76,6 +86,23 @@ https://<ngrok-domain>
       /*                  -> frontend :<frontend-port>
 ```
 
+Website root through Caddy, backed by a CLI-started runtime:
+
+```text
+https://<ngrok-domain>
+  -> Caddy :18080
+      /*                       -> local website files/server
+      /api/*, /sse/*           -> KDCube web proxy :<proxy-http-port>
+      /api/integrations/*      -> KDCube web proxy :<proxy-http-port> -> proc
+      /cb/socket.io/*          -> KDCube web proxy :<proxy-http-port> -> ingress websocket
+      /platform/*              -> KDCube web proxy :<proxy-http-port> -> platform frontend
+```
+
+In this shape the KDCube web proxy does not serve the website root. It only
+serves runtime/API/platform paths behind Caddy. If ngrok reports
+`config.addr: "http://localhost:18080"`, the public website origin is entering
+through Caddy first.
+
 ## Descriptor Rule
 
 KDCube runtime configuration is descriptor-driven. For this flow, edit the
@@ -96,6 +123,41 @@ stages the active descriptor set under:
 That staged copy is the runtime authority for `kdcube start`. Do not configure
 this flow by editing frontend-local config files or generated environment files.
 The frontend must receive its browser config from ingress.
+
+## Identify The Active Local Path
+
+When it is unclear whether the public URL enters through Caddy or through the
+KDCube web proxy, inspect the local ngrok agent:
+
+```bash
+curl http://127.0.0.1:4040/api/tunnels
+```
+
+Read `tunnels[].config.addr`:
+
+```text
+http://localhost:5173   -> ngrok enters the KDCube web proxy directly
+http://localhost:18080  -> ngrok enters Caddy first
+```
+
+Then check the local ports:
+
+```bash
+curl -I http://127.0.0.1:5173/
+curl -I http://127.0.0.1:18080/
+```
+
+Typical result:
+
+```text
+127.0.0.1:5173  Server: openresty  -> KDCube runtime web proxy
+127.0.0.1:18080 Server: Caddy       -> website bridge / local site root
+```
+
+If a local cross-site scene emulator is running, it may expose a separate
+static site server on another localhost port. That server is only the parent
+site for that local cross-site test path; it is not the normal KDCube runtime
+web proxy and it is not automatically the ngrok target.
 
 ## What To Configure
 

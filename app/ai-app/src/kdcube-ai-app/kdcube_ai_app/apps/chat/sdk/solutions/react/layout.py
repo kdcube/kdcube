@@ -1074,7 +1074,7 @@ def build_announce_memory_lines(*, runtime_ctx: Optional[RuntimeCtx]) -> List[st
 
     lines: List[str] = ["[USER MEMORY HOTSET]"]
     lines.append(
-        "  policy: read-only durable user memory; current user message and visible turn context override memory if they conflict."
+        "  policy: durable user memory; current user message and visible turn context override memory if they conflict."
     )
     lines.append(
         "  use: consult these only when relevant; do not restate them unless they affect the answer."

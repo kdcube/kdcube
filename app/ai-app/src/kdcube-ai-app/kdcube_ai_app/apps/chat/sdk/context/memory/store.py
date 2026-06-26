@@ -21,10 +21,12 @@ from .models import (
     normalize_term,
     normalize_terms,
     normalize_visibility,
+    resolve_collection_update,
 )
 from .scoring import (
     DEFAULT_MEMORY_SCORING,
     build_canonical_key,
+    compute_importance_score,
     compute_memory_scores,
     event_weight,
     rank_candidate,
@@ -41,6 +43,16 @@ USER_BUNDLE_PROPS_TABLE = "user_bundle_props"
 MEMORY_PREFERENCES_SUBSYSTEM = "memory"
 MEMORY_PREFERENCES_BUNDLE_ID = "*"
 MEMORY_PREFERENCES_KEY = "preferences"
+
+# Event types that carry an authoritative, user-directed edit: an explicit text
+# (and status) provided via upsert_object / edit_memory must REPLACE the
+# canonical memory text (latest authoritative edit wins), rather than being
+# averaged in as a passive observation that reconciliation defers. Passive
+# evidence types (e.g. agent_observation) intentionally do NOT promote their
+# text to canonical so accumulating observations don't clobber a curated note.
+AUTHORITATIVE_EDIT_EVENTS = frozenset(
+    {"user_edit", "manual_update", "refinement", "agent_refinement", "squash"}
+)
 
 
 def _safe_identifier(value: str, *, fallback: str = "kdcube_default_default") -> str:
@@ -96,6 +108,96 @@ def _json(value: Any) -> Any:
         except Exception:
             return {}
     return value
+
+
+def rederive_fields_from_events(
+    events: Sequence[Dict[str, Any]],
+    *,
+    status: str = "active",
+    pinned: bool = False,
+    fallback_memory: str = "",
+    seed_event_at: Any = None,
+) -> Dict[str, Any]:
+    """Fold a chronological event tail into a record's derived fields.
+
+    Replays events with the same accumulation the live write path uses
+    (``_insert_memory`` seed + ``_append_event_and_update_scores`` per event):
+    weights sum, counts increment, and the canonical text/context is the most
+    recent authoritative edit (first event seeds it). Returns the derived
+    scalar fields plus the computed score bundle. Labels/keywords are NOT
+    derived here — they are curated separately via replace/delta edits.
+
+    ``events`` must be ordered oldest-first and each a mapping with
+    ``event_type``, ``signal_text``, ``context``, ``confidence``, ``importance``,
+    and ``created_at``.
+    """
+
+    memory_text = ""
+    context = ""
+    positive = 0.0
+    negative = 0.0
+    evidence_count = 0
+    update_count = 0
+    confirmation_count = 0
+    contradiction_count = 0
+    importance_score = 0.5
+    last_event_at = seed_event_at or _utc_now()
+    last_confirmed_at = None
+    first = True
+    for ev in events:
+        event_type = normalize_term(str(ev.get("event_type") or "")).replace(" ", "_")
+        confidence = float(ev.get("confidence") or 0.0)
+        importance = float(ev.get("importance") or 0.0)
+        pos_delta, neg_delta, confirmed = event_weight(event_type, confidence=confidence, importance=importance)
+        positive += pos_delta
+        negative += neg_delta
+        evidence_count += 1
+        update_count += 1
+        confirmation_count += 1 if confirmed else 0
+        contradiction_count += 1 if neg_delta > 0 else 0
+        # Canonical text/context: first event seeds; later events replace only
+        # when they are authoritative edits (latest authoritative edit wins).
+        if first or event_type in AUTHORITATIVE_EDIT_EVENTS:
+            memory_text = str(ev.get("signal_text") or "") or memory_text
+        if first or str(ev.get("context") or ""):
+            context = str(ev.get("context") or "")
+        importance_score = compute_importance_score(
+            current=importance if first else importance_score,
+            signal_importance=importance,
+            update_count=update_count,
+        )
+        last_event_at = ev.get("created_at") or last_event_at
+        if confirmed:
+            last_confirmed_at = ev.get("created_at") or last_confirmed_at
+        first = False
+
+    scores = compute_memory_scores(
+        status=str(status or "active"),
+        positive_weight=positive,
+        negative_weight=negative,
+        evidence_count=evidence_count,
+        confirmation_count=confirmation_count,
+        contradiction_count=contradiction_count,
+        update_count=update_count,
+        current_importance=importance_score,
+        signal_importance=importance_score,
+        last_event_at=last_event_at,
+        pinned=bool(pinned),
+    )
+    return {
+        "memory": memory_text or str(fallback_memory or ""),
+        "context": context,
+        "positive_weight": positive,
+        "negative_weight": negative,
+        "evidence_count": evidence_count,
+        "update_count": update_count,
+        "confirmation_count": confirmation_count,
+        "contradiction_count": contradiction_count,
+        "importance_score": importance_score,
+        "last_event_at": last_event_at,
+        "last_confirmed_at": last_confirmed_at,
+        "scores": scores,
+    }
 
 
 def _array(value: Any) -> list[str]:
@@ -1431,6 +1533,18 @@ class UserMemoryStore:
                     last_event_at=now,
                     pinned=pinned_value,
                 )
+                # Resolve labels/keywords against the existing row so a
+                # {add, remove} delta is incremental and a bare list replaces.
+                edit_labels = (
+                    resolve_collection_update(_array(row.get("labels")), normalized_signal["labels_raw"])
+                    if normalized_signal.get("labels_supplied")
+                    else _array(row.get("labels"))
+                )
+                edit_keywords = (
+                    resolve_collection_update(_array(row.get("keywords")), normalized_signal["keywords_raw"])
+                    if normalized_signal.get("keywords_supplied")
+                    else _array(row.get("keywords"))
+                )
                 updated = await con.fetchrow(
                     f"""
                     UPDATE {self.schema}.{MEMORY_TABLE}
@@ -1472,10 +1586,10 @@ class UserMemoryStore:
                     normalized_signal["status"],
                     normalized_signal["visibility"],
                     normalized_signal["visible_to_user"],
-                    normalized_signal["labels"],
-                    normalized_signal["keywords"],
+                    edit_labels,
+                    edit_keywords,
                     pinned_value,
-                    self._search_text(normalized_signal),
+                    self._search_text({**normalized_signal, "labels": edit_labels, "keywords": edit_keywords}),
                     normalized_signal["embedding"],
                     normalized_signal["embedding_model"],
                     evidence_count,
@@ -1497,10 +1611,252 @@ class UserMemoryStore:
                 await self._upsert_aliases(
                     con,
                     memory_id=str(row["id"]),
-                    labels=normalized_signal["labels"],
-                    keywords=normalized_signal["keywords"],
+                    labels=edit_labels,
+                    keywords=edit_keywords,
                 )
         return self._record_from_row(dict(updated)) if updated else None
+
+    async def delete_evidence(
+        self,
+        *,
+        scope: MemoryScope,
+        memory_id: str,
+        event_id: str,
+        visible_to_user: Optional[bool] = True,
+        scope_filter: str = "current_bundle",
+        base_revision: Optional[int] = None,
+        ensure_schema: bool = False,
+    ) -> Optional[MemoryRecord]:
+        """Delete one evidence entry from a memory record, then re-derive.
+
+        Removes the named event row, then replays the surviving events to
+        re-derive the canonical memory text, counts, weights, and scores so the
+        record reflects exactly the evidence that remains. Idempotent: if the
+        event is already gone (or never belonged to this memory) the record is
+        returned unchanged. The last surviving event cannot be deleted (that
+        would leave a memory with no evidence — delete the memory instead).
+        """
+
+        if ensure_schema:
+            await self.ensure_schema()
+        pool = self._require_pool()
+        scope = scope.normalized()
+        memory_id = str(memory_id or "").strip()
+        event_id = str(event_id or "").strip()
+        async with pool.acquire() as con:
+            async with con.transaction():
+                row = await self._fetch_memory_for_update_scoped(
+                    con,
+                    scope=scope,
+                    memory_id=memory_id,
+                    visible_to_user=visible_to_user,
+                    scope_filter=scope_filter,
+                )
+                if row is None:
+                    return None
+                self._check_base_revision(row, base_revision)
+                target = await con.fetchrow(
+                    f"SELECT id FROM {self.schema}.{EVENT_TABLE} WHERE memory_id=$1 AND id=$2",
+                    memory_id,
+                    event_id,
+                )
+                if target is None:
+                    # Idempotent: nothing to remove, return the record as-is.
+                    return self._record_from_row(row)
+                remaining = await con.fetch(
+                    f"SELECT COUNT(*) AS n FROM {self.schema}.{EVENT_TABLE} WHERE memory_id=$1",
+                    memory_id,
+                )
+                if int(remaining[0]["n"]) <= 1:
+                    raise ValueError("memory_requires_at_least_one_evidence")
+                await con.execute(
+                    f"DELETE FROM {self.schema}.{EVENT_TABLE} WHERE memory_id=$1 AND id=$2",
+                    memory_id,
+                    event_id,
+                )
+                updated = await self._rederive_record_from_events(con, scope=scope, row=row)
+        return self._record_from_row(dict(updated)) if updated else None
+
+    async def apply_evidence(
+        self,
+        *,
+        scope: MemoryScope,
+        memory_id: str,
+        event_id: str,
+        visible_to_user: Optional[bool] = True,
+        scope_filter: str = "current_bundle",
+        base_revision: Optional[int] = None,
+        ensure_schema: bool = False,
+    ) -> Optional[MemoryRecord]:
+        """Promote a chosen evidence entry's text to the canonical memory.
+
+        The user picks any past entry from the tail and makes its text (and
+        context) the current note — an authoritative edit. The choice is
+        recorded as a new ``manual_update`` event so the promotion survives a
+        future re-derivation, then the record is re-derived from all events.
+        Idempotent: re-applying the same entry yields the same canonical text.
+        """
+
+        if ensure_schema:
+            await self.ensure_schema()
+        pool = self._require_pool()
+        scope = scope.normalized()
+        memory_id = str(memory_id or "").strip()
+        event_id = str(event_id or "").strip()
+        async with pool.acquire() as con:
+            async with con.transaction():
+                row = await self._fetch_memory_for_update_scoped(
+                    con,
+                    scope=scope,
+                    memory_id=memory_id,
+                    visible_to_user=visible_to_user,
+                    scope_filter=scope_filter,
+                )
+                if row is None:
+                    return None
+                self._check_base_revision(row, base_revision)
+                chosen = await con.fetchrow(
+                    f"SELECT * FROM {self.schema}.{EVENT_TABLE} WHERE memory_id=$1 AND id=$2",
+                    memory_id,
+                    event_id,
+                )
+                if chosen is None:
+                    raise ValueError("evidence_not_found")
+                chosen = dict(chosen)
+                chosen_text = str(chosen.get("signal_text") or "").strip()
+                if not chosen_text:
+                    raise ValueError("evidence_has_no_text")
+                if str(row.get("memory") or "").strip() == chosen_text:
+                    # Idempotent: chosen text is already canonical.
+                    return self._record_from_row(row)
+                # Record the user's choice as an authoritative edit event so the
+                # promoted text wins now and on any later re-derivation.
+                now = _utc_now()
+                apply_signal = {
+                    "conversation_id": "",
+                    "turn_id": "",
+                    "event_type": "manual_update",
+                    "memory": chosen_text,
+                    "context": str(chosen.get("context") or ""),
+                    "originator": "user",
+                    "confidence": max(0.0, min(1.0, float(chosen.get("confidence") or 0.95))),
+                    "importance": max(0.0, min(1.0, float(chosen.get("importance") or 0.7))),
+                    "labels": _array(row.get("labels")),
+                    "keywords": _array(row.get("keywords")),
+                    "source": {"bundle_id": scope.bundle_id, "action": "evidence_apply", "applied_event_id": event_id},
+                    "metadata": {},
+                    "idempotency_key": "",
+                }
+                await self._insert_event(con, scope=scope, row=row, signal=apply_signal)
+                updated = await self._rederive_record_from_events(con, scope=scope, row=row)
+        return self._record_from_row(dict(updated)) if updated else None
+
+    @staticmethod
+    def _check_base_revision(row: Dict[str, Any], base_revision: Optional[int]) -> None:
+        if base_revision is None:
+            return
+        current = int(row.get("revision") or 0)
+        if int(base_revision) != current:
+            raise ValueError(f"revision_conflict: expected {base_revision}, found {current}")
+
+    async def _rederive_record_from_events(
+        self,
+        con: Any,
+        *,
+        scope: MemoryScope,
+        row: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Replay surviving events to re-derive a record's text, counts, scores.
+
+        Folds the chronological event tail with the same accumulation the live
+        write path uses (see ``_insert_memory`` / ``_append_event_and_update_scores``):
+        weights sum per event, counts increment, and the canonical text/context
+        is the most recent authoritative edit. Labels/keywords are preserved
+        from the current record (they are curated via replace/delta edits, not
+        derived from the evidence tail).
+        """
+
+        events = await con.fetch(
+            f"""
+            SELECT event_type, signal_text, context, confidence, importance, created_at
+            FROM {self.schema}.{EVENT_TABLE}
+            WHERE memory_id=$1
+            ORDER BY created_at ASC, id ASC
+            """,
+            row["id"],
+        )
+        if not events:
+            return dict(row)
+
+        status = str(row.get("status") or "active")
+        pinned = bool(row.get("pinned"))
+        derived = rederive_fields_from_events(
+            [dict(ev) for ev in events],
+            status=status,
+            pinned=pinned,
+            fallback_memory=str(row.get("memory") or ""),
+            seed_event_at=row.get("created_at") or _utc_now(),
+        )
+        memory_text = derived["memory"]
+        context = derived["context"]
+        evidence_count = derived["evidence_count"]
+        update_count = derived["update_count"]
+        confirmation_count = derived["confirmation_count"]
+        contradiction_count = derived["contradiction_count"]
+        positive = derived["positive_weight"]
+        negative = derived["negative_weight"]
+        last_event_at = derived["last_event_at"]
+        last_confirmed_at = derived["last_confirmed_at"]
+        scores = derived["scores"]
+        labels = _array(row.get("labels"))
+        keywords = _array(row.get("keywords"))
+        now = _utc_now()
+        updated = await con.fetchrow(
+            f"""
+            UPDATE {self.schema}.{MEMORY_TABLE}
+            SET memory=$2,
+                context=$3,
+                search_text=$4,
+                evidence_count=$5,
+                update_count=$6,
+                confirmation_count=$7,
+                contradiction_count=$8,
+                positive_weight=$9,
+                negative_weight=$10,
+                confidence_score=$11,
+                importance_score=$12,
+                freshness_score=$13,
+                salience_score=$14,
+                confirmation_rate=$15,
+                tier=$16,
+                updated_at=$17,
+                last_event_at=$18,
+                last_confirmed_at=$19,
+                revision=revision + 1
+            WHERE id=$1
+            RETURNING *
+            """,
+            row["id"],
+            memory_text or str(row.get("memory") or ""),
+            context,
+            self._search_text({"memory": memory_text, "context": context, "labels": labels, "keywords": keywords}),
+            evidence_count,
+            update_count,
+            confirmation_count,
+            contradiction_count,
+            positive,
+            negative,
+            scores["confidence_score"],
+            scores["importance_score"],
+            scores["freshness_score"],
+            scores["salience_score"],
+            scores["confirmation_rate"],
+            scores["tier"],
+            now,
+            last_event_at,
+            last_confirmed_at,
+        )
+        return dict(updated) if updated else None
 
     async def restore_snapshot(
         self,
@@ -2024,8 +2380,16 @@ class UserMemoryStore:
         memory = str(signal.memory or "").strip()
         if not memory:
             raise ValueError("memory signal requires non-empty memory")
-        labels = normalize_terms(signal.labels)
-        keywords = normalize_terms(signal.keywords)
+        labels_supplied = signal.labels is not None
+        keywords_supplied = signal.keywords is not None
+        labels_raw = signal.labels
+        keywords_raw = signal.keywords
+        # Resolved against an empty set: the value used for a fresh insert,
+        # canonical-key derivation, and search text. On update the apply path
+        # re-resolves the raw value against the existing stored set so a
+        # {add, remove} delta is incremental rather than replacing.
+        labels = resolve_collection_update(None, labels_raw)
+        keywords = resolve_collection_update(None, keywords_raw)
         canonical_key_supplied = bool(str(signal.canonical_key or "").strip())
         canonical_key = str(signal.canonical_key or "").strip() or build_canonical_key(
             user_id=scope.user_id,
@@ -2048,6 +2412,10 @@ class UserMemoryStore:
             "visible_to_user": is_user_visible(visibility),
             "labels": labels,
             "keywords": keywords,
+            "labels_raw": labels_raw,
+            "keywords_raw": keywords_raw,
+            "labels_supplied": labels_supplied,
+            "keywords_supplied": keywords_supplied,
             "pinned": signal.pinned if signal.pinned is not None else None,
             "confidence": max(0.0, min(1.0, float(signal.confidence))),
             "importance": max(0.0, min(1.0, float(signal.importance))),
@@ -2302,9 +2670,26 @@ class UserMemoryStore:
             last_event_at=now,
             pinned=pinned,
         )
-        labels = sorted(set(_array(row.get("labels")) + signal["labels"]))
-        keywords = sorted(set(_array(row.get("keywords")) + signal["keywords"]))
-        memory_text = signal["memory"] if signal["event_type"] in {"user_edit", "manual_update", "refinement", "squash"} else row["memory"]
+        # labels/keywords are value-lists (bare strings), so removal is only
+        # possible by re-sending the set without an item. The update accepts
+        # either shape: a bare list replaces the stored set (an empty list
+        # clears it); a {add, remove} delta is applied incrementally against the
+        # existing stored set (removes then adds). When the field is omitted
+        # (None), the existing stored set is preserved unchanged.
+        labels = (
+            resolve_collection_update(_array(row.get("labels")), signal["labels_raw"])
+            if signal.get("labels_supplied")
+            else _array(row.get("labels"))
+        )
+        keywords = (
+            resolve_collection_update(_array(row.get("keywords")), signal["keywords_raw"])
+            if signal.get("keywords_supplied")
+            else _array(row.get("keywords"))
+        )
+        # An explicit, user-directed edit (upsert_object/edit_memory providing
+        # memory text) promotes that text to canonical (latest authoritative
+        # edit wins); passive observations keep the existing curated text.
+        memory_text = signal["memory"] if signal["event_type"] in AUTHORITATIVE_EDIT_EVENTS else row["memory"]
         context = signal["context"] or row.get("context") or ""
         updated = await con.fetchrow(
             f"""

@@ -21,9 +21,13 @@ class _CtxBrowserStub:
         self.runtime_ctx = runtime_ctx
         self.timeline = _TimelineStub()
         self.contributed = []
+        self.closed_external_event_handler = False
 
     def contribute(self, blocks):
         self.contributed.extend(list(blocks or []))
+
+    async def close_external_event_handler(self):
+        self.closed_external_event_handler = True
 
 
 def _payload(
@@ -524,6 +528,180 @@ def test_sync_runtime_ctx_bundle_props_refreshes_render_thinking(monkeypatch):
     assert wf.runtime_ctx.debug_timeline_keep_files == 17
 
 
+def _announce_settings_stub():
+    return SimpleNamespace(
+        AI_REACT_RENDER_THINKING=True,
+        HOST_REACT_DEBUG_PATH="/host/react-debug",
+        PLATFORM=SimpleNamespace(
+            REACT_DEBUG=SimpleNamespace(
+                REACT_DEBUG_ROOT="/react-debug",
+                REACT_DEBUG_KEEP_FILES=5,
+            )
+        ),
+    )
+
+
+def test_announce_config_resolves_from_as_consumer_mem_namespace(monkeypatch):
+    """Announce (hotset) settings are a consumer concern: read them from the
+    agent's ``as_consumer.agents.<agent>.tools[].namespaces.mem.announce``."""
+    monkeypatch.setattr(workflow_mod, "get_settings", _announce_settings_stub)
+    wf = BaseWorkflow.__new__(BaseWorkflow)
+    wf.bundle_props = {
+        "memory": {"enabled": True},
+        "surfaces": {
+            "as_consumer": {
+                "agents": {
+                    "main": {
+                        "tools": [
+                            {
+                                "kind": "named_service",
+                                "alias": "named_services",
+                                "namespaces": {
+                                    "mem": {
+                                        "allowed": ["provider.about", "object.search"],
+                                        "announce": {
+                                            "enabled": True,
+                                            "limit": 12,
+                                            "scope_filter": "all_user_memories",
+                                            "timeout_seconds": 2.0,
+                                        },
+                                    }
+                                },
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+    }
+    wf.runtime_ctx = RuntimeCtx()
+
+    wf._sync_runtime_ctx_bundle_props()
+
+    assert wf.runtime_ctx.memory_announce_enabled is True
+    assert wf.runtime_ctx.memory_hotset_limit == 12
+    assert wf.runtime_ctx.memory_scope_filter == "all_user_memories"
+    assert wf.runtime_ctx.memory_announce_timeout_seconds == 2.0
+
+
+def test_announce_config_falls_back_to_legacy_memory_announce(monkeypatch):
+    """Un-migrated bundles (no as_consumer announce) keep working via the
+    legacy ``memory.announce.*`` fallback in ``_resolve_announce_config``."""
+    monkeypatch.setattr(workflow_mod, "get_settings", _announce_settings_stub)
+    wf = BaseWorkflow.__new__(BaseWorkflow)
+    wf.bundle_props = {
+        "memory": {
+            "enabled": True,
+            "announce": {
+                "enabled": True,
+                "limit": 6,
+                "scope_filter": "current_bundle",
+            },
+        },
+        # mem namespace connected but without an announce sub-config
+        "surfaces": {
+            "as_consumer": {
+                "agents": {
+                    "main": {
+                        "tools": [
+                            {
+                                "kind": "named_service",
+                                "alias": "named_services",
+                                "namespaces": {"mem": {"allowed": ["object.search"]}},
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+    }
+    wf.runtime_ctx = RuntimeCtx()
+
+    wf._sync_runtime_ctx_bundle_props()
+
+    assert wf.runtime_ctx.memory_announce_enabled is True
+    assert wf.runtime_ctx.memory_hotset_limit == 6
+    assert wf.runtime_ctx.memory_scope_filter == "current_bundle"
+
+
+def test_announce_enabled_for_pure_consumer_without_memory_block(monkeypatch):
+    """A pure memory *consumer* (no ``memory:`` owner block) still gets the
+    hotset: enablement gates on consuming the ``mem`` namespace via
+    ``as_consumer`` + ``announce.enabled``, never on owner ``memory.enabled``."""
+    monkeypatch.setattr(workflow_mod, "get_settings", _announce_settings_stub)
+    wf = BaseWorkflow.__new__(BaseWorkflow)
+    wf.bundle_props = {
+        # NO "memory" block at all — versatile is a pure consumer.
+        "surfaces": {
+            "as_consumer": {
+                "agents": {
+                    "main": {
+                        "tools": [
+                            {
+                                "kind": "named_service",
+                                "alias": "named_services",
+                                "namespaces": {
+                                    "mem": {
+                                        "allowed": ["provider.about", "object.search"],
+                                        "announce": {
+                                            "enabled": True,
+                                            "limit": 8,
+                                            "scope_filter": "all_user_memories",
+                                        },
+                                    }
+                                },
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+    }
+    wf.runtime_ctx = RuntimeCtx()
+
+    wf._sync_runtime_ctx_bundle_props()
+
+    assert wf.runtime_ctx.memory_enabled is False
+    assert wf.runtime_ctx.memory_announce_enabled is True
+    assert wf.runtime_ctx.memory_hotset_limit == 8
+    assert wf.runtime_ctx.memory_scope_filter == "all_user_memories"
+
+
+def test_announce_disabled_when_mem_not_consumed(monkeypatch):
+    """Without the ``mem`` namespace in ``as_consumer``, the agent is not a
+    memory consumer, so announce stays off even with a legacy
+    ``memory.announce.enabled: true`` block."""
+    monkeypatch.setattr(workflow_mod, "get_settings", _announce_settings_stub)
+    wf = BaseWorkflow.__new__(BaseWorkflow)
+    wf.bundle_props = {
+        "memory": {
+            "enabled": True,
+            "announce": {"enabled": True, "limit": 6, "scope_filter": "current_bundle"},
+        },
+        # as_consumer connects a different namespace, not "mem".
+        "surfaces": {
+            "as_consumer": {
+                "agents": {
+                    "main": {
+                        "tools": [
+                            {
+                                "kind": "named_service",
+                                "alias": "named_services",
+                                "namespaces": {"task": {"allowed": ["object.search"]}},
+                            }
+                        ]
+                    }
+                }
+            }
+        },
+    }
+    wf.runtime_ctx = RuntimeCtx()
+
+    wf._sync_runtime_ctx_bundle_props()
+
+    assert wf.runtime_ctx.memory_announce_enabled is False
+
+
 def test_base_workflow_constructor_binds_external_event_source_when_redis_present(monkeypatch):
     sentinel = object()
     calls = []
@@ -899,6 +1077,7 @@ async def test_handle_turn_exception_sanitizes_wrapped_react_connection_error(mo
     assert data["error_type"] == "APIConnectionError"
     assert data["service_error"]["error_type"] == "APIConnectionError"
     assert deleted_turns
+    assert wf.ctx_browser.closed_external_event_handler is True
 
 
 @pytest.mark.asyncio
@@ -1289,3 +1468,140 @@ def test_bind_runtime_role_models_noop_without_agent_overlay():
 
     with solver._bind_runtime_role_models():
         assert "role_models" not in get_current_bundle_call_context()
+
+
+# ---------------------------------------------------------------------------
+# Named-service ReAct roster: overridable BaseWorkflow helper composes the
+# section from the canonical discovery read.
+# ---------------------------------------------------------------------------
+
+class _RosterFakeRedis:
+    """Minimal async redis double for RedisNamedServiceDiscovery reads/writes."""
+
+    def __init__(self):
+        self._v = {}
+        self._s = {}
+
+    async def set(self, k, v, ex=None):
+        self._v[str(k)] = v
+        return True
+
+    async def get(self, k):
+        return self._v.get(str(k))
+
+    async def sadd(self, k, *vs):
+        bucket = self._s.setdefault(str(k), set())
+        for x in vs:
+            bucket.add(str(x))
+        return 1
+
+    async def smembers(self, k):
+        return set(self._s.get(str(k), set()))
+
+    async def expire(self, k, s):
+        return True
+
+    async def persist(self, k):
+        return True
+
+
+def _named_service_consumer_props(*namespaces: str) -> dict:
+    return {
+        "surfaces": {
+            "as_consumer": {
+                "agents": {
+                    "main": {
+                        "tools": [
+                            {
+                                "kind": "named_service",
+                                "alias": "named_services",
+                                "namespaces": {
+                                    ns: {"allowed": ["provider.about", "object.search"]}
+                                    for ns in namespaces
+                                },
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+    }
+
+
+async def _register_roster_provider(redis, *, provider_id, namespaces, label, intro, bundle_id):
+    from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
+        RedisNamedServiceDiscovery,
+        NamedServiceProviderSpec,
+    )
+    discovery = RedisNamedServiceDiscovery(redis, tenant="demo-tenant", project="demo-project")
+    await discovery.register_provider(
+        NamedServiceProviderSpec(
+            provider_id=provider_id,
+            bundle_id=bundle_id,
+            namespaces=tuple(namespaces),
+            label=label,
+            intro=intro,
+            operations={"object.search": {"transports": ["bundle_registry"]}},
+        ),
+        bundle_id=bundle_id,
+    )
+
+
+@pytest.mark.asyncio
+async def test_base_workflow_named_service_roster_uses_canonical_discovery_read():
+    redis = _RosterFakeRedis()
+    await _register_roster_provider(
+        redis,
+        provider_id="sdk.memory",
+        namespaces=("me", "mem"),
+        label="User memories",
+        intro="Durable user memory — facts, preferences …",
+        bundle_id="versatile@1-0",
+    )
+    await _register_roster_provider(
+        redis,
+        provider_id="task.issue",
+        namespaces=("task",),
+        label="Tasks",
+        intro="KDCube issue tracker — report issues …",
+        bundle_id="task-tracker@1-0",
+    )
+
+    wf = BaseWorkflow.__new__(BaseWorkflow)
+    wf.bundle_props = _named_service_consumer_props("mem", "task")
+    wf.redis = redis
+    wf.runtime_ctx = RuntimeCtx(agent_id="main", tenant="demo-tenant", project="demo-project")
+    wf.logger = SimpleNamespace(log=lambda *args, **kwargs: None)
+
+    block = await wf.named_service_react_instructions()
+
+    assert "[NAMED SERVICES — NAMESPACE OBJECT OPERATIONS]" in block
+    assert "Named-service namespaces available to this agent (pass one as the `namespace` argument):" in block
+    assert "- `mem` — Durable user memory — facts, preferences …" in block
+    assert "- `task` — KDCube issue tracker — report issues …" in block
+
+
+@pytest.mark.asyncio
+async def test_base_workflow_named_service_roster_empty_without_connected_namespaces():
+    wf = BaseWorkflow.__new__(BaseWorkflow)
+    wf.bundle_props = {}  # no as_consumer named-service namespaces
+    wf.redis = _RosterFakeRedis()
+    wf.runtime_ctx = RuntimeCtx(agent_id="main", tenant="demo-tenant", project="demo-project")
+    wf.logger = SimpleNamespace(log=lambda *args, **kwargs: None)
+
+    assert await wf.named_service_react_instructions() == ""
+
+
+@pytest.mark.asyncio
+async def test_subclass_can_override_named_service_react_instructions():
+    class CustomWorkflow(BaseWorkflow):
+        async def named_service_react_instructions(self, *, client_id=None):
+            return "CUSTOM ROSTER BLOCK"
+
+    wf = CustomWorkflow.__new__(CustomWorkflow)
+    wf.bundle_props = _named_service_consumer_props("mem")
+    wf.redis = _RosterFakeRedis()
+    wf.runtime_ctx = RuntimeCtx(agent_id="main", tenant="demo-tenant", project="demo-project")
+    wf.logger = SimpleNamespace(log=lambda *args, **kwargs: None)
+
+    assert await wf.named_service_react_instructions() == "CUSTOM ROSTER BLOCK"

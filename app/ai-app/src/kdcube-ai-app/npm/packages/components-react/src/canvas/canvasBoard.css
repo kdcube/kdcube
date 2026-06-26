@@ -178,14 +178,15 @@ button {
 }
 
 .canvas-header {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   min-width: 0;
 }
 
 .canvas-title {
+  flex: 1 1 220px;
   min-width: 0;
 }
 
@@ -263,8 +264,11 @@ button {
 
 .canvas-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: end;
+  justify-content: flex-end;
   gap: 8px;
+  min-width: 0;
 }
 
 .canvas-actions label {
@@ -1782,8 +1786,9 @@ button {
 }
 .canvas-search-filterbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px 8px;
   font-size: 12px;
   color: var(--text-2);
   background: var(--surface);

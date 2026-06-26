@@ -1,10 +1,10 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/service/comm/conversation-event-bus-orchestrator-README.md
 title: "Conversation Event Bus Orchestrator"
-summary: "Design for the conversation external-event bus orchestrator and its shared Redis synchronization table."
-status: draft
+summary: "Current conversation external-event bus orchestrator and its shared Redis synchronization table."
+status: active
 tags: ["service", "comm", "conversation-event-bus", "external-events", "react", "redis"]
-updated_at: 2026-06-20
+updated_at: 2026-06-25
 keywords:
   [
     "conversation event bus orchestrator",
@@ -117,7 +117,7 @@ Proc
     else if T.consumer.status == active and active acknowledgement is fresh:
       leave for active Consumer
     else if T.consumer.status == scheduled and scheduled acknowledgement is fresh:
-      leave for scheduled Consumer
+      leave for scheduled start reservation
     else:
       set T.consumer.status = scheduled
       set T.consumer.status_at = now
@@ -127,6 +127,10 @@ Proc
         v
 BaseWorkflow / ContextBrowser Handler Setup
   lock(T)
+    if another handler is open and its active consumer acknowledgement is fresh:
+      raise ExternalEventLaneTurnSuperseded
+    if another handler is open but has no fresh active consumer:
+      reclaim it
     set T.handler.turn_id = handler runtime turn id
     set T.handler.status = open
     set T.handler.status_at = now
@@ -213,7 +217,10 @@ state and event timestamps to decide what can be accepted.
 
 ## Freshness
 
-Proc freshness checks use explicit inputs:
+Proc wake scheduling and handler-owner reclaim use related but different
+freshness checks.
+
+Proc wake scheduling uses explicit inputs:
 
 ```text
 active_is_fresh =
@@ -224,6 +231,23 @@ scheduled_is_fresh =
   T.consumer.status == scheduled
   and now - T.consumer.status_at <= event_bus.consumer.scheduled_ttl_ms
 ```
+
+Here `scheduled` is a start reservation: proc has already decided that a turn
+should load/open the handler, so duplicate wakes should not start additional
+competing turns during that short bundle-load / entrypoint window.
+
+Handler-owner reclaim is stricter:
+
+```text
+owner_is_live =
+  T.consumer.status == active
+  and now - T.consumer.status_at <= event_bus.consumer.active_ttl_ms
+```
+
+`scheduled` is not handler liveness. A later user event can schedule a new wake
+while an old handler is still stuck open. If `scheduled` were treated as proof
+that the old handler is alive, the new turn would be rejected as superseded
+before it could reclaim the stale owner.
 
 `now` must come from the same clock source used by the state table. The first
 implementation uses Redis-backed state and may use process UTC timestamps
@@ -275,15 +299,19 @@ T.consumer.status_at
 ```
 
 The handler and consumer are the same runtime owner, but
-`T.consumer.status_at` is the only timestamp that answers the liveness
-question:
+`T.consumer.status_at` answers the liveness question only when the status is
+`active`:
 
 ```text
-fresh consumer_status_at
-  an owner recently acknowledged the lane; defer to it
+fresh active consumer_status_at
+  an owner recently acknowledged the lane; defer to it at handler open
 
 missing or stale consumer_status_at
   no owner has acknowledged the lane recently; reclaim it
+
+fresh scheduled consumer_status_at
+  suppresses duplicate proc wake scheduling only; it does not protect an open
+  handler from reclaim
 ```
 
 The reclaim window is a recovery timeout, not a correctness boundary. A live
@@ -373,7 +401,7 @@ L        Q        P        T                         R(turn-A)       R(turn-B)
 |        |------->| set scheduled, build turn-B      |               |
 |        |        |        |                         |               | open_handler
 |        |        |        | sees open turn-A        |               |
-|        |        |        | consumer_status_at stale|               |
+|        |        |        | no fresh active consumer|               |
 |        |        |        | reclaim handler=turn-B  |               |
 |        |        |        |<---------------------------------------|
 |        |        |        | consumer=active         |               |
@@ -485,7 +513,10 @@ manufacture post-completion wakeups.
 The standalone tests cover:
 
 - stale wake suppression;
-- fresh active/scheduled consumer suppression;
+- fresh active consumer wake suppression;
+- fresh scheduled duplicate-wake suppression;
+- stale-open handler reclaim even when a later wake freshly marked
+  `T.consumer.status = scheduled`;
 - stale active consumer rescheduling;
 - full wake -> scheduled -> handler open -> consumer active -> accept -> close path;
 - close rejection when ReAct did not see a newly accepted lane event;

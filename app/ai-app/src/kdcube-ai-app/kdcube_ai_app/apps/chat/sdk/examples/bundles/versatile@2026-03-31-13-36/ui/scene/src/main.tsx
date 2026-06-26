@@ -60,6 +60,7 @@ const CONFIG_IDENTITY = 'BUNDLE_VERSATILE_MAIN_VIEW'
 const CHAT_CONFIG_IDENTITY = 'BUNDLE_VERSATILE_CHAT_VIEW'
 const CHAT_WIDGET_ALIAS = 'versatile_chat'
 const MEMORY_WIDGET_ALIAS = 'memories'
+const MEMORY_WIDGET_BUNDLE_ID = 'user-memories@2026-06-26'
 const USAGE_CARD_WIDGET_ALIAS = 'usage_card'
 const CANVAS_SUBJECT = 'canvas.patch'
 const DEFAULT_CHAT_WIDTH = 460
@@ -243,7 +244,9 @@ function chatWidgetUrl(ctx: RouteContext): string {
 }
 
 function memoryWidgetUrl(ctx: RouteContext, expanded: boolean): string {
-  return widgetUrl(ctx, MEMORY_WIDGET_ALIAS, {
+  // Memory was consolidated into the user-memories app; versatile no longer
+  // serves its own memory widget. Load the iframe from the memory owner bundle.
+  return widgetUrlForBundle(ctx, MEMORY_WIDGET_BUNDLE_ID, MEMORY_WIDGET_ALIAS, {
     view: expanded ? 'expanded' : 'compact',
     compact: expanded ? '0' : '1',
     host_controls: '1',

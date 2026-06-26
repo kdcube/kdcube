@@ -390,6 +390,7 @@ class ContextBrowser:
         return False
 
     async def close_external_event_handler(self) -> None:
+        await self.stop_external_event_listener()
         orchestrator = self._event_bus_orchestrator()
         if orchestrator is None:
             return

@@ -15,6 +15,8 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.types import
 
 MEMORY_NAMED_SERVICE_NAMESPACE = "mem"
 
+MEMORY_NAMESPACE_INTRO = "Durable user memory — facts, preferences, and decisions to remember across conversations. Search and read memories for relevant context; save or update a memory when something is worth keeping long-term, forget one the user no longer wants, and pin a memory to the hot set (keep it always-loaded) when it should stay top-of-mind. It's one of the user's memory realms — when you need to recall what the user saved or told you, look here alongside their context boards (`cnv`) and past conversations."
+
 MEMORY_CONTEXT_INSTRUCTIONS = """
 [MEMORY CONTEXT]
 `mem:record:<id>` points to one saved user memory record. Older `me:<id>` or
@@ -171,6 +173,7 @@ __all__ = [
     "DURABLE_USER_MEMORY_POLICY_INSTRUCTIONS",
     "MEMORY_CONTEXT_INSTRUCTIONS",
     "MEMORY_NAMED_SERVICE_NAMESPACE",
+    "MEMORY_NAMESPACE_INTRO",
     "MEMORY_REACT_ADDITIONAL_INSTRUCTIONS",
     "resolve_memory_react_additional_instructions",
 ]

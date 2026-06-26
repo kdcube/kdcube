@@ -5,6 +5,7 @@ summary: "How named-service namespace operations become model-callable tools, ho
 tags: ["sdk", "tools", "named-services", "namespaces", "react", "configuration"]
 keywords: ["named_service", "named_services", "surfaces.as_consumer", "namespaces_applicable", "provider search scopes", "search_scopes_by_namespace", "named_service.search_results", "object.get", "object.host_file", "object.upsert", "react.pull"]
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/ontologic-tools-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/tool-subsystem-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/custom-tools-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/tools/sdk-tools-README.md

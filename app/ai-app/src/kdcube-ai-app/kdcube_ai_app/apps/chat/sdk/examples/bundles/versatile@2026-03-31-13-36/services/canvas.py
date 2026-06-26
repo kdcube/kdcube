@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import inspect
 from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional
 
@@ -29,6 +30,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.chat.events.resolver import (
     conversation_ref_capabilities,
     resolve_conversation_ref_action,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.canvas.ids import timestamp_id
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
     NamedServiceClient,
     NamedServiceContext,
@@ -83,6 +85,7 @@ class CanvasRuntimeConfig:
     state_event_source_id: str
     ui_event_type: str
     artifact_resolver_name: str
+    data_bus_subject: str = "canvas.patch"
 
 
 def payload_from_call(data: Optional[Mapping[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
@@ -196,6 +199,7 @@ class VersatileCanvasService:
         provider = self._named_service_provider
         if provider is None:
             provider = CanvasPinSearchNamedServiceProvider(
+                list_handler=self._named_service_list,
                 search_handler=self._named_service_search,
                 upsert_handler=self._named_service_upsert,
             )
@@ -263,6 +267,76 @@ class VersatileCanvasService:
             "status": response.status,
             "details": error.details if error is not None else {},
         }
+
+    async def _broadcast_canvas_patch_result(
+        self,
+        result: Mapping[str, Any],
+        *,
+        payload: Mapping[str, Any],
+        source: str,
+    ) -> None:
+        if result.get("ok") is False:
+            return
+        comm = getattr(self.entrypoint, "comm", None)
+        service_event = getattr(comm, "service_event", None)
+        if not callable(service_event):
+            return
+        canvas_name = protocol_string(result, "canvas_name", protocol_string(payload, "canvas_name", "main"))
+        object_ref = (
+            protocol_string(payload, "object_ref")
+            or protocol_string(result, "latest_ref")
+            or protocol_string(result, "canvas_ref")
+            or (f"cnv:{canvas_name}" if canvas_name else "")
+        )
+        try:
+            maybe = service_event(
+                type="kdcube.data_bus.result",
+                step="data_bus",
+                status="completed",
+                title=None,
+                data={
+                    "message_id": timestamp_id("dbmsg"),
+                    "subject": self.config.data_bus_subject,
+                    "object_ref": object_ref,
+                    "data": dict(result),
+                    "source": source,
+                },
+                agent="data_bus",
+                broadcast=True,
+                auto_markdown=False,
+            )
+            if inspect.isawaitable(maybe):
+                await maybe
+        except Exception:
+            self.logger.warning(
+                "[canvas.live] failed to broadcast live canvas update source=%s canvas_id=%s canvas_name=%s",
+                source,
+                result.get("canvas_id"),
+                canvas_name,
+                exc_info=True,
+            )
+
+    async def _named_service_list(
+        self,
+        ctx: NamedServiceContext,
+        request: NamedServiceRequest,
+    ) -> Mapping[str, Any]:
+        payload = dict(request.filters or {})
+        if request.limit is not None:
+            payload["limit"] = request.limit
+        if request.cursor is not None:
+            payload["cursor"] = request.cursor
+        if ctx.tenant and "tenant" not in payload:
+            payload["tenant"] = ctx.tenant
+        if ctx.project and "project" not in payload:
+            payload["project"] = ctx.project
+        if ctx.user_id and "user_id" not in payload:
+            payload["user_id"] = ctx.user_id
+        user_id = self.resolve_user_id(payload)
+        return canvas_api.list_canvases(
+            store=self.store(payload, user_id=user_id),
+            user_id=user_id,
+        )
 
     async def _named_service_search(
         self,
@@ -440,24 +514,31 @@ class VersatileCanvasService:
         object_kind = protocol_string(obj, "object_kind", CANVAS_CARD_OBJECT_KIND)
         base_revision = request.base_revision or obj.get("base_revision")
         user_id = self.resolve_user_id(obj)
+        suppress_live_broadcast = bool(request.context.get("suppress_live_broadcast"))
         if object_kind == CANVAS_BOARD_OBJECT_KIND and "patch" not in obj and "operations" not in obj and not obj.get("op"):
-            return canvas_api.write(
+            result = canvas_api.write(
                 payload=obj,
                 store=self.store(obj, user_id=user_id),
                 user_id=user_id,
                 target=self.target(),
             )
+            if not suppress_live_broadcast:
+                await self._broadcast_canvas_patch_result(result, payload=obj, source="named_services.upsert_object")
+            return result
         patch = self._patch_payload_from_named_object(obj, base_revision=base_revision)
         patch_payload = {
             **obj,
             "patch": patch,
         }
-        return canvas_api.patch(
+        result = canvas_api.patch(
             payload=patch_payload,
             store=self.store(patch_payload, user_id=user_id),
             user_id=user_id,
             target=self.target(),
         )
+        if not suppress_live_broadcast:
+            await self._broadcast_canvas_patch_result(result, payload=patch_payload, source="named_services.upsert_object")
+        return result
 
     def _canvas_payload_for_result(self, payload: Mapping[str, Any], result: Mapping[str, Any]) -> Dict[str, Any]:
         merged = dict(payload if payload is not None else {})
@@ -632,15 +713,21 @@ class VersatileCanvasService:
     async def apply_patch_payload(self, payload: Mapping[str, Any]) -> Dict[str, Any]:
         user_id = self.resolve_user_id(payload)
         try:
-            object_payload = dict(payload if payload is not None else {})
+            suppress_live_broadcast = bool((payload or {}).get("_suppress_live_broadcast"))
+            object_payload = {
+                key: value
+                for key, value in dict(payload if payload is not None else {}).items()
+                if key != "_suppress_live_broadcast"
+            }
             object_payload.setdefault("object_kind", CANVAS_BOARD_OBJECT_KIND)
             if "patch" not in object_payload:
-                object_payload["patch"] = dict(payload if payload is not None else {})
+                object_payload["patch"] = dict(object_payload)
             response = await self._named_service_client(payload).upsert(
                 namespace=CANVAS_NAMESPACE,
                 object=object_payload,
                 object_ref=protocol_string(payload, "object_ref") or None,
                 base_revision=payload.get("base_revision"),
+                context={"suppress_live_broadcast": suppress_live_broadcast},
             )
             result = self._legacy_result_from_named_response(
                 response,
@@ -783,6 +870,7 @@ class VersatileCanvasService:
             payload["actor"] = actor["user_id"]
         if message.object_ref and "object_ref" not in payload:
             payload["object_ref"] = message.object_ref
+        payload["_suppress_live_broadcast"] = True
 
         result = await self.apply_patch_payload(payload)
         if result.get("ok") is False and result.get("current_revision") is not None:

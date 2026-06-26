@@ -188,7 +188,7 @@ Notes:
 Namespaces control discoverability:
 - public: visible in skill catalogs
 - internal: not discoverable (used for internal behaviors)
-- task: SDK tasks solution skills
+- automation: SDK automations solution skills
 - custom/product/etc.: loaded from a bundle-defined root (see `surfaces.as_consumer.agents.<agent>.skills`)
 
 Skills are referenced by fully qualified id:

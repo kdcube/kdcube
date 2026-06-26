@@ -251,8 +251,6 @@ def test_memory_mixin_exposes_mem_named_service_registry():
     assert "mem" in entry.spec.namespaces
     assert {scope.namespace for scope in entry.spec.search_scopes} == {"mem"}
     assert entry.spec.object_kinds == ("memory.record",)
-    provider = entry.provider
-    assert provider._allow_write is True
 
 
 @pytest.mark.asyncio

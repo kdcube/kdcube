@@ -387,6 +387,7 @@ class NamedServiceProviderSpec:
     operations: dict[str, NamedServiceOperationSpec] = field(default_factory=dict)
     label: str | None = None
     description: str | None = None
+    intro: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -431,6 +432,7 @@ class NamedServiceProviderSpec:
             operations=operations,
             label=normalize_optional_string(data.get("label")),
             description=normalize_optional_string(data.get("description")),
+            intro=str(data.get("intro") or "").strip(),
             metadata=ensure_json_object(data.get("metadata"), field_name="metadata"),
         )
 
@@ -480,6 +482,7 @@ class NamedServiceProviderSpec:
             "operations": {op: spec.to_dict() for op, spec in (self.operations or {}).items()},
             "label": self.label,
             "description": self.description,
+            "intro": self.intro,
             "metadata": dict(self.metadata or {}),
         }
 

@@ -24,6 +24,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/integration-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/clients-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/discovery-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/react-object-materialization-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/namespace-services/react-object-policy-bridge-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/events/namespaces-README.md
@@ -285,6 +286,17 @@ purpose, base object summaries, and a short hint to call `object.schema` for
 concrete payload fields. Full object schemas, capability maps, and the complete
 provider spec belong to `object.schema` and `provider.capabilities`.
 
+For a large realm, a **recommended convention** for the realm-contributed
+`about` content is to make it a navigable **top-level catalog** (namespaces, a
+shallow list of kinds/scopes, the action vocabulary) plus a **query playbook**
+(per common intent: scope + filter template + example query, and a short
+"how to query this realm" note). The kinds/scopes that `about` lists are the
+selectors the agent passes to a focused `object.schema`. This is content
+guidance for `about`, not a new operation. For a big schema the agent should
+fetch by part rather than reading the whole thing; per-part projection
+selectors (kind/scope/field-subset/depth) on `object.schema` are a proposed
+extension, not current params.
+
 Providers that expose more than one searchable object space should declare
 bounded `search_scopes` on the provider spec. Search scopes are registration
 metadata, so consumers can render them in the agent tool catalog from service
@@ -324,6 +336,51 @@ class SensorProvider(NamedServiceProvider):
 The same shape can be supplied through explicit provider config when discovery
 is not available. Prefer provider registration when the provider app is loaded
 in the runtime because it keeps the object-space contract with the provider.
+
+### Namespace Intro
+
+`intro` is a provider-authored, one/two-sentence description of what the
+namespace **is** and what an agent does with it. A provider sets it on its spec
+next to `label` and `search_scopes`. It is published into discovery as part of
+the registered spec, and a consumer surfaces it to the agent in the namespace
+roster (provider `label` is the fallback when `intro` is empty).
+
+Set it on the decorator/spec the same way the SDK providers do:
+
+```python
+from kdcube_ai_app.apps.chat.sdk.context.memory.instructions import (
+    MEMORY_NAMESPACE_INTRO,
+)
+
+@named_service_provider(
+    provider_id="memory.records",
+    namespace="mem",
+    label="User memories",
+    description="SDK memory namespace provider for durable user-memory records.",
+    intro=MEMORY_NAMESPACE_INTRO,
+    search_scopes=MEMORY_SEARCH_SCOPES,
+    operations=build_default_operations((TRANSPORT_LOCAL, TRANSPORT_API)),
+)
+class MemoryNamedServiceProvider(NamedServiceProvider):
+    ...
+```
+
+Real provider intros, each a constant the provider owns:
+
+| Namespace | Constant | Defined in |
+| --- | --- | --- |
+| `mem` / `me` | `MEMORY_NAMESPACE_INTRO` | `context/memory/instructions.py` |
+| `cnv` | `CANVAS_NAMESPACE_INTRO` | `solutions/canvas/instructions.py` |
+| `task` | `TASK_NAMESPACE_INTRO` | the task app bundle |
+
+Write the `intro` for the model: name the namespace, say what it holds, and name
+the actions the agent takes there (search/read, save/update, pin, …). Keep it to
+one or two sentences; richer guidance belongs to `provider.about` and
+`object.schema`.
+
+For where the intro lands in the registry and how it is read back, see
+[Discovery Registry](discovery-README.md). For how a consumer renders the roster
+into agent instructions, see [Clients](clients-README.md).
 
 ### Search Scope Filters And Relevance Tuning
 

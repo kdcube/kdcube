@@ -25,6 +25,7 @@ import {
 import { messageWithContextChips } from './contextChips.ts'
 import { activateContextPin, contextPinActionNotice } from './contextPinActions.ts'
 import { buildExternalEventBatch } from './eventBatch.ts'
+import { projectServiceEventToChatStep } from './serviceSteps.ts'
 import { messageForError } from './util.ts'
 import {
   deleteConversationById,
@@ -336,6 +337,12 @@ export function createChatEngine(config: EngineConfig): ChatEngine {
   }
 
   const handleServiceEvent = (env: ChatServiceEnvelope) => {
+    const projectedStep = projectServiceEventToChatStep(env)
+    if (projectedStep) {
+      dispatch(chatActions.chatStep(projectedStep))
+      return
+    }
+
     const data = (env.data || {}) as Record<string, unknown>
     const rateLimit = (env.data?.rate_limit || null) as RateLimitPayload | null
 

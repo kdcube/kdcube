@@ -21,6 +21,12 @@ When a namespace ref or request appears, pick the visible path that fits the goa
 4. Discover objects when no exact ref is in hand -> `named_services.search_objects(namespace=..., query=...)` for text/semantic lookup, or `named_services.list_objects(namespace=..., ...)` for bounded browsing/pagination. Respect cursor/limit; avoid broad scans unless the user asks.
 
 5. Create/update or delete (only when the tool is visible and scoped to that namespace) -> `named_services.upsert_object` for create/update, `named_services.delete_object` for delete/archive. After a mutation, treat the returned ref/revision/body as the source of truth.
+   - Mutating collection (array) fields on a namespace object: a collection field in `upsert_object` accepts EITHER a bare list or a `{ "add": [...], "remove": [...] }` delta. These defaults cover the common cases without reading the schema first:
+     - Bare list -> set/append per the field's `update_strategy`: `replace` overwrites the whole list with what you send; `append` adds the item(s) you send. Omit the field to leave it unchanged.
+     - Delta `{add, remove}` -> incremental edit applied as removes first, then adds. `add` appends item(s); `remove` removes matching item(s) (by value for value-lists; by ref or `dedup_key` for ref-lists).
+     - Replace ONE item -> add it with a matching `dedup_key` (e.g. an attachment keyed by filename); the new item supersedes the old one with that key. Do NOT add-then-delete.
+     - Remove ONE item -> use the field's `{remove: [...]}` delta. This is the only way to take an item off a list. `delete_object` is NOT a list tool: it destroys the underlying object itself (e.g. the file everywhere it is used) and is never used to edit a list.
+     - Consult `object_schema` for a field's exact `update_strategy`/`dedup_key` only when these defaults aren't enough.
 
 6. Send a ReAct/runtime file INTO a namespace service — the reverse of pull -> `named_services.host_file(namespace=..., object_ref=..., file_ref=<fi:...>, ...)`. `react.pull` brings an external namespace ref into ReAct as an `fi:` artifact; `host_file` sends your `fi:`/runtime file to the namespace service so it creates or registers a namespace file ref. Hosting a file does NOT attach or cite it on a domain object. If the object schema supports attachments or file links, call `host_file` first, then cite the returned namespace ref in a separate `named_services.upsert_object` call according to that schema.
 

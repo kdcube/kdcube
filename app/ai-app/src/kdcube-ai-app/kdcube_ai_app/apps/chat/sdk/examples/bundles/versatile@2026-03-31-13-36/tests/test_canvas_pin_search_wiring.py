@@ -27,12 +27,23 @@ async def _embed_texts(texts):
     return [[float(len(str(text)))] for text in texts]
 
 
+class _Comm:
+    user_id = None
+
+    def __init__(self):
+        self.events = []
+
+    async def service_event(self, **kwargs):
+        self.events.append(kwargs)
+
+
 class _Entrypoint:
     models_service = SimpleNamespace(embed_texts=_embed_texts)
 
     def __init__(self, *, bundle_props=None):
         self.bundle_props = bundle_props or {}
         self.scope_filters = []
+        self.comm = _Comm()
 
     def search_semantic_guard(self, *, flow: str):
         async def _guard(_query: str) -> bool:
@@ -137,6 +148,88 @@ async def test_canvas_patch_indexes_after_successful_patch(monkeypatch):
     assert seen["index"]["payload"]["canvas_name"] == "main"
     assert seen["index_embed"] == [[205.0]]
     assert seen["index"]["model_service"].flow == "canvas.pins.search"
+
+
+@pytest.mark.asyncio
+async def test_named_service_canvas_upsert_broadcasts_live_update(monkeypatch):
+    def _patch(**_kwargs):
+        return {
+            "ok": True,
+            "canvas_id": "cnv:u-1:main",
+            "canvas_name": "main",
+            "revision": 2,
+            "canvas_ref": "cnv:main@2",
+            "latest_ref": "cnv:main",
+            "projection": {"canvas_name": "main", "revision": 2},
+            "ui_event": {
+                "type": "canvas.patch.applied",
+                "canvas_name": "main",
+                "revision": 2,
+            },
+        }
+
+    monkeypatch.setattr(canvas_service.canvas_api, "patch", _patch)
+    service = _service(monkeypatch)
+
+    result = await service._named_service_upsert(
+        canvas_service.NamedServiceContext(tenant="demo", project="project", user_id="u-1"),
+        canvas_service.NamedServiceRequest(
+            operation="object.upsert",
+            namespace="cnv",
+            object={
+                "object_kind": canvas_service.CANVAS_CARD_OBJECT_KIND,
+                "canvas_name": "main",
+                "card": {"kind": "agent.text", "title": "hello"},
+            },
+            base_revision="1",
+        ),
+    )
+
+    assert result["ok"] is True
+    assert len(service.entrypoint.comm.events) == 1
+    event = service.entrypoint.comm.events[0]
+    assert event["type"] == "kdcube.data_bus.result"
+    assert event["broadcast"] is True
+    assert event["auto_markdown"] is False
+    assert event["data"]["subject"] == "canvas.patch"
+    assert event["data"]["object_ref"] == "cnv:main"
+    assert event["data"]["data"]["revision"] == 2
+
+
+@pytest.mark.asyncio
+async def test_data_bus_originated_canvas_upsert_suppresses_live_bridge(monkeypatch):
+    def _patch(**_kwargs):
+        return {
+            "ok": True,
+            "canvas_id": "cnv:u-1:main",
+            "canvas_name": "main",
+            "revision": 2,
+            "canvas_ref": "cnv:main@2",
+            "latest_ref": "cnv:main",
+            "projection": {"canvas_name": "main", "revision": 2},
+            "ui_event": {"type": "canvas.patch.applied"},
+        }
+
+    monkeypatch.setattr(canvas_service.canvas_api, "patch", _patch)
+    service = _service(monkeypatch)
+
+    result = await service._named_service_upsert(
+        canvas_service.NamedServiceContext(tenant="demo", project="project", user_id="u-1"),
+        canvas_service.NamedServiceRequest(
+            operation="object.upsert",
+            namespace="cnv",
+            object={
+                "object_kind": canvas_service.CANVAS_CARD_OBJECT_KIND,
+                "canvas_name": "main",
+                "card": {"kind": "agent.text", "title": "hello"},
+            },
+            context={"suppress_live_broadcast": True},
+            base_revision="1",
+        ),
+    )
+
+    assert result["ok"] is True
+    assert service.entrypoint.comm.events == []
 
 
 @pytest.mark.asyncio

@@ -138,8 +138,8 @@ class TestBundleErrorHandling:
         assert "error" in state.get("error_message", "").lower()
 
     @pytest.mark.anyio
-    async def test_error_does_not_crash_system_comm_failure_ignored(self):
-        """If comm.error() itself raises, report_turn_error still completes."""
+    async def test_error_does_not_crash_system_comm_failure_uses_step_fallback(self):
+        """If comm.error() itself raises, report_turn_error falls back to one chat.step."""
 
         class _FailingComm(_CaptureComm):
             async def error(self, **kwargs):
@@ -155,6 +155,8 @@ class TestBundleErrorHandling:
 
         # state must still be updated despite comm failure
         assert state.get("error_message") == "inner error"
+        assert len(ep._comm.step_calls) == 1
+        assert ep._comm.step_calls[0]["status"] == "error"
 
     @pytest.mark.anyio
     async def test_error_sets_fallback_final_answer(self):
@@ -181,8 +183,8 @@ class TestBundleErrorHandling:
         assert state["final_answer"] == "partial answer already set"
 
     @pytest.mark.anyio
-    async def test_error_step_event_has_error_status(self):
-        """report_turn_error emits a chat.step event with status='error'."""
+    async def test_error_step_not_emitted_when_chat_error_succeeds(self):
+        """report_turn_error uses chat.error as the single normal error surface."""
         comm = _CaptureComm()
         ep = _make_entrypoint(comm)
         state = {}
@@ -191,9 +193,8 @@ class TestBundleErrorHandling:
         except Exception as exc:
             await ep.report_turn_error(state=state, exc=exc)
 
-        assert len(comm.step_calls) == 1
-        step_call = comm.step_calls[0]
-        assert step_call["status"] == "error"
+        assert len(comm.error_calls) == 1
+        assert comm.step_calls == []
 
     @pytest.mark.anyio
     async def test_error_event_data_contains_error_type(self):
@@ -243,4 +244,4 @@ class TestBundleErrorHandling:
 
         assert state.get("error_message") == "bundle-level error"
         assert len(comm.error_calls) == 1
-        assert len(comm.step_calls) == 1
+        assert comm.step_calls == []

@@ -1623,6 +1623,7 @@ class BaseEntrypoint:
             "error_type": type(exc).__name__,
         }
 
+        error_emitted = False
         try:
             await self.comm.error(
                 message=message,
@@ -1631,6 +1632,7 @@ class BaseEntrypoint:
                 step=step,
                 title=title,
             )
+            error_emitted = True
         except Exception as emit_exc:
             emit_traceback = "".join(
                 traceback.format_exception(
@@ -1642,24 +1644,25 @@ class BaseEntrypoint:
                 "ERROR",
             )
 
-        try:
-            await self.comm.step(
-                step=step,
-                status="error",
-                title=title,
-                data=payload,
-                markdown=f"**Error:** {message}",
-            )
-        except Exception as emit_exc:
-            emit_traceback = "".join(
-                traceback.format_exception(
-                    type(emit_exc), emit_exc, emit_exc.__traceback__
+        if not error_emitted:
+            try:
+                await self.comm.step(
+                    step=step,
+                    status="error",
+                    title=title,
+                    data=payload,
+                    markdown=f"**Error:** {message}",
                 )
-            )
-            self.logger.log(
-                f"Failed to emit diagnostic chat.step for bundle failure:\n{emit_traceback}",
-                "ERROR",
-            )
+            except Exception as emit_exc:
+                emit_traceback = "".join(
+                    traceback.format_exception(
+                        type(emit_exc), emit_exc, emit_exc.__traceback__
+                    )
+                )
+                self.logger.log(
+                    f"Failed to emit diagnostic chat.step for bundle failure:\n{emit_traceback}",
+                    "ERROR",
+                )
 
     @on_reactive_event
     async def run(self, **params) -> Dict[str, Any]:

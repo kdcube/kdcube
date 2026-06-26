@@ -62,7 +62,7 @@ def test_email_mcp_run_token_is_scoped_to_run_and_bundle(tmp_path):
         entrypoint=_Entry(),
         storage_root=tmp_path,
         user_id="user-a",
-        task_id="task-email",
+        automation_id="task-email",
         execution_id="exec-1",
         account={"account_id": "google_1", "provider": "google", "email": "user@example.test"},
         mailbox="inbox",

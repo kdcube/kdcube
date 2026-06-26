@@ -44,14 +44,18 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
     bind_named_service_discovery,
     call_named_service_endpoint,
     call_named_service_endpoint_stream,
+    compose_named_service_react_instructions,
+    connected_named_service_namespaces,
     dispatch_named_service_api_request,
     build_default_operations,
     extend_tool_specs_for_named_services,
+    fetch_namespace_intros,
     named_service_agent_event_source_namespaces,
     named_service_agent_pull_namespaces,
     named_service_canvas_resolver_namespaces,
     named_service_provider,
     named_service_namespaces,
+    render_named_service_namespace_roster,
     normalize_search_scopes,
     register_configured_named_service_artifact_rehosters,
     register_configured_named_service_canvas_resolvers,
@@ -2633,3 +2637,205 @@ async def test_named_service_client_tool_reads_object_schema():
     assert result["ok"] is True
     assert result["ret"]["extra"]["schema"]["object_kind"] == "task.issue"
     assert calls
+
+
+def _named_service_consumer_props(*namespaces: str) -> dict:
+    """Bundle props that connect the given namespaces via the as_consumer surface."""
+    return {
+        "surfaces": {
+            "as_consumer": {
+                "agents": {
+                    "main": {
+                        "tools": [
+                            {
+                                "kind": "named_service",
+                                "alias": "named_services",
+                                "namespaces": {
+                                    ns: {"allowed": ["provider.about", "object.search"]}
+                                    for ns in namespaces
+                                },
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_fetch_namespace_intros_reads_redis_discovery_keyed_by_base_namespace():
+    # Publishing path: providers register into Redis discovery WITH an intro,
+    # exactly like the running mem/cnv/task providers do for the turn scope.
+    redis = FakeDiscoveryRedis()
+    discovery = RedisNamedServiceDiscovery(redis, tenant="demo-tenant", project="demo-project")
+    await discovery.register_provider(
+        NamedServiceProviderSpec(
+            provider_id="sdk.memory",
+            bundle_id="versatile@1-0",
+            namespaces=("me", "mem"),
+            label="User memories",
+            intro="Durable user memory — facts, preferences …",
+            operations={"object.search": {"transports": ["bundle_registry"]}},
+        ),
+        bundle_id="versatile@1-0",
+    )
+    await discovery.register_provider(
+        NamedServiceProviderSpec(
+            provider_id="sdk.canvas.pins",
+            bundle_id="versatile@1-0",
+            namespace="cnv",
+            label="Canvas",
+            intro="Canvas (also called the pin board) — a board of pinned cards …",
+            operations={"object.search": {"transports": ["bundle_registry"]}},
+        ),
+        bundle_id="versatile@1-0",
+    )
+    await discovery.register_provider(
+        NamedServiceProviderSpec(
+            provider_id="task.issue",
+            bundle_id="task-tracker@1-0",
+            namespace="task",
+            label="Tasks",
+            intro="KDCube issue tracker — report issues / suggest features …",
+            operations={"object.search": {"transports": ["bundle_registry"]}},
+        ),
+        bundle_id="task-tracker@1-0",
+    )
+    # Provider with no intro: label fallback still surfaces.
+    await discovery.register_provider(
+        NamedServiceProviderSpec(
+            provider_id="connections",
+            bundle_id="connection-hub@1-0",
+            namespace="conn",
+            label="Connections",
+            operations={"object.search": {"transports": ["bundle_registry"]}},
+        ),
+        bundle_id="connection-hub@1-0",
+    )
+
+    intros = await fetch_namespace_intros(discovery, ["mem", "cnv", "task", "conn"])
+
+    # Memory owns both me and mem; the intro maps to EACH base namespace.
+    assert intros["mem"]["intro"].startswith("Durable user memory")
+    assert intros["me"]["intro"].startswith("Durable user memory")
+    assert intros["cnv"]["intro"].startswith("Canvas (also called the pin board)")
+    assert intros["task"]["intro"].startswith("KDCube issue tracker")
+    # No-intro provider: label retained for fallback.
+    assert intros["conn"] == {"label": "Connections"}
+
+
+@pytest.mark.asyncio
+async def test_generic_roster_renders_redis_discovery_intros_for_connected_namespaces():
+    redis = FakeDiscoveryRedis()
+    discovery = RedisNamedServiceDiscovery(redis, tenant="demo-tenant", project="demo-project")
+    await discovery.register_provider(
+        NamedServiceProviderSpec(
+            provider_id="sdk.memory",
+            bundle_id="versatile@1-0",
+            namespaces=("me", "mem"),
+            label="User memories",
+            intro="Durable user memory — facts, preferences …",
+            operations={"object.search": {"transports": ["bundle_registry"]}},
+        ),
+        bundle_id="versatile@1-0",
+    )
+    await discovery.register_provider(
+        NamedServiceProviderSpec(
+            provider_id="sdk.canvas.pins",
+            bundle_id="versatile@1-0",
+            namespace="cnv",
+            label="Canvas",
+            intro="Canvas (also called the pin board) — a board of pinned cards …",
+            operations={"object.search": {"transports": ["bundle_registry"]}},
+        ),
+        bundle_id="versatile@1-0",
+    )
+    await discovery.register_provider(
+        NamedServiceProviderSpec(
+            provider_id="task.issue",
+            bundle_id="task-tracker@1-0",
+            namespace="task",
+            label="Tasks",
+            intro="KDCube issue tracker — report issues …",
+            operations={"object.search": {"transports": ["bundle_registry"]}},
+        ),
+        bundle_id="task-tracker@1-0",
+    )
+
+    props = _named_service_consumer_props("cnv", "mem", "task")
+    # The roster lookup keys are the base namespaces the agent passes.
+    namespaces = connected_named_service_namespaces(props, client_id="main")
+    assert namespaces == ["cnv", "mem", "task"]
+
+    intros = await fetch_namespace_intros(discovery, namespaces)
+    block = compose_named_service_react_instructions(props, client_id="main", intros=intros)
+
+    assert "[NAMED SERVICES — NAMESPACE OBJECT OPERATIONS]" in block
+    assert "Named-service namespaces available to this agent (pass one as the `namespace` argument):" in block
+    assert "- `cnv` — Canvas (also called the pin board) — a board of pinned cards …" in block
+    assert "- `mem` — Durable user memory — facts, preferences …" in block
+    assert "- `task` — KDCube issue tracker — report issues …" in block
+
+
+def test_roster_falls_back_to_label_then_bare_name():
+    namespaces = ["cnv", "mem", "x"]
+    intros = {
+        "cnv": {"intro": "Canvas intro"},
+        "mem": {"label": "User memories"},  # no intro -> label fallback
+        # "x" absent -> bare name
+    }
+    roster = render_named_service_namespace_roster(namespaces, intros)
+    assert "- `cnv` — Canvas intro" in roster
+    assert "- `mem` — User memories" in roster
+    assert "- `x`" in roster
+    assert "- `x` —" not in roster
+
+
+@pytest.mark.asyncio
+async def test_redis_discovery_namespace_intros_is_the_canonical_read():
+    # The discovery module is the single place that knows how to read the registry.
+    redis = FakeDiscoveryRedis()
+    discovery = RedisNamedServiceDiscovery(redis, tenant="demo-tenant", project="demo-project")
+    await discovery.register_provider(
+        NamedServiceProviderSpec(
+            provider_id="sdk.memory",
+            bundle_id="versatile@1-0",
+            namespaces=("me", "mem"),
+            label="User memories",
+            intro="Durable user memory — facts …",
+            operations={"object.search": {"transports": ["bundle_registry"]}},
+        ),
+        bundle_id="versatile@1-0",
+    )
+
+    # Canonical read methods live on the discovery object.
+    all_entries = await discovery.list_entries()
+    assert {e.spec.provider_id for e in all_entries} == {"sdk.memory"}
+    ns_entries = await discovery.entries_for_namespace("mem")
+    assert ns_entries and ns_entries[0].spec.provider_id == "sdk.memory"
+
+    intros = await discovery.namespace_intros(["mem"])
+    # Intro mapped to EVERY namespace the provider owns.
+    assert intros["mem"]["intro"].startswith("Durable user memory")
+    assert intros["me"]["intro"].startswith("Durable user memory")
+
+    # fetch_namespace_intros delegates to the same canonical method (no second read impl).
+    via_helper = await fetch_namespace_intros(discovery, ["mem"])
+    assert via_helper == intros
+
+
+def test_intros_from_entries_maps_intro_to_every_owned_namespace():
+    entry = NamedServiceDiscoveryEntry(
+        spec=NamedServiceProviderSpec(
+            provider_id="sdk.memory",
+            bundle_id="versatile@1-0",
+            namespaces=("me", "mem"),
+            label="User memories",
+            intro="Durable user memory — facts …",
+        )
+    )
+    out = discovery_mod.intros_from_entries([entry])
+    assert out["me"]["intro"].startswith("Durable user memory")
+    assert out["mem"]["intro"].startswith("Durable user memory")
+    assert out["mem"]["label"] == "User memories"

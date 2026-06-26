@@ -360,6 +360,81 @@ def client_has_named_service_tools(
     return False
 
 
+def connected_named_service_namespaces(
+    bundle_props: Mapping[str, Any] | None,
+    *,
+    client_id: Any,
+) -> list[str]:
+    """Return the base namespaces this agent is connected to (tools/events/pull).
+
+    A namespace is connected when the agent's ``as_consumer`` config exposes a
+    named-service tool surface for it, or an enabled event-source / pull policy.
+    This is the exact set the ReAct namespace roster should enumerate.
+    """
+
+    all_namespaces = named_service_namespaces(bundle_props or {})
+    event_namespaces = named_service_agent_event_source_namespaces(bundle_props or {}, client_id=client_id)
+    pull_namespaces = named_service_agent_pull_namespaces(bundle_props or {}, client_id=client_id)
+    connected: list[str] = []
+    for namespace in all_namespaces:
+        tool_cfg = named_service_namespace_client_tools_config(
+            bundle_props or {},
+            namespace=str(namespace),
+            client_id=client_id,
+        )
+        if tool_cfg or namespace in event_namespaces or namespace in pull_namespaces:
+            connected.append(str(namespace))
+    return sorted(dict.fromkeys(connected))
+
+
+def render_named_service_namespace_roster(
+    namespaces: Sequence[str],
+    intros: Mapping[str, Mapping[str, str]] | None = None,
+) -> str:
+    """Render the ``Named-service namespaces available to this agent`` roster.
+
+    Each connected namespace renders its published ``intro`` (falling back to the
+    provider ``label``); when neither is known the bare namespace name is shown.
+    """
+
+    intros = intros or {}
+    rows: list[str] = []
+    for namespace in namespaces:
+        info = intros.get(str(namespace)) or {}
+        blurb = str(info.get("intro") or info.get("label") or "").strip()
+        rows.append(f"- `{namespace}` — {blurb}" if blurb else f"- `{namespace}`")
+    if not rows:
+        return ""
+    return (
+        "Named-service namespaces available to this agent (pass one as the `namespace` argument):\n"
+        + "\n".join(rows)
+    )
+
+
+def compose_named_service_react_instructions(
+    bundle_props: Mapping[str, Any] | None,
+    *,
+    client_id: Any,
+    intros: Mapping[str, Mapping[str, str]] | None = None,
+) -> str:
+    """Build the generic named-service ReAct block for any agent.
+
+    Returns the static ``NAMED_SERVICES_REACT_ADDITIONAL_INSTRUCTIONS`` teaching
+    block followed by the per-agent namespace roster (with intros). Empty string
+    when the agent has no connected named-service namespaces.
+    """
+
+    namespaces = connected_named_service_namespaces(bundle_props, client_id=client_id)
+    if not namespaces:
+        return ""
+    from .instructions import NAMED_SERVICES_REACT_ADDITIONAL_INSTRUCTIONS
+
+    roster = render_named_service_namespace_roster(namespaces, intros)
+    if not roster:
+        return NAMED_SERVICES_REACT_ADDITIONAL_INSTRUCTIONS
+    return f"{NAMED_SERVICES_REACT_ADDITIONAL_INSTRUCTIONS}\n\n{roster}"
+
+
 def named_service_agent_event_source_namespaces(
     bundle_props: Mapping[str, Any] | None,
     *,

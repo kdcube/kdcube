@@ -26,6 +26,21 @@ auth:
   jwks_cache_ttl_seconds: 86400              # JWKS_CACHE_TTL_SECONDS
   turnstile_development_token: ""            # optional local/dev frontend Turnstile bypass token; leave empty outside development
 
+  oauth_mcp:
+    enabled: false
+    issuer: ""  # Public AS origin advertised in OAuth metadata; empty lets local/dev derive from request origin.
+    public_clients:
+      - client_id: "claude"
+        redirect_uris:
+          - "https://claude.ai/api/mcp/auth_callback"
+          - "http://localhost/callback"
+          - "http://127.0.0.1/callback"
+    dynamic_client_registration:
+      allowed_redirect_uris:
+        - "https://claude.ai/api/mcp/auth_callback"
+        - "http://localhost/callback"
+        - "http://127.0.0.1/callback"
+
   # OIDC service account credentials → secrets.yaml: auth.oidc.{admin_email,admin_username,admin_password}
 
   # Cognito — fill in when auth.idp = "cognito"

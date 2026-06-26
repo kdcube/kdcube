@@ -13,7 +13,10 @@ from kdcube_ai_app.auth.federated import issue_federated_data_bus_token
 from kdcube_ai_app.apps.chat.sdk.config import get_secret
 from kdcube_ai_app.apps.chat.sdk.context.vector.conv_ticket_store import ConvTicketStore
 from kdcube_ai_app.apps.chat.sdk.comm.sink import StatsTelemetrySink
-from kdcube_ai_app.apps.chat.sdk.integrations.telegram import TelegramUserAdminStorage
+from kdcube_ai_app.apps.chat.sdk.integrations.telegram import (
+    TelegramUserAdminStorage,
+    extract_telegram_init_data_from_request,
+)
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram import user_admin as telegram_user_admin
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram import webapp as telegram_webapp
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram import widget_auth as telegram_widget_auth
@@ -25,6 +28,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_memory import
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.canvas import api as canvas_api
 from kdcube_ai_app.apps.chat.sdk.solutions.canvas.events.defaults import default_canvas_event_source_specs
+from kdcube_ai_app.apps.chat.sdk.solutions.connections import IdentityLinksClient, request_origin
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
     NamedServiceRegistry,
     named_service_agent_event_source_namespaces,
@@ -100,20 +104,34 @@ def _storage_root_or_error(entrypoint: Any) -> Path:
     return storage_root
 
 
+def _payload(data: Optional[Mapping[str, Any]] = None, **kwargs: Any) -> Dict[str, Any]:
+    merged: Dict[str, Any] = {}
+    if isinstance(data, Mapping):
+        nested = data.get("data")
+        if isinstance(nested, Mapping):
+            merged.update({str(k): v for k, v in nested.items()})
+        else:
+            merged.update({str(k): v for k, v in data.items()})
+    for key, value in kwargs.items():
+        if key not in {"request", "alias", "route", "endpoint_alias"} and value is not None:
+            merged[key] = value
+    return merged
+
+
 def _telegram_user_admin_storage(entrypoint: Any) -> TelegramUserAdminStorage:
     return TelegramUserAdminStorage(_storage_root_or_error(entrypoint))
 
 
-class _VersatileTaskWidgets:
+class _VersatileAutomationWidgets:
     @staticmethod
     async def payload(entrypoint: Any, **kwargs) -> Dict[str, Any]:
         del entrypoint, kwargs
         return {
             "user_id": "",
-            "tasks": [],
+            "automations": [],
             "count": 0,
             "supported_now": {
-                "tasks": False,
+                "automations": False,
                 "reason": "versatile reference webapp demonstrates memory, conversations, and Telegram admin.",
             },
         }
@@ -155,11 +173,11 @@ class _VersatileSettingsWidgets:
         }
 
 
-class _VersatileTaskOperations:
+class _VersatileAutomationOperations:
     @staticmethod
-    async def list_tasks(*args, **kwargs) -> Dict[str, Any]:
+    async def list_automations(*args, **kwargs) -> Dict[str, Any]:
         del args, kwargs
-        return {"ok": True, "tasks": [], "count": 0}
+        return {"ok": True, "automations": [], "count": 0}
 
 
 telegram_user_admin.configure_telegram_user_admin(
@@ -175,12 +193,12 @@ telegram_widget_auth.configure_telegram_widget_auth(
 telegram_webapp.configure_telegram_webapp(
     memory_widgets_module=_VersatileMemoryWidgets,
     settings_widgets_module=_VersatileSettingsWidgets,
-    task_widgets_module=_VersatileTaskWidgets,
+    automation_widgets_module=_VersatileAutomationWidgets,
     telegram_user_admin_module=telegram_user_admin,
     bundle_id=BUNDLE_ID,
 )
 telegram_widget_ops.configure_telegram_widget_ops(
-    task_operations_module=_VersatileTaskOperations,
+    automation_operations_module=_VersatileAutomationOperations,
     telegram_user_admin_module=telegram_user_admin,
     telegram_widget_auth_module=telegram_widget_auth,
     webapp_module=telegram_webapp,
@@ -394,6 +412,7 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
                     state_event_source_id=CANVAS_STATE_EVENT_SOURCE_ID,
                     ui_event_type=CANVAS_UI_EVENT_TYPE,
                     artifact_resolver_name=CANVAS_ARTIFACT_RESOLVER_NAME,
+                    data_bus_subject=CANVAS_DATA_BUS_SUBJECT,
                 ),
                 logger=_log,
             )
@@ -959,6 +978,43 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
             path=path,
         )
 
+    @api(method="POST", alias="telegram_identity_link_start", route="public", public_auth=TELEGRAM_WEBAPP_PUBLIC_AUTH)
+    async def telegram_identity_link_start(
+        self,
+        data: Optional[Dict[str, Any]] = None,
+        request: Any = None,
+        telegram_init_data: str = "",
+        **kwargs,
+    ) -> Dict[str, Any]:
+        payload = _payload(data, telegram_init_data=telegram_init_data, **kwargs)
+        init_data = str(payload.get("telegram_init_data") or "").strip() or extract_telegram_init_data_from_request(request)
+        return await IdentityLinksClient(self).telegram_link_start(
+            telegram_init_data=init_data,
+            public_origin=request_origin(request),
+        )
+
+    @api(method="POST", alias="telegram_identity_link_complete", route="public", public_auth=TELEGRAM_WEBAPP_PUBLIC_AUTH)
+    async def telegram_identity_link_complete(
+        self,
+        data: Optional[Dict[str, Any]] = None,
+        request: Any = None,
+        challenge_id: str = "",
+        telegram_init_data: str = "",
+        **kwargs,
+    ) -> Dict[str, Any]:
+        payload = _payload(
+            data,
+            challenge_id=challenge_id,
+            telegram_init_data=telegram_init_data,
+            **kwargs,
+        )
+        init_data = str(payload.get("telegram_init_data") or "").strip() or extract_telegram_init_data_from_request(request)
+        return await IdentityLinksClient(self).telegram_link_complete(
+            challenge_id=str(payload.get("challenge_id") or ""),
+            telegram_init_data=init_data,
+            public_origin=request_origin(request),
+        )
+
     @api(method="POST", alias="telegram_federated_data_bus_claim", route="public", public_auth=TELEGRAM_WEBAPP_PUBLIC_AUTH)
     async def telegram_federated_data_bus_claim(
         self,
@@ -1196,6 +1252,9 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
                 },
             },
             "integrations": {
+                "connection_hub": {
+                    "bundle_id": "connection-hub@1-0",
+                },
                 "telegram": {
                     "enabled": False,
                     "webhook_url": "",
@@ -1219,16 +1278,17 @@ class VersatileEntrypoint(BaseEntrypointWithEconomicsAndMemory):
             },
             "memory": {
                 "enabled": True,
-                "announce": {
-                    "enabled": True,
-                    "limit": 8,
-                    "scope_filter": "all_user_memories",
-                },
-                "tools": {
-                    "enabled": True,
-                    "allow_write": True,
-                    "default_scope_filter": "current_bundle",
-                },
+                # Announce (the [USER MEMORY HOTSET] injection) is a consumer
+                # concern and is declared via this agent's as_consumer mem
+                # namespace (surfaces.as_consumer.agents.main.tools[mem].
+                # namespaces.mem.announce), supplied by the runtime bundles.yaml.
+                # base_workflow reads it from there first and only falls back to
+                # the legacy memory.announce.* block for un-migrated bundles.
+                # The durable memory write path is the `mem` named service
+                # (named_services.upsert_object), not the legacy in-process
+                # memory tools, so this consumer app carries no `memory.tools`
+                # block. Provider/maintenance config (reconciliation, snapshots)
+                # lives only in the dedicated memory app.
                 "widget": {
                     "enabled": True,
                     "allow_write": True,

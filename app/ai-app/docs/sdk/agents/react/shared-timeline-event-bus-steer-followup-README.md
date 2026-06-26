@@ -40,6 +40,7 @@ This page explains the followup/steer behavior after those fields exist.
 
 - ingress appends busy-turn `followup` / `steer` into one Redis-backed shared conversation event source
 - the active React turn acquires a fenced owner lease and listens to that source live
+- the event-lane orchestrator treats only a fresh `active` consumer acknowledgement as live handler ownership; `scheduled` is a proc start reservation and does not protect a stale open handler from reclaim
 - `followup` is folded into the current turn and can trigger another decision round before completion
 - a consumed live `followup` also mints extra iteration credit for that same turn, capped by runtime configuration, so additive followups do not exhaust the original fixed loop budget
 - if the user already saw a completion before a new `followup` arrived, that visible completion remains part of the same turn history; later completions are additive, not replacement-only
