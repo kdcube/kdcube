@@ -2197,6 +2197,61 @@ class BaseWorkflow():
             bundle_root = pathlib.Path(__file__).resolve().parents[1]
         return bundle_root
 
+    async def named_service_react_instructions(self, *, client_id: Any = None) -> str:
+        """Compose the named-service ReAct block (teaching + namespace roster).
+
+        Returns the static ``[NAMED SERVICES …]`` teaching block plus this agent's
+        namespace roster, each ``as_consumer``-connected namespace rendered with its
+        discovery-published ``intro`` (provider ``label`` fallback). Empty string
+        when the agent has no connected named-service namespaces.
+
+        This is a normal ``BaseWorkflow`` method: a bundle that subclasses
+        ``BaseWorkflow`` can override it to customize or fully rebuild the section.
+        Intros are read through the canonical discovery API (no in-process registry,
+        no key scan). Self-contained: redis / tenant / project / bundle_props are
+        pulled from ``self``.
+        """
+        try:
+            from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.client_tools import (
+                compose_named_service_react_instructions,
+                connected_named_service_namespaces,
+            )
+            from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.discovery import (
+                RedisNamedServiceDiscovery,
+                fetch_namespace_intros,
+            )
+        except Exception:
+            return ""
+
+        resolved_client_id = client_id if client_id is not None else getattr(
+            getattr(self, "runtime_ctx", None), "agent_id", None
+        )
+        bundle_props = self.bundle_props if isinstance(self.bundle_props, Mapping) else {}
+        namespaces = connected_named_service_namespaces(bundle_props, client_id=resolved_client_id)
+        if not namespaces:
+            return ""
+
+        intros: Dict[str, Dict[str, str]] = {}
+        try:
+            runtime_ctx = getattr(self, "runtime_ctx", None)
+            tenant = str(getattr(runtime_ctx, "tenant", "") or "").strip()
+            project = str(getattr(runtime_ctx, "project", "") or "").strip()
+            if self.redis is not None and tenant and project:
+                discovery = RedisNamedServiceDiscovery(self.redis, tenant=tenant, project=project)
+                intros = await fetch_namespace_intros(discovery, namespaces)
+        except Exception:
+            try:
+                self.logger.log("[named_services] roster intro fetch failed", level="WARNING")
+            except Exception:
+                pass
+            intros = {}
+
+        return compose_named_service_react_instructions(
+            bundle_props,
+            client_id=resolved_client_id,
+            intros=intros,
+        )
+
     def build_react(self,
                     scratchpad: TurnScratchpad,
                     mod_tools_spec: Optional[List[Dict[str, Any]]] = None,

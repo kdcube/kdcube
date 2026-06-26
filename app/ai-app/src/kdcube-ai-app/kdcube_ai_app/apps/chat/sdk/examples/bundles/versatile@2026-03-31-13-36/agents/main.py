@@ -16,11 +16,8 @@ from kdcube_ai_app.apps.chat.sdk.solutions.canvas.events.defaults import default
 from kdcube_ai_app.apps.chat.sdk.solutions.canvas.instructions import CANVAS_REACT_ADDITIONAL_INSTRUCTIONS
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.base_workflow import BaseWorkflow
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
-    NAMED_SERVICES_REACT_ADDITIONAL_INSTRUCTIONS,
     named_service_agent_event_source_namespaces,
     named_service_agent_pull_namespaces,
-    named_service_namespace_client_tools_config,
-    named_service_namespaces,
     register_configured_named_service_artifact_rehosters,
     register_configured_named_service_event_sources,
 )
@@ -79,49 +76,19 @@ def _resolve_react_ui_instructions(comm_context: ExternalEventPayload) -> str:
     return _WEB_CHAT_REACT_INSTRUCTIONS
 
 
-def _resolve_named_service_react_instructions(bundle_props: Dict[str, Any] | None, *, client_id: Any = None) -> str:
-    all_namespaces = named_service_namespaces(bundle_props or {})
-    event_namespaces = named_service_agent_event_source_namespaces(bundle_props or {}, client_id=client_id or "main")
-    pull_namespaces = named_service_agent_pull_namespaces(bundle_props or {}, client_id=client_id or "main")
-    namespaces = {}
-    for namespace, cfg in all_namespaces.items():
-        tool_cfg = named_service_namespace_client_tools_config(
-            bundle_props or {},
-            namespace=str(namespace),
-            client_id=client_id or "main",
-        )
-        if tool_cfg or namespace in event_namespaces or namespace in pull_namespaces:
-            namespaces[namespace] = cfg
-    if not namespaces:
-        return ""
-    rows = []
-    for namespace, cfg in sorted(namespaces.items(), key=lambda item: str(item[0])):
-        provider = cfg.get("provider") if isinstance(cfg, dict) else {}
-        provider_id = provider.get("provider") if isinstance(provider, dict) else ""
-        bundle_id = provider.get("bundle_id") if isinstance(provider, dict) else ""
-        label = f"- `{namespace}`"
-        details = ", ".join(str(value) for value in (provider_id, bundle_id) if value)
-        rows.append(f"{label}: {details}" if details else label)
-    # Static ecosystem/workflow teaching + the per-agent namespace roster. The
-    # teaching block is the single source of truth (no provider operation ids,
-    # only visible tool ids); this function just appends which namespaces this
-    # agent may pass as the `namespace` argument. The tool catalog stays
-    # authoritative for which named_services.* tools are actually callable.
-    roster = "Named-service namespaces available to this agent (pass one as the `namespace` argument):\n" + "\n".join(rows)
-    return f"{NAMED_SERVICES_REACT_ADDITIONAL_INSTRUCTIONS}\n\n{roster}"
-
-
 def _resolve_react_additional_instructions(
     comm_context: ExternalEventPayload,
     *,
     bundle_props: Dict[str, Any] | None = None,
     client_id: Any = None,
 ) -> str:
+    # The named-service teaching block + namespace roster (with intros) is composed
+    # generically by the ReAct runtime for every bundle/agent that has named-services
+    # connected; this bundle no longer injects its own bespoke roster here.
     blocks = [
         _resolve_react_ui_instructions(comm_context),
         resolve_memory_react_additional_instructions(bundle_props or {}, client_id=client_id or "main"),
         CANVAS_REACT_ADDITIONAL_INSTRUCTIONS,
-        _resolve_named_service_react_instructions(bundle_props, client_id=client_id),
     ]
     return "\n\n".join(block.strip() for block in blocks if str(block or "").strip())
 
@@ -309,6 +276,21 @@ class VersatileWorkflow(BaseWorkflow):
                     client_id,
                     bundle_root=BUNDLE_ROOT,
                 )
+                additional_instructions = _resolve_react_additional_instructions(
+                    self.comm_context,
+                    bundle_props=self.bundle_props,
+                    client_id=client_id,
+                )
+                # The named-service teaching block + namespace roster (with discovery
+                # intros) is composed by the overridable BaseWorkflow helper, so the
+                # section uses the canonical discovery read and bundles can customize it.
+                named_service_block = await self.named_service_react_instructions(client_id=client_id)
+                if named_service_block:
+                    additional_instructions = (
+                        f"{additional_instructions}\n\n{named_service_block}".strip()
+                        if str(additional_instructions or "").strip()
+                        else named_service_block
+                    )
                 react = self.build_react(
                     tools_runtime=tool_config.tool_runtime,
                     tool_traits=tool_config.tool_traits,
@@ -318,11 +300,7 @@ class VersatileWorkflow(BaseWorkflow):
                     custom_skills_root=skill_config.custom_skills_root,
                     skills_visibility_agents_config=skill_config.agents_config,
                     scratchpad=scratchpad,
-                    additional_instructions=_resolve_react_additional_instructions(
-                        self.comm_context,
-                        bundle_props=self.bundle_props,
-                        client_id=client_id,
-                    ),
+                    additional_instructions=additional_instructions,
                 )
                 self._register_named_service_react_surfaces(client_id=client_id)
 

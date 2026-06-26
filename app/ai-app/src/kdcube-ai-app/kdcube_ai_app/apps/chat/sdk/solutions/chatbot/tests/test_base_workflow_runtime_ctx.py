@@ -1294,3 +1294,140 @@ def test_bind_runtime_role_models_noop_without_agent_overlay():
 
     with solver._bind_runtime_role_models():
         assert "role_models" not in get_current_bundle_call_context()
+
+
+# ---------------------------------------------------------------------------
+# Named-service ReAct roster: overridable BaseWorkflow helper composes the
+# section from the canonical discovery read.
+# ---------------------------------------------------------------------------
+
+class _RosterFakeRedis:
+    """Minimal async redis double for RedisNamedServiceDiscovery reads/writes."""
+
+    def __init__(self):
+        self._v = {}
+        self._s = {}
+
+    async def set(self, k, v, ex=None):
+        self._v[str(k)] = v
+        return True
+
+    async def get(self, k):
+        return self._v.get(str(k))
+
+    async def sadd(self, k, *vs):
+        bucket = self._s.setdefault(str(k), set())
+        for x in vs:
+            bucket.add(str(x))
+        return 1
+
+    async def smembers(self, k):
+        return set(self._s.get(str(k), set()))
+
+    async def expire(self, k, s):
+        return True
+
+    async def persist(self, k):
+        return True
+
+
+def _named_service_consumer_props(*namespaces: str) -> dict:
+    return {
+        "surfaces": {
+            "as_consumer": {
+                "agents": {
+                    "main": {
+                        "tools": [
+                            {
+                                "kind": "named_service",
+                                "alias": "named_services",
+                                "namespaces": {
+                                    ns: {"allowed": ["provider.about", "object.search"]}
+                                    for ns in namespaces
+                                },
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+    }
+
+
+async def _register_roster_provider(redis, *, provider_id, namespaces, label, intro, bundle_id):
+    from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
+        RedisNamedServiceDiscovery,
+        NamedServiceProviderSpec,
+    )
+    discovery = RedisNamedServiceDiscovery(redis, tenant="demo-tenant", project="demo-project")
+    await discovery.register_provider(
+        NamedServiceProviderSpec(
+            provider_id=provider_id,
+            bundle_id=bundle_id,
+            namespaces=tuple(namespaces),
+            label=label,
+            intro=intro,
+            operations={"object.search": {"transports": ["bundle_registry"]}},
+        ),
+        bundle_id=bundle_id,
+    )
+
+
+@pytest.mark.asyncio
+async def test_base_workflow_named_service_roster_uses_canonical_discovery_read():
+    redis = _RosterFakeRedis()
+    await _register_roster_provider(
+        redis,
+        provider_id="sdk.memory",
+        namespaces=("me", "mem"),
+        label="User memories",
+        intro="Durable user memory — facts, preferences …",
+        bundle_id="versatile@1-0",
+    )
+    await _register_roster_provider(
+        redis,
+        provider_id="task.issue",
+        namespaces=("task",),
+        label="Tasks",
+        intro="KDCube issue tracker — report issues …",
+        bundle_id="task-tracker@1-0",
+    )
+
+    wf = BaseWorkflow.__new__(BaseWorkflow)
+    wf.bundle_props = _named_service_consumer_props("mem", "task")
+    wf.redis = redis
+    wf.runtime_ctx = RuntimeCtx(agent_id="main", tenant="demo-tenant", project="demo-project")
+    wf.logger = SimpleNamespace(log=lambda *args, **kwargs: None)
+
+    block = await wf.named_service_react_instructions()
+
+    assert "[NAMED SERVICES — NAMESPACE OBJECT OPERATIONS]" in block
+    assert "Named-service namespaces available to this agent (pass one as the `namespace` argument):" in block
+    assert "- `mem` — Durable user memory — facts, preferences …" in block
+    assert "- `task` — KDCube issue tracker — report issues …" in block
+
+
+@pytest.mark.asyncio
+async def test_base_workflow_named_service_roster_empty_without_connected_namespaces():
+    wf = BaseWorkflow.__new__(BaseWorkflow)
+    wf.bundle_props = {}  # no as_consumer named-service namespaces
+    wf.redis = _RosterFakeRedis()
+    wf.runtime_ctx = RuntimeCtx(agent_id="main", tenant="demo-tenant", project="demo-project")
+    wf.logger = SimpleNamespace(log=lambda *args, **kwargs: None)
+
+    assert await wf.named_service_react_instructions() == ""
+
+
+@pytest.mark.asyncio
+async def test_subclass_can_override_named_service_react_instructions():
+    class CustomWorkflow(BaseWorkflow):
+        async def named_service_react_instructions(self, *, client_id=None):
+            return "CUSTOM ROSTER BLOCK"
+
+    wf = CustomWorkflow.__new__(CustomWorkflow)
+    wf.bundle_props = _named_service_consumer_props("mem")
+    wf.redis = _RosterFakeRedis()
+    wf.runtime_ctx = RuntimeCtx(agent_id="main", tenant="demo-tenant", project="demo-project")
+    wf.logger = SimpleNamespace(log=lambda *args, **kwargs: None)
+
+    assert await wf.named_service_react_instructions() == "CUSTOM ROSTER BLOCK"
