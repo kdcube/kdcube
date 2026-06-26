@@ -71,7 +71,6 @@ def _provider():
         store_factory=lambda ctx: object(),  # not used by about/schema tests
         scope_factory=lambda ctx: MemoryScope(tenant="tenant-a", project="project-a", user_id="user-a"),
         bundle_id="bundle@1",
-        allow_write=True,
     )
 
 
@@ -125,7 +124,6 @@ def _provider_with_store(store: _Store, *, model_service=None, embedding_factory
         store_factory=lambda ctx: store,
         scope_factory=lambda ctx: MemoryScope(tenant="tenant-a", project="project-a", user_id="user-a", bundle_id="bundle@1"),
         bundle_id="bundle@1",
-        allow_write=True,
         model_service=model_service,
         embedding_factory=embedding_factory,
         search_embedding_factory=search_embedding_factory,

@@ -157,42 +157,6 @@ class MemoryEntrypointMixin:
         memory_cfg = self._memory_config()
         return _truthy(memory_cfg.get("enabled"), False)
 
-    def _memory_agent_named_service_allows(self, operation: str) -> bool:
-        operation = str(operation or "").strip()
-        if not operation:
-            return False
-        props = getattr(self, "bundle_props", None) or {}
-        surfaces = props.get("surfaces") if isinstance(props, dict) else {}
-        as_consumer = surfaces.get("as_consumer") if isinstance(surfaces, dict) else {}
-        agents = as_consumer.get("agents") if isinstance(as_consumer, dict) else {}
-        if not isinstance(agents, dict):
-            return False
-        for agent_cfg in agents.values():
-            tools = agent_cfg.get("tools") if isinstance(agent_cfg, dict) else []
-            if not isinstance(tools, list):
-                continue
-            for tool_cfg in tools:
-                if not isinstance(tool_cfg, dict) or tool_cfg.get("kind") != "named_service":
-                    continue
-                namespaces = tool_cfg.get("namespaces")
-                mem_cfg = namespaces.get("mem") if isinstance(namespaces, dict) else None
-                if not isinstance(mem_cfg, dict):
-                    continue
-                allowed = {str(item).strip() for item in (mem_cfg.get("allowed") or []) if str(item).strip()}
-                if operation in allowed:
-                    return True
-        return False
-
-    def _memory_named_service_write_enabled(self) -> bool:
-        memory_cfg = self._memory_config()
-        tools_cfg = memory_cfg.get("tools") if isinstance(memory_cfg.get("tools"), dict) else {}
-        if _truthy(tools_cfg.get("allow_write"), False):
-            return True
-        return any(
-            self._memory_agent_named_service_allows(operation)
-            for operation in ("object.upsert", "object.delete", "object.action")
-        )
-
     def _memory_named_service_default_scope_filter(self) -> str:
         memory_cfg = self._memory_config()
         tools_cfg = memory_cfg.get("tools") if isinstance(memory_cfg.get("tools"), dict) else {}
@@ -436,7 +400,6 @@ class MemoryEntrypointMixin:
             store_factory=self._memory_named_service_store,
             scope_factory=self._memory_named_service_scope,
             bundle_id=getattr(bundle_spec, "id", None) or "",
-            allow_write=self._memory_named_service_write_enabled(),
             default_scope_filter=self._memory_named_service_default_scope_filter(),
             model_service=self.search_model_service(flow="memory.search"),
             embedding_enabled=_truthy(tools_cfg.get("embedding_enabled"), True),
