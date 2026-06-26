@@ -387,6 +387,8 @@ bundles:
           # receiver sits behind a gateway that parses Authorization as JWT.
           auth_header: ""
         integrations:
+          connection_hub:
+            bundle_id: connection-hub@1-0
           telegram:
             enabled: false
             webhook_url: "<domain name>/assembly.yaml service route/<tenant>/<project>/api/public/<alias>"

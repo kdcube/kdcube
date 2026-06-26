@@ -30,6 +30,13 @@ from .contract import (
 )
 from .provider import ConnectionsProviderBase
 from .client import ConnectionsClient, ConnectionsError
+from .identity_links import (
+    DEFAULT_CONNECTION_HUB_BUNDLE_ID,
+    IdentityLinksClient,
+    connection_hub_bundle_id,
+    connection_hub_bundle_id_from_entrypoint,
+    request_origin,
+)
 
 __all__ = [
     "NAMESPACE",
@@ -48,4 +55,9 @@ __all__ = [
     "ConnectionsProviderBase",
     "ConnectionsClient",
     "ConnectionsError",
+    "DEFAULT_CONNECTION_HUB_BUNDLE_ID",
+    "IdentityLinksClient",
+    "connection_hub_bundle_id",
+    "connection_hub_bundle_id_from_entrypoint",
+    "request_origin",
 ]

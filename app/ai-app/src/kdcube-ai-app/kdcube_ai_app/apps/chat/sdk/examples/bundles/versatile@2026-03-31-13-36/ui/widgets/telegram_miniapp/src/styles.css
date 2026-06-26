@@ -433,6 +433,45 @@ input:focus, select:focus, textarea:focus {
   text-transform: uppercase;
 }
 
+.link-steps {
+  margin: 14px 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.link-steps li {
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  color: var(--text-2);
+  padding: 8px 10px;
+}
+
+.link-steps li.active {
+  border-color: rgba(67, 114, 195, 0.35);
+  background: var(--blue-pale);
+  color: var(--blue-dark);
+}
+
+.link-steps li.done {
+  border-color: rgba(82, 176, 68, 0.28);
+  background: rgba(232, 247, 229, 0.6);
+  color: var(--green-dark);
+}
+
+.link-steps strong,
+.link-steps span {
+  display: block;
+}
+
+.link-steps span {
+  margin-top: 2px;
+  font-size: 12px;
+}
+
 .link-field {
   margin: 12px 0;
   display: flex;

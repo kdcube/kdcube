@@ -1,9 +1,14 @@
-# `connections` named-service contract
+# `connections` SDK contracts
 
 The transport-neutral contract for the `connections` namespace: list a user's
 connectable providers, fetch the user's access token for a provider, and drive
 OAuth. A bundle implements the provider; any bundle consumes it through the
 typed client over the local (in-process) or API (HTTP) transport.
+
+The same package also exposes `IdentityLinksClient`, the app-to-app SDK client
+for asking Connection Hub to resolve/link external identities such as Telegram.
+Browser widgets should not build another app's public URL directly. They should
+call their own app, and that app should call `IdentityLinksClient`.
 
 For the full design (two layers, registry, user-scoped tokens, pins) see
 [`docs/sdk/integrations/connections-README.md`](../../../../../../../../docs/sdk/integrations/connections-README.md).
@@ -24,7 +29,7 @@ the implementing bundle, not a named-service operation.
 ## Consuming it
 
 ```python
-from kdcube_ai_app.apps.chat.sdk.solutions.connections import ConnectionsClient
+from kdcube_ai_app.apps.chat.sdk.solutions.connections import ConnectionsClient, IdentityLinksClient
 
 connections = ConnectionsClient(registry)            # local transport
 # or: ConnectionsClient(registry, transport="api")   # HTTP transport
@@ -38,6 +43,26 @@ entries = await connections.catalog()                # list[CatalogEntry]
 info = await connections.status("slack")             # dict
 start = await connections.start_oauth("slack")       # {"authorize_url": ...}
 await connections.disconnect("slack", account_id)
+```
+
+For identity links from an app surface:
+
+```python
+from kdcube_ai_app.apps.chat.sdk.solutions.connections import IdentityLinksClient, request_origin
+
+identity_links = IdentityLinksClient(self)
+result = await identity_links.telegram_link_start(
+    telegram_init_data=telegram_init_data,
+    public_origin=request_origin(request),
+)
+```
+
+Configure the Connection Hub app id on the calling app:
+
+```yaml
+integrations:
+  connection_hub:
+    bundle_id: connection-hub@1-0
 ```
 
 ## Implementing it (in a bundle)
