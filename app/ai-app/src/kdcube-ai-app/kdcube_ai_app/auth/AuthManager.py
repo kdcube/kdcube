@@ -16,6 +16,10 @@ HTTP_403_FORBIDDEN = 403
 PRIVILEGED_ROLES = {"kdcube:role:super-admin", "kdcube:role:admin"}
 PAID_ROLES = {"kdcube:role:paid"}
 REGISTERED_ROLE = "kdcube:role:chat-user"
+# Read-only integration role granted via the OAuth2 `conversations:read` scope
+# (see apps/chat/ingress/oauth_mcp). Used by the feedback-triage MCP tool; never
+# grants write/admin access.
+FEEDBACK_READER_ROLE = "kdcube:role:feedback-reader"
 
 class User(BaseModel):
     username: str = None

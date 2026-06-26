@@ -5,6 +5,7 @@ summary: "Authentication providers and token transport across REST/SSE/Socket.IO
 tags: ["service", "auth", "security", "tokens"]
 keywords: ["delegated auth", "cookie auth", "JWT", "SSE auth", "Socket.IO"]
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/oauth-mcp-integration-access-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connections-sdk-solution-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/bundle-session-auth-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/bundle-simple-idp-bridge-README.md
@@ -104,6 +105,15 @@ That authority projection is documented in
   a non-masquerade flow where the real auth and identity cookies are already
   present on the request.
 
+6) OAuth MCP integration access
+- Implementation: `kdcube_ai_app.apps.chat.ingress.oauth_mcp`.
+- KDCube hosts an OAuth2 authorization server and an MCP protected resource for
+  external integration clients such as Claude Code.
+- Existing platform session auth proves the human admin before consent.
+- Consent issues a least-privilege integration session and binds the selected
+  MCP tool allowlist to the issued grant.
+- Details: [OAuth MCP Integration Access](oauth-mcp-integration-access-README.md).
+
 ### Multi-Cognito descriptor shape
 
 The primary `auth.cognito` block remains the provider surfaced to the browser
@@ -142,6 +152,7 @@ clients for routing/logging, but token claims remain authoritative.
 |---|---|
 | Bundle/front shell performs login and browser should become a platform user | [Bundle Session Auth](bundle-session-auth-README.md) |
 | Bundle writes a SimpleIDP token for local/embedded simple auth | [Bundle SimpleIDP Bridge](bundle-simple-idp-bridge-README.md) |
+| External tool should access a narrow MCP integration surface after admin consent | [OAuth MCP Integration Access](oauth-mcp-integration-access-README.md) |
 | Public mini app needs Socket.IO Data Bus publish rights | [Bundle Federated Auth](../../sdk/bundle/auth-bundle-federated-README.md) |
 | Bundle endpoint should be public or role-protected | [Bundle Firewall](../../sdk/bundle/bundle-firewall-README.md) |
 

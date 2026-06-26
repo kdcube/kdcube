@@ -10,6 +10,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/bundles-descriptor-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/secrets-descriptor-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/gateway-descriptor-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/oauth-mcp-integration-access-README.md
 ---
 # Platform Assembly Descriptor
 
@@ -194,6 +195,46 @@ auth:
 
 The server selects a verifier from token claims (`iss` plus `client_id` or
 `aud`) and then performs normal JWKS validation for that provider.
+
+### `auth.oauth_mcp`
+
+`auth.oauth_mcp` configures KDCube-hosted OAuth2 authorization for MCP
+integration access. It is a platform auth capability served by chat-ingress.
+Do not configure it under `platform.services.ingress.*`, and do not configure it
+with operator-facing environment variables.
+
+Reference shape:
+
+```yaml
+auth:
+  oauth_mcp:
+    enabled: false
+    issuer: ""
+    public_clients:
+      - client_id: "claude"
+        redirect_uris:
+          - "https://claude.ai/api/mcp/auth_callback"
+          - "http://localhost/callback"
+          - "http://127.0.0.1/callback"
+    dynamic_client_registration:
+      allowed_redirect_uris:
+        - "https://claude.ai/api/mcp/auth_callback"
+        - "http://localhost/callback"
+        - "http://127.0.0.1/callback"
+```
+
+Rules:
+
+- `enabled` controls whether the OAuth/MCP integration-access routes are mounted.
+- `issuer` is the public origin advertised in OAuth metadata. Leave it empty in
+  local/dev when deriving the issuer from the request origin is acceptable.
+- `public_clients[*].redirect_uris` configures pre-registered public clients.
+- `dynamic_client_registration.allowed_redirect_uris` constrains pre-auth
+  dynamic client registration.
+- Tenant/project scope comes from `context.tenant` and `context.project`.
+- The browser session cookie used by the flow is `auth.auth_token_cookie_name`.
+
+See [OAuth MCP Integration Access](../service/auth/oauth-mcp-integration-access-README.md).
 
 ### `infra.redis.topology`
 
