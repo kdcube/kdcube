@@ -21,6 +21,7 @@ from kdcube_ai_app.apps.chat.ingress.oauth_mcp.clients import (
     dcr_redirect_allowed,
     get_client,
 )
+from kdcube_ai_app.apps.chat.ingress.oauth_mcp.config import oauth_mcp_config
 from kdcube_ai_app.apps.chat.ingress.oauth_mcp.consent import render_consent_html, tools_for_scopes
 from kdcube_ai_app.apps.chat.ingress.oauth_mcp.deps import (
     extract_bearer,
@@ -157,7 +158,11 @@ async def authorize(request: Request) -> Response:
     # trusted = a statically pre-registered client (not a dynamically-registered one),
     # so the consent screen can flag unknown clients for anti-phishing.
     trusted = get_client(req.client_id, request) is not None
-    return HTMLResponse(render_consent_html(req, issuer, csrf_token=csrf, trusted=trusted))
+    return HTMLResponse(
+        render_consent_html(
+            req, issuer, csrf_token=csrf, trusted=trusted, brand=oauth_mcp_config(request).brand
+        )
+    )
 
 
 @router.post("/oauth/authorize/consent", include_in_schema=False)

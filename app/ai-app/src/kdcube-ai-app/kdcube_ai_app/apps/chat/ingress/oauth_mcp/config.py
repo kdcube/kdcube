@@ -39,6 +39,7 @@ class OAuthMcpConfig:
     tenant: str
     project: str
     auth_cookie_name: str
+    brand: str
     public_clients: tuple[OAuthMcpPublicClientConfig, ...]
     dynamic_client_registration: OAuthMcpDynamicClientRegistrationConfig
 
@@ -123,6 +124,7 @@ def _parse_config(raw: Any, *, settings: Any | None = None) -> OAuthMcpConfig:
         tenant=tenant,
         project=project,
         auth_cookie_name=cookie_name,
+        brand=_coerce_str(node.get("brand")) or "KDCube",
         public_clients=_parse_public_clients(node.get("public_clients")),
         dynamic_client_registration=OAuthMcpDynamicClientRegistrationConfig(
             allowed_redirect_uris=allowed_redirects,

@@ -57,6 +57,7 @@ auth:
         assert cfg.tenant == "tenant-a"
         assert cfg.project == "project-b"
         assert cfg.auth_cookie_name == "__Secure-KDCUBE"
+        assert cfg.brand == "KDCube"  # default when auth.oauth_mcp.brand is unset
 
         assert get_client("local-client", app) is not None
         assert get_client("claude", app) is None
@@ -68,3 +69,15 @@ auth:
         assert response.json()["issuer"] == "https://mcp.example.test"
     finally:
         sdk_config.get_settings.cache_clear()
+
+
+def test_oauth_mcp_brand_defaults_to_kdcube():
+    app = FastAPI()
+    app.state.oauth_mcp_config = {"enabled": True}
+    assert oauth_mcp_config(app).brand == "KDCube"
+
+
+def test_oauth_mcp_brand_from_descriptor_is_reflected():
+    app = FastAPI()
+    app.state.oauth_mcp_config = {"enabled": True, "brand": "Acme AI"}
+    assert oauth_mcp_config(app).brand == "Acme AI"
