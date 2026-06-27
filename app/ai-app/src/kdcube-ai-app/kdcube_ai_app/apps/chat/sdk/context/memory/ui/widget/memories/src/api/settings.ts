@@ -150,7 +150,15 @@ class Settings {
       idTokenHeader: idTokenHeader || this.values.idTokenHeader,
       tenant: tenant || this.values.tenant,
       project: project || this.values.project,
-      bundleId: config.defaultAppBundleId || this.values.bundleId,
+      // The bundle the widget is SERVED from owns its operations endpoint, so a
+      // known served bundleId wins over the host's `defaultAppBundleId` (the
+      // host's "current app" hint). Only fall back to the hint when the served
+      // bundle is unknown (placeholder) — otherwise an embedding host (e.g. the
+      // versatile scene) would redirect this user-memories widget's calls to its
+      // own bundle and get `memory_disabled`.
+      bundleId: isPlaceholder(this.values.bundleId)
+        ? (config.defaultAppBundleId || this.values.bundleId)
+        : this.values.bundleId,
       authContextHeaders: hasAuthContext ? authContextHeaders : this.values.authContextHeaders,
     };
     return Boolean(
