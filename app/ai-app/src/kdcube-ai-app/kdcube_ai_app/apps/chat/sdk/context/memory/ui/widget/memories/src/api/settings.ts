@@ -150,13 +150,14 @@ class Settings {
       idTokenHeader: idTokenHeader || this.values.idTokenHeader,
       tenant: tenant || this.values.tenant,
       project: project || this.values.project,
-      // The bundle the widget is SERVED from owns its operations endpoint, so a
-      // known served bundleId wins over the host's `defaultAppBundleId` (the
-      // host's "current app" hint). Only fall back to the hint when the served
-      // bundle is unknown (placeholder) — otherwise an embedding host (e.g. the
-      // versatile scene) would redirect this user-memories widget's calls to its
-      // own bundle and get `memory_disabled`.
-      bundleId: isPlaceholder(this.values.bundleId)
+      // The bundle this widget is SERVED from — parsed from the iframe URL into
+      // `context.bundleId` — owns its operations endpoint, exactly like the task
+      // widget (which reads its bundle from the URL and ignores any host hint).
+      // A host's `defaultAppBundleId` must NOT hijack it: the versatile scene
+      // forwards the outer host's default (versatile), which would redirect this
+      // user-memories widget's calls to versatile -> memory_disabled. Only fall
+      // back to the host hint when the served route carries no bundle at all.
+      bundleId: isPlaceholder(context.bundleId)
         ? (config.defaultAppBundleId || this.values.bundleId)
         : this.values.bundleId,
       authContextHeaders: hasAuthContext ? authContextHeaders : this.values.authContextHeaders,
