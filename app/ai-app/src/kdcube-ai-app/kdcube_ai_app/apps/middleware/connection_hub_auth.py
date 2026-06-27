@@ -77,6 +77,56 @@ def connection_hub_auth_enabled() -> bool:
     return _bool(_authenticator_config().get("enabled"), default=False)
 
 
+def _first(*values: Any) -> str:
+    for value in values:
+        text = _str(value)
+        if text:
+            return text
+    return ""
+
+
+def _external_auth_summary(envelope: RequestEnvelope) -> dict[str, Any]:
+    headers = envelope.headers or {}
+    query = envelope.query or {}
+    provider = _first(
+        headers.get("x-kdcube-auth-provider"),
+        headers.get("x-kdcube-auth-provider-id"),
+        query.get("auth_provider"),
+        query.get("kdcube_auth_provider"),
+    )
+    integration_id = _first(
+        headers.get("x-kdcube-auth-integration-id"),
+        headers.get("x-kdcube-integration-id"),
+        query.get("auth_integration_id"),
+        query.get("integration_id"),
+        query.get("kdcube_auth_integration_id"),
+    )
+    has_telegram_init_data = bool(
+        _first(
+            headers.get("x-telegram-init-data"),
+            headers.get("telegram-init-data"),
+            headers.get("x-kdcube-telegram-init-data"),
+            query.get("telegram_init_data"),
+            query.get("tgwebappdata"),
+        )
+    )
+    return {
+        "provider": provider,
+        "integration_id": integration_id,
+        "has_telegram_init_data": has_telegram_init_data,
+        "has_authorization": bool(headers.get("authorization")),
+        "has_cookie": bool(headers.get("cookie") or envelope.cookies),
+    }
+
+
+def _should_trace_auth_attempt(summary: Mapping[str, Any]) -> bool:
+    return bool(
+        summary.get("provider")
+        or summary.get("integration_id")
+        or summary.get("has_telegram_init_data")
+    )
+
+
 class ConnectionHubRequestAuthBridge:
     """Gateway selector bridge backed by the Connection Hub app."""
 
@@ -126,9 +176,54 @@ class ConnectionHubRequestAuthBridge:
     ) -> Optional[UserSession]:
         include_body = self._should_include_body(request)
         envelope = await RequestEnvelope.from_request(request, include_body=include_body)
-        response = await self._call_connection_hub(envelope)
+        summary = _external_auth_summary(envelope)
+        trace = _should_trace_auth_attempt(summary)
+        if trace:
+            logger.info(
+                "[auth.selector.connection_hub] start tenant=%s project=%s bridge_bundle=%s operation=%s method=%s path=%s provider_hint=%s integration_id=%s has_telegram_init_data=%s has_authorization=%s has_cookie=%s include_body=%s",
+                self.tenant,
+                self.project,
+                self.bundle_id,
+                self.operation,
+                envelope.method,
+                envelope.path,
+                summary.get("provider") or "",
+                summary.get("integration_id") or "",
+                summary.get("has_telegram_init_data"),
+                summary.get("has_authorization"),
+                summary.get("has_cookie"),
+                include_body,
+            )
+        try:
+            response = await self._call_connection_hub(envelope)
+        except Exception as exc:
+            if trace:
+                logger.warning(
+                    "[auth.selector.connection_hub] failed tenant=%s project=%s bridge_bundle=%s operation=%s provider_hint=%s integration_id=%s error=%s",
+                    self.tenant,
+                    self.project,
+                    self.bundle_id,
+                    self.operation,
+                    summary.get("provider") or "",
+                    summary.get("integration_id") or "",
+                    exc,
+                )
+            raise
         authenticated = AuthenticatedRequest.coerce(response)
         if not (authenticated.ok and authenticated.authenticated):
+            if trace:
+                logger.info(
+                    "[auth.selector.connection_hub] declined tenant=%s project=%s provider=%s integration_id=%s selected_authenticator=%s ok=%s authenticated=%s error=%s message=%s",
+                    self.tenant,
+                    self.project,
+                    authenticated.provider or summary.get("provider") or "",
+                    authenticated.integration_id or authenticated.connection_id or summary.get("integration_id") or "",
+                    authenticated.selected_authenticator or "",
+                    authenticated.ok,
+                    authenticated.authenticated,
+                    authenticated.error or "",
+                    authenticated.message or "",
+                )
             return None
 
         authority = dict(authenticated.identity_authority or {})
@@ -164,6 +259,19 @@ class ConnectionHubRequestAuthBridge:
         }
         session = await session_factory(context, effective_user_type, user_data)
         session.identity_authority = authority
+        if trace:
+            logger.info(
+                "[auth.selector.connection_hub] accepted tenant=%s project=%s provider=%s integration_id=%s selected_authenticator=%s actor_user_id=%s platform_user_present=%s effective_user_type=%s roles=%s",
+                self.tenant,
+                self.project,
+                authenticated.provider or summary.get("provider") or "",
+                authenticated.integration_id or authenticated.connection_id or summary.get("integration_id") or "",
+                authenticated.selected_authenticator or "",
+                actor_user_id,
+                bool(authenticated.platform_user_id or authority.get("platform_user_id")),
+                effective_user_type.value,
+                roles,
+            )
         return session
 
     def _should_include_body(self, request: Request) -> bool:
@@ -224,6 +332,15 @@ def maybe_register_connection_hub_auth_bridge(
     tenant: str,
     project: str,
 ) -> bool:
+    cfg = _authenticator_config()
+    if not _bool(cfg.get("enabled"), default=False):
+        logger.info(
+            "Connection Hub request-auth bridge disabled tenant=%s project=%s config_present=%s",
+            tenant,
+            project,
+            bool(cfg),
+        )
+        return False
     bridge = ConnectionHubRequestAuthBridge.from_descriptors(
         redis=redis,
         pg_pool=pg_pool,
