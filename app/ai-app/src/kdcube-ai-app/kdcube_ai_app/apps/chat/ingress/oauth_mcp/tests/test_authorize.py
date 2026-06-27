@@ -121,6 +121,18 @@ def test_consent_html_lists_requested_tools_and_carries_state():
     assert "KDCube" in html                      # attribution
 
 
+def test_consent_html_uses_configured_brand():
+    req = parse_authorize_request(_params())
+
+    branded = render_consent_html(req, issuer=ISSUER, brand="Acme AI")
+    assert "Authorize an MCP connection to Acme AI" in branded   # <h1>
+    assert "Authorize MCP connection · Acme AI" in branded       # <title>
+    assert "Powered by" in branded and "KDCube" in branded       # attribution stays
+
+    default = render_consent_html(req, issuer=ISSUER)
+    assert "Authorize an MCP connection to KDCube" in default     # default brand
+
+
 # ----------------------------------- routes -----------------------------------
 
 async def _fake_authenticate(token):

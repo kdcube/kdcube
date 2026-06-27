@@ -32,11 +32,23 @@ def tools_for_scopes(scopes: List[str]) -> List[Tuple[str, str]]:
     return list(seen.items())
 
 
+def _brand_monogram(brand: str) -> str:
+    """1-2 uppercase initials from the brand name (first letters of first two words)."""
+    words = [w for w in brand.split() if w]
+    initials = "".join(w[0] for w in words[:2]).upper()
+    return initials or "KC"
+
+
 def render_consent_html(
-    req: AuthorizeRequest, issuer: str, csrf_token: str = "", trusted: bool = False
+    req: AuthorizeRequest,
+    issuer: str,
+    csrf_token: str = "",
+    trusted: bool = False,
+    brand: str = "KDCube",
 ) -> str:
     esc = _html.escape
     tools = tools_for_scopes(req.scopes)
+    monogram = _brand_monogram(brand)
 
     tool_rows = "\n".join(
         f'    <label class="tool"><input type="checkbox" name="tools" value="{esc(name)}" checked> '
@@ -72,7 +84,7 @@ def render_consent_html(
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Authorize MCP connection · KDCube</title>
+  <title>Authorize MCP connection · {esc(brand)}</title>
   <style>
     :root {{
       --accent: #1565c0; --accent-700: #0f4e9c; --ink: #1a2230; --muted: #5b6675;
@@ -127,11 +139,11 @@ def render_consent_html(
 </head>
 <body>
   <div class="brand">
-    <div class="mark">KC</div>
-    <div><b>KDCube</b><br><span>MCP authorization</span></div>
+    <div class="mark">{esc(monogram)}</div>
+    <div><b>{esc(brand)}</b><br><span>MCP authorization</span></div>
   </div>
   <div class="card">
-    <h1>Authorize an MCP connection to KDCube</h1>
+    <h1>Authorize an MCP connection to {esc(brand)}</h1>
     <p class="sub">An application is requesting access to this workspace's data over MCP.</p>
     <div class="details">
       <div class="row"><span class="k">Client</span> <span><code>{esc(req.client_id)}</code> {trust_badge}</span></div>
