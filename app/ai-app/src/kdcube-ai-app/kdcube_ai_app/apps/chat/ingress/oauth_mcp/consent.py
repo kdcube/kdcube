@@ -74,41 +74,76 @@ def render_consent_html(
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Authorize MCP connection · KDCube</title>
   <style>
-    body {{ font-family: system-ui, sans-serif; max-width: 540px; margin: 6vh auto; padding: 0 1rem; color: #1a1a1a; }}
-    .card {{ border: 1px solid #e2e2e2; border-radius: 12px; padding: 1.5rem; }}
-    h1 {{ font-size: 1.2rem; }}
-    .details {{ background: #f5f7fa; border-radius: 8px; padding: .75rem 1rem; margin: 1rem 0; }}
-    .details div {{ margin: .35rem 0; word-break: break-all; }}
-    .k {{ display: inline-block; min-width: 92px; color: #555; font-size: .85rem; }}
-    code, .scope {{ font-family: monospace; }}
-    .badge {{ font-size: .72rem; padding: .1rem .4rem; border-radius: 6px; }}
+    :root {{
+      --accent: #1565c0; --accent-700: #0f4e9c; --ink: #1a2230; --muted: #5b6675;
+      --line: #e5e9f0; --panel: #f4f7fb;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      background: linear-gradient(180deg, #eef3f8 0%, #f7f9fc 100%);
+      max-width: 560px; margin: 0 auto; min-height: 100vh; padding: 6vh 1rem 2rem;
+      color: var(--ink); line-height: 1.5;
+    }}
+    .brand {{ display: flex; align-items: center; gap: .6rem; margin: 0 0 1rem .2rem; }}
+    .brand .mark {{
+      width: 34px; height: 34px; border-radius: 9px; flex: 0 0 auto;
+      background: linear-gradient(135deg, var(--accent), var(--accent-700));
+      display: grid; place-items: center; color: #fff; font-weight: 800; font-size: .95rem;
+      box-shadow: 0 2px 6px rgba(21,101,192,.25);
+    }}
+    .brand b {{ color: var(--accent-700); font-size: .95rem; letter-spacing: .2px; }}
+    .brand span {{ color: var(--muted); font-size: .8rem; }}
+    .card {{
+      background: #fff; border: 1px solid var(--line); border-radius: 16px;
+      padding: 1.6rem 1.6rem 1.4rem; box-shadow: 0 8px 30px rgba(16,40,70,.08);
+    }}
+    h1 {{ font-size: 1.3rem; line-height: 1.3; margin: 0 0 .25rem; color: var(--accent-700); }}
+    .sub {{ color: var(--muted); font-size: .9rem; margin: 0 0 1.1rem; }}
+    .details {{ background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: .85rem 1rem; margin: 0 0 1rem; }}
+    .details .row {{ display: flex; gap: .6rem; align-items: baseline; margin: .4rem 0; word-break: break-word; }}
+    .k {{ flex: 0 0 96px; color: var(--muted); font-size: .8rem; text-transform: uppercase; letter-spacing: .4px; }}
+    code, .scope {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85rem; }}
+    code {{ background: #eef2f7; padding: .08rem .35rem; border-radius: 5px; }}
+    .badge {{ font-size: .7rem; padding: .12rem .45rem; border-radius: 999px; white-space: nowrap; font-weight: 600; }}
     .badge.ok {{ background: #e6f4ea; color: #1e7e34; }}
     .badge.warn {{ background: #fdecea; color: #b71c1c; }}
-    .warn-text {{ background: #fff8e1; border: 1px solid #ffe082; border-radius: 8px; padding: .6rem .8rem; font-size: .85rem; }}
-    .tool {{ display: block; margin: .5rem 0; }}
-    .tool .desc, .desc {{ display: block; color: #555; font-size: .85rem; margin-left: 1.5rem; }}
-    .actions {{ display: flex; gap: .75rem; margin-top: 1.25rem; }}
-    button {{ flex: 1; padding: .6rem; border-radius: 8px; border: 0; font-size: 1rem; cursor: pointer; }}
-    .approve {{ background: #1565c0; color: #fff; }}
-    .deny {{ background: #eee; color: #333; }}
-    footer {{ margin-top: 1.25rem; font-size: .8rem; color: #888; text-align: center; }}
-    footer a {{ color: #1565c0; }}
+    .warn-text {{ background: #fff8e1; border: 1px solid #ffe6a3; border-radius: 10px; padding: .7rem .9rem; font-size: .85rem; color: #6b5400; }}
+    .pick {{ font-weight: 600; margin: 1.2rem 0 .5rem; font-size: .92rem; }}
+    .tool {{ display: flex; gap: .6rem; align-items: flex-start; padding: .7rem .8rem; margin: .45rem 0;
+      border: 1px solid var(--line); border-radius: 10px; cursor: pointer; transition: border-color .15s, background .15s; }}
+    .tool:hover {{ border-color: #c7d6e6; background: #fafcff; }}
+    .tool input {{ margin-top: .2rem; width: 1.05rem; height: 1.05rem; accent-color: var(--accent); }}
+    .tool b {{ font-size: .95rem; }}
+    .tool .desc, .desc {{ display: block; color: var(--muted); font-size: .83rem; }}
+    .actions {{ display: flex; gap: .75rem; margin-top: 1.4rem; }}
+    button {{ flex: 1; padding: .7rem; border-radius: 10px; border: 0; font-size: 1rem; font-weight: 600; cursor: pointer; transition: filter .15s; }}
+    button:hover {{ filter: brightness(.96); }}
+    .approve {{ background: var(--accent); color: #fff; }}
+    .deny {{ background: #eef1f5; color: #33414f; }}
+    footer {{ margin-top: 1.3rem; font-size: .8rem; color: var(--muted); text-align: center; }}
+    footer a {{ color: var(--accent-700); }}
   </style>
 </head>
 <body>
+  <div class="brand">
+    <div class="mark">KC</div>
+    <div><b>KDCube</b><br><span>MCP authorization</span></div>
+  </div>
   <div class="card">
     <h1>Authorize an MCP connection to KDCube</h1>
+    <p class="sub">An application is requesting access to this workspace's data over MCP.</p>
     <div class="details">
-      <div><span class="k">Client</span> <code>{esc(req.client_id)}</code> {trust_badge}</div>
-      <div><span class="k">Sends code to</span> <code>{esc(req.redirect_uri)}</code></div>
-      <div><span class="k">Scope</span> <span class="scope">{scope_list}</span></div>
+      <div class="row"><span class="k">Client</span> <span><code>{esc(req.client_id)}</code> {trust_badge}</span></div>
+      <div class="row"><span class="k">Sends code to</span> <code>{esc(req.redirect_uri)}</code></div>
+      <div class="row"><span class="k">Scope</span> <span class="scope">{scope_list}</span></div>
     </div>
     <p class="warn-text">Only approve if <strong>you</strong> started this connection and recognize the
     client and the redirect URL above. Approving grants read-only access to all conversation
     transcripts across every tenant/project.</p>
     <form method="post" action="/oauth/authorize/consent">
 {hidden}
-    <p>Select which capabilities to authorize for this connection:</p>
+    <p class="pick">Select which capabilities to authorize for this connection:</p>
 {tool_rows}
     <div class="actions">
       <button class="approve" type="submit" name="decision" value="approve">Approve</button>
