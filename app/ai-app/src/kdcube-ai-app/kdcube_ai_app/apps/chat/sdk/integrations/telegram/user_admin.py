@@ -5,11 +5,14 @@ import uuid
 import asyncio
 import base64
 import binascii
+import hmac
 import inspect
 import threading
 from dataclasses import asdict
 from datetime import datetime
 from typing import Any, Callable, Dict
+
+from fastapi import HTTPException
 
 from kdcube_ai_app.apps.chat.ids import new_turn_id
 from kdcube_ai_app.apps.chat.ingress.ingress_core import IngressConfig, RawAttachment
@@ -19,6 +22,12 @@ from kdcube_ai_app.apps.chat.sdk.event_identity import (
 )
 from kdcube_ai_app.auth.sessions import RequestContext, UserSession, UserType
 from kdcube_ai_app.apps.chat.sdk.config import get_secret, get_settings
+from kdcube_ai_app.apps.chat.sdk.integrations.integration_config import (
+    configured_integrations,
+    integration_definition_value,
+    integration_secret_value,
+    select_integration,
+)
 from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bundle_registry import (
     configured_bundle_id,
@@ -459,7 +468,10 @@ async def notify_access_change(entrypoint: Any, *, result: Dict[str, Any]) -> Di
         )
     try:
         delivery = await send_telegram_messages(
-            bot_token=await _bot_token_value(entrypoint),
+            bot_token=await _bot_token_value(
+                entrypoint,
+                integration_id=str(user.get("integration_id") or user.get("auth_integration_id") or ""),
+            ),
             chat_id=chat_id,
             messages=[TelegramMessage(kind="text", text=text)],
         )
@@ -485,23 +497,107 @@ def delete(entrypoint: Any, *, telegram_user_id: str) -> Dict[str, Any]:
     }
 
 
-async def bot_token(entrypoint: Any = None) -> str:
-    bundle_id = _bundle_id(entrypoint)
-    return (
-        await get_secret("b:integrations.telegram.bot_token")
-        or await get_secret(f"bundles.{bundle_id}.secrets.integrations.telegram.bot_token")
-        or ""
+async def bot_token(entrypoint: Any = None, *, integration_id: str = "") -> str:
+    return await integration_secret_value(
+        entrypoint,
+        provider="telegram",
+        field="bot_token",
+        integration_id=integration_id,
     )
 
 
-async def _bot_token_value(entrypoint: Any = None) -> str:
+async def _bot_token_value(entrypoint: Any = None, *, integration_id: str = "") -> str:
     try:
-        value = bot_token(entrypoint)
+        value = bot_token(entrypoint, integration_id=integration_id)
     except TypeError:
         value = bot_token()
     if inspect.isawaitable(value):
         value = await value
     return str(value or "")
+
+
+def _request_header(request: Any, name: str) -> str:
+    headers = getattr(request, "headers", None)
+    if headers is not None:
+        try:
+            return str(headers.get(name) or "").strip()
+        except Exception:
+            pass
+    if isinstance(request, dict):
+        raw_headers = request.get("headers")
+        if isinstance(raw_headers, dict):
+            for key, value in raw_headers.items():
+                if str(key or "").lower() == name.lower():
+                    return str(value or "").strip()
+    return ""
+
+
+def _request_query_value(request: Any, *names: str) -> str:
+    query = getattr(request, "query_params", None)
+    for name in names:
+        if query is not None:
+            try:
+                value = str(query.get(name) or "").strip()
+                if value:
+                    return value
+            except Exception:
+                pass
+        if isinstance(request, dict):
+            raw_query = request.get("query") or request.get("query_params")
+            if isinstance(raw_query, dict):
+                for key, value in raw_query.items():
+                    if str(key or "").lower() == name.lower() and str(value or "").strip():
+                        return str(value or "").strip()
+    return ""
+
+
+def _webhook_integration_id(request: Any) -> str:
+    return (
+        _request_header(request, "X-KDCube-Auth-Integration-ID")
+        or _request_query_value(request, "integration_id", "auth_integration_id", "kdcube_auth_integration_id")
+    )
+
+
+async def _resolve_webhook_integration_id(entrypoint: Any = None, *, request: Any) -> str:
+    header_name = "X-Telegram-Bot-Api-Secret-Token"
+    provided = _request_header(request, header_name)
+    if not provided:
+        raise HTTPException(status_code=401, detail="telegram_webhook_secret_missing")
+    integration_value = _webhook_integration_id(request)
+    if integration_value:
+        rows = [select_integration(entrypoint, provider="telegram", integration_id=integration_value)]
+    else:
+        rows = configured_integrations(entrypoint, provider="telegram")
+    configured = False
+    for row in rows:
+        if not row or row.get("enabled") is False:
+            continue
+        row_id = str(row.get("id") or "").strip()
+        if not row_id:
+            continue
+        value = await integration_secret_value(
+            entrypoint,
+            provider="telegram",
+            field="webhook_secret",
+            integration_id=row_id,
+        )
+        if value:
+            configured = True
+            if hmac.compare_digest(provided, value):
+                return row_id
+    if not configured:
+        log.warning(
+            "[%s] telegram webhook rejected: no webhook secrets configured integration_id=%s",
+            _bundle_id(entrypoint),
+            integration_value or "<fallback>",
+        )
+        raise HTTPException(status_code=503, detail="telegram_webhook_secret_not_configured")
+    log.warning(
+        "[%s] telegram webhook rejected: invalid webhook secret integration_id=%s",
+        _bundle_id(entrypoint),
+        integration_value or "<fallback>",
+    )
+    raise HTTPException(status_code=401, detail="telegram_webhook_secret_invalid")
 
 
 def _role_to_user_type(role: str) -> UserType:
@@ -529,13 +625,19 @@ def _telegram_payload_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
         "chat_type": summary.get("chat_type"),
         "user_id": summary.get("user_id"),
         "username": summary.get("username"),
+        "integration_id": summary.get("integration_id"),
         "attachments": _attachment_log_items(list(summary.get("attachments") or [])),
     }
 
 
-def _bundle_prop(entrypoint: Any, path: str, default: Any = None) -> Any:
-    fn = getattr(entrypoint, "bundle_prop", None)
-    return fn(path, default) if callable(fn) else default
+def _telegram_definition_prop(entrypoint: Any, key: str, default: Any = None, *, integration_id: str = "") -> Any:
+    return integration_definition_value(
+        entrypoint,
+        provider="telegram",
+        key=key,
+        default=default,
+        integration_id=integration_id,
+    )
 
 
 async def submit_react_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> Dict[str, Any] | None:
@@ -687,6 +789,7 @@ async def run_react_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> Dict[st
 
     chat_id = str(summary.get("chat_id") or "unknown").strip()
     update_id = str(summary.get("update_id") or uuid.uuid4().hex).strip()
+    integration_id = str(summary.get("integration_id") or "").strip()
     telegram_user_id = str(summary.get("user_id") or chat_id or "anonymous").strip()
     telegram_identity = storage(entrypoint).resolve_telegram_user(
         telegram_user_id=telegram_user_id,
@@ -792,15 +895,15 @@ async def run_react_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> Dict[st
         state["turn_id"] = turn_id
         entrypoint.set_state(state)
         stream_enabled = bool(
-            _bundle_prop(entrypoint, "integrations.telegram.stream_activity", True)
-            and _bundle_prop(entrypoint, "integrations.telegram.send_responses", True)
+            _telegram_definition_prop(entrypoint, "stream_activity", True, integration_id=integration_id)
+            and _telegram_definition_prop(entrypoint, "send_responses", True, integration_id=integration_id)
         )
         stream_show_progress = bool(
-            _bundle_prop(entrypoint, "integrations.telegram.stream_activity_display", True)
+            _telegram_definition_prop(entrypoint, "stream_activity_display", True, integration_id=integration_id)
         )
         async with TelegramActivityStreamer(
             comm=getattr(entrypoint, "comm", None),
-            bot_token=await _bot_token_value(entrypoint),
+            bot_token=await _bot_token_value(entrypoint, integration_id=integration_id),
             chat_id=chat_id,
             turn_id=turn_id,
             enabled=stream_enabled,
@@ -870,6 +973,7 @@ async def run_with_queued_telegram_delivery(entrypoint: Any, *, runner: Any) -> 
 
     chat_id = str(telegram_meta.get("chat_id") or "").strip()
     update_id = str(telegram_meta.get("update_id") or "").strip()
+    integration_id = str(telegram_meta.get("integration_id") or "").strip()
     comm_context = getattr(entrypoint, "comm_context", None)
     turn_id = str(
         telegram_meta.get("turn_id")
@@ -878,16 +982,16 @@ async def run_with_queued_telegram_delivery(entrypoint: Any, *, runner: Any) -> 
     ).strip()
     lock_key = _telegram_conversation_lock_key(entrypoint, telegram_meta)
     stream_enabled = bool(
-        _bundle_prop(entrypoint, "integrations.telegram.stream_activity", True)
-        and _bundle_prop(entrypoint, "integrations.telegram.send_responses", True)
+        _telegram_definition_prop(entrypoint, "stream_activity", True, integration_id=integration_id)
+        and _telegram_definition_prop(entrypoint, "send_responses", True, integration_id=integration_id)
     )
     stream_show_progress = bool(
-        _bundle_prop(entrypoint, "integrations.telegram.stream_activity_display", True)
+        _telegram_definition_prop(entrypoint, "stream_activity_display", True, integration_id=integration_id)
     )
     async with _telegram_conversation_lock(lock_key):
         async with TelegramActivityStreamer(
             comm=getattr(entrypoint, "comm", None),
-            bot_token=await _bot_token_value(entrypoint),
+            bot_token=await _bot_token_value(entrypoint, integration_id=integration_id),
             chat_id=chat_id,
             turn_id=turn_id,
             enabled=stream_enabled,
@@ -898,14 +1002,14 @@ async def run_with_queued_telegram_delivery(entrypoint: Any, *, runner: Any) -> 
             result = {}
         delivery = await deliver_react_turn_to_telegram(
             bundle_id=bundle_id,
-            bot_token=await _bot_token_value(entrypoint),
+            bot_token=await _bot_token_value(entrypoint, integration_id=integration_id),
             chat_id=chat_id,
             update_id=update_id,
             react_turn=result,
             delivered_file_keys=telegram_streamer.delivered_file_keys() if telegram_streamer else set(),
             progress_message_id=telegram_streamer.progress_message_id() if telegram_streamer else None,
             progress_summary=telegram_streamer.progress_summary() if telegram_streamer else "",
-            send_responses=bool(_bundle_prop(entrypoint, "integrations.telegram.send_responses", True)),
+            send_responses=bool(_telegram_definition_prop(entrypoint, "send_responses", True, integration_id=integration_id)),
         )
     result["telegram"] = {
         "queued_delivery": True,
@@ -916,8 +1020,13 @@ async def run_with_queued_telegram_delivery(entrypoint: Any, *, runner: Any) -> 
     return result
 
 
-async def handle_webhook(entrypoint: Any, **update) -> Dict[str, Any]:
+async def handle_webhook(entrypoint: Any, request: Any = None, **update) -> Dict[str, Any]:
+    integration_id = ""
+    if request is not None:
+        integration_id = await _resolve_webhook_integration_id(entrypoint, request=request)
     summary = summarize_telegram_update(update)
+    if integration_id:
+        summary["integration_id"] = integration_id
     telegram_store = storage(entrypoint)
     update_id = str(summary.get("update_id") or "").strip()
     bundle_id = _bundle_id(entrypoint)
@@ -962,7 +1071,7 @@ async def handle_webhook(entrypoint: Any, **update) -> Dict[str, Any]:
             )
             summary["attachments"] = await hydrate_telegram_attachments(
                 attachments=list(summary.get("attachments") or []),
-                bot_token=await _bot_token_value(entrypoint),
+                bot_token=await _bot_token_value(entrypoint, integration_id=str(summary.get("integration_id") or "")),
                 message_id=summary.get("message_id"),
             )
             log.info(
@@ -1002,14 +1111,21 @@ async def handle_webhook(entrypoint: Any, **update) -> Dict[str, Any]:
         if react_turn:
             delivery_result = await deliver_react_turn_to_telegram(
                 bundle_id=bundle_id,
-                bot_token=await _bot_token_value(entrypoint),
+                bot_token=await _bot_token_value(entrypoint, integration_id=str(summary.get("integration_id") or "")),
                 chat_id=summary.get("chat_id") or "",
                 update_id=update_id,
                 react_turn=react_turn,
                 delivered_file_keys=set(react_turn.get("telegram_delivered_file_keys") or []) if isinstance(react_turn, dict) else set(),
                 progress_message_id=react_turn.get("telegram_progress_message_id") if isinstance(react_turn, dict) else None,
                 progress_summary=react_turn.get("telegram_progress_summary") if isinstance(react_turn, dict) else "",
-                send_responses=bool(entrypoint.bundle_prop("integrations.telegram.send_responses", True)),
+                send_responses=bool(
+                    _telegram_definition_prop(
+                        entrypoint,
+                        "send_responses",
+                        True,
+                        integration_id=str(summary.get("integration_id") or ""),
+                    )
+                ),
             )
             telegram_delivery = delivery_result.get("telegram_delivery")
             telegram_messages = list(delivery_result.get("messages") or [])

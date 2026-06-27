@@ -32,6 +32,7 @@ from .apps import (
 )
 from .oauth import build_authorize_url, callback_url, exchange_code
 from .store import ConnectionStore
+from kdcube_ai_app.apps.chat.sdk.integrations.integration_config import integration_definition_value
 
 BUNDLE_ID = ""
 
@@ -349,7 +350,10 @@ async def callback(entrypoint: Any, *, request: Any = None, code: str = "", stat
     except Exception as exc:
         return _html_done(title="Connection failed", body=str(exc))
 
-    return_link = str(entrypoint.bundle_prop("integrations.telegram.webapp_deeplink", "") or "").strip()
+    return_link = str(
+        integration_definition_value(entrypoint, provider="telegram", key="webapp_deeplink", default="")
+        or ""
+    ).strip()
     if return_link and str(payload.get("source") or "").startswith("telegram"):
         if bool(entrypoint.bundle_prop("connections.oauth.auto_redirect_to_telegram", False)):
             return RedirectResponse(return_link)

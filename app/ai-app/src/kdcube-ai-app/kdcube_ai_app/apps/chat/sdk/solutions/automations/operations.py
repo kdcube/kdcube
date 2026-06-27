@@ -10,8 +10,12 @@ import uuid
 from contextlib import nullcontext
 from typing import Any, Awaitable, Callable, Dict, Optional
 
-from kdcube_ai_app.apps.chat.sdk.config import get_secret
 from kdcube_ai_app.apps.chat.sdk.infra.bundle_urls import bundle_operation_url
+from kdcube_ai_app.apps.chat.sdk.integrations.integration_config import (
+    integration_definition_value,
+    integration_secret_value,
+    select_integration,
+)
 from kdcube_ai_app.infra.jobs.stream import RedisBackgroundJobStream
 from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_request_context
 from kdcube_ai_app.apps.chat.sdk.runtime.http_ops import BundleBinaryResponse
@@ -42,6 +46,7 @@ WORK_KIND_AUTOMATION_RUN_NOW = "automation.execution.manual"
 
 _storage_root_or_error = None
 _target_user_id = None
+_telegram_integration_id = ""
 
 
 def configure_automation_operations(
@@ -49,12 +54,14 @@ def configure_automation_operations(
     storage_root_or_error: Any,
     target_user_id: Any,
     bundle_id: str = "",
+    telegram_integration_id: str = "",
 ) -> None:
     """Bind bundle-specific storage and user scope resolution."""
-    global BUNDLE_ID, _storage_root_or_error, _target_user_id
+    global BUNDLE_ID, _storage_root_or_error, _target_user_id, _telegram_integration_id
     BUNDLE_ID = str(bundle_id or "").strip()
     _storage_root_or_error = storage_root_or_error
     _target_user_id = target_user_id
+    _telegram_integration_id = str(telegram_integration_id or "").strip()
 
 
 def _storage_root(entrypoint: Any) -> str:
@@ -265,20 +272,19 @@ def _b64url_decode(data: str) -> bytes:
 
 
 async def _download_token_secret(entrypoint: Any) -> bytes:
-    _tenant, _project, bundle_id = _bundle_route_parts(entrypoint)
-    secret = str(
-        _bundle_prop(entrypoint, "integrations.telegram.artifact_download_secret", "")
-        or await get_secret("b:integrations.telegram.artifact_download_secret")
-        or await get_secret(f"bundles.{bundle_id}.secrets.integrations.telegram.artifact_download_secret")
-        or await _telegram_bot_token()
-        or ""
-    ).strip()
+    integration_id = _automation_telegram_integration_id(entrypoint)
+    secret = str(await _telegram_integration_secret(entrypoint, "artifact_download_secret", integration_id=integration_id) or "").strip()
+    if not secret:
+        secret = str(await _telegram_bot_token(entrypoint, integration_id=integration_id) or "").strip()
     return secret.encode("utf-8")
 
 
 def _download_token_ttl(entrypoint: Any) -> int:
     try:
-        ttl = int(_bundle_prop(entrypoint, "integrations.telegram.artifact_download_token_ttl_seconds", 900) or 900)
+        ttl = int(
+            _telegram_definition_prop(entrypoint, "artifact_download_token_ttl_seconds", 900)
+            or 900
+        )
     except Exception:
         ttl = 900
     return max(60, min(ttl, 86400))
@@ -961,13 +967,43 @@ async def _execute_automation_job(
     )
 
 
-async def _telegram_bot_token() -> str:
-    bundle_id = BUNDLE_ID or "task-and-memo-app@1-0"
-    return (
-        await get_secret("b:integrations.telegram.bot_token")
-        or await get_secret(f"bundles.{bundle_id}.secrets.integrations.telegram.bot_token")
+def _automation_telegram_integration_id(entrypoint: Any) -> str:
+    configured = str(
+        _bundle_prop(entrypoint, "automations.delivery.telegram.integration_id", "")
+        or _telegram_integration_id
         or ""
+    ).strip()
+    if configured:
+        return configured
+    row = select_integration(entrypoint, provider="telegram")
+    return str(row.get("id") or "").strip() if row else ""
+
+
+def _telegram_definition_prop(entrypoint: Any, key: str, default: Any = None, *, integration_id: str = "") -> Any:
+    row_id = str(integration_id or _automation_telegram_integration_id(entrypoint) or "").strip()
+    return integration_definition_value(
+        entrypoint,
+        provider="telegram",
+        key=key,
+        default=default,
+        integration_id=row_id,
     )
+
+
+async def _telegram_integration_secret(entrypoint: Any, field: str, *, integration_id: str = "") -> str:
+    row_id = str(integration_id or _automation_telegram_integration_id(entrypoint) or "").strip()
+    if not row_id:
+        return ""
+    return await integration_secret_value(
+        entrypoint,
+        provider="telegram",
+        field=field,
+        integration_id=row_id,
+    )
+
+
+async def _telegram_bot_token(entrypoint: Any, *, integration_id: str = "") -> str:
+    return await _telegram_integration_secret(entrypoint, "bot_token", integration_id=integration_id)
 
 
 def _bundle_prop(entrypoint: Any, path: str, default: Any = None) -> Any:
@@ -1058,9 +1094,13 @@ async def _deliver_execution_to_telegram(
     react_result: Dict[str, Any],
     answer: str,
 ) -> Dict[str, Any] | None:
-    if not _bundle_prop(entrypoint, "integrations.telegram.enabled", False):
+    integration_id = _automation_telegram_integration_id(entrypoint)
+    if not integration_id:
         return None
-    if not _bundle_prop(entrypoint, "integrations.telegram.send_responses", True):
+    integration = select_integration(entrypoint, provider="telegram", integration_id=integration_id)
+    if not integration or integration.get("enabled") is False:
+        return None
+    if not _telegram_definition_prop(entrypoint, "send_responses", True, integration_id=integration_id):
         return None
     recipient = _telegram_recipient_for_user(entrypoint, user_id=user_id)
     if not recipient:
@@ -1080,7 +1120,7 @@ async def _deliver_execution_to_telegram(
         messages = [TelegramMessage(kind="text", text=str(execution.get("summary") or "Automation execution completed."))]
 
     delivery = await send_telegram_messages(
-        bot_token=await _telegram_bot_token(),
+        bot_token=await _telegram_bot_token(entrypoint, integration_id=integration_id),
         chat_id=recipient["chat_id"],
         messages=messages,
     )

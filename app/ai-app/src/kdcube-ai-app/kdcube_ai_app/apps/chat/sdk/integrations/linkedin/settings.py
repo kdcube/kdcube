@@ -21,6 +21,10 @@ from kdcube_ai_app.apps.chat.sdk.integrations.bundle_registry import (
     register_config,
     resolve_config,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.integration_config import (
+    configured_integrations,
+    integration_definition_value,
+)
 
 BUNDLE_ID = ""
 
@@ -93,6 +97,10 @@ def store_for(entrypoint: Any, *, user_id: Optional[str] = None, fingerprint: Op
     return LinkedInAccountStore(_storage_root(entrypoint), user_id=resolved_user, bundle_id=_bundle_id(entrypoint)), resolved_user
 
 
+def linkedin_enabled(entrypoint: Any) -> bool:
+    return any(row.get("enabled") is not False for row in configured_integrations(entrypoint, provider="linkedin"))
+
+
 async def status(
     entrypoint: Any,
     *,
@@ -100,19 +108,19 @@ async def status(
     fingerprint: Optional[str] = None,
 ) -> Dict[str, Any]:
     store, resolved_user = store_for(entrypoint, user_id=user_id, fingerprint=fingerprint)
-    enabled = bool(entrypoint.bundle_prop("integrations.linkedin.enabled", False))
+    enabled = linkedin_enabled(entrypoint)
     client_id_configured = _configured(linkedin_client_id(entrypoint))
-    client_secret_configured = _configured(await linkedin_client_secret(_bundle_id(entrypoint)))
+    client_secret_configured = _configured(await linkedin_client_secret(entrypoint))
     state_secret_configured = _configured(await oauth_state_secret(entrypoint))
     missing = []
     if not enabled:
-        missing.append("integrations.linkedin.enabled")
+        missing.append("integrations[id=linkedin.*].enabled")
     if not client_id_configured:
-        missing.append("integrations.linkedin.client_id")
+        missing.append("integrations[id=linkedin.*].definition.client_id")
     if not client_secret_configured:
-        missing.append("integrations.linkedin.client_secret")
+        missing.append("integrations[id=linkedin.*].secret_refs.client_secret")
     if not state_secret_configured:
-        missing.append("integrations.linkedin.oauth_state_secret")
+        missing.append("integrations[id=linkedin.*].secret_refs.oauth_state_secret")
     return {
         "ok": True,
         "user_id": resolved_user,
@@ -143,7 +151,7 @@ async def start_oauth(
     fingerprint: Optional[str] = None,
     source: str = "kdcube_widget",
 ) -> Dict[str, Any]:
-    if not bool(entrypoint.bundle_prop("integrations.linkedin.enabled", False)):
+    if not linkedin_enabled(entrypoint):
         return {"ok": False, "error": {"code": "linkedin_integration_disabled", "message": "LinkedIn integration is disabled."}}
     store, resolved_user = store_for(entrypoint, user_id=user_id, fingerprint=fingerprint)
     try:
@@ -214,7 +222,7 @@ async def callback(entrypoint: Any, *, request: Any = None, code: str = "", stat
             code=code,
             redirect_uri=callback_url(entrypoint, request=request),
             client_id=linkedin_client_id(entrypoint),
-            client_secret=await linkedin_client_secret(bundle_id),
+            client_secret=await linkedin_client_secret(entrypoint),
         )
         profile = await fetch_linkedin_profile(access_token=str(token.get("access_token") or ""))
         person_id = str(profile.get("sub") or "").strip()
@@ -237,9 +245,19 @@ async def callback(entrypoint: Any, *, request: Any = None, code: str = "", stat
     except Exception as exc:
         return _html_done(title="LinkedIn connection failed", body=str(exc))
 
-    return_link = str(entrypoint.bundle_prop("integrations.telegram.webapp_deeplink", "") or "").strip()
+    return_link = str(
+        integration_definition_value(entrypoint, provider="telegram", key="webapp_deeplink", default="")
+        or ""
+    ).strip()
     if return_link and str(payload.get("source") or "").startswith("telegram"):
-        if bool(entrypoint.bundle_prop("integrations.linkedin.oauth.auto_redirect_to_telegram", False)):
+        if bool(
+            integration_definition_value(
+                entrypoint,
+                provider="linkedin",
+                key="oauth.auto_redirect_to_telegram",
+                default=False,
+            )
+        ):
             return RedirectResponse(return_link)
         return _html_done(
             title="LinkedIn connected",

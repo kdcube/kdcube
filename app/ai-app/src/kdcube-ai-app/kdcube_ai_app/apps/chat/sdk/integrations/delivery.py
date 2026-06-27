@@ -10,7 +10,6 @@ from typing import Any, Dict, Iterable, Mapping
 
 import httpx
 
-from kdcube_ai_app.apps.chat.sdk.config import get_secret
 from kdcube_ai_app.apps.chat.sdk.integrations.email import send_icloud_message
 from kdcube_ai_app.apps.chat.sdk.integrations.email.accounts import (
     GOOGLE_GMAIL_API,
@@ -37,6 +36,7 @@ from kdcube_ai_app.apps.chat.sdk.integrations.telegram import (
     send_telegram_messages,
     TelegramUserAdminStorage,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.integration_config import integration_secret_value
 
 
 GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send"
@@ -66,12 +66,12 @@ def _select_account(accounts: Iterable[Mapping[str, Any]], wanted: str) -> dict[
     return rows[0] if len(rows) == 1 else None
 
 
-async def _telegram_bot_token(bundle_id: str = "") -> str:
-    resolved_bundle_id = str(bundle_id or DEFAULT_EMAIL_BUNDLE_ID).strip() or DEFAULT_EMAIL_BUNDLE_ID
-    return (
-        await get_secret("b:integrations.telegram.bot_token")
-        or await get_secret(f"bundles.{resolved_bundle_id}.secrets.integrations.telegram.bot_token")
-        or ""
+async def _telegram_bot_token(entrypoint: Any, *, integration_id: str = "") -> str:
+    return await integration_secret_value(
+        entrypoint,
+        provider="telegram",
+        field="bot_token",
+        integration_id=integration_id,
     )
 
 
@@ -476,8 +476,9 @@ async def send_report_to_telegram(
     body_markdown: str,
     attachment_paths: str = "",
     attachments_json: str = "",
+    telegram_integration_id: str = "",
 ) -> dict[str, Any]:
-    del entrypoint
+    del bundle_id
     chat_id = _infer_telegram_chat_id(explicit=telegram_chat_id, conversation_id=conversation_id)
     recipient = None
     if not chat_id:
@@ -514,8 +515,19 @@ async def send_report_to_telegram(
                 parse_mode="HTML",
             )
         )
+    bot_token = await _telegram_bot_token(entrypoint, integration_id=telegram_integration_id)
+    if not bot_token:
+        return {
+            "ok": False,
+            "error": {
+                "code": "telegram_bot_token_unavailable",
+                "message": "Telegram bot token is unavailable. Configure one enabled Telegram integration, or pass telegram_integration_id.",
+                "category": "configuration",
+                "user_action_required": False,
+            },
+        }
     delivery = await send_telegram_messages(
-        bot_token=await _telegram_bot_token(bundle_id),
+        bot_token=bot_token,
         chat_id=chat_id,
         messages=messages,
     )
@@ -558,6 +570,7 @@ async def send_report(
     cc: str = "",
     bcc: str = "",
     telegram_chat_id: str = "",
+    telegram_integration_id: str = "",
     attachment_paths: str = "",
     attachments_json: str = "",
 ) -> dict[str, Any]:
@@ -600,6 +613,7 @@ async def send_report(
                 bundle_id=bundle_id,
                 conversation_id=conversation_id,
                 telegram_chat_id=telegram_chat_id,
+                telegram_integration_id=telegram_integration_id,
                 subject=subject,
                 body_markdown=body_markdown,
                 attachment_paths=attachment_paths,

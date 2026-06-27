@@ -21,6 +21,11 @@ try:
 except Exception:
     get_secret = None  # type: ignore[assignment]
 
+from kdcube_ai_app.apps.chat.sdk.integrations.integration_config import (
+    integration_definition_value,
+    integration_secret_value,
+)
+
 
 DEFAULT_EMAIL_BUNDLE_ID = "task-and-memo-app@1-0"
 BUNDLE_ID = DEFAULT_EMAIL_BUNDLE_ID
@@ -90,31 +95,26 @@ def _entrypoint_bundle_id(entrypoint: Any, default: str = BUNDLE_ID) -> str:
 
 
 def email_mcp_token_header(entrypoint: Any) -> str:
-    configured = str(entrypoint.bundle_prop("integrations.email.mcp.auth_header_name", "") or "").strip()
+    configured = str(
+        integration_definition_value(entrypoint, provider="email", key="mcp.auth_header_name", default="")
+        or ""
+    ).strip()
     return configured or EMAIL_MCP_TOKEN_HEADER
 
 
 def email_mcp_token_ttl_seconds(entrypoint: Any) -> int:
     try:
-        value = int(entrypoint.bundle_prop("integrations.email.mcp.token_ttl_seconds", 900) or 900)
+        value = int(
+            integration_definition_value(entrypoint, provider="email", key="mcp.token_ttl_seconds", default=900)
+            or 900
+        )
     except Exception:
         value = 900
     return max(60, min(value, 3600))
 
 
 async def email_mcp_auth_secret(entrypoint: Any) -> str:
-    bundle_id = _entrypoint_bundle_id(entrypoint)
-    return (
-        await _secret_lookup(
-            "b:integrations.email.mcp_auth_secret",
-            f"bundles.{bundle_id}.secrets.integrations.email.mcp_auth_secret",
-            "b:integrations.email.oauth_state_secret",
-            f"bundles.{bundle_id}.secrets.integrations.email.oauth_state_secret",
-            "b:integrations.telegram.webhook_secret",
-            f"bundles.{bundle_id}.secrets.integrations.telegram.webhook_secret",
-        )
-        or str(entrypoint.bundle_prop("integrations.email.mcp.auth_secret", "") or "").strip()
-    )
+    return await integration_secret_value(entrypoint, provider="email", field="mcp_auth_secret")
 
 
 def sign_email_mcp_payload(payload: Mapping[str, Any], *, secret: str) -> str:

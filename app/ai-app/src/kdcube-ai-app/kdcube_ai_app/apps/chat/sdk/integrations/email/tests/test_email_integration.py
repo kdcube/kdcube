@@ -12,6 +12,38 @@ from kdcube_ai_app.apps.chat.sdk.integrations.email import claude as email_claud
 from kdcube_ai_app.apps.chat.sdk.integrations.email import delivery as email_delivery
 from kdcube_ai_app.apps.chat.sdk.integrations.email import icloud as email_icloud
 from kdcube_ai_app.apps.chat.sdk.integrations.email import mcp as email_mcp
+from kdcube_ai_app.apps.chat.sdk.integrations import integration_config
+
+
+def _email_entrypoint(
+    *,
+    client_id: str = "client-id",
+    claude_enabled: bool = False,
+    extra_definition: dict | None = None,
+    extra_secret_refs: dict | None = None,
+):
+    definition = {
+        "google": {"client_id": client_id},
+        "claude_code": {"enabled": claude_enabled},
+    }
+    if extra_definition:
+        definition.update(extra_definition)
+    secret_refs = dict(extra_secret_refs or {})
+
+    class _Entry:
+        def bundle_prop(self, path, default=None):
+            if path == "integrations":
+                return {
+                    "email.google": {
+                        "provider": "email",
+                        "enabled": True,
+                        "definition": definition,
+                        "secret_refs": secret_refs,
+                    }
+                }
+            return default
+
+    return _Entry()
 
 
 def test_email_claude_session_id_for_run_is_valid_uuid():
@@ -99,13 +131,17 @@ async def test_delivery_ignores_process_global_output_dir_without_contextvar(tmp
 
 @pytest.mark.asyncio
 async def test_email_claude_accepts_recorded_result_when_process_times_out(tmp_path, monkeypatch):
-    class _Entry:
-        def bundle_prop(self, path, default=None):
-            if path == "integrations.email.mcp.auth_secret":
-                return "mcp-secret"
-            if path == "integrations.email.claude_code.timeout_seconds":
-                return 90
-            return default
+    async def fake_get_secret(key, **kwargs):
+        if "email_mcp_auth_secret" in str(key):
+            return "mcp-secret"
+        return ""
+
+    monkeypatch.setattr(integration_config, "get_secret", fake_get_secret)
+    entrypoint = _email_entrypoint(
+        claude_enabled=True,
+        extra_definition={"claude_code": {"enabled": True, "timeout_seconds": 90}},
+        extra_secret_refs={"mcp_auth_secret": "identity.email_mcp_auth_secret"},
+    )
 
     class _Binding:
         def __init__(self, **kwargs):
@@ -155,7 +191,7 @@ async def test_email_claude_accepts_recorded_result_when_process_times_out(tmp_p
     monkeypatch.setattr(email_claude, "run_claude_code_turn", fake_run_claude_code_turn)
 
     result = await email_claude.run_email_processor_with_claude_code(
-        entrypoint=_Entry(),
+        entrypoint=entrypoint,
         storage_root=tmp_path,
         user_id="user-a",
         bundle_id="task-and-memo-app@1-0",
@@ -277,32 +313,27 @@ def test_icloud_search_criteria_supports_sender_recipient_and_dates():
 
 
 @pytest.mark.asyncio
-async def test_google_oauth_authorize_url_uses_signed_state(tmp_path):
+async def test_google_oauth_authorize_url_uses_signed_state(tmp_path, monkeypatch):
     email_mod = email_accounts
 
-    class _Entry:
-        props = {
-            "integrations": {
-                "email": {
-                    "google": {"client_id": "google-client-id"},
-                    "oauth": {
-                        "state_secret": "state-secret",
-                        "redirect_uri": "https://example.test/public/email_oauth_callback",
-                    },
-                }
-            }
-        }
+    async def fake_get_secret(key, **kwargs):
+        if "email_oauth_state_secret" in str(key):
+            return "state-secret"
+        return ""
 
-        def bundle_prop(self, path, default=None):
-            cursor = self.props
-            for part in path.split("."):
-                if not isinstance(cursor, dict) or part not in cursor:
-                    return default
-                cursor = cursor[part]
-            return cursor
+    monkeypatch.setattr(integration_config, "get_secret", fake_get_secret)
+    entrypoint = _email_entrypoint(
+        client_id="google-client-id",
+        extra_definition={
+            "oauth": {
+                "redirect_uri": "https://example.test/public/email_oauth_callback",
+            },
+        },
+        extra_secret_refs={"oauth_state_secret": "identity.email_oauth_state_secret"},
+    )
 
     store = email_mod.EmailAccountStore(tmp_path, user_id="user-a")
-    result = await email_mod.build_google_authorize_url(entrypoint=_Entry(), store=store, source="settings")
+    result = await email_mod.build_google_authorize_url(entrypoint=entrypoint, store=store, source="settings")
 
     assert result["provider"] == "google"
     assert "client_id=google-client-id" in result["authorize_url"]
@@ -312,40 +343,36 @@ async def test_google_oauth_authorize_url_uses_signed_state(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_google_oauth_authorize_url_merges_required_scopes_when_descriptor_is_old(tmp_path):
+async def test_google_oauth_authorize_url_merges_required_scopes_from_descriptor(tmp_path, monkeypatch):
     email_mod = email_accounts
 
-    class _Entry:
-        props = {
-            "integrations": {
-                "email": {
-                    "google": {
-                        "client_id": "google-client-id",
-                        "scopes": [
-                            "openid",
-                            "email",
-                            "profile",
-                            "https://www.googleapis.com/auth/gmail.readonly",
-                        ],
-                    },
-                    "oauth": {
-                        "state_secret": "state-secret",
-                        "redirect_uri": "https://example.test/public/email_oauth_callback",
-                    },
-                }
-            }
-        }
+    async def fake_get_secret(key, **kwargs):
+        if "email_oauth_state_secret" in str(key):
+            return "state-secret"
+        return ""
 
-        def bundle_prop(self, path, default=None):
-            cursor = self.props
-            for part in path.split("."):
-                if not isinstance(cursor, dict) or part not in cursor:
-                    return default
-                cursor = cursor[part]
-            return cursor
+    monkeypatch.setattr(integration_config, "get_secret", fake_get_secret)
+    entrypoint = _email_entrypoint(
+        client_id="google-client-id",
+        extra_definition={
+            "google": {
+                "client_id": "google-client-id",
+                "scopes": [
+                    "openid",
+                    "email",
+                    "profile",
+                    "https://www.googleapis.com/auth/gmail.readonly",
+                ],
+            },
+            "oauth": {
+                "redirect_uri": "https://example.test/public/email_oauth_callback",
+            },
+        },
+        extra_secret_refs={"oauth_state_secret": "identity.email_oauth_state_secret"},
+    )
 
     store = email_mod.EmailAccountStore(tmp_path, user_id="user-a")
-    result = await email_mod.build_google_authorize_url(entrypoint=_Entry(), store=store, source="settings")
+    result = await email_mod.build_google_authorize_url(entrypoint=entrypoint, store=store, source="settings")
 
     assert "https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fgmail.readonly" in result["authorize_url"]
     assert "https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fgmail.send" in result["authorize_url"]
@@ -370,13 +397,7 @@ async def test_process_user_emails_keeps_run_metadata_without_processed_id_ledge
     monkeypatch.setattr(email_mod, "set_user_secret", fake_set_user_secret)
     monkeypatch.setattr(email_mod, "get_secret", fake_get_secret)
 
-    class _Entry:
-        def bundle_prop(self, path, default=None):
-            if path == "integrations.email.google.client_id":
-                return "client-id"
-            if path == "integrations.email.claude_code.enabled":
-                return False
-            return default
+    entrypoint = _email_entrypoint()
 
     store = email_mod.EmailAccountStore(tmp_path, user_id="user-a", bundle_id="task-and-memo-app@1-0")
     account = store.upsert_account({"provider": "google", "email": "user@example.test"})
@@ -396,7 +417,7 @@ async def test_process_user_emails_keeps_run_metadata_without_processed_id_ledge
     monkeypatch.setattr(email_mod, "fetch_google_messages", fake_fetch_google_messages)
 
     first = await email_mod.process_user_emails(
-        entrypoint=_Entry(),
+        entrypoint=entrypoint,
         storage_root=tmp_path,
         user_id="user-a",
         bundle_id="task-and-memo-app@1-0",
@@ -408,7 +429,7 @@ async def test_process_user_emails_keeps_run_metadata_without_processed_id_ledge
         instruction="Find customer escalations.",
     )
     second = await email_mod.process_user_emails(
-        entrypoint=_Entry(),
+        entrypoint=entrypoint,
         storage_root=tmp_path,
         user_id="user-a",
         bundle_id="task-and-memo-app@1-0",
@@ -451,13 +472,7 @@ async def test_process_user_emails_does_not_hide_previous_messages_by_default(tm
     monkeypatch.setattr(email_mod, "set_user_secret", fake_set_user_secret)
     monkeypatch.setattr(email_mod, "get_secret", fake_get_secret)
 
-    class _Entry:
-        def bundle_prop(self, path, default=None):
-            if path == "integrations.email.google.client_id":
-                return "client-id"
-            if path == "integrations.email.claude_code.enabled":
-                return False
-            return default
+    entrypoint = _email_entrypoint()
 
     store = email_mod.EmailAccountStore(tmp_path, user_id="user-a", bundle_id="task-and-memo-app@1-0")
     account = store.upsert_account({"provider": "google", "email": "user@example.test"})
@@ -475,7 +490,7 @@ async def test_process_user_emails_does_not_hide_previous_messages_by_default(tm
     monkeypatch.setattr(email_mod, "fetch_google_messages", fake_fetch_google_messages)
 
     first = await email_mod.process_user_emails(
-        entrypoint=_Entry(),
+        entrypoint=entrypoint,
         storage_root=tmp_path,
         user_id="user-a",
         bundle_id="task-and-memo-app@1-0",
@@ -486,7 +501,7 @@ async def test_process_user_emails_does_not_hide_previous_messages_by_default(tm
         instruction="Find technology newsletters.",
     )
     second = await email_mod.process_user_emails(
-        entrypoint=_Entry(),
+        entrypoint=entrypoint,
         storage_root=tmp_path,
         user_id="user-a",
         bundle_id="task-and-memo-app@1-0",
@@ -523,11 +538,7 @@ async def test_fetch_google_messages_classifies_structured_google_403(tmp_path, 
     monkeypatch.setattr(email_mod, "set_user_secret", fake_set_user_secret)
     monkeypatch.setattr(email_mod, "get_secret", fake_get_secret)
 
-    class _Entry:
-        def bundle_prop(self, path, default=None):
-            if path == "integrations.email.google.client_id":
-                return "client-id"
-            return default
+    entrypoint = _email_entrypoint()
 
     store = email_mod.EmailAccountStore(tmp_path, user_id="user-a", bundle_id="task-and-memo-app@1-0")
     account = store.upsert_account({"provider": "google", "email": "user@example.test"})
@@ -560,7 +571,7 @@ async def test_fetch_google_messages_classifies_structured_google_403(tmp_path, 
 
     result = await email_mod.fetch_google_messages(
         store=store,
-        entrypoint=_Entry(),
+        entrypoint=entrypoint,
         account=account,
         mailbox="INBOX",
         unread_only=False,
@@ -596,13 +607,7 @@ async def test_process_user_emails_selects_account_by_email_when_multiple_connec
     monkeypatch.setattr(email_mod, "set_user_secret", fake_set_user_secret)
     monkeypatch.setattr(email_mod, "get_secret", fake_get_secret)
 
-    class _Entry:
-        def bundle_prop(self, path, default=None):
-            if path == "integrations.email.google.client_id":
-                return "client-id"
-            if path == "integrations.email.claude_code.enabled":
-                return False
-            return default
+    entrypoint = _email_entrypoint()
 
     store = email_mod.EmailAccountStore(tmp_path, user_id="user-a", bundle_id="task-and-memo-app@1-0")
     work = store.upsert_account({"provider": "google", "email": "work@example.test"})
@@ -618,7 +623,7 @@ async def test_process_user_emails_selects_account_by_email_when_multiple_connec
     monkeypatch.setattr(email_mod, "fetch_google_messages", fake_fetch_google_messages)
 
     missing_account = await email_mod.process_user_emails(
-        entrypoint=_Entry(),
+        entrypoint=entrypoint,
         storage_root=tmp_path,
         user_id="user-a",
         bundle_id="task-and-memo-app@1-0",
@@ -627,7 +632,7 @@ async def test_process_user_emails_selects_account_by_email_when_multiple_connec
         instruction="Summarize technology news.",
     )
     by_email = await email_mod.process_user_emails(
-        entrypoint=_Entry(),
+        entrypoint=entrypoint,
         storage_root=tmp_path,
         user_id="user-a",
         bundle_id="task-and-memo-app@1-0",
@@ -663,15 +668,16 @@ async def test_process_user_emails_marks_seen_after_claude_mcp_success(tmp_path,
     monkeypatch.setattr(email_mod, "set_user_secret", fake_set_user_secret)
     monkeypatch.setattr(email_mod, "get_secret", fake_get_secret)
 
-    class _Entry:
-        def bundle_prop(self, path, default=None):
-            if path == "integrations.email.google.client_id":
-                return "client-id"
-            if path == "integrations.email.claude_code.enabled":
-                return True
-            if path == "integrations.email.mcp.auth_secret":
-                return "mcp-secret"
-            return default
+    async def fake_config_secret(key, **kwargs):
+        if "email_mcp_auth_secret" in str(key):
+            return "mcp-secret"
+        return ""
+
+    monkeypatch.setattr(integration_config, "get_secret", fake_config_secret)
+    entrypoint = _email_entrypoint(
+        claude_enabled=True,
+        extra_secret_refs={"mcp_auth_secret": "identity.email_mcp_auth_secret"},
+    )
 
     store = email_mod.EmailAccountStore(tmp_path, user_id="user-a", bundle_id="task-and-memo-app@1-0")
     account = store.upsert_account({"provider": "google", "email": "user@example.test"})
@@ -718,7 +724,7 @@ async def test_process_user_emails_marks_seen_after_claude_mcp_success(tmp_path,
     monkeypatch.setattr(claude_mod, "run_email_processor_with_claude_code", fake_run_email_processor_with_claude_code)
 
     first = await email_mod.process_user_emails(
-        entrypoint=_Entry(),
+        entrypoint=entrypoint,
         storage_root=tmp_path,
         user_id="user-a",
         bundle_id="task-and-memo-app@1-0",
@@ -730,7 +736,7 @@ async def test_process_user_emails_marks_seen_after_claude_mcp_success(tmp_path,
         instruction="Find customer escalations.",
     )
     second = await email_mod.process_user_emails(
-        entrypoint=_Entry(),
+        entrypoint=entrypoint,
         storage_root=tmp_path,
         user_id="user-a",
         bundle_id="task-and-memo-app@1-0",
@@ -788,15 +794,16 @@ async def test_process_user_emails_delegates_gmail_scope_to_claude_when_enabled(
     monkeypatch.setattr(email_mod, "set_user_secret", fake_set_user_secret)
     monkeypatch.setattr(email_mod, "get_secret", fake_get_secret)
 
-    class _Entry:
-        def bundle_prop(self, path, default=None):
-            if path == "integrations.email.google.client_id":
-                return "client-id"
-            if path == "integrations.email.claude_code.enabled":
-                return True
-            if path == "integrations.email.mcp.auth_secret":
-                return "mcp-secret"
-            return default
+    async def fake_config_secret(key, **kwargs):
+        if "email_mcp_auth_secret" in str(key):
+            return "mcp-secret"
+        return ""
+
+    monkeypatch.setattr(integration_config, "get_secret", fake_config_secret)
+    entrypoint = _email_entrypoint(
+        claude_enabled=True,
+        extra_secret_refs={"mcp_auth_secret": "identity.email_mcp_auth_secret"},
+    )
 
     store = email_mod.EmailAccountStore(tmp_path, user_id="user-a", bundle_id="task-and-memo-app@1-0")
     account = store.upsert_account({"provider": "google", "email": "user@example.test"})
@@ -831,7 +838,7 @@ async def test_process_user_emails_delegates_gmail_scope_to_claude_when_enabled(
     monkeypatch.setattr(claude_mod, "run_email_processor_with_claude_code", fake_run_email_processor_with_claude_code)
 
     result = await email_mod.process_user_emails(
-        entrypoint=_Entry(),
+        entrypoint=entrypoint,
         storage_root=tmp_path,
         user_id="user-a",
         bundle_id="task-and-memo-app@1-0",
@@ -869,13 +876,7 @@ async def test_process_user_emails_returns_messages_when_claude_mcp_did_not_reco
     monkeypatch.setattr(email_mod, "set_user_secret", fake_set_user_secret)
     monkeypatch.setattr(email_mod, "get_secret", fake_get_secret)
 
-    class _Entry:
-        def bundle_prop(self, path, default=None):
-            if path == "integrations.email.google.client_id":
-                return "client-id"
-            if path == "integrations.email.claude_code.enabled":
-                return True
-            return default
+    entrypoint = _email_entrypoint(claude_enabled=True)
 
     store = email_mod.EmailAccountStore(tmp_path, user_id="user-a", bundle_id="task-and-memo-app@1-0")
     account = store.upsert_account({"provider": "google", "email": "user@example.test"})
@@ -904,7 +905,7 @@ async def test_process_user_emails_returns_messages_when_claude_mcp_did_not_reco
     monkeypatch.setattr(claude_mod, "run_email_processor_with_claude_code", fake_run_email_processor_with_claude_code)
 
     result = await email_mod.process_user_emails(
-        entrypoint=_Entry(),
+        entrypoint=entrypoint,
         storage_root=tmp_path,
         user_id="user-a",
         bundle_id="task-and-memo-app@1-0",
@@ -940,13 +941,7 @@ async def test_process_user_emails_saved_task_fails_closed_when_claude_mcp_did_n
     monkeypatch.setattr(email_mod, "set_user_secret", fake_set_user_secret)
     monkeypatch.setattr(email_mod, "get_secret", fake_get_secret)
 
-    class _Entry:
-        def bundle_prop(self, path, default=None):
-            if path == "integrations.email.google.client_id":
-                return "client-id"
-            if path == "integrations.email.claude_code.enabled":
-                return True
-            return default
+    entrypoint = _email_entrypoint(claude_enabled=True)
 
     store = email_mod.EmailAccountStore(tmp_path, user_id="user-a", bundle_id="task-and-memo-app@1-0")
     account = store.upsert_account({"provider": "google", "email": "user@example.test"})
@@ -976,7 +971,7 @@ async def test_process_user_emails_saved_task_fails_closed_when_claude_mcp_did_n
     monkeypatch.setattr(email_claude, "run_email_processor_with_claude_code", fake_run_email_processor_with_claude_code)
 
     result = await email_mod.process_user_emails(
-        entrypoint=_Entry(),
+        entrypoint=entrypoint,
         storage_root=tmp_path,
         user_id="user-a",
         bundle_id="task-and-memo-app@1-0",
@@ -1002,17 +997,19 @@ async def test_process_user_emails_saved_task_fails_closed_when_claude_mcp_did_n
 
 
 @pytest.mark.asyncio
-async def test_email_mcp_token_is_task_scoped_and_verifiable(tmp_path):
+async def test_email_mcp_token_is_task_scoped_and_verifiable(tmp_path, monkeypatch):
     mcp_mod = email_mcp
 
-    class _Entry:
-        def bundle_prop(self, path, default=None):
-            if path == "integrations.email.mcp.auth_secret":
-                return "mcp-secret"
-            return default
+    async def fake_get_secret(key, **kwargs):
+        if "email_mcp_auth_secret" in str(key):
+            return "mcp-secret"
+        return ""
+
+    monkeypatch.setattr(integration_config, "get_secret", fake_get_secret)
+    entrypoint = _email_entrypoint(extra_secret_refs={"mcp_auth_secret": "identity.email_mcp_auth_secret"})
 
     prepared = await mcp_mod.create_email_mcp_run(
-        entrypoint=_Entry(),
+        entrypoint=entrypoint,
         storage_root=tmp_path,
         user_id="user-a",
         automation_id="task-email",
@@ -1040,7 +1037,7 @@ async def test_email_mcp_token_is_task_scoped_and_verifiable(tmp_path):
     assert "mcp__task_memo_email__store_current_task_state" in prepared["allowed_tools"]
 
     mcp_app = await mcp_mod.build_email_mcp_app(
-        entrypoint=_Entry(),
+        entrypoint=entrypoint,
         request=SimpleNamespace(headers={mcp_mod.EMAIL_MCP_TOKEN_HEADER: prepared["token"]}),
         storage_root=tmp_path,
     )
@@ -1128,11 +1125,7 @@ async def test_fetch_google_attachment_returns_text_and_base64(tmp_path, monkeyp
     monkeypatch.setattr(email_mod, "set_user_secret", fake_set_user_secret)
     monkeypatch.setattr(email_mod, "get_secret", fake_get_secret)
 
-    class _Entry:
-        def bundle_prop(self, path, default=None):
-            if path == "integrations.email.google.client_id":
-                return "client-id"
-            return default
+    entrypoint = _email_entrypoint()
 
     store = email_mod.EmailAccountStore(tmp_path, user_id="user-a", bundle_id="task-and-memo-app@1-0")
     account = store.upsert_account({"provider": "google", "email": "user@example.test"})
@@ -1160,7 +1153,7 @@ async def test_fetch_google_attachment_returns_text_and_base64(tmp_path, monkeyp
 
     result = await email_mod.fetch_google_attachment(
         store=store,
-        entrypoint=_Entry(),
+        entrypoint=entrypoint,
         account=account,
         message_id="m-1",
         attachment_id="att-1",
@@ -1191,11 +1184,7 @@ async def test_fetch_google_attachment_tries_endpoint_when_refetched_metadata_mi
     monkeypatch.setattr(email_mod, "set_user_secret", fake_set_user_secret)
     monkeypatch.setattr(email_mod, "get_secret", fake_get_secret)
 
-    class _Entry:
-        def bundle_prop(self, path, default=None):
-            if path == "integrations.email.google.client_id":
-                return "client-id"
-            return default
+    entrypoint = _email_entrypoint()
 
     store = email_mod.EmailAccountStore(tmp_path, user_id="user-a", bundle_id="task-and-memo-app@1-0")
     account = store.upsert_account({"provider": "google", "email": "user@example.test"})
@@ -1226,7 +1215,7 @@ async def test_fetch_google_attachment_tries_endpoint_when_refetched_metadata_mi
 
     result = await email_mod.fetch_google_attachment(
         store=store,
-        entrypoint=_Entry(),
+        entrypoint=entrypoint,
         account=account,
         message_id="m-1",
         attachment_id="att-1",

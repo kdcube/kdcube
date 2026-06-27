@@ -27,6 +27,11 @@ except Exception:
     get_secret = None  # type: ignore[assignment]
     set_user_secret = None  # type: ignore[assignment]
 
+from kdcube_ai_app.apps.chat.sdk.integrations.integration_config import (
+    integration_definition_value,
+    integration_secret_value,
+)
+
 
 DEFAULT_EMAIL_BUNDLE_ID = "task-and-memo-app@1-0"
 BUNDLE_ID = DEFAULT_EMAIL_BUNDLE_ID
@@ -254,30 +259,22 @@ async def _secret_lookup_async(*keys: str) -> str:
 
 
 async def oauth_state_secret(entrypoint: Any) -> str:
-    bundle_id = _entrypoint_bundle_id(entrypoint)
-    return (
-        await _secret_lookup_async(
-            "b:integrations.email.oauth_state_secret",
-            f"bundles.{bundle_id}.secrets.integrations.email.oauth_state_secret",
-            "b:integrations.telegram.webhook_secret",
-            f"bundles.{bundle_id}.secrets.integrations.telegram.webhook_secret",
-            "b:integrations.telegram.bot_token",
-            f"bundles.{bundle_id}.secrets.integrations.telegram.bot_token",
-        )
-        or str(entrypoint.bundle_prop("integrations.email.oauth.state_secret", "") or "").strip()
-    )
+    return await integration_secret_value(entrypoint, provider="email", field="oauth_state_secret")
 
 
 def google_client_id(entrypoint: Any) -> str:
-    return str(entrypoint.bundle_prop("integrations.email.google.client_id", "") or "").strip()
+    return str(
+        integration_definition_value(entrypoint, provider="email", key="google.client_id", default="")
+        or ""
+    ).strip()
 
 
-async def google_client_secret(bundle_id: str = "") -> str:
-    bundle = str(bundle_id or BUNDLE_ID).strip() or BUNDLE_ID
-    return await _secret_lookup_async(
-        "b:integrations.email.google.client_secret",
-        f"bundles.{bundle}.secrets.integrations.email.google.client_secret",
-    )
+async def google_client_secret(entrypoint: Any = None, bundle_id: str = "") -> str:
+    if isinstance(entrypoint, str) and not bundle_id:
+        entrypoint = None
+    if entrypoint is not None:
+        return await integration_secret_value(entrypoint, provider="email", field="google_client_secret")
+    return ""
 
 
 def google_scopes(entrypoint: Any) -> List[str]:
@@ -292,7 +289,7 @@ def google_scopes(entrypoint: Any) -> List[str]:
             scopes.append(value)
         return scopes
 
-    configured = entrypoint.bundle_prop("integrations.email.google.scopes", None)
+    configured = integration_definition_value(entrypoint, provider="email", key="google.scopes", default=None)
     if isinstance(configured, str) and configured.strip():
         return _with_required_scopes(configured.replace(",", " ").split())
     if isinstance(configured, list):
@@ -316,10 +313,10 @@ def request_public_base_url(request: Any) -> str:
 
 
 def callback_url(entrypoint: Any, *, request: Any = None) -> str:
-    configured = str(entrypoint.bundle_prop("integrations.email.oauth.redirect_uri", "") or "").strip()
+    configured = str(integration_definition_value(entrypoint, provider="email", key="oauth.redirect_uri", default="") or "").strip()
     if configured:
         return configured
-    base = str(entrypoint.bundle_prop("integrations.email.oauth.public_base_url", "") or "").strip().rstrip("/")
+    base = str(integration_definition_value(entrypoint, provider="email", key="oauth.public_base_url", default="") or "").strip().rstrip("/")
     if not base:
         base = request_public_base_url(request)
     if not base:
@@ -660,7 +657,7 @@ async def build_google_authorize_url(
 ) -> Dict[str, Any]:
     client_id = google_client_id(entrypoint)
     if not client_id:
-        raise ValueError("integrations.email.google.client_id is not configured")
+        raise ValueError("email integration google.client_id is not configured")
     state = store.create_oauth_state(
         secret=await oauth_state_secret(entrypoint),
         provider="google",
@@ -843,7 +840,7 @@ async def ensure_google_access_token(
         )
         return {"ok": False, "error": {"code": "email_account_not_connected", "message": "Email account has no stored OAuth token."}}
     client_id = google_client_id(entrypoint)
-    client_secret = await google_client_secret()
+    client_secret = await google_client_secret(entrypoint)
     expires_at = int(token.get("expires_at") or 0)
     if expires_at and expires_at < int(time.time()) + 120:
         try:

@@ -28,6 +28,11 @@ except Exception:
     get_secret = None  # type: ignore[assignment]
     set_user_secret = None  # type: ignore[assignment]
 
+from kdcube_ai_app.apps.chat.sdk.integrations.integration_config import (
+    integration_definition_value,
+    integration_secret_value,
+)
+
 
 DEFAULT_LINKEDIN_BUNDLE_ID = "task-and-memo-app@1-0"
 BUNDLE_ID = DEFAULT_LINKEDIN_BUNDLE_ID
@@ -132,26 +137,15 @@ def _entrypoint_bundle_id(entrypoint: Any, default: str = BUNDLE_ID) -> str:
 
 
 async def oauth_state_secret(entrypoint: Any) -> str:
-    bundle_id = _entrypoint_bundle_id(entrypoint)
-    return (
-        await _secret_lookup(
-            "b:integrations.linkedin.oauth_state_secret",
-            f"bundles.{bundle_id}.secrets.integrations.linkedin.oauth_state_secret",
-        )
-        or str(entrypoint.bundle_prop("integrations.linkedin.oauth_state_secret", "") or "").strip()
-    )
+    return await integration_secret_value(entrypoint, provider="linkedin", field="oauth_state_secret")
 
 
 def linkedin_client_id(entrypoint: Any) -> str:
-    return str(entrypoint.bundle_prop("integrations.linkedin.client_id", "") or "").strip()
+    return str(integration_definition_value(entrypoint, provider="linkedin", key="client_id", default="") or "").strip()
 
 
-async def linkedin_client_secret(bundle_id: str = "") -> str:
-    bundle = str(bundle_id or BUNDLE_ID).strip() or BUNDLE_ID
-    return await _secret_lookup(
-        "b:integrations.linkedin.client_secret",
-        f"bundles.{bundle}.secrets.integrations.linkedin.client_secret",
-    )
+async def linkedin_client_secret(entrypoint: Any) -> str:
+    return await integration_secret_value(entrypoint, provider="linkedin", field="client_secret")
 
 
 def linkedin_scopes(entrypoint: Any) -> List[str]:
@@ -166,7 +160,7 @@ def linkedin_scopes(entrypoint: Any) -> List[str]:
             scopes.append(value)
         return scopes
 
-    configured = entrypoint.bundle_prop("integrations.linkedin.scopes", None)
+    configured = integration_definition_value(entrypoint, provider="linkedin", key="scopes", default=None)
     if isinstance(configured, str) and configured.strip():
         return _with_required(configured.replace(",", " ").split())
     if isinstance(configured, list):
@@ -190,10 +184,16 @@ def _request_public_base_url(request: Any) -> str:
 
 
 def callback_url(entrypoint: Any, *, request: Any = None) -> str:
-    configured = str(entrypoint.bundle_prop("integrations.linkedin.oauth.redirect_uri", "") or "").strip()
+    configured = str(
+        integration_definition_value(entrypoint, provider="linkedin", key="oauth.redirect_uri", default="")
+        or ""
+    ).strip()
     if configured:
         return configured
-    base = str(entrypoint.bundle_prop("integrations.linkedin.oauth.public_base_url", "") or "").strip().rstrip("/")
+    base = str(
+        integration_definition_value(entrypoint, provider="linkedin", key="oauth.public_base_url", default="")
+        or ""
+    ).strip().rstrip("/")
     if not base:
         base = _request_public_base_url(request)
     if not base:
@@ -407,7 +407,7 @@ async def build_linkedin_authorize_url(
 ) -> Dict[str, Any]:
     client_id = linkedin_client_id(entrypoint)
     if not client_id:
-        raise ValueError("integrations.linkedin.client_id is not configured")
+        raise ValueError("integrations[id=linkedin.*].definition.client_id is not configured")
     state = await store.create_oauth_state_async(
         secret=await oauth_state_secret(entrypoint),
         source=source,

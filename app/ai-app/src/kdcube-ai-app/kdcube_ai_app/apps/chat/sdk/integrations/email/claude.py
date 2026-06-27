@@ -37,6 +37,7 @@ from .mcp import (
     create_email_mcp_run,
     safe_segment,
 )
+from kdcube_ai_app.apps.chat.sdk.integrations.integration_config import integration_definition_value
 
 
 DEFAULT_EMAIL_BUNDLE_ID = "task-and-memo-app@1-0"
@@ -54,11 +55,15 @@ def configure_email_claude(*, skills_descriptor: Any = None, bundle_root: str | 
 
 
 def claude_code_enabled(entrypoint: Any) -> bool:
-    return bool(entrypoint.bundle_prop("integrations.email.claude_code.enabled", True))
+    return bool(integration_definition_value(entrypoint, provider="email", key="claude_code.enabled", default=True))
+
+
+def _email_prop(entrypoint: Any, key: str, default: Any = None) -> Any:
+    return integration_definition_value(entrypoint, provider="email", key=key, default=default)
 
 
 def _bool_prop(entrypoint: Any, key: str, default: bool = False) -> bool:
-    value = entrypoint.bundle_prop(key, default)
+    value = _email_prop(entrypoint, key, default)
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
     return bool(value)
@@ -66,7 +71,7 @@ def _bool_prop(entrypoint: Any, key: str, default: bool = False) -> bool:
 
 def _int_prop(entrypoint: Any, key: str, default: int) -> int:
     try:
-        return int(entrypoint.bundle_prop(key, default) or default)
+        return int(_email_prop(entrypoint, key, default) or default)
     except Exception:
         return default
 
@@ -102,15 +107,15 @@ async def _claude_code_env(*, entrypoint: Any, user_id: str, bundle_id: str) -> 
         env["ANTHROPIC_API_KEY"] = anthropic_key
     if claude_code_key:
         env["CLAUDE_CODE_KEY"] = claude_code_key
-    env["MCP_TIMEOUT"] = str(entrypoint.bundle_prop("integrations.email.claude_code.mcp_timeout_ms", 10000) or 10000)
-    env["MCP_TOOL_TIMEOUT"] = str(entrypoint.bundle_prop("integrations.email.claude_code.mcp_tool_timeout_ms", 60000) or 60000)
-    env["MAX_MCP_OUTPUT_TOKENS"] = str(entrypoint.bundle_prop("integrations.email.claude_code.max_mcp_output_tokens", 50000) or 50000)
+    env["MCP_TIMEOUT"] = str(_email_prop(entrypoint, "claude_code.mcp_timeout_ms", 10000) or 10000)
+    env["MCP_TOOL_TIMEOUT"] = str(_email_prop(entrypoint, "claude_code.mcp_tool_timeout_ms", 60000) or 60000)
+    env["MAX_MCP_OUTPUT_TOKENS"] = str(_email_prop(entrypoint, "claude_code.max_mcp_output_tokens", 50000) or 50000)
     env["DISABLE_AUTOUPDATER"] = "1"
     return env
 
 
 def _mcp_base_url(entrypoint: Any) -> str:
-    configured = str(entrypoint.bundle_prop("integrations.email.claude_code.mcp_base_url", "") or "").strip().rstrip("/")
+    configured = str(_email_prop(entrypoint, "claude_code.mcp_base_url", "") or "").strip().rstrip("/")
     if configured:
         return configured
     if get_settings is not None:
@@ -361,10 +366,10 @@ async def run_email_processor_with_claude_code(
         token=str(mcp_run["token"]),
     )
 
-    model = str(entrypoint.bundle_prop("integrations.email.claude_code.model", "sonnet") or "sonnet").strip()
-    command = str(entrypoint.bundle_prop("integrations.email.claude_code.command", "claude") or "claude").strip() or "claude"
+    model = str(_email_prop(entrypoint, "claude_code.model", "sonnet") or "sonnet").strip()
+    command = str(_email_prop(entrypoint, "claude_code.command", "claude") or "claude").strip() or "claude"
     try:
-        timeout_seconds = float(entrypoint.bundle_prop("integrations.email.claude_code.timeout_seconds", 300) or 300)
+        timeout_seconds = float(_email_prop(entrypoint, "claude_code.timeout_seconds", 300) or 300)
     except Exception:
         timeout_seconds = 300.0
     prompt = _prompt(
@@ -397,10 +402,10 @@ async def run_email_processor_with_claude_code(
             timeout_seconds=timeout_seconds,
             step_name="email.claude_code",
             delta_marker="email_processing",
-            log_stream_output=_bool_prop(entrypoint, "integrations.email.claude_code.log_stream_output", False),
+            log_stream_output=_bool_prop(entrypoint, "claude_code.log_stream_output", False),
             log_stream_output_max_chars=_int_prop(
                 entrypoint,
-                "integrations.email.claude_code.log_stream_output_max_chars",
+                "claude_code.log_stream_output_max_chars",
                 1200,
             ),
             executive_journal_prefixes=(

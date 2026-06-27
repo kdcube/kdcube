@@ -11,6 +11,7 @@ import pytest
 from kdcube_ai_app.apps.chat.sdk.integrations.linkedin import accounts as li_accounts
 from kdcube_ai_app.apps.chat.sdk.integrations.linkedin import delivery as li_delivery
 from kdcube_ai_app.apps.chat.sdk.integrations.linkedin import settings as li_settings
+from kdcube_ai_app.apps.chat.sdk.integrations import integration_config
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
@@ -35,6 +36,26 @@ def _make_entrypoint(props: dict | None = None, *, bundle_id: str = "test-bundle
     return ns
 
 
+def _linkedin_descriptor(
+    *,
+    enabled: bool = True,
+    client_id: str = "real_client_id",
+    secret_refs: dict | None = None,
+) -> dict:
+    return {
+        "integrations": {
+            "linkedin.default": {
+                "provider": "linkedin",
+                "enabled": enabled,
+                "definition": {
+                    "client_id": client_id,
+                },
+                "secret_refs": dict(secret_refs or {}),
+            }
+        }
+    }
+
+
 def _make_store(tmp_path, user_id="user-1"):
     return li_accounts.LinkedInAccountStore(tmp_path, user_id=user_id, bundle_id="test-bundle@1")
 
@@ -54,6 +75,7 @@ def _sdk_secret_fakes(monkeypatch):
         return None
 
     monkeypatch.setattr(li_accounts, "get_secret", _empty_get_secret)
+    monkeypatch.setattr(integration_config, "get_secret", _empty_get_secret)
     monkeypatch.setattr(li_accounts, "set_user_secret", _noop_set_user_secret)
     monkeypatch.setattr(li_accounts, "delete_user_secret", _noop_delete_user_secret)
 
@@ -70,8 +92,12 @@ async def test_oauth_state_secret_uses_linkedin_secret_only(monkeypatch):
             return "wrong-telegram-secret"
         return ""
 
-    monkeypatch.setattr(li_accounts, "get_secret", _get_secret)
-    ep = _make_entrypoint()
+    monkeypatch.setattr(integration_config, "get_secret", _get_secret)
+    ep = _make_entrypoint(
+        _linkedin_descriptor(
+            secret_refs={"oauth_state_secret": "identity.linkedin_oauth_state_secret"}
+        )
+    )
 
     assert await li_accounts.oauth_state_secret(ep) == ""
     assert all("integrations.email" not in key for key in seen)
@@ -79,12 +105,19 @@ async def test_oauth_state_secret_uses_linkedin_secret_only(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_oauth_state_secret_uses_documented_bundle_prop():
-    ep = _make_entrypoint({"integrations.linkedin.oauth_state_secret": "prop-secret"})
-    assert await li_accounts.oauth_state_secret(ep) == "prop-secret"
+async def test_oauth_state_secret_uses_descriptor_secret_ref(monkeypatch):
+    async def _get_secret(key, **kwargs):
+        if "linkedin_oauth_state_secret" in str(key):
+            return "prop-secret"
+        return ""
 
-    old_key_ep = _make_entrypoint({"integrations.linkedin.oauth.state_secret": "old-prop-secret"})
-    assert await li_accounts.oauth_state_secret(old_key_ep) == ""
+    monkeypatch.setattr(integration_config, "get_secret", _get_secret)
+    ep = _make_entrypoint(
+        _linkedin_descriptor(
+            secret_refs={"oauth_state_secret": "identity.linkedin_oauth_state_secret"}
+        )
+    )
+    assert await li_accounts.oauth_state_secret(ep) == "prop-secret"
 
 
 # ── OAuth state: create and consume ───────────────────────────────────────────
@@ -215,6 +248,7 @@ async def test_tokens_stored_out_of_band_not_in_accounts_file(tmp_path, monkeypa
 
     monkeypatch.setattr(li_accounts, "set_user_secret", _set_secret)
     monkeypatch.setattr(li_accounts, "get_secret", _get_secret)
+    monkeypatch.setattr(integration_config, "get_secret", _get_secret)
 
     await store.set_tokens_async(account_id, token_data)
 
@@ -357,21 +391,16 @@ async def test_settings_status_reflects_enabled_flag(tmp_path):
         target_user_id=lambda ep, **kw: "user-1",
     )
 
-    ep_enabled = _make_entrypoint({
-        "integrations.linkedin.enabled": True,
-        "integrations.linkedin.client_id": "real_client_id",
-    })
-    ep_disabled = _make_entrypoint({
-        "integrations.linkedin.enabled": False,
-    })
+    ep_enabled = _make_entrypoint(_linkedin_descriptor(enabled=True, client_id="real_client_id"))
+    ep_disabled = _make_entrypoint(_linkedin_descriptor(enabled=False))
 
     result_on = await li_settings.status(ep_enabled)
     result_off = await li_settings.status(ep_disabled)
 
     assert result_on["enabled"] is True
     assert result_off["enabled"] is False
-    assert "integrations.linkedin.enabled" not in result_on["configuration_missing"]
-    assert "integrations.linkedin.enabled" in result_off["configuration_missing"]
+    assert "integrations[id=linkedin.*].enabled" not in result_on["configuration_missing"]
+    assert "integrations[id=linkedin.*].enabled" in result_off["configuration_missing"]
 
 
 @pytest.mark.asyncio
@@ -380,12 +409,9 @@ async def test_settings_status_missing_client_id(tmp_path):
         storage_root_or_error=lambda ep: tmp_path,
         target_user_id=lambda ep, **kw: "user-1",
     )
-    ep = _make_entrypoint({
-        "integrations.linkedin.enabled": True,
-        "integrations.linkedin.client_id": "",
-    })
+    ep = _make_entrypoint(_linkedin_descriptor(enabled=True, client_id=""))
     result = await li_settings.status(ep)
-    assert "integrations.linkedin.client_id" in result["configuration_missing"]
+    assert "integrations[id=linkedin.*].definition.client_id" in result["configuration_missing"]
     assert result["linkedin_configured"] is False
 
 
@@ -398,15 +424,21 @@ async def test_settings_status_fully_configured(tmp_path, monkeypatch):
             return "client-secret"
         return ""
 
-    monkeypatch.setattr(li_accounts, "get_secret", _get_secret)
+    monkeypatch.setattr(integration_config, "get_secret", _get_secret)
     li_settings.configure_linkedin_settings(
         storage_root_or_error=lambda ep: tmp_path,
         target_user_id=lambda ep, **kw: "user-1",
     )
-    ep = _make_entrypoint({
-        "integrations.linkedin.enabled": True,
-        "integrations.linkedin.client_id": "real_client_id",
-    })
+    ep = _make_entrypoint(
+        _linkedin_descriptor(
+            enabled=True,
+            client_id="real_client_id",
+            secret_refs={
+                "oauth_state_secret": "identity.linkedin_oauth_state_secret",
+                "client_secret": "identity.linkedin_client_secret",
+            },
+        )
+    )
     result = await li_settings.status(ep)
     assert result["ok"] is True
     assert result["linkedin_configured"] is True
@@ -433,10 +465,16 @@ async def test_settings_status_returns_accounts(tmp_path, monkeypatch):
     store = _make_store(tmp_path)
     await store.upsert_account_async({"person_id": "P1", "display_name": "Alice"})
 
-    ep = _make_entrypoint({
-        "integrations.linkedin.enabled": True,
-        "integrations.linkedin.client_id": "real_client_id",
-    })
+    ep = _make_entrypoint(
+        _linkedin_descriptor(
+            enabled=True,
+            client_id="real_client_id",
+            secret_refs={
+                "oauth_state_secret": "identity.linkedin_oauth_state_secret",
+                "client_secret": "identity.linkedin_client_secret",
+            },
+        )
+    )
     result = await li_settings.status(ep)
     assert len(result["accounts"]) == 1
     assert result["accounts"][0]["display_name"] == "Alice"
@@ -456,6 +494,7 @@ async def test_settings_resolves_per_bundle_configuration(tmp_path, monkeypatch)
         return ""
 
     monkeypatch.setattr(li_accounts, "get_secret", _get_secret)
+    monkeypatch.setattr(integration_config, "get_secret", _get_secret)
 
     root_a = tmp_path / "bundle-a"
     root_b = tmp_path / "bundle-b"
@@ -478,11 +517,25 @@ async def test_settings_resolves_per_bundle_configuration(tmp_path, monkeypatch)
     )
 
     ep_a = _make_entrypoint(
-        {"integrations.linkedin.enabled": True, "integrations.linkedin.client_id": "client-a"},
+        _linkedin_descriptor(
+            enabled=True,
+            client_id="client-a",
+            secret_refs={
+                "oauth_state_secret": "identity.linkedin_oauth_state_secret",
+                "client_secret": "identity.linkedin_client_secret",
+            },
+        ),
         bundle_id="bundle-a@1",
     )
     ep_b = _make_entrypoint(
-        {"integrations.linkedin.enabled": True, "integrations.linkedin.client_id": "client-b"},
+        _linkedin_descriptor(
+            enabled=True,
+            client_id="client-b",
+            secret_refs={
+                "oauth_state_secret": "identity.linkedin_oauth_state_secret",
+                "client_secret": "identity.linkedin_client_secret",
+            },
+        ),
         bundle_id="bundle-b@1",
     )
 

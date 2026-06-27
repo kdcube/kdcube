@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable
 
 from fastapi import HTTPException
+from kdcube_ai_app.apps.chat.sdk.integrations.integration_config import integration_definition_value
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bundle_registry import register_config, resolve_config
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram import (
     INIT_DATA_HEADER,
@@ -49,7 +50,49 @@ def _storage(entrypoint: Any) -> Any:
     return storage_for(entrypoint)
 
 
-async def _token(entrypoint: Any) -> str:
+def _request_header(request: Any, name: str) -> str:
+    headers = getattr(request, "headers", None)
+    if headers is not None:
+        try:
+            return str(headers.get(name) or "").strip()
+        except Exception:
+            pass
+    if isinstance(request, dict):
+        raw_headers = request.get("headers")
+        if isinstance(raw_headers, dict):
+            for key, value in raw_headers.items():
+                if str(key or "").lower() == name.lower():
+                    return str(value or "").strip()
+    return ""
+
+
+def _request_query_value(request: Any, *names: str) -> str:
+    query = getattr(request, "query_params", None)
+    for name in names:
+        if query is not None:
+            try:
+                value = str(query.get(name) or "").strip()
+                if value:
+                    return value
+            except Exception:
+                pass
+        if isinstance(request, dict):
+            raw_query = request.get("query") or request.get("query_params")
+            if isinstance(raw_query, dict):
+                for key, value in raw_query.items():
+                    if str(key or "").lower() == name.lower() and str(value or "").strip():
+                        return str(value or "").strip()
+    return ""
+
+
+def _auth_integration_id(request: Any) -> str:
+    return (
+        _request_header(request, "X-KDCube-Auth-Integration-ID")
+        or _request_query_value(request, "integration_id", "auth_integration_id", "kdcube_auth_integration_id")
+    )
+
+
+async def _token(entrypoint: Any, *, integration_id: str = "") -> str:
     bot_token = _config(entrypoint).get("bot_token")
     if bot_token is None:
         raise RuntimeError("telegram widget auth integration is not configured: bot_token is missing")
@@ -63,7 +106,10 @@ async def _token(entrypoint: Any) -> str:
     if len(signature.parameters) == 0:
         value = bot_token()
     else:
-        value = bot_token(entrypoint)
+        try:
+            value = bot_token(entrypoint, integration_id=integration_id)
+        except TypeError:
+            value = bot_token(entrypoint)
     if inspect.isawaitable(value):
         value = await value
     return str(value or "")
@@ -105,11 +151,21 @@ async def resolve_identity(
     init_data = str(telegram_init_data or "").strip() or extract_telegram_init_data_from_request(request)
     if not init_data:
         raise HTTPException(status_code=401, detail="Telegram initData is required")
+    integration_id = _auth_integration_id(request)
 
-    max_age = int(entrypoint.bundle_prop("integrations.telegram.web_app_auth_max_age_seconds", 86400) or 86400)
+    max_age = int(
+        integration_definition_value(
+            entrypoint,
+            provider="telegram",
+            key="web_app_auth_max_age_seconds",
+            default=86400,
+            integration_id=integration_id,
+        )
+        or 86400
+    )
     verified = validate_telegram_init_data(
         init_data,
-        bot_token=await _token(entrypoint),
+        bot_token=await _token(entrypoint, integration_id=integration_id),
         max_age_seconds=max_age,
     )
     user = verified.user

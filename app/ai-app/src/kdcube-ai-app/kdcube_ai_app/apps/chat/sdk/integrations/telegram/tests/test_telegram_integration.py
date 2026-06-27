@@ -261,8 +261,14 @@ async def test_telegram_inline_run_react_turn_derives_external_event_type(tmp_pa
             self.state = dict(state)
 
         def bundle_prop(self, path, default=None):
-            if path == "integrations.telegram.stream_activity_display":
-                return False
+            if path == "integrations":
+                return {
+                    "telegram.test": {
+                        "provider": "telegram",
+                        "enabled": True,
+                        "definition": {"stream_activity_display": False},
+                    }
+                }
             return default
 
         async def run(self, **params):
@@ -353,8 +359,14 @@ async def test_queued_telegram_delivery_uses_processor_payload_telegram(monkeypa
         )
 
         def bundle_prop(self, path, default=None):
-            if path == "integrations.telegram.stream_activity_display":
-                return False
+            if path == "integrations":
+                return {
+                    "telegram.test": {
+                        "provider": "telegram",
+                        "enabled": True,
+                        "definition": {"stream_activity_display": False},
+                    }
+                }
             return default
 
     async def _runner():
