@@ -46,7 +46,6 @@ auth:
       enabled: false
       app_id: "connection-hub@1-0"
       operation: "request_authenticate"
-      require_selector_hint: false
 
   # OIDC service account credentials → secrets.yaml: auth.oidc.{admin_email,admin_username,admin_password}
 

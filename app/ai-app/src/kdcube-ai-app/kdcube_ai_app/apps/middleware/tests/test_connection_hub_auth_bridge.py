@@ -153,29 +153,3 @@ async def test_connection_hub_bridge_skips_hub_without_selector_hints_or_provide
 
     assert session is None
     assert called is False
-
-
-async def test_connection_hub_bridge_can_require_selector_hints_when_configured():
-    bridge = ConnectionHubRequestAuthBridge(
-        redis=None,
-        pg_pool=None,
-        tenant="demo-tenant",
-        project="demo-project",
-        require_selector_hint=True,
-    )
-
-    async def _call_connection_hub(_envelope):
-        raise AssertionError("hint-required bridge must not call Connection Hub without selector hints or provider proof")
-
-    bridge._call_connection_hub = _call_connection_hub
-
-    async def _session_factory(_context, _user_type, _user_data):
-        raise AssertionError("declined request-auth must not create a session")
-
-    session = await bridge(
-        _request(),
-        RequestContext(client_ip="127.0.0.1", user_agent="test"),
-        _session_factory,
-    )
-
-    assert session is None
