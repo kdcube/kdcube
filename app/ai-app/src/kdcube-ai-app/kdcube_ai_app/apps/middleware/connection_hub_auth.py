@@ -171,6 +171,7 @@ class ConnectionHubRequestAuthBridge:
         project: str,
         bundle_id: str = DEFAULT_CONNECTION_HUB_BUNDLE_ID,
         operation: str = DEFAULT_CONNECTION_HUB_AUTH_OPERATION,
+        require_selector_hint: bool = False,
     ) -> None:
         self.redis = redis
         self.pg_pool = pg_pool
@@ -178,6 +179,7 @@ class ConnectionHubRequestAuthBridge:
         self.project = project
         self.bundle_id = _str(bundle_id) or DEFAULT_CONNECTION_HUB_BUNDLE_ID
         self.operation = _str(operation) or DEFAULT_CONNECTION_HUB_AUTH_OPERATION
+        self.require_selector_hint = bool(require_selector_hint)
 
     @classmethod
     def from_descriptors(
@@ -198,6 +200,7 @@ class ConnectionHubRequestAuthBridge:
             project=project,
             bundle_id=_str(cfg.get("app_id") or cfg.get("bundle_id") or DEFAULT_CONNECTION_HUB_BUNDLE_ID),
             operation=_str(cfg.get("operation") or DEFAULT_CONNECTION_HUB_AUTH_OPERATION),
+            require_selector_hint=_bool(cfg.get("require_selector_hint"), default=False),
         )
 
     async def __call__(
@@ -209,7 +212,8 @@ class ConnectionHubRequestAuthBridge:
         include_body = self._should_include_body(request)
         envelope = await RequestEnvelope.from_request(request, include_body=include_body)
         summary = _external_auth_summary(envelope)
-        if not _should_attempt_connection_hub(summary):
+        has_selector_hint = _should_attempt_connection_hub(summary)
+        if self.require_selector_hint and not has_selector_hint:
             return None
         trace = _should_trace_auth_attempt(summary)
         if trace:
@@ -388,11 +392,12 @@ def maybe_register_connection_hub_auth_bridge(
         return False
     gateway_adapter.register_request_auth_candidate(bridge)
     logger.info(
-        "Connection Hub request-auth bridge registered tenant=%s project=%s bundle=%s operation=%s",
+        "Connection Hub request-auth bridge registered tenant=%s project=%s bundle=%s operation=%s require_selector_hint=%s",
         tenant,
         project,
         bridge.bundle_id,
         bridge.operation,
+        bridge.require_selector_hint,
     )
     return True
 

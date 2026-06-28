@@ -102,6 +102,7 @@ auth:
       enabled: true
       app_id: "connection-hub@1-0"
       operation: "request_authenticate"
+      require_selector_hint: false
 ```
 
 When enabled, the gateway first accepts a valid platform token/cookie session
@@ -112,11 +113,20 @@ Those modules verify proof, read Connection Hub identity links and secrets,
 resolve platform authority, and return authority material. The gateway adapter
 converts that material into a normal `UserSession`.
 
-The gateway does not call Connection Hub for every anonymous request. A cheap
-local prefilter looks for selector hints or recognizable external proof headers
-(`X-KDCube-Auth-*`, Telegram initData, provider signatures/API-key headers).
-Requests without such material fall through to the normal anonymous session
-path without a bundle operation.
+By default, when the Connection Hub bridge is enabled and no platform session
+was accepted, the gateway gives Connection Hub the request envelope. Connection
+Hub owns authenticator selection, Redis-backed selector caches, provider
+fallbacks, and the final decision to authenticate or decline. This is important
+for bundle-exposed public APIs, MCP surfaces, and widgets: the gateway must not
+pre-decide that an unknown request shape cannot be meaningful to a configured
+bundle/authority.
+
+Deployments that fully control every caller may set
+`require_selector_hint: true` on the bridge. In that opt-in mode, the gateway
+only calls Connection Hub when the request carries `X-KDCube-Auth-*`, Telegram
+initData, provider signatures/API-key headers, or equivalent query hints. This
+is a latency optimization for closed surfaces, not the default platform
+contract.
 
 Connection Hub stores request-authenticator metadata in its own app store
 (Postgres for widget-managed rows) and reads secret values only through bundle

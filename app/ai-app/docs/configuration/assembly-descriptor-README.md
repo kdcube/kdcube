@@ -183,6 +183,7 @@ auth:
       enabled: true
       app_id: "connection-hub@1-0"
       operation: "request_authenticate"
+      require_selector_hint: false
 ```
 
 `auth.authenticators.platform` is the canonical descriptor registration for the
@@ -198,6 +199,13 @@ authenticators, such as Telegram Mini App `initData`, are Connection Hub modules
 with access to Connection Hub config, secrets, and identity-link data. See
 [Auth Selector](../service/auth/auth-selector-README.md) and
 [Request Authenticators](../sdk/solutions/connections/request-authenticators/request-authenticators-README.md).
+
+`require_selector_hint` defaults to `false`. Keep it false for open/public
+bundle surfaces where Connection Hub must be allowed to inspect the request
+envelope and decide whether any configured authority can authenticate it. Set it
+true only for closed deployments where every caller is known to carry
+`X-KDCube-Auth-*`, Telegram, provider signature, API-key, or equivalent query
+hints.
 
 `auth.idp: multi-cognito` selects the multi-provider Cognito verifier. The
 browser-facing OIDC config still comes from `auth.cognito`; ingress/proc also

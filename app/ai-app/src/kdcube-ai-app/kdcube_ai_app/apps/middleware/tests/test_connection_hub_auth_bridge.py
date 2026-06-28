@@ -122,16 +122,50 @@ async def test_connection_hub_bridge_declines_when_hub_does_not_authenticate():
     assert session is None
 
 
-async def test_connection_hub_bridge_skips_request_without_external_auth_material():
+async def test_connection_hub_bridge_calls_hub_without_selector_hints_by_default():
     bridge = ConnectionHubRequestAuthBridge(
         redis=None,
         pg_pool=None,
         tenant="demo-tenant",
         project="demo-project",
     )
+    called = False
 
     async def _call_connection_hub(_envelope):
-        raise AssertionError("bridge must not call Connection Hub without selector hints or provider proof")
+        nonlocal called
+        called = True
+        return AuthenticatedRequest(
+            ok=False,
+            authenticated=False,
+            error="no_authenticator_accepted",
+        ).to_dict()
+
+    bridge._call_connection_hub = _call_connection_hub
+
+    async def _session_factory(_context, _user_type, _user_data):
+        raise AssertionError("declined request-auth must not create a session")
+
+    session = await bridge(
+        _request(),
+        RequestContext(client_ip="127.0.0.1", user_agent="test"),
+        _session_factory,
+    )
+
+    assert session is None
+    assert called is True
+
+
+async def test_connection_hub_bridge_can_require_selector_hints_when_configured():
+    bridge = ConnectionHubRequestAuthBridge(
+        redis=None,
+        pg_pool=None,
+        tenant="demo-tenant",
+        project="demo-project",
+        require_selector_hint=True,
+    )
+
+    async def _call_connection_hub(_envelope):
+        raise AssertionError("hint-required bridge must not call Connection Hub without selector hints or provider proof")
 
     bridge._call_connection_hub = _call_connection_hub
 
