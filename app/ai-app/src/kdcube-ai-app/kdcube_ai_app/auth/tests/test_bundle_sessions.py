@@ -149,3 +149,38 @@ async def test_bundle_session_auth_manager_returns_gateway_user():
 
     with pytest.raises(AuthenticationError):
         await manager.authenticate("bad-token")
+
+
+@pytest.mark.asyncio
+async def test_bundle_session_login_or_register_embeds_credential_claim():
+    authority = BundleSessionAuthority(
+        tenant="tenant-a",
+        project="project-a",
+        redis=FakeRedis(),
+        secret="session-secret",
+    )
+    credential = {
+        "schema": "kdcube.credential.v1",
+        "credential_id": "cred_test",
+        "credential_kind": "delegated_client_access",
+        "issuer_authority_id": "oauth_mcp",
+        "issuer_authenticator_id": "oauth_mcp.bearer",
+        "subject": "integration:claude:google:admin@example.test",
+        "audience": "kdcube:mcp",
+        "attrs": {"client_id": "claude"},
+    }
+
+    grant = await authority.login_or_register(
+        sub="integration:claude:google:admin@example.test",
+        username="claude-feedback-reader",
+        roles=["kdcube:role:feedback-reader"],
+        provider="integration",
+        provider_subject="google:admin@example.test",
+        metadata={"credential": credential},
+    )
+
+    assert grant.claims["credential"]["schema"] == "kdcube.credential.v1"
+    assert grant.claims["credential"]["issuer_authority_id"] == "oauth_mcp"
+    assert grant.claims["credential"]["attrs"] == {"client_id": "claude"}
+    verified = await authority.validate_token(grant.token)
+    assert verified.claims["credential"]["subject"] == credential["subject"]

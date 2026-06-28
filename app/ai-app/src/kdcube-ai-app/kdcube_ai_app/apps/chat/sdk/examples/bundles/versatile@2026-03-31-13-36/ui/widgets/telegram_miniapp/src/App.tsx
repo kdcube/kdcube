@@ -13,7 +13,7 @@ import {
   setBrowserTabPath,
   settings,
 } from './store/settings';
-import type { TabId, TelegramProfile, WebAppPayload } from './store/types';
+import type { AppSettings, TabId, TelegramProfile, WebAppPayload } from './store/types';
 import { isTelegramWebApp, prepareTelegramWebApp, telegramLinkChallenge } from './telegram/utils';
 
 function telegramDeniedProfile(): TelegramProfile {
@@ -87,14 +87,19 @@ export default function App() {
         widget_path: tab === 'conversations' ? 'chats' : tab === 'telegram_admin' ? 'telegram-admin' : 'memory',
         mark_memory_seen: tab === 'memory',
       });
+      const settingsUpdate: Partial<AppSettings> = {};
       if (data.authContext?.headers) {
-        settings.update({
-          authContextHeaders: Object.fromEntries(
-            Object.entries(data.authContext.headers)
-              .filter(([name, value]) => name && value !== undefined && value !== null && String(value) !== '')
-              .map(([name, value]) => [name, String(value)]),
-          ),
-        });
+        settingsUpdate.authContextHeaders = Object.fromEntries(
+          Object.entries(data.authContext.headers)
+            .filter(([name, value]) => name && value !== undefined && value !== null && String(value) !== '')
+            .map(([name, value]) => [name, String(value)]),
+        );
+      }
+      if (data.connections?.connection_hub?.bundle_id) {
+        settingsUpdate.connectionHubBundleId = data.connections.connection_hub.bundle_id;
+      }
+      if (Object.keys(settingsUpdate).length > 0) {
+        settings.update(settingsUpdate);
       }
       setPayload(data);
       let nextShowAdmin = Boolean(data.permissions?.show_admin_component);

@@ -83,17 +83,6 @@ def _actor_from_session(session: UserSession) -> dict[str, Any]:
     }
 
 
-def _allowed_subjects_from_socket_meta(socket_session: Mapping[str, Any] | None) -> set[str]:
-    claims = (socket_session or {}).get("federated_claims")
-    if not isinstance(claims, Mapping):
-        return set()
-    return {
-        str(subject).strip()
-        for subject in (claims.get("allowed_subjects") or ())
-        if str(subject).strip()
-    }
-
-
 class DataBusSocketIOIngress:
     def __init__(self, *, app: Any, redis: Any | None = None) -> None:
         self.app = app
@@ -192,8 +181,6 @@ class DataBusSocketIOIngress:
         props = await get_bundle_props(self._redis(), tenant=tenant, project=project, bundle_id=bundle_id)
         if not _bundle_enabled(props):
             return self._ack(status="rejected", rejected=[{"index": None, "error": "bundle is disabled"}])
-        allowed_subjects = _allowed_subjects_from_socket_meta(socket_session)
-
         logger.info(
             "[data_bus.publish] received package tenant=%s project=%s bundle=%s sid=%s messages=%s bytes=%s",
             tenant,
@@ -222,7 +209,6 @@ class DataBusSocketIOIngress:
                     session=session,
                     sid=sid,
                     reply_transport=reply_transport,
-                    allowed_subjects=allowed_subjects,
                 )
                 logger.info(
                     "[data_bus.publish] received message tenant=%s project=%s bundle=%s subject=%s object_ref=%s message_id=%s sid=%s index=%s",
@@ -286,13 +272,10 @@ class DataBusSocketIOIngress:
         session: UserSession,
         sid: str,
         reply_transport: str,
-        allowed_subjects: set[str],
     ) -> DataBusMessage:
         if not isinstance(item, Mapping):
             raise ValueError("message must be an object")
         subject = normalize_subject(item.get("subject"))
-        if allowed_subjects and subject not in allowed_subjects:
-            raise ValueError(f"subject is not allowed by federated token: {subject}")
 
         object_ref = normalize_optional_string(item.get("object_ref"))
         idempotency_key = normalize_optional_string(item.get("idempotency_key"))

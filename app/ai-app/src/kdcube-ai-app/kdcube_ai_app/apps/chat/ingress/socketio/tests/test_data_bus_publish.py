@@ -532,45 +532,6 @@ async def test_data_bus_publish_queues_unknown_subject_for_proc_side_rejection(m
 
 
 @pytest.mark.asyncio
-async def test_data_bus_publish_rejects_subject_outside_federated_token_scope(monkeypatch):
-    redis = FakeRedis()
-    app = _app(redis)
-    manifest = SimpleNamespace(
-        allowed_roles=(),
-        allowed_roles_config=None,
-        data_bus_handlers=(
-            DataBusHandlerSpec(method_name="handle_known", subject="known.subject"),
-            DataBusHandlerSpec(method_name="handle_other", subject="other.subject"),
-        ),
-    )
-    _patch_data_bus_contract(monkeypatch, manifest)
-
-    socket_session = _socket_session()
-    socket_session["federated_claims"] = {"allowed_subjects": ["known.subject"]}
-
-    ingress = DataBusSocketIOIngress(app=app)
-    ack = await ingress.handle_publish(
-        sid="socket-1",
-        socket_session=socket_session,
-        data={
-            "bundle_id": "task-tracker@1-0",
-            "messages": [
-                {
-                    "message_id": "m1",
-                    "subject": "other.subject",
-                    "payload": {},
-                }
-            ],
-        },
-    )
-
-    assert ack["status"] == "rejected"
-    assert ack["accepted"] == []
-    assert "subject is not allowed by federated token" in ack["rejected"][0]["error"]
-    assert redis.streams == {}
-
-
-@pytest.mark.asyncio
 async def test_data_bus_publish_rejects_bundle_outside_federated_token_scope(monkeypatch):
     redis = FakeRedis()
     app = _app(redis)
@@ -586,7 +547,6 @@ async def test_data_bus_publish_rejects_bundle_outside_federated_token_scope(mon
     socket_session = _socket_session()
     socket_session["federated_claims"] = {
         "bundle_id": "task-tracker@1-0",
-        "allowed_subjects": ["known.subject"],
     }
 
     ingress = DataBusSocketIOIngress(app=app)
@@ -709,8 +669,6 @@ async def _federated_handler(monkeypatch):
         tenant="tenant-a",
         project="project-a",
         bundle_id="task-tracker@1-0",
-        provider="telegram",
-        provider_subject="42",
         user_id="telegram:42",
         user_type=UserType.REGISTERED,
         username="telegram-user",

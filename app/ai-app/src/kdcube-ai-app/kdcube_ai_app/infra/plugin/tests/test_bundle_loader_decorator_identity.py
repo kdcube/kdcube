@@ -6,7 +6,9 @@ from dataclasses import dataclass
 
 from kdcube_ai_app.infra.plugin.bundle_loader import (
     APIEndpointSpec as CurrentAPIEndpointSpec,
+    AUTHORITY_PROVIDER_ATTR,
     CRON_JOB_ATTR,
+    AuthorityProviderDeclarationSpec as CurrentAuthorityProviderDeclarationSpec,
     CronJobSpec as CurrentCronJobSpec,
     MCP_ENDPOINT_ATTR,
     MCPEndpointSpec as CurrentMCPEndpointSpec,
@@ -87,6 +89,17 @@ class CronJobSpec:
     span: str = "system"
 
 
+@dataclass(frozen=True)
+class AuthorityProviderDeclarationSpec:
+    method_name: str
+    authority_id: str
+    authenticator_id: str = ""
+    credential_kinds: tuple[str, ...] = ()
+    audiences: tuple[str, ...] = ()
+    label: str = ""
+    transports: tuple[str, ...] = ("local",)
+
+
 class BundleWithReloadedDecoratorSpecs:
     def api_method(self):
         return None
@@ -107,6 +120,9 @@ class BundleWithReloadedDecoratorSpecs:
         return None
 
     def cron_method(self):
+        return None
+
+    def authority_provider_method(self):
         return None
 
 
@@ -147,6 +163,18 @@ setattr(
     CRON_JOB_ATTR,
     CronJobSpec(method_name="old_cron", alias="daily", cron_expression="0 8 * * *", span="project"),
 )
+setattr(
+    BundleWithReloadedDecoratorSpecs.authority_provider_method,
+    AUTHORITY_PROVIDER_ATTR,
+    AuthorityProviderDeclarationSpec(
+        method_name="old_authority",
+        authority_id="yay.identity",
+        authenticator_id="yay.identity.oauth",
+        credential_kinds=("authority_access",),
+        audiences=("bundle:navigator-tg-bot@1-0",),
+        label="Yay Identity",
+    ),
+)
 
 
 def test_manifest_discovery_accepts_reloaded_decorator_dataclasses():
@@ -181,3 +209,9 @@ def test_manifest_discovery_accepts_reloaded_decorator_dataclasses():
     assert isinstance(manifest.scheduled_jobs[0], CurrentCronJobSpec)
     assert manifest.scheduled_jobs[0].method_name == "cron_method"
     assert manifest.scheduled_jobs[0].alias == "daily"
+
+    assert len(manifest.authority_providers) == 1
+    assert isinstance(manifest.authority_providers[0], CurrentAuthorityProviderDeclarationSpec)
+    assert manifest.authority_providers[0].method_name == "authority_provider_method"
+    assert manifest.authority_providers[0].authority_id == "yay.identity"
+    assert manifest.authority_providers[0].authenticator_id == "yay.identity.oauth"

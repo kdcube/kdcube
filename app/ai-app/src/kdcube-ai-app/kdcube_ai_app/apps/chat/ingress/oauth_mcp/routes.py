@@ -11,6 +11,7 @@ hidden fields blindly — and restricts granted tools to those valid for the sco
 """
 from __future__ import annotations
 
+import inspect
 from typing import Optional, Tuple
 
 from fastapi import APIRouter, Request
@@ -23,12 +24,14 @@ from kdcube_ai_app.apps.chat.ingress.oauth_mcp.clients import (
 )
 from kdcube_ai_app.apps.chat.ingress.oauth_mcp.config import oauth_mcp_config
 from kdcube_ai_app.apps.chat.ingress.oauth_mcp.consent import render_consent_html, tools_for_scopes
+from kdcube_ai_app.apps.chat.ingress.oauth_mcp.authority import build_oauth_mcp_credential
 from kdcube_ai_app.apps.chat.ingress.oauth_mcp.deps import (
     extract_bearer,
     get_access_token_minter,
     get_authenticate,
     get_grant_store,
     is_admin,
+    oauth_tenant_project,
 )
 from kdcube_ai_app.apps.chat.ingress.oauth_mcp.discovery import resolve_issuer
 from kdcube_ai_app.apps.chat.ingress.oauth_mcp.flow import (
@@ -223,16 +226,63 @@ def _token_error(error: str, description: str = "", status: int = 400) -> JSONRe
     )
 
 
+def _minter_accepts_authority_kwargs(minter) -> bool:
+    try:
+        signature = inspect.signature(minter)
+    except Exception:
+        return False
+    params = signature.parameters
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values()):
+        return True
+    return any(name in params for name in ("client_id", "tools", "credential"))
+
+
 async def _issue_tokens(request, store, *, sub, scopes, client_id, tools, refresh_token=None) -> JSONResponse:
-    minted = await get_access_token_minter(request)(sub, scopes)
+    tenant, project = oauth_tenant_project(request)
+    # This is the common credential envelope understood by the Connection Hub
+    # authority SDK. The access token remains a real kst1 session token; the
+    # envelope is the routing/verification hint carried inside that token and in
+    # the grant store.
+    credential = build_oauth_mcp_credential(
+        grantor_subject=sub,
+        client_id=client_id,
+        scopes=scopes,
+        tools=tools,
+        tenant=tenant,
+        project=project,
+        expires_in=3600,
+    )
+    minter = get_access_token_minter(request)
+    if _minter_accepts_authority_kwargs(minter):
+        minted = await minter(
+            sub,
+            scopes,
+            client_id=client_id,
+            tools=tools,
+            credential=credential.to_dict(),
+        )
+    else:
+        # Test overrides and older injected minters only accept (sub, scopes).
+        minted = await minter(sub, scopes)
     access_token = minted["access_token"]
     expires_in = minted.get("expires_in", 3600)
+    if expires_in != 3600:
+        credential = build_oauth_mcp_credential(
+            grantor_subject=sub,
+            client_id=client_id,
+            scopes=scopes,
+            tools=tools,
+            tenant=tenant,
+            project=project,
+            expires_in=expires_in,
+        )
     # Bind the consented tool allowlist to THIS access token so /mcp tools/call can
     # enforce it (the consent screen's per-tool selection is meaningless otherwise).
-    await store.bind_access_grant(access_token, tools, expires_in)
+    await store.bind_access_grant(access_token, tools, expires_in, authority=credential.to_dict())
     if refresh_token is None:
         refresh_token = await store.create_refresh_token(
-            client_id=client_id, sub=sub, scopes=scopes, tools=tools
+            client_id=client_id, sub=sub, scopes=scopes, tools=tools,
+            authority=credential.to_dict(),
         )
     return JSONResponse(
         {

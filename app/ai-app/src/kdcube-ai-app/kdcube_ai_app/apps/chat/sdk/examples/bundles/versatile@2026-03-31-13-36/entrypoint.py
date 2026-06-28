@@ -8,7 +8,6 @@ from typing import Any, Dict, Mapping, Optional
 
 from langgraph.graph import END, START, StateGraph
 
-from kdcube_ai_app.auth.federated import issue_federated_data_bus_token
 from kdcube_ai_app.apps.chat.sdk.config import get_secret
 from kdcube_ai_app.apps.chat.sdk.context.vector.conv_ticket_store import ConvTicketStore
 from kdcube_ai_app.apps.chat.sdk.comm.sink import StatsTelemetrySink
@@ -990,45 +989,6 @@ class VersatileEntrypoint(BaseEntrypointWithEconomics):
             telegram_init_data=init_data,
             public_origin=request_origin(request),
         )
-
-    @api(method="POST", alias="telegram_federated_data_bus_claim", route="public", public_auth=TELEGRAM_WEBAPP_PUBLIC_AUTH)
-    async def telegram_federated_data_bus_claim(
-        self,
-        request: Any = None,
-        telegram_init_data: str = "",
-        **kwargs,
-    ) -> Dict[str, Any]:
-        del kwargs
-        identity = await telegram_widget_auth.resolve_identity(
-            self,
-            request=request,
-            telegram_init_data=telegram_init_data,
-            allowed_roles=("registered", "admin"),
-        )
-        roles = [TELEGRAM_ADMIN_ROLE] if identity.role == "admin" else []
-        user_type = "privileged" if identity.role == "admin" else "registered"
-        grant = await issue_federated_data_bus_token(
-            request=request,
-            tenant=self.settings.TENANT,
-            project=self.settings.PROJECT,
-            bundle_id=BUNDLE_ID,
-            provider="telegram",
-            provider_subject=identity.telegram_user_id,
-            user_id=identity.user_id,
-            user_type=user_type,
-            username=identity.telegram_username or identity.user_id,
-            roles=roles,
-            allowed_subjects=(DATA_BUS_ECHO_SUBJECT,),
-        )
-        return {
-            "ok": True,
-            "schema": "kdcube.federated_token_claim.v1",
-            "federated_token": grant.token,
-            "session_id": grant.session.session_id,
-            "expires_at": grant.expires_at,
-            "bundle_id": BUNDLE_ID,
-            "allowed_subjects": [DATA_BUS_ECHO_SUBJECT],
-        }
 
     @api(method="POST", alias="telegram_webapp_user_admin_data", route="public", public_auth=TELEGRAM_WEBAPP_PUBLIC_AUTH)
     async def telegram_user_admin_data_public(

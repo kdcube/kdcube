@@ -48,6 +48,20 @@ from .authenticators import (
     SurfaceGuardRequirement,
     select_authenticator_candidates,
 )
+from .authority_registry import (
+    AUTHORITY_DISCOVERY_SCHEMA,
+    CREDENTIAL_SCHEMA,
+    INGRESS_SESSION_AUTHENTICATOR_ID,
+    INGRESS_SESSION_AUTHORITY_ID,
+    OAUTH_MCP_AUTHENTICATOR_ID,
+    OAUTH_MCP_AUTHORITY_ID,
+    AuthorityProviderSpec,
+    AuthorityRegistry,
+    AuthorityResolution,
+    CredentialEnvelope,
+    RedisAuthorityDiscovery,
+    authority_provider_spec_from_declaration,
+)
 
 __all__ = [
     "NAMESPACE",
@@ -80,4 +94,16 @@ __all__ = [
     "RequestEnvelope",
     "SurfaceGuardRequirement",
     "select_authenticator_candidates",
+    "AUTHORITY_DISCOVERY_SCHEMA",
+    "CREDENTIAL_SCHEMA",
+    "INGRESS_SESSION_AUTHENTICATOR_ID",
+    "INGRESS_SESSION_AUTHORITY_ID",
+    "OAUTH_MCP_AUTHENTICATOR_ID",
+    "OAUTH_MCP_AUTHORITY_ID",
+    "AuthorityProviderSpec",
+    "AuthorityRegistry",
+    "AuthorityResolution",
+    "CredentialEnvelope",
+    "RedisAuthorityDiscovery",
+    "authority_provider_spec_from_declaration",
 ]

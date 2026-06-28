@@ -8,6 +8,7 @@ updated_at: 2026-06-28
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/authority-providers/authority-provider-runtime-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/authority-providers/credential-envelope-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-accounts/delegated-accounts-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/oauth-mcp-integration-access-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/oauth-mcp-consent-branding.md
@@ -322,6 +323,11 @@ configured platform auth resolver to authenticate the human browser session. If 
 deployment brings a custom role authority, that authority must return normal
 KDCube role strings such as `kdcube:role:super-admin`.
 
+Runtime credentials use the shared `kdcube.credential.v1` envelope, whether the
+credential is a Data Bus derived session, an OAuth/MCP delegated client token,
+or a future bundle custom authority token. See
+[Authority Credential Envelope](../authority-providers/credential-envelope-README.md).
+
 ## Storage
 
 Current implementation stores OAuth/MCP grant state in Redis through
@@ -338,6 +344,8 @@ connectors:
 | Need | Read |
 | --- | --- |
 | Understand delegated connection object model | This document |
+| Understand authority provider and custom-authority registration | [Authority Provider Runtime](../authority-providers/authority-provider-runtime-README.md) |
+| Understand credential routing fields | [Authority Credential Envelope](../authority-providers/credential-envelope-README.md) |
 | Understand KDCube using external provider accounts | [Delegated Accounts](../delegated-accounts/delegated-accounts-README.md) |
 | Configure current OAuth/MCP protocol endpoints | [OAuth MCP Integration Access](../../../../service/auth/oauth-mcp-integration-access-README.md) |
 | Brand the consent page | [MCP Consent Branding](../../../../service/auth/oauth-mcp-consent-branding.md) |

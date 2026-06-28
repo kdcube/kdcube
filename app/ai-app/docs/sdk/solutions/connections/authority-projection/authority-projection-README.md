@@ -99,6 +99,30 @@ For scheduled automations, the job source should carry normalized
 `identity_authority` so the later run can restore the same effective authority.
 Do not make each surface redo provider-specific auth or role mapping.
 
+## Federated Data Bus Sessions
+
+Non-browser clients use the same projection model. For example, a Telegram Mini
+App calls Connection Hub `federated_data_bus_claim` with Telegram proof
+headers. Connection Hub creates a Data Bus `UserSession` whose actor remains the
+Telegram user:
+
+```text
+user_id = telegram_434804821
+```
+
+If no identity link exists, the session stays low authority:
+
+```text
+user_type   = registered
+roles       = []
+permissions = []
+```
+
+If `telegram:434804821` is linked to a platform user, the next claim keeps the
+same actor id and projects the platform authority into that session. The
+federated token itself only points at the session; it does not duplicate roles,
+permissions, or provider identity in the signed token body.
+
 ## SDK Helpers
 
 The platform SDK exposes helpers for normalizing/applying this envelope:

@@ -544,7 +544,8 @@ Auth:
 - `/widgets/...` uses normal integrations/browser auth
 - `/public/widgets/...` serves the built static shell with a public session
 - data/action APIs called by a public widget use their own public API auth,
-  such as Telegram `initData` verification or a bundle-issued federated token
+  such as Telegram `initData` verification or a federated Data Bus session
+  token issued after provider proof is verified
 
 ### 5.2 `@ui_main`
 

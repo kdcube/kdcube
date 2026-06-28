@@ -38,6 +38,10 @@ class FakeSessionManager:
         existing = next((s for s in self.sessions.values() if s.user_id == user_id), None)
         if existing is not None:
             existing.request_context = context
+            existing.user_type = user_type
+            existing.roles = list(user_data.get("roles") or [])
+            existing.permissions = list(user_data.get("permissions") or [])
+            existing.identity_authority = user_data.get("identity_authority") or {}
             return existing
         session = UserSession(
             session_id=f"session-{user_id}",
@@ -50,6 +54,7 @@ class FakeSessionManager:
             permissions=list(user_data.get("permissions") or []),
             timezone=context.user_timezone or "UTC",
             request_context=context,
+            identity_authority=user_data.get("identity_authority") or {},
         )
         self.sessions[session.session_id] = session
         return session
@@ -83,13 +88,16 @@ async def test_issue_and_verify_federated_data_bus_token():
         tenant="tenant-a",
         project="project-a",
         bundle_id="task-tracker@1-0",
-        provider="telegram",
-        provider_subject="42",
         user_id="telegram:42",
         user_type=UserType.PRIVILEGED,
         username="alice",
         roles=["kdcube:role:bundle-admin"],
-        allowed_subjects=["task.patch"],
+        identity_authority={
+            "actor_user_id": "telegram:42",
+            "identity_provider": "telegram",
+            "identity_provider_subject": "42",
+            "platform_user_id": "platform-user-1",
+        },
         secret="test-secret",
     )
 
@@ -105,10 +113,27 @@ async def test_issue_and_verify_federated_data_bus_token():
 
     assert verified.session.session_id == grant.session.session_id
     assert verified.session.user_type == UserType.PRIVILEGED
-    assert verified.claims["provider"] == "telegram"
-    assert verified.claims["provider_subject"] == "42"
     assert verified.claims["allowed_transports"] == ["data_bus"]
-    assert verified.claims["allowed_subjects"] == ["task.patch"]
+    assert verified.claims["credential"]["schema"] == "kdcube.credential.v1"
+    assert verified.claims["credential"]["credential_kind"] == "derived_session"
+    assert verified.claims["credential"]["issuer_authority_id"] == "kdcube.ingress_session"
+    assert verified.claims["credential"]["issuer_authenticator_id"] == "kdcube.signed_active_record"
+    assert verified.claims["credential"]["audience"] == "kdcube:data_bus"
+    assert verified.claims["credential"]["verified_authority"]["platform_user_id"] == "platform-user-1"
+    assert set(verified.claims) == {
+        "schema",
+        "jti",
+        "sub",
+        "tenant",
+        "project",
+        "bundle_id",
+        "session_id",
+        "allowed_transports",
+        "credential",
+        "iat",
+        "exp",
+    }
+    assert verified.session.identity_authority["platform_user_id"] == "platform-user-1"
 
 
 @pytest.mark.asyncio
@@ -121,8 +146,6 @@ async def test_federated_data_bus_token_is_bundle_scoped():
         tenant="tenant-a",
         project="project-a",
         bundle_id="task-tracker@1-0",
-        provider="telegram",
-        provider_subject="42",
         user_id="telegram:42",
         secret="test-secret",
     )
@@ -153,7 +176,5 @@ async def test_federated_data_bus_token_does_not_fallback_to_service_tokens(monk
             tenant="tenant-a",
             project="project-a",
             bundle_id="task-tracker@1-0",
-            provider="telegram",
-            provider_subject="42",
             user_id="telegram:42",
         )

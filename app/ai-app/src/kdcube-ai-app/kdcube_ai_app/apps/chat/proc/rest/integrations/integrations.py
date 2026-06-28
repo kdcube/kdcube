@@ -1367,6 +1367,18 @@ def _cron_spec_descriptor(spec, props: Optional[Dict[str, Any]] = None) -> Dict[
     }
 
 
+def _authority_provider_spec_descriptor(spec) -> Dict[str, Any]:
+    return {
+        "method_name": spec.method_name,
+        "authority_id": spec.authority_id,
+        "authenticator_id": spec.authenticator_id,
+        "credential_kinds": list(spec.credential_kinds),
+        "audiences": list(spec.audiences),
+        "label": spec.label,
+        "transports": list(spec.transports),
+    }
+
+
 def _manifest_to_descriptor(
         manifest: BundleInterfaceManifest,
         props: Optional[Dict[str, Any]] = None,
@@ -1400,6 +1412,10 @@ def _manifest_to_descriptor(
                 "roles": list(spec.roles),
             }
             for spec in manifest.data_bus_handlers
+        ],
+        "authority_providers": [
+            _authority_provider_spec_descriptor(spec)
+            for spec in manifest.authority_providers
         ],
     }
 
@@ -1458,6 +1474,10 @@ def _manifest_to_descriptor_filtered(
             }
             for spec in manifest.data_bus_handlers
             if _endpoint_visible(spec.user_types, spec.roles, session)
+        ],
+        "authority_providers": [
+            _authority_provider_spec_descriptor(spec)
+            for spec in manifest.authority_providers
         ],
     }
 
@@ -2900,6 +2920,10 @@ async def get_bundle_interface(
                 "roles": list(spec.roles),
             }
             for spec in visible_data_bus_handlers
+        ],
+        "authority_providers": [
+            _authority_provider_spec_descriptor(spec)
+            for spec in manifest.authority_providers
         ],
     }
 

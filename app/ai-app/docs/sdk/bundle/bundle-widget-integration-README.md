@@ -135,8 +135,8 @@ serialization.
 Ingress authenticates and enqueues the package. Proc loads the bundle manifest,
 checks the active bundle/handler visibility rules, and invokes the
 `@data_bus_handler(...)`. Keep app-specific identity decoding in the bundle
-token-claim endpoint; ingress should receive a platform or bundle-issued token,
-not raw upstream app context.
+or Connection Hub token-claim endpoint; ingress should receive a platform
+session or standardized federated Data Bus token, not raw upstream app context.
 
 See:
 
@@ -553,7 +553,7 @@ Widget visibility still applies. A public Mini App widget should leave
 
 That route serves only the built widget app assets. Any public data/action API
 used by that widget must have its own bundle-level auth, for example Telegram
-WebApp `initData` verification or a bundle-issued federated Data Bus token.
+WebApp `initData` verification or a standardized federated Data Bus token.
 
 ## Dual Runtime Pattern
 

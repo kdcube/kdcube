@@ -1,9 +1,7 @@
 import { io, type Socket } from 'socket.io-client';
-import { callOperation } from './apiClient';
+import { authHeaders } from './apiClient';
 import { settings } from './settings';
 import { isTelegramWebApp } from '../telegram/utils';
-
-const ECHO_SUBJECT = 'versatile.echo';
 
 interface FederatedClaimPayload {
   ok?: boolean;
@@ -11,7 +9,8 @@ interface FederatedClaimPayload {
   session_id?: string;
   expires_at?: number;
   bundle_id?: string;
-  allowed_subjects?: string[];
+  error?: string;
+  message?: string;
 }
 
 interface ProfilePayload {
@@ -22,12 +21,6 @@ interface SocketContext {
   auth: Record<string, unknown>;
   sessionId: string;
   key: string;
-}
-
-export interface DataBusEchoOutcome {
-  ack: Record<string, unknown>;
-  event?: Record<string, unknown>;
-  messageId: string;
 }
 
 export interface DataBusServiceEnvelope {
@@ -42,19 +35,6 @@ let dataBusSocket: Socket | null = null;
 let dataBusSocketKey = '';
 let dataBusSessionId = '';
 let dataBusConnectPromise: Promise<void> | null = null;
-
-function createLocalId(prefix: string): string {
-  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function authHeaders(base?: HeadersInit): Headers {
-  const headers = new Headers(base);
-  const accessToken = settings.getAccessToken();
-  const idToken = settings.getIdToken();
-  if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
-  if (idToken) headers.set(settings.getIdTokenHeader(), idToken);
-  return headers;
-}
 
 async function fetchProfileSessionId(): Promise<string> {
   const response = await fetch(`${settings.getBaseUrl()}/profile`, {
@@ -71,30 +51,26 @@ async function fetchProfileSessionId(): Promise<string> {
 }
 
 async function buildSocketContext(): Promise<SocketContext> {
-  const baseAuth: Record<string, unknown> = {
-    tenant: settings.getTenant(),
-    project: settings.getProject(),
-    bundle_id: settings.getBundleId(),
-  };
-  const key = [
-    settings.getBaseUrl(),
-    settings.getTenant(),
-    settings.getProject(),
-    settings.getBundleId(),
-    isTelegramWebApp() ? 'telegram' : 'browser',
-  ].join('|');
-
   if (isTelegramWebApp()) {
-    const claim = await callOperation<FederatedClaimPayload>('federated_data_bus_claim', {});
+    const claim = await claimConnectionHubDataBusToken();
     const token = String(claim.federated_token || '').trim();
     if (!token) throw new Error('Federated Data Bus token was not issued.');
     const sessionId = String(claim.session_id || '').trim();
     if (!sessionId) throw new Error('Federated Data Bus claim did not return a session_id.');
+    const bundleId = String(claim.bundle_id || settings.getConnectionHubBundleId()).trim();
     return {
-      key,
+      key: [
+        settings.getBaseUrl(),
+        settings.getTenant(),
+        settings.getProject(),
+        bundleId,
+        sessionId,
+      ].join('|'),
       sessionId,
       auth: {
-        ...baseAuth,
+        tenant: settings.getTenant(),
+        project: settings.getProject(),
+        bundle_id: bundleId,
         federated_token: token,
       },
     };
@@ -103,16 +79,66 @@ async function buildSocketContext(): Promise<SocketContext> {
   const sessionId = await fetchProfileSessionId();
   const accessToken = settings.getAccessToken();
   const idToken = settings.getIdToken();
+  const bundleId = settings.getBundleId();
   return {
-    key,
+    key: [
+      settings.getBaseUrl(),
+      settings.getTenant(),
+      settings.getProject(),
+      bundleId,
+      sessionId,
+      'browser',
+    ].join('|'),
     sessionId,
     auth: {
-      ...baseAuth,
+      tenant: settings.getTenant(),
+      project: settings.getProject(),
+      bundle_id: bundleId,
       user_session_id: sessionId,
       ...(accessToken ? { bearer_token: accessToken } : {}),
       ...(idToken ? { id_token: idToken } : {}),
     },
   };
+}
+
+function unwrapConnectionHubClaim(parsed: unknown): FederatedClaimPayload {
+  if (parsed && typeof parsed === 'object' && 'federated_data_bus_claim' in parsed) {
+    return (parsed as Record<string, unknown>).federated_data_bus_claim as FederatedClaimPayload;
+  }
+  return parsed as FederatedClaimPayload;
+}
+
+async function claimConnectionHubDataBusToken(): Promise<FederatedClaimPayload> {
+  const tenant = encodeURIComponent(settings.getTenant());
+  const project = encodeURIComponent(settings.getProject());
+  const bundleId = encodeURIComponent(settings.getConnectionHubBundleId());
+  const url = `${settings.getBaseUrl()}/api/integrations/bundles/${tenant}/${project}/${bundleId}/public/federated_data_bus_claim`;
+  const headers = authHeaders({ Accept: 'application/json', 'Content-Type': 'application/json' });
+  const response = await fetch(url, {
+    method: 'POST',
+    credentials: 'include',
+    cache: 'no-store',
+    headers,
+    body: JSON.stringify({ data: {} }),
+  });
+  const text = await response.text();
+  let parsed: unknown = {};
+  try {
+    parsed = text ? JSON.parse(text) : {};
+  } catch {
+    parsed = { raw: text };
+  }
+  if (!response.ok) {
+    const detail = typeof parsed === 'object' && parsed && 'detail' in parsed
+      ? String((parsed as Record<string, unknown>).detail)
+      : text || response.statusText;
+    throw new Error(detail || `Connection Hub Data Bus claim failed: ${response.status}`);
+  }
+  const claim = unwrapConnectionHubClaim(parsed);
+  if (claim?.ok === false) {
+    throw new Error(claim.message || claim.error || 'Connection Hub Data Bus claim failed');
+  }
+  return claim;
 }
 
 function resetDataBusSocket(socket: Socket): void {
@@ -199,30 +225,16 @@ async function dataBusSocketFor(): Promise<{ socket: Socket; sessionId: string }
   return { socket, sessionId: context.sessionId };
 }
 
-function waitForEchoEvent(socket: Socket, messageId: string): Promise<Record<string, unknown> | undefined> {
-  return new Promise((resolve) => {
-    const timeout = window.setTimeout(() => {
-      socket.off('chat_service', onServiceEvent);
-      resolve(undefined);
-    }, 8000);
-
-    function onServiceEvent(payload: unknown) {
-      if (!payload || typeof payload !== 'object') return;
-      const envelope = payload as Record<string, unknown>;
-      if (envelope.type !== 'kdcube.data_bus.result') return;
-      const data = envelope.data;
-      if (!data || typeof data !== 'object') return;
-      if ((data as Record<string, unknown>).message_id !== messageId) return;
-      window.clearTimeout(timeout);
-      socket.off('chat_service', onServiceEvent);
-      resolve(envelope);
-    }
-
-    socket.on('chat_service', onServiceEvent);
-  });
+export async function getDataBusSessionId(): Promise<string> {
+  const { sessionId } = await dataBusSocketFor();
+  return sessionId;
 }
 
-export async function getDataBusSessionId(): Promise<string> {
+export async function reconnectDataBus(): Promise<string> {
+  if (dataBusSocket) {
+    dataBusSocket.disconnect();
+    resetDataBusSocket(dataBusSocket);
+  }
   const { sessionId } = await dataBusSocketFor();
   return sessionId;
 }
@@ -256,37 +268,4 @@ export function subscribeDataBusServiceEvents(
       subscribedSocket.off('chat_service', onService);
     }
   };
-}
-
-export async function sendDataBusEcho(payload: Record<string, unknown>): Promise<DataBusEchoOutcome> {
-  const { socket } = await dataBusSocketFor();
-  const messageId = createLocalId('dbmsg');
-  const result = waitForEchoEvent(socket, messageId);
-
-  const ack = await socket.timeout(8000).emitWithAck('data_bus.publish', {
-    schema: 'kdcube.data_bus.ingress.v1',
-    bundle_id: settings.getBundleId(),
-    messages: [
-      {
-        message_id: messageId,
-        subject: ECHO_SUBJECT,
-        object_ref: 'probe:memory',
-        idempotency_key: createLocalId('echo'),
-        payload,
-        client: {
-          widget: 'telegram_miniapp',
-          source: 'memory_page',
-        },
-      },
-    ],
-  });
-  const ackObject = ack as Record<string, unknown>;
-  const status = String(ackObject.status || '');
-  if (status !== 'accepted' && status !== 'partial') {
-    const rejected = Array.isArray(ackObject.rejected) ? ackObject.rejected : [];
-    const first = rejected[0] as Record<string, unknown> | undefined;
-    throw new Error(String(first?.error || `Data Bus publish rejected: ${status || 'unknown'}`));
-  }
-  const event = await result;
-  return { ack: ackObject, event, messageId };
 }

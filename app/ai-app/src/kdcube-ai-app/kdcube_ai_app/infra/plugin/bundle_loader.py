@@ -64,6 +64,7 @@ PROCESS_OFFLINE_EVENTS_ATTR = "__bundle_process_offline_events__"
 UI_MAIN_ATTR = "__bundle_ui_main__"
 CRON_JOB_ATTR = "__bundle_cron_job__"
 DATA_BUS_HANDLER_ATTR = "__bundle_data_bus_handler__"
+AUTHORITY_PROVIDER_ATTR = "__bundle_authority_provider__"
 BUNDLE_VENV_ATTR = "__bundle_venv__"
 _BUNDLE_VENV_EXEC_ENV = "KDCUBE_BUNDLE_VENV_EXEC"
 _BUNDLE_VENV_STAMP_FILE = ".kdcube_venv_stamp.json"
@@ -157,6 +158,17 @@ class CronJobSpec:
 
 
 @dataclass(frozen=True)
+class AuthorityProviderDeclarationSpec:
+    method_name: str
+    authority_id: str
+    authenticator_id: str = ""
+    credential_kinds: tuple[str, ...] = ()
+    audiences: tuple[str, ...] = ()
+    label: str = ""
+    transports: tuple[str, ...] = ("local",)
+
+
+@dataclass(frozen=True)
 class BundleInterfaceManifest:
     bundle_id: str
     allowed_roles: tuple[str, ...] = ()
@@ -170,6 +182,7 @@ class BundleInterfaceManifest:
     process_offline_events: ProcessOfflineEventsSpec | None = None
     scheduled_jobs: tuple[CronJobSpec, ...] = ()
     data_bus_handlers: tuple[DataBusHandlerSpec, ...] = ()
+    authority_providers: tuple[AuthorityProviderDeclarationSpec, ...] = ()
 
 
 _VALID_ENABLED_KINDS: frozenset = frozenset({"bundle", "api", "mcp", "widget", "cron"})
@@ -779,6 +792,48 @@ def mcp(
 
 
 mcp_endpoint = mcp
+
+
+def authority_provider(
+        *,
+        authority_id: str,
+        authenticator_id: str | None = None,
+        credential_kinds: List[str] | Tuple[str, ...] | None = None,
+        audiences: List[str] | Tuple[str, ...] | None = None,
+        label: str | None = None,
+        transports: List[str] | Tuple[str, ...] | None = None,
+):
+    """Declare a bundle-local authority provider.
+
+    The decorated async method is discoverable on proc where the bundle is
+    loaded. Ingress may see the declaration metadata through the registry, but
+    it must not import or execute the bundle-local verifier code.
+    """
+    resolved_authority_id = str(authority_id or "").strip()
+    if not resolved_authority_id:
+        raise ValueError("@authority_provider requires authority_id")
+    resolved_authenticator_id = str(authenticator_id or "").strip()
+    resolved_label = str(label or "").strip()
+    resolved_transports = _tuple_str(transports) or ("local",)
+
+    def _wrap(fn):
+        method_name = getattr(fn, "__name__", "authority_provider")
+        setattr(
+            fn,
+            AUTHORITY_PROVIDER_ATTR,
+            AuthorityProviderDeclarationSpec(
+                method_name=method_name,
+                authority_id=resolved_authority_id,
+                authenticator_id=resolved_authenticator_id,
+                credential_kinds=_tuple_str(credential_kinds),
+                audiences=_tuple_str(audiences),
+                label=resolved_label,
+                transports=resolved_transports,
+            ),
+        )
+        return fn
+
+    return _wrap
 
 
 def on_reactive_event(fn):
@@ -2281,6 +2336,7 @@ def _iter_bundle_callable_members(target: Any):
         PROCESS_OFFLINE_EVENTS_ATTR,
         UI_MAIN_ATTR,
         CRON_JOB_ATTR,
+        AUTHORITY_PROVIDER_ATTR,
     )
     for name, member in inspect.getmembers(cls, predicate=callable):
         if name.startswith("__"):
@@ -2319,10 +2375,12 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
     process_offline_events_spec: ProcessOfflineEventsSpec | None = None
     scheduled_jobs: list[CronJobSpec] = []
     data_bus_handlers: list[DataBusHandlerSpec] = []
+    authority_providers: list[AuthorityProviderDeclarationSpec] = []
     seen_api: set[tuple[str, str]] = set()
     seen_mcp: set[tuple[str, str]] = set()
     seen_widgets: set[str] = set()
     seen_data_bus_subjects: set[str] = set()
+    seen_authority_providers: set[tuple[str, str]] = set()
 
     for member_name, fn in _iter_bundle_callable_members(target):
         api_spec = getattr(fn, API_METHOD_ATTR, None)
@@ -2465,6 +2523,30 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
                 roles=tuple(getattr(data_bus_spec, "roles", ()) or ()),
             ))
 
+        authority_spec = getattr(fn, AUTHORITY_PROVIDER_ATTR, None)
+        if _is_equivalent_decorator_spec(
+            authority_spec,
+            AuthorityProviderDeclarationSpec,
+            ("method_name", "authority_id"),
+        ):
+            resolved = AuthorityProviderDeclarationSpec(
+                method_name=member_name,
+                authority_id=str(getattr(authority_spec, "authority_id", "") or ""),
+                authenticator_id=str(getattr(authority_spec, "authenticator_id", "") or ""),
+                credential_kinds=tuple(getattr(authority_spec, "credential_kinds", ()) or ()),
+                audiences=tuple(getattr(authority_spec, "audiences", ()) or ()),
+                label=str(getattr(authority_spec, "label", "") or ""),
+                transports=tuple(getattr(authority_spec, "transports", ()) or ("local",)),
+            )
+            authority_key = (resolved.authority_id, resolved.authenticator_id)
+            if authority_key in seen_authority_providers:
+                raise ValueError(
+                    f"Duplicate bundle authority provider detected: "
+                    f"{resolved.authority_id}/{resolved.authenticator_id}"
+                )
+            seen_authority_providers.add(authority_key)
+            authority_providers.append(resolved)
+
     meta = _get_bundle_entrypoint_meta(cls)
     allowed_roles: tuple[str, ...] = _tuple_str(meta.get("allowed_roles"))
     allowed_roles_config: str | None = meta.get("allowed_roles_config") or None
@@ -2474,6 +2556,7 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
     ui_widgets.sort(key=lambda item: (item.alias, item.method_name))
     scheduled_jobs.sort(key=lambda item: (item.alias, item.method_name))
     data_bus_handlers.sort(key=lambda item: (item.subject, item.method_name))
+    authority_providers.sort(key=lambda item: (item.authority_id, item.authenticator_id, item.method_name))
     return BundleInterfaceManifest(
         bundle_id=resolved_bundle_id,
         allowed_roles=allowed_roles,
@@ -2487,6 +2570,7 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
         process_offline_events=process_offline_events_spec,
         scheduled_jobs=tuple(scheduled_jobs),
         data_bus_handlers=tuple(data_bus_handlers),
+        authority_providers=tuple(authority_providers),
     )
 
 
@@ -2642,6 +2726,44 @@ def get_workflow_instance(
     return instance, mod
 
 
+async def _register_bundle_authority_provider_declarations(
+    *,
+    instance: Any,
+    spec: BundleSpec,
+    config: Any,
+    comm_context: ExternalEventPayload,
+    redis: Optional[Any],
+) -> None:
+    if redis is None:
+        return
+    try:
+        bundle_id_hint = getattr(getattr(config, "ai_bundle_spec", None), "id", None) or ""
+        manifest = discover_bundle_interface_manifest(instance, bundle_id=bundle_id_hint)
+        if not manifest.authority_providers:
+            return
+        from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_registry import (
+            RedisAuthorityDiscovery,
+            authority_provider_spec_from_declaration,
+        )
+
+        tenant, project = _tp_from_ctx(comm_context)
+        discovery = RedisAuthorityDiscovery(redis, tenant=tenant, project=project)
+        bundle_id = manifest.bundle_id or bundle_id_hint or spec.path
+        for declaration in manifest.authority_providers:
+            await discovery.register_provider(
+                authority_provider_spec_from_declaration(declaration, bundle_id=bundle_id)
+            )
+        _log.info(
+            "[authority.discovery] registered %s provider(s) for bundle=%s tenant=%s project=%s",
+            len(manifest.authority_providers),
+            bundle_id,
+            tenant,
+            project,
+        )
+    except Exception:
+        _log.warning("[authority.discovery] failed to register bundle authority providers", exc_info=True)
+
+
 async def get_workflow_instance_async(
         spec: BundleSpec,
         config: Any,
@@ -2656,6 +2778,13 @@ async def get_workflow_instance_async(
         config,
         comm_context=comm_context,
         pg_pool=pg_pool,
+        redis=redis,
+    )
+    await _register_bundle_authority_provider_declarations(
+        instance=instance,
+        spec=spec,
+        config=config,
+        comm_context=comm_context,
         redis=redis,
     )
     await _maybe_run_bundle_on_load(

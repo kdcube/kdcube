@@ -59,6 +59,7 @@ class GrantStore:
         sub: str,
         scopes: List[str],
         tools: List[str],
+        authority: Optional[Dict[str, Any]] = None,
     ) -> str:
         code = secrets.token_urlsafe(32)
         payload = {
@@ -68,6 +69,7 @@ class GrantStore:
             "sub": sub,
             "scopes": scopes,
             "tools": tools,
+            "authority": authority or {},
         }
         await self._r.setex(self._key("code", code), self._auth_code_ttl, json.dumps(payload))
         return code
@@ -83,10 +85,22 @@ class GrantStore:
     # ----------------------------- refresh tokens -----------------------------
 
     async def create_refresh_token(
-        self, *, client_id: str, sub: str, scopes: List[str], tools: Optional[List[str]] = None
+        self,
+        *,
+        client_id: str,
+        sub: str,
+        scopes: List[str],
+        tools: Optional[List[str]] = None,
+        authority: Optional[Dict[str, Any]] = None,
     ) -> str:
         rt = secrets.token_urlsafe(40)
-        payload = {"client_id": client_id, "sub": sub, "scopes": scopes, "tools": list(tools or [])}
+        payload = {
+            "client_id": client_id,
+            "sub": sub,
+            "scopes": scopes,
+            "tools": list(tools or []),
+            "authority": authority or {},
+        }
         await self._r.setex(self._key("refresh", rt), self._refresh_ttl, json.dumps(payload))
         return rt
 
@@ -150,6 +164,7 @@ class GrantStore:
         return await self.create_refresh_token(
             client_id=rec["client_id"], sub=rec["sub"], scopes=rec["scopes"],
             tools=rec.get("tools") or [],
+            authority=rec.get("authority") or {},
         )
 
     # ------------------------- access-token tool grant -------------------------
@@ -159,20 +174,36 @@ class GrantStore:
         return self._key("agrant", digest)
 
     async def bind_access_grant(
-        self, access_token: str, tools: List[str], ttl_seconds: int
+        self,
+        access_token: str,
+        tools: List[str],
+        ttl_seconds: int,
+        *,
+        authority: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Record the consented tool allowlist for an issued access token."""
+        """Record the consented tool allowlist and authority envelope for a token."""
         await self._r.setex(
             self._agrant_key(access_token), max(1, int(ttl_seconds)),
-            json.dumps({"tools": list(tools or [])}),
+            json.dumps({"tools": list(tools or []), "authority": authority or {}}),
         )
 
-    async def get_access_grant(self, access_token: str) -> Optional[List[str]]:
-        """The consented tools bound to ``access_token`` (None if no grant record)."""
+    async def get_access_grant_record(self, access_token: str) -> Optional[Dict[str, Any]]:
+        """Grant metadata bound to ``access_token`` (None if no grant record)."""
         raw = await self._r.get(self._agrant_key(access_token))
         if raw is None:
             return None
         try:
-            return list(json.loads(raw).get("tools") or [])
+            payload = json.loads(raw)
+        except Exception:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    async def get_access_grant(self, access_token: str) -> Optional[List[str]]:
+        """The consented tools bound to ``access_token`` (None if no grant record)."""
+        payload = await self.get_access_grant_record(access_token)
+        if payload is None:
+            return None
+        try:
+            return list(payload.get("tools") or [])
         except Exception:
             return None

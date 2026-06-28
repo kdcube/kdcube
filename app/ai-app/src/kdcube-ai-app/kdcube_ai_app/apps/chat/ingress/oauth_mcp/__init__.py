@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from kdcube_ai_app.apps.chat.ingress.oauth_mcp.authority import OAuthMcpAuthorityProvider
 from kdcube_ai_app.apps.chat.ingress.oauth_mcp.config import oauth_mcp_config
 from kdcube_ai_app.apps.chat.ingress.oauth_mcp.metadata import (
     authorization_server_metadata,
@@ -26,6 +27,7 @@ from kdcube_ai_app.apps.chat.ingress.oauth_mcp.metadata import (
 from kdcube_ai_app.apps.chat.ingress.oauth_mcp.discovery import router as discovery_router
 from kdcube_ai_app.apps.chat.ingress.oauth_mcp.routes import router as oauth_routes_router
 from kdcube_ai_app.apps.chat.ingress.oauth_mcp.mcp_server import router as mcp_router
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_registry import AuthorityRegistry
 
 __all__ = [
     "mount_oauth_mcp",
@@ -42,6 +44,12 @@ def mount_oauth_mcp(app: FastAPI) -> FastAPI:
     """
     if not oauth_mcp_config(app).enabled:
         return app
+    registry = getattr(app.state, "connection_hub_authority_registry", None)
+    if registry is None:
+        registry = AuthorityRegistry()
+        app.state.connection_hub_authority_registry = registry
+    if registry.get("oauth_mcp") is None:
+        registry.register(OAuthMcpAuthorityProvider())
     app.include_router(discovery_router, tags=["oauth-mcp discovery"])
     app.include_router(oauth_routes_router, tags=["oauth-mcp authorize"])
     app.include_router(mcp_router, tags=["oauth-mcp server"])

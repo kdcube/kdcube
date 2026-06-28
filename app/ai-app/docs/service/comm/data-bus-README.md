@@ -76,7 +76,7 @@ The Data Bus path has one strict ownership boundary:
 
 ```text
 browser/widget
-  -> optional bundle token-claim operation
+  -> optional federated token-claim operation
   -> Socket.IO data_bus.publish or HTTP POST /sse/data_bus.publish
   -> ingress authenticates, normalizes, and enqueues
   -> proc Data Bus worker loads bundle manifest
@@ -84,7 +84,8 @@ browser/widget
 ```
 
 Ingress owns transport concerns: socket authentication, tenant/project/session
-normalization, payload bounds, federated token scope, and stream admission.
+normalization, payload bounds, federated Data Bus token verification, and
+stream admission.
 
 Proc owns bundle execution concerns: loading bundle code, discovering
 `@data_bus_handler(...)`, applying effective bundle props, enforcing
@@ -191,33 +192,41 @@ Cookies are still accepted as fallback by the gateway, but explicit auth in the
 Socket.IO auth payload is the preferred browser contract when the widget has
 runtime config.
 
-### Bundle-Issued Federated Clients
+### Federated Clients
 
-Clients that do not have a platform browser session can publish to Data Bus
-through a bundle-issued federated token.
+Clients that do not have a platform browser session can connect to Data Bus
+through a standardized federated token.
 
-The client first calls a bundle endpoint. The bundle validates the upstream
-application context itself, maps that context to a platform actor and role, and
-calls `issue_federated_data_bus_token(...)`. The client then connects to
-Socket.IO namespace `/` with:
+The preferred shared-identity path is Connection Hub's
+`federated_data_bus_claim` operation. Connection Hub validates promoted
+upstream auth context, resolves identity links when present, creates or
+refreshes the actor `UserSession`, stores projected authority on that session,
+and returns a short-lived Data Bus token.
+
+A bundle-owned public claim endpoint may also issue the same token shape when
+the bundle owns a custom authority. It must validate upstream proof and build
+the correct `UserSession` authority before issuing the token. Ingress does not
+run bundle-local provider verification.
+
+The client then connects to Socket.IO namespace `/` with:
 
 ```json
 {
   "tenant": "tenant-a",
   "project": "project-a",
-  "bundle_id": "example-collab@1-0",
+  "bundle_id": "<token-bundle-scope>",
   "federated_token": "<short-lived-token>"
 }
 ```
 
-Socket.IO verifies token integrity, scope, Redis registration, and backing
-session before accepting the connection. If the token carries
-`allowed_subjects`, ingress rejects publishes outside that subject allowlist.
-After that, `data_bus.publish` uses the same normalized actor/reply metadata as
-ordinary platform-authenticated sockets.
+Socket.IO verifies token integrity, bundle scope, Redis registration, and the
+backing session before accepting the connection. The token body stays minimal:
+identity provenance, roles, and permissions live on the backing `UserSession`,
+not inside the token. After admission, `data_bus.publish` uses the same
+normalized actor/reply metadata as ordinary platform-authenticated sockets.
 
 Use the full bundle recipe in
-[Bundle Federated Auth For Data Bus](../../sdk/bundle/auth-bundle-federated-README.md).
+[Federated Data Bus Session Tokens](../../sdk/bundle/auth-bundle-federated-README.md).
 
 ## Core Envelope
 
@@ -569,8 +578,8 @@ Ingress must:
 
 - resolve tenant/project from the authenticated platform context;
 - verify token/session integrity for platform-authenticated sockets;
-- verify federated token scope, backing session, and `allowed_subjects` when a
-  bundle-issued token is used;
+- verify federated token scope and backing session when a federated token is
+  used;
 - verify that the target bundle exists and is enabled in the active registry;
 - reject client-supplied tenant/project/actor overrides;
 - attach actor and reply metadata from the authenticated connection;
@@ -641,7 +650,7 @@ Core tests should cover:
 - two messages for the same `object_ref` not running concurrently when the
   handler requests `serial_per_partition`;
 - stale `base_revision` returning conflict;
-- federated `allowed_subjects` rejection at ingress.
+- federated token/session rejection at ingress.
 
 Regression tests should prove:
 

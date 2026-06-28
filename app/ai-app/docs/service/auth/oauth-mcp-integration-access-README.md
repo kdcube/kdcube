@@ -8,6 +8,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/bundle-session-auth-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/authority-providers/credential-envelope-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-connections/delegated-connections-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-connections/design/grant-storage-durability-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/assembly-descriptor-README.md
@@ -19,6 +20,17 @@ see_also:
 OAuth MCP integration access is the current service/protocol implementation of
 a Connection Hub delegated connection where an external tool, such as Claude
 Code, calls a narrow KDCube MCP surface after a human platform admin consents.
+
+At the Connection Hub authority layer this feature is:
+
+```text
+authority_id       = oauth_mcp
+authenticator_id   = oauth_mcp.bearer
+credential_kind    = delegated_client_access
+audience           = kdcube:mcp
+representative     = integration:claude:<grantor-sub>
+grant resolver     = OAuth/MCP grant store
+```
 
 KDCube is the OAuth2 Authorization Server for this integration flow. It does
 not delegate this integration authorization step to an external identity
@@ -102,7 +114,7 @@ KDCube token endpoint
   |
   | verifies code, client, redirect URI, and PKCE
   | mints a short-lived kst1 integration session
-  | stores refresh token and selected tool allowlist
+  | stores refresh token, selected tool allowlist, and authority envelope
   v
 External client holds:
   access_token  = least-privilege integration token
@@ -144,6 +156,29 @@ kdcube:*:conversations:*;read
 
 Admin roles remain platform roles resolved by the existing platform session and
 role resolver. OAuth tokens do not invent admin privileges.
+
+The access token is a normal `kst1` session token for the integration
+representative, but it carries a nested `kdcube.credential.v1` envelope. The
+same envelope is stored in the access-grant and refresh-token records so refresh
+rotation keeps the delegated-client authority provenance:
+
+```json
+{
+  "schema": "kdcube.credential.v1",
+  "credential_kind": "delegated_client_access",
+  "issuer_authority_id": "oauth_mcp",
+  "issuer_authenticator_id": "oauth_mcp.bearer",
+  "subject": "integration:claude:<admin-sub>",
+  "audience": "kdcube:mcp",
+  "attrs": {
+    "client_id": "claude",
+    "scopes": ["conversations:read"],
+    "tools": ["conversations_export"]
+  }
+}
+```
+
+See [Authority Credential Envelope](../../sdk/solutions/connections/authority-providers/credential-envelope-README.md).
 
 ## Consent And Tool Enforcement
 
@@ -222,8 +257,8 @@ store, normally Redis.
 | Dynamic client record | Stores registered public client metadata and redirect URIs. | Until registration expiry or cleanup policy. |
 | CSRF token | Single-use consent POST protection bound to admin subject. | Short TTL. |
 | Authorization code | Stores client, redirect URI, PKCE challenge, admin subject, scopes, and selected tools. | Short TTL, single use. |
-| Access grant | Binds an access token to selected MCP tools. | Same TTL as access token. |
-| Refresh token | Stores client, admin subject, scopes, selected tools, and rotation state. | Long-lived, rotating. |
+| Access grant | Binds an access token to selected MCP tools and the `oauth_mcp` credential envelope. | Same TTL as access token. |
+| Refresh token | Stores client, admin subject, scopes, selected tools, authority envelope, and rotation state. | Long-lived, rotating. |
 | Bundle session record | The issued access token is a `kst1` session for the integration identity. | Access-token TTL. |
 
 Redis loss is safe but product-visible: missing records fail closed, but
@@ -276,6 +311,11 @@ KDCube-issued integration token
   -> delegated representative principal
   -> selected tools / allowed actions
 ```
+
+The feature registers an `oauth_mcp` authority provider in the local Connection
+Hub authority registry when mounted. That makes the implementation visible to
+code using the authority SDK without turning `/oauth/*` into a bundle-local
+surface.
 
 The consent roundtrip is how that credential and grant registry entry are
 created:

@@ -12,7 +12,7 @@ privilege, refreshable, revocable token. Write/delete tools remain admin-only.
 """
 from __future__ import annotations
 
-from typing import Iterable, List, Optional
+from typing import Any, Iterable, List, Mapping, Optional
 
 from kdcube_ai_app.apps.chat.ingress.oauth_mcp.deps import ADMIN_ROLES, oauth_tenant_project
 
@@ -49,6 +49,9 @@ async def mint_feedback_reader_access_token(
     scopes: List[str],
     *,
     authority=None,
+    client_id: str = "",
+    tools: List[str] | None = None,
+    credential: Mapping[str, Any] | None = None,
     ttl_seconds: int = ACCESS_TOKEN_TTL_SECONDS,
 ) -> dict:
     """Mint a read-only integration session for the consenting admin's connection.
@@ -71,6 +74,14 @@ async def mint_feedback_reader_access_token(
         permissions=[CONVERSATIONS_READ_PERMISSION],
         provider="integration",
         provider_subject=sub,
+        metadata={
+            "credential": dict(credential or {}),
+            "oauth_mcp": {
+                "client_id": str(client_id or "").strip(),
+                "scopes": list(scopes or []),
+                "tools": list(tools or []),
+            },
+        },
         ttl_seconds=ttl_seconds,
     )
     return {"access_token": grant.token, "expires_in": ttl_seconds}

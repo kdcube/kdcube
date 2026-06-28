@@ -77,3 +77,31 @@ async def test_minter_uses_integration_identity_not_admin():
     assert call["sub"] == integration_subject(ADMIN_SUB)
     assert call["sub"] != ADMIN_SUB
     assert call["roles"] == [FEEDBACK_READER_ROLE]
+
+
+@pytest.mark.asyncio
+async def test_minter_passes_credential_metadata_to_session_authority():
+    authority = _FakeAuthority()
+    credential = {
+        "schema": "kdcube.credential.v1",
+        "credential_id": "cred_test",
+        "credential_kind": "delegated_client_access",
+        "issuer_authority_id": "oauth_mcp",
+        "issuer_authenticator_id": "oauth_mcp.bearer",
+        "subject": integration_subject(ADMIN_SUB),
+        "audience": "kdcube:mcp",
+    }
+    await mint_feedback_reader_access_token(
+        ADMIN_SUB,
+        ["conversations:read"],
+        authority=authority,
+        client_id="claude",
+        tools=["conversations_export"],
+        credential=credential,
+        ttl_seconds=3600,
+    )
+
+    metadata = authority.calls[0]["metadata"]
+    assert metadata["credential"] == credential
+    assert metadata["oauth_mcp"]["client_id"] == "claude"
+    assert metadata["oauth_mcp"]["tools"] == ["conversations_export"]

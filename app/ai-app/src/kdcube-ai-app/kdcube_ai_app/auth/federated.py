@@ -22,6 +22,9 @@ FEDERATED_TOKEN_SECRET_KEY = "services.federated_token.secret"
 FEDERATED_TOKEN_DEFAULT_TTL_SECONDS = 900
 FEDERATED_TOKEN_MAX_TTL_SECONDS = 3600
 FEDERATED_TOKEN_REDIS_BASE = "kdcube:federated-idp:token"
+FEDERATED_CREDENTIAL_SCHEMA = "kdcube.credential.v1"
+FEDERATED_INGRESS_SESSION_AUTHORITY_ID = "kdcube.ingress_session"
+FEDERATED_INGRESS_SESSION_AUTHENTICATOR_ID = "kdcube.signed_active_record"
 
 
 class FederatedTokenError(ValueError):
@@ -194,33 +197,29 @@ async def issue_federated_data_bus_token(
     tenant: str,
     project: str,
     bundle_id: str,
-    provider: str,
-    provider_subject: str,
     user_id: str,
     user_type: str | UserType = UserType.REGISTERED,
     username: str | None = None,
     email: str | None = None,
     roles: Iterable[str] | None = None,
     permissions: Iterable[str] | None = None,
-    allowed_subjects: Iterable[str] | None = None,
+    identity_authority: Mapping[str, Any] | None = None,
     ttl_seconds: int = FEDERATED_TOKEN_DEFAULT_TTL_SECONDS,
     secret: str | bytes | None = None,
 ) -> FederatedTokenGrant:
     """
-    Issue a short-lived, bundle-scoped token for Socket.IO Data Bus use.
+    Issue a short-lived, bundle-scoped token for Data Bus use.
 
     The caller must validate the upstream federated identity before calling
     this function. This helper only materializes the verified identity as a
-    platform session plus a Redis-registered capability token.
+    KDCube session plus a Redis-registered Data Bus token.
     """
     tenant_value = str(tenant or "").strip()
     project_value = str(project or "").strip()
     bundle_value = str(bundle_id or "").strip()
-    provider_value = str(provider or "").strip()
-    provider_subject_value = str(provider_subject or "").strip()
     user_id_value = str(user_id or "").strip()
-    if not all((tenant_value, project_value, bundle_value, provider_value, provider_subject_value, user_id_value)):
-        raise FederatedTokenInvalid("tenant, project, bundle_id, provider, provider_subject, and user_id are required")
+    if not all((tenant_value, project_value, bundle_value, user_id_value)):
+        raise FederatedTokenInvalid("tenant, project, bundle_id, and user_id are required")
 
     user_type_value = user_type.value if isinstance(user_type, UserType) else str(user_type or "").strip().lower()
     resolved_user_type = UserType(user_type_value or UserType.REGISTERED.value)
@@ -236,27 +235,38 @@ async def issue_federated_data_bus_token(
         "email": email,
         "roles": _as_list(roles),
         "permissions": _as_list(permissions),
+        "identity_authority": dict(identity_authority or {}),
     }
     session = await session_manager.get_or_create_session(context, resolved_user_type, user_data)
 
+    jti = f"fdt_{uuid.uuid4().hex}"
+    credential: dict[str, Any] = {
+        "schema": FEDERATED_CREDENTIAL_SCHEMA,
+        "credential_id": jti,
+        "credential_kind": "derived_session",
+        "issuer_authority_id": FEDERATED_INGRESS_SESSION_AUTHORITY_ID,
+        "issuer_authenticator_id": FEDERATED_INGRESS_SESSION_AUTHENTICATOR_ID,
+        "subject": f"session:{session.session_id}",
+        "tenant": tenant_value,
+        "project": project_value,
+        "audience": "kdcube:data_bus",
+        "session_id": session.session_id,
+        "iat": issued_at,
+        "exp": expires_at,
+    }
+    if identity_authority:
+        credential["verified_authority"] = dict(identity_authority)
+
     claims: dict[str, Any] = {
         "schema": FEDERATED_TOKEN_SCHEMA,
-        "jti": f"fdt_{uuid.uuid4().hex}",
+        "jti": jti,
         "sub": _token_subject(tenant=tenant_value, project=project_value, bundle_id=bundle_value),
         "tenant": tenant_value,
         "project": project_value,
         "bundle_id": bundle_value,
-        "provider": provider_value,
-        "provider_subject": provider_subject_value,
         "session_id": session.session_id,
-        "user_id": user_id_value,
-        "username": username or user_id_value,
-        "email": email,
-        "user_type": resolved_user_type.value,
-        "roles": _as_list(roles),
-        "permissions": _as_list(permissions),
         "allowed_transports": ["data_bus"],
-        "allowed_subjects": _as_list(allowed_subjects),
+        "credential": credential,
         "iat": issued_at,
         "exp": expires_at,
     }

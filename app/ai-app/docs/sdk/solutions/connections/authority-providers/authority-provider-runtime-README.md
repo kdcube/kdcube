@@ -7,6 +7,7 @@ tags: ["sdk", "solutions", "connections", "connection-hub", "authority-provider"
 updated_at: 2026-06-28
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/authority-providers/credential-envelope-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/request-authenticators/request-authenticators-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/authority-projection/authority-projection-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-selector-README.md
@@ -179,8 +180,29 @@ AuthorityProvider
   authenticators[]
   grant_resolver(identity, requested_grants)
   linkers[to_authority_id]
-  optional credential/grant provisioning operations
+optional credential/grant provisioning operations
 ```
+
+Bundle-local custom authorities declare this through the bundle manifest:
+
+```python
+from kdcube_ai_app.infra.plugin.bundle_loader import authority_provider
+
+class MyBundle:
+    @authority_provider(
+        authority_id="yay.identity",
+        authenticator_id="yay.identity.oauth",
+        credential_kinds=["authority_access"],
+        audiences=["bundle:navigator-tg-bot@1-0"],
+    )
+    async def yay_identity_provider(self):
+        return self.yay_authority_provider
+```
+
+On proc load, the declaration is published to Redis authority discovery as
+metadata. The verifier itself remains reachable only where the bundle is
+loaded. Ingress may use the metadata for diagnostics/selection, but it must not
+import bundle-local verifier code.
 
 An authenticator result should include:
 
@@ -212,6 +234,31 @@ linker("yey.custom:user:123", to="kdcube.platform")
   -> "kdcube.platform:02e53484-..."
   -> or null
 ```
+
+## Credential Envelope
+
+KDCube-issued credentials and delegated grant records use
+`kdcube.credential.v1` as their routing envelope. The runtime reads the
+untrusted envelope to choose a reachable authority provider, then the provider
+performs real verification.
+
+```text
+credential envelope
+  issuer_authority_id
+  issuer_authenticator_id
+  credential_kind
+  audience
+      |
+      v
+AuthorityRegistry
+      |
+      +-- reachable provider -> verify
+      |
+      +-- not reachable -> unresolved/fail closed
+```
+
+The canonical schema and examples are in
+[Authority Credential Envelope](credential-envelope-README.md).
 
 ## Provisioning And Runtime Use
 
@@ -248,7 +295,8 @@ Target:
 
 - all authenticators declare an `authority_id`;
 - surface guards declare required authority and grants;
-- OAuth/MCP becomes the `oauth_mcp` authenticator + grant resolver;
+- OAuth/MCP is registered as the `oauth_mcp` authority provider with
+  `oauth_mcp.bearer` authenticator and delegated-client grant resolver;
 - custom deployments such as Yey register `yey.custom` as an authority provider;
 - platform APIs require `kdcube.platform` only when they truly require platform
   authority.

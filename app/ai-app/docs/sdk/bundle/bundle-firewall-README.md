@@ -90,5 +90,6 @@ from:
 That route is a static app shell route. Bundle data/actions should go through
 explicit bundle public APIs, for example `@api(route="public", ...)` handlers
 that verify Telegram WebApp `initData`, or through Socket.IO Data Bus with a
-bundle-issued federated token. The outbound firewall still applies only when
-bundle code emits events back to connected clients.
+federated Data Bus session token issued after provider proof is verified. The
+outbound firewall still applies only when bundle code emits events back to
+connected clients.

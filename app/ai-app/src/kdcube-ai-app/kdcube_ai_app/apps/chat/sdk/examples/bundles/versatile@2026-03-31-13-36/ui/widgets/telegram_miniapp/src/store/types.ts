@@ -14,6 +14,7 @@ export interface AppSettings {
   defaultTenant: string;
   defaultProject: string;
   defaultAppBundleId: string;
+  connectionHubBundleId: string;
 }
 
 export interface RouteContext {
@@ -139,6 +140,11 @@ export interface WebAppPayload {
   };
   authContext?: {
     headers?: Record<string, unknown>;
+  };
+  connections?: {
+    connection_hub?: {
+      bundle_id?: string;
+    };
   };
   auth?: {
     provider?: string;

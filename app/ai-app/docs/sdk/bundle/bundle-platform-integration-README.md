@@ -895,15 +895,16 @@ Current behavior:
 
 - proc discovers all `@data_bus_handler(...)` methods through the manifest path
 - Socket.IO `data_bus.publish` ingress authenticates the socket, verifies the
-  target bundle exists/enabled, normalizes actor/reply metadata, applies
-  federated token scope such as `allowed_subjects`, and enqueues accepted
-  messages
+  target bundle exists/enabled, verifies any Connection Hub federated Data Bus
+  token and backing session, normalizes actor/reply metadata, and enqueues
+  accepted messages
 - ingress does not import bundle modules or handler manifests
 - proc validates registered subjects, handler `user_types` / `roles`, required
   `object_ref`, and required `idempotency_key` before invoking handler code
-- Socket.IO accepts scoped federated Data Bus tokens issued by bundle public
-  claim endpoints for clients without a platform browser session; the bundle
-  endpoint validates the upstream app context and maps it to a platform actor
+- Socket.IO accepts scoped federated Data Bus tokens for clients without a
+  platform browser session; the issuer, usually Connection Hub or a
+  bundle-owned authority endpoint, validates upstream app context and maps it
+  to an actor session with projected authority when an identity link exists
 - accepted messages are written to
   `kdcube:data-bus:{tenant}:{project}:{bundle_id}:messages`
 - the processor-owned Data Bus runtime reconciles the active registry and

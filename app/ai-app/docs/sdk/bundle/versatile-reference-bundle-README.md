@@ -43,7 +43,7 @@ This is the bundle to study first.
 | SDK canvas component mount | `ui/scene`, `sdk://solutions/canvas/ui/component`, `entrypoint.py` canvas operations |
 | SDK canvas board as a standalone widget | `ui.widgets.pinboard`, `sdk://solutions/canvas/ui/widget/pinboard`; see [Scene Composition](../solutions/scene/scene-composition-README.md#the-canvas-board-as-a-standalone-widget) |
 | Public Telegram webhook and WebApp bridge | `entrypoint.py`, `docs/integrations/telegram-setup.md`, `docs/design/telegram-webapp.md` |
-| Federated Data Bus claim for Telegram WebApp | `entrypoint.py:telegram_federated_data_bus_claim` |
+| Telegram Mini App live Data Bus claim | Connection Hub `federated_data_bus_claim`; Versatile only forwards `authContext` |
 | Data Bus handlers | `entrypoint.py:data_bus_echo`, `entrypoint.py` handler for subject `canvas.patch` |
 | Canvas Data Bus mutation path | `entrypoint.py` handler for subject `canvas.patch` |
 | MCP connector declarations | `surfaces.as_consumer.agents.main.tools` in config |
@@ -240,20 +240,20 @@ Platform widget path:
 3. The widget emits `data_bus.publish` with subject `versatile.echo`.
 4. `entrypoint.py:data_bus_echo` replies through the Data Bus result channel.
 
-Telegram WebApp path:
+Telegram Mini App Connection Hub path:
 
-1. The widget calls the public bundle operation
-   `telegram_federated_data_bus_claim`.
-2. The bundle validates Telegram identity and issues a temporary federated Data
-   Bus token scoped to this bundle and to `versatile.echo`.
-3. The widget opens Socket.IO with `federated_token`.
-4. The widget emits `data_bus.publish` with subject `versatile.echo`.
-5. `entrypoint.py:data_bus_echo` replies through the Data Bus result channel.
+1. The Telegram host receives Telegram `initData` and returns it as
+   `authContext.headers` in the standard widget `CONFIG_RESPONSE`.
+2. The Connection Hub iframe calls Connection Hub
+   `federated_data_bus_claim`.
+3. Connection Hub validates the promoted Telegram proof, resolves any identity
+   link, and issues a temporary Data Bus token scoped to `connection-hub@1-0`.
+4. The iframe opens Socket.IO with `federated_token`.
+5. Connection Hub uses that live channel to deliver
+   `connection_hub.identity.link_changed`.
 
-The handler is declared with the anonymous visibility threshold so the platform
-widget can call it from anonymous, registered, paid, or privileged sessions. The
-Telegram path remains narrower because the federated token is scoped to the
-single echo subject.
+The Versatile bundle does not mint this token and does not validate Telegram
+for Connection Hub. It only supplies the host-side auth context.
 
 The detailed platform contract is in:
 

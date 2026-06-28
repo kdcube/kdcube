@@ -13,7 +13,14 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from kdcube_ai_app.apps.chat.ingress.oauth_mcp import mount_oauth_mcp
+from kdcube_ai_app.apps.chat.ingress.oauth_mcp.authority import (
+    OAUTH_MCP_CREDENTIAL_KIND,
+)
 from kdcube_ai_app.apps.chat.ingress.oauth_mcp.store import GrantStore
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_registry import (
+    OAUTH_MCP_AUTHENTICATOR_ID,
+    OAUTH_MCP_AUTHORITY_ID,
+)
 from kdcube_ai_app.apps.chat.ingress.oauth_mcp.pkce import make_s256_challenge
 from kdcube_ai_app.apps.chat.ingress.oauth_mcp.tests.test_clients_and_store import FakeRedis
 from kdcube_ai_app.apps.chat.ingress.oauth_mcp.tests.helpers import enable_oauth_mcp
@@ -61,7 +68,15 @@ async def test_access_token_grant_binds_consented_tools(ctx):
     # The issued access token's grant must reflect the (empty) consent, and the
     # refresh token must carry it so it survives rotation.
     assert await store.get_access_grant(body["access_token"]) == []
-    assert (await store.validate_refresh_token(body["refresh_token"]))["tools"] == []
+    grant_record = await store.get_access_grant_record(body["access_token"])
+    assert grant_record["authority"]["schema"] == "kdcube.credential.v1"
+    assert grant_record["authority"]["credential_kind"] == OAUTH_MCP_CREDENTIAL_KIND
+    assert grant_record["authority"]["issuer_authority_id"] == OAUTH_MCP_AUTHORITY_ID
+    assert grant_record["authority"]["issuer_authenticator_id"] == OAUTH_MCP_AUTHENTICATOR_ID
+    assert grant_record["authority"]["audience"] == "kdcube:mcp"
+    refresh_record = await store.validate_refresh_token(body["refresh_token"])
+    assert refresh_record["tools"] == []
+    assert refresh_record["authority"]["issuer_authority_id"] == OAUTH_MCP_AUTHORITY_ID
 
 
 @pytest.mark.asyncio
@@ -82,6 +97,8 @@ async def test_authorization_code_exchange_succeeds(ctx):
     assert body["expires_in"] == 3600
     assert body["scope"] == "conversations:read"
     assert body["refresh_token"]
+    refresh_record = await store.validate_refresh_token(body["refresh_token"])
+    assert refresh_record["authority"]["subject"] == "integration:claude:google:admin@example.test"
     assert r.headers.get("Cache-Control") == "no-store"
 
 

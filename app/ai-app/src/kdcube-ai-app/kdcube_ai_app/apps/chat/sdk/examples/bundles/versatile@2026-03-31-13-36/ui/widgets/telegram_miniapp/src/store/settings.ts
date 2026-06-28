@@ -7,6 +7,7 @@ const PLACEHOLDER_ID_TOKEN_HEADER = '{{ID_TOKEN_HEADER}}';
 const PLACEHOLDER_TENANT = '{{DEFAULT_TENANT}}';
 const PLACEHOLDER_PROJECT = '{{DEFAULT_PROJECT}}';
 const PLACEHOLDER_BUNDLE_ID = '{{DEFAULT_APP_BUNDLE_ID}}';
+const DEFAULT_CONNECTION_HUB_BUNDLE_ID = 'connection-hub@1-0';
 
 interface RuntimeConfigPayload {
   baseUrl?: string;
@@ -17,6 +18,12 @@ interface RuntimeConfigPayload {
   defaultTenant?: string;
   defaultProject?: string;
   defaultAppBundleId?: string;
+  connectionHubBundleId?: string;
+  connections?: {
+    connection_hub?: {
+      bundle_id?: string;
+    };
+  };
   tenant?: string;
   project?: string;
   tenant_id?: string;
@@ -146,6 +153,7 @@ class SettingsManager {
     defaultTenant: PLACEHOLDER_TENANT,
     defaultProject: PLACEHOLDER_PROJECT,
     defaultAppBundleId: PLACEHOLDER_BUNDLE_ID,
+    connectionHubBundleId: DEFAULT_CONNECTION_HUB_BUNDLE_ID,
   };
 
   private callback: (() => void) | null = null;
@@ -170,6 +178,11 @@ class SettingsManager {
     return isPlaceholder(this.settings.defaultAppBundleId)
       ? ROUTE_CONTEXT.bundleId || 'versatile@2026-03-31-13-36'
       : this.settings.defaultAppBundleId;
+  }
+
+  getConnectionHubBundleId(): string {
+    const configured = String(this.settings.connectionHubBundleId || '').trim();
+    return configured || DEFAULT_CONNECTION_HUB_BUNDLE_ID;
   }
 
   getIdTokenHeader(): string {
@@ -246,6 +259,10 @@ class SettingsManager {
       defaultTenant: tenant || this.settings.defaultTenant,
       defaultProject: project || this.settings.defaultProject,
       defaultAppBundleId: config.defaultAppBundleId || this.settings.defaultAppBundleId,
+      connectionHubBundleId:
+        config.connectionHubBundleId ||
+        config.connections?.connection_hub?.bundle_id ||
+        this.settings.connectionHubBundleId,
     };
     if (options.notify !== false) {
       this.callback?.();
@@ -313,6 +330,8 @@ class SettingsManager {
                 'defaultTenant',
                 'defaultProject',
                 'defaultAppBundleId',
+                'connections',
+                'connectionHubBundleId',
               ],
             },
           },

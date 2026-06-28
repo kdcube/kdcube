@@ -119,6 +119,41 @@ def _as_list(values: Iterable[Any] | None) -> list[str]:
     return [str(value).strip() for value in (values or ()) if str(value).strip()]
 
 
+_CREDENTIAL_CLAIM_SCHEMA = "kdcube.credential.v1"
+_CREDENTIAL_CLAIM_KEYS = {
+    "schema",
+    "credential_id",
+    "credential_kind",
+    "issuer_authority_id",
+    "issuer_authenticator_id",
+    "subject",
+    "tenant",
+    "project",
+    "audience",
+    "session_id",
+    "verified_authority",
+    "attrs",
+    "iat",
+    "exp",
+}
+
+
+def _session_credential_claim(metadata: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(metadata, Mapping):
+        return None
+    credential = metadata.get("credential")
+    if not isinstance(credential, Mapping):
+        return None
+    if credential.get("schema") != _CREDENTIAL_CLAIM_SCHEMA:
+        return None
+    claim = {
+        key: credential[key]
+        for key in _CREDENTIAL_CLAIM_KEYS
+        if key in credential and credential[key] not in (None, "", [], {})
+    }
+    return claim or None
+
+
 def _b64url_encode(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
 
@@ -479,6 +514,9 @@ class BundleSessionAuthority:
             "iat": issued_at,
             "exp": expires_at,
         }
+        credential_claim = _session_credential_claim(metadata)
+        if credential_claim is not None:
+            claims["credential"] = credential_claim
         secret = await self._resolve_secret()
         token = _make_token(claims, secret=secret)
         session_record["token_sha256"] = _hash_token(token)
@@ -526,6 +564,7 @@ class BundleSessionAuthority:
             sub=sub,
             provider=provider,
             provider_subject=provider_subject,
+            metadata=metadata,
             ttl_seconds=ttl_seconds,
         )
 

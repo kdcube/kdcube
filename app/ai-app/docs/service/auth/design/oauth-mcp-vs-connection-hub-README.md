@@ -8,6 +8,7 @@ updated_at: 2026-06-28
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/oauth-mcp-integration-access-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/authority-providers/credential-envelope-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-selector-README.md
 ---
 # OAuth MCP And Connection Hub Delegation
@@ -17,6 +18,21 @@ Connection Hub delegated-connection shape. Its token is not special at the
 Connection Hub layer: it is another credential that a registered authenticator
 must verify and a linker/grant resolver must attach to a principal, resource,
 and allowed actions.
+
+Implementation status: OAuth/MCP registers `oauth_mcp` as a local authority
+provider when the feature is mounted. Issued access tokens and grant records
+carry the standard `kdcube.credential.v1` envelope:
+
+```text
+credential_kind         = delegated_client_access
+issuer_authority_id     = oauth_mcp
+issuer_authenticator_id = oauth_mcp.bearer
+audience                = kdcube:mcp
+```
+
+Federated Data Bus session tokens carry the same envelope vocabulary with
+`issuer_authority_id = kdcube.ingress_session` and
+`audience = kdcube:data_bus`.
 
 The common abstraction is not "MCP" and not "client access". It is
 authenticator-driven delegation:

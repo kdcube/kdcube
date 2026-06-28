@@ -58,6 +58,8 @@ Socket.IO live channel by calling Connection Hub's `federated_data_bus_claim`
 public operation. When the user finishes the browser-side claim, Connection
 Hub emits `connection_hub.identity.link_changed` to that session. This avoids
 polling and keeps Versatile out of Connection Hub's server-to-widget lifecycle.
+After a link or unlink event, the iframe claims a fresh token and reconnects so
+the backing `UserSession` carries the current projected authority.
 
 ## Auth Lanes
 

@@ -80,6 +80,19 @@ def _bundle_id(entrypoint: Any = None) -> str:
     return configured_bundle_id(_config(entrypoint)) or BUNDLE_ID
 
 
+def _connection_hub_bundle_id(entrypoint: Any = None) -> str:
+    bundle_prop = getattr(entrypoint, "bundle_prop", None)
+    if callable(bundle_prop):
+        try:
+            value = bundle_prop("connections.connection_hub.bundle_id", "connection-hub@1-0")
+            text = str(value or "").strip()
+            if text:
+                return text
+        except Exception:
+            pass
+    return "connection-hub@1-0"
+
+
 def user_has_role(entrypoint: Any, role: str) -> bool:
     wanted = str(role or "").strip()
     if not wanted:
@@ -358,6 +371,11 @@ async def payload(
     data = {
         "ok": True,
         "bundle_id": _bundle_id(entrypoint),
+        "connections": {
+            "connection_hub": {
+                "bundle_id": _connection_hub_bundle_id(entrypoint),
+            },
+        },
         "authContext": _auth_context_config(entrypoint, integration_id=integration_id),
         "auth": _legacy_auth_config(entrypoint, integration_id=integration_id),
         "active_tab": active_tab,

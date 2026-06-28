@@ -11,6 +11,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/link-flows/platform-first-identity-linking-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/request-authenticators/request-authenticators-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/authority-providers/authority-provider-runtime-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/authority-providers/credential-envelope-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/authority-projection/authority-projection-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-accounts/delegated-accounts-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-connections/delegated-connections-README.md
@@ -40,6 +41,7 @@ Connection Hub
   |
   +-- Authority Projection
   |     actor identity + linked platform principal -> UserSession authority
+  |     short-lived Data Bus tokens use that UserSession
   |
   +-- Delegated Connections
   |     credential/proof -> authenticator -> linker/grant -> allowed actions
@@ -126,7 +128,9 @@ allowed capability, not the grantor's full platform session.
 | User starts in KDCube and then proves a provider identity | [Platform-First Identity Linking](link-flows/platform-first-identity-linking-README.md) |
 | Authenticate a request with provider proof | [Request Authenticators](request-authenticators/request-authenticators-README.md) |
 | Understand selector/authenticator/authority/grant contracts | [Authority Provider Runtime](authority-providers/authority-provider-runtime-README.md) |
+| Understand token/proof routing metadata | [Authority Credential Envelope](authority-providers/credential-envelope-README.md) |
 | Carry roles/economics across runtime boundaries | [Authority Projection](authority-projection/authority-projection-README.md) |
+| Open Data Bus from Telegram or another non-browser actor | [Federated Data Bus Session Tokens](../../bundle/auth-bundle-federated-README.md) |
 | Understand delegated representatives and grants | [Delegated Connections](delegated-connections/delegated-connections-README.md) |
 | Connect Gmail/Slack/iCloud as delegated provider accounts | [Delegated Accounts](delegated-accounts/delegated-accounts-README.md) |
 | Host Connection Hub or another widget in an iframe | [Widget Auth Context](widget-auth-context/widget-auth-context-README.md) |

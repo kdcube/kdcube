@@ -15,7 +15,6 @@ const TELEGRAM_OPERATION_ALIASES: Record<string, string> = {
   conversations_create: 'telegram_conversations_create',
   conversations_switch: 'telegram_conversations_switch',
   conversations_delete: 'telegram_conversations_delete',
-  federated_data_bus_claim: 'telegram_federated_data_bus_claim',
   telegram_user_admin_data: 'telegram_webapp_user_admin_data',
   telegram_user_admin_upsert: 'telegram_webapp_user_admin_upsert',
   telegram_user_admin_delete: 'telegram_webapp_user_admin_delete',
@@ -37,7 +36,7 @@ function providerFrom(headers: Record<string, string>): string {
   return String(found?.[1] || '').toLowerCase();
 }
 
-function authHeaders(base?: HeadersInit): Headers {
+export function authHeaders(base?: HeadersInit): Headers {
   const headers = new Headers(base);
   const initData = telegramInitData();
   const accessToken = settings.getAccessToken();

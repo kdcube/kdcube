@@ -172,8 +172,16 @@ async def mcp_endpoint(request: Request) -> Response:
     except Exception:
         return JSONResponse(_rpc_error(None, -32700, "parse error"))
 
-    # The consented tool allowlist bound to this access token at issue time.
-    granted_tools = await get_grant_store(request).get_access_grant(token)
+    # The consented tool allowlist and authority envelope bound to this access
+    # token at issue time. Tool enforcement remains the hard gate here; the
+    # envelope is propagated so downstream code can reason in the same
+    # Connection Hub authority vocabulary as other delegated connections.
+    grant_record = await get_grant_store(request).get_access_grant_record(token)
+    granted_tools = list((grant_record or {}).get("tools") or []) if grant_record is not None else None
+    if isinstance((grant_record or {}).get("authority"), dict):
+        user = dict(user)
+        user["credential"] = grant_record["authority"]
+        user["identity_authority"] = grant_record["authority"]
     response = await handle_rpc(
         message, user=user, tools=get_mcp_tools(request), granted_tools=granted_tools
     )
