@@ -4,7 +4,7 @@ title: "Platform-First Identity Linking"
 summary: "Connection Hub link flow where the user starts with an authenticated KDCube platform session and then proves an external provider identity."
 status: active
 tags: ["sdk", "connections", "connection-hub", "identity-linking", "platform-session"]
-updated_at: 2026-06-27
+updated_at: 2026-06-28
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/link-flows/channel-first-identity-linking-README.md
@@ -46,7 +46,7 @@ KDCube user is already signed in
        provider proof
           |
           v
-4. Connection Hub provider module
+4. Connection Hub authenticator module
      validates provider proof
      extracts provider_subject
           |

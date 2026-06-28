@@ -146,6 +146,7 @@ class AuthenticatorRegistration:
 
     authenticator_id: str
     provider: str
+    authority_id: str = ""
     integration_id: str = ""
     connection_id: str = ""
     label: str = ""
@@ -160,6 +161,7 @@ class AuthenticatorRegistration:
         return {
             "authenticator_id": self.authenticator_id,
             "provider": self.provider,
+            "authority_id": self.authority_id,
             "integration_id": self.integration_id or self.connection_id,
             "connection_id": self.connection_id,
             "label": self.label,
@@ -177,6 +179,12 @@ class AuthenticatorRegistration:
         return cls(
             authenticator_id=_str(data.get("authenticator_id") or data.get("id")),
             provider=_str(data.get("provider")),
+            authority_id=_str(
+                data.get("authority_id")
+                or data.get("authorityId")
+                or data.get("authority")
+                or data.get("issuer")
+            ),
             integration_id=_str(data.get("integration_id") or data.get("integrationId")),
             connection_id=_str(
                 data.get("connection_id")
@@ -209,6 +217,8 @@ class AuthenticatedRequest:
 
     ok: bool
     authenticated: bool = False
+    authority_id: str = ""
+    identity_subject: str = ""
     linked: bool = False
     provider: str = ""
     provider_subject: str = ""
@@ -228,6 +238,8 @@ class AuthenticatedRequest:
         return {
             "ok": self.ok,
             "authenticated": self.authenticated,
+            "authority_id": self.authority_id,
+            "identity_subject": self.identity_subject or self.provider_subject,
             "linked": self.linked,
             "provider": self.provider,
             "provider_subject": self.provider_subject,
@@ -246,9 +258,23 @@ class AuthenticatedRequest:
     @classmethod
     def from_dict(cls, value: Mapping[str, Any] | None) -> "AuthenticatedRequest":
         data = dict(value or {})
+        identity_authority = data.get("identity_authority") if isinstance(data.get("identity_authority"), Mapping) else {}
         return cls(
             ok=bool(data.get("ok")),
             authenticated=bool(data.get("authenticated")),
+            authority_id=_str(
+                data.get("authority_id")
+                or data.get("authorityId")
+                or data.get("authority")
+                or identity_authority.get("authority_id")
+                or identity_authority.get("authority")
+            ),
+            identity_subject=_str(
+                data.get("identity_subject")
+                or data.get("subject")
+                or data.get("provider_subject")
+                or data.get("sub")
+            ),
             linked=bool(data.get("linked")),
             provider=_str(data.get("provider")),
             provider_subject=_str(data.get("provider_subject") or data.get("subject")),

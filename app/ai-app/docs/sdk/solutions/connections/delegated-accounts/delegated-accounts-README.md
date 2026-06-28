@@ -1,17 +1,20 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-accounts/delegated-accounts-README.md
-title: "Delegated Accounts"
-summary: "Connection Hub role: store user-granted external account capabilities such as Gmail, Slack, and iCloud for automation and app actions."
+title: "Delegated Provider Accounts"
+summary: "Delegated Connections subtype where KDCube stores user-granted external provider capabilities such as Gmail, Slack, and iCloud for automation and app actions."
 status: active
-tags: ["sdk", "connections", "connection-hub", "delegated-accounts", "oauth", "gmail", "slack", "icloud"]
-updated_at: 2026-06-27
+tags: ["sdk", "connections", "connection-hub", "delegated-connections", "delegated-accounts", "oauth", "gmail", "slack", "icloud"]
+updated_at: 2026-06-28
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-connections/delegated-connections-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/identity-links/identity-links-README.md
 ---
-# Delegated Accounts
+# Delegated Provider Accounts
 
-Delegated accounts answer a different question than identity links:
+Delegated provider accounts are a subtype of
+[Delegated Connections](../delegated-connections/delegated-connections-README.md).
+They answer this question:
 
 ```text
 Can an app or automation act on this user's external account?
@@ -26,10 +29,29 @@ platform user 02e...
   -> iCloud app-specific password
 ```
 
+In delegated-connection terms:
+
+```text
+grantor principal
+  platform user 02e...
+      |
+      v
+delegated representative
+  KDCube automation/app using provider account
+      |
+      v
+credential or capability
+  Gmail OAuth token / Slack OAuth token / iCloud app password
+      |
+      v
+resource surface
+  Gmail / Slack / iCloud
+```
+
 ## Boundary
 
-Delegated account connections are capabilities. They are not identity proof and
-they are not platform roles.
+Delegated provider account connections are capabilities. They are not identity
+proof and they are not platform roles.
 
 ```text
 Identity link:
@@ -103,5 +125,5 @@ Connection Hub resolves user's delegated account
 provider token/capability returned to app-side integration code
 ```
 
-The app should not ask delegated accounts for platform roles. Roles come from
-platform authority projection.
+The app should not ask delegated provider accounts for platform roles. Roles
+come from platform authority projection.

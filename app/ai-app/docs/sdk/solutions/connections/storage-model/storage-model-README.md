@@ -4,7 +4,7 @@ title: "Connection Hub Storage Model"
 summary: "Storage map for Connection Hub data: descriptors, secrets, request-authenticator metadata, identity links, link challenges, delegated account tokens, and runtime caches."
 status: active
 tags: ["sdk", "connections", "connection-hub", "storage", "postgres", "secrets", "identity-links"]
-updated_at: 2026-06-27
+updated_at: 2026-06-28
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-properties-and-secrets-lifecycle-README.md
@@ -37,9 +37,9 @@ Redis/cache
 
 | Object | Current storage | Contains secrets? | Notes |
 | --- | --- | ---: | --- |
-| Provider/app config | `bundles.yaml` app props | no | Integration ids, OAuth app definitions, descriptor authenticators. |
+| Provider/app config | `bundles.yaml` app props | no | Authority ids, authenticator ids, OAuth app definitions, descriptor authenticators. |
 | Bot token / OAuth client secret | `bundles.secrets.yaml` or secrets service | yes | Read through bundle secret lifecycle using `secret_ref`. |
-| Request-authenticator metadata | Postgres | no | Stores provider, integration id/selector, `secret_ref`, verifier metadata. |
+| Request-authenticator metadata | Postgres | no | Stores provider, authority id, authenticator id, `secret_ref`, verifier metadata. |
 | Identity link | bundle-local JSON today | no | Maps provider subject to platform user id. |
 | Identity-link challenge | bundle-local JSON today | no | Short-lived link proof state. |
 | Delegated account token | connections/email stores | yes, user token | OAuth token or app password for automation. |
@@ -53,8 +53,8 @@ managed operational metadata:
 ```text
 connection_hub_request_authenticators
   authenticator_id
+  authority_id
   provider
-  integration_id / selector handle
   enabled
   role_providing
   subject_namespace

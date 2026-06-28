@@ -8,15 +8,17 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/bundle-session-auth-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-connections/delegated-connections-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-connections/design/grant-storage-durability-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/assembly-descriptor-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/configuration/service-runtime-configuration-mapping-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/servicing-interfaces-README.md
 ---
 # OAuth MCP Integration Access
 
-OAuth MCP integration access is the platform service mechanism for allowing an
-external tool, such as Claude Code, to call a narrow KDCube MCP surface after a
-human platform admin consents.
+OAuth MCP integration access is the current service/protocol implementation of
+a Connection Hub delegated connection where an external tool, such as Claude
+Code, calls a narrow KDCube MCP surface after a human platform admin consents.
 
 KDCube is the OAuth2 Authorization Server for this integration flow. It does
 not delegate this integration authorization step to an external identity
@@ -224,6 +226,11 @@ store, normally Redis.
 | Refresh token | Stores client, admin subject, scopes, selected tools, and rotation state. | Long-lived, rotating. |
 | Bundle session record | The issued access token is a `kst1` session for the integration identity. | Access-token TTL. |
 
+Redis loss is safe but product-visible: missing records fail closed, but
+long-lived connectors can require re-consent if dynamic client or refresh-token
+records disappear. The solution-level durability design note is
+[Grant Storage Durability](../../sdk/solutions/connections/delegated-connections/design/grant-storage-durability-README.md).
+
 ## Failure Modes
 
 | Situation | Expected behavior |
@@ -252,51 +259,49 @@ admin consent flow to a least-privilege MCP integration token.
 
 ## Relationship To Connection Hub
 
-OAuth MCP integration access and Connection Hub are adjacent, but they solve
-different problems. The shared diagram lives in
+OAuth MCP integration access is one delegated-connection authenticator/protocol
+under the Connection Hub concept. It is still implemented as service auth
+endpoints because `/oauth/*` and `/mcp` are platform ingress surfaces. The
+shared diagram lives in
 [OAuth MCP Vs Connection Hub](design/oauth-mcp-vs-connection-hub-README.md).
 
-OAuth MCP starts with a platform-authenticated human, usually an admin:
+At the Connection Hub layer, OAuth/MCP is not conceptually different from other
+credential-bearing integrations. It provides one authenticator and one grant
+registry:
 
 ```text
-platform browser session
-  -> /oauth/authorize
-  -> consent scopes + selected MCP tools
-  -> auth code + PKCE
-  -> integration token
-  -> /mcp tools/list or tools/call
+KDCube-issued integration token
+  -> oauth_mcp authenticator
+  -> oauth_mcp grant registry
+  -> delegated representative principal
+  -> selected tools / allowed actions
 ```
 
-Connection Hub often starts from the opposite direction:
+The consent roundtrip is how that credential and grant registry entry are
+created:
 
 ```text
-provider/channel proof
-  Telegram initData / Slack signature / API key / OIDC claim
-  -> request authenticator
-  -> identity link
-  -> platform authority
-  -> UserSession
+grantor authority
+  platform browser session / projected platform principal
+      |
+      v
+/oauth/authorize
+      |
+      v
+consent scopes + selected MCP tools
+      |
+      v
+auth code + PKCE
+      |
+      v
+integration token + refresh token + selected-tool grant
 ```
 
-The boundary is:
-
-| Concern | OAuth MCP Integration Access | Connection Hub |
-| --- | --- | --- |
-| Primary user story | External MCP client needs narrow access after consent. | App/channel needs to prove/link an external identity or use delegated accounts. |
-| Starts with | Existing platform browser session. | Provider proof or platform user connecting a provider. |
-| Produces | Integration access/refresh token and selected-tool grant. | Identity link, request-auth authority, or delegated account capability. |
-| Main consumer | External MCP client such as Claude Code. | Gateway auth selector, widgets, apps, automations, agents. |
-| Storage | OAuth clients, codes, grants, refresh tokens, selected tools. | Identity links, request-authenticator metadata, delegated account tokens. |
-
-Connection Hub delegated OAuth accounts, such as Gmail or Slack user accounts,
-are not OAuth MCP tokens. They are user-granted capabilities for app/automation
-work. OAuth MCP tokens are KDCube-issued integration access tokens for an
-external client calling KDCube MCP resources.
-
-Do not put Telegram/Slack/webhook proof verification into the OAuth MCP
-authorization server. That verification belongs to Connection Hub request
-authenticators. Do not put MCP consent/tool-grant issuance into Connection Hub
-identity links. That belongs to this OAuth MCP integration access mechanism.
+The OAuth/MCP authenticator validates only OAuth/MCP tokens and grant records.
+It should not learn Telegram, Slack, webhook, Gmail, or customer directory proof
+formats. Those are other authenticator modules. Likewise, identity links should
+not issue OAuth codes or refresh tokens; those records belong to the
+OAuth/MCP grant registry.
 
 ## Regression Checklist
 

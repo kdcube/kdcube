@@ -1,17 +1,19 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
 title: "Connection Hub Solution"
-summary: "Canonical map of Connection Hub roles: identity links, request authenticators, authority projection, delegated accounts, link flows, and widget auth-context transport."
+summary: "Canonical map of Connection Hub roles: identity links, request authenticators, authority projection, delegated connections, link flows, and widget auth-context transport."
 status: active
-tags: ["sdk", "solutions", "connections", "connection-hub", "identity", "auth", "authority", "delegated-accounts"]
-updated_at: 2026-06-27
+tags: ["sdk", "solutions", "connections", "connection-hub", "identity", "auth", "authority", "delegated-connections"]
+updated_at: 2026-06-28
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/identity-links/identity-links-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/link-flows/channel-first-identity-linking-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/link-flows/platform-first-identity-linking-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/request-authenticators/request-authenticators-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/authority-providers/authority-provider-runtime-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/authority-projection/authority-projection-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-accounts/delegated-accounts-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-connections/delegated-connections-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/widget-auth-context/widget-auth-context-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/storage-model/storage-model-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-selector-README.md
@@ -19,10 +21,10 @@ see_also:
 # Connection Hub Solution
 
 Connection Hub is the solution component that lets KDCube connect identities,
-request proofs, platform authority, and delegated external accounts without
+request proofs, platform authority, and delegated connections without
 collapsing those concepts into one store or one auth trick.
 
-It has six roles:
+It has seven roles:
 
 ```text
 Connection Hub
@@ -33,11 +35,14 @@ Connection Hub
   +-- Request Authenticators
   |     request proof -> verified external identity
   |
+  +-- Authority Providers
+  |     authority_id -> authenticators + grant resolver + linkers
+  |
   +-- Authority Projection
   |     actor identity + linked platform principal -> UserSession authority
   |
-  +-- Delegated Accounts
-  |     platform user -> external account token/capability
+  +-- Delegated Connections
+  |     credential/proof -> authenticator -> linker/grant -> allowed actions
   |
   +-- Link Flows
   |     platform-first and channel-first linking
@@ -54,44 +59,62 @@ incoming world event/request/widget call
        | proof material
        |   browser cookies / Telegram initData / Slack signature / API key
        v
-Request Authenticators
+Authenticator Selector
        |
-       | verified external identity
-       |   telegram:434804821
+       | candidate authenticators
        v
-Identity Links
+Request Authenticator
        |
-       | linked platform principal
-       |   02e53484-...
+       | verified identity + authority_id
        v
-Authority Projection
+Surface Guard
        |
-       | UserSession + identity_authority
-       |   actor_user_id=telegram_434804821
-       |   platform_user_id=02e53484-...
-       |   user_type=privileged
+       | same authority -> Grant Resolver
+       | different authority -> Authority Linker -> Grant Resolver
        v
 KDCube app/API/runtime/ReAct/economics
 ```
 
-Delegated accounts are a separate side of the same hub:
+Delegated connections are the common abstraction for consented capability
+relationships. The token or proof is not meaningful by itself. A registered
+authenticator interprets it, and a linker/grant resolver decides which
+principal, representative, resource, and actions it carries:
 
 ```text
-platform user 02e53484-...
+credential / proof / token
+  Telegram initData / Gmail OAuth token / iCloud password / KDCube OAuth token
        |
        v
-Delegated Accounts
+registered authenticator
+  telegram / gmail / slack / icloud / oauth_mcp / future provider
        |
-       +-- Gmail OAuth token
-       +-- Slack OAuth token
-       +-- iCloud app password
-       +-- future provider token/capability
+       v
+linker / grant resolver
+  identity link / delegated account grant / delegated client grant
+       |
+       v
+allowed actions on resource surface
+  Gmail / Slack / iCloud / KDCube MCP / future KDCube API
 ```
 
-An identity link proves who the actor maps to in KDCube. A delegated account
-token lets automation act on a remote account. Do not use delegated account
-tokens as platform identity proof, and do not derive platform roles from
-provider-local roles.
+The visible use cases differ only by authenticator and linker:
+
+```text
+Telegram:
+  initData -> telegram authenticator -> identity link -> projected UserSession
+
+Gmail:
+  OAuth account credential -> google authenticator -> account grant -> Gmail capability
+
+OAuth/MCP:
+  KDCube-issued token -> oauth_mcp authenticator -> grant registry -> integration principal + tools
+```
+
+An identity link proves who the actor maps to in KDCube. A delegated connection
+authorizes a representative to perform specific actions. Do not use delegated
+connection credentials as platform identity proof, and do not derive platform
+roles from provider-local roles. The delegated representative receives only the
+allowed capability, not the grantor's full platform session.
 
 ## Reading Order
 
@@ -102,8 +125,10 @@ provider-local roles.
 | User starts in Telegram/Slack/etc. and then attaches to KDCube | [Channel-First Identity Linking](link-flows/channel-first-identity-linking-README.md) |
 | User starts in KDCube and then proves a provider identity | [Platform-First Identity Linking](link-flows/platform-first-identity-linking-README.md) |
 | Authenticate a request with provider proof | [Request Authenticators](request-authenticators/request-authenticators-README.md) |
+| Understand selector/authenticator/authority/grant contracts | [Authority Provider Runtime](authority-providers/authority-provider-runtime-README.md) |
 | Carry roles/economics across runtime boundaries | [Authority Projection](authority-projection/authority-projection-README.md) |
-| Connect Gmail/Slack/iCloud for automation | [Delegated Accounts](delegated-accounts/delegated-accounts-README.md) |
+| Understand delegated representatives and grants | [Delegated Connections](delegated-connections/delegated-connections-README.md) |
+| Connect Gmail/Slack/iCloud as delegated provider accounts | [Delegated Accounts](delegated-accounts/delegated-accounts-README.md) |
 | Host Connection Hub or another widget in an iframe | [Widget Auth Context](widget-auth-context/widget-auth-context-README.md) |
 | Know where data/secrets live | [Storage Model](storage-model/storage-model-README.md) |
 | Understand gateway-level auth selection | [Auth Selector](../../../service/auth/auth-selector-README.md) |
@@ -123,9 +148,13 @@ host embeds Connection Hub iframe
        |
        | CONFIG_RESPONSE.authContext.headers
        |   X-Telegram-Init-Data
-       |   X-KDCube-Auth-Integration-ID
+       |   X-KDCube-Auth-Authority-ID
+       |   X-KDCube-Auth-Authenticator-ID
        v
 Connection Hub iframe calls Connection Hub
+       |
+       v
+Connection Hub authenticator selector picks the Telegram verifier
        |
        v
 Connection Hub validates Telegram proof
@@ -174,20 +203,23 @@ The gateway/service auth side asks for a complete `UserSession`.
 HTTP / SSE / Socket.IO / app API request
        |
        v
-RequestAuthSelector
+Authenticator Selector
        |
        +-- platform token/cookie auth
        |
        +-- Connection Hub bridge
              |
              v
-           provider module verifies request proof
+           selected authenticator verifies request proof
              |
              v
-           identity link resolves platform principal
+           verified identity + authority_id
              |
              v
-           authority projection returns roles/economics
+           linker resolves required authority if needed
+             |
+             v
+           grant resolver returns roles/economics/access grants
        |
        v
 UserSession
@@ -198,11 +230,12 @@ UserSession
 | Data | Source | Used by |
 | --- | --- | --- |
 | Provider proof | Incoming request or host widget config, for example Telegram `initData` | Request authenticator module |
-| Integration id | App/server config for the surface that owns the provider integration | Connection Hub selector |
+| Authority/authenticator hints | App/server config for the surface that owns the provider integration | Connection Hub authenticator selector |
 | Verifier secret | Bundle secrets / secrets service via `secret_ref` | Provider verifier only |
 | Identity link | Connection Hub identity-link store | Request auth, authority projection, link status |
 | Platform roles | Platform principal/role resolver | Authority projection |
-| Delegated account token | Connections framework user-scoped store | Automation/app tools |
+| Delegated connection grant | Connection Hub grant/account store | Automation/app tools or inbound protocol adapters |
+| Provider account token | Connections framework user-scoped store | Automation/app tools |
 | Widget auth context | Host `CONFIG_RESPONSE` | Child iframe API calls |
 
 ## Current Implementation Boundary
@@ -213,8 +246,10 @@ Current implementation:
 - Request-authenticator metadata is Postgres-backed.
 - Identity links and identity-link challenges are currently bundle-local JSON in
   the playground app.
-- Delegated Gmail/Slack/iCloud account storage uses the existing connections and
-  email integration stores.
+- Delegated Gmail/Slack/iCloud provider account storage uses the existing
+  connections and email integration stores.
+- OAuth MCP integration access is the current inbound delegated-connection
+  protocol adapter.
 - Gateway auth selection is documented in service auth.
 
 Production direction:
@@ -223,17 +258,19 @@ Production direction:
   identity service;
 - keep verifier secrets only in descriptor-backed bundle secrets/secrets
   service;
-- keep Connection Hub provider modules as the only place for Telegram/Slack/OIDC
+- keep Connection Hub authenticators as the only place for Telegram/Slack/OIDC
   request-proof verification.
 
 ## Boundary With OAuth MCP Integration Access
 
-Connection Hub and OAuth MCP integration access both touch platform auth, but
-they are different mechanisms. The shared diagram lives in
+OAuth MCP integration access is the current service/protocol implementation of
+one delegated-connection authenticator and grant registry. It verifies
+KDCube-issued integration credentials, resolves the delegated representative,
+and enforces selected actions. The shared diagram lives in
 [OAuth MCP Vs Connection Hub](../../../service/auth/design/oauth-mcp-vs-connection-hub-README.md).
 
 Do not put Telegram/Slack/webhook proof verification into OAuth MCP. That
-belongs to Connection Hub request authenticators. Do not put MCP consent,
-OAuth-code issuance, refresh-token rotation, or selected-tool grants into
-Connection Hub identity links. That belongs to
-[OAuth MCP Integration Access](../../../service/auth/oauth-mcp-integration-access-README.md).
+belongs to Connection Hub request authenticators. Do not put OAuth-code
+issuance, refresh-token rotation, or selected-tool grant state into Connection
+Hub identity links. That belongs to delegated connection protocol adapters such
+as [OAuth MCP Integration Access](../../../service/auth/oauth-mcp-integration-access-README.md).

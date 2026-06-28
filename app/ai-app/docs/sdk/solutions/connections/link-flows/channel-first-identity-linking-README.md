@@ -4,7 +4,7 @@ title: "Channel-First Identity Linking"
 summary: "Connection Hub link flow where the user starts inside an external channel that already carries provider auth material, then signs into KDCube to claim that provider proof."
 status: active
 tags: ["sdk", "connections", "connection-hub", "identity-linking", "telegram", "data-bus"]
-updated_at: 2026-06-27
+updated_at: 2026-06-28
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/identity-links/identity-links-README.md
@@ -35,7 +35,8 @@ external channel first
           v
 2. Versatile Telegram Mini App host
      knows app config:
-       integration_id = telegram.kdcube_ref
+       authority_id = telegram.kdcube_ref
+       authenticator_id = telegram.kdcube_ref.init_data
        Connection Hub widget URL
           |
           v
@@ -43,7 +44,8 @@ external channel first
      receives CONFIG_RESPONSE.authContext.headers:
        X-Telegram-Init-Data
        X-KDCube-Auth-Provider: telegram
-       X-KDCube-Auth-Integration-ID: telegram.kdcube_ref
+       X-KDCube-Auth-Authority-ID: telegram.kdcube_ref
+       X-KDCube-Auth-Authenticator-ID: telegram.kdcube_ref.init_data
           |
           v
 4. Connection Hub backend
@@ -82,8 +84,8 @@ external channel first
 | Stage | Data | Source |
 | --- | --- | --- |
 | Telegram proof | `Telegram.WebApp.initData` | Telegram client runtime |
-| Integration id | `telegram.kdcube_ref` | host app server config / bundle props |
-| Auth context headers | `X-Telegram-Init-Data`, `X-KDCube-Auth-Integration-ID` | host `CONFIG_RESPONSE` |
+| Authority/authenticator hints | `telegram.kdcube_ref`, `telegram.kdcube_ref.init_data` | host app server config / bundle props |
+| Auth context headers | `X-Telegram-Init-Data`, `X-KDCube-Auth-Authority-ID`, `X-KDCube-Auth-Authenticator-ID` | host `CONFIG_RESPONSE` |
 | Verifier secret | Telegram bot token | bundle secrets / secrets service through `secret_ref` |
 | Pending challenge | `challenge_id`, provider subject, live event session | Connection Hub backend |
 | Platform user | `platform_user_id` | authenticated KDCube browser session |

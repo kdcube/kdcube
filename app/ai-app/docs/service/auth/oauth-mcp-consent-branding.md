@@ -1,4 +1,15 @@
-# Branding the MCP authorization (consent) screen
+---
+id: repo:kdcube-ai-app/app/ai-app/docs/service/auth/oauth-mcp-consent-branding.md
+title: "Branding the MCP Authorization Screen"
+summary: "How to configure the product name shown on the OAuth MCP consent screen through auth.oauth_mcp.brand."
+status: active
+tags: ["service", "auth", "oauth", "mcp", "branding", "descriptor"]
+updated_at: 2026-06-27
+see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/service/auth/oauth-mcp-integration-access-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-connections/delegated-connections-README.md
+---
+# Branding the MCP Authorization Screen
 
 How to put your own product name on the OAuth/MCP consent screen, with no code
 change and no image rebuild.

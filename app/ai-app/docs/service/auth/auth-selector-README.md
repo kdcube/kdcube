@@ -4,17 +4,21 @@ title: "Auth Selector"
 summary: "Gateway request-authentication stack: request in, selected authenticator, complete UserSession out."
 status: active
 tags: ["service", "auth", "gateway", "connections", "authenticators", "sessions"]
-updated_at: 2026-06-27
+updated_at: 2026-06-28
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/authority-providers/authority-provider-runtime-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/request-authenticators/request-authenticators-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/runtime/cross-runtime-context-README.md
 ---
 # Auth Selector
 
-The gateway authenticates requests through a selector stack. The selector gets
-the raw request/context and returns one complete `UserSession`.
+The gateway authenticates requests through an authenticator selector stack. The
+selector chooses authenticator candidates. The selected authenticator verifies
+auth material and returns identity under an authority. Surface guards then
+authorize against required authority/grants and return one complete
+`UserSession`.
 
 ```text
 HTTP / SSE / Socket.IO / app API request
@@ -23,14 +27,20 @@ HTTP / SSE / Socket.IO / app API request
 FastAPIGatewayAdapter
         |
         v
-RequestAuthSelector
+AuthenticatorSelector
    |
    +-- platform token authenticators
    |     Cognito / multi-Cognito / bundle-session / simple-idp
    |
    +-- Connection Hub request-auth bridge
-         Connection Hub provider modules:
+         Connection Hub authenticator modules:
            Telegram initData / webhook HMAC / API key / Slack signature / ...
+        |
+        v
+verified identity + authority_id
+        |
+        v
+Surface Guard + Linker + Grant Resolver
         |
         v
 UserSession
@@ -77,7 +87,7 @@ KDCube has more than one way a user can arrive:
 - API key;
 - OAuth MCP integration token.
 
-Without a selector, every app/surface repeats "how do I authenticate this
+Without an authenticator selector, every app/surface repeats "how do I authenticate this
 request, link it to a platform user, and turn that into roles?" The selector
 makes that one platform mechanism.
 
@@ -97,47 +107,47 @@ auth:
 When enabled, the gateway first accepts a valid platform token/cookie session
 when one is present. That path is role-providing and should win. If no platform
 session is established, the gateway can ask Connection Hub. Connection Hub
-receives a `RequestEnvelope` and dispatches to its own provider modules. Those
-modules verify proof, read Connection Hub identity links and secrets, resolve
-platform authority, and return authority material. The gateway adapter converts
-that material into a normal `UserSession`.
+receives a `RequestEnvelope` and dispatches to its own authenticator modules.
+Those modules verify proof, read Connection Hub identity links and secrets,
+resolve platform authority, and return authority material. The gateway adapter
+converts that material into a normal `UserSession`.
 
 Connection Hub stores request-authenticator metadata in its own app store
 (Postgres for widget-managed rows) and reads secret values only through bundle
 secrets. The gateway sees neither bot tokens nor provider-specific verifier
 configuration.
 
-## Controlled Surfaces Carry An Integration Id
+## Controlled Surfaces Carry Selector Hints
 
 For surfaces KDCube controls, request-auth should not depend on guessing. The
 surface sends either platform auth material or external proof plus a stable
-non-secret integration selector:
+non-secret authority/authenticator selector:
 
 ```http
 X-Telegram-Init-Data: <Telegram.WebApp.initData>
-X-KDCube-Auth-Provider: telegram
-X-KDCube-Auth-Integration-ID: telegram.kdcube_ref
+X-KDCube-Auth-Authority-ID: telegram.kdcube_ref
+X-KDCube-Auth-Authenticator-ID: telegram.kdcube_ref.init_data
 ```
 
 For provider callbacks where the provider controls the request headers, put the
 same selector into the callback URL. Telegram webhooks should be registered as:
 
 ```text
-/public/telegram_webhook?integration_id=telegram.kdcube_ref
+/public/telegram_webhook?authenticator_id=telegram.kdcube_ref.webhook
 ```
 
-The integration id is configured in app props. It names the integration row
-used by the app for this surface or provider callback. It is not a bot id and
-not a secret. The Telegram Mini App host reads it from server config, forwards it to
-hosted iframes through the standard
-`CONFIG_RESPONSE`, and attaches it on its own app API calls.
+The authority/authenticator ids are configured in app props. They name the
+non-secret authority realm and verifier row used by the app for this surface or
+provider callback. They are not bot ids and not secrets. The Telegram Mini App
+host reads them from server config, forwards them to hosted iframes through the
+standard `CONFIG_RESPONSE`, and attaches them on its own app API calls.
 
-Uncontrolled third-party hooks are the only place where a provider module may
+Uncontrolled third-party hooks are the only place where an authenticator module may
 need to infer from raw request shape alone. All new
-controlled webhook examples should include `integration_id`; the fallback exists
+controlled webhook examples should include `authenticator_id`; the fallback exists
 for uncontrolled provider callbacks, not as the preferred setup. If a controlled request supplies
-`integration_id`, Connection Hub tries that row only and fails closed when no
-enabled row matches.
+`authenticator_id`, Connection Hub tries that row only and fails closed when no
+enabled row matches or the proof is rejected.
 
 ## Header-Only Auth Paths
 
@@ -154,7 +164,7 @@ header_only_auth=True
 
 This preserves the existing strict behavior for header-only routes while still
 allowing browser, Mini App, webhook, and app API routes to use Connection Hub's
-provider modules.
+authenticator modules.
 
 ## Cognito Is Also An Authenticator
 
@@ -162,18 +172,18 @@ The current Cognito/session/simple auth managers are still active and preserve
 their behavior. Conceptually they are selector candidates too:
 
 ```text
-selector candidate: cognito-token
+authenticator: kdcube.cognito
   input: Authorization + ID token
-  output: UserSession(platform_user_id, roles)
+  output: identity under kdcube.platform
 
-selector candidate: bundle-session-cookie
+authenticator: kdcube.bundle-session
   input: kst1 session cookie
-  output: UserSession(platform_user_id, roles)
+  output: identity under kdcube.platform
 
-selector candidate: connection-hub
+authenticator family: connection-hub
   input: raw request envelope
-  internal modules: telegram, slack, api-key, oidc, ...
-  output: UserSession(actor=<provider subject>, platform authority if linked)
+  internal authenticator modules: telegram, slack, api-key, oidc, ...
+  output: identity under module authority; linker/grant resolver produce session
 ```
 
 The migration target is to register all auth managers through the same selector
@@ -184,18 +194,18 @@ default selector candidate to avoid changing Cognito/session behavior.
 
 Provider families can have multiple configured authenticator rows. These rows
 belong to Connection Hub. The gateway does not know them. For Telegram,
-Connection Hub recognizes Telegram request shape and tries its configured bot
-verifiers:
+Connection Hub recognizes Telegram request shape and tries its configured
+authenticator rows:
 
 ```text
 request has x-telegram-init-data
   -> gateway calls Connection Hub bridge
   -> Connection Hub module family = telegram
-  -> if x-kdcube-auth-integration-id=telegram.support:
-       try telegram.support only
+  -> if x-kdcube-auth-authenticator-id=telegram.support.init_data:
+       try telegram.support.init_data only
      else:
        use provider fallback order for uncontrolled hooks
-  -> selected_authenticator = telegram.support
+  -> selected_authenticator = telegram.support.init_data
 ```
 
 This is bounded selection, not a blind broadcast to every app in the system.
@@ -204,19 +214,19 @@ This is bounded selection, not a blind broadcast to every app in the system.
 
 Implemented now:
 
-- `RequestAuthSelector`;
+- the authenticator selector contract and SDK primitives;
 - standard platform token/cookie auth as the role-providing first path;
 - optional Connection Hub bridge candidate;
 - `UserSession.identity_authority`;
 - Connection Hub `request_authenticate` operation;
 - Connection Hub authenticator metadata widget/API backed by Postgres rows and
   bundle-secret references;
-- Telegram provider module with `initData` verification and identity-link
+- Telegram authenticator module with `initData` verification and identity-link
   authority projection.
 
 Not complete yet:
 
 - Redis selector cache;
-- Slack/webhook/API-key provider modules;
+- Slack/webhook/API-key authenticator modules;
 - full replacement of the legacy `AUTH_PROVIDER` switch with descriptor-defined
   selector registrations.

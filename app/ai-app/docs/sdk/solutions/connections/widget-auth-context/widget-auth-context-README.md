@@ -4,7 +4,7 @@ title: "Widget Auth Context Transport"
 summary: "Connection Hub role: standard host-to-iframe auth-context transport through CONFIG_REQUEST/CONFIG_RESPONSE and opaque promoted headers."
 status: active
 tags: ["sdk", "connections", "connection-hub", "widgets", "iframe", "auth-context", "scene"]
-updated_at: 2026-06-27
+updated_at: 2026-06-28
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/scene/cross-surface-context-drag-README.md
@@ -47,13 +47,15 @@ as bearer/cookie scene auth material.
 ```text
 Telegram Mini App host
   has Telegram.WebApp.initData
-  has server config integration_id=telegram.kdcube_ref
+  has server config authority_id=telegram.kdcube_ref
+  has server config authenticator_id=telegram.kdcube_ref.init_data
        |
        v
 CONFIG_RESPONSE.authContext.headers
   X-Telegram-Init-Data: <initData>
   X-KDCube-Auth-Provider: telegram
-  X-KDCube-Auth-Integration-ID: telegram.kdcube_ref
+  X-KDCube-Auth-Authority-ID: telegram.kdcube_ref
+  X-KDCube-Auth-Authenticator-ID: telegram.kdcube_ref.init_data
        |
        v
 Connection Hub iframe requests

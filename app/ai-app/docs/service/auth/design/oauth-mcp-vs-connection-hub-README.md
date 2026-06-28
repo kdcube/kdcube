@@ -1,116 +1,160 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/service/auth/design/oauth-mcp-vs-connection-hub-README.md
-title: "OAuth MCP Vs Connection Hub"
-summary: "Shared diagram explaining the boundary between OAuth MCP integration access and Connection Hub identity/account linkage."
+title: "OAuth MCP And Connection Hub Delegation"
+summary: "Shared diagram explaining OAuth/MCP as a delegated-connection protocol adapter within the Connection Hub model."
 status: active
 tags: ["service", "auth", "oauth", "mcp", "connection-hub", "identity", "diagram"]
-updated_at: 2026-06-27
+updated_at: 2026-06-28
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/oauth-mcp-integration-access-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-selector-README.md
 ---
-# OAuth MCP Vs Connection Hub
+# OAuth MCP And Connection Hub Delegation
 
-OAuth MCP integration access and Connection Hub both touch platform auth, but
-they solve different problems.
+OAuth MCP integration access is the current service/protocol adapter for one
+Connection Hub delegated-connection shape. Its token is not special at the
+Connection Hub layer: it is another credential that a registered authenticator
+must verify and a linker/grant resolver must attach to a principal, resource,
+and allowed actions.
 
-```text
-                                   KDCUBE PLATFORM AUTH
-                         browser session / roles / platform user
-                                          |
-                    +---------------------+---------------------+
-                    |                                           |
-                    v                                           v
-
-        OAUTH MCP INTEGRATION ACCESS                 CONNECTION HUB
-        service/auth/oauth-mcp...                    sdk/solutions/connections
-        ---------------------------                  -------------------------
-
-        Purpose:                                    Purpose:
-        give an external MCP client                 connect external identities,
-        narrow access to KDCube                     request proofs, authority,
-        after human consent                         and delegated accounts
-
-
-        FLOW A                                      FLOW B
-        External Tool Access                        External Identity / Account Linkage
-
-        Claude Code / MCP client                    Telegram / Slack / OIDC / API key
-              |                                                   |
-              | discovers /mcp metadata                            | carries provider proof
-              v                                                   v
-        /oauth/register, /oauth/authorize            Connection Hub request authenticator
-              |                                                   |
-              | requires existing platform session                 | verifies provider proof
-              v                                                   v
-        Human platform admin consents                verified external identity
-              |                                      telegram:434804821
-              | scopes + selected MCP tools                        |
-              v                                                   v
-        auth code + PKCE token exchange              identity link lookup/write
-              |                                      telegram:434804821 -> platform_user_id
-              v                                                   |
-        KDCube issues integration token                            v
-              |                                      authority projection
-              |                                      actor + platform principal -> UserSession
-              v                                                   |
-        external client calls /mcp                                 v
-              |                                      app/API/widget/automation/ReAct/economics
-              v
-        selected MCP tool result
-
-
-        OUTPUT                                      OUTPUT
-
-        integration access token                    identity link
-        refresh token                               request-auth authority
-        selected-tool grant                         delegated account capability
-        least-privilege MCP role                    UserSession + identity_authority
-
-
-        STORAGE                                     STORAGE
-
-        OAuth client records                         request-authenticator metadata
-        CSRF tokens                                  identity links
-        auth codes                                   link challenges
-        access grants                                delegated account tokens
-        refresh tokens                               verifier secret refs
-        selected tool allowlist                      Data Bus link update sessions
-
-
-        DO NOT MIX
-
-        OAuth MCP is not the place                   Connection Hub is not the place
-        to verify Telegram/Slack/webhook             to issue MCP OAuth consent grants
-        provider proof.                              or selected-tool tokens.
-
-        Connection Hub verifies provider             OAuth MCP issues KDCube integration
-        identities and links them to                  tokens for external clients.
-        platform principals.
-```
-
-Shortest mental model:
+The common abstraction is not "MCP" and not "client access". It is
+authenticator-driven delegation:
 
 ```text
-OAuth MCP:
-  "Can this external tool call these KDCube MCP tools after admin consent?"
-
-Connection Hub:
-  "Who is this external identity in KDCube, and what authority/account access follows?"
+proof / credential / token
+  Telegram initData / Gmail OAuth token / iCloud password / KDCube OAuth token
+      |
+      v
+registered authenticator
+  telegram / gmail / slack / icloud / oauth_mcp / future provider
+      |
+      v
+linker / grant resolver
+  identity link / delegated account grant / delegated client grant
+      |
+      v
+authority or capability
+  UserSession / provider capability / integration principal
+      |
+      v
+allowed actions
+  scopes / tools / provider permissions / operation allowlist
 ```
+
+## Same Pipeline, Different Modules
+
+```text
+Telegram request:
+  initData
+    -> telegram authenticator
+    -> identity link
+    -> projected UserSession
+
+
+Gmail delegated account:
+  OAuth account credential
+    -> google/provider authenticator
+    -> delegated account grant
+    -> Gmail capability
+
+
+OAuth/MCP delegated connection:
+  KDCube-issued token
+    -> oauth_mcp authenticator
+    -> grant registry
+    -> integration principal + selected tools
+```
+
+## Two Phases
+
+```text
+Provisioning / consent
+  grantor proves authority
+    -> user login / channel proof / admin consent
+    -> identity link or delegated grant is written
+    -> credential is issued or stored
+
+Runtime use
+  credential/proof arrives later
+    -> selected authenticator verifies it
+    -> linker/grant resolver finds stored meaning
+    -> authority or capability is produced
+    -> allowed actions are enforced
+```
+
+OAuth/MCP follows the same lifecycle:
+
+```text
+/oauth/authorize + /oauth/token
+  -> writes delegated connection grant
+  -> issues KDCube credential
+
+/mcp tools/call
+  -> oauth_mcp authenticator verifies credential
+  -> grant registry resolves representative + actions
+  -> tool policy enforces selected tools
+```
+
+## Where OAuth/MCP Fits
+
+```text
+External client
+  Claude Code / MCP connector
+      |
+      | discovers protected KDCube resource
+      v
+OAuth/MCP protocol adapter
+  /oauth/register
+  /oauth/authorize
+  /oauth/token
+  /mcp
+      |
+      | requires grantor authority
+      v
+Platform auth / Connection Hub authority projection
+  browser session / linked Telegram authority / customer role provider
+      |
+      | consent
+      v
+Delegated connection grant
+  representative = integration:claude:<grantor>
+  resource       = kdcube:mcp
+  actions        = conversations_export
+  credential     = KDCube access/refresh token
+      |
+      v
+External client calls KDCube as delegated representative
+```
+
+OAuth/MCP owns protocol mechanics for this delegated connection authenticator:
+
+- OAuth metadata and dynamic client registration.
+- Authorization code + PKCE.
+- Consent screen and CSRF.
+- Access and refresh token issue/rotation.
+- Selected-tool grants for `/mcp`.
+
+Connection Hub owns the broader model:
+
+- Who the grantor is.
+- How non-platform actor identities link to a platform principal.
+- Which request authenticators can prove external identities.
+- How delegated credentials are selected, verified, linked, represented, and
+  revoked.
+- How allowed actions are projected into a `UserSession`, provider capability,
+  or integration principal.
 
 ## Boundary Rules
 
-- OAuth MCP integration access is an OAuth2 authorization-server and MCP
-  protected-resource mechanism.
-- Connection Hub is an identity/account linkage and request-proof authority
-  mechanism.
-- Connection Hub delegated OAuth accounts, such as Gmail or Slack user accounts,
-  are not OAuth MCP tokens.
-- OAuth MCP tokens are KDCube-issued integration access tokens for an external
-  client calling KDCube MCP resources.
-- Provider proof verification for Telegram/Slack/webhook/API-key belongs to
-  Connection Hub request authenticators.
-- MCP consent, OAuth-code issuance, refresh-token rotation, and selected-tool
-  grants belong to OAuth MCP integration access.
+- Do not verify Telegram/Slack/webhook/API-key provider proof inside the
+  OAuth/MCP protocol adapter. That belongs to Connection Hub request
+  authenticators.
+- Do not treat a delegated connection credential as the grantor's full platform
+  session. It is a representative credential with selected actions.
+- Do not derive platform roles from provider-local delegated account roles.
+  Platform authority comes from platform auth or Connection Hub authority
+  projection.
+- Do not split the product model into unrelated "external client access" and
+  "delegated account" systems. They are both delegated connections implemented
+  by different authenticator and linker modules.

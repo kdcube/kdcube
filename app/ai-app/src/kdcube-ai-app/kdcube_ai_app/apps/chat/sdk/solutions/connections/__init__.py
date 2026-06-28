@@ -38,11 +38,15 @@ from .identity_links import (
     request_origin,
 )
 from .authenticators import (
+    AuthRequestHints,
     AuthenticatedRequest,
     AuthenticatorRegistration,
+    AuthorityIdentity,
     ConnectionHubAuthenticatorsClient,
     REQUEST_AUTHENTICATE_OPERATION,
     RequestEnvelope,
+    SurfaceGuardRequirement,
+    select_authenticator_candidates,
 )
 
 __all__ = [
@@ -67,9 +71,13 @@ __all__ = [
     "connection_hub_bundle_id",
     "connection_hub_bundle_id_from_entrypoint",
     "request_origin",
+    "AuthRequestHints",
     "AuthenticatedRequest",
     "AuthenticatorRegistration",
+    "AuthorityIdentity",
     "ConnectionHubAuthenticatorsClient",
     "REQUEST_AUTHENTICATE_OPERATION",
     "RequestEnvelope",
+    "SurfaceGuardRequirement",
+    "select_authenticator_candidates",
 ]

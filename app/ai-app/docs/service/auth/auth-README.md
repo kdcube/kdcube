@@ -4,6 +4,7 @@ title: "Auth"
 summary: "Authentication providers and token transport across REST/SSE/Socket.IO."
 tags: ["service", "auth", "security", "tokens"]
 keywords: ["delegated auth", "cookie auth", "JWT", "SSE auth", "Socket.IO"]
+updated_at: 2026-06-28
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-selector-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/oauth-mcp-integration-access-README.md
@@ -26,13 +27,13 @@ options across REST, SSE, and Socket.IO.
 The gateway runs the request through the auth selector. A valid platform
 token/cookie session wins first because it directly provides platform authority.
 If no platform session is established, the selector can accept the Connection
-Hub request-auth bridge. Provider-specific proof modules live inside Connection
-Hub.
+Hub request-auth bridge. Provider-specific authenticator modules live inside
+Connection Hub.
 
 2) **Authentication**
 The selected authenticator returns a complete `UserSession`. For classic
 platform requests this is Cognito/session/simple auth. For channel/provider
-requests this may be Connection Hub after one of its provider modules verifies
+requests this may be Connection Hub after one of its authenticator modules verifies
 proof and resolves linked authority.
 
 3) **User type classification**  
@@ -60,21 +61,31 @@ provider-specific identity-link rule.
 
 When a request starts from another channel, such as Telegram init data, webhook
 signature, API key, or an app-owned proof, KDCube-controlled callers should
-send the external proof plus the stable non-secret `integration_id` that names
-the app integration row being used. API and iframe calls normally carry it as
-`X-KDCube-Auth-Integration-ID`; provider
+send the external proof plus stable non-secret authority/authenticator selector
+hints that name the authority realm and verifier row being used. API and iframe
+calls normally carry:
+
+```http
+X-KDCube-Auth-Authority-ID: telegram.kdcube_ref
+X-KDCube-Auth-Authenticator-ID: telegram.kdcube_ref.init_data
+```
+
+Provider
 webhooks that cannot add arbitrary selector headers, such as Telegram
 `setWebhook`, should put the same selector in the webhook URL query string:
-`?integration_id=<integration-id>`. Uncontrolled hooks may lack that
-hint and are handled by provider-specific request-shape matching as a fallback.
+`?authenticator_id=<authenticator-id>`. Uncontrolled hooks may lack that hint
+and are handled by provider-specific request-shape matching as a fallback.
+`integration_id` and `connection_id` are accepted only as migration aliases for
+older controlled surfaces; new surfaces should use `authority_id` and
+`authenticator_id`.
 Connection Hub should:
 
-1. select the provider module from the request shape;
+1. select authenticator candidates from request hints and request shape;
 2. validate the provider/request proof;
-3. resolve the provider identity to a linked platform principal through
-   Connections;
-4. resolve platform roles/permissions for that principal;
-5. stamp the execution context before role checks, economics, ReAct, tools, or
+3. return verified identity + `authority_id`;
+4. link to the required authority when the surface requires a different one;
+5. resolve roles/permissions/grants under that authority;
+6. stamp the execution context before role checks, economics, ReAct, tools, or
    child runtimes run.
 
 Connection Hub authenticator rows store metadata and `secret_ref` only. Provider

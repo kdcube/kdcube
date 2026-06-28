@@ -1,18 +1,21 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/request-authenticators/request-authenticators-README.md
 title: "Request Authenticators"
-summary: "Connection Hub role: verify request proof through provider modules and return linked authority material to the gateway/auth selector."
+summary: "Connection Hub role: verify request proof through authenticator modules and return linked authority material to the gateway/auth selector."
 status: active
 tags: ["sdk", "connections", "connection-hub", "authenticators", "request-auth", "gateway"]
-updated_at: 2026-06-27
+updated_at: 2026-06-28
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/authority-providers/authority-provider-runtime-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/service/auth/auth-selector-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/authority-projection/authority-projection-README.md
 ---
 # Request Authenticators
 
-Request authenticators verify proof carried by incoming requests.
+Request authenticators verify proof carried by incoming requests. The
+authenticator selector selects authenticators, not authorities. Each
+authenticator is registered under an `authority_id`.
 
 ```text
 Telegram initData
@@ -22,15 +25,15 @@ API key
 OIDC claim
         |
         v
-Connection Hub provider module
+Connection Hub authenticator module
         |
         v
-verified provider identity
+verified identity + authority_id
 ```
 
 The gateway does not parse Telegram, Slack, API-key, or webhook proof itself.
 It passes a request envelope to Connection Hub and receives an authenticated
-result when one provider module accepts it.
+result when one authenticator module accepts it.
 
 ## Selector Shape
 
@@ -38,7 +41,7 @@ result when one provider module accepts it.
 raw request
    |
    v
-RequestAuthSelector
+AuthenticatorSelector
    |
    +-- platform token/cookie/session candidates
    |
@@ -48,10 +51,13 @@ RequestAuthSelector
        request_authenticate(RequestEnvelope)
          |
          v
-       provider module verifies proof
+       authenticator verifies proof
          |
          v
-       identity link + authority projection
+       verified identity + authority_id
+         |
+         v
+       linker/grant resolver if the surface requires another authority
          |
          v
        AuthenticatedRequest
@@ -75,8 +81,8 @@ The SDK contract passes a JSON-safe view of the request:
   "url": "https://...",
   "headers": {
     "x-telegram-init-data": "...",
-    "x-kdcube-auth-provider": "telegram",
-    "x-kdcube-auth-integration-id": "telegram.kdcube_ref"
+    "x-kdcube-auth-authority-id": "telegram.kdcube_ref",
+    "x-kdcube-auth-authenticator-id": "telegram.kdcube_ref.init_data"
   },
   "query": {},
   "cookies": {}
@@ -86,42 +92,45 @@ The SDK contract passes a JSON-safe view of the request:
 Controlled KDCube surfaces should include:
 
 ```http
-X-KDCube-Auth-Provider: telegram
-X-KDCube-Auth-Integration-ID: telegram.kdcube_ref
+X-KDCube-Auth-Authority-ID: telegram.kdcube_ref
+X-KDCube-Auth-Authenticator-ID: telegram.kdcube_ref.init_data
 ```
 
-For third-party callbacks that cannot send custom headers, put the integration
-id in the callback URL:
+For third-party callbacks that cannot send custom headers, put the
+authenticator id in the callback URL:
 
 ```text
-/public/telegram_webhook?integration_id=telegram.kdcube_ref
+/public/telegram_webhook?authenticator_id=telegram.kdcube_ref.webhook
 ```
 
-## Integration Id
+## Hints
 
-`integration_id` is a non-secret deployment handle. It says which configured
-provider integration this surface is using.
+`authority_id` and `authenticator_id` are non-secret selector hints. They
+narrow which authenticators may be tried. They are not trusted facts. Legacy
+`integration_id`/`connection_id` names are accepted only while older surfaces
+migrate to the authority/authenticator names.
 
 ```text
-integration_id = telegram.kdcube_ref
+authenticator_id = telegram.kdcube_ref.init_data
   -> Connection Hub authenticator row
-  -> provider=telegram
+  -> authority_id=telegram.kdcube_ref
   -> secret_ref=identity.authenticators.telegram_kdcube_ref.bot_token
 ```
 
-It is not:
+These hints are not:
 
 - a bot token;
 - a Telegram bot id;
 - a platform user id;
 - an identity link.
 
-If an explicit integration id is present, Connection Hub should try that row
-only and fail closed if it is missing or disabled.
+If an explicit authenticator id is present, Connection Hub should try that row
+only and fail closed if it is missing, disabled, or rejects the proof.
 
-## Provider Modules
+## Authenticator Modules
 
-Provider modules live inside Connection Hub because they need access to:
+Authenticator modules live inside Connection Hub because they need
+access to:
 
 - Connection Hub authenticator metadata;
 - bundle secret references;
@@ -130,10 +139,11 @@ Provider modules live inside Connection Hub because they need access to:
 
 ```text
 Connection Hub
-  provider modules:
-    telegram
-    slack
-    oidc
+  authenticator modules:
+    telegram.init_data
+    telegram.webhook
+    slack.signature
+    oidc.claim
     api-key
     webhook-hmac
 ```
@@ -148,8 +158,11 @@ A successful request-auth bridge returns authority material:
 {
   "ok": true,
   "authenticated": true,
+  "authority_id": "telegram.kdcube_ref",
+  "identity_subject": "434804821",
   "provider": "telegram",
   "provider_subject": "434804821",
+  "selected_authenticator": "telegram.kdcube_ref.init_data",
   "actor_user_id": "telegram_434804821",
   "platform_user_id": "02e53484-...",
   "identity_authority": {
