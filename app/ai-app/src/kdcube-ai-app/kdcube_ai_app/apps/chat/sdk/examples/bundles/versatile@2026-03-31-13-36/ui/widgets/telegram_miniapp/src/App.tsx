@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AppShell } from './components/AppShell';
-import { ConnectionLinkPage } from './pages/ConnectionLinkPage';
 import { ConnectionsPage } from './pages/ConnectionsPage';
 import { ConversationsPage } from './pages/ConversationsPage';
 import { MemoryPage } from './pages/MemoryPage';
@@ -14,7 +13,7 @@ import {
   settings,
 } from './store/settings';
 import type { AppSettings, TabId, TelegramProfile, WebAppPayload } from './store/types';
-import { isTelegramWebApp, prepareTelegramWebApp, telegramLinkChallenge } from './telegram/utils';
+import { isTelegramWebApp, prepareTelegramWebApp } from './telegram/utils';
 
 function telegramDeniedProfile(): TelegramProfile {
   return {
@@ -34,9 +33,7 @@ function telegramDeniedProfile(): TelegramProfile {
 
 export default function App() {
   const [tab, setTab] = useState<TabId>(activeTabFromPath(ROUTE_CONTEXT.widgetPath));
-  const linkChallenge = useMemo(() => telegramLinkChallenge(), []);
-  const linkMode = isTelegramWebApp() && Boolean(linkChallenge);
-  const connectionLinkSurface = isTelegramWebApp() && (linkMode || tab === 'connections');
+  const connectionLinkSurface = isTelegramWebApp() && tab === 'connections';
   const [payload, setPayload] = useState<WebAppPayload>({});
   const [profile, setProfile] = useState<TelegramProfile | null>(null);
   const [error, setError] = useState('');
@@ -128,21 +125,19 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (linkMode) return;
     setBrowserTabPath(tab);
     void load();
-  }, [tab, linkMode]);
+  }, [tab]);
 
   return (
     <AppShell
       activeTab={tab}
       showAdmin={showAdmin}
-      hideTabs={telegramGateActive || linkMode}
+      hideTabs={telegramGateActive}
       loading={loading}
       error={pendingTelegramApproval ? '' : error}
       onTabChange={setTab}
     >
-      {!loading && linkMode && <ConnectionLinkPage challengeId={linkChallenge} />}
       {!loading && pendingTelegramApproval && (
         <TelegramPendingApproval
           title="Access request received"
@@ -152,7 +147,7 @@ export default function App() {
       )}
       {!loading && !pendingTelegramApproval && tab === 'memory' && <MemoryPage memory={payload.memory} reload={load} />}
       {!loading && !pendingTelegramApproval && tab === 'conversations' && <ConversationsPage conversations={payload.conversations} reload={load} />}
-      {!loading && !pendingTelegramApproval && tab === 'connections' && !linkMode && <ConnectionsPage />}
+      {!loading && !pendingTelegramApproval && tab === 'connections' && <ConnectionsPage />}
       {!loading && !pendingTelegramApproval && tab === 'telegram_admin' && showAdmin && <TelegramAdminPage />}
     </AppShell>
   );

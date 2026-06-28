@@ -132,7 +132,7 @@ External Client
         | GET /.well-known/oauth-protected-resource
         v
 KDCube Delegated Connection Protocol Adapter
-  served by chat-ingress when auth.oauth_mcp.enabled=true
+  served by chat-ingress when auth.connection_hub.delegated_credentials.oauth_mcp.enabled=true
         |
         | returns authorization endpoint, token endpoint,
         | registration endpoint, scopes, and resource metadata
@@ -272,7 +272,7 @@ should not learn how Google, Telegram, or a customer directory work.
 ## Descriptor Contract
 
 The current OAuth/MCP protocol implementation is configured in `assembly.yaml`
-under `auth.oauth_mcp`.
+under `auth.connection_hub.delegated_credentials.oauth_mcp`.
 
 ```yaml
 auth:

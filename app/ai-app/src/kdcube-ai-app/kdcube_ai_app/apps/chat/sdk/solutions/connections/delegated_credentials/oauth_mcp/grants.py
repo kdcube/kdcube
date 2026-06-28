@@ -14,9 +14,8 @@ from __future__ import annotations
 
 from typing import Any, Iterable, List, Mapping, Optional
 
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.deps import ADMIN_ROLES, oauth_tenant_project
-
 FEEDBACK_READER_ROLE = "kdcube:role:feedback-reader"
+ADMIN_ROLES = {"kdcube:role:super-admin"}
 
 # Read-only permission for conversation export across tenants/projects.
 CONVERSATIONS_READ_PERMISSION = "kdcube:*:conversations:*;read"
@@ -29,6 +28,15 @@ ACCESS_TOKEN_TTL_SECONDS = 3600
 ROLE_TOOLS = {
     FEEDBACK_READER_ROLE: {"conversations_export"},
 }
+
+
+def oauth_tenant_project(source: Any | None = None) -> tuple[str, str]:
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.config import (
+        oauth_mcp_config,
+    )
+
+    cfg = oauth_mcp_config(source)
+    return cfg.tenant, cfg.project
 
 
 def integration_subject(admin_sub: str) -> str:

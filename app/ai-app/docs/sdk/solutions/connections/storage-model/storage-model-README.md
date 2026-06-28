@@ -41,6 +41,7 @@ Redis/cache
 | Bot token / OAuth client secret | `bundles.secrets.yaml` or secrets service | yes | Read through bundle secret lifecycle using `secret_ref`. |
 | Request-authenticator metadata | Postgres | no | Stores provider, authority id, authenticator id, `secret_ref`, verifier metadata. |
 | Identity link | bundle-local JSON today | no | Maps provider subject to platform user id. |
+| Identity family | derived from identity links | no | Resolver output for product aggregation; not persisted separately. |
 | Identity-link challenge | bundle-local JSON today | no | Short-lived link proof state. |
 | Delegated account token | connections/email stores | yes, user token | OAuth token or app password for automation. |
 | Live link update | Data Bus / event delivery | no | Signals original iframe after browser claim completes. |

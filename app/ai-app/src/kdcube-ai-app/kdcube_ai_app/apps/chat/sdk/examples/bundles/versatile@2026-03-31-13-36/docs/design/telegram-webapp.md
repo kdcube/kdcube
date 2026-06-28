@@ -91,7 +91,8 @@ Connect tab link completion
   Connection Hub iframe claims a connection-hub live Socket.IO session
   |
   v
-  telegram_identity_link_start stores that session on the link challenge
+  connection-hub@1-0/public/telegram_identity_link_start stores that session
+  on the link challenge
   |
   v
   browser-side KDCube claim completes the challenge

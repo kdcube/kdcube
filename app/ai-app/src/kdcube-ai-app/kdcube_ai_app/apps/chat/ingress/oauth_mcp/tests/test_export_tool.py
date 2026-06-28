@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.export_tool import (
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.export_tool import (
     export_conversations,
     normalize_conversation,
     source_for_user,

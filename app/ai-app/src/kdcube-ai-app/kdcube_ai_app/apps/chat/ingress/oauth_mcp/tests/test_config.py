@@ -7,8 +7,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from kdcube_ai_app.apps.chat.ingress.oauth_mcp import mount_oauth_mcp
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.clients import dcr_redirect_allowed, get_client
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.config import oauth_mcp_config
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.clients import dcr_redirect_allowed, get_client
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.config import oauth_mcp_config
 from kdcube_ai_app.apps.chat.sdk import config as sdk_config
 
 
@@ -32,16 +32,18 @@ context:
   project: "project-b"
 auth:
   auth_token_cookie_name: "__Secure-KDCUBE"
-  oauth_mcp:
-    enabled: true
-    issuer: "https://mcp.example.test"
-    public_clients:
-      - client_id: "local-client"
-        redirect_uris:
-          - "http://localhost/callback"
-    dynamic_client_registration:
-      allowed_redirect_uris:
-        - "https://allowed.example.test/callback"
+  connection_hub:
+    delegated_credentials:
+      oauth_mcp:
+        enabled: true
+        issuer: "https://mcp.example.test"
+        public_clients:
+          - client_id: "local-client"
+            redirect_uris:
+              - "http://localhost/callback"
+        dynamic_client_registration:
+          allowed_redirect_uris:
+            - "https://allowed.example.test/callback"
 """,
         encoding="utf-8",
     )
@@ -57,7 +59,7 @@ auth:
         assert cfg.tenant == "tenant-a"
         assert cfg.project == "project-b"
         assert cfg.auth_cookie_name == "__Secure-KDCUBE"
-        assert cfg.brand == "KDCube"  # default when auth.oauth_mcp.brand is unset
+        assert cfg.brand == "KDCube"  # default when oauth_mcp brand is unset
 
         assert get_client("local-client", app) is not None
         assert get_client("claude", app) is None

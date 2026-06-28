@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.grants import (
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.grants import (
     FEEDBACK_READER_ROLE,
     can_call_tool,
     integration_subject,

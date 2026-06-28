@@ -2779,6 +2779,57 @@ async def call_bundle_op_public_get(
     )
 
 
+@router.post("/bundles/{tenant}/{project}/{bundle_id}/public/{operation}/{path_tail:path}")
+async def call_bundle_op_public_with_path(
+        tenant: str,
+        project: str,
+        bundle_id: str,
+        operation: str,
+        path_tail: str,
+        request: Request,
+):
+    """Public bundle op served with a trailing sub-path. The op (declared with
+    ``@api(route="public", ...)``) receives ``path_tail`` if it accepts that
+    kwarg; otherwise the segment is ignored and the op runs as usual."""
+    payload, uploaded_files = await _parse_bundle_request_payload(request)
+    return await _call_bundle_op_limited(
+        tenant=tenant,
+        project=project,
+        bundle_id=bundle_id,
+        payload=payload,
+        uploaded_files=uploaded_files,
+        request=request,
+        operation=operation,
+        route="public",
+        session=_build_public_api_request_session(request),
+        path_tail=path_tail,
+    )
+
+
+@router.get("/bundles/{tenant}/{project}/{bundle_id}/public/{operation}/{path_tail:path}")
+async def call_bundle_op_public_get_with_path(
+        tenant: str,
+        project: str,
+        bundle_id: str,
+        operation: str,
+        path_tail: str,
+        request: Request,
+):
+    payload = BundleSuggestionsRequest()
+    return await _call_bundle_op_limited(
+        tenant=tenant,
+        project=project,
+        bundle_id=bundle_id,
+        payload=payload,
+        uploaded_files=[],
+        request=request,
+        operation=operation,
+        route="public",
+        session=_build_public_api_request_session(request),
+        path_tail=path_tail,
+    )
+
+
 @router.post("/bundles/{tenant}/{project}/{bundle_id}/operations/{operation}")
 async def call_bundle_op(
         tenant: str,
@@ -3934,6 +3985,7 @@ async def _call_bundle_op_limited(
         operation: str,
         route: str,
         session: UserSession,
+        path_tail: Optional[str] = None,
 ):
     uploaded_files = list(uploaded_files or [])
     sem = _get_integrations_semaphore()
@@ -3949,6 +4001,7 @@ async def _call_bundle_op_limited(
                 operation=operation,
                 route=route,
                 session=session,
+                path_tail=path_tail,
             )
     return await _call_bundle_op_inner(
         tenant=tenant,
@@ -3960,6 +4013,7 @@ async def _call_bundle_op_limited(
         operation=operation,
         route=route,
         session=session,
+        path_tail=path_tail,
     )
 
 
@@ -4179,6 +4233,7 @@ async def _call_bundle_op_inner(
         operation: str,
         route: str,
         session: UserSession,
+        path_tail: Optional[str] = None,
 ):
     uploaded_files = list(uploaded_files or [])
     workflow, spec_resolved, tenant_id, project_id, comm_context = _unpack_loaded_bundle_workflow(
@@ -4239,6 +4294,9 @@ async def _call_bundle_op_inner(
         if _callable_accepts_kwarg(fn, "request"):
             extra = dict(extra or {})
             extra["request"] = request
+        if path_tail and _callable_accepts_kwarg(fn, "path_tail"):
+            extra = dict(extra or {})
+            extra["path_tail"] = path_tail
         extra = _with_implicit_bundle_kwargs(
             extra,
             user_id=session.user_id or session.fingerprint,

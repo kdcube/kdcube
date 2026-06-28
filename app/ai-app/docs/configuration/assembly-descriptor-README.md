@@ -231,9 +231,9 @@ auth:
 The server selects a verifier from token claims (`iss` plus `client_id` or
 `aud`) and then performs normal JWKS validation for that provider.
 
-### `auth.oauth_mcp`
+### `auth.connection_hub.delegated_credentials.oauth_mcp`
 
-`auth.oauth_mcp` configures KDCube-hosted OAuth2 authorization for MCP
+`auth.connection_hub.delegated_credentials.oauth_mcp` configures KDCube-hosted OAuth2 authorization for MCP
 integration access. It is a platform auth capability served by chat-ingress.
 Do not configure it under `platform.services.ingress.*`, and do not configure it
 with operator-facing environment variables.

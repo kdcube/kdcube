@@ -20,13 +20,10 @@ from typing import Any, Awaitable, Callable, Optional
 
 from fastapi import Request
 
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.config import oauth_mcp_config
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.config import oauth_mcp_config
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.grants import ADMIN_ROLES
 
 AuthenticateFn = Callable[[str], Awaitable[Optional[dict]]]
-
-# Roles permitted to authorize an integration connection.
-ADMIN_ROLES = {"kdcube:role:super-admin"}
-
 
 def oauth_tenant_project(source: Any | None = None) -> tuple[str, str]:
     cfg = oauth_mcp_config(source)
@@ -87,7 +84,7 @@ def get_grant_store(request: Request) -> Any:
     from kdcube_ai_app.apps.chat.sdk.config import get_settings
     from kdcube_ai_app.infra.redis.client import get_async_redis_client
 
-    from kdcube_ai_app.apps.chat.ingress.oauth_mcp.store import GrantStore
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.store import GrantStore
 
     tenant, project = oauth_tenant_project(request)
     redis = get_async_redis_client(get_settings().REDIS_URL)
@@ -104,7 +101,7 @@ def get_access_token_minter(request: Request) -> Callable[[str, list], Awaitable
     if fn is not None:
         return fn
 
-    from kdcube_ai_app.apps.chat.ingress.oauth_mcp.grants import mint_feedback_reader_access_token
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.grants import mint_feedback_reader_access_token
 
     return mint_feedback_reader_access_token
 

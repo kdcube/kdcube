@@ -389,6 +389,37 @@ input:focus, select:focus, textarea:focus {
   width: 100%;
 }
 
+/* Temporary on-screen layout/handshake readout (mobile has no devtools). */
+.memory-debug-overlay {
+  position: fixed;
+  left: 8px;
+  bottom: 8px;
+  z-index: 999;
+  max-width: calc(100vw - 16px);
+  padding: 8px 28px 8px 10px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line-strong);
+  background: rgba(6, 16, 30, 0.86);
+  color: #C6F3F1;
+  font-size: 11px;
+  line-height: 1.5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  pointer-events: auto;
+}
+.memory-debug-overlay strong { color: #FFE884; font-weight: 600; }
+.memory-debug-close {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  background: transparent;
+  color: #C6F3F1;
+  font-size: 15px;
+  line-height: 1;
+}
+
 .connection-widget-iframe {
   display: block;
   width: 100%;

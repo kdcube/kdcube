@@ -1,12 +1,13 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
 title: "Connection Hub Solution"
-summary: "Canonical map of Connection Hub roles: identity links, request authenticators, authority projection, delegated connections, link flows, and widget auth-context transport."
+summary: "Canonical map of Connection Hub roles: identity links, identity-family resolution, request authenticators, authority projection, delegated connections, link flows, and widget auth-context transport."
 status: active
 tags: ["sdk", "solutions", "connections", "connection-hub", "identity", "auth", "authority", "delegated-connections"]
 updated_at: 2026-06-28
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/identity-links/identity-links-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/identity-family-resolver/identity-family-resolver-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/link-flows/channel-first-identity-linking-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/link-flows/platform-first-identity-linking-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/request-authenticators/request-authenticators-README.md
@@ -25,13 +26,16 @@ Connection Hub is the solution component that lets KDCube connect identities,
 request proofs, platform authority, and delegated connections without
 collapsing those concepts into one store or one auth trick.
 
-It has seven roles:
+It has eight roles:
 
 ```text
 Connection Hub
   |
   +-- Identity Links
   |     external identity -> platform principal
+  |
+  +-- Identity Family Resolver
+  |     current actor/platform user -> linked runtime user ids
   |
   +-- Request Authenticators
   |     request proof -> verified external identity
@@ -124,6 +128,7 @@ allowed capability, not the grantor's full platform session.
 | --- | --- |
 | Understand the complete map | This document |
 | Store and resolve external identity -> platform user | [Identity Links](identity-links/identity-links-README.md) |
+| Resolve all linked runtime user ids for product aggregation | [Identity Family Resolver](identity-family-resolver/identity-family-resolver-README.md) |
 | User starts in Telegram/Slack/etc. and then attaches to KDCube | [Channel-First Identity Linking](link-flows/channel-first-identity-linking-README.md) |
 | User starts in KDCube and then proves a provider identity | [Platform-First Identity Linking](link-flows/platform-first-identity-linking-README.md) |
 | Authenticate a request with provider proof | [Request Authenticators](request-authenticators/request-authenticators-README.md) |
@@ -237,6 +242,7 @@ UserSession
 | Authority/authenticator hints | App/server config for the surface that owns the provider integration | Connection Hub authenticator selector |
 | Verifier secret | Bundle secrets / secrets service via `secret_ref` | Provider verifier only |
 | Identity link | Connection Hub identity-link store | Request auth, authority projection, link status |
+| Identity family | Connection Hub identity-link resolver | Product aggregation such as memories across linked identities |
 | Platform roles | Platform principal/role resolver | Authority projection |
 | Delegated connection grant | Connection Hub grant/account store | Automation/app tools or inbound protocol adapters |
 | Provider account token | Connections framework user-scoped store | Automation/app tools |
@@ -250,6 +256,8 @@ Current implementation:
 - Request-authenticator metadata is Postgres-backed.
 - Identity links and identity-link challenges are currently bundle-local JSON in
   the playground app.
+- Identity-family resolution is implemented as Connection Hub resolver logic over
+  the same identity-link store.
 - Delegated Gmail/Slack/iCloud provider account storage uses the existing
   connections and email integration stores.
 - OAuth/MCP is the current inbound delegated-connection

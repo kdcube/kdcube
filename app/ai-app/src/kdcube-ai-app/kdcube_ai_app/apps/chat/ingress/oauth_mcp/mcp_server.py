@@ -27,7 +27,7 @@ from kdcube_ai_app.apps.chat.ingress.oauth_mcp.deps import (
     get_grant_store,
 )
 from kdcube_ai_app.apps.chat.ingress.oauth_mcp.discovery import resolve_issuer, unauthorized_challenge
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.grants import FEEDBACK_READER_ROLE, can_call_tool
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.grants import FEEDBACK_READER_ROLE, can_call_tool
 
 router = APIRouter()
 
@@ -66,7 +66,7 @@ def get_mcp_tools(request: Request) -> Dict[str, ToolRunner]:
     if tools is not None:
         return tools
     # Production: build the conversations_browser-backed tool set.
-    from kdcube_ai_app.apps.chat.ingress.oauth_mcp.export_adapter import build_default_tools
+    from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.export_adapter import build_default_tools
 
     return build_default_tools(request)
 

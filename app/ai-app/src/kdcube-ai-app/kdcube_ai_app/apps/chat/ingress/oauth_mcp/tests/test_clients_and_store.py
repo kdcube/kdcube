@@ -12,12 +12,12 @@ from __future__ import annotations
 
 import pytest
 
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.clients import (
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.clients import (
     get_client,
     redirect_uri_allowed,
 )
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.pkce import make_s256_challenge, verify_s256
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.store import GrantStore
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.pkce import make_s256_challenge, verify_s256
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.store import GrantStore
 
 
 # ------------------------------- fake redis -------------------------------

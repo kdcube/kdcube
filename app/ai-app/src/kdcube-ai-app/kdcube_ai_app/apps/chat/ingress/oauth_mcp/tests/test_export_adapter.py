@@ -9,7 +9,7 @@ live in Phase 2.)
 """
 from __future__ import annotations
 
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.export_adapter import collapse_turn
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.export_adapter import collapse_turn
 
 
 def test_collapses_user_and_assistant_text():

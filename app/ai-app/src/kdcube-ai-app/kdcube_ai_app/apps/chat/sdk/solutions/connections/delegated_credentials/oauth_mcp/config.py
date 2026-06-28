@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
 
-"""Descriptor-backed configuration for OAuth/MCP integration access."""
+"""Descriptor-backed configuration for the OAuth/MCP delegated credential adapter."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -133,10 +133,12 @@ def _parse_config(raw: Any, *, settings: Any | None = None) -> OAuthMcpConfig:
 
 
 def oauth_mcp_config(source: Any | None = None) -> OAuthMcpConfig:
-    """Resolve OAuth/MCP config from app state override or assembly.yaml.
+    """Resolve OAuth/MCP delegated-credential config from app state or assembly.
 
     Tests may set ``app.state.oauth_mcp_config`` to a mapping or ``OAuthMcpConfig``.
-    Production reads ``auth.oauth_mcp`` from ``assembly.yaml``;
+    Production reads
+    ``auth.connection_hub.delegated_credentials.oauth_mcp`` from
+    ``assembly.yaml``;
     tenant/project and cookie name come from the canonical Settings object, which
     already resolves ``context.*`` and ``auth.*`` from descriptors.
     """
@@ -151,5 +153,5 @@ def oauth_mcp_config(source: Any | None = None) -> OAuthMcpConfig:
     from kdcube_ai_app.apps.chat.sdk.config import get_settings, read_plain
 
     settings = get_settings()
-    raw = read_plain("auth.oauth_mcp", default={})
+    raw = read_plain("auth.connection_hub.delegated_credentials.oauth_mcp", default={})
     return _parse_config(raw, settings=settings)

@@ -165,6 +165,15 @@ Important current behavior:
 - if the section is missing or empty, the loader falls back to built-in default
   guarded patterns from [config.py](/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/infra/gateway/config.py)
 
+Public bundle operations can be served with a trailing sub-path —
+`…/integrations/bundles/{tenant}/{project}/{bundle}/public/{alias}/{rest}` — for
+example an app that returns a shareable standalone page. For those, the public
+pattern must allow the tail: use `…/public/[^/]+(?:/.*)?$` (not
+`…/public/[^/]+$`) so the sub-path request is still classified `CHAT_INGRESS`
+and reaches the operation (which receives `{rest}` as its `path_tail`). The
+built-in defaults in `gateway_policy.py` already use the tail-allowing form, so
+update this descriptor list only if you override it.
+
 ### `bypass_throttling_patterns`
 
 `bypass_throttling_patterns` is a list of regexes for endpoints that should

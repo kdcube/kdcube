@@ -24,7 +24,7 @@ from fastapi import HTTPException
 
 from kdcube_ai_app.auth.AuthManager import AuthenticationError
 from kdcube_ai_app.auth.sessions import UserSession, UserType, RequestContext
-from kdcube_ai_app.auth.federated import (
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.federated_tokens.data_bus import (
     FederatedTokenError,
     verify_federated_data_bus_token,
 )
@@ -58,6 +58,13 @@ def _http_exception_message(exc: HTTPException) -> str:
     if isinstance(detail, dict):
         return str(detail.get("error") or detail.get("detail") or "Chat request failed")
     return str(detail or "Chat request failed")
+
+
+def _should_log_live_service_event(event: Any, data: Any) -> bool:
+    if event != "chat_service" or not isinstance(data, dict):
+        return False
+    event_type = str(data.get("type") or "")
+    return event_type.startswith("kdcube.data_bus.") or event_type.startswith("connection_hub.")
 
 async def _reject_anonymous(
         *,
@@ -189,9 +196,9 @@ class SocketIOChatHandler:
             if not event:
                 return
             if target_sid:
-                if event == "chat_service" and str(data.get("type") or "").startswith("kdcube.data_bus."):
+                if _should_log_live_service_event(event, data):
                     logger.info(
-                        "[socketio.relay] emitting data_bus event type=%s target_sid=%s session_id=%s message_id=%s",
+                        "[socketio.relay] emitting live service event type=%s target_sid=%s session_id=%s message_id=%s",
                         data.get("type"),
                         target_sid,
                         session_id,
@@ -199,9 +206,9 @@ class SocketIOChatHandler:
                     )
                 await self.sio.emit(event, data, room=target_sid)
             elif session_id:
-                if event == "chat_service" and str(data.get("type") or "").startswith("kdcube.data_bus."):
+                if _should_log_live_service_event(event, data):
                     logger.info(
-                        "[socketio.relay] broadcasting data_bus event type=%s session_id=%s message_id=%s",
+                        "[socketio.relay] broadcasting live service event type=%s session_id=%s message_id=%s",
                         data.get("type"),
                         session_id,
                         (data.get("data") or {}).get("message_id") if isinstance(data.get("data"), dict) else None,
@@ -281,6 +288,16 @@ class SocketIOChatHandler:
                 )
                 session = verified.session
                 federated_claims = verified.claims
+                logger.info(
+                    "WS federated connect verified sid=%s tenant=%s project=%s bundle_id=%s session_id=%s user_id=%s user_type=%s",
+                    sid,
+                    tenant,
+                    project,
+                    bundle_id,
+                    session.session_id,
+                    session.user_id,
+                    session.user_type.value if hasattr(session.user_type, "value") else session.user_type,
+                )
             except FederatedTokenError as e:
                 logger.warning("WS connect rejected: federated token invalid: %s", e)
                 return False

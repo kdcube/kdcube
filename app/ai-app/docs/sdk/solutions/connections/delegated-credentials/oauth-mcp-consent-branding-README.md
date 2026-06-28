@@ -1,7 +1,7 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/delegated-credentials/oauth-mcp-consent-branding-README.md
 title: "Branding the MCP Authorization Screen"
-summary: "How to configure the product name shown on the current OAuth/MCP delegated-credential consent screen through auth.oauth_mcp.brand."
+summary: "How to configure the product name shown on the current OAuth/MCP delegated-credential consent screen through auth.connection_hub.delegated_credentials.oauth_mcp.brand."
 status: active
 tags: ["service", "auth", "oauth", "mcp", "branding", "descriptor"]
 updated_at: 2026-06-27
@@ -27,9 +27,9 @@ Approve or Deny.
 By default that page is branded **KDCube**. If your deployment ships under a
 different product name, you can change the brand shown to the admin.
 
-## The one knob: `auth.oauth_mcp.brand`
+## The one knob: `auth.connection_hub.delegated_credentials.oauth_mcp.brand`
 
-Set `brand` under `auth.oauth_mcp` in your `assembly.yaml` descriptor to your
+Set `brand` under `auth.connection_hub.delegated_credentials.oauth_mcp` in your `assembly.yaml` descriptor to your
 product name:
 
 ```yaml
@@ -40,7 +40,7 @@ auth:
     brand: "Acme AI"
 ```
 
-That is the only field involved. The other `auth.oauth_mcp` settings (`issuer`,
+That is the only field involved. The other `auth.connection_hub.delegated_credentials.oauth_mcp` settings (`issuer`,
 `public_clients`, `dynamic_client_registration`, ...) are documented in
 [`oauth-mcp-protocol-adapter-README.md`](./oauth-mcp-protocol-adapter-README.md).
 

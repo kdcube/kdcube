@@ -208,7 +208,7 @@ matching selected-tool grant must fail closed for non-admin integration calls.
 This is a platform auth/MCP integration access feature served by chat-ingress.
 It is an auth capability, not an ingress-service descriptor setting and not an
 app configuration field. Its non-secret configuration belongs in
-`assembly.yaml` under `auth.oauth_mcp`.
+`assembly.yaml` under `auth.connection_hub.delegated_credentials.oauth_mcp`.
 
 Reference shape:
 
@@ -362,4 +362,4 @@ Use focused tests and one live connector test.
 9. `/mcp tools/list` and `/mcp tools/call` return MCP-shaped responses, not
    unhandled HTTP 500s for authorization failures.
 10. The feature is disabled when
-    `auth.oauth_mcp.enabled: false`.
+    `auth.connection_hub.delegated_credentials.oauth_mcp.enabled: false`.

@@ -13,7 +13,6 @@ from kdcube_ai_app.apps.chat.sdk.context.vector.conv_ticket_store import ConvTic
 from kdcube_ai_app.apps.chat.sdk.comm.sink import StatsTelemetrySink
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram import (
     TelegramUserAdminStorage,
-    extract_telegram_init_data_from_request,
 )
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram import user_admin as telegram_user_admin
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram import webapp as telegram_webapp
@@ -26,7 +25,6 @@ from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_economic impo
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.canvas import api as canvas_api
 from kdcube_ai_app.apps.chat.sdk.solutions.canvas.events.defaults import default_canvas_event_source_specs
-from kdcube_ai_app.apps.chat.sdk.solutions.connections import IdentityLinksClient, request_origin
 from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers import (
     NamedServiceRegistry,
     named_service_agent_event_source_namespaces,
@@ -951,43 +949,6 @@ class VersatileEntrypoint(BaseEntrypointWithEconomics):
             mark_memory_seen=mark_memory_seen,
             widget_path=widget_path,
             path=path,
-        )
-
-    @api(method="POST", alias="telegram_identity_link_start", route="public", public_auth=TELEGRAM_WEBAPP_PUBLIC_AUTH)
-    async def telegram_identity_link_start(
-        self,
-        data: Optional[Dict[str, Any]] = None,
-        request: Any = None,
-        telegram_init_data: str = "",
-        **kwargs,
-    ) -> Dict[str, Any]:
-        payload = _payload(data, telegram_init_data=telegram_init_data, **kwargs)
-        init_data = str(payload.get("telegram_init_data") or "").strip() or extract_telegram_init_data_from_request(request)
-        return await IdentityLinksClient(self).telegram_link_start(
-            telegram_init_data=init_data,
-            public_origin=request_origin(request),
-        )
-
-    @api(method="POST", alias="telegram_identity_link_complete", route="public", public_auth=TELEGRAM_WEBAPP_PUBLIC_AUTH)
-    async def telegram_identity_link_complete(
-        self,
-        data: Optional[Dict[str, Any]] = None,
-        request: Any = None,
-        challenge_id: str = "",
-        telegram_init_data: str = "",
-        **kwargs,
-    ) -> Dict[str, Any]:
-        payload = _payload(
-            data,
-            challenge_id=challenge_id,
-            telegram_init_data=telegram_init_data,
-            **kwargs,
-        )
-        init_data = str(payload.get("telegram_init_data") or "").strip() or extract_telegram_init_data_from_request(request)
-        return await IdentityLinksClient(self).telegram_link_complete(
-            challenge_id=str(payload.get("challenge_id") or ""),
-            telegram_init_data=init_data,
-            public_origin=request_origin(request),
         )
 
     @api(method="POST", alias="telegram_webapp_user_admin_data", route="public", public_auth=TELEGRAM_WEBAPP_PUBLIC_AUTH)

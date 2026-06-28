@@ -17,14 +17,14 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from kdcube_ai_app.apps.chat.ingress.oauth_mcp import mount_oauth_mcp
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.flow import (
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.flow import (
     AuthorizeError,
     build_redirect,
     parse_authorize_request,
 )
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.consent import render_consent_html
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.store import GrantStore
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.pkce import make_s256_challenge
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.consent import render_consent_html
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.store import GrantStore
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.pkce import make_s256_challenge
 from kdcube_ai_app.apps.chat.ingress.oauth_mcp.tests.test_clients_and_store import FakeRedis
 from kdcube_ai_app.apps.chat.ingress.oauth_mcp.tests.helpers import enable_oauth_mcp
 

@@ -12,6 +12,7 @@ see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/arch/architecture-of-what-we-built-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/arch/architecture-of-what-you-build-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/components/README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/build/how-to-write-bundle-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/bundle/bundle-index-README.md
@@ -30,6 +31,7 @@ Curated index of platform, service, and SDK documentation.
 * Architecture Of What We Built: [architecture-of-what-we-built-README.md](arch/architecture-of-what-we-built-README.md)
 * Architecture Of What You Build: [architecture-of-what-you-build-README.md](arch/architecture-of-what-you-build-README.md)
 * Component Recipes: [components/README.md](recipes/components/README.md)
+* Connection Recipes: [connections/README.md](recipes/connections/README.md)
 * How To Navigate App Docs: [how-to-navigate-kdcube-docs-README.md](sdk/bundle/build/how-to-navigate-kdcube-docs-README.md)
 * App Docs Index: [bundle-index-README.md](sdk/bundle/bundle-index-README.md)
 
@@ -43,6 +45,7 @@ Curated index of platform, service, and SDK documentation.
 * Versatile Reference App: [versatile-reference-bundle-README.md](sdk/bundle/versatile-reference-bundle-README.md)
 * App Developer Guide: [bundle-developer-guide-README.md](sdk/bundle/bundle-developer-guide-README.md)
 * Component Recipes: [components/README.md](recipes/components/README.md)
+* Connection Recipes: [connections/README.md](recipes/connections/README.md)
 
 ## App Interfaces And Frontend
 

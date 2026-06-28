@@ -160,7 +160,14 @@ button:disabled { cursor: not-allowed; opacity: 0.55; }
 }
 
 .host-controlled-shell.compact-shell {
-  height: 100vh;
+  /* Fill the iframe via the definite html/body/#root height:100% chain rather
+   * than 100vh. On mobile (Telegram Mini App) the layout viewport that `vh`
+   * resolves against is not established at initial mount, so the host-
+   * controlled compact shell collapsed to a thin line until a real view
+   * transition (compact->expanded->compact) forced a recalc. `100%` resolves
+   * against #root's definite height (which traces to the host iframe element's
+   * fixed height), so it is correct on the very first render. */
+  height: 100%;
 }
 
 .host-controlled-shell .warning-box {

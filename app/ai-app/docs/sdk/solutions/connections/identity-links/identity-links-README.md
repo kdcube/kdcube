@@ -7,6 +7,7 @@ tags: ["sdk", "connections", "connection-hub", "identity-links", "platform-princ
 updated_at: 2026-06-27
 see_also:
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/connection-hub-solution-README.md
+  - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/identity-family-resolver/identity-family-resolver-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/link-flows/channel-first-identity-linking-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/link-flows/platform-first-identity-linking-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/storage-model/storage-model-README.md
@@ -18,6 +19,10 @@ Identity links answer one question:
 ```text
 Which KDCube platform principal owns this verified external identity?
 ```
+
+When a product needs all runtime user ids that belong to the same person, use
+the [Identity Family Resolver](../identity-family-resolver/identity-family-resolver-README.md)
+instead of reading this store directly.
 
 Examples:
 

@@ -17,14 +17,14 @@ from typing import Optional, Tuple
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.clients import (
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.clients import (
     client_from_record,
     dcr_redirect_allowed,
     get_client,
 )
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.config import oauth_mcp_config
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.consent import render_consent_html, tools_for_scopes
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.authority import build_oauth_mcp_credential
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.config import oauth_mcp_config
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.consent import render_consent_html, tools_for_scopes
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.authority import build_oauth_mcp_credential
 from kdcube_ai_app.apps.chat.ingress.oauth_mcp.deps import (
     extract_bearer,
     get_access_token_minter,
@@ -34,12 +34,12 @@ from kdcube_ai_app.apps.chat.ingress.oauth_mcp.deps import (
     oauth_tenant_project,
 )
 from kdcube_ai_app.apps.chat.ingress.oauth_mcp.discovery import resolve_issuer
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.flow import (
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.flow import (
     AuthorizeError,
     build_redirect,
     parse_authorize_request,
 )
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.pkce import verify_s256
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.pkce import verify_s256
 
 router = APIRouter()
 

@@ -14,7 +14,7 @@ from __future__ import annotations
 import html as _html
 from typing import List, Tuple
 
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.flow import AuthorizeRequest
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.flow import AuthorizeRequest
 
 # scope -> [(tool_name, human description)]. Extensible as more MCP tools land.
 SCOPE_TOOLS = {

@@ -15,8 +15,8 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.clients import get_client, redirect_uri_allowed
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.metadata import CONVERSATIONS_READ_SCOPE
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.clients import get_client, redirect_uri_allowed
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.metadata import CONVERSATIONS_READ_SCOPE
 
 SUPPORTED_SCOPES = {CONVERSATIONS_READ_SCOPE}
 

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from kdcube_ai_app.auth.federated import issue_federated_data_bus_token
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.federated_tokens.data_bus import issue_federated_data_bus_token
 from kdcube_ai_app.auth.sessions import UserSession, UserType
 from kdcube_ai_app.apps.chat.ingress.ingress_core import GatewayCheckResult, IngressResult
 from kdcube_ai_app.apps.chat.ingress.socketio import chat as socket_chat

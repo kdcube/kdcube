@@ -17,7 +17,7 @@ from typing import Any
 from typing import Optional, Tuple
 from urllib.parse import urlsplit
 
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.config import (
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.config import (
     DEFAULT_CLAUDE_REDIRECT_URIS,
     DEFAULT_DCR_REDIRECT_URIS,
     oauth_mcp_config,

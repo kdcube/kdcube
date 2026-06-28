@@ -9,7 +9,7 @@ import secrets
 import time
 from typing import Any, Mapping
 
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.grants import (
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.grants import (
     CONVERSATIONS_READ_PERMISSION,
     FEEDBACK_READER_ROLE,
     integration_subject,

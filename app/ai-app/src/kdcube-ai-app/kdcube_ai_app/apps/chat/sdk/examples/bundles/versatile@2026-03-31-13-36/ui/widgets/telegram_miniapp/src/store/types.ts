@@ -160,31 +160,3 @@ export interface ExportPayload {
   content_b64?: string;
   error?: string;
 }
-
-export interface TelegramIdentityLinkResult {
-  ok?: boolean;
-  provider?: string;
-  provider_subject?: string;
-  connection_id?: string;
-  platform_claim_url?: string;
-  linked?: boolean;
-  removed?: boolean;
-  challenge?: {
-    challenge_id?: string;
-    status?: string;
-    platform_user_id?: string;
-  };
-  link?: {
-    provider?: string;
-    provider_subject?: string;
-    platform_user_id?: string;
-    label?: string;
-  };
-  principal?: {
-    platform_user_id?: string;
-    roles?: string[];
-    permissions?: string[];
-  };
-  error?: string;
-  message?: string;
-}

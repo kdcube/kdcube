@@ -13,8 +13,8 @@ a feedback-reader grant.
 """
 from __future__ import annotations
 
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.consent import render_consent_html
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.flow import AuthorizeRequest
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.consent import render_consent_html
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.flow import AuthorizeRequest
 
 ISSUER = "https://yey.boats"
 

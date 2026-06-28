@@ -13,8 +13,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.config import oauth_mcp_config
-from kdcube_ai_app.apps.chat.ingress.oauth_mcp.metadata import (
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.config import oauth_mcp_config
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth_mcp.metadata import (
     WELL_KNOWN_AS_PATH,
     WELL_KNOWN_PR_PATH,
     authorization_server_metadata,

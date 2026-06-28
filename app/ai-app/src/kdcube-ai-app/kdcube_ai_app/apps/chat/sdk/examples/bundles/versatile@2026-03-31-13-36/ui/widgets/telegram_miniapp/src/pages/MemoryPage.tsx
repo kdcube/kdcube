@@ -6,12 +6,12 @@ import type { MemoryPayload } from '../store/types';
 // Memory lives in the user-memories app. The Mini App loads it as a same-origin
 // served-widget iframe (like the scene host does) — the whole tab IS the widget.
 // The host answers the iframe's standard CONFIG_REQUEST with a CONFIG_RESPONSE
-// that carries the host-owned auth proof (telegramInitData); the widget promotes
-// it onto its own requests without knowing Telegram.
+// that carries the host-owned authContext.headers; the widget promotes those
+// onto its own requests without knowing Telegram.
 //
 // View model mirrors the scene's memory panel: the iframe is served in COMPACT
 // mode with host_controls=1, so the widget suppresses its own header chrome and
-// the host renders the compact header (title · count, add, expand/collapse).
+// the host renders the compact header (title · count, expand/collapse).
 // Expand/collapse is driven host-side by posting `kdcube-set-view` to the
 // widget — no iframe reload — exactly as the scene does (ui/scene/src/main.tsx
 // `syncMemoryWidgetView` + the memory-pane expand button).
@@ -22,22 +22,16 @@ const MEMORY_WIDGET_IDENTITY = 'MEMORIES_WIDGET';
 // preview count so the compact tab stays a glanceable summary.
 const COMPACT_LIMIT = '4';
 
-// Flip to false to silence the layout/handshake trace. Kept on so the
-// maintainer can confirm the initial-view-sync fix from the Telegram desktop
-// devtools console (or by opening the mini-app URL in a browser).
+// On-screen layout/handshake readout. Mobile Telegram has no devtools console,
+// so the trace is rendered as a tiny dismissable overlay the maintainer can
+// screenshot. Flip to false to remove it entirely.
 const DEBUG = true;
 
-function frameHeight(frame: HTMLIFrameElement | null): number {
-  return frame ? Math.round(frame.getBoundingClientRect().height) : -1;
-}
-
-function debugLog(frame: HTMLIFrameElement | null, event: string, extra?: Record<string, unknown>): void {
-  if (!DEBUG) return;
-  console.log('[memory-tab]', new Date().toISOString().slice(11, 23), event, {
-    iframeHeight: frameHeight(frame),
-    hasContentWindow: Boolean(frame?.contentWindow),
-    ...extra,
-  });
+interface DebugStats {
+  iframeRectH: number;
+  frameRectH: number;
+  iframeComputedH: string;
+  lastMessage: string;
 }
 
 interface MemoryPageProps {
@@ -47,6 +41,7 @@ interface MemoryPageProps {
 
 export function MemoryPage(_props: MemoryPageProps) {
   const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const frameWrapRef = useRef<HTMLDivElement | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [count, setCount] = useState<number | null>(null);
   // Keep `expanded` reachable inside the persistent message listener without
@@ -57,6 +52,23 @@ export function MemoryPage(_props: MemoryPageProps) {
   // listening — the iframe `onLoad` fires earlier (document load), before the
   // React widget hydrates, so the set-view posted there can be dropped.
   const widgetReadyRef = useRef(false);
+
+  const [debugStats, setDebugStats] = useState<DebugStats>({
+    iframeRectH: -1, frameRectH: -1, iframeComputedH: '?', lastMessage: '—',
+  });
+  const [debugHidden, setDebugHidden] = useState(false);
+
+  const sampleDebug = useCallback((lastMessage?: string) => {
+    if (!DEBUG) return;
+    const frame = frameRef.current;
+    const wrap = frameWrapRef.current;
+    setDebugStats((prev) => ({
+      iframeRectH: frame ? Math.round(frame.getBoundingClientRect().height) : -1,
+      frameRectH: wrap ? Math.round(wrap.getBoundingClientRect().height) : -1,
+      iframeComputedH: frame ? getComputedStyle(frame).height : '?',
+      lastMessage: lastMessage ?? prev.lastMessage,
+    }));
+  }, []);
 
   const memoryWidgetSrc = useMemo(
     () => settings.widgetUrlForBundle(MEMORY_WIDGET_BUNDLE_ID, MEMORY_WIDGET_ALIAS, {
@@ -69,9 +81,9 @@ export function MemoryPage(_props: MemoryPageProps) {
   );
 
   // Answer the memory iframe's standard CONFIG_REQUEST. Inside Telegram the
-  // CONFIG_RESPONSE config also carries the host-owned authContext (telegram
-  // initData). A kdcube-auth-changed nudge re-triggers the handshake if initData
-  // lands after the frame mounts.
+  // CONFIG_RESPONSE config also carries the host-owned authContext.headers. A
+  // kdcube-auth-changed nudge re-triggers the handshake if proof lands after the
+  // frame mounts.
   useEffect(
     () => installConfigHandshakeHost(frameRef.current, {
       identity: MEMORY_WIDGET_IDENTITY,
@@ -85,7 +97,6 @@ export function MemoryPage(_props: MemoryPageProps) {
   // and on the widget's first status (see below) so the initial view always
   // lands after the widget is mounted and listening.
   const syncView = useCallback((view: 'compact' | 'expanded') => {
-    debugLog(frameRef.current, 'post kdcube-set-view', { view });
     frameRef.current?.contentWindow?.postMessage({
       type: 'kdcube-set-view',
       widget: MEMORY_WIDGET_ALIAS,
@@ -93,33 +104,17 @@ export function MemoryPage(_props: MemoryPageProps) {
     }, '*');
   }, []);
 
-  // Force the widget to re-measure its layout. The widget recomputes its
-  // compact/expanded shell height on a window `resize` (ResizeObserver +
-  // resize listener); a same-value `kdcube-set-view` is a no-op for it, so when
-  // the very first set-view was dropped (posted before the widget hydrated) the
-  // shell can stay collapsed. Bumping the iframe height by 1px across two frames
-  // fires a real resize inside the frame and settles the layout — the same
-  // cross-frame jiggle the scene uses to wake the iframe — without a flash.
-  const nudgeFrameLayout = useCallback(() => {
-    const frame = frameRef.current;
-    if (!frame) return;
-    const base = frame.style.height;
-    const measured = Math.round(frame.getBoundingClientRect().height);
-    if (!measured) return;
-    frame.style.height = `${measured + 1}px`;
-    window.requestAnimationFrame(() => {
-      if (frameRef.current) frameRef.current.style.height = base;
-    });
-  }, []);
-
-  useEffect(() => {
-    debugLog(frameRef.current, 'mount', { expanded });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   useEffect(() => {
     syncView(expanded ? 'expanded' : 'compact');
   }, [expanded, syncView]);
+
+  // Keep the on-screen readout live while DEBUG is on.
+  useEffect(() => {
+    if (!DEBUG) return undefined;
+    sampleDebug('mount');
+    const timer = window.setInterval(() => sampleDebug(), 500);
+    return () => window.clearInterval(timer);
+  }, [sampleDebug]);
 
   // The widget reports its record count + (with host_controls) view-change
   // requests from its own affordances. Reflect those host-side.
@@ -130,33 +125,25 @@ export function MemoryPage(_props: MemoryPageProps) {
       if (data.type === 'kdcube-memory-widget-status') {
         const next = Number(data.count);
         const firstStatus = !widgetReadyRef.current;
-        debugLog(frameRef.current, 'recv kdcube-memory-widget-status', {
-          count: next, compact: data.compact, firstStatus, expanded: expandedRef.current,
-        });
         setCount(Number.isFinite(next) ? next : null);
+        sampleDebug(`status${firstStatus ? ' (first)' : ''} count=${data.count} compact=${data.compact}`);
         // First status = the widget has hydrated and its message listener is
         // live. The set-view posted on iframe onLoad could have been dropped
-        // (fired before hydration), leaving the iframe at its un-synced default
-        // — the collapsed thin line. Re-post the current view now so compact
-        // applies without needing a manual expand/collapse toggle.
+        // (fired before hydration), so re-post the current view now.
         if (firstStatus) {
           widgetReadyRef.current = true;
           syncView(expandedRef.current ? 'expanded' : 'compact');
-          // The widget mounts compact from the URL params, so the re-posted
-          // view may be a no-op for it; nudge a resize so its shell settles to
-          // the iframe height instead of the collapsed initial line.
-          nudgeFrameLayout();
         }
         return;
       }
       if (data.type === 'kdcube-widget-view') {
-        debugLog(frameRef.current, 'recv kdcube-widget-view', { view: data.view, expanded: expandedRef.current });
+        sampleDebug(`widget-view ${data.view}`);
         setExpanded(data.view === 'expanded');
       }
     }
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [syncView, nudgeFrameLayout]);
+  }, [syncView, sampleDebug]);
 
   return (
     <section className={`page page-wide memory-embed-page${expanded ? ' memory-expanded' : ''}`}>
@@ -186,18 +173,35 @@ export function MemoryPage(_props: MemoryPageProps) {
           </button>
         </div>
       </header>
-      <div className="memory-widget-frame">
+      <div className="memory-widget-frame" ref={frameWrapRef}>
         <iframe
           ref={frameRef}
           src={memoryWidgetSrc}
           title="Memories"
           className="memory-widget-iframe"
           onLoad={() => {
-            debugLog(frameRef.current, 'iframe onLoad', { expanded });
+            sampleDebug('iframe onLoad');
             syncView(expanded ? 'expanded' : 'compact');
           }}
         />
       </div>
+      {DEBUG && !debugHidden ? (
+        <div className="memory-debug-overlay" role="status">
+          <button
+            type="button"
+            className="memory-debug-close"
+            onClick={() => setDebugHidden(true)}
+            aria-label="Hide debug readout"
+          >
+            ×
+          </button>
+          <div>iframe rect h: <strong>{debugStats.iframeRectH}</strong></div>
+          <div>frame wrap h: <strong>{debugStats.frameRectH}</strong></div>
+          <div>iframe computed h: <strong>{debugStats.iframeComputedH}</strong></div>
+          <div>expanded: <strong>{String(expanded)}</strong> · count: <strong>{count ?? '—'}</strong></div>
+          <div>last msg: <strong>{debugStats.lastMessage}</strong></div>
+        </div>
+      ) : null}
     </section>
   );
 }
