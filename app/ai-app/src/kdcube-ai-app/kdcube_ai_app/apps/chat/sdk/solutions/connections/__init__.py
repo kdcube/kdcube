@@ -62,6 +62,17 @@ from .authority_registry import (
     RedisAuthorityDiscovery,
     authority_provider_spec_from_declaration,
 )
+from .request_auth import (
+    PlatformTokenAuthenticator,
+    RequestAuthenticationSurface,
+    RequestAuthResolver,
+    SessionFactory,
+)
+from .authentication_surface import (
+    ConnectionHubAuthenticationSurface,
+    connection_hub_auth_enabled,
+    maybe_install_connection_hub_authentication_surface,
+)
 
 __all__ = [
     "NAMESPACE",
@@ -106,4 +117,11 @@ __all__ = [
     "CredentialEnvelope",
     "RedisAuthorityDiscovery",
     "authority_provider_spec_from_declaration",
+    "PlatformTokenAuthenticator",
+    "RequestAuthenticationSurface",
+    "RequestAuthResolver",
+    "SessionFactory",
+    "ConnectionHubAuthenticationSurface",
+    "connection_hub_auth_enabled",
+    "maybe_install_connection_hub_authentication_surface",
 ]

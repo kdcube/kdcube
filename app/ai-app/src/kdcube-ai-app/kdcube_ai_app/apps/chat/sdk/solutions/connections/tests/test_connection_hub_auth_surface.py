@@ -6,7 +6,9 @@ from __future__ import annotations
 from starlette.requests import Request
 
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.authenticators.models import AuthenticatedRequest
-from kdcube_ai_app.apps.middleware.connection_hub_auth import ConnectionHubAuthenticationSurface
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.authentication_surface import (
+    ConnectionHubAuthenticationSurface,
+)
 from kdcube_ai_app.auth.sessions import RequestContext, UserSession, UserType
 
 

@@ -14,10 +14,12 @@ see_also:
 ---
 # Auth Selector And Connection Hub Surface
 
-The gateway request-auth boundary is intentionally small. It first accepts the
+The gateway request-auth boundary is intentionally small. Middleware uses the
+Connection Hub SDK's `RequestAuthResolver`. The resolver first accepts the
 configured platform authenticator when platform credentials are present. If that
 does not establish a session, it asks one configured Connection Hub
-authentication surface whether the request proves an external actor.
+`ConnectionHubAuthenticationSurface` whether the request proves an external
+actor.
 
 Connection Hub owns the selector. It decides which Telegram/Slack/OIDC/API-key
 or custom authority authenticator should inspect the request, verifies the

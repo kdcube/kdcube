@@ -1,7 +1,7 @@
 ---
 id: repo:kdcube-ai-app/app/ai-app/docs/sdk/solutions/connections/request-authenticators/request-authenticators-README.md
 title: "Request Authenticators"
-summary: "Connection Hub role: verify request proof through authenticator modules and return linked authority material to the gateway/auth selector."
+summary: "Connection Hub role: verify request proof through authenticator modules and return linked authority material to the Connection Hub authentication surface."
 status: active
 tags: ["sdk", "connections", "connection-hub", "authenticators", "request-auth", "gateway"]
 updated_at: 2026-06-28
@@ -41,11 +41,11 @@ result when one authenticator module accepts it.
 raw request
    |
    v
-AuthenticatorSelector
+Connection Hub SDK RequestAuthResolver
    |
-   +-- platform token/cookie/session candidates
+   +-- platform token/cookie/session authenticator
    |
-   +-- Connection Hub request-auth bridge
+   +-- ConnectionHubAuthenticationSurface
          |
          v
        request_authenticate(RequestEnvelope)
@@ -66,9 +66,9 @@ AuthenticatorSelector
 UserSession
 ```
 
-Service-level selector behavior is documented in
+Service-level resolver behavior is documented in
 [Auth Selector](../../../../service/auth/auth-selector-README.md). This document
-describes the Connection Hub side of that bridge.
+describes the Connection Hub side of that authentication surface.
 
 ## Request Envelope
 
@@ -152,7 +152,7 @@ Apps and gateway code should not duplicate this verifier logic.
 
 ## Output
 
-A successful request-auth bridge returns authority material:
+A successful Connection Hub authentication surface returns authority material:
 
 ```json
 {

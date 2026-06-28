@@ -24,11 +24,11 @@ options across REST, SSE, and Socket.IO.
 ## How auth works (current)
 
 1) **Request-auth resolver**
-The gateway runs the request through the auth resolver. A valid platform
-token/cookie session wins first because it directly provides platform authority.
-If no platform session is established, the resolver can ask the Connection Hub
-authentication surface. Provider-specific selector and authenticator modules
-live inside Connection Hub.
+The gateway runs the request through the Connection Hub SDK request-auth
+resolver. A valid platform token/cookie session wins first because it directly
+provides platform authority. If no platform session is established, the
+resolver can ask the Connection Hub authentication surface. Provider-specific
+selector and authenticator modules live inside Connection Hub.
 
 2) **Authentication**
 The accepted surface returns a complete `UserSession`. For classic platform

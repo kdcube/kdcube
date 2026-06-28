@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from kdcube_ai_app.apps.middleware.request_auth import RequestAuthResolver
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.request_auth import RequestAuthResolver
 from kdcube_ai_app.auth.AuthManager import User
 from kdcube_ai_app.auth.sessions import RequestContext, UserSession, UserType
 

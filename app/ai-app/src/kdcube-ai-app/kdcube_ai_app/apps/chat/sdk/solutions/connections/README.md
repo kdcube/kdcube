@@ -10,6 +10,12 @@ for asking Connection Hub to resolve/link external identities such as Telegram.
 Browser widgets should not build another app's public URL directly. They should
 call their own app, and that app should call `IdentityLinksClient`.
 
+The package also owns request-auth composition for Connection Hub:
+`RequestAuthResolver` is the boundary resolver used by ingress/proc middleware,
+and `ConnectionHubAuthenticationSurface` is the single external-auth surface it
+can install. Provider selection remains inside Connection Hub, not in
+`apps.middleware`.
+
 For the full design (two layers, registry, user-scoped tokens, pins) see
 [`docs/sdk/integrations/connections-README.md`](../../../../../../../../docs/sdk/integrations/connections-README.md).
 

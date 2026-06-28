@@ -25,7 +25,7 @@ request auth material
   token / cookie / header / signature / Telegram initData / API key
         |
         v
-Authenticator Selector
+Connection Hub Authenticator Selector
   uses non-trusted hints and request shape to choose verifier candidates
         |
         v
@@ -55,7 +55,7 @@ authorize / reject
 | `authenticator_id` | One verifier for one proof shape. Examples: `kdcube.cognito`, `yey.google_oidc`, `telegram.kdcube_ref.init_data`, `oauth_mcp.bearer`. |
 | Authority Provider | Owns an `authority_id`, identity namespace, grant resolver, linkers, and registered authenticators. |
 | Authenticator | Verifies auth material and returns a verified identity under its authority. |
-| Authenticator Selector | Chooses authenticator candidates. It does not authorize and it does not trust hints as facts. |
+| Connection Hub Authenticator Selector | Chooses authenticator candidates inside Connection Hub. It does not authorize and it does not trust hints as facts. |
 | Authority Linker | Maps an identity from one authority to another, or returns null. |
 | Grant Resolver | Loads roles, permissions, scopes, tools, or operation grants for an identity under one authority. |
 | Surface Guard | Declares required authority/grants and asks the runtime to authorize the request. |
@@ -87,7 +87,7 @@ successful authenticator verification result.
 hint says authority_id=yey.custom
         |
         v
-selector tries candidate authenticators under yey.custom
+Connection Hub selector tries candidate authenticators under yey.custom
         |
         v
 authenticator verifies token/signature

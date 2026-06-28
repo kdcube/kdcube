@@ -34,7 +34,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.authenticators.models imp
     AuthenticatedRequest,
     RequestEnvelope,
 )
-from kdcube_ai_app.apps.middleware.request_auth import SessionFactory
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.request_auth import SessionFactory
 from kdcube_ai_app.auth.sessions import RequestContext, UserSession, UserType
 
 logger = logging.getLogger(__name__)

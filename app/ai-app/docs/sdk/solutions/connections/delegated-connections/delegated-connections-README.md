@@ -249,15 +249,15 @@ surface guards decide whether that authority is sufficient or must be linked to
 `kdcube.platform`. The delegated connection flow consumes the resolved
 authority; it does not own Google verification or local role storage.
 
-In the fully standardized platform, that customer role provider is one
-auth-selector/Connection Hub authenticator candidate:
+In the fully standardized platform, that customer role provider is selected by
+the Connection Hub authentication surface:
 
 ```text
-auth selector
+Connection Hub SDK RequestAuthResolver
   |
   +-- Cognito / platform browser session
   +-- platform bundle-session
-  +-- Connection Hub request-auth bridge
+  +-- ConnectionHubAuthenticationSurface
         |
         +-- role-providing authenticator
         |     signed customer session / customer OIDC / enterprise header

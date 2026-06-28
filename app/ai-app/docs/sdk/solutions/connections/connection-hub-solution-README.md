@@ -61,7 +61,7 @@ incoming world event/request/widget call
        | proof material
        |   browser cookies / Telegram initData / Slack signature / API key
        v
-Authenticator Selector
+Connection Hub Authenticator Selector
        |
        | candidate authenticators
        v
@@ -207,11 +207,11 @@ The gateway/service auth side asks for a complete `UserSession`.
 HTTP / SSE / Socket.IO / app API request
        |
        v
-Authenticator Selector
+Connection Hub SDK RequestAuthResolver
        |
        +-- platform token/cookie auth
        |
-       +-- Connection Hub bridge
+       +-- ConnectionHubAuthenticationSurface
              |
              v
            selected authenticator verifies request proof
