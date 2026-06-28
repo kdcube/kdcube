@@ -25,7 +25,7 @@ import time
 import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional, Tuple, Any, Dict, List
+from typing import Callable, Optional, Tuple, Any, Dict, List, Mapping
 
 from kdcube_ai_app.apps.chat.sdk.protocol import (
     ExternalEventActor,
@@ -105,6 +105,8 @@ class MCPEndpointSpec:
     route: str = "operations"
     transport: str = "streamable-http"
     transport_config: str | None = None
+    auth: dict[str, Any] | None = None
+    auth_config: str | None = None
 
 
 @dataclass(frozen=True)
@@ -263,6 +265,19 @@ def _coerce_public_api_auth_spec(value: Any) -> PublicAPIAuthSpec | None:
     return value
 
 
+def _coerce_mcp_auth_spec(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        return dict(value)
+    if dataclasses.is_dataclass(value):
+        try:
+            return dataclasses.asdict(value)
+        except Exception:
+            return None
+    return None
+
+
 def canonical_enabled_path(
         kind: str,
         *,
@@ -395,14 +410,26 @@ def apply_bundle_overrides(manifest: BundleInterfaceManifest, props: dict[str, A
 
 def apply_mcp_overrides(spec: MCPEndpointSpec, props: dict[str, Any]) -> MCPEndpointSpec:
     raw = _coerce_string_override(_resolve_override_value(spec.transport_config, props))
+    raw_auth = _coerce_mcp_auth_spec(
+        _resolve_override_value(
+            spec.auth_config or f"mcp.{spec.alias}.auth",
+            props,
+        )
+    )
+    replacements: dict[str, Any] = {}
     if raw is None:
+        pass
+    else:
+        try:
+            replacements["transport"] = _normalize_mcp_transport(raw)
+        except ValueError:
+            # Invalid transport override -> keep decorator default. Caller may log.
+            pass
+    if raw_auth is not None:
+        replacements["auth"] = raw_auth
+    if not replacements:
         return spec
-    try:
-        normalized = _normalize_mcp_transport(raw)
-    except ValueError:
-        # Invalid transport override -> keep decorator default. Caller may log.
-        return spec
-    return dataclasses.replace(spec, transport=normalized)
+    return dataclasses.replace(spec, **replacements)
 
 
 def _clean_alias(value: str | None, default: str) -> str:
@@ -753,6 +780,8 @@ def mcp(
         route: str = "operations",
         transport: str = "streamable-http",
         transport_config: str | None = None,
+        auth: Dict[str, Any] | None = None,
+        auth_config: str | None = None,
         user_types: List[str] | Tuple[str, ...] | None = None,
         roles: List[str] | Tuple[str, ...] | None = None,
         public_auth: str | Dict[str, Any] | None = None,
@@ -768,9 +797,12 @@ def mcp(
     if user_types or roles or public_auth is not None:
         raise ValueError(
             "@mcp(...) does not support proc-side visibility or public_auth. "
-            "MCP request authentication/authorization must be handled by the bundle MCP app."
+            "Use auth/auth_config for MCP endpoint policy; bundle-local MCP apps may still "
+            "perform domain-specific authorization after platform policy passes."
         )
     resolved_transport_config = str(transport_config).strip() if transport_config else None
+    resolved_auth = _coerce_mcp_auth_spec(auth)
+    resolved_auth_config = str(auth_config).strip() if auth_config else None
 
     def _wrap(fn):
         method_name = getattr(fn, "__name__", "mcp")
@@ -784,6 +816,8 @@ def mcp(
                 route=resolved_route,
                 transport=resolved_transport,
                 transport_config=resolved_transport_config,
+                auth=resolved_auth,
+                auth_config=resolved_auth_config,
             ),
         )
         return fn
@@ -2421,6 +2455,8 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
                 route=str(getattr(mcp_spec, "route", "operations") or "operations"),
                 transport=str(getattr(mcp_spec, "transport", "streamable-http") or "streamable-http"),
                 transport_config=getattr(mcp_spec, "transport_config", None),
+                auth=_coerce_mcp_auth_spec(getattr(mcp_spec, "auth", None)),
+                auth_config=getattr(mcp_spec, "auth_config", None),
             )
             mcp_key = (resolved.alias, resolved.route)
             if mcp_key in seen_mcp:

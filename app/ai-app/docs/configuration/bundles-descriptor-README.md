@@ -91,6 +91,39 @@ Do not mirror every enabled API/widget/cron as `true` in deployment descriptors.
 That makes descriptors noisy and can leave stale explicit overrides after code
 defaults change.
 
+`enabled.mcp.<alias>` is only an availability switch. Authentication for a
+bundle-provided MCP endpoint is configured separately under
+`config.mcp.<alias>.auth`:
+
+```yaml
+bundles:
+  items:
+    - id: "feedback@1-0"
+      config:
+        enabled:
+          mcp:
+            feedback: true
+        mcp:
+          feedback:
+            auth:
+              mode: managed
+              authority_id: oauth_mcp
+              grants: [conversations:read]
+              selected_tool_grants: true
+```
+
+`mode: managed` means the proc MCP bridge verifies the delegated bearer
+credential and the selected MCP tool grant before the request enters the bundle
+MCP app. If `mode` is absent, the auth block is treated as bundle-owned
+metadata. This preserves existing bundle-specific schemes such as:
+
+```yaml
+mcp:
+  knowledge:
+    auth:
+      header_name: X-Knowledge-MCP-Token
+```
+
 `config.execution.runtime` controls per-bundle execution runtime routing and
 per-run ISO runtime limits. `config.exec_runtime` is the legacy alias.
 

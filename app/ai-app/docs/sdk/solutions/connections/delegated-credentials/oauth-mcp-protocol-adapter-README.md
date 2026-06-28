@@ -205,29 +205,80 @@ matching selected-tool grant must fail closed for non-admin integration calls.
 
 ## Descriptor Contract
 
-This is a platform auth/MCP integration access feature served by chat-ingress.
-It is an auth capability, not an ingress-service descriptor setting and not an
-app configuration field. Its non-secret configuration belongs in
+This is a Connection Hub delegated-credential protocol adapter. OAuth metadata,
+authorization, token, refresh, and dynamic-client-registration routes are served
+by chat-ingress because they are platform auth protocol routes. The delegated
+credential they issue should then guard concrete bundle/proc surfaces such as
+bundle-provided MCP endpoints.
+
+Its non-secret protocol configuration belongs in
 `assembly.yaml` under `auth.connection_hub.delegated_credentials.oauth_mcp`.
 
 Reference shape:
 
 ```yaml
 auth:
+  connection_hub:
+    delegated_credentials:
+      oauth_mcp:
+        enabled: false
+        issuer: ""
+        public_clients:
+          - client_id: "claude"
+            redirect_uris:
+              - "https://claude.ai/api/mcp/auth_callback"
+              - "http://localhost/callback"
+              - "http://127.0.0.1/callback"
+        dynamic_client_registration:
+          allowed_redirect_uris:
+            - "https://claude.ai/api/mcp/auth_callback"
+            - "http://localhost/callback"
+            - "http://127.0.0.1/callback"
+```
+
+The bundle surface that consumes this credential is configured in
+`bundles.yaml`, not in `assembly.yaml`. For a proc-served bundle MCP endpoint:
+
+```yaml
+bundles:
+  items:
+    - id: "feedback@1-0"
+      config:
+        enabled:
+          mcp:
+            feedback: true
+        mcp:
+          feedback:
+            auth:
+              mode: managed
+              authority_id: oauth_mcp
+              grants: [conversations:read]
+              selected_tool_grants: true
+```
+
+`mode: managed` means the proc MCP bridge owns the credential and grant check
+before dispatching into the bundle MCP app. If `mode` is absent, the MCP auth
+block is bundle-owned metadata; the knowledge bundle's
+`mcp.knowledge.auth.header_name` is one such bundle-owned scheme.
+
+Legacy root `/mcp` remains an adapter while this feature is migrated to
+bundle-provided MCP surfaces. It should not be modeled as "platform MCP"; the
+normal product shape is:
+
+```text
+OAuth/consent/token routes
+  -> delegated credential
+  -> proc bundle @mcp endpoint with mode: managed
+  -> bundle MCP app
+```
+
+Old shape to avoid in new descriptors:
+
+```yaml
+auth:
   oauth_mcp:
     enabled: false
     issuer: ""
-    public_clients:
-      - client_id: "claude"
-        redirect_uris:
-          - "https://claude.ai/api/mcp/auth_callback"
-          - "http://localhost/callback"
-          - "http://127.0.0.1/callback"
-    dynamic_client_registration:
-      allowed_redirect_uris:
-        - "https://claude.ai/api/mcp/auth_callback"
-        - "http://localhost/callback"
-        - "http://127.0.0.1/callback"
 ```
 
 Rules:

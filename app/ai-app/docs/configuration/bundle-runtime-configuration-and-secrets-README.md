@@ -356,7 +356,39 @@ Common reserved paths:
 | `exec_runtime` | runtime/exec subsystem | legacy alias for `execution.runtime` |
 | `surfaces.as_consumer` | SDK tool, event-source, pull, and UI resolver subsystems | bundle consumer wiring: per-agent tools, external object/event-source policies, and UI resolvers |
 | `tools.agents` | SDK tool subsystem / ReAct runtime | legacy per-agent model-callable tool connections and allow-lists; prefer `surfaces.as_consumer.agents.*.tools` for new descriptors |
-| `mcp.services` | MCP runtime/bootstrap | MCP transport/auth config |
+| `mcp.services` | MCP runtime/bootstrap | MCP client transport/auth config for MCP services the bundle consumes |
+| `mcp.<endpoint_alias>.auth` | proc MCP bridge or bundle MCP app | auth metadata for a bundle-provided `@mcp` endpoint; `mode: managed` is enforced by the platform bridge, absent `mode` is bundle-owned metadata |
+
+For provided MCP endpoints, `enabled.mcp.<alias>` only controls whether the
+endpoint is published. Endpoint auth policy lives separately under
+`mcp.<alias>.auth`.
+
+Example platform-managed endpoint policy:
+
+```yaml
+mcp:
+  feedback:
+    auth:
+      mode: managed
+      authority_id: oauth_mcp
+      grants: [conversations:read]
+      selected_tool_grants: true
+```
+
+Example bundle-owned header-token metadata, used by the knowledge bundle:
+
+```yaml
+mcp:
+  knowledge:
+    auth:
+      header_name: X-Knowledge-MCP-Token
+```
+
+In the first example, the proc bridge verifies the delegated bearer credential
+and selected MCP tool grants before dispatching to the bundle MCP app. In the
+second example, there is no `mode`, so the platform treats the block as
+bundle-owned metadata and the bundle MCP app remains responsible for its own
+domain-specific access context.
 
 Use the detailed page for those reserved paths:
 
