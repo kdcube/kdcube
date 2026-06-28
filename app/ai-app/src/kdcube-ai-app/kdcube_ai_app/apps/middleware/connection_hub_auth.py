@@ -88,6 +88,19 @@ def _first(*values: Any) -> str:
 def _external_auth_summary(envelope: RequestEnvelope) -> dict[str, Any]:
     headers = envelope.headers or {}
     query = envelope.query or {}
+    authority_id = _first(
+        headers.get("x-kdcube-auth-authority-id"),
+        headers.get("x-kdcube-auth-authority"),
+        query.get("auth_authority_id"),
+        query.get("authority_id"),
+        query.get("kdcube_auth_authority_id"),
+    )
+    authenticator_id = _first(
+        headers.get("x-kdcube-auth-authenticator-id"),
+        query.get("authenticator_id"),
+        query.get("auth_authenticator_id"),
+        query.get("kdcube_auth_authenticator_id"),
+    )
     provider = _first(
         headers.get("x-kdcube-auth-provider"),
         headers.get("x-kdcube-auth-provider-id"),
@@ -110,21 +123,40 @@ def _external_auth_summary(envelope: RequestEnvelope) -> dict[str, Any]:
             query.get("tgwebappdata"),
         )
     )
+    has_provider_signature = bool(
+        _first(
+            headers.get("x-slack-signature"),
+            headers.get("x-hub-signature"),
+            headers.get("x-hub-signature-256"),
+            headers.get("x-kdcube-webhook-signature"),
+            headers.get("x-kdcube-api-key"),
+        )
+    )
     return {
+        "authority_id": authority_id,
+        "authenticator_id": authenticator_id,
         "provider": provider,
         "integration_id": integration_id,
         "has_telegram_init_data": has_telegram_init_data,
+        "has_provider_signature": has_provider_signature,
         "has_authorization": bool(headers.get("authorization")),
         "has_cookie": bool(headers.get("cookie") or envelope.cookies),
     }
 
 
-def _should_trace_auth_attempt(summary: Mapping[str, Any]) -> bool:
+def _should_attempt_connection_hub(summary: Mapping[str, Any]) -> bool:
     return bool(
-        summary.get("provider")
+        summary.get("authority_id")
+        or summary.get("authenticator_id")
+        or summary.get("provider")
         or summary.get("integration_id")
         or summary.get("has_telegram_init_data")
+        or summary.get("has_provider_signature")
     )
+
+
+def _should_trace_auth_attempt(summary: Mapping[str, Any]) -> bool:
+    return _should_attempt_connection_hub(summary)
 
 
 class ConnectionHubRequestAuthBridge:
@@ -177,19 +209,24 @@ class ConnectionHubRequestAuthBridge:
         include_body = self._should_include_body(request)
         envelope = await RequestEnvelope.from_request(request, include_body=include_body)
         summary = _external_auth_summary(envelope)
+        if not _should_attempt_connection_hub(summary):
+            return None
         trace = _should_trace_auth_attempt(summary)
         if trace:
             logger.info(
-                "[auth.selector.connection_hub] start tenant=%s project=%s bridge_bundle=%s operation=%s method=%s path=%s provider_hint=%s integration_id=%s has_telegram_init_data=%s has_authorization=%s has_cookie=%s include_body=%s",
+                "[auth.selector.connection_hub] start tenant=%s project=%s bridge_bundle=%s operation=%s method=%s path=%s authority_id=%s authenticator_id=%s provider_hint=%s integration_id=%s has_telegram_init_data=%s has_provider_signature=%s has_authorization=%s has_cookie=%s include_body=%s",
                 self.tenant,
                 self.project,
                 self.bundle_id,
                 self.operation,
                 envelope.method,
                 envelope.path,
+                summary.get("authority_id") or "",
+                summary.get("authenticator_id") or "",
                 summary.get("provider") or "",
                 summary.get("integration_id") or "",
                 summary.get("has_telegram_init_data"),
+                summary.get("has_provider_signature"),
                 summary.get("has_authorization"),
                 summary.get("has_cookie"),
                 include_body,

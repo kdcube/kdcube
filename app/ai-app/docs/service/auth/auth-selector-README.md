@@ -29,8 +29,8 @@ FastAPIGatewayAdapter
         v
 AuthenticatorSelector
    |
-   +-- platform token authenticators
-   |     Cognito / multi-Cognito / bundle-session / simple-idp
+   +-- descriptor-registered platform authenticator
+   |     kdcube.cognito / kdcube.multi-cognito / kdcube.bundle-session / kdcube.simple-idp
    |
    +-- Connection Hub request-auth bridge
          Connection Hub authenticator modules:
@@ -112,6 +112,12 @@ Those modules verify proof, read Connection Hub identity links and secrets,
 resolve platform authority, and return authority material. The gateway adapter
 converts that material into a normal `UserSession`.
 
+The gateway does not call Connection Hub for every anonymous request. A cheap
+local prefilter looks for selector hints or recognizable external proof headers
+(`X-KDCube-Auth-*`, Telegram initData, provider signatures/API-key headers).
+Requests without such material fall through to the normal anonymous session
+path without a bundle operation.
+
 Connection Hub stores request-authenticator metadata in its own app store
 (Postgres for widget-managed rows) and reads secret values only through bundle
 secrets. The gateway sees neither bot tokens nor provider-specific verifier
@@ -168,11 +174,12 @@ authenticator modules.
 
 ## Cognito Is Also An Authenticator
 
-The current Cognito/session/simple auth managers are still active and preserve
-their behavior. Conceptually they are selector candidates too:
+The current Cognito/session/simple auth managers are active through the selector
+as the descriptor-registered platform authenticator. They preserve existing
+token/cookie behavior but now produce normal selector provenance:
 
 ```text
-authenticator: kdcube.cognito
+authenticator: kdcube.multi-cognito
   input: Authorization + ID token
   output: identity under kdcube.platform
 
@@ -186,9 +193,11 @@ authenticator family: connection-hub
   output: identity under module authority; linker/grant resolver produce session
 ```
 
-The migration target is to register all auth managers through the same selector
-surface. The initial implementation keeps the existing `AuthManager` as the
-default selector candidate to avoid changing Cognito/session behavior.
+The gateway derives the platform authenticator from
+`auth.authenticators.platform` when present, otherwise from existing
+`auth.idp`/`auth.providers` descriptors. Environment-only `AUTH_PROVIDER`
+selection is retained only as a compatibility fallback when no descriptor is
+available.
 
 ## Multiple Bots And Providers
 
@@ -215,18 +224,18 @@ This is bounded selection, not a blind broadcast to every app in the system.
 Implemented now:
 
 - the authenticator selector contract and SDK primitives;
-- standard platform token/cookie auth as the role-providing first path;
+- descriptor-registered platform token/cookie auth as the role-providing first
+  path;
 - optional Connection Hub bridge candidate;
 - `UserSession.identity_authority`;
 - Connection Hub `request_authenticate` operation;
 - Connection Hub authenticator metadata widget/API backed by Postgres rows and
   bundle-secret references;
+- Redis-backed Connection Hub authenticator metadata selector cache;
 - Telegram authenticator module with `initData` verification and identity-link
   authority projection.
 
 Not complete yet:
 
-- Redis selector cache;
 - Slack/webhook/API-key authenticator modules;
-- full replacement of the legacy `AUTH_PROVIDER` switch with descriptor-defined
-  selector registrations.
+- custom-authority surface guards for non-platform required authorities.

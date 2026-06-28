@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
 
 from fastapi import Request
@@ -60,12 +61,43 @@ class RequestAuthSelector:
         auth_manager: AuthManager | None,
         session_factory: SessionFactory,
     ) -> None:
-        self.auth_manager = auth_manager
         self.session_factory = session_factory
-        self._request_auth_candidates: list[RequestAuthCandidate] = []
+        self._platform_authenticators: list[RegisteredRequestAuthenticator] = []
+        self._request_auth_candidates: list[RegisteredRequestAuthenticator] = []
+        if auth_manager is not None:
+            self.register_platform_authenticator(
+                PlatformTokenAuthenticator(auth_manager=auth_manager),
+                authenticator_id=getattr(auth_manager, "authenticator_id", "") or "kdcube.platform.token",
+                authority_id=getattr(auth_manager, "authority_id", "") or "kdcube.platform",
+            )
 
     def register_request_auth_candidate(self, candidate: RequestAuthCandidate) -> None:
-        self._request_auth_candidates.append(candidate)
+        self._request_auth_candidates.append(
+            RegisteredRequestAuthenticator(
+                authenticator_id=getattr(candidate, "authenticator_id", "") or candidate.__class__.__name__,
+                authority_id=getattr(candidate, "authority_id", ""),
+                candidate=candidate,
+                header_only_allowed=False,
+                role_providing=False,
+            )
+        )
+
+    def register_platform_authenticator(
+        self,
+        candidate: RequestAuthCandidate,
+        *,
+        authenticator_id: str,
+        authority_id: str = "kdcube.platform",
+    ) -> None:
+        self._platform_authenticators.append(
+            RegisteredRequestAuthenticator(
+                authenticator_id=authenticator_id,
+                authority_id=authority_id,
+                candidate=candidate,
+                header_only_allowed=True,
+                role_providing=True,
+            )
+        )
 
     async def resolve_session(
         self,
@@ -74,51 +106,109 @@ class RequestAuthSelector:
         *,
         allow_request_auth_candidates: bool = True,
     ) -> UserSession:
-        standard_first = bool(context.authorization_header and self.auth_manager)
-        if standard_first:
-            standard_session = await self._resolve_standard_auth(context)
-            if standard_session.user_type != UserType.ANONYMOUS:
-                return standard_session
+        tried_platform = False
+        if context.authorization_header:
+            session = await self._try_registered_authenticators(
+                self._platform_authenticators,
+                request,
+                context,
+            )
+            tried_platform = True
+            if session is not None:
+                return session
 
         if allow_request_auth_candidates:
-            for candidate in self._request_auth_candidates:
-                try:
-                    session = await candidate(request, context, self.session_factory)
-                except Exception:
-                    logger.warning(
-                        "Request-auth candidate failed; continuing auth stack",
-                        exc_info=_auth_debug_enabled(),
+            session = await self._try_registered_authenticators(
+                self._request_auth_candidates,
+                request,
+                context,
+            )
+            if session is not None:
+                return session
+
+        if not tried_platform and context.authorization_header:
+            session = await self._try_registered_authenticators(
+                self._platform_authenticators,
+                request,
+                context,
+            )
+            if session is not None:
+                return session
+
+        return await self.session_factory(context, UserType.ANONYMOUS, None)
+
+    async def _try_registered_authenticators(
+        self,
+        authenticators: list["RegisteredRequestAuthenticator"],
+        request: Request,
+        context: RequestContext,
+    ) -> Optional[UserSession]:
+        for registered in authenticators:
+            try:
+                session = await registered.candidate(request, context, self.session_factory)
+            except Exception:
+                logger.warning(
+                    "Request-auth candidate failed; continuing auth stack authenticator_id=%s authority_id=%s",
+                    registered.authenticator_id,
+                    registered.authority_id,
+                    exc_info=_auth_debug_enabled(),
+                )
+                continue
+            if session is not None:
+                if _auth_debug_enabled():
+                    logger.info(
+                        "Request auth selector accepted session authenticator_id=%s authority_id=%s user=%s type=%s",
+                        registered.authenticator_id,
+                        registered.authority_id,
+                        session.user_id,
+                        session.user_type.value if hasattr(session.user_type, "value") else session.user_type,
                     )
-                    continue
-                if session is not None:
-                    if _auth_debug_enabled():
-                        logger.info(
-                            "Request auth selector accepted request-auth session user=%s type=%s",
-                            session.user_id,
-                            session.user_type.value if hasattr(session.user_type, "value") else session.user_type,
-                        )
-                    return session
+                return session
+        return None
 
-        if standard_first:
-            return standard_session
-        return await self._resolve_standard_auth(context)
 
-    async def _resolve_standard_auth(self, context: RequestContext) -> UserSession:
+@dataclass(frozen=True)
+class RegisteredRequestAuthenticator:
+    authenticator_id: str
+    authority_id: str
+    candidate: RequestAuthCandidate
+    header_only_allowed: bool = False
+    role_providing: bool = False
+
+
+class PlatformTokenAuthenticator:
+    """Descriptor-registered platform token/cookie authenticator.
+
+    This preserves the existing AuthManager implementations while moving them
+    into the same selector contract as Connection Hub request authenticators.
+    """
+
+    def __init__(self, *, auth_manager: AuthManager) -> None:
+        self.auth_manager = auth_manager
+        self.authenticator_id = getattr(auth_manager, "authenticator_id", "") or "kdcube.platform.token"
+        self.authority_id = getattr(auth_manager, "authority_id", "") or "kdcube.platform"
+
+    async def __call__(
+        self,
+        _request: Request,
+        context: RequestContext,
+        session_factory: SessionFactory,
+    ) -> Optional[UserSession]:
         if not context.authorization_header or not self.auth_manager:
             if _auth_debug_enabled():
                 logger.info(
-                    "Request auth selector: no token/auth manager, creating anonymous session auth_header=%s manager=%s",
+                    "Request auth selector: no token/auth manager auth_header=%s manager=%s",
                     bool(context.authorization_header),
                     bool(self.auth_manager),
                 )
-            return await self.session_factory(context, UserType.ANONYMOUS, None)
+            return None
 
         try:
             parts = context.authorization_header.split(" ", 1)
             if len(parts) != 2 or parts[0].lower() != "bearer":
                 if _auth_debug_enabled():
                     logger.info("Request auth selector: malformed authorization header")
-                return await self.session_factory(context, UserType.ANONYMOUS, None)
+                return None
 
             token = parts[1]
             user = await self.auth_manager.authenticate_with_both(token, context.id_token)
@@ -133,20 +223,35 @@ class RequestAuthSelector:
                 "email": user.email,
                 "roles": roles,
                 "permissions": permissions,
+                "identity_authority": {
+                    "authority_id": self.authority_id,
+                    "authenticator_id": self.authenticator_id,
+                    "actor_user_id": getattr(user, "sub", None) or user.username,
+                    "platform_user_id": getattr(user, "sub", None) or user.username,
+                    "platform_roles": roles,
+                    "platform_permissions": permissions,
+                    "source": "platform_token_authenticator",
+                },
             }
-            return await self.session_factory(context, user_type, user_data)
+            return await session_factory(context, user_type, user_data)
         except AuthenticationError as exc:
             if _auth_debug_enabled():
-                logger.info("Request auth selector: token rejected, anonymous fallback: %s", exc)
-            return await self.session_factory(context, UserType.ANONYMOUS, None)
+                logger.info("Request auth selector: token rejected: %s", exc)
+            return None
         except Exception as exc:
             logger.warning(
-                "Request auth selector: unexpected standard auth failure; anonymous fallback: %s: %s",
+                "Request auth selector: unexpected platform auth failure: %s: %s",
                 type(exc).__name__,
                 str(exc),
                 exc_info=_auth_debug_enabled(),
             )
-            return await self.session_factory(context, UserType.ANONYMOUS, None)
+            return None
 
 
-__all__ = ["RequestAuthCandidate", "RequestAuthSelector", "SessionFactory"]
+__all__ = [
+    "PlatformTokenAuthenticator",
+    "RegisteredRequestAuthenticator",
+    "RequestAuthCandidate",
+    "RequestAuthSelector",
+    "SessionFactory",
+]

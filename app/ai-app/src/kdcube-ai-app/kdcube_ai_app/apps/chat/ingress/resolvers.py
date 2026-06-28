@@ -7,7 +7,7 @@ Simplified resolvers module with clean separation of concerns
 """
 import os
 import logging
-from typing import Tuple, Optional
+from typing import Any, Mapping, Tuple, Optional
 
 from fastapi import HTTPException
 from starlette.requests import Request
@@ -156,31 +156,43 @@ def create_gateway_configuration() -> GatewayConfiguration:
     return config
 
 def create_auth_manager():
-    """Create the authentication manager"""
-    # You can switch between different auth managers here:
+    """Create the platform authority authenticator from descriptors."""
 
-    provider = (get_settings().AUTH_PROVIDER or "simple").lower()
+    descriptor = _platform_authenticator_descriptor()
+    provider = str(descriptor.get("provider") or "simple").strip().lower()
+    authenticator_id = str(descriptor.get("authenticator_id") or provider or "simple").strip()
+    logger.info(
+        "Using platform authenticator descriptor id=%s provider=%s source=%s authority_id=%s",
+        authenticator_id,
+        provider,
+        descriptor.get("source") or "",
+        descriptor.get("authority_id") or "kdcube.platform",
+    )
+
     if provider in {"multi-cognito", "cognito-multi"}:
         from kdcube_ai_app.auth.implementations.multi_cognito import MultiCognitoAuthManager
         providers = list(get_settings().AUTH.COGNITO_TRUSTED_PROVIDERS or [])
-        logger.info("Using MultiCognitoAuthManager for authentication providers=%s", len(providers))
-        return MultiCognitoAuthManager(providers, send_validation_error_details=True)
+        logger.info("Using MultiCognitoAuthManager for platform authentication providers=%s", len(providers))
+        return _with_authenticator_metadata(
+            MultiCognitoAuthManager(providers, send_validation_error_details=True),
+            descriptor,
+        )
 
     if provider == "cognito":
         from kdcube_ai_app.auth.implementations.cognito import CognitoAuthManager
-        logger.info("Using CognitoAuthManager for authentication")
-        return CognitoAuthManager(send_validation_error_details=True)
+        logger.info("Using CognitoAuthManager for platform authentication")
+        return _with_authenticator_metadata(CognitoAuthManager(send_validation_error_details=True), descriptor)
 
     if provider in {"session", "bundle", "bundle-session"}:
         # Docs: repo:./app/ai-app/docs/service/auth/bundle-session-auth-README.md
         from kdcube_ai_app.auth.bundle import BundleSessionAuthManager
-        logger.info("Using BundleSessionAuthManager for authentication")
-        return BundleSessionAuthManager(send_validation_error_details=True)
+        logger.info("Using BundleSessionAuthManager for platform authentication")
+        return _with_authenticator_metadata(BundleSessionAuthManager(send_validation_error_details=True), descriptor)
 
     if provider == "oauth":
         # existing generic OAuth option (if you keep it)
         from kdcube_ai_app.auth.OAuthManager import OAuthManager, OAuth2Config
-        logger.info("Using OAuth for authentication")
+        logger.info("Using OAuth for platform authentication")
 
         # Option 2: OAuth (uncomment when needed)
         # from oauth_manager import OAuthManager, OAuth2Config
@@ -198,12 +210,98 @@ def create_auth_manager():
         # )
     # default for dev
     from kdcube_ai_app.apps.middleware.simple_idp import SimpleIDP
-    logger.info("Using SimpleIDP for authentication")
-    return SimpleIDP(send_validation_error_details=True, service_user_token=os.getenv("SERVICE_USER_TOKEN"))
+    logger.info("Using SimpleIDP for platform authentication")
+    return _with_authenticator_metadata(
+        SimpleIDP(send_validation_error_details=True, service_user_token=os.getenv("SERVICE_USER_TOKEN")),
+        descriptor,
+    )
 
     # Option 3: Anonymous only (for testing)
     # from kdcube_ai_app.auth.AnonymousAuthManager import AnonymousAuthManager
     # return AnonymousAuthManager()
+
+
+def _platform_authenticator_descriptor() -> dict[str, Any]:
+    """Normalize the platform authority authenticator descriptor.
+
+    Canonical form:
+
+        auth:
+          authenticators:
+            platform:
+              id: kdcube.cognito
+              provider: multi-cognito
+              authority_id: kdcube.platform
+
+    Existing descriptors with ``auth.idp`` and ``auth.providers`` are treated as
+    an implicit platform authenticator so deployments do not need a flag-day
+    migration.
+    """
+
+    settings = get_settings()
+    raw = settings.plain("auth.authenticators.platform", default=None)
+
+    if isinstance(raw, list):
+        raw = next((row for row in raw if isinstance(row, Mapping) and row.get("enabled") is not False), None)
+    elif isinstance(raw, Mapping) and isinstance(raw.get("items"), list):
+        raw = next(
+            (
+                row
+                for row in raw.get("items") or []
+                if isinstance(row, Mapping) and row.get("enabled") is not False
+            ),
+            None,
+        )
+
+    if isinstance(raw, Mapping):
+        provider = str(
+            raw.get("provider")
+            or raw.get("kind")
+            or raw.get("type")
+            or raw.get("idp")
+            or ""
+        ).strip().lower()
+        if provider:
+            return {
+                "authenticator_id": str(raw.get("authenticator_id") or raw.get("id") or f"kdcube.{provider}").strip(),
+                "authority_id": str(raw.get("authority_id") or "kdcube.platform").strip(),
+                "provider": _normalize_platform_auth_provider(provider),
+                "source": "auth.authenticators.platform",
+            }
+
+    descriptor_provider = str(settings.plain("auth.idp", default="") or "").strip().lower()
+    if not descriptor_provider:
+        descriptor_provider = str(settings.plain("auth.type", default="") or "").strip().lower()
+    if not descriptor_provider:
+        descriptor_provider = str(settings.AUTH_PROVIDER or "simple").strip().lower()
+    provider = _normalize_platform_auth_provider(descriptor_provider)
+    trusted_providers = list(getattr(settings.AUTH, "COGNITO_TRUSTED_PROVIDERS", None) or [])
+    if provider == "cognito" and len(trusted_providers) > 1:
+        provider = "multi-cognito"
+    return {
+        "authenticator_id": f"kdcube.{provider}",
+        "authority_id": "kdcube.platform",
+        "provider": provider,
+        "source": "auth.idp",
+    }
+
+
+def _normalize_platform_auth_provider(value: str) -> str:
+    provider = str(value or "").strip().lower()
+    aliases = {
+        "bundle": "session",
+        "bundle-session": "session",
+        "cognito-multi": "multi-cognito",
+        "delegated": "cognito",
+    }
+    return aliases.get(provider, provider or "simple")
+
+
+def _with_authenticator_metadata(manager: Any, descriptor: Mapping[str, Any]) -> Any:
+    setattr(manager, "authenticator_id", str(descriptor.get("authenticator_id") or "kdcube.platform.token"))
+    setattr(manager, "authority_id", str(descriptor.get("authority_id") or "kdcube.platform"))
+    setattr(manager, "authenticator_provider", str(descriptor.get("provider") or ""))
+    return manager
 
 def create_request_gateway():
     """Create the request gateway with centralized configuration"""

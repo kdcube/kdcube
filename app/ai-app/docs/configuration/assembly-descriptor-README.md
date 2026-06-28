@@ -174,14 +174,26 @@ policy does not need to know which bridge accepted the request.
 ```yaml
 auth:
   authenticators:
+    platform:
+      id: "kdcube.multi-cognito"
+      authority_id: "kdcube.platform"
+      provider: "multi-cognito"
+
     connection_hub:
-      enabled: false
+      enabled: true
       app_id: "connection-hub@1-0"
       operation: "request_authenticate"
 ```
 
-When enabled, ingress/proc call the Connection Hub request-auth bridge before
-falling back to normal platform token/cookie auth. Provider-specific
+`auth.authenticators.platform` is the canonical descriptor registration for the
+role-providing platform authenticator. Existing descriptors that only declare
+`auth.idp` and `auth.providers` are treated as an implicit platform
+authenticator so current deployments do not need a flag-day migration. New
+descriptors should name the platform authenticator explicitly.
+
+When Connection Hub is enabled, ingress/proc first accept a valid platform
+token/cookie session when one is present. If no platform session is established,
+the selector may call the Connection Hub request-auth bridge. Provider-specific
 authenticators, such as Telegram Mini App `initData`, are Connection Hub modules
 with access to Connection Hub config, secrets, and identity-link data. See
 [Auth Selector](../service/auth/auth-selector-README.md) and

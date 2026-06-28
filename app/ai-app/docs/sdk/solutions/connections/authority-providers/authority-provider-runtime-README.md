@@ -236,14 +236,16 @@ Runtime use
 
 Current state:
 
-- platform auth managers effectively implement `kdcube.platform`;
+- platform auth managers are registered selector authenticators for
+  `kdcube.platform`;
 - Connection Hub Telegram rows are request authenticators;
+- Connection Hub caches authenticator metadata in Redis and still resolves proof,
+  links, and grants on each request;
 - OAuth/MCP is a service auth implementation with its own grant store;
 - most surfaces implicitly require `kdcube.platform`.
 
 Target:
 
-- all request auth candidates are registered authenticators;
 - all authenticators declare an `authority_id`;
 - surface guards declare required authority and grants;
 - OAuth/MCP becomes the `oauth_mcp` authenticator + grant resolver;
