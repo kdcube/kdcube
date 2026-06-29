@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_economic import BaseEntrypointWithEconomics
@@ -30,6 +32,74 @@ def test_non_anonymous_plan_lanes_can_use_project_budget_without_plan_name_hardc
         has_wallet=False,
         has_active_subscription=False,
     ) is False
+
+
+def test_economics_run_authority_projects_actor_to_platform_subject():
+    entrypoint = object.__new__(BaseEntrypointWithEconomics)
+
+    projection = entrypoint._project_economics_run_authority(
+        {
+            "user": "telegram_434804821",
+            "user_type": "registered",
+            "identity_authority": {
+                "actor_user_id": "telegram_434804821",
+                "platform_user_id": "02e53484-0081-70ce-11c1-e96706b1a182",
+                "roles": ["kdcube:role:super-admin"],
+            },
+        }
+    )
+
+    assert projection.actor_user_id == "telegram_434804821"
+    assert projection.economics_user_id == "02e53484-0081-70ce-11c1-e96706b1a182"
+    assert projection.budget_bypass is True
+    assert projection.user_type == "privileged"
+
+
+def test_economics_run_authority_does_not_trust_legacy_privileged_user_type():
+    entrypoint = object.__new__(BaseEntrypointWithEconomics)
+
+    projection = entrypoint._project_economics_run_authority(
+        {
+            "user": "telegram_434804821",
+            "user_type": "privileged",
+        }
+    )
+
+    assert projection.actor_user_id == "telegram_434804821"
+    assert projection.economics_user_id == "telegram_434804821"
+    assert projection.budget_bypass is None
+    assert projection.user_type == "registered"
+
+
+def test_economics_run_authority_reads_cross_runtime_context_authority():
+    entrypoint = object.__new__(BaseEntrypointWithEconomics)
+    entrypoint.comm_context = SimpleNamespace(
+        user=SimpleNamespace(
+            identity_authority={
+                "actor_user_id": "delegated_client:claude",
+                "economics_user_id": "platform-user-1",
+                "budget_bypass": False,
+                "roles": ["kdcube:role:chat-user"],
+            },
+            roles=(),
+            permissions=(),
+            user_type="registered",
+        )
+    )
+    entrypoint._comm = None
+
+    projection = entrypoint._project_economics_run_authority(
+        {
+            "user": "delegated_client:claude",
+            "user_type": "registered",
+        }
+    )
+
+    assert projection.actor_user_id == "delegated_client:claude"
+    assert projection.economics_user_id == "platform-user-1"
+    assert projection.roles == ("kdcube:role:chat-user",)
+    assert projection.budget_bypass is False
+    assert projection.user_type == "registered"
 
 
 @pytest.mark.asyncio

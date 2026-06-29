@@ -147,10 +147,10 @@ def _legacy_user_type_from_authority(
         or authority.get("user_type")
         or fallback_user_type
     ).lower()
-    if value in {"anonymous", "registered", "paid", "privileged"}:
+    if value in {"privileged", "admin"}:
+        return "registered"
+    if value in {"anonymous", "registered", "paid"}:
         return value
-    if value == "admin":
-        return "privileged"
     return "registered"
 
 

@@ -239,6 +239,77 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
         """
         return {"privileged", "admin"}
 
+    def _project_economics_run_authority(self, state: Dict[str, Any]):
+        """Project request authority into economics-facing fields.
+
+        Runtime ``user_type`` is legacy compatibility data. It must not be used
+        as authority for admin/budget bypass; bypass must come from projected
+        roles, permissions, or explicit Connection Hub authority fields.
+        """
+        from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_projection import (
+            project_execution_authority,
+        )
+
+        actor_user_id = state.get("actor_user") or state.get("user") or state.get("fingerprint")
+        authority = (
+            dict(state.get("identity_authority") or {})
+            if isinstance(state.get("identity_authority"), dict)
+            else {}
+        )
+
+        try:
+            comm_context = getattr(self, "comm_context", None)
+        except RuntimeError:
+            comm_context = None
+        context_user = getattr(comm_context, "user", None)
+        if not authority:
+            raw_authority = getattr(context_user, "identity_authority", None)
+            if isinstance(raw_authority, dict):
+                authority = dict(raw_authority)
+
+        comm = getattr(self, "_comm", None)
+        if comm is None:
+            try:
+                comm = getattr(self, "comm", None)
+            except RuntimeError:
+                comm = None
+        if not authority:
+            raw_authority = getattr(comm, "identity_authority", None)
+            if isinstance(raw_authority, dict):
+                authority = dict(raw_authority)
+
+        service = getattr(comm, "service", None) if comm is not None else None
+        user_obj = (service or {}).get("user_obj") if isinstance(service, dict) else {}
+        if not isinstance(user_obj, dict):
+            user_obj = {}
+
+        fallback_roles = (
+            state.get("roles")
+            or getattr(context_user, "roles", None)
+            or user_obj.get("roles")
+            or ()
+        )
+        fallback_permissions = (
+            state.get("permissions")
+            or getattr(context_user, "permissions", None)
+            or user_obj.get("permissions")
+            or ()
+        )
+
+        return project_execution_authority(
+            authority,
+            actor_user_id=str(actor_user_id or ""),
+            economics_user_id=str(state.get("economics_user") or state.get("authority_user") or ""),
+            fallback_user_id=str(actor_user_id or ""),
+            fallback_roles=fallback_roles,
+            fallback_permissions=fallback_permissions,
+            fallback_user_type=str(
+                state.get("user_type")
+                or getattr(context_user, "user_type", None)
+                or "anonymous"
+            ),
+        )
+
     @on_reactive_event
     async def run(self, **params) -> Dict[str, Any]:
         """
@@ -562,9 +633,11 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
 
         tenant = state.get("tenant")
         project = state.get("project")
-        actor_user_id = state.get("user") or state.get("fingerprint")
-        user_id = state.get("economics_user") or state.get("authority_user") or actor_user_id
-        user_type = state.get("user_type") or "anonymous"
+        projected_authority = self._project_economics_run_authority(state)
+        actor_user_id = state.get("actor_user") or state.get("user") or state.get("fingerprint")
+        actor_user_id = projected_authority.actor_user_id or actor_user_id
+        user_id = projected_authority.economics_user_id or actor_user_id
+        user_type = projected_authority.user_type or "anonymous"
         agent_id = normalize_agent_id(
             state.get("agent_id")
             or getattr(getattr(getattr(self, "comm_context", None), "event", None), "agent_id", None),
@@ -575,8 +648,18 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
             acct.set_context(agent_id=agent_id)
         except Exception:
             pass
-        role = user_type
-        budget_bypass = role in self.budget_bypass_user_types()
+        role = "privileged" if projected_authority.budget_bypass else user_type
+        user_type = role
+        budget_bypass = bool(projected_authority.budget_bypass)
+        state["actor_user"] = actor_user_id
+        state["economics_user"] = user_id
+        state["authority_user"] = user_id
+        state["user_type"] = role
+        state["identity_authority"] = dict(projected_authority.source)
+        if projected_authority.roles:
+            state["roles"] = list(projected_authority.roles)
+        if projected_authority.permissions:
+            state["permissions"] = list(projected_authority.permissions)
         thread_id = state.get("conversation_id") or state.get("session_id") or "default"
 
         self.subj = subject_id_of(tenant, project, user_id)
@@ -593,6 +676,10 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
             economics_user_id=user_id,
             thread_id=thread_id, turn_id=turn_id, bundle_id=bundle_id, rl_bundle_id=rl_bundle_id,
             event_count=len(state.get("external_events") or []),
+            authority_present=bool(projected_authority.source),
+            authority_roles=list(projected_authority.roles),
+            authority_permissions=list(projected_authority.permissions),
+            budget_bypass=budget_bypass,
         )
         if actor_user_id and actor_user_id != user_id:
             _log(
@@ -603,7 +690,7 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                 user_type=role,
             )
         if budget_bypass:
-            _log("budget.bypass", "Budget bypass enabled for user type", user_type=role)
+            _log("budget.bypass", "Budget bypass enabled from projected authority", user_type=role)
 
         input_text = ""
         usd_per_token = float(llm_output_price_usd_per_token(ref_provider=anthropic, ref_model=sonnet_45))

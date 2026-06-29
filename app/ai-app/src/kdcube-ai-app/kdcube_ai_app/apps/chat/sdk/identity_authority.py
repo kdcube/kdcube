@@ -203,6 +203,11 @@ def apply_authority_to_comm_context(comm_context: Any, *, source: Dict[str, Any]
     user = getattr(comm_context, "user", None)
     if user is None:
         return
+    if isinstance(source, dict):
+        try:
+            user.identity_authority = dict(source)
+        except Exception:
+            pass
     authority = authority_from_source(source)
     if authority.get("user_type"):
         user.user_type = authority["user_type"]

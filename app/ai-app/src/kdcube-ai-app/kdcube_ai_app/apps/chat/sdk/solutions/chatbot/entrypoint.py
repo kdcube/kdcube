@@ -1476,6 +1476,7 @@ class BaseEntrypoint:
             "project": payload.get("project"),
             "user": payload.get("user"),
             "user_type": payload.get("user_type"),
+            "identity_authority": dict(payload.get("identity_authority") or {}) if isinstance(payload.get("identity_authority"), Mapping) else {},
             "agent_id": agent_id,
             "session_id": payload.get("session_id"),
             "conversation_id": payload.get("conversation_id"),
