@@ -173,6 +173,22 @@ def test_identity_family_result_payload_unwraps_operation_result() -> None:
     assert _memory_identity_family_result_payload({"ok": True, "result": payload}) == payload
 
 
+def test_identity_family_result_payload_unwraps_operation_alias_result() -> None:
+    from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_memory import (
+        _memory_identity_family_result_payload,
+    )
+
+    payload = {"ok": True, "schema": "connection_hub.identity_family.v1", "memory_user_ids": [_ACTOR, _LINKED]}
+    wrapped = {
+        "status": "ok",
+        "tenant": "demo-tenant",
+        "project": "demo-project",
+        "bundle_id": "connection-hub@1-0",
+        "identity_family_resolve": payload,
+    }
+    assert _memory_identity_family_result_payload(wrapped) == payload
+
+
 def test_identity_family_result_payload_unwraps_json_body() -> None:
     from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_memory import (
         _memory_identity_family_result_payload,

@@ -74,6 +74,10 @@ def _memory_identity_family_result_payload(value: Any) -> Mapping[str, Any]:
             found = _walk(nested)
             if found:
                 return found
+        for nested in candidate.values():
+            found = _walk(nested)
+            if found:
+                return found
         return candidate
 
     return _walk(value)
