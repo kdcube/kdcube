@@ -2508,6 +2508,7 @@ class MemoryEntrypointMixin:
         store = self._memory_store()
         if _truthy(self._memory_widget_config().get("ensure_schema"), True):
             await store.ensure_schema()
+        family_user_ids = await self._memory_read_user_ids()
         return await store.search(
             MemorySearchRequest(
                 scope=scope,
@@ -2523,6 +2524,7 @@ class MemoryEntrypointMixin:
                 limit=normalized_limit,
                 candidate_limit=normalized_limit,
                 query_embedding=query_embedding,
+                user_ids=family_user_ids,
             )
         )
 
@@ -2660,8 +2662,9 @@ class MemoryEntrypointMixin:
             memory_id = str(payload.get("id") or "")
             if not memory_id:
                 continue
+            owner_record = getattr(row, "memory", None) or row
             deleted = await store.delete_memory(
-                scope=self._memory_scope(),
+                scope=owner_record.scope,
                 memory_id=memory_id,
                 visible_to_user=True,
                 scope_filter=normalized_scope_filter,
@@ -3071,11 +3074,24 @@ class MemoryEntrypointMixin:
         del kwargs
         if not self._memory_widget_write_enabled():
             return self._memory_error("memory_write_disabled")
-        deleted = await self._memory_store().delete_memory(
-            scope=self._memory_scope(),
+        store = self._memory_store()
+        normalized_scope_filter = self._memory_scope_filter(scope_filter)
+        scope = self._memory_scope()
+        family_user_ids = await self._memory_read_user_ids(scope=scope)
+        record = await store.get_memory(
+            scope=scope,
             memory_id=memory_id,
             visible_to_user=True,
-            scope_filter=self._memory_scope_filter(scope_filter),
+            scope_filter=normalized_scope_filter,
+            user_ids=family_user_ids,
+        )
+        if record is None:
+            return self._memory_error("memory_not_found")
+        deleted = await store.delete_memory(
+            scope=record.scope,
+            memory_id=memory_id,
+            visible_to_user=True,
+            scope_filter=normalized_scope_filter,
             ensure_schema=_truthy(self._memory_widget_config().get("ensure_schema"), True),
         )
         if not deleted:

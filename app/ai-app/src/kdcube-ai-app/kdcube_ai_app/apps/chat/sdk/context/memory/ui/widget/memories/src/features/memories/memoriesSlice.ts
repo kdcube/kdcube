@@ -257,11 +257,19 @@ export const confirmMemory = createAsyncThunk<MemoryMutationPayload, string>(
   }),
 );
 
-export const retireMemory = createAsyncThunk<MemoryMutationPayload, string>(
+export const retireMemory = createAsyncThunk<
+  MemoryMutationPayload,
+  string,
+  { state: { memories: MemoriesState } }
+>(
   'memories/retire',
-  async (memoryId) => callOperation<MemoryMutationPayload>('memories_widget_delete', {
-    memory_id: memoryId,
-  }),
+  async (memoryId, thunkApi) => {
+    const state = thunkApi.getState().memories;
+    return callOperation<MemoryMutationPayload>('memories_widget_delete', {
+      memory_id: memoryId,
+      scope_filter: state.allowAllUserMemories ? 'all_user_memories' : state.scopeFilter,
+    });
+  },
 );
 
 export const updateMemoryPreferences = createAsyncThunk<
