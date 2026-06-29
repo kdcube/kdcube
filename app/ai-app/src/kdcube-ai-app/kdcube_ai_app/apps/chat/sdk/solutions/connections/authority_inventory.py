@@ -14,6 +14,10 @@ from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from typing import Any, Iterable, Mapping, Protocol
 
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_projection import (
+    PLATFORM_PRIVILEGED_ROLE_GRANTS,
+)
+
 
 DELEGATION_EDGE_SCHEMA = "connection_hub.delegation_edge.v1"
 PLATFORM_AUTHORITY_ID = "platform"
@@ -213,7 +217,7 @@ class PlatformAuthorityInventoryProvider:
         self,
         grant_definitions: Iterable[Any],
         *,
-        admin_roles: Iterable[str] = ("kdcube:role:super-admin",),
+        admin_roles: Iterable[str] = PLATFORM_PRIVILEGED_ROLE_GRANTS,
     ) -> None:
         self._definitions = {
             item.grant: item

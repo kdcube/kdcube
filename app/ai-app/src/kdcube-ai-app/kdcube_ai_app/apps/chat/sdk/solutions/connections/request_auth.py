@@ -26,10 +26,12 @@ from kdcube_ai_app.auth.AuthManager import (
     AuthManager,
     AuthenticationError,
     PAID_ROLES,
-    PRIVILEGED_ROLES,
     REGISTERED_ROLE,
 )
 from kdcube_ai_app.auth.sessions import RequestContext, UserSession, UserType
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_projection import (
+    authority_has_platform_privilege,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +45,7 @@ def _auth_debug_enabled() -> bool:
 
 def _roles_user_type(roles: list[str] | None) -> UserType:
     role_set = set(roles or [])
-    if PRIVILEGED_ROLES & role_set:
+    if authority_has_platform_privilege(role_set):
         return UserType.PRIVILEGED
     if PAID_ROLES & role_set:
         return UserType.PAID

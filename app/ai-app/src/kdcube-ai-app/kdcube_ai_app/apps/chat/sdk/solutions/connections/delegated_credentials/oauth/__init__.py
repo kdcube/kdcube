@@ -17,7 +17,6 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oau
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.grants import (
     ACCESS_TOKEN_TTL_SECONDS,
-    ADMIN_ROLES,
     CONVERSATIONS_READ_PERMISSION,
     FEEDBACK_READER_ROLE,
     ROLE_TOOLS,
@@ -35,7 +34,6 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oau
 
 __all__ = [
     "ACCESS_TOKEN_TTL_SECONDS",
-    "ADMIN_ROLES",
     "CONVERSATIONS_READ_PERMISSION",
     "CONVERSATIONS_READ_SCOPE",
     "FEEDBACK_READER_ROLE",

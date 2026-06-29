@@ -212,22 +212,21 @@ class UserMemoriesEntrypoint(BaseEntrypointWithEconomicsAndMemory):
         return await self._memory_read_user_ids(scope=scope)
 
     async def _memory_mcp_economics_subject(self, scope, request=None):
-        from kdcube_ai_app.apps.chat.sdk.infra.economics.enforcement import EconomicsSubject
+        from kdcube_ai_app.apps.chat.sdk.infra.economics.enforcement import (
+            economics_subject_from_authority_context,
+        )
 
         projection = await self._memory_mcp_projection(scope, request=request)
         economics = projection.get("economics") if isinstance(projection, dict) else None
         if isinstance(economics, dict) and str(economics.get("user_id") or "").strip():
-            return EconomicsSubject(
+            return economics_subject_from_authority_context(
                 tenant=scope.tenant,
                 project=scope.project,
-                user_id=str(economics.get("user_id") or "").strip(),
-                roles=tuple(economics.get("roles") or ()),
-                permissions=tuple(economics.get("permissions") or ()),
-                budget_bypass=(
-                    bool(economics.get("budget_bypass"))
-                    if isinstance(economics.get("budget_bypass"), bool)
-                    else None
-                ),
+                identity_authority=economics,
+                actor_user_id=str((projection.get("provenance") or {}).get("actor_identity") or ""),
+                fallback_user_id=str(economics.get("user_id") or "").strip(),
+                fallback_roles=tuple(economics.get("roles") or ()),
+                fallback_permissions=tuple(economics.get("permissions") or ()),
                 provenance=dict(economics.get("provenance") or projection.get("provenance") or {}),
             )
         return self._memory_search_econ_subject()

@@ -101,11 +101,11 @@ def test_execution_authority_roles_promote_user_type():
     assert authority["economics_user_type"] == "privileged"
 
 
-async def test_automation_subject_uses_carried_role_when_no_pg():
+async def test_automation_subject_does_not_treat_carried_user_type_as_authority():
     ep = _StubEP(pg_pool=None)
     subj = await ops._automation_econ_subject(ep, target_user="u1", source={"user_type": "privileged"})
     assert (subj.tenant, subj.project, subj.user_id) == ("t", "p", "u1")
-    assert subj.budget_bypass is True  # privileged preserved without DB re-resolve
+    assert subj.budget_bypass is None
     assert subj.is_anonymous is False
 
 
@@ -117,6 +117,7 @@ async def test_automation_subject_can_use_platform_authority_user():
         source={
             "economics_user_id": "platform-user-1",
             "economics_user_type": "privileged",
+            "platform_roles": ["kdcube:role:super-admin"],
         },
     )
     assert (subj.tenant, subj.project, subj.user_id) == ("t", "p", "platform-user-1")
@@ -127,7 +128,7 @@ async def test_automation_subject_can_use_platform_authority_user():
 async def test_automation_subject_falls_back_to_registered():
     ep = _StubEP(pg_pool=None)
     subj = await ops._automation_econ_subject(ep, target_user="u1", source={})
-    assert subj.budget_bypass is False
+    assert subj.budget_bypass is None
     assert subj.is_anonymous is False
 
 
@@ -157,12 +158,12 @@ async def test_verify_economics_preflight_ok(monkeypatch):
     monkeypatch.setattr(enf, "economic_preflight", _pf)
     ep = _StubEP(economics=True, reservation=0.5)
     subj, dec = await ops._automation_verify_economics(ep, target_user="u1", source={"user_type": "paid"})
-    assert subj.budget_bypass is False
+    assert subj.budget_bypass is None
     assert subj.is_anonymous is False
     assert dec.funding_source == "project"
     assert seen == {
         "flow": "automations",
-        "budget_bypass": False,
+        "budget_bypass": None,
         "is_anonymous": False,
         "res": 0.5,
         "concurrency": False,

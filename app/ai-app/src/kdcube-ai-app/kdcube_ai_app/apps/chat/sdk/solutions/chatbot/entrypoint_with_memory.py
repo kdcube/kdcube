@@ -3816,65 +3816,24 @@ class MemoryEntrypointMixin:
         The role comes from the authenticated session (override wins), so no DB
         re-resolution is needed (unlike detached reconciler jobs, §4.6).
         """
-        from kdcube_ai_app.apps.chat.sdk.infra.economics.enforcement import EconomicsSubject
+        from kdcube_ai_app.apps.chat.sdk.infra.economics.enforcement import (
+            economics_subject_from_authority_context,
+        )
 
         scope = self._memory_scope()
         user = getattr(self.comm_context, "user", None)
         authority = self._memory_identity_authority_projection()
-        roles = tuple(
-            str(role or "").strip()
-            for role in (
-                authority.get("platform_roles")
-                or authority.get("roles")
-                or getattr(user, "roles", None)
-                or ()
-            )
-            if str(role or "").strip()
-        )
-        permissions = tuple(
-            str(permission or "").strip()
-            for permission in (
-                authority.get("platform_permissions")
-                or authority.get("permissions")
-                or getattr(user, "permissions", None)
-                or ()
-            )
-            if str(permission or "").strip()
-        )
-        economics_user_id = str(
-            authority.get("economics_user_id")
-            or authority.get("platform_user_id")
-            or scope.user_id
-        ).strip()
-        role = self._memory_effective_user_type(
-            str(
-                authority.get("economics_user_type")
-                or authority.get("platform_user_type")
-                or authority.get("user_type")
-                or getattr(user, "user_type", None)
-                or "registered"
-            )
-        ).strip().lower()
-        budget_bypass = (
-            bool(authority.get("economics_budget_bypass"))
-            if isinstance(authority.get("economics_budget_bypass"), bool)
-            else bool(authority.get("budget_bypass"))
-            if isinstance(authority.get("budget_bypass"), bool)
-            else role in {"admin", "privileged"}
-            or bool(set(roles) & {"kdcube:role:super-admin", "kdcube:role:admin"})
-        )
-        return EconomicsSubject(
+        return economics_subject_from_authority_context(
             tenant=scope.tenant,
             project=scope.project,
-            user_id=economics_user_id,
-            roles=roles,
-            permissions=permissions,
-            budget_bypass=budget_bypass,
-            is_anonymous=(not economics_user_id or economics_user_id == "anonymous" or role == "anonymous"),
-            provenance={
-                "actor_user_id": scope.user_id,
-                "identity_authority": authority,
-            },
+            identity_authority=authority,
+            actor_user_id=scope.user_id,
+            fallback_user_id=scope.user_id,
+            fallback_roles=getattr(user, "roles", None) or (),
+            fallback_permissions=getattr(user, "permissions", None) or (),
+            fallback_user_type=self._memory_effective_user_type(
+                str(getattr(user, "user_type", None) or "registered")
+            ),
         )
 
     def _economics_search_subject(self):
@@ -3961,39 +3920,24 @@ class MemoryEntrypointMixin:
             return 0.10
 
     async def _memory_reconciliation_econ_subject(self, job: Dict[str, Any]):
-        """Build an EconomicsSubject from the persisted job scope + carried role.
-
-        privileged/admin is preserved from the carried (enqueue-time) role;
-        paid/registered is re-resolved at run time from economics state.
-        """
+        """Build an EconomicsSubject from the persisted job scope."""
         from kdcube_ai_app.apps.chat.sdk.infra.economics.enforcement import (
-            EconomicsSubject,
-            RoleResolver,
+            economics_subject_from_authority_context,
         )
 
         scope = job.get("scope") or {}
         tenant = str(scope.get("tenant") or "")
         project = str(scope.get("project") or "")
         user_id = str(scope.get("user_id") or "")
-        carried_role = str(job.get("user_type") or "registered")
-        role = carried_role
-        try:
-            pg_pool = getattr(self, "pg_pool", None)
-            if pg_pool is not None and tenant and project and user_id:
-                resolver = RoleResolver(pg_pool=pg_pool, tenant=tenant, project=project)
-                role = await resolver.resolve(user_id=user_id, carried_role=carried_role)
-        except Exception as exc:
-            logger.warning(
-                "[memory.reconciliation] role resolve failed; using carried role: job_id=%s carried=%s err=%s",
-                job.get("job_id"), carried_role, exc,
-            )
-            role = carried_role
-        normalized_role = str(role or "").strip().lower()
-        return EconomicsSubject(
-            tenant=tenant, project=project, user_id=user_id,
+        authority = job.get("identity_authority") if isinstance(job.get("identity_authority"), dict) else {}
+        return economics_subject_from_authority_context(
+            tenant=tenant,
+            project=project,
+            identity_authority=authority,
+            actor_user_id=user_id,
+            fallback_user_id=user_id,
             timezone=str(job.get("timezone") or "") or None,
-            budget_bypass=(normalized_role in {"admin", "privileged"}),
-            is_anonymous=(not user_id or user_id == "anonymous" or normalized_role == "anonymous"),
+            fallback_user_type=str(job.get("user_type") or "registered"),
         )
 
     async def _memory_reconciliation_make_guard(self, job: Dict[str, Any], job_id: str):

@@ -14,7 +14,9 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable
 
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
-from kdcube_ai_app.auth.AuthManager import PRIVILEGED_ROLES
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_projection import (
+    authority_has_platform_privilege,
+)
 from kdcube_ai_app.auth.sessions import SessionManager, UserType
 
 
@@ -39,8 +41,7 @@ def _normal_user_type(value: Any, default: str = "registered") -> str:
 
 
 def user_type_from_roles(*, roles: Iterable[Any] | None, fallback: Any = "registered") -> str:
-    role_set = set(_list(roles))
-    if role_set & PRIVILEGED_ROLES:
+    if authority_has_platform_privilege(roles):
         return "privileged"
     return _normal_user_type(fallback)
 

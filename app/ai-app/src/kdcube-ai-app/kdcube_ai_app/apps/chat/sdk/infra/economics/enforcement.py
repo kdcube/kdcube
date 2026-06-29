@@ -55,6 +55,10 @@ from kdcube_ai_app.apps.chat.sdk.infra.economics.events_resources import (
     MSG_PROJECT_EXHAUSTED,
     MSG_DENIED_GENERIC,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_projection import (
+    authority_has_platform_privilege,
+    project_execution_authority,
+)
 
 SAFETY_MARGIN = 1.15
 # Budget rows store integer cents; a hold below $0.01 rounds to 0 and reserve()
@@ -125,12 +129,6 @@ class EconomicsSubject:
     provenance: dict[str, Any] = field(default_factory=dict)
 
 
-_PRIVILEGED_ROLE_NAMES = {
-    "kdcube:role:super-admin",
-    "kdcube:role:admin",
-}
-
-
 def _subject_roles(subject: EconomicsSubject) -> set[str]:
     return {str(role or "").strip() for role in (subject.roles or ()) if str(role or "").strip()}
 
@@ -145,7 +143,54 @@ def _subject_is_anonymous(subject: EconomicsSubject) -> bool:
 def _subject_budget_bypass(subject: EconomicsSubject) -> bool:
     if subject.budget_bypass is not None:
         return bool(subject.budget_bypass)
-    return bool(_subject_roles(subject) & _PRIVILEGED_ROLE_NAMES)
+    return authority_has_platform_privilege(_subject_roles(subject))
+
+
+def economics_subject_from_authority_context(
+    *,
+    tenant: str,
+    project: str,
+    identity_authority: dict[str, Any] | None = None,
+    actor_user_id: str = "",
+    fallback_user_id: str = "",
+    fallback_roles: tuple[Any, ...] | list[Any] | set[Any] | None = None,
+    fallback_permissions: tuple[Any, ...] | list[Any] | set[Any] | None = None,
+    fallback_user_type: str = "",
+    timezone: str | None = None,
+    provenance: dict[str, Any] | None = None,
+) -> EconomicsSubject:
+    """Build an economics subject from a Connection Hub authority envelope.
+
+    Components should prefer this helper over interpreting platform identity,
+    linked actors, or admin/bypass roles locally. Connection Hub owns that
+    projection; economics only consumes the already-projected result.
+    """
+
+    projected = project_execution_authority(
+        identity_authority,
+        actor_user_id=actor_user_id,
+        fallback_user_id=fallback_user_id,
+        fallback_roles=fallback_roles,
+        fallback_permissions=fallback_permissions,
+        fallback_user_type=fallback_user_type,
+    )
+    subject_provenance = projected.to_provenance()
+    if provenance:
+        subject_provenance.update(provenance)
+        subject_provenance.setdefault("identity_authority", dict(projected.source))
+        subject_provenance.setdefault("actor_user_id", projected.actor_user_id)
+        subject_provenance.setdefault("economics_user_id", projected.economics_user_id)
+    return EconomicsSubject(
+        tenant=str(tenant or ""),
+        project=str(project or ""),
+        user_id=projected.economics_user_id,
+        timezone=timezone,
+        roles=projected.roles,
+        permissions=projected.permissions,
+        budget_bypass=projected.budget_bypass,
+        is_anonymous=projected.is_anonymous,
+        provenance=subject_provenance,
+    )
 
 
 def _subject_plan_role(subject: EconomicsSubject, *, budget_bypass: bool) -> str:

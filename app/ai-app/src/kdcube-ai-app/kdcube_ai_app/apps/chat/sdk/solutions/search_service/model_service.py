@@ -192,6 +192,18 @@ class EconomicSearchModelService:
         reservation_usd: float,
         min_tokens: int,
     ) -> list[list[float]]:
+        provenance = self.subject.provenance if isinstance(self.subject.provenance, dict) else {}
+        logger.info(
+            "[economics.search] guarded embedding flow=%s subject_user=%s actor_user=%s budget_bypass=%s roles=%s provider=%s model=%s text_count=%s",
+            flow_name,
+            self.subject.user_id,
+            provenance.get("actor_user_id") or "",
+            self.subject.budget_bypass,
+            list(self.subject.roles or ()),
+            self.provider,
+            self.model,
+            len(texts or ()),
+        )
         async with EconomicsGuard(
             self.entrypoint,
             subject=self.subject,

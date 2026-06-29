@@ -166,48 +166,31 @@ async def _automation_econ_subject(entrypoint: Any, *, target_user: str, source:
 
     The automation actor/storage user can be a surface-local identity such as
     ``telegram_...``. Economics is allowed to use a separately carried platform
-    authority identity when the surface identity was linked to a platform user.
-    privileged/admin is preserved only from that platform authority role; paid
-    and registered are re-resolved at run time from economics state via
-    RoleResolver.
+    authority identity when the surface identity was linked to a platform user;
+    the authority projection is owned by Connection Hub.
     """
     from kdcube_ai_app.apps.chat.sdk.infra.economics.enforcement import (
-        EconomicsSubject,
-        RoleResolver,
+        economics_subject_from_authority_context,
     )
 
     tenant, project, _bundle_id = _bundle_route_parts(entrypoint)
     comm_context = getattr(entrypoint, "comm_context", None)
     comm_user = getattr(comm_context, "user", None)
-    economics_user_id = _automation_economics_user_id(target_user=target_user, source=source)
-    carried_role = str(
-        (source or {}).get("economics_user_type")
-        or (source or {}).get("platform_user_type")
-        or (source or {}).get("user_type")
-        or getattr(comm_user, "user_type", "")
-        or "registered"
-    ).strip() or "registered"
-    role = carried_role
-    try:
-        pg_pool = getattr(entrypoint, "pg_pool", None)
-        if pg_pool is not None and tenant and project and economics_user_id:
-            resolver = RoleResolver(pg_pool=pg_pool, tenant=tenant, project=project)
-            role = await resolver.resolve(user_id=economics_user_id, carried_role=carried_role)
-    except Exception as exc:
-        logger.warning(
-            "[automations.economics] role resolve failed; using carried role: actor=%s economics_user=%s carried=%s err=%s",
-            target_user, economics_user_id, carried_role, exc,
-        )
-        role = carried_role
     timezone = str((source or {}).get("timezone") or getattr(comm_user, "timezone", "") or "") or None
-    normalized_role = str(role or "").strip().lower()
-    return EconomicsSubject(
-        tenant=tenant, project=project, user_id=economics_user_id,
+    authority = dict(source or {})
+    nested_authority = authority.get("identity_authority")
+    if isinstance(nested_authority, dict):
+        authority.update(nested_authority)
+    return economics_subject_from_authority_context(
+        tenant=tenant,
+        project=project,
+        identity_authority=authority,
+        actor_user_id=target_user,
+        fallback_user_id=target_user,
         timezone=timezone,
-        roles=tuple(getattr(comm_user, "roles", None) or ()),
-        permissions=tuple(getattr(comm_user, "permissions", None) or ()),
-        budget_bypass=(normalized_role in {"admin", "privileged"}),
-        is_anonymous=(not economics_user_id or economics_user_id == "anonymous" or normalized_role == "anonymous"),
+        fallback_roles=tuple(getattr(comm_user, "roles", None) or ()),
+        fallback_permissions=tuple(getattr(comm_user, "permissions", None) or ()),
+        fallback_user_type=str(getattr(comm_user, "user_type", "") or "registered"),
     )
 
 

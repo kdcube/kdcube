@@ -6,8 +6,11 @@ from __future__ import annotations
 
 from typing import Any, Iterable, List, Mapping, Optional
 
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_projection import (
+    authority_has_platform_privilege,
+)
+
 FEEDBACK_READER_ROLE = "kdcube:role:feedback-reader"
-ADMIN_ROLES = {"kdcube:role:super-admin"}
 
 # Read-only permission for conversation export across tenants/projects.
 CONVERSATIONS_READ_PERMISSION = "kdcube:*:conversations:*;read"
@@ -39,7 +42,7 @@ def integration_subject(admin_sub: str) -> str:
 def can_call_tool(roles: Iterable[str], tool: str) -> bool:
     roles = set(roles or [])
     # Platform admins retain access to everything.
-    if roles & ADMIN_ROLES:
+    if authority_has_platform_privilege(roles):
         return True
     return any(tool in ROLE_TOOLS.get(r, set()) for r in roles)
 

@@ -120,7 +120,7 @@ def test_search_reservation_usd_from_config_and_default():
 def test_search_subject_uses_session_role():
     subj = M._memory_search_econ_subject(_StubSearchEP(user_type="paid", user_id="u9"))
     assert (subj.tenant, subj.project, subj.user_id) == ("t", "p", "u9")
-    assert subj.budget_bypass is False
+    assert subj.budget_bypass is None
     assert subj.is_anonymous is False
 
 

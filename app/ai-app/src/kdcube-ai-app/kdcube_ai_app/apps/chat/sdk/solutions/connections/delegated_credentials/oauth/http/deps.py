@@ -21,7 +21,9 @@ from typing import Any, Awaitable, Callable, Optional
 from fastapi import Request
 
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.config import oauth_delegated_config
-from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.grants import ADMIN_ROLES
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_projection import (
+    authority_has_platform_privilege,
+)
 
 AuthenticateFn = Callable[[str], Awaitable[Optional[dict]]]
 
@@ -116,4 +118,4 @@ def extract_bearer(request: Request) -> Optional[str]:
 
 
 def is_admin(roles) -> bool:
-    return bool(set(roles or []) & ADMIN_ROLES)
+    return authority_has_platform_privilege(roles)
