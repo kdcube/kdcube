@@ -2176,6 +2176,9 @@ class ConnectionHubEntrypoint(BaseEntrypointWithMemory):
             platform_user_id=platform_user_id,
             **kwargs,
         )
+        payload_authority = payload.get("identity_authority")
+        if not isinstance(payload_authority, Mapping):
+            payload_authority = {}
         current_platform_user = _platform_user_id(self, user_id=user_id)
         current_actor_user = _target_user_id(self, user_id=user_id, fingerprint=fingerprint)
         if not current_platform_user and (not current_actor_user or current_actor_user == "anonymous"):
@@ -2193,11 +2196,26 @@ class ConnectionHubEntrypoint(BaseEntrypointWithMemory):
         if not requested_user or requested_user == "anonymous":
             return {"ok": False, "error": "identity_family_requires_user_id"}
 
+        projected_platform_user = str(payload_authority.get("platform_user_id") or "").strip()
+        projected_grants = set(_safe_list(payload_authority.get("grants")))
+        if projected_platform_user and "identity:family" in projected_grants:
+            current_platform_user = current_platform_user or projected_platform_user
+
         result = resolve_identity_family(
             _edge_store(self),
             input_user_id=requested_user,
             actor_user_id=current_actor_user,
             platform_user_id=current_platform_user,
+        )
+        LOGGER.info(
+            "[connection-hub.identity_family_resolve] requested_user=%s actor_user=%s platform_user=%s projected_platform_user=%s projected_grants=%s linked=%s memory_user_ids=%s",
+            requested_user,
+            current_actor_user,
+            current_platform_user,
+            projected_platform_user,
+            sorted(projected_grants),
+            result.get("linked") if isinstance(result, Mapping) else None,
+            result.get("memory_user_ids") if isinstance(result, Mapping) else None,
         )
         family_platform_user = str(result.get("platform_user_id") or "").strip()
         if current_platform_user:

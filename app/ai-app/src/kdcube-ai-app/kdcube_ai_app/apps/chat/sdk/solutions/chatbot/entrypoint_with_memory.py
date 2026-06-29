@@ -375,6 +375,28 @@ class MemoryEntrypointMixin:
         # force single-actor reads everywhere regardless of the user's choice.
         return _truthy(widget_cfg.get("identity_family_aggregation"), True)
 
+    def _memory_identity_authority_projection(self) -> dict[str, Any]:
+        """Current request authority projection, if one was authenticated."""
+
+        user = getattr(getattr(self, "comm_context", None), "user", None)
+        raw = getattr(user, "identity_authority", None)
+        if isinstance(raw, Mapping):
+            return dict(raw)
+
+        comm = getattr(self, "comm", None)
+        raw = getattr(comm, "identity_authority", None)
+        if isinstance(raw, Mapping):
+            return dict(raw)
+
+        service = getattr(comm, "service", None)
+        if isinstance(service, Mapping):
+            user_obj = service.get("user_obj")
+            if isinstance(user_obj, Mapping):
+                raw = user_obj.get("identity_authority")
+                if isinstance(raw, Mapping):
+                    return dict(raw)
+        return {}
+
     async def _memory_scope_pref_for(self, scope) -> str:
         """The effective memory read-scope preference for ``scope`` (default family)."""
         from kdcube_ai_app.apps.chat.sdk.context.memory import (
@@ -440,7 +462,13 @@ class MemoryEntrypointMixin:
         try:
             from kdcube_ai_app.apps.chat.sdk.infra.bundle_operations import call_bundle_operation
 
-            data = {"input_user_id": actor_user_id} if actor_user_id else {}
+            data = {"input_user_id": actor_user_id, "actor_user_id": actor_user_id} if actor_user_id else {}
+            identity_authority = self._memory_identity_authority_projection()
+            if identity_authority:
+                data["identity_authority"] = identity_authority
+                platform_user_id = str(identity_authority.get("platform_user_id") or "").strip()
+                if platform_user_id:
+                    data["platform_user_id"] = platform_user_id
             result = await call_bundle_operation(
                 bundle_id=self._memory_identity_family_bundle_id(),
                 operation="identity_family_resolve",
