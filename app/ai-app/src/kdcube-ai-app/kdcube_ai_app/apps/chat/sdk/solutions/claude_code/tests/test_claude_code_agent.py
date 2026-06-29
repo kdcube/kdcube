@@ -184,6 +184,10 @@ async def test_from_current_context_derives_deterministic_binding(tmp_path: Path
 def test_build_args_includes_session_allowed_tools_and_agent(tmp_path: Path):
     workspace = tmp_path / "workspace"
     (workspace / "repos" / "output").mkdir(parents=True)
+    # --agent is only passed when the named agent is defined in the workspace.
+    agents_dir = workspace / ".claude" / "agents"
+    agents_dir.mkdir(parents=True)
+    (agents_dir / "kb-writer.md").write_text("# Agent\n", encoding="utf-8")
     binding = ClaudeCodeBinding(
         user_id="admin-user-1",
         conversation_id="conv-claude",
@@ -208,6 +212,27 @@ def test_build_args_includes_session_allowed_tools_and_agent(tmp_path: Path):
     assert "--session-id" not in resume_args
     assert "--agent" in args
     assert "kb-writer" in args
+    assert args[-1] == "Explain the repo"
+
+
+def test_build_args_omits_agent_when_no_definition(tmp_path: Path):
+    """agent_name may be used purely as a label. With no
+    .claude/agents/<name>.md definition the CLI rejects --agent, so the runner
+    omits it and runs the default agent with the seeded instructions."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    binding = ClaudeCodeBinding(
+        user_id="admin-user-1",
+        conversation_id="conv-claude",
+        session_id="sid-claude",
+        claude_session_id="claude-session-1",
+    )
+    agent = ClaudeCodeAgent(config=_config(workspace), binding=binding, comm=None)
+
+    args = agent.build_args("Explain the repo")
+
+    assert "--agent" not in args
+    assert "kb-writer" not in args
     assert args[-1] == "Explain the repo"
 
 

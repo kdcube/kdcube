@@ -298,11 +298,28 @@ Important current flags:
 - `--allowedTools ...` when configured
 - `--permission-mode <mode>` when configured
 - `--add-dir <path>` for each configured additional directory
-- `--agent <agent_name>`
+- `--agent <agent_name>` **only when that agent is defined in the workspace** at `.claude/agents/<agent_name>.md`
 - `--session-id <stable-uuid>` for first turn
 - `--resume <stable-uuid>` for continued turns
 
 The CLI command is configurable through `ClaudeCodeAgentConfig.command`, but defaults to `claude`.
+
+### When `--agent` is passed
+
+`agent_name` is always a stable label (it keys the session/journal/accounting
+paths), but it is passed to the CLI as `--agent` **only when a matching agent
+definition exists** in the workspace: `.claude/agents/<agent_name>.md`. The CLI
+runs with `cwd` set to the workspace and validates `--agent` against its
+registered/defined agents, so passing a name with no definition fails the run
+with `--agent '<name>' not found`. When no definition is present, the runner
+omits `--agent` and the default agent runs with the seeded `CLAUDE.md`
+instructions — the same effective behavior, without the failure.
+
+A bundle that wants a genuinely custom agent seeds its definition into the
+workspace `.claude/` (for example through the workspace's `.claude` git seed —
+see [workspace bootstrap](claude-code-workspace-bootstrap-README.md)); a bundle
+that uses `agent_name` purely as a label seeds nothing and runs the default
+agent.
 
 ## Streaming behavior
 

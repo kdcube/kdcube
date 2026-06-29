@@ -294,7 +294,23 @@ class ClaudeCodeAgent:
             args.extend(["--permission-mode", self.config.permission_mode])
         for path in self.config.additional_directories:
             args.extend(["--add-dir", str(path)])
-        args.extend(["--agent", self.config.agent_name])
+        # Only pass --agent when the named agent is actually defined in the
+        # workspace (.claude/agents/<name>.md). The CLI runs with cwd=workspace
+        # and validates --agent against its registered/defined agents, so passing
+        # a name used purely as a label (no definition seeded) now hard-fails
+        # with "agent not found". Without a definition, run the default agent
+        # with the seeded CLAUDE.md instructions.
+        agent_definition = (
+            self.config.workspace_path / ".claude" / "agents" / f"{self.config.agent_name}.md"
+        )
+        if agent_definition.exists():
+            args.extend(["--agent", self.config.agent_name])
+        else:
+            self.logger.debug(
+                "[ClaudeCodeAgent] no agent definition at %s; omitting --agent %s (running default agent)",
+                agent_definition,
+                self.config.agent_name,
+            )
         if resume_existing:
             args.extend(["--resume", self.binding.claude_session_id])
         else:

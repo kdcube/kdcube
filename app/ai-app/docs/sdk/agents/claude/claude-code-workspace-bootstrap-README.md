@@ -272,6 +272,16 @@ The runtime/bootstrap layer is responsible for:
 That separation keeps bundles flexible while still giving the platform a
 standard continuity mechanism.
 
+## Custom agent definitions
+
+The runner passes `--agent <agent_name>` only when the workspace contains a
+matching definition at `.claude/agents/<agent_name>.md`. Seed that file the same
+way as other workspace `.claude` content — for example through the session-store
+git seed — to run a genuinely custom agent. With no definition the runner omits
+`--agent` and the default agent runs with the seeded `CLAUDE.md`, so an
+`agent_name` used purely as a continuity/accounting label needs nothing seeded.
+See [claude-code-README.md](claude-code-README.md) for the runner-side rule.
+
 ## Related docs
 
 - session identity and runner behavior:
