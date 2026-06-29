@@ -3831,9 +3831,6 @@ class MemoryEntrypointMixin:
             fallback_user_id=scope.user_id,
             fallback_roles=getattr(user, "roles", None) or (),
             fallback_permissions=getattr(user, "permissions", None) or (),
-            fallback_user_type=self._memory_effective_user_type(
-                str(getattr(user, "user_type", None) or "registered")
-            ),
         )
 
     def _economics_search_subject(self):
@@ -3937,7 +3934,6 @@ class MemoryEntrypointMixin:
             actor_user_id=user_id,
             fallback_user_id=user_id,
             timezone=str(job.get("timezone") or "") or None,
-            fallback_user_type=str(job.get("user_type") or "registered"),
         )
 
     async def _memory_reconciliation_make_guard(self, job: Dict[str, Any], job_id: str):
@@ -4410,14 +4406,12 @@ class MemoryEntrypointMixin:
                 ]).encode("utf-8")
             ).hexdigest()[:12]
             job_id = f"memrec_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{digest}"
-            # Carry the authenticated/gateway-resolved role and timezone into the job so the
-            # detached worker can enforce economics on the correct funding lane. privileged/admin
-            # is NOT derivable from economics state, so it must be persisted here at enqueue time.
             enqueue_user = getattr(self.comm_context, "user", None)
-            carried_user_type = self._memory_effective_user_type(
+            queue_label = self._memory_effective_user_type(
                 str(getattr(enqueue_user, "user_type", "") or "registered")
             )
             carried_timezone = str(getattr(enqueue_user, "timezone", "") or "")
+            identity_authority = self._memory_identity_authority_projection()
             job: Dict[str, Any] = {
                 "job_id": job_id,
                 "status": "queued",
@@ -4428,7 +4422,8 @@ class MemoryEntrypointMixin:
                     "user_id": scope.user_id,
                     "bundle_id": scope.bundle_id,
                 },
-                "user_type": carried_user_type,
+                "queue_label": queue_label,
+                "identity_authority": identity_authority,
                 "timezone": carried_timezone,
                 "scope_filter": normalized_scope_filter,
                 "candidate_count": 0,
@@ -4470,8 +4465,6 @@ class MemoryEntrypointMixin:
 
             from kdcube_ai_app.infra.jobs.stream import RedisBackgroundJobStream
 
-            user = enqueue_user
-            user_type = carried_user_type
             routing = getattr(self.comm_context, "routing", None)
             stream = RedisBackgroundJobStream(redis, tenant=scope.tenant, project=scope.project)
             try:
@@ -4479,16 +4472,16 @@ class MemoryEntrypointMixin:
                     work_kind=MEMORY_RECONCILIATION_WORK_KIND,
                     bundle_id=scope.bundle_id,
                     user_id=scope.user_id,
-                    user_type=user_type,
-                    queue=user_type,
+                    queue_label=queue_label,
                     job_id=job_id,
                     dedupe_key=f"{MEMORY_RECONCILIATION_WORK_KIND}:{scope.tenant}:{scope.project}:{scope.user_id}:{scope.bundle_id}:{job_id}",
-                    source={"surface": "memory_widget", "operation": "reconcile_run"},
+                    source={"surface": "memory_widget", "operation": "reconcile_run", "queue_label": queue_label},
+                    identity_authority=identity_authority,
                     metadata={
                         "conversation_id": str(getattr(routing, "conversation_id", "") or f"memory_reconciliation_{scope.user_id}"),
                         "turn_id": str(getattr(routing, "turn_id", "") or f"turn_{job_id}"),
                         "text": "Run memory reconciliation dry run.",
-                        "timezone": str(getattr(user, "timezone", "") or ""),
+                        "timezone": carried_timezone,
                     },
                     payload={
                         "job_id": job_id,

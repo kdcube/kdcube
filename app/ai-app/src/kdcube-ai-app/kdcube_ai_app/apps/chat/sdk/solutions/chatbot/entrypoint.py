@@ -253,14 +253,12 @@ class BaseEntrypoint:
         project = getattr(actor, "project_id", None) if actor is not None else None
         user_id = getattr(user_ctx, "user_id", None) if user_ctx is not None else None
         fingerprint = getattr(user_ctx, "fingerprint", None) if user_ctx is not None else None
-        user_type = getattr(user_ctx, "user_type", None) if user_ctx is not None else None
 
         return {
             "tenant": str(tenant or identity.get("tenant_id") or identity.get("tenant") or "").strip(),
             "project": str(project or identity.get("project_id") or identity.get("project") or "").strip(),
             "user": str(user_id or identity.get("user_id") or "").strip(),
             "fingerprint": str(fingerprint or identity.get("fingerprint") or "").strip(),
-            "user_type": str(user_type or identity.get("user_type") or "anonymous").strip() or "anonymous",
         }
 
     def _react_event_sources(self) -> Any:
@@ -1475,7 +1473,6 @@ class BaseEntrypoint:
             "tenant": payload.get("tenant"),
             "project": payload.get("project"),
             "user": payload.get("user"),
-            "user_type": payload.get("user_type"),
             "identity_authority": dict(payload.get("identity_authority") or {}) if isinstance(payload.get("identity_authority"), Mapping) else {},
             "agent_id": agent_id,
             "session_id": payload.get("session_id"),
@@ -1676,7 +1673,7 @@ class BaseEntrypoint:
         tenant = state.get("tenant")
         project = state.get("project")
         user_id = state.get("user") or state.get("fingerprint")
-        user_type = state.get("user_type") or "anonymous"
+        accounting_label = "anonymous" if not user_id or user_id == "anonymous" else "registered"
         thread_id = state.get("conversation_id") or state.get("session_id") or "default"
         turn_id = state.get("turn_id")
         agent_id = normalize_agent_id(
@@ -1708,7 +1705,7 @@ class BaseEntrypoint:
             bundle_id or "chat.orchestrator",
             user_id=user_id,
             session_id=state.get("session_id") or thread_id,
-            user_type=user_type,
+            user_type=accounting_label,
             tenant_id=tenant,
             project_id=project,
             request_id=request_id,
@@ -1736,7 +1733,7 @@ class BaseEntrypoint:
                 tenant=tenant,
                 project=project,
                 user_id=user_id,
-                user_type=user_type,
+                user_type=accounting_label,
                 thread_id=thread_id,
                 turn_id=turn_id,
                 usage_from=usage_from,
@@ -2328,7 +2325,7 @@ class BaseEntrypoint:
             tenant = state.get("tenant") or getattr(self.config, "tenant", None) or self.settings.TENANT
             project = state.get("project") or getattr(self.config, "project", None) or self.settings.PROJECT
             user_id = state.get("user") or state.get("fingerprint") or ""
-            user_type = state.get("user_type") or "anonymous"
+            storage_label = "anonymous" if not user_id or user_id == "anonymous" else "registered"
             conversation_id = state.get("conversation_id") or state.get("session_id") or ""
             turn_id = state.get("turn_id") or getattr(self, "_turn_id", None) or ""
             bundle_id = str(getattr(getattr(self.config, "ai_bundle_spec", None), "id", "") or "")
@@ -2360,7 +2357,7 @@ class BaseEntrypoint:
                 conversation_id=conversation_id,
                 bundle_id=bundle_id,
                 agent_id=agent_id,
-                user_type=user_type,
+                user_type=storage_label,
                 content={"version": "v1", "items": step_items},
                 extra_tags=["conversation", "events"],
             )

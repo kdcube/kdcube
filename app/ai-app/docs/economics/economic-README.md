@@ -48,18 +48,12 @@ Tracing a single request:
 
 ### Role (economics role)
 
-Role is the funding access decision, not the quota policy. The gateway can override the authenticated role based on economics state.
-
-Role resolution is applied in the gateway and stored in the session:
-
-- If `privileged` or `admin`, role stays privileged.
-- Else if active subscription or wallet credits exist, role becomes `paid`.
-- Else role remains `registered`.
-
-This overrides the session `user_type` (the role used by the runtime entrypoint). The session key uses the resolved role:
-
-- `...:paid:<user_id>`
-- `...:registered:<user_id>`
+Authority is the funding access decision, not the quota policy. Modern flows
+derive economics authority from the authenticated principal and any Connection
+Hub delegation edge, then pass an `EconomicsSubject` into enforcement. Runtime
+`user_type` is not economics authority. Queue/session labels may exist in older
+runtime schemas, but delegated/channel-owned work must charge from the
+`EconomicsSubject` projected out of Connection Hub authority context.
 
 Admin UI role resolution:
 - The admin endpoints auto‑resolve role from the user’s cached session in Redis.

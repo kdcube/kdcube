@@ -11,6 +11,24 @@ from kdcube_ai_app.auth.sessions import UserSession
 from kdcube_ai_app.infra.accounting import AccountingSystem, _new_context_with, _context_var, _storage_var, SystemResource
 from contextlib import contextmanager
 
+
+def _project_session_accounting(session, *, tenant_id, project_id, metadata=None):
+    del tenant_id, project_id
+    user_id = getattr(session, "user_id", None)
+    user_type = _enum_to_str(getattr(session, "user_type", None))
+    authority = getattr(session, "identity_authority", None)
+    if not isinstance(authority, dict):
+        authority = {}
+    economics_user_id = str(authority.get("economics_user_id") or "").strip()
+    if economics_user_id:
+        projected_metadata = dict(metadata or {})
+        projected_metadata.setdefault("actor_user_id", str(user_id or ""))
+        projected_metadata.setdefault("economics_user_id", economics_user_id)
+        projected_metadata.setdefault("identity_authority", dict(authority))
+        return economics_user_id, user_type, projected_metadata
+    return user_id, user_type, dict(metadata or {})
+
+
 @dataclass
 class AccountingEnvelope:
     # core context
@@ -73,15 +91,21 @@ class AccountingEnvelope:
 def build_envelope_from_session(session, *, tenant_id,
                                 project_id, request_id, component,
                                 app_bundle_id=None, metadata=None, seeds=None) -> AccountingEnvelope:
+    accounting_user_id, accounting_user_type, accounting_metadata = _project_session_accounting(
+        session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        metadata=metadata,
+    )
     return AccountingEnvelope(
-        user_id=getattr(session, "user_id", None),
+        user_id=accounting_user_id,
         session_id=getattr(session, "session_id", None),
-        user_type=_enum_to_str(getattr(session, "user_type", None)),
+        user_type=accounting_user_type,
         tenant_id=tenant_id,
         project_id=project_id,
         request_id=request_id,
         component=component,
-        metadata=metadata or {},
+        metadata=accounting_metadata,
         seed_system_resources=seeds or [],
         app_bundle_id=app_bundle_id,
         timezone=getattr(session, "timezone", None),

@@ -978,6 +978,7 @@ async def process_chat_message(
             permissions=session.permissions,
             timezone=session.timezone,
             utc_offset_min=getattr(request_context, "user_utc_offset_min", None),
+            identity_authority=dict(getattr(session, "identity_authority", None) or {}),
         ),
         request=ExternalEventRequest(
             external_events=external_events,

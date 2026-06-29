@@ -85,7 +85,6 @@ def economics_search_subject(entrypoint: Any) -> EconomicsSubject:
         fallback_user_id=fallback_user_id,
         fallback_roles=getattr(user, "roles", None) or (),
         fallback_permissions=getattr(user, "permissions", None) or (),
-        fallback_user_type=str(getattr(user, "user_type", "") or ""),
     )
 
 

@@ -145,6 +145,30 @@ async with EconomicsGuard(
     await run_paid_work()
 ```
 
+When the job actor may be a linked/delegated identity, the job producer must
+carry the Connection Hub authority projection into the job envelope as
+`identity_authority`. Proc restores that snapshot into the runtime
+`ExternalEventPayload` and `bundle_call_context`. The bundle should keep its
+domain storage/provenance under the actor identity and let shared economics
+helpers project the billing/quota subject.
+
+If the job opens a nested accounting scope directly, pass the projected
+authority envelope and the actor `user_id`. Do not derive or hardcode
+`economics_user_id` or billing authority in bundle code; those are handled inside
+the shared economics/accounting layer.
+
+```python
+async with with_accounting(
+    "my_component.background_model_call",
+    user_id=actor_user_id,
+    identity_authority=bundle_call_context.get("identity_authority"),
+    metadata={
+        "actor_user_id": actor_user_id,
+    },
+):
+    await run_paid_work()
+```
+
 For automation execution through the automations solution, the SDK already performs a
 verify-only start check and then routes ReAct execution through
 `BaseEntrypointWithEconomics.run(...)`, which owns the reservation and settlement
@@ -174,7 +198,7 @@ Important stages:
 | Stage | Meaning |
 | --- | --- |
 | `preflight_start` / `preflight_ok` | verify-only check was evaluated |
-| `plan_resolved` | user role, plan, funding lane, and estimate were resolved |
+| `plan_resolved` | subject, plan, funding path, and estimate were resolved |
 | `admit` | quota admission ran and may have reserved plan tokens |
 | `reserve_ok` | funding reservation was created |
 | `accounting_bound` | accounting context was bound under the operation scope |

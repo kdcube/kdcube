@@ -32,6 +32,14 @@ def _clean_queue(value: str | None) -> str:
     return raw if raw in {"privileged", "registered", "paid", "anonymous"} else "registered"
 
 
+def _queue_label(*values: Any) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return _clean_queue(text)
+    return "registered"
+
+
 def _decode(value: Any) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8")
@@ -58,28 +66,29 @@ class BackgroundJob:
     work_kind: str
     tenant: str
     project: str
-    queue: str = "registered"
+    queue_label: str = "registered"
     bundle_id: str = ""
     user_id: str = ""
-    user_type: str = "registered"
     dedupe_key: str = ""
     source: Optional[Dict[str, Any]] = None
+    identity_authority: Optional[Dict[str, Any]] = None
     metadata: Optional[Dict[str, Any]] = None
     payload: Optional[Dict[str, Any]] = None
     created_at: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
+        queue_label = _queue_label(self.queue_label)
         return {
             "job_id": self.job_id or "",
             "work_kind": self.work_kind or "",
             "tenant": self.tenant or "",
             "project": self.project or "",
-            "queue": _clean_queue(self.queue),
+            "queue_label": queue_label,
             "bundle_id": self.bundle_id or "",
             "user_id": self.user_id or "",
-            "user_type": self.user_type or _clean_queue(self.queue),
             "dedupe_key": self.dedupe_key or "",
             "source": dict(self.source or {}),
+            "identity_authority": dict(self.identity_authority or {}),
             "metadata": dict(self.metadata or {}),
             "payload": dict(self.payload or {}),
             "created_at": float(self.created_at or 0.0),
@@ -87,18 +96,18 @@ class BackgroundJob:
 
     def to_fields(self) -> Dict[str, str]:
         created_at = float(self.created_at or _utc_ts())
-        queue = _clean_queue(self.queue or self.user_type)
+        queue_label = _queue_label(self.queue_label)
         return {
             "job_id": self.job_id or f"job_{uuid.uuid4().hex}",
             "work_kind": str(self.work_kind or "").strip(),
             "tenant": str(self.tenant or ""),
             "project": str(self.project or ""),
-            "queue": queue,
+            "queue_label": queue_label,
             "bundle_id": str(self.bundle_id or ""),
             "user_id": str(self.user_id or ""),
-            "user_type": str(self.user_type or queue),
             "dedupe_key": str(self.dedupe_key or ""),
             "source_json": _json_dump(self.source or {}),
+            "identity_authority_json": _json_dump(self.identity_authority or {}),
             "metadata_json": _json_dump(self.metadata or {}),
             "payload_json": _json_dump(self.payload or {}),
             "created_at": str(created_at),
@@ -109,18 +118,19 @@ class BackgroundJob:
         data = {_decode(k): _decode(v) for k, v in dict(fields or {}).items()}
         payload = _json_load(data.get("payload_json") or "{}")
         source = _json_load(data.get("source_json") or "{}")
+        identity_authority = _json_load(data.get("identity_authority_json") or "{}")
         metadata = _json_load(data.get("metadata_json") or "{}")
         return cls(
             job_id=str(data.get("job_id") or ""),
             work_kind=str(data.get("work_kind") or ""),
             tenant=str(data.get("tenant") or ""),
             project=str(data.get("project") or ""),
-            queue=_clean_queue(data.get("queue") or data.get("user_type")),
+            queue_label=_queue_label(data.get("queue_label")),
             bundle_id=str(data.get("bundle_id") or ""),
             user_id=str(data.get("user_id") or ""),
-            user_type=str(data.get("user_type") or data.get("queue") or "registered"),
             dedupe_key=str(data.get("dedupe_key") or ""),
             source=source if isinstance(source, dict) else {},
+            identity_authority=identity_authority if isinstance(identity_authority, dict) else {},
             metadata=metadata if isinstance(metadata, dict) else {},
             payload=payload if isinstance(payload, dict) else {},
             created_at=float(data.get("created_at") or 0.0),
@@ -163,9 +173,9 @@ class RedisBackgroundJobStream:
         self.group_name = group_name
         self.stream_maxlen = max(0, int(stream_maxlen or 0))
 
-    def stream_key(self, queue: str | None = None) -> str:
+    def stream_key(self, queue_label: str | None = None) -> str:
         base = ns_key(REDIS.BACKGROUND.JOB_STREAM_PREFIX, tenant=self.tenant, project=self.project)
-        return f"{base}:{_clean_queue(queue)}"
+        return f"{base}:{_clean_queue(queue_label)}"
 
     def dedupe_key(self, value: str) -> str:
         base = ns_key(REDIS.BACKGROUND.JOB_DEDUPE_PREFIX, tenant=self.tenant, project=self.project)
@@ -176,19 +186,19 @@ class RedisBackgroundJobStream:
         *,
         work_kind: str,
         payload: Dict[str, Any],
-        queue: str = "registered",
+        queue_label: str = "",
         bundle_id: str = "",
         user_id: str = "",
-        user_type: str = "registered",
         source: Optional[Dict[str, Any]] = None,
+        identity_authority: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         job_id: str = "",
         dedupe_key: str = "",
         dedupe_ttl_seconds: int = BACKGROUND_JOB_DEDUPE_TTL_SECONDS,
     ) -> EnqueueResult:
-        queue_name = _clean_queue(queue or user_type)
+        queue_label = _queue_label(queue_label)
         resolved_job_id = str(job_id or "").strip() or f"job_{uuid.uuid4().hex}"
-        stream_key = self.stream_key(queue_name)
+        stream_key = self.stream_key(queue_label)
         dedupe_storage_key = ""
         if dedupe_key:
             dedupe_storage_key = self.dedupe_key(dedupe_key)
@@ -211,12 +221,12 @@ class RedisBackgroundJobStream:
             work_kind=work_kind,
             tenant=self.tenant,
             project=self.project,
-            queue=queue_name,
+            queue_label=queue_label,
             bundle_id=bundle_id,
             user_id=user_id,
-            user_type=user_type or queue_name,
             dedupe_key=dedupe_key,
             source=source or {},
+            identity_authority=identity_authority or {},
             metadata=metadata or {},
             payload=payload or {},
             created_at=_utc_ts(),
@@ -258,8 +268,8 @@ class RedisBackgroundJobStream:
         autoclaim_idle_ms: int = BACKGROUND_JOB_AUTOCLAIM_IDLE_MS,
     ) -> Optional[BackgroundJobClaim]:
         consumer = str(consumer_name or "background-worker").strip() or "background-worker"
-        for queue in queue_order:
-            stream_key = self.stream_key(queue)
+        for queue_label in queue_order:
+            stream_key = self.stream_key(queue_label)
             await self._ensure_group(stream_key)
             raw_items = await self._xreadgroup(stream_key, consumer_name=consumer, count=count, block_ms=block_ms)
             if not raw_items:

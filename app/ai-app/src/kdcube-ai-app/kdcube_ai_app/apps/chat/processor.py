@@ -74,6 +74,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.named_services_providers.discovery im
     RedisNamedServiceDiscovery,
     bind_named_service_discovery,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_projection import (
+    project_execution_authority,
+)
 from kdcube_ai_app.infra.jobs.stream import (
     BACKGROUND_JOB_OPERATION,
     BACKGROUND_JOB_QUEUE_ORDER,
@@ -1583,6 +1586,32 @@ class EnhancedChatRequestProcessor:
         job = claim.job
         job_payload = job.payload or {}
         metadata = job.metadata or {}
+        source = job.source or {}
+        raw_identity_authority = (
+            job.identity_authority
+            if isinstance(job.identity_authority, dict) and job.identity_authority
+            else metadata.get("identity_authority")
+            if isinstance(metadata.get("identity_authority"), dict)
+            else source.get("identity_authority")
+            if isinstance(source.get("identity_authority"), dict)
+            else job_payload.get("identity_authority")
+            if isinstance(job_payload.get("identity_authority"), dict)
+            else {}
+        )
+        if not raw_identity_authority and any(
+            key in source
+            for key in (
+                "actor_user_id",
+                "storage_user_id",
+                "economics_user_id",
+                "platform_user_id",
+                "platform_roles",
+                "roles",
+                "platform_permissions",
+                "permissions",
+            )
+        ):
+            raw_identity_authority = dict(source)
         conversation_id = str(
             metadata.get("conversation_id")
             or job_payload.get("conversation_id")
@@ -1601,9 +1630,18 @@ class EnhancedChatRequestProcessor:
         ).strip()
         actor_tenant = job.tenant or get_settings().TENANT
         actor_project = job.project or get_settings().PROJECT
-        user_type = job.user_type or job.queue or "registered"
+        queue_label = job.queue_label or "registered"
         user_id = job.user_id or None
         timezone = metadata.get("timezone")
+        projection = project_execution_authority(
+            raw_identity_authority,
+            actor_user_id=str(user_id or ""),
+            fallback_user_id=str(user_id or ""),
+            fallback_roles=self._metadata_list(metadata.get("roles")),
+            fallback_permissions=self._metadata_list(metadata.get("permissions")),
+        )
+        actor_user_id = projection.actor_user_id or user_id
+        economics_user_id = projection.economics_user_id or actor_user_id
         payload = ExternalEventPayload(
             meta=ExternalEventMeta(
                 task_id=job.job_id,
@@ -1621,14 +1659,15 @@ class EnhancedChatRequestProcessor:
                 project_id=actor_project,
             ),
             user=ExternalEventUser(
-                user_type=user_type,
-                user_id=user_id,
+                user_type=queue_label,
+                user_id=actor_user_id,
                 username=str(metadata.get("username") or "") or None,
                 email=str(metadata.get("email") or "") or None,
                 fingerprint=str(metadata.get("fingerprint") or "") or None,
-                roles=self._metadata_list(metadata.get("roles")),
-                permissions=self._metadata_list(metadata.get("permissions")),
+                roles=list(projection.roles or self._metadata_list(metadata.get("roles"))),
+                permissions=list(projection.permissions or self._metadata_list(metadata.get("permissions"))),
                 timezone=timezone,
+                identity_authority=dict(projection.source),
             ),
             request=ExternalEventRequest(
                 operation=BACKGROUND_JOB_OPERATION,
@@ -1646,9 +1685,9 @@ class EnhancedChatRequestProcessor:
             config=ExternalEventConfig(values={}),
             accounting=ExternalEventAccounting(
                 envelope={
-                    "user_id": user_id,
+                    "user_id": economics_user_id,
                     "session_id": conversation_id,
-                    "user_type": user_type,
+                    "user_type": None,
                     "tenant_id": actor_tenant,
                     "project_id": actor_project,
                     "request_id": request_id,
@@ -1660,6 +1699,9 @@ class EnhancedChatRequestProcessor:
                         "work_kind": job.work_kind,
                         "conversation_id": conversation_id,
                         "turn_id": turn_id,
+                        "actor_user_id": actor_user_id,
+                        "economics_user_id": economics_user_id,
+                        "identity_authority": dict(projection.source),
                     },
                     "seed_system_resources": [],
                 }
@@ -1675,7 +1717,10 @@ class EnhancedChatRequestProcessor:
                 "kind": "background_job",
                 "job_id": job.job_id,
                 "work_kind": job.work_kind,
-                "source": dict(job.source or {}),
+                "source": dict(source or {}),
+                "identity_authority": dict(projection.source),
+                "actor_user_id": actor_user_id,
+                "economics_user_id": economics_user_id,
                 "metadata": metadata,
                 "payload": job_payload,
             },

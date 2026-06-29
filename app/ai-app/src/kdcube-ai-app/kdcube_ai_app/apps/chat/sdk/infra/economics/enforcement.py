@@ -155,7 +155,6 @@ def economics_subject_from_authority_context(
     fallback_user_id: str = "",
     fallback_roles: tuple[Any, ...] | list[Any] | set[Any] | None = None,
     fallback_permissions: tuple[Any, ...] | list[Any] | set[Any] | None = None,
-    fallback_user_type: str = "",
     timezone: str | None = None,
     provenance: dict[str, Any] | None = None,
 ) -> EconomicsSubject:
@@ -172,7 +171,6 @@ def economics_subject_from_authority_context(
         fallback_user_id=fallback_user_id,
         fallback_roles=fallback_roles,
         fallback_permissions=fallback_permissions,
-        fallback_user_type=fallback_user_type,
     )
     subject_provenance = projected.to_provenance()
     if provenance:

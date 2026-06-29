@@ -303,11 +303,6 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
             fallback_user_id=str(actor_user_id or ""),
             fallback_roles=fallback_roles,
             fallback_permissions=fallback_permissions,
-            fallback_user_type=str(
-                state.get("user_type")
-                or getattr(context_user, "user_type", None)
-                or "anonymous"
-            ),
         )
 
     @on_reactive_event
@@ -637,7 +632,7 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
         actor_user_id = state.get("actor_user") or state.get("user") or state.get("fingerprint")
         actor_user_id = projected_authority.actor_user_id or actor_user_id
         user_id = projected_authority.economics_user_id or actor_user_id
-        user_type = projected_authority.user_type or "anonymous"
+        compatibility_label = "anonymous" if projected_authority.is_anonymous else "registered"
         agent_id = normalize_agent_id(
             state.get("agent_id")
             or getattr(getattr(getattr(self, "comm_context", None), "event", None), "agent_id", None),
@@ -648,13 +643,12 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
             acct.set_context(agent_id=agent_id)
         except Exception:
             pass
-        role = "privileged" if projected_authority.budget_bypass else user_type
+        role = "privileged" if projected_authority.budget_bypass else compatibility_label
         user_type = role
         budget_bypass = bool(projected_authority.budget_bypass)
         state["actor_user"] = actor_user_id
         state["economics_user"] = user_id
         state["authority_user"] = user_id
-        state["user_type"] = role
         state["identity_authority"] = dict(projected_authority.source)
         if projected_authority.roles:
             state["roles"] = list(projected_authority.roles)

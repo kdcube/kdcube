@@ -49,7 +49,7 @@ comm_ctx
       routing.session_id
       routing.conversation_id
       routing.turn_id
-      user.user_type / user_id / roles / permissions
+      user.user_id / roles / permissions / identity_authority
       request metadata
       bundle_call_context
 
@@ -149,7 +149,6 @@ The portable shape is:
 ```text
 REQUEST_CONTEXT.user
   user_id       = telegram_434804821        # actor/storage identity
-  user_type     = privileged                # resolved authority role
   roles         = ["kdcube:role:super-admin"]
   permissions   = [...]
 
@@ -158,10 +157,9 @@ BUNDLE_CALL_CONTEXT.identity_authority
   storage_user_id    = telegram_434804821
   platform_user_id   = 02e53484-...
   economics_user_id  = 02e53484-...
-  user_type          = privileged
-  economics_user_type = privileged
   platform_roles     = ["kdcube:role:super-admin"]
   platform_permissions = [...]
+  economics_budget_bypass = true
   identity_provider  = telegram
   identity_provider_subject = 434804821
 

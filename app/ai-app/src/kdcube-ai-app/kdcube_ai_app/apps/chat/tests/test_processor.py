@@ -692,10 +692,9 @@ def test_background_job_chat_task_carries_accounting_context(_patch_processor_de
             work_kind="task.execution.due",
             tenant="demo-tenant",
             project="demo-project",
-            queue="registered",
+            queue_label="registered",
             bundle_id="task-and-memo-app@1-0",
             user_id="user-123",
-            user_type="registered",
             metadata={
                 "conversation_id": "automation_job_abc",
                 "turn_id": "turn_exec_1",

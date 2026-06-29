@@ -276,7 +276,7 @@ async def _job_turn_artifacts_from_store(execution: Dict[str, Any], *, sc: Dict[
             store.list_conversation,
             tenant=sc["tenant"],
             project=sc["project"],
-            user_type=sc.get("user_type") or "registered",
+            user_type="conversation",
             user_or_fp=sc["user_id"],
             conversation_id=conversation_id,
             turn_id=turn_id,

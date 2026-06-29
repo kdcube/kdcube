@@ -67,10 +67,14 @@ async def test_background_job_stream_enqueue_dedupe_claim_ack():
         work_kind="task.execution.due",
         bundle_id="task-and-memo-app@1-0",
         user_id="user-a",
-        user_type="registered",
-        queue="registered",
+        queue_label="registered",
         job_id="job-1",
         dedupe_key="bundle:user-a:task-1:slot-1",
+        identity_authority={
+            "actor_user_id": "telegram_42",
+            "economics_user_id": "platform-user-1",
+            "platform_roles": ["kdcube:role:super-admin"],
+        },
         metadata={"conversation_id": "conv-1", "turn_id": "turn-1"},
         payload={"task_id": "task-1", "execution_id": "exec-1"},
     )
@@ -78,8 +82,7 @@ async def test_background_job_stream_enqueue_dedupe_claim_ack():
         work_kind="task.execution.due",
         bundle_id="task-and-memo-app@1-0",
         user_id="user-a",
-        user_type="registered",
-        queue="registered",
+        queue_label="registered",
         job_id="job-1",
         dedupe_key="bundle:user-a:task-1:slot-1",
         metadata={},
@@ -89,11 +92,19 @@ async def test_background_job_stream_enqueue_dedupe_claim_ack():
     assert first.enqueued is True
     assert duplicate.enqueued is False
     assert duplicate.reason == "duplicate"
+    stored_fields = next(iter(redis.streams[first.stream_key]))[1]
+    assert stored_fields["queue_label"] == "registered"
+    assert "user_type" not in stored_fields
 
     claim = await stream.claim_next(consumer_name="proc-1", queue_order=("registered",))
     assert claim is not None
     assert claim.job.job_id == "job-1"
     assert claim.job.work_kind == "task.execution.due"
+    assert claim.job.identity_authority == {
+        "actor_user_id": "telegram_42",
+        "economics_user_id": "platform-user-1",
+        "platform_roles": ["kdcube:role:super-admin"],
+    }
     assert claim.job.metadata["conversation_id"] == "conv-1"
     assert claim.job.payload["execution_id"] == "exec-1"
 

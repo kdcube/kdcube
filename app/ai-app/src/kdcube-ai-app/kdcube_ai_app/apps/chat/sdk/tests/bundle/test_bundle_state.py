@@ -29,7 +29,6 @@ class TestBundleState:
             "tenant": "acme",
             "project": "main",
             "user": "user-456",
-            "user_type": "registered",
             "session_id": "sess-789",
             "conversation_id": "conv-abc",
             "external_events": [{"type": "event.user.prompt", "payload": {"mime": "text/plain", "event": {"text": "hello world"}}}],
@@ -40,7 +39,7 @@ class TestBundleState:
         assert state["tenant"] == "acme"
         assert state["project"] == "main"
         assert state["user"] == "user-456"
-        assert state["user_type"] == "registered"
+        assert "user_type" not in state
         assert state["session_id"] == "sess-789"
         assert state["conversation_id"] == "conv-abc"
         assert state["external_events"] == payload["external_events"]

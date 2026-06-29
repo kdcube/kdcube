@@ -132,28 +132,6 @@ def authority_economics_user_id(
     )
 
 
-def _legacy_user_type_from_authority(
-    source: Mapping[str, Any] | None,
-    *,
-    budget_bypass: bool | None,
-    fallback_user_type: str = "",
-) -> str:
-    authority = _authority_mapping(source)
-    if budget_bypass:
-        return "privileged"
-    value = _clean(
-        authority.get("economics_user_type")
-        or authority.get("platform_user_type")
-        or authority.get("user_type")
-        or fallback_user_type
-    ).lower()
-    if value in {"privileged", "admin"}:
-        return "registered"
-    if value in {"anonymous", "registered", "paid"}:
-        return value
-    return "registered"
-
-
 @dataclass(frozen=True)
 class AuthorityExecutionProjection:
     actor_user_id: str
@@ -161,7 +139,6 @@ class AuthorityExecutionProjection:
     roles: tuple[str, ...] = ()
     permissions: tuple[str, ...] = ()
     budget_bypass: bool | None = None
-    user_type: str = "registered"
     is_anonymous: bool = False
     source: dict[str, Any] = field(default_factory=dict)
 
@@ -181,7 +158,6 @@ def project_execution_authority(
     fallback_user_id: str = "",
     fallback_roles: Iterable[Any] | None = None,
     fallback_permissions: Iterable[Any] | None = None,
-    fallback_user_type: str = "",
 ) -> AuthorityExecutionProjection:
     authority = dict(source or {}) if isinstance(source, Mapping) else {}
     actor = authority_actor_user_id(authority, fallback_user_id=actor_user_id or fallback_user_id)
@@ -193,19 +169,13 @@ def project_execution_authority(
     roles = authority_roles(authority, fallback=fallback_roles)
     permissions = authority_permissions(authority, fallback=fallback_permissions)
     budget_bypass = authority_budget_bypass(authority, roles=roles)
-    user_type = _legacy_user_type_from_authority(
-        authority,
-        budget_bypass=budget_bypass,
-        fallback_user_type=fallback_user_type,
-    )
-    is_anonymous = (not economics_user) or economics_user == "anonymous" or user_type == "anonymous"
+    is_anonymous = (not economics_user) or economics_user == "anonymous"
     return AuthorityExecutionProjection(
         actor_user_id=actor,
         economics_user_id=economics_user,
         roles=roles,
         permissions=permissions,
         budget_bypass=budget_bypass,
-        user_type=user_type,
         is_anonymous=is_anonymous,
         source=authority,
     )

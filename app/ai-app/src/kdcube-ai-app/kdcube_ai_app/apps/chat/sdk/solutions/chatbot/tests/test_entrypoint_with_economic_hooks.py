@@ -52,7 +52,6 @@ def test_economics_run_authority_projects_actor_to_platform_subject():
     assert projection.actor_user_id == "telegram_434804821"
     assert projection.economics_user_id == "02e53484-0081-70ce-11c1-e96706b1a182"
     assert projection.budget_bypass is True
-    assert projection.user_type == "privileged"
 
 
 def test_economics_run_authority_does_not_trust_legacy_privileged_user_type():
@@ -68,7 +67,6 @@ def test_economics_run_authority_does_not_trust_legacy_privileged_user_type():
     assert projection.actor_user_id == "telegram_434804821"
     assert projection.economics_user_id == "telegram_434804821"
     assert projection.budget_bypass is None
-    assert projection.user_type == "registered"
 
 
 def test_economics_run_authority_reads_cross_runtime_context_authority():
@@ -99,7 +97,6 @@ def test_economics_run_authority_reads_cross_runtime_context_authority():
     assert projection.economics_user_id == "platform-user-1"
     assert projection.roles == ("kdcube:role:chat-user",)
     assert projection.budget_bypass is False
-    assert projection.user_type == "registered"
 
 
 @pytest.mark.asyncio

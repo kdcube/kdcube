@@ -89,7 +89,7 @@ def test_automation_reservation_usd_from_config_and_default():
     assert ops._automation_reservation_usd(_StubEP(reservation="nope")) == 0.50
 
 
-def test_execution_authority_roles_promote_user_type():
+def test_execution_authority_roles_project_budget_bypass_not_user_type():
     authority = normalize_execution_authority(
         {"user_type": "registered", "platform_roles": ["kdcube:role:super-admin"]},
         actor_user_id="telegram_42",
@@ -97,8 +97,9 @@ def test_execution_authority_roles_promote_user_type():
     )
     assert authority["actor_user_id"] == "telegram_42"
     assert authority["economics_user_id"] == "platform-user-1"
-    assert authority["user_type"] == "privileged"
-    assert authority["economics_user_type"] == "privileged"
+    assert "user_type" not in authority
+    assert "economics_user_type" not in authority
+    assert authority["economics_budget_bypass"] is True
 
 
 async def test_automation_subject_does_not_treat_carried_user_type_as_authority():
@@ -116,7 +117,6 @@ async def test_automation_subject_can_use_platform_authority_user():
         target_user="telegram_42",
         source={
             "economics_user_id": "platform-user-1",
-            "economics_user_type": "privileged",
             "platform_roles": ["kdcube:role:super-admin"],
         },
     )
@@ -192,17 +192,17 @@ def test_automation_economics_metadata_logs_limits():
 
 
 # --------------------------------------------------------------------------
-# Point (2): resolved role propagated into the scoped context for inner run()
+# Point (2): authority facts, not user_type, propagate into scoped context.
 # --------------------------------------------------------------------------
-def test_scoped_context_propagates_resolved_role():
+def test_scoped_context_does_not_apply_queue_label_as_authority():
     ep = _StubEP(economics=True)
     ep.comm_context = _FakeCtx(user_type="registered")
     ctx = ops._build_automation_scoped_context(
         ep, target_user="u1", run_conversation_id="conv", turn_id="turn_e1",
-        bundle_call_context={}, resolved_user_type="paid",
+        bundle_call_context={"queue_label": "paid"},
     )
     assert ctx.user.user_id == "u1"
-    assert ctx.user.user_type == "paid"  # inner run() now bills the correct plan
+    assert ctx.user.user_type == "registered"
 
 
 def test_scoped_context_keeps_actor_and_carries_platform_roles():
@@ -214,16 +214,15 @@ def test_scoped_context_keeps_actor_and_carries_platform_roles():
         run_conversation_id="conv",
         turn_id="turn_e1",
         bundle_call_context={
+            "queue_label": "privileged",
             "source": {
                 "economics_user_id": "platform-user-1",
-                "economics_user_type": "privileged",
                 "platform_roles": ["kdcube:role:super-admin"],
             }
         },
-        resolved_user_type="privileged",
     )
     assert ctx.user.user_id == "telegram_42"
-    assert ctx.user.user_type == "privileged"
+    assert ctx.user.user_type == "registered"
     assert ctx.user.roles == ["kdcube:role:super-admin"]
 
 
@@ -240,15 +239,13 @@ def test_scoped_context_prefers_cross_runtime_identity_authority():
             "identity_authority": {
                 "actor_user_id": "telegram_42",
                 "economics_user_id": "platform-user-1",
-                "user_type": "privileged",
                 "platform_roles": ["kdcube:role:super-admin"],
                 "platform_permissions": ["kdcube:*:chat:*;read;write"],
             },
         },
-        resolved_user_type=None,
     )
     assert ctx.user.user_id == "telegram_42"
-    assert ctx.user.user_type == "privileged"
+    assert ctx.user.user_type == "registered"
     assert ctx.user.roles == ["kdcube:role:super-admin"]
     assert ctx.user.permissions == ["kdcube:*:chat:*;read;write"]
 
@@ -258,6 +255,6 @@ def test_scoped_context_keeps_role_when_unresolved():
     ep.comm_context = _FakeCtx(user_type="registered")
     ctx = ops._build_automation_scoped_context(
         ep, target_user="u1", run_conversation_id="conv", turn_id="turn_e1",
-        bundle_call_context={}, resolved_user_type=None,
+        bundle_call_context={},
     )
     assert ctx.user.user_type == "registered"  # unchanged

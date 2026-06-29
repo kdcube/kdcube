@@ -277,7 +277,6 @@ class VersatileEntrypoint(BaseEntrypointWithEconomics):
                     "tenant": state["tenant"],
                     "project": state["project"],
                     "user": state["user"],
-                    "user_type": state["user_type"] or "anonymous",
                     "session_id": state["session_id"],
                     "conversation_id": state["conversation_id"],
                     "turn_id": state["turn_id"],

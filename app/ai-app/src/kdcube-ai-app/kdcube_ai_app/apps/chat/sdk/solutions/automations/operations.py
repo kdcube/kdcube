@@ -115,10 +115,9 @@ def _execution_scope(entrypoint: Any, *, user_id: str) -> Dict[str, Any]:
         "tenant": tenant,
         "project": project,
         "user_id": user_id,
-        # NOTE: user_type here scopes ARTIFACT storage paths (execution_artifacts),
-        # not economics. It is intentionally left constant so artifact read/write
-        # paths stay consistent across executions regardless of the funding role.
-        # Economics uses an independently resolved role via _automation_econ_subject.
+        # NOTE: user_type here is legacy ARTIFACT path compatibility for
+        # execution_artifacts, not economics or authority. Economics uses the
+        # carried identity_authority projection.
         "user_type": "registered",
         "storage_root": _storage_root(entrypoint),
     }
@@ -190,7 +189,6 @@ async def _automation_econ_subject(entrypoint: Any, *, target_user: str, source:
         timezone=timezone,
         fallback_roles=tuple(getattr(comm_user, "roles", None) or ()),
         fallback_permissions=tuple(getattr(comm_user, "permissions", None) or ()),
-        fallback_user_type=str(getattr(comm_user, "user_type", "") or "registered"),
     )
 
 
@@ -784,7 +782,6 @@ def _build_automation_scoped_context(
     run_conversation_id: str,
     turn_id: str,
     bundle_call_context: Dict[str, Any],
-    resolved_user_type: Optional[str] = None,
 ):
     comm_context = getattr(entrypoint, "comm_context", None)
     if comm_context is None or not hasattr(comm_context, "model_copy"):
@@ -801,11 +798,6 @@ def _build_automation_scoped_context(
         else bundle_call_context.get("source")
     )
     apply_authority_to_comm_context(scoped_ctx, source=authority_source)
-    # Carry the economics-resolved role so the inner run() applies the correct
-    # plan/limits + funding for this user (the worker comm_context may carry a
-    # stale/default role for scheduled automations).
-    if resolved_user_type:
-        scoped_ctx.user.user_type = resolved_user_type
     scoped_ctx.bundle_call_context = bundle_call_context
     return scoped_ctx
 
@@ -836,7 +828,6 @@ async def _run_default_react_automation_job(
     run_conversation_id: str,
     turn_id: str,
     bundle_call_context: Dict[str, Any],
-    resolved_user_type: Optional[str] = None,
     economics_user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     scoped_ctx = _build_automation_scoped_context(
@@ -845,10 +836,19 @@ async def _run_default_react_automation_job(
         run_conversation_id=run_conversation_id,
         turn_id=turn_id,
         bundle_call_context=bundle_call_context,
-        resolved_user_type=resolved_user_type,
     )
 
     async def _run_scoped() -> Dict[str, Any]:
+        source_context = (
+            bundle_call_context.get("source")
+            if isinstance(bundle_call_context.get("source"), dict)
+            else {}
+        )
+        queue_label = str(
+            bundle_call_context.get("queue_label")
+            or source_context.get("queue_label")
+            or "registered"
+        )
         state = entrypoint.create_initial_state(
             {
                 "request_id": getattr(scoped_ctx.request, "request_id", "") or str(uuid.uuid4()),
@@ -856,7 +856,7 @@ async def _run_default_react_automation_job(
                 "project": scoped_ctx.actor.project_id,
                 "user": target_user,
                 "economics_user": economics_user_id or target_user,
-                "user_type": scoped_ctx.user.user_type,
+                "user_type": queue_label,
                 "session_id": run_conversation_id,
                 "conversation_id": run_conversation_id,
                 "turn_id": turn_id,
@@ -908,7 +908,6 @@ async def _execute_automation_job(
     run_conversation_id: str,
     turn_id: str,
     bundle_call_context: Dict[str, Any],
-    resolved_user_type: Optional[str] = None,
     economics_user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     executor = getattr(entrypoint, "execute_automation_job", None)
@@ -934,7 +933,6 @@ async def _execute_automation_job(
                 run_conversation_id=run_conversation_id,
                 turn_id=turn_id,
                 bundle_call_context=bundle_call_context,
-                resolved_user_type=resolved_user_type,
             )
         except RuntimeError:
             return await _run_custom()
@@ -950,7 +948,6 @@ async def _execute_automation_job(
         run_conversation_id=run_conversation_id,
         turn_id=turn_id,
         bundle_call_context=bundle_call_context,
-        resolved_user_type=resolved_user_type,
         economics_user_id=economics_user_id,
     )
 
@@ -1279,28 +1276,16 @@ async def run_automation_execution(
             compatibility_role,
             econ_decision.lane, econ_decision.funding_source, econ_decision.plan_id,
         )
-    # Point (2): propagate the resolved role so the inner ReAct run() applies the
-    # correct plan/limits for this user (esp. scheduled automations enqueued in a system
-    # context where the carried role may default to "registered").
-    resolved_user_type = (
-        "privileged" if bool(getattr(econ_subject, "budget_bypass", False))
-        else "anonymous" if bool(getattr(econ_subject, "is_anonymous", False))
-        else None
-    )
     if econ_subject is not None and getattr(econ_subject, "user_id", None):
         economics_user_id = str(econ_subject.user_id)
     authority_context = normalize_execution_authority(
         source or {},
         actor_user_id=target_user,
         economics_user_id=economics_user_id,
-        user_type=resolved_user_type or (source or {}).get("user_type") or "registered",
     )
     execution_source = {**(source or {}), **authority_context}
-    if resolved_user_type:
-        execution_source["user_type"] = resolved_user_type
     bundle_call_context["actor_user_id"] = target_user
     bundle_call_context["economics_user_id"] = economics_user_id
-    bundle_call_context["economics_user_type"] = resolved_user_type
     bundle_call_context["identity_authority"] = authority_context
     bundle_call_context["source"] = execution_source
 
@@ -1326,7 +1311,6 @@ async def run_automation_execution(
                 run_conversation_id=run_conversation_id,
                 turn_id=turn_id,
                 bundle_call_context=bundle_call_context,
-                resolved_user_type=resolved_user_type,
                 economics_user_id=economics_user_id,
             )
         answer = _result_answer(result)
@@ -1438,19 +1422,17 @@ async def enqueue_automation_job(
             "execution": execution,
             "error": {"code": "redis_unavailable", "message": "Redis is required to enqueue automation jobs."},
         }
-    comm_context = getattr(entrypoint, "comm_context", None)
-    comm_user = getattr(comm_context, "user", None)
-    user_type = str(source.get("user_type") or getattr(comm_user, "user_type", "registered") or "registered")
+    queue_label = str(source.get("queue_label") or "registered")
     stream = RedisBackgroundJobStream(entrypoint.redis, tenant=tenant, project=project)
     enqueue = await stream.enqueue(
         work_kind=work_kind,
         bundle_id=bundle_id,
         user_id=target_user,
-        user_type=user_type,
-        queue=user_type,
+        queue_label=queue_label,
         job_id=f"job_{execution['id']}",
         dedupe_key=str(source.get("dedupe_key") or ""),
         source=source,
+        identity_authority=source.get("identity_authority") if isinstance(source.get("identity_authority"), dict) else {},
         metadata={
             "conversation_id": run_conversation_id,
             "turn_id": turn_id,

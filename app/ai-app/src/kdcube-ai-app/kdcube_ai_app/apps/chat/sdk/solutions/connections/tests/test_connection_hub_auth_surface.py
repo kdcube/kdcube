@@ -60,7 +60,7 @@ async def test_connection_hub_surface_projects_identity_authority_to_session():
                 "platform_user_id": "platform-user-1",
                 "platform_roles": ["kdcube:role:super-admin"],
                 "platform_permissions": ["demo:*"],
-                "economics_user_type": "privileged",
+                "economics_budget_bypass": True,
             },
         ).to_dict()
 
@@ -90,7 +90,7 @@ async def test_connection_hub_surface_projects_identity_authority_to_session():
 
     assert session is not None
     assert session.user_id == "telegram_434804821"
-    assert session.user_type == UserType.PRIVILEGED
+    assert session.user_type == UserType.REGISTERED
     assert session.roles == ["kdcube:role:super-admin"]
     assert session.permissions == ["demo:*"]
     assert session.identity_authority["platform_user_id"] == "platform-user-1"

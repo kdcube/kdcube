@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Awaitable, Callable, Mapping, Optional
 
-from kdcube_ai_app.apps.chat.sdk.identity_authority import resolve_platform_authority, user_type_from_roles
+from kdcube_ai_app.apps.chat.sdk.identity_authority import resolve_platform_authority
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram import validate_telegram_init_data
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.authenticators.models import (
     AuthenticatedRequest,
@@ -13,6 +13,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.authenticators.authority 
     AuthRequestHints,
     select_authenticator_candidates,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_projection import authority_has_platform_privilege
 from kdcube_ai_app.auth.AuthManager import REGISTERED_ROLE
 
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.hub.edges import (
@@ -559,7 +560,6 @@ async def authenticate_request(
         entrypoint,
         actor_user_id=actor_user_id,
         platform_user_id=platform_user_id,
-        default_user_type="registered",
         provider="telegram",
         provider_subject=telegram_user_id,
         source="connection_hub.request_auth",
@@ -569,20 +569,18 @@ async def authenticate_request(
     raw_permissions = _safe_list(authority.get("platform_permissions") or principal.get("permissions") or [])
     delegated_roles = [role for role in raw_roles if role in edge_grants]
     delegated_permissions = [permission for permission in raw_permissions if permission in edge_grants]
-    effective_user_type = user_type_from_roles(roles=delegated_roles, fallback="registered")
     if delegated_roles:
         authority["platform_roles"] = delegated_roles
+        authority["economics_budget_bypass"] = authority_has_platform_privilege(delegated_roles)
     else:
         authority.pop("platform_roles", None)
+        authority.pop("economics_budget_bypass", None)
     if delegated_permissions:
         authority["platform_permissions"] = delegated_permissions
     else:
         authority.pop("platform_permissions", None)
     authority["delegated_grants"] = sorted(edge_grants)
     authority["grants"] = sorted(edge_grants)
-    authority["user_type"] = effective_user_type
-    authority["platform_user_type"] = effective_user_type
-    authority["economics_user_type"] = effective_user_type
     if platform_user_id and "economics:platform-user" not in edge_grants:
         authority["economics_user_id"] = actor_user_id
         authority["economics_projection"] = "actor"
@@ -591,7 +589,7 @@ async def authenticate_request(
         authority["economics_projection"] = "platform_user"
 
     LOGGER.info(
-        "[connection-hub.request_authenticate] accepted provider=telegram authority_id=%s selected_authenticator=%s actor_user_id=%s platform_user_present=%s linked=%s edge_grants=%s delegated_roles=%s authority_user_type=%s",
+        "[connection-hub.request_authenticate] accepted provider=telegram authority_id=%s selected_authenticator=%s actor_user_id=%s platform_user_present=%s linked=%s edge_grants=%s delegated_roles=%s budget_bypass=%s",
         selected_authority_id or authority_id or "telegram.default",
         selected_authenticator or "telegram.default",
         actor_user_id,
@@ -599,7 +597,7 @@ async def authenticate_request(
         bool(platform_user_id),
         sorted(edge_grants),
         delegated_roles,
-        _str(authority.get("economics_user_type") or authority.get("platform_user_type") or authority.get("user_type")),
+        authority.get("economics_budget_bypass"),
     )
     return AuthenticatedRequest(
         ok=True,

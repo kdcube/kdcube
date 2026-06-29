@@ -26,13 +26,12 @@ def configure_due_automations(
     storage_root_or_error: Any,
     automation_operations_module: Any,
     scheduler_identity_resolver: Any = None,
-    scheduler_user_type_resolver: Any = None,
 ) -> None:
     """Bind bundle-specific storage and automation operation hooks."""
     global _storage_root_or_error, _automation_operations, _scheduler_identity_resolver
     _storage_root_or_error = storage_root_or_error
     _automation_operations = automation_operations_module
-    _scheduler_identity_resolver = scheduler_identity_resolver or scheduler_user_type_resolver
+    _scheduler_identity_resolver = scheduler_identity_resolver
 
 
 def _storage_root(entrypoint: Any) -> str:
@@ -115,13 +114,13 @@ async def _disable_one_shot_automation(storage: AsyncAutomationStorage, *, autom
     )
 
 
-def _normalize_user_type(value: Any, default: str = "registered") -> str:
+def _normalize_queue_label(value: Any, default: str = "registered") -> str:
     raw = getattr(value, "value", value)
-    user_type = str(raw or default or "registered").strip().lower() or "registered"
-    if user_type == "admin":
+    queue_label = str(raw or default or "registered").strip().lower() or "registered"
+    if queue_label == "admin":
         return "privileged"
-    if user_type in {"anonymous", "registered", "paid", "privileged"}:
-        return user_type
+    if queue_label in {"anonymous", "registered", "paid", "privileged"}:
+        return queue_label
     return str(default or "registered").strip().lower() or "registered"
 
 
@@ -129,17 +128,15 @@ def _scheduler_identity_from_result(
     resolved: Any,
     *,
     owner_user_id: str,
-    default_user_type: str,
+    default_queue_label: str,
 ) -> Tuple[str, Dict[str, Any]]:
     if not isinstance(resolved, dict):
-        user_type = _normalize_user_type(resolved, default_user_type)
-        return user_type, {"actor_user_id": owner_user_id, "storage_user_id": owner_user_id}
+        queue_label = _normalize_queue_label(resolved, default_queue_label)
+        return queue_label, {"actor_user_id": owner_user_id, "storage_user_id": owner_user_id}
 
-    user_type = _normalize_user_type(
-        resolved.get("economics_user_type")
-        or resolved.get("platform_user_type")
-        or resolved.get("user_type"),
-        default_user_type,
+    queue_label = _normalize_queue_label(
+        resolved.get("queue_label"),
+        default_queue_label,
     )
     identity = {
         key: value
@@ -148,12 +145,9 @@ def _scheduler_identity_from_result(
     }
     identity.setdefault("actor_user_id", owner_user_id)
     identity.setdefault("storage_user_id", owner_user_id)
-    identity["user_type"] = user_type
     if identity.get("platform_user_id") and not identity.get("economics_user_id"):
         identity["economics_user_id"] = identity["platform_user_id"]
-    if identity.get("economics_user_id") and not identity.get("economics_user_type"):
-        identity["economics_user_type"] = user_type
-    return user_type, identity
+    return queue_label, identity
 
 
 async def enqueue_due_automations(entrypoint: Any) -> Dict[str, Any]:
@@ -167,7 +161,7 @@ async def enqueue_due_automations(entrypoint: Any) -> Dict[str, Any]:
 
     max_due = int(entrypoint.bundle_prop("automations.scheduler.max_due_automations_per_tick", 10) or 10)
     min_interval_seconds = int(entrypoint.bundle_prop("automations.scheduler.min_interval_seconds", 300) or 300)
-    default_user_type = str(entrypoint.bundle_prop("automations.scheduler.default_user_type", "registered") or "registered")
+    default_queue_label = str(entrypoint.bundle_prop("automations.scheduler.default_queue_label", "registered") or "registered")
     now_utc = datetime.now(timezone.utc)
     stream = RedisBackgroundJobStream(redis, tenant=tenant, project=project)
     enqueued: List[Dict[str, Any]] = []
@@ -197,7 +191,7 @@ async def enqueue_due_automations(entrypoint: Any) -> Dict[str, Any]:
 
             conversation_id = f"automation_job_{uuid.uuid4().hex}"
             owner_user_id = str(automation.get("owner_user_id") or user_id)
-            user_type = default_user_type
+            queue_label = default_queue_label
             identity_context: Dict[str, Any] = {
                 "actor_user_id": owner_user_id,
                 "storage_user_id": owner_user_id,
@@ -207,30 +201,29 @@ async def enqueue_due_automations(entrypoint: Any) -> Dict[str, Any]:
                     entrypoint,
                     user_id=owner_user_id,
                     automation=automation,
-                    default_user_type=default_user_type,
+                    default_queue_label=default_queue_label,
                 )
                 if inspect.isawaitable(resolved):
                     resolved = await resolved
-                user_type, identity_context = _scheduler_identity_from_result(
+                queue_label, identity_context = _scheduler_identity_from_result(
                     resolved,
                     owner_user_id=owner_user_id,
-                    default_user_type=default_user_type,
+                    default_queue_label=default_queue_label,
                 )
             else:
-                user_type = _normalize_user_type(user_type, default_user_type)
+                queue_label = _normalize_queue_label(queue_label, default_queue_label)
             source = {
                 "surface": "scheduler",
                 "operation": "scheduled_automation_due_scan",
                 "due_slot": due_slot,
                 "cron": (automation.get("schedule") or {}).get("cron") or "",
-                "user_type": user_type,
+                "queue_label": queue_label,
                 **identity_context,
             }
             source["identity_authority"] = normalize_execution_authority(
                 identity_context,
                 actor_user_id=owner_user_id,
                 economics_user_id=str(identity_context.get("economics_user_id") or ""),
-                user_type=user_type,
             )
             execution = await storage.create_execution(
                 automation_id=automation_id,
@@ -246,11 +239,11 @@ async def enqueue_due_automations(entrypoint: Any) -> Dict[str, Any]:
                 work_kind=WORK_KIND_AUTOMATION_EXECUTION_DUE,
                 bundle_id=bundle_id,
                 user_id=owner_user_id,
-                user_type=user_type,
-                queue=user_type,
+                queue_label=queue_label,
                 job_id=f"job_{execution['id']}",
                 dedupe_key=f"{bundle_id}:{user_id}:{automation_id}:{due_slot}",
                 source=source,
+                identity_authority=source.get("identity_authority") if isinstance(source.get("identity_authority"), dict) else {},
                 metadata={
                     "conversation_id": conversation_id,
                     "turn_id": turn_id,

@@ -57,16 +57,6 @@ def _bool(value: Any, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
-def _user_type(value: Any, default: str = "registered") -> UserType:
-    raw = _str(getattr(value, "value", value)).lower() or _str(default).lower() or "registered"
-    if raw == "admin":
-        raw = "privileged"
-    try:
-        return UserType(raw)
-    except Exception:
-        return UserType.REGISTERED
-
-
 def _authenticator_config() -> dict[str, Any]:
     cfg = get_plain("auth.authenticators.connection_hub", default=None)
     if not isinstance(cfg, Mapping):
@@ -271,13 +261,6 @@ class ConnectionHubAuthenticationSurface:
             return None
         roles = list(authority.get("platform_roles") or authenticated.principal.get("roles") or [])
         permissions = list(authority.get("platform_permissions") or authenticated.principal.get("permissions") or [])
-        effective_user_type = _user_type(
-            authority.get("economics_user_type")
-            or authority.get("platform_user_type")
-            or authority.get("user_type")
-            or authenticated.principal.get("user_type"),
-            default="registered",
-        )
         user_data = {
             "user_id": actor_user_id,
             "username": actor_user_id,
@@ -285,11 +268,11 @@ class ConnectionHubAuthenticationSurface:
             "permissions": permissions,
             "identity_authority": authority,
         }
-        session = await session_factory(context, effective_user_type, user_data)
+        session = await session_factory(context, UserType.REGISTERED, user_data)
         session.identity_authority = authority
         if trace:
             logger.info(
-                "[auth.connection_hub.surface] accepted tenant=%s project=%s provider=%s authority_id=%s selected_authenticator=%s actor_user_id=%s platform_user_present=%s effective_user_type=%s roles=%s",
+                "[auth.connection_hub.surface] accepted tenant=%s project=%s provider=%s authority_id=%s selected_authenticator=%s actor_user_id=%s platform_user_present=%s session_label=%s roles=%s",
                 self.tenant,
                 self.project,
                 authenticated.provider or summary.get("provider") or "",
@@ -297,7 +280,7 @@ class ConnectionHubAuthenticationSurface:
                 authenticated.selected_authenticator or "",
                 actor_user_id,
                 bool(authenticated.platform_user_id or authority.get("platform_user_id")),
-                effective_user_type.value,
+                UserType.REGISTERED.value,
                 roles,
             )
         return session

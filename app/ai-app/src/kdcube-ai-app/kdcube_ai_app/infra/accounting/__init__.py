@@ -747,6 +747,27 @@ class AccountingSystem:
 # Sentinel used to mark "key was absent" in context overlays
 _MISSING = object()
 
+
+def _project_authority_accounting_fields(fields: Dict[str, Any]) -> Dict[str, Any]:
+    authority = fields.get("identity_authority")
+    if not isinstance(authority, dict) or not authority:
+        return fields
+    actor_user_id = str(fields.get("user_id") or authority.get("actor_user_id") or "").strip()
+    economics_user_id = str(authority.get("economics_user_id") or "").strip()
+    if not economics_user_id:
+        raise ValueError("identity_authority must carry canonical economics_user_id at accounting boundaries")
+
+    projected = dict(fields)
+    projected["user_id"] = economics_user_id
+    metadata = dict(projected.get("metadata") or {})
+    if actor_user_id:
+        metadata.setdefault("actor_user_id", actor_user_id)
+    metadata.setdefault("economics_user_id", economics_user_id)
+    metadata.setdefault("identity_authority", dict(authority))
+    projected["metadata"] = metadata
+    return projected
+
+
 class with_accounting:
     """Context manager for setting component and overlaying context keys (async safe)."""
 
@@ -770,7 +791,7 @@ class with_accounting:
         ctx.component = self.component
 
         # split kwargs: pull out enrichment keys using a sentinel so static analysis
-        new = dict(self._new_enrichment)
+        new = _project_authority_accounting_fields(dict(self._new_enrichment))
 
         enrich_patch = {}
         for key in ("metadata", "seed_system_resources"):

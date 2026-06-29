@@ -72,6 +72,8 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.compaction_memory import extrac
 
 # ---------- small utilities ----------
 
+CONVERSATION_INDEX_LABEL = "conversation"
+
 
 def _react_agent_version() -> str:
     try:
@@ -456,7 +458,6 @@ def _effective_runtime_ctx_log_payload(runtime_ctx: Any, bundle_props: Dict[str,
         "tenant": getattr(runtime_ctx, "tenant", None),
         "project": getattr(runtime_ctx, "project", None),
         "user_id": getattr(runtime_ctx, "user_id", None),
-        "user_type": getattr(runtime_ctx, "user_type", None),
         "conversation_id": getattr(runtime_ctx, "conversation_id", None),
         "turn_id": getattr(runtime_ctx, "turn_id", None),
         "bundle_id": getattr(runtime_ctx, "bundle_id", None),
@@ -537,15 +538,8 @@ def _cleanup_turn_workspace(runtime_ctx: Any, logger: Any) -> None:
                 logger.log(f"[workflow] turn workspace root retained after partial cleanup: {parent}", level="WARNING")
 
 
-def _ttl_for(user_type: str, requested: int) -> int:
-    ttl_map = {
-        "anonymous": 1,
-        "registered": 7,
-        "privileged": 90,
-        "paid": 365
-    }
-    hard = ttl_map.get((user_type or "anonymous").lower(), 7)
-    return min(requested, hard)
+def _ttl_for(requested: int) -> int:
+    return int(requested)
 
 def _norm_topic(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", (s or "").lower()).strip("_")
@@ -645,7 +639,6 @@ class BaseWorkflow():
                 tenant=self.comm_context.actor.tenant_id,
                 project=self.comm_context.actor.project_id,
                 user_id=self.comm_context.user.user_id,
-                user_type=self.comm_context.user.user_type,
                 timezone=self.comm_context.user.timezone,
                 conversation_id=self.comm_context.routing.conversation_id,
                 turn_id=self.comm_context.routing.turn_id,
@@ -1109,7 +1102,6 @@ class BaseWorkflow():
                 runtime_ctx.tenant = comm_context.actor.tenant_id
                 runtime_ctx.project = comm_context.actor.project_id
                 runtime_ctx.user_id = comm_context.user.user_id
-                runtime_ctx.user_type = comm_context.user.user_type
                 runtime_ctx.timezone = comm_context.user.timezone
                 runtime_ctx.conversation_id = comm_context.routing.conversation_id
                 runtime_ctx.turn_id = comm_context.routing.turn_id
@@ -1376,12 +1368,12 @@ class BaseWorkflow():
                     project=self.runtime_ctx.project,
                     user_id=self.runtime_ctx.user_id,
                     conversation_id=self.runtime_ctx.conversation_id,
-                    user_type=self.runtime_ctx.user_type,
+                    user_type=CONVERSATION_INDEX_LABEL,
                     turn_id=self.runtime_ctx.turn_id,
                     content=payload,
                     content_str=content_str,
                     embedding=embedding,
-                    ttl_days=_ttl_for(self.runtime_ctx.user_type, 365),
+                    ttl_days=_ttl_for(365),
                     meta={
                         "title": f"User Attachment Summary: {filename}",
                         "kind": "user.attachment",
@@ -1466,7 +1458,6 @@ class BaseWorkflow():
             tenant = self.runtime_ctx.tenant
             project = self.runtime_ctx.project
             user_id = self.runtime_ctx.user_id
-            user_type = self.runtime_ctx.user_type
             conversation_id = self.runtime_ctx.conversation_id
             turn_id = self.runtime_ctx.turn_id
         except Exception:
@@ -1500,7 +1491,7 @@ class BaseWorkflow():
                 conversation_id=conversation_id,
                 bundle_id=self.config.ai_bundle_spec.id,
                 agent_id=self._index_agent_id(),
-                user_type=user_type,
+                user_type=CONVERSATION_INDEX_LABEL,
                 content={"version": "v1", "items": canvas_full},
                 content_str=json.dumps(canvas_idx),
                 extra_tags=["conversation", "stream", "canvas"],
@@ -1514,14 +1505,14 @@ class BaseWorkflow():
             outdir: Optional[str],
             workdir: Optional[str],
             tenant: str, project: str, user: str, conversation_id: str,
-            user_type: str, turn_id: str, codegen_run_id: str
+            turn_id: str, codegen_run_id: str
     ):
         snap = await self.store.put_execution_snapshot(
             tenant=tenant, project=project, user=user, fingerprint=None,
             conversation_id=conversation_id, turn_id=turn_id,
             out_dir=outdir, pkg_dir=workdir,
             codegen_run_id=codegen_run_id,
-            user_type=user_type
+            user_type=CONVERSATION_INDEX_LABEL
         )
         return snap
 
@@ -1749,11 +1740,10 @@ class BaseWorkflow():
         path: str,
         user_event_type: Optional[str],
     ) -> Optional[str]:
-        tenant, project, user, user_type = (
+        tenant, project, user = (
             self._ctx["service"]["tenant"],
             self._ctx["service"]["project"],
             self._ctx["service"]["user"],
-            self._ctx["service"]["user_type"],
         )
         conversation_id = self._ctx["conversation"]["conversation_id"]
         text = str(text or "").strip()
@@ -1784,8 +1774,8 @@ class BaseWorkflow():
             hosted_uri="index_only",
             ts=ts,
             tags=tags,
-            ttl_days=_ttl_for(user_type, 365),
-            user_type=user_type,
+            ttl_days=_ttl_for(365),
+            user_type=CONVERSATION_INDEX_LABEL,
             embedding=uvec,
             message_id=msgid_u,
         )
@@ -1827,11 +1817,10 @@ class BaseWorkflow():
 
     async def persist_assistant(self, scratchpad: TurnScratchpad):
 
-        tenant, project, user, user_type = (
+        tenant, project, user = (
             self._ctx["service"]["tenant"],
             self._ctx["service"]["project"],
             self._ctx["service"]["user"],
-            self._ctx["service"]["user_type"],
         )
         conversation_id, turn_id = self._ctx["conversation"]["conversation_id"], self._ctx["conversation"]["turn_id"]
 
@@ -1871,8 +1860,8 @@ class BaseWorkflow():
                 hosted_uri="index_only",
                 ts=str(entry.get("ts") or datetime.datetime.utcnow().isoformat() + "Z"),
                 tags=["chat:assistant", f"turn:{turn_id}"] + [f"topic:{t}" for t in scratchpad.turn_topics_plain or []],
-                ttl_days=_ttl_for(user_type, 365),
-                user_type=user_type,
+                ttl_days=_ttl_for(365),
+                user_type=CONVERSATION_INDEX_LABEL,
                 embedding=avec,
                 message_id=msgid_a,
             )
@@ -1928,8 +1917,8 @@ class BaseWorkflow():
                 hosted_uri="index_only",
                 ts=str(entry.get("ts") or datetime.datetime.utcnow().isoformat() + "Z"),
                 tags=tags,
-                ttl_days=_ttl_for(user_type, 365),
-                user_type=user_type,
+                ttl_days=_ttl_for(365),
+                user_type=CONVERSATION_INDEX_LABEL,
                 embedding=avec,
                 message_id=msgid_a,
                 anchors_text=anchors_text,
@@ -1973,8 +1962,8 @@ class BaseWorkflow():
                 hosted_uri="index_only",
                 ts=str(entry.get("ts") or datetime.datetime.utcnow().isoformat() + "Z"),
                 tags=tags,
-                ttl_days=_ttl_for(user_type, 365),
-                user_type=user_type,
+                ttl_days=_ttl_for(365),
+                user_type=CONVERSATION_INDEX_LABEL,
                 embedding=avec,
                 message_id=msgid_a,
             )
@@ -2126,7 +2115,7 @@ class BaseWorkflow():
         await self.emit_conversation_title(conversation_id=conversation_id, turn_id=self._ctx["conversation"]["turn_id"], title=scratchpad.conversation_title)
 
     async def handle_feedback(self, scratchpad: TurnScratchpad, gate):
-        tenant, project, user, user_type = self._ctx["service"]["tenant"], self._ctx["service"]["project"], self._ctx["service"]["user"], self._ctx["service"]["user_type"]
+        tenant, project, user = self._ctx["service"]["tenant"], self._ctx["service"]["project"], self._ctx["service"]["user"]
         conversation_id = self._ctx["conversation"]["conversation_id"]
         current_turn_id = scratchpad.turn_id  # Add this - the turn where feedback was given
 
@@ -2197,7 +2186,7 @@ class BaseWorkflow():
                             bundle_id=self.config.ai_bundle_spec.id,
                             reaction=scratchpad.detected_feedback,
                             tenant=tenant, project=project, user=user,
-                            fingerprint=None, user_type=user_type,
+                            fingerprint=None, user_type=CONVERSATION_INDEX_LABEL,
                             conversation_id=conversation_id,
                             origin="machine",
                         )
@@ -2207,7 +2196,7 @@ class BaseWorkflow():
                             tenant=tenant,
                             project=project,
                             user=user,
-                            user_type=user_type,
+                            user_type=CONVERSATION_INDEX_LABEL,
                             conversation_id=conversation_id,
                             turn_id=target_tid,  # The turn being commented on
                             bundle_id=self.config.ai_bundle_spec.id,
@@ -2631,7 +2620,6 @@ class BaseWorkflow():
         tenant, project, user = payload["tenant"], payload["project"], payload["user"]
         session_id = payload.get("session_id")
         conversation_id = payload.get("conversation_id") or session_id
-        user_type = payload.get("user_type") or "anonymous"
         turn_id = payload.get("turn_id")
         external_events = payload.get("external_events") if isinstance(payload.get("external_events"), list) else []
         if not external_events:
@@ -2645,8 +2633,13 @@ class BaseWorkflow():
         attachments = external_event_attachment_payloads(external_events)
 
         # bind for envelope composition
-        self._ctx["service"] = {"request_id": rid, "tenant": tenant, "project": project,
-                                "user": user, "user_type": user_type, "session_id": session_id}
+        self._ctx["service"] = {
+            "request_id": rid,
+            "tenant": tenant,
+            "project": project,
+            "user": user,
+            "session_id": session_id,
+        }
         self._ctx["conversation"] = {"conversation_id": conversation_id,
                                      "turn_id": turn_id,
                                      "ts": datetime.datetime.utcnow().isoformat() + "Z"}
@@ -2757,7 +2750,7 @@ class BaseWorkflow():
                          scratchpad: CTurnScratchpad,
                          summarize_attachments: bool = False):
 
-        tenant, project, user, user_type, request_id, session_id = self._ctx["service"]["tenant"], self._ctx["service"]["project"], self._ctx["service"]["user"], self._ctx["service"]["user_type"], self._ctx["service"]["request_id"], self._ctx["service"]["session_id"]
+        tenant, project, user, request_id, session_id = self._ctx["service"]["tenant"], self._ctx["service"]["project"], self._ctx["service"]["user"], self._ctx["service"]["request_id"], self._ctx["service"]["session_id"]
         conversation_id, turn_id = self._ctx["conversation"]["conversation_id"], self._ctx["conversation"]["turn_id"]
 
         # (0) ensure User ↔ Conversation link (cheap + idempotent)
@@ -2821,7 +2814,6 @@ class BaseWorkflow():
                     return
                 if not self.ctx_browser:
                     return
-                user_type = self.runtime_ctx.user_type or "anonymous"
                 embedding = None
                 if self.model_service:
                     try:
@@ -2835,12 +2827,12 @@ class BaseWorkflow():
                         project=self.runtime_ctx.project,
                         user_id=self.runtime_ctx.user_id,
                         conversation_id=self.runtime_ctx.conversation_id,
-                        user_type=user_type,
+                        user_type=CONVERSATION_INDEX_LABEL,
                         turn_id=self.runtime_ctx.turn_id,
                         content=dict(payload),
                         content_str=summary,
                         embedding=embedding,
-                        ttl_days=_ttl_for(user_type, 365),
+                        ttl_days=_ttl_for(365),
                         bundle_id=self.config.ai_bundle_spec.id,
                         agent_id=self._index_agent_id(),
                         index_only=True,
@@ -3029,7 +3021,7 @@ class BaseWorkflow():
             return
         scratchpad._turn_finished = True
 
-        tenant, project, user, user_type, request_id = self._ctx["service"]["tenant"], self._ctx["service"]["project"], self._ctx["service"]["user"], self._ctx["service"]["user_type"], self._ctx["service"]["request_id"]
+        tenant, project, user, request_id = self._ctx["service"]["tenant"], self._ctx["service"]["project"], self._ctx["service"]["user"], self._ctx["service"]["request_id"]
         conversation_id, turn_id = self._ctx["conversation"]["conversation_id"], self._ctx["conversation"]["turn_id"]
         t_turn0, ms0u = self._ctx["turn"]["t_turn0"], self._ctx["turn"]["ms0u"]
 
@@ -3243,7 +3235,7 @@ class BaseWorkflow():
         )
         await self.ctx_client.save_turn_log_as_artifact(
             tenant=tenant, project=project, user=user,
-            conversation_id=conversation_id, user_type=user_type,
+            conversation_id=conversation_id, user_type=CONVERSATION_INDEX_LABEL,
             turn_id=turn_id,
             bundle_id=self.config.ai_bundle_spec.id,
             agent_id=self._index_agent_id(),
@@ -3336,7 +3328,7 @@ class BaseWorkflow():
         meta = (phase.meta if phase else {}) if phase else {}
 
         t_turn0, ms0u = self._ctx["turn"]["t_turn0"], self._ctx["turn"]["ms0u"]
-        tenant, project, user, user_type, request_id = self._ctx["service"]["tenant"], self._ctx["service"]["project"], self._ctx["service"]["user"], self._ctx["service"]["user_type"], self._ctx["service"]["request_id"]
+        tenant, project, user, request_id = self._ctx["service"]["tenant"], self._ctx["service"]["project"], self._ctx["service"]["user"], self._ctx["service"]["request_id"]
 
         total_ms = int((time.perf_counter() - t_turn0) * 1000)
         ms_pretty_table, ms_markdown, timings = await self.report_timings(scratchpad, ms0u, total_ms)
@@ -3448,7 +3440,7 @@ class BaseWorkflow():
                 "reason": "services_quota_exceeded",
                 "bundle_id": bundle_id,
                 "subject_id": subj,
-                "user_type": user_type,
+                "conversation_index_label": CONVERSATION_INDEX_LABEL,
                 "code": code,
                 "show_in_timeline": False,
                 "service_error": se.model_dump(),  # <-- required nesting
@@ -3540,7 +3532,7 @@ class BaseWorkflow():
                 user_id=user,
                 conversation_id=scratchpad.conversation_id,
                 turn_id=scratchpad.turn_id,
-                user_type=user_type,
+                user_type=CONVERSATION_INDEX_LABEL,
                 bundle_id=self.config.ai_bundle_spec.id,
                 where="index_only",   # important: keep blobs for monitoring, just rollback index
             )

@@ -45,16 +45,41 @@ Top-level fields are platform-visible:
 | `job_id` | Stable logical id used for locks, logs, and idempotency. |
 | `work_kind` | Bundle-agreed operation name, for example `task.execution.due`. |
 | `tenant`, `project`, `bundle_id` | Routing target. |
-| `user_id`, `user_type`, `queue` | Runtime user context and fairness queue. |
+| `user_id`, `queue_label` | Actor user id plus the scheduling/fairness queue label. `queue_label` is not authority and is not the economics subject. |
 | `dedupe_key` | Optional producer-chosen idempotency key. |
 | `source` | Small audit object such as `scheduler`, `admin`, or `widget`. |
+| `identity_authority` | Optional Connection Hub authority projection snapshot for detached execution. |
 | `metadata` | Transport hints such as `conversation_id`, `turn_id`, `text`, `timezone`, `roles`. |
 | `payload` | Bundle-owned domain payload, for example `{ "task_id": "...", "execution_id": "..." }`. |
 | `created_at` | Unix timestamp for queue wait metrics. |
 
-`metadata` and `payload` are JSON objects. The submitter and receiver can agree
-on their contents, but the processor should only use generic metadata needed to
-create the runtime context.
+`source`, `identity_authority`, `metadata`, and `payload` are JSON objects. The
+submitter and receiver can agree on their contents, but the processor should only
+use generic metadata needed to create the runtime context.
+
+## Identity And Accounting
+
+The job actor and the economics subject may be different.
+
+Example: a Telegram actor may enqueue or own work as `telegram_434804821`, while
+Connection Hub projection says platform user `02e5...` is the economics subject.
+The job envelope must therefore carry `identity_authority` when the producer has
+one. Proc restores it into:
+
+- `ExternalEventPayload.user.identity_authority`
+- `bundle_call_context.identity_authority`
+- the base accounting envelope, where `user_id` is projected to the economics
+  subject and metadata still records the actor
+
+Bundle job handlers should keep domain ownership/provenance on the actor user
+unless the product intentionally says otherwise. Paid work inside a job should
+use shared economics helpers or inherit the bound accounting context. If a job
+opens its own `with_accounting(...)` scope, pass the actor `user_id` and the
+carried `identity_authority`; the accounting layer projects the billed
+economics subject internally.
+
+Do not reconstruct privileged/admin authority from the dispatch queue. Authority
+comes from `identity_authority` and Connection Hub projection.
 
 ## Processing
 
@@ -69,7 +94,7 @@ RedisBackgroundJobStream.enqueue(...)
   |
   | XADD ready job envelope
   v
-Redis Stream by tenant/project/queue
+Redis Stream by tenant/project/queue_label
   |
   | XREADGROUP / XAUTOCLAIM
   v
@@ -93,7 +118,7 @@ stream pending entry cleared
 ```
 
 1. A producer calls `RedisBackgroundJobStream.enqueue(...)`.
-2. The stream writes to a tenant/project stream by queue, for example registered-user jobs and privileged jobs.
+2. The stream writes to a tenant/project stream by `queue_label`, for example registered-user jobs and privileged jobs.
 3. The processor loop polls chat work and background work in a simple round-robin.
 4. For background work, the processor uses a Redis Stream consumer group and `XAUTOCLAIM` to recover idle pending jobs.
 5. The processor builds a `ExternalEventPayload` with operation `__kdcube_on_job__`
@@ -142,6 +167,14 @@ normal chat queue / relay / conversation persistence
 Use it when the work is a chat turn and should appear as normal assistant
 conversation activity. Use `RedisBackgroundJobStream` when the work is a
 bundle-owned background job handled by `@on_job`.
+
+Identity note: the submit helper receives a normal `UserSession`. If that
+session has `identity_authority`, `process_chat_message(...)` copies it into the
+queued `ExternalEventPayload`, and the accounting envelope projects the
+economics subject from it. Webhook resubmission should therefore authenticate or
+claim the upstream request first, create the correct actor session, attach the
+Connection Hub authority projection to that session, and then call the submit
+helper. It should not enqueue a background job only to preserve identity.
 
 ## Bundle Job Dispatch
 

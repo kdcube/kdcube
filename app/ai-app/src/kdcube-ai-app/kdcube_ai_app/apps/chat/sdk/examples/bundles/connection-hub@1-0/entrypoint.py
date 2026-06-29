@@ -1730,12 +1730,6 @@ class ConnectionHubEntrypoint(BaseEntrypointWithMemory):
         principal = auth.get("principal") if isinstance(auth.get("principal"), Mapping) else {}
         roles = list(authority.get("platform_roles") or principal.get("roles") or [])
         permissions = list(authority.get("platform_permissions") or principal.get("permissions") or [])
-        user_type = str(
-            authority.get("economics_user_type")
-            or authority.get("platform_user_type")
-            or authority.get("user_type")
-            or "registered"
-        ).strip().lower()
         actor_user_id = str(auth.get("actor_user_id") or "").strip()
         provider = str(auth.get("provider") or "").strip()
         provider_subject = str(auth.get("provider_subject") or "").strip()
@@ -1752,7 +1746,7 @@ class ConnectionHubEntrypoint(BaseEntrypointWithMemory):
             project=project,
             bundle_id=BUNDLE_ID,
             user_id=actor_user_id,
-            user_type=user_type or "registered",
+            user_type="registered",
             username=actor_user_id,
             roles=roles,
             permissions=permissions,

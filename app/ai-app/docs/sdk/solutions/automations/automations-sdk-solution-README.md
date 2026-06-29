@@ -142,10 +142,9 @@ bundle_call_context.identity_authority
   storage_user_id     = telegram_434804821
   platform_user_id    = 02e53484-0081-70ce-11c1-e96706b1a182
   economics_user_id   = 02e53484-0081-70ce-11c1-e96706b1a182
-  user_type           = privileged
-  economics_user_type = privileged
   platform_roles      = ["kdcube:role:super-admin"]
   platform_permissions = [...]
+  economics_budget_bypass = true
   identity_provider   = telegram
   identity_provider_subject = 434804821
 ```
@@ -155,7 +154,6 @@ Runtime binding then projects this into:
 ```text
 REQUEST_CONTEXT.user
   user_id     = telegram_434804821      # actor/storage identity
-  user_type   = privileged              # effective platform authority
   roles       = ["kdcube:role:super-admin"]
   permissions = [...]
 
@@ -206,7 +204,7 @@ request-auth selector or durable scheduler resolver
   |
   | emits actor identity
   | resolves linked platform principal through Connections
-  | asks platform authority resolver for roles/permissions/user_type
+  | asks platform authority resolver for roles/permissions/budget-bypass facts
   v
 execution context
   |
@@ -390,7 +388,7 @@ The scheduler reads these bundle config values:
 ```text
 automations.scheduler.max_due_automations_per_tick
 automations.scheduler.min_interval_seconds
-automations.scheduler.default_user_type
+automations.scheduler.default_queue_label
 ```
 
 Scheduled and manual jobs both end at `operations.run_automation_execution(...)`.

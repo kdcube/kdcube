@@ -46,23 +46,44 @@ from kdcube_ai_app.apps.chat.sdk.infra.economics.enforcement import EconomicsSub
 
 subject = EconomicsSubject(
     tenant="acme", project="main", user_id="u-123",
-    user_type="paid",          # resolved economics role; never a hardcoded default
+    roles=("kdcube:role:chat-user",),
+    permissions=(),
+    budget_bypass=False,       # explicit authority decision when applicable
     timezone="Europe/Kyiv",     # optional; anchors quota periods where configured
 )
 ```
 
-For **detached** flows (e.g. a job run later by a worker) the original session is
-gone, so re-derive `paid`/`registered` from economics state with `RoleResolver`.
-`privileged`/`admin` cannot be derived from economics state and must be carried from
-the enqueue side and passed as `carried_role`:
+`EconomicsSubject` does not carry a `user_type` lane. Funding, subscription, and
+plan access are resolved from economics state and explicit authority fields.
+
+For linked/delegated identities the actor and the economics subject may be
+different. A Telegram actor, delegated external client, or bundle-owned identity
+should stay visible as the actor, while Connection Hub projects the economics
+subject, roles, permissions, and explicit budget bypass from the carried
+authority context.
 
 ```python
-from kdcube_ai_app.apps.chat.sdk.infra.economics.enforcement import RoleResolver
+from kdcube_ai_app.apps.chat.sdk.infra.economics.enforcement import (
+    economics_subject_from_authority_context,
+)
 
-resolver = RoleResolver(pg_pool=entrypoint.pg_pool, tenant=tenant, project=project)
-role = await resolver.resolve(user_id="u-123", carried_role=carried_role)  # preserves privileged/admin
-subject = EconomicsSubject(tenant=tenant, project=project, user_id="u-123", user_type=role)
+subject = economics_subject_from_authority_context(
+    tenant=tenant,
+    project=project,
+    identity_authority=bundle_call_context.get("identity_authority"),
+    actor_user_id="telegram_434804821",
+    fallback_user_id="telegram_434804821",
+    timezone="Europe/Kyiv",
+)
 ```
+
+For **detached** flows (for example a job run later by a worker), persist the
+`identity_authority` snapshot in the job envelope at enqueue time. The background
+job processor restores it into `ExternalEventPayload.user.identity_authority` and
+`bundle_call_context.identity_authority`. Privileged/admin bypass must come from
+that authority projection; it must not be reconstructed from the dispatch queue.
+Background queues may carry `queue_label`, but that label is not authority and
+is not the economics subject.
 
 ## `EconomicsGuard` — verify, reserve, settle
 
@@ -182,7 +203,7 @@ user id/type, and the stage-specific fields. Current stages:
 | Stage | Meaning |
 | --- | --- |
 | `preflight_start` / `preflight_ok` | verify-only feasibility check |
-| `plan_resolved` | resolved role, plan, funding source, and reservation estimate |
+| `plan_resolved` | resolved economics subject, plan, funding source, and reservation estimate |
 | `admit` | quota admission evaluated and token reservation state known |
 | `reserve_ok` | funding reservation created |
 | `accounting_bound` | accounting context bound under the operation scope |
@@ -218,7 +239,7 @@ Semantic-search economics denial logs a facade-level fallback line and returns
 
 ### `EconomicsDecision` — outcome (returned by both APIs)
 
-Carries the resolved `lane` (`plan` / `bypass`), `plan_id`,
+Carries the resolved funding path (`plan` / `bypass`), `plan_id`,
 `funding_source` (`subscription` / `project` / `wallet` / `none`),
 `funding_available_usd`, `est_turn_tokens`, `est_turn_usd`, `budget_bypass`,
 `nested`, and `scope_id`. Useful for logging the decision and the applicable limits.
