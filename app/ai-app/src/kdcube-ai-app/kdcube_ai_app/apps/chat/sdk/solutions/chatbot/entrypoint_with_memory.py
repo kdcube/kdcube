@@ -3820,17 +3820,61 @@ class MemoryEntrypointMixin:
 
         scope = self._memory_scope()
         user = getattr(self.comm_context, "user", None)
+        authority = self._memory_identity_authority_projection()
+        roles = tuple(
+            str(role or "").strip()
+            for role in (
+                authority.get("platform_roles")
+                or authority.get("roles")
+                or getattr(user, "roles", None)
+                or ()
+            )
+            if str(role or "").strip()
+        )
+        permissions = tuple(
+            str(permission or "").strip()
+            for permission in (
+                authority.get("platform_permissions")
+                or authority.get("permissions")
+                or getattr(user, "permissions", None)
+                or ()
+            )
+            if str(permission or "").strip()
+        )
+        economics_user_id = str(
+            authority.get("economics_user_id")
+            or authority.get("platform_user_id")
+            or scope.user_id
+        ).strip()
         role = self._memory_effective_user_type(
-            str(getattr(user, "user_type", None) or "registered")
+            str(
+                authority.get("economics_user_type")
+                or authority.get("platform_user_type")
+                or authority.get("user_type")
+                or getattr(user, "user_type", None)
+                or "registered"
+            )
         ).strip().lower()
+        budget_bypass = (
+            bool(authority.get("economics_budget_bypass"))
+            if isinstance(authority.get("economics_budget_bypass"), bool)
+            else bool(authority.get("budget_bypass"))
+            if isinstance(authority.get("budget_bypass"), bool)
+            else role in {"admin", "privileged"}
+            or bool(set(roles) & {"kdcube:role:super-admin", "kdcube:role:admin"})
+        )
         return EconomicsSubject(
             tenant=scope.tenant,
             project=scope.project,
-            user_id=scope.user_id,
-            roles=tuple(getattr(user, "roles", None) or ()),
-            permissions=tuple(getattr(user, "permissions", None) or ()),
-            budget_bypass=(role in {"admin", "privileged"}),
-            is_anonymous=(not scope.user_id or scope.user_id == "anonymous" or role == "anonymous"),
+            user_id=economics_user_id,
+            roles=roles,
+            permissions=permissions,
+            budget_bypass=budget_bypass,
+            is_anonymous=(not economics_user_id or economics_user_id == "anonymous" or role == "anonymous"),
+            provenance={
+                "actor_user_id": scope.user_id,
+                "identity_authority": authority,
+            },
         )
 
     def _economics_search_subject(self):
@@ -3862,7 +3906,7 @@ class MemoryEntrypointMixin:
             logger.warning("[economics] semantic search guard unavailable; search ungated", exc_info=True)
             return None
 
-    def search_model_service(self, *, flow: str):
+    def search_model_service(self, *, flow: str, subject=None):
         """Model-service facade for searchable components.
 
         Components receive this single dependency. Query and document embeddings
@@ -3875,7 +3919,7 @@ class MemoryEntrypointMixin:
         """
         from kdcube_ai_app.apps.chat.sdk.solutions.search_service import make_search_model_service
 
-        return make_search_model_service(self, flow=flow)
+        return make_search_model_service(self, flow=flow, subject=subject)
 
     async def _memory_search_embed_or_downgrade(self, query: str) -> Optional[Sequence[float]]:
         """Embed the query for semantic ranking through the search model service.
@@ -3894,7 +3938,7 @@ class MemoryEntrypointMixin:
             subject = self._memory_search_econ_subject()
             if subject.tenant and subject.project and subject.user_id and subject.user_id != "anonymous":
                 try:
-                    model_service = self.search_model_service(flow="memory.search")
+                    model_service = self.search_model_service(flow="memory.search", subject=subject)
                     embed_query = getattr(model_service, "embed_search_query", None)
                     if callable(embed_query):
                         return await embed_query(normalized, flow="memory.search")

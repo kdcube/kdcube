@@ -13,6 +13,7 @@ canvas, news, … — shares one copy of the facade.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import Any, Tuple
 
 from kdcube_ai_app.apps.chat.sdk.infra.economics.enforcement import EconomicsSubject
@@ -52,6 +53,36 @@ def embedding_provider_model(entrypoint: Any) -> Tuple[str, str]:
     return provider or "openai", model or "text-embedding-3-small"
 
 
+_PRIVILEGED_ROLE_NAMES = {
+    "kdcube:role:super-admin",
+    "kdcube:role:admin",
+}
+
+
+def _safe_list(values: Any) -> tuple[str, ...]:
+    if isinstance(values, str):
+        values = [values]
+    return tuple(str(value or "").strip() for value in (values or ()) if str(value or "").strip())
+
+
+def _optional_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    return None
+
+
+def _identity_authority(entrypoint: Any) -> dict[str, Any]:
+    user = getattr(getattr(entrypoint, "comm_context", None), "user", None)
+    raw = getattr(user, "identity_authority", None)
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    comm = getattr(entrypoint, "comm", None)
+    raw = getattr(comm, "identity_authority", None)
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    return {}
+
+
 def economics_search_subject(entrypoint: Any) -> EconomicsSubject:
     """Feature-neutral EconomicsSubject for any in-request semantic search
     (issues, pins, news, …). Tenant/project from runtime identity; user_id +
@@ -59,14 +90,42 @@ def economics_search_subject(entrypoint: Any) -> EconomicsSubject:
     ident = entrypoint.runtime_identity() if hasattr(entrypoint, "runtime_identity") else {}
     user = getattr(getattr(entrypoint, "comm_context", None), "user", None)
     actor = getattr(getattr(entrypoint, "comm_context", None), "actor", None)
-    user_id = str(getattr(user, "user_id", None) or getattr(actor, "user_id", None) or "")
+    authority = _identity_authority(entrypoint)
+    actor_user_id = str(
+        authority.get("actor_user_id")
+        or authority.get("storage_user_id")
+        or getattr(user, "user_id", None)
+        or getattr(actor, "user_id", None)
+        or ""
+    ).strip()
+    user_id = str(
+        authority.get("economics_user_id")
+        or authority.get("platform_user_id")
+        or actor_user_id
+    ).strip()
+    roles = _safe_list(authority.get("platform_roles") or authority.get("roles") or getattr(user, "roles", None) or ())
+    permissions = _safe_list(
+        authority.get("platform_permissions") or authority.get("permissions") or getattr(user, "permissions", None) or ()
+    )
+    budget_bypass = _optional_bool(
+        authority.get("economics_budget_bypass")
+        if "economics_budget_bypass" in authority
+        else authority.get("budget_bypass")
+    )
+    if budget_bypass is None and set(roles) & _PRIVILEGED_ROLE_NAMES:
+        budget_bypass = True
     return EconomicsSubject(
         tenant=str((ident or {}).get("tenant") or ""),
         project=str((ident or {}).get("project") or ""),
         user_id=user_id,
-        roles=tuple(getattr(user, "roles", None) or ()),
-        permissions=tuple(getattr(user, "permissions", None) or ()),
+        roles=roles,
+        permissions=permissions,
+        budget_bypass=budget_bypass,
         is_anonymous=(not user_id or user_id == "anonymous"),
+        provenance={
+            "actor_user_id": actor_user_id,
+            "identity_authority": authority,
+        },
     )
 
 

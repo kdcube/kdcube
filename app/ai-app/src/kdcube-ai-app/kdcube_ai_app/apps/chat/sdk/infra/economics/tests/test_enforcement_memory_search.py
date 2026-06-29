@@ -29,7 +29,18 @@ class _Config:
 class _StubSearchEP:
     """Minimal stand-in for the memory entrypoint, synchronous (widget) shape."""
 
-    def __init__(self, *, economics=True, user_type="registered", user_id="u1", reservation=None, deny=False):
+    def __init__(
+        self,
+        *,
+        economics=True,
+        user_type="registered",
+        user_id="u1",
+        reservation=None,
+        deny=False,
+        identity_authority=None,
+        roles=None,
+        permissions=None,
+    ):
         self.cp_manager = object() if economics else None
         self.rl = object() if economics else None
         self.budget_limiter = object() if economics else None
@@ -37,9 +48,16 @@ class _StubSearchEP:
         self._deny = deny
         self.embed_calls: list[str] = []
         self.metered_flows: list[str] = []
+        self.metered_subjects: list[str] = []
         self.comm_context = types.SimpleNamespace(
             actor=types.SimpleNamespace(tenant_id="t", project_id="p"),
-            user=types.SimpleNamespace(user_id=user_id, user_type=user_type),
+            user=types.SimpleNamespace(
+                user_id=user_id,
+                user_type=user_type,
+                roles=list(roles or []),
+                permissions=list(permissions or []),
+                identity_authority=dict(identity_authority or {}),
+            ),
         )
         self.comm = types.SimpleNamespace(user_id=user_id)
         self.settings = types.SimpleNamespace(TENANT="t", PROJECT="p")
@@ -52,11 +70,13 @@ class _StubSearchEP:
         self.embed_calls.append(text)
         return [0.1, 0.2, 0.3]
 
-    def search_model_service(self, *, flow: str):
+    def search_model_service(self, *, flow: str, subject=None):
         if not self._memory_economics_enabled():
             return None
 
         stub = self
+        if subject is not None:
+            stub.metered_subjects.append(str(subject.user_id))
 
         class _ModelService:
             async def embed_search_query(self, text: str, *, flow: str | None = None):
@@ -74,6 +94,9 @@ class _StubSearchEP:
 
     def _memory_scope(self):
         return M._memory_scope(self)
+
+    def _memory_identity_authority_projection(self):
+        return M._memory_identity_authority_projection(self)
 
     def _memory_effective_user_type(self, default="registered"):
         return M._memory_effective_user_type(self, default)
@@ -99,6 +122,27 @@ def test_search_subject_uses_session_role():
     assert (subj.tenant, subj.project, subj.user_id) == ("t", "p", "u9")
     assert subj.budget_bypass is False
     assert subj.is_anonymous is False
+
+
+def test_search_subject_uses_projected_platform_economics_user():
+    subj = M._memory_search_econ_subject(
+        _StubSearchEP(
+            user_type="registered",
+            user_id="telegram_434804821",
+            identity_authority={
+                "actor_user_id": "telegram_434804821",
+                "economics_user_id": "02e53484-0081-70ce-11c1-e96706b1a182",
+                "platform_user_id": "02e53484-0081-70ce-11c1-e96706b1a182",
+                "platform_roles": ["kdcube:role:super-admin"],
+                "platform_permissions": ["memories:read"],
+            },
+        )
+    )
+    assert subj.user_id == "02e53484-0081-70ce-11c1-e96706b1a182"
+    assert subj.provenance["actor_user_id"] == "telegram_434804821"
+    assert subj.roles == ("kdcube:role:super-admin",)
+    assert subj.permissions == ("memories:read",)
+    assert subj.budget_bypass is True
 
 
 async def test_empty_query_skips_embed_and_preflight(monkeypatch):
@@ -131,6 +175,24 @@ async def test_metered_embedder_ok_embeds():
     assert out == [0.1, 0.2, 0.3]
     assert ep.embed_calls == ["query text"]
     assert ep.metered_flows == ["memory.search"]
+    assert ep.metered_subjects == ["u1"]
+
+
+async def test_metered_embedder_receives_projected_platform_subject():
+    ep = _StubSearchEP(
+        user_type="registered",
+        user_id="telegram_434804821",
+        reservation=0.02,
+        identity_authority={
+            "actor_user_id": "telegram_434804821",
+            "economics_user_id": "02e53484-0081-70ce-11c1-e96706b1a182",
+            "platform_user_id": "02e53484-0081-70ce-11c1-e96706b1a182",
+            "platform_roles": ["kdcube:role:super-admin"],
+        },
+    )
+    out = await ep._memory_search_embed_or_downgrade("query text")
+    assert out == [0.1, 0.2, 0.3]
+    assert ep.metered_subjects == ["02e53484-0081-70ce-11c1-e96706b1a182"]
 
 
 async def test_economics_limit_downgrades_to_bm25():

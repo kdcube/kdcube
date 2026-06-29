@@ -156,7 +156,7 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
     # search_model_service() without touching feature-specific code.
     # ------------------------------------------------------------------ #
 
-    def search_model_service(self, *, flow: str):
+    def search_model_service(self, *, flow: str, subject=None):
         """Model-service facade for searchable components.
 
         Components receive this single dependency. Query and document embeddings
@@ -165,7 +165,7 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
         """
         from kdcube_ai_app.apps.chat.sdk.solutions.search_service import make_search_model_service
 
-        return make_search_model_service(self, flow=flow)
+        return make_search_model_service(self, flow=flow, subject=subject)
 
     async def execute_core(self, *, state: Dict[str, Any], thread_id: str, params: Dict[str, Any]):
         raise NotImplementedError("execute_core() must be implemented by subclasses")
