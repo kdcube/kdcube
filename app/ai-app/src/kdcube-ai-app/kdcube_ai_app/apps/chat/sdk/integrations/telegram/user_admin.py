@@ -20,6 +20,11 @@ from kdcube_ai_app.apps.chat.sdk.event_identity import (
     DEFAULT_REACT_AGENT_ID,
     build_event_logical_path,
 )
+from kdcube_ai_app.apps.chat.sdk.identity_authority import resolve_platform_authority
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.connection_edges import ConnectionEdgesClient
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_projection import (
+    authority_has_platform_privilege,
+)
 from kdcube_ai_app.auth.sessions import RequestContext, UserSession, UserType
 from kdcube_ai_app.apps.chat.sdk.config import get_secret, get_settings
 from kdcube_ai_app.apps.chat.sdk.integrations.integration_config import (
@@ -88,6 +93,80 @@ def configure_telegram_user_admin(
 
 def _config(entrypoint: Any = None) -> Dict[str, Any]:
     return resolve_config(_CONFIGS, entrypoint=entrypoint, label="telegram user admin integration")
+
+
+def _authority_runtime_label(authority: Dict[str, Any]) -> str:
+    if not str(authority.get("platform_user_id") or "").strip():
+        return "external"
+    if authority_has_platform_privilege(authority.get("platform_roles") or []):
+        return "privileged"
+    return "registered"
+
+
+def _edge_platform_user_id(edge: Dict[str, Any] | None) -> str:
+    if not isinstance(edge, dict):
+        return ""
+    target = edge.get("to")
+    if not isinstance(target, dict):
+        return ""
+    return str(target.get("user_id") or target.get("subject") or "").strip()
+
+
+async def _telegram_platform_authority(
+    entrypoint: Any,
+    *,
+    actor_user_id: str,
+    telegram_user_id: str,
+    local_role: str,
+    source: str,
+) -> Dict[str, Any]:
+    platform_user_id = ""
+    try:
+        resolved = await ConnectionEdgesClient(entrypoint).resolve_identity(
+            provider="telegram",
+            provider_subject=telegram_user_id,
+        )
+        principal = resolved.get("principal") if isinstance(resolved.get("principal"), dict) else {}
+        edge = resolved.get("connection_edge") if isinstance(resolved.get("connection_edge"), dict) else {}
+        platform_user_id = str(principal.get("platform_user_id") or "").strip() or _edge_platform_user_id(edge)
+    except Exception as exc:
+        log.info(
+            "[%s] telegram authority edge unresolved | telegram_user_id=%s error=%s",
+            _bundle_id(entrypoint),
+            telegram_user_id,
+            exc,
+        )
+    return await resolve_platform_authority(
+        entrypoint,
+        actor_user_id=actor_user_id,
+        platform_user_id=platform_user_id,
+        provider="telegram",
+        provider_subject=telegram_user_id,
+        local_role=local_role,
+        source=source,
+    )
+
+
+def _telegram_connect_answer(turn_id: str) -> Dict[str, Any]:
+    text = (
+        "Connect your Telegram account to KDCube first. "
+        "Open the Mini App and use the Connect tab to link this Telegram account."
+    )
+    return {
+        "answer": text,
+        "followups": [],
+        "timeline": {
+            "blocks": [
+                {
+                    "path": f"tc:{turn_id}.telegram.connect_required",
+                    "type": "answer",
+                    "text": text,
+                }
+            ],
+            "sources_pool": [],
+        },
+        "authorization": "connection_required",
+    }
 
 
 def _telegram_external_events(
@@ -667,8 +746,6 @@ async def submit_react_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> Dict
     )
     kdcube_user_id = str(telegram_identity.get("kdcube_user_id") or "").strip()
     role = str(telegram_identity.get("role") or "anonymous").strip().lower() or "anonymous"
-    if role not in {"registered", "admin"}:
-        return None
 
     comm_context = getattr(entrypoint, "comm_context", None)
     if not comm_context:
@@ -682,7 +759,17 @@ async def submit_react_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> Dict
     )
     turn_id = new_turn_id()
     telegram_command_type, processed_text = _telegram_command_kind_and_text(text)
-    user_id = kdcube_user_id or f"telegram_{telegram_user_id}"
+    actor_user_id = f"telegram_{telegram_user_id}"
+    identity_authority = await _telegram_platform_authority(
+        entrypoint,
+        actor_user_id=actor_user_id,
+        telegram_user_id=telegram_user_id,
+        local_role=role,
+        source="telegram.webhook",
+    )
+    if not str(identity_authority.get("platform_user_id") or "").strip():
+        return None
+    runtime_label = _authority_runtime_label(identity_authority)
     request_context = RequestContext(
         client_ip="telegram",
         user_agent="Telegram Bot API",
@@ -690,13 +777,14 @@ async def submit_react_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> Dict
     )
     session = UserSession(
         session_id=conversation_id,
-        user_type=_role_to_user_type(role),
-        user_id=user_id,
+        user_type=UserType(runtime_label),
+        user_id=actor_user_id,
         username=str(summary.get("username") or "").strip(),
-        roles=[role],
-        permissions=[],
+        roles=list(identity_authority.get("platform_roles") or []),
+        permissions=list(identity_authority.get("platform_permissions") or []),
         timezone=request_context.user_timezone,
         request_context=request_context,
+        identity_authority=identity_authority,
     )
     telegram_payload = _telegram_payload_summary(summary)
     telegram_payload.update(
@@ -813,30 +901,21 @@ async def run_react_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> Dict[st
         len(text),
         _attachment_log_items(attachments),
     )
-    if role not in {"registered", "admin"}:
+    actor_user_id = f"telegram_{telegram_user_id}"
+    identity_authority = await _telegram_platform_authority(
+        entrypoint,
+        actor_user_id=actor_user_id,
+        telegram_user_id=telegram_user_id,
+        local_role=role,
+        source="telegram.webhook",
+    )
+    if not str(identity_authority.get("platform_user_id") or "").strip():
+        connect_answer = _telegram_connect_answer(turn_id)
         return {
             "conversation_id": conversation_id,
             "turn_id": turn_id,
             "telegram_identity": telegram_identity,
-            "answer": (
-                "Your Telegram user has been recorded. "
-                "An admin must allow it in the Telegram Admin panel before this bot can process requests."
-            ),
-            "followups": [],
-            "timeline": {
-                "blocks": [
-                    {
-                        "path": f"tc:{turn_id}.telegram.access_pending",
-                        "type": "answer",
-                        "text": (
-                            "Your Telegram user has been recorded. "
-                            "An admin must allow it in the Telegram Admin panel before this bot can process requests."
-                        ),
-                    }
-                ],
-                "sources_pool": [],
-            },
-            "authorization": "pending_admin_approval",
+            **connect_answer,
         }
     if not comm_context:
         return None
@@ -853,9 +932,13 @@ async def run_react_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> Dict[st
     scoped_ctx.routing.session_id = conversation_id
     scoped_ctx.routing.conversation_id = conversation_id
     scoped_ctx.routing.turn_id = turn_id
-    scoped_ctx.user.user_id = kdcube_user_id or f"telegram_{telegram_user_id}"
+    runtime_label = _authority_runtime_label(identity_authority)
+    scoped_ctx.user.user_id = actor_user_id
     scoped_ctx.user.username = str(summary.get("username") or scoped_ctx.user.username or "")
-    scoped_ctx.user.user_type = role
+    scoped_ctx.user.user_type = runtime_label
+    scoped_ctx.user.roles = list(identity_authority.get("platform_roles") or [])
+    scoped_ctx.user.permissions = list(identity_authority.get("platform_permissions") or [])
+    scoped_ctx.user.identity_authority = identity_authority
 
     async def _run_scoped_telegram_turn() -> Dict[str, Any]:
         nonlocal attachments
@@ -885,6 +968,9 @@ async def run_react_turn(entrypoint: Any, *, summary: Dict[str, Any]) -> Dict[st
                 "project": scoped_ctx.actor.project_id,
                 "user": scoped_ctx.user.user_id,
                 "user_type": scoped_ctx.user.user_type,
+                "identity_authority": identity_authority,
+                "roles": list(identity_authority.get("platform_roles") or []),
+                "permissions": list(identity_authority.get("platform_permissions") or []),
                 "session_id": conversation_id,
                 "conversation_id": conversation_id,
                 "turn_id": turn_id,
@@ -1148,8 +1234,8 @@ async def handle_webhook(entrypoint: Any, request: Any = None, **update) -> Dict
         "ok": True,
         "accepted": True,
         "stage": (
-            "access-pending"
-            if isinstance(react_turn, dict) and react_turn.get("authorization") == "pending_admin_approval"
+            "connection-required"
+            if isinstance(react_turn, dict) and react_turn.get("authorization") == "connection_required"
             else "react-turn" if react_turn else "webhook-ack"
         ),
         "summary": summary,

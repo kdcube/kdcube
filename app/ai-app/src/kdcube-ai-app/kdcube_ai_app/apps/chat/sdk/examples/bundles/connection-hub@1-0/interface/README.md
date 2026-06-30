@@ -109,7 +109,7 @@ Telegram-first:
 | Alias | Method | Route | Purpose |
 | --- | --- | --- | --- |
 | `telegram_connection_edge_start` | POST | public | Validate Telegram Mini App `initData`, create a pending provider proof, and return `platform_claim_url`. |
-| `telegram_connection_edge_status` | POST | public | Validate Telegram Mini App `initData` and report whether that Telegram subject is already linked. |
+| `telegram_connection_edge_status` | GET | public | Validate Telegram Mini App `initData` and report whether that Telegram subject is already linked. |
 | `telegram_connection_edge_remove` | POST | public | Validate Telegram Mini App `initData` and unlink that Telegram subject from its platform user. |
 | `telegram_connection_edge_complete` | POST | public | Validate Telegram Mini App `initData` and complete a pending Telegram connection-edge challenge. |
 | `federated_data_bus_claim` | POST | public | Validate promoted request auth context and issue a short-lived Socket.IO token for the Connection Hub widget live channel. |

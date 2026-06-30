@@ -1,11 +1,11 @@
 ---
-title: Versatile Telegram WebApp Design
+title: KDCube Companion Telegram Mini App Design
 kind: design-note
 bundle_id: versatile@2026-03-31-13-36
 updated_at: 2026-06-27
 ---
 
-# Versatile Telegram Mini App Design
+# KDCube Companion Telegram Mini App Design
 
 The source-folder widget `ui/widgets/telegram_miniapp` demonstrates a Telegram
 Mini App shell that can also be opened as a KDCube widget for operator testing.

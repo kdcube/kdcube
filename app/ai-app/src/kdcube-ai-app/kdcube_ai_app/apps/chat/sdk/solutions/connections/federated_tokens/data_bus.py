@@ -198,7 +198,7 @@ async def issue_federated_data_bus_token(
     project: str,
     bundle_id: str,
     user_id: str,
-    user_type: str | UserType = UserType.REGISTERED,
+    user_type: str | UserType = UserType.EXTERNAL,
     username: str | None = None,
     email: str | None = None,
     roles: Iterable[str] | None = None,
@@ -222,7 +222,7 @@ async def issue_federated_data_bus_token(
         raise FederatedTokenInvalid("tenant, project, bundle_id, and user_id are required")
 
     user_type_value = user_type.value if isinstance(user_type, UserType) else str(user_type or "").strip().lower()
-    resolved_user_type = UserType(user_type_value or UserType.REGISTERED.value)
+    resolved_user_type = UserType(user_type_value or UserType.EXTERNAL.value)
     ttl = _bounded_ttl(ttl_seconds)
     issued_at = int(time.time())
     expires_at = issued_at + ttl

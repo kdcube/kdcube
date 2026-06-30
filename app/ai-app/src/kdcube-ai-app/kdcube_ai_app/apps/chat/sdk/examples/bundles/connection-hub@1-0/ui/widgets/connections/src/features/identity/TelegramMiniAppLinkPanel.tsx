@@ -4,7 +4,7 @@ import {
   reconnectConnectionHubLiveChannel,
   subscribeConnectionHubEvents,
 } from '../../api/dataBus';
-import { postPublicOp } from '../../api/client';
+import { getPublicOp, postPublicOp } from '../../api/client';
 import type { ConnectionEdge, ConnectionEdgeChallengeResult } from '../../api/types';
 
 interface TelegramStatusResult extends ConnectionEdgeChallengeResult {
@@ -18,6 +18,21 @@ function textError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function statusLinked(result: TelegramStatusResult | null): boolean {
+  return Boolean(result?.linked || result?.edge);
+}
+
+function notifyHost(result: TelegramStatusResult | null): void {
+  if (window.parent === window) return;
+  window.parent.postMessage({
+    type: 'kdcube-connection-status-changed',
+    provider: 'telegram',
+    linked: statusLinked(result),
+    providerSubject: result?.provider_subject || '',
+    connectionId: result?.connection_id || '',
+  }, '*');
+}
+
 export function TelegramMiniAppLinkPanel() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -26,7 +41,6 @@ export function TelegramMiniAppLinkPanel() {
   const [challenge, setChallenge] = useState<TelegramStatusResult | null>(null);
   const edge = (status?.edge || challenge?.edge || null) as ConnectionEdge | null;
   const linked = Boolean(status?.linked || edge || challenge?.linked);
-  const platformUrl = challenge?.platform_claim_url || '';
   const source = edge?.from || {};
   const target = edge?.to || {};
   const telegramSubject = source.subject || status?.provider_subject || challenge?.provider_subject || '';
@@ -34,9 +48,10 @@ export function TelegramMiniAppLinkPanel() {
   const delegatedGrants = edge?.grants || [];
 
   const refresh = useCallback(async () => {
-    const result = await postPublicOp<TelegramStatusResult>('telegram_connection_edge_status');
+    const result = await getPublicOp<TelegramStatusResult>('telegram_connection_edge_status');
     if (result.ok === false) throw new Error(result.message || result.error || 'Telegram status failed');
     setStatus(result);
+    notifyHost(result);
     if (result.linked || result.edge) setChallenge(null);
   }, []);
 
@@ -172,11 +187,6 @@ export function TelegramMiniAppLinkPanel() {
               <button className="btn" type="button" disabled={busy} onClick={start}>
                 {challenge ? 'Open KDCube to finish' : 'Link this Telegram account'}
               </button>
-              {platformUrl ? (
-                <a className="btn btn-link" href={platformUrl} target="_blank" rel="noreferrer">
-                  Open KDCube
-                </a>
-              ) : null}
             </div>
           </>
         )}

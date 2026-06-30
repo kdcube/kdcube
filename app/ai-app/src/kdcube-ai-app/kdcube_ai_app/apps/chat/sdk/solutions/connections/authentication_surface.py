@@ -34,6 +34,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.authenticators.models imp
     AuthenticatedRequest,
     RequestEnvelope,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_projection import (
+    authority_has_platform_privilege,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.request_auth import SessionFactory
 from kdcube_ai_app.auth.sessions import RequestContext, UserSession, UserType
 
@@ -259,8 +262,16 @@ class ConnectionHubAuthenticationSurface:
         if not actor_user_id:
             logger.warning("Connection Hub authenticated request without actor user id")
             return None
-        roles = list(authority.get("platform_roles") or authenticated.principal.get("roles") or [])
-        permissions = list(authority.get("platform_permissions") or authenticated.principal.get("permissions") or [])
+        platform_user_id = _str(authenticated.platform_user_id or authority.get("platform_user_id"))
+        roles = list(authority.get("platform_roles") or [])
+        permissions = list(authority.get("platform_permissions") or [])
+        session_type = (
+            UserType.PRIVILEGED
+            if authority_has_platform_privilege(roles)
+            else UserType.REGISTERED
+            if platform_user_id
+            else UserType.EXTERNAL
+        )
         user_data = {
             "user_id": actor_user_id,
             "username": actor_user_id,
@@ -268,7 +279,7 @@ class ConnectionHubAuthenticationSurface:
             "permissions": permissions,
             "identity_authority": authority,
         }
-        session = await session_factory(context, UserType.REGISTERED, user_data)
+        session = await session_factory(context, session_type, user_data)
         session.identity_authority = authority
         if trace:
             logger.info(
@@ -279,8 +290,8 @@ class ConnectionHubAuthenticationSurface:
                 authenticated.authority_id or summary.get("authority_id") or "",
                 authenticated.selected_authenticator or "",
                 actor_user_id,
-                bool(authenticated.platform_user_id or authority.get("platform_user_id")),
-                UserType.REGISTERED.value,
+                bool(platform_user_id),
+                session_type.value,
                 roles,
             )
         return session

@@ -111,6 +111,23 @@ export interface TelegramProfile {
     can_use_chatbot?: boolean;
     can_use_widget?: boolean;
   };
+  connection?: {
+    linked?: boolean;
+    required?: boolean;
+    provider?: string;
+    provider_subject?: string;
+    platform_user_id?: string;
+    error?: string;
+    message?: string;
+  };
+  authContext?: {
+    headers?: Record<string, unknown>;
+  };
+  connections?: {
+    connection_hub?: {
+      bundle_id?: string;
+    };
+  };
 }
 
 export interface WebAppPayload {
@@ -126,6 +143,7 @@ export interface WebAppPayload {
       bundle_id?: string;
     };
   };
+  connection?: TelegramProfile['connection'];
   auth?: {
     provider?: string;
     authority_id?: string;

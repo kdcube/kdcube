@@ -140,16 +140,21 @@ def configuration_defaults(self):
                 "telegram_conversations_list.GET": False,
             },
         },
-        "integrations": {
-            "telegram": {
-                "enabled": False,
-                "webhook_url": "",
-                "send_responses": True,
-                "stream_activity": True,
-                "stream_activity_display": True,
-                "web_app_auth_max_age_seconds": 86400,
-            },
-        },
+                "integrations": {
+                    "telegram.default": {
+                        "provider": "telegram",
+                        "enabled": False,
+                        "definition": {
+                            "webhook": {
+                                "url": "",
+                                "send_responses": True,
+                                "stream_activity": True,
+                                "stream_activity_display": True,
+                            },
+                            "web_app_auth_max_age_seconds": 86400,
+                        },
+                    },
+                },
     }
 ```
 
@@ -264,22 +269,26 @@ Deployment config:
 
 ```yaml
 integrations:
-  telegram:
+  telegram.default:
+    provider: telegram
     enabled: true
-    webhook_url: "https://<PUBLIC_HOST>/api/integrations/bundles/<TENANT>/<PROJECT>/<BUNDLE_ID>/public/telegram_webhook"
-    send_responses: true
-    stream_activity: true
-    stream_activity_display: true
-    web_app_auth_max_age_seconds: 86400
+    definition:
+      webhook:
+        url: "https://<PUBLIC_HOST>/api/integrations/bundles/<TENANT>/<PROJECT>/<BUNDLE_ID>/public/telegram_webhook?integration_id=telegram.default"
+        send_responses: true
+        stream_activity: true
+        stream_activity_display: true
+      web_app_auth_max_age_seconds: 86400
 ```
 
 Deployment secrets:
 
 ```yaml
 integrations:
-  telegram:
-    bot_token: "<TELEGRAM_BOT_TOKEN>"
-    webhook_secret: "<TELEGRAM_WEBHOOK_SECRET>"
+  telegram.default:
+    definition:
+      bot_token: "<TELEGRAM_BOT_TOKEN>"
+      webhook_secret: "<TELEGRAM_WEBHOOK_SECRET>"
 ```
 
 For local development where Telegram must call a localhost KDCube, use
@@ -297,7 +306,8 @@ Before calling the bundle done, prove:
   not `/widgets/<widget_alias>/`
 - the webhook rejects missing or wrong `X-Telegram-Bot-Api-Secret-Token`
 - `setWebhook` points at the active public URL
-- a Telegram user can be recorded, approved/mapped, and bound to a conversation
+- an unlinked Telegram user sees the Connection Hub connect prompt
+- a linked Telegram user can be bound to a conversation and run the intended workflow
 - a chat update submits through the shared chat ingress and receives a final
   Telegram delivery
 - Mini App APIs reject invalid or stale `initData`
@@ -317,8 +327,8 @@ kdcube_ai_app.apps.chat.sdk.integrations.telegram
   chat_submit.py      helpers for /steer, /followup, RawAttachment, UserSession,
                       RequestContext, and IngressConfig
   signed_downloads.py short-lived signed link helpers re-exported for Telegram clients
-  user_storage.py     file-backed TelegramUserAdminStorage registry for user
-                      roles, KDCube user mapping, conversation binding, and
+  user_storage.py     file-backed TelegramUserAdminStorage registry for Telegram
+                      chat/user metadata, conversation binding, and
                       webhook update-id claims
   user_admin.py       configurable Telegram user registry/admin, webhook
                       authorization and submitter orchestration, attachment hosting
@@ -334,7 +344,7 @@ Keep these concerns separate when reusing the SDK:
 bot.py      Telegram protocol primitives
 stream.py   live progress message/card mechanics
 router.py   final React-turn delivery to Telegram
-user_admin  user allow-list, role, conversation binding, webhook orchestration
+user_admin  Telegram chat metadata, conversation binding, webhook orchestration
 widget_*    Telegram Mini App identity and operations
 ```
 

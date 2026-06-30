@@ -21,8 +21,8 @@ interface ConfigHandshakeHostOptions {
   // only requests carrying this identity (the memory widget uses
   // 'MEMORIES_WIDGET').
   identity: string;
-  // Served-widget iframe bundle id. The host app is Versatile, but child
-  // widgets may belong to user-memories, connection-hub, etc.
+  // Served-widget iframe bundle id. The Telegram host can embed child widgets
+  // from user-memories, connection-hub, etc.
   bundleId?: string;
   extraConfig?: Record<string, unknown>;
 }

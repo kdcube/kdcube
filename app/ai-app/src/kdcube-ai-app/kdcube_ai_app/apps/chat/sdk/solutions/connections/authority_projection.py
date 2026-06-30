@@ -132,6 +132,40 @@ def authority_economics_user_id(
     )
 
 
+def authority_has_platform_economics(
+    source: Mapping[str, Any] | None,
+    *,
+    economics_user_id: str = "",
+) -> bool:
+    """Return true when economics should be owned by a platform authority user.
+
+    A verified external actor can have an actor session without being a
+    registered platform user. Free-user quota, subscriptions, and admin bypass
+    belong only to a platform/grantor projection.
+    """
+
+    authority = _authority_mapping(source)
+    if not authority:
+        return False
+
+    economics_user = _clean(economics_user_id)
+    if _clean(authority.get("economics_projection")) == "platform_user":
+        return True
+
+    platform_user = _clean(authority.get("platform_user_id"))
+    if platform_user and (not economics_user or economics_user == platform_user):
+        return True
+
+    grantor_user = _clean(authority.get("grantor_user_id") or authority.get("subject_user_id"))
+    if grantor_user and (not economics_user or economics_user == grantor_user):
+        authority_id = _clean(authority.get("authority_id"))
+        charge_to = _clean(authority.get("charge_to"))
+        if authority_id in {"platform", "kdcube.platform", "kdcube-front-shell"} or charge_to == "grantor":
+            return True
+
+    return False
+
+
 @dataclass(frozen=True)
 class AuthorityExecutionProjection:
     actor_user_id: str
@@ -166,10 +200,16 @@ def project_execution_authority(
         actor_user_id=actor,
         fallback_user_id=fallback_user_id,
     )
-    roles = authority_roles(authority, fallback=fallback_roles)
-    permissions = authority_permissions(authority, fallback=fallback_permissions)
-    budget_bypass = authority_budget_bypass(authority, roles=roles)
-    is_anonymous = (not economics_user) or economics_user == "anonymous"
+    roles = authority_roles(authority)
+    permissions = authority_permissions(authority)
+    has_platform_economics = authority_has_platform_economics(authority, economics_user_id=economics_user)
+    budget_bypass = authority_budget_bypass(authority, roles=roles) if has_platform_economics else None
+    del fallback_roles, fallback_permissions
+    is_anonymous = (
+        (not economics_user)
+        or economics_user == "anonymous"
+        or not has_platform_economics
+    )
     return AuthorityExecutionProjection(
         actor_user_id=actor,
         economics_user_id=economics_user,
@@ -188,6 +228,7 @@ __all__ = [
     "authority_budget_bypass",
     "authority_economics_user_id",
     "authority_explicit_budget_bypass",
+    "authority_has_platform_economics",
     "authority_has_platform_privilege",
     "authority_permissions",
     "authority_roles",

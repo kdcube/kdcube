@@ -534,15 +534,13 @@ class EconomicsGuard:
             base_policy = dataclasses.replace(base_policy, max_concurrent=None)
 
         # funding source selection — mirror run()'s plan-funding eligibility.
-        # NOTE: aligned with the economics fix that replaced the static
-        # project_budget_user_types()={"registered"} with project_budget_allowed_for_plan(...).
-        # Project budget backs the plan lane for ANY non-anonymous user (not just
-        # "registered"), unless an active subscription pays or the user is wallet-only.
+        # Project budget backs the plan lane for any non-anonymous projected
+        # subject unless an active subscription pays or the user is wallet-only.
         plan_source = "subscription" if has_active_subscription else "role"
         resolver = getattr(self.ep, "project_budget_allowed_for_plan", None)
         if callable(resolver):
             project_budget_allowed = bool(resolver(
-                user_type=role,
+                is_anonymous=bool(s.is_anonymous),
                 plan_id=plan_id,
                 plan_source=plan_source,
                 has_wallet=has_wallet,

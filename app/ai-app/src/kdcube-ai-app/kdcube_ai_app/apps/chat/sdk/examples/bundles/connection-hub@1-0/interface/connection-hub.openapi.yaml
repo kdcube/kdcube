@@ -511,7 +511,7 @@ paths:
           description: Pending Telegram proof and platform claim URL.
 
   /bundles/{tenant}/{project}/{bundle_id}/public/telegram_connection_edge_status:
-    post:
+    get:
       tags: [Connection Edges]
       summary: Read Telegram edge status for the current Mini App subject.
       description: >
@@ -528,11 +528,6 @@ paths:
           in: header
           required: true
           schema: { type: string }
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/Envelope"
       responses:
         "200":
           description: Telegram edge status and principal envelope when connected.

@@ -1,9 +1,9 @@
 ---
 id: ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/docs/integrations/telegram-setup.md
-title: "Versatile Telegram Setup"
-summary: "Compact operator commands for configuring the Versatile reference bundle Telegram bot webhook, Telegram Mini App menu button, bot commands, and pending user approval flow."
+title: "KDCube Companion Telegram Setup"
+summary: "Compact operator commands for configuring the KDCube Companion Telegram bot webhook, Telegram Mini App menu button, bot commands, and Connection Hub link flow."
 tags: ["bundle", "versatile", "telegram", "webhook", "mini-app", "botfather", "operator-setup"]
-keywords: ["versatile telegram setup", "telegram webhook", "setWebhook", "secret_token", "getWebhookInfo", "setChatMenuButton", "setMyCommands", "telegram_miniapp", "pending telegram user", "telegram admin"]
+keywords: ["kdcube companion telegram setup", "telegram webhook", "setWebhook", "secret_token", "getWebhookInfo", "setChatMenuButton", "setMyCommands", "telegram_miniapp", "connection hub", "telegram link"]
 updated_at: 2026-05-16
 see_also:
   - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
@@ -12,7 +12,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-widget-integration-README.md
 ---
 
-# Versatile Telegram Setup
+# KDCube Companion Telegram Setup
 
 The bundle exposes:
 
@@ -48,7 +48,7 @@ curl -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
   -d "secret_token=${TELEGRAM_WEBHOOK_SECRET}"
 ```
 
-The Versatile webhook route is platform-public because Telegram is not a
+The Telegram webhook route is platform-public because Telegram is not a
 browser/platform session. The Telegram handler still enforces
 `X-Telegram-Bot-Api-Secret-Token`. New webhook registrations should always put
 the non-secret `integration_id` selector in the webhook URL, as shown above.
@@ -70,20 +70,20 @@ Create the Mini App in `@BotFather` before registering the menu button:
 ```text
 /newapp
 select @<bot_username>
-App title: Versatile
-Short description: KDCube versatile reference assistant
+App title: KDCube Companion
+Short description: Memories, chats, and KDCube account connection in Telegram
 App URL: ${MINI_APP_URL}
 ```
 
-Use the same `MINI_APP_URL` for the menu button:
+Use the same `MINI_APP_URL` for the programmable chat menu button:
 
 ```bash
 curl -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setChatMenuButton" \
   -H "Content-Type: application/json" \
-  -d "{\"menu_button\":{\"type\":\"web_app\",\"text\":\"Open Versatile\",\"web_app\":{\"url\":\"${MINI_APP_URL}\"}}}"
+  -d "{\"menu_button\":{\"type\":\"web_app\",\"text\":\"Open KDCube\",\"web_app\":{\"url\":\"${MINI_APP_URL}\"}}}"
 ```
 
-Check what the blue chat button currently opens:
+Check what the programmable chat menu button currently opens:
 
 ```bash
 curl "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getChatMenuButton"
@@ -101,19 +101,18 @@ Test:
 
 ```text
 1. Send /start to the bot.
-2. Open the Versatile widget in KDCube.
-3. Go to Admin (requires KDCube admin role).
-4. Refresh users.
-5. Promote the pending anonymous Telegram user to registered or admin.
+2. Open the Telegram Mini App.
+3. Use the Connect tab to link this Telegram account to the signed-in KDCube account.
+4. Return to Telegram and send another message.
+5. Confirm the message runs as telegram_<id> with projected KDCube authority.
 ```
 
 Visible Mini App surfaces:
 
 ```text
-anonymous Telegram user  -> Pending approval banner
-registered Telegram user -> User Memory + Chats
-admin Telegram user      -> User Memory + Chats + Admin
-KDCube admin widget user -> User Memory + Chats + Admin
+unlinked Telegram user -> Connect tab only
+linked Telegram user   -> Memory + Chats + Connect
+KDCube admin user      -> platform-side bundle/admin operations where configured
 ```
 
 Widget build note:
@@ -139,6 +138,9 @@ If `/start` does not appear in Admin:
 3. Confirm setWebhook used secret_token.
 4. Confirm TELEGRAM_WEBHOOK_SECRET matches the bundle secret.
 5. Confirm PUBLIC_HOST points to the running KDCube ingress.
-6. If the blue chat button opens `{"detail":"Not Found"}`, run
-   getChatMenuButton and confirm its URL equals MINI_APP_URL.
+6. If any Telegram launch button opens `{"detail":"Bundle does not define widget <old-alias>"}`,
+   that launch surface still points to a removed widget alias.
+   Run getChatMenuButton for the programmable menu button and confirm its URL
+   equals MINI_APP_URL. If getChatMenuButton is correct, edit the BotFather
+   Main Mini App/direct app URL manually to MINI_APP_URL.
 ```

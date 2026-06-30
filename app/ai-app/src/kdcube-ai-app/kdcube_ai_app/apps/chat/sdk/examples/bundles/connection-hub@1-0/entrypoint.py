@@ -1727,10 +1727,11 @@ class ConnectionHubEntrypoint(BaseEntrypointWithMemory):
 
         tenant, project = _runtime_tenant_project(self)
         authority = auth.get("identity_authority") if isinstance(auth.get("identity_authority"), Mapping) else {}
-        principal = auth.get("principal") if isinstance(auth.get("principal"), Mapping) else {}
-        roles = list(authority.get("platform_roles") or principal.get("roles") or [])
-        permissions = list(authority.get("platform_permissions") or principal.get("permissions") or [])
+        roles = list(authority.get("platform_roles") or [])
+        permissions = list(authority.get("platform_permissions") or [])
         actor_user_id = str(auth.get("actor_user_id") or "").strip()
+        platform_user_id = str(authority.get("platform_user_id") or auth.get("platform_user_id") or "").strip()
+        runtime_user_type = "registered" if platform_user_id else "external"
         provider = str(auth.get("provider") or "").strip()
         provider_subject = str(auth.get("provider_subject") or "").strip()
         if not actor_user_id or not provider or not provider_subject:
@@ -1746,7 +1747,7 @@ class ConnectionHubEntrypoint(BaseEntrypointWithMemory):
             project=project,
             bundle_id=BUNDLE_ID,
             user_id=actor_user_id,
-            user_type="registered",
+            user_type=runtime_user_type,
             username=actor_user_id,
             roles=roles,
             permissions=permissions,
@@ -1904,7 +1905,7 @@ class ConnectionHubEntrypoint(BaseEntrypointWithMemory):
             "message": "Telegram account verified. Open KDCube to claim this identity as a platform user.",
         }
 
-    @api(method="POST", alias="telegram_connection_edge_status", route="public")
+    @api(method="GET", alias="telegram_connection_edge_status", route="public")
     async def telegram_connection_edge_status(
         self,
         data: Optional[Dict[str, Any]] = None,

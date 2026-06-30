@@ -58,8 +58,10 @@ class RateLimiter:
                     burst_window=cfg.burst_window
                 )
             return default
+        anonymous_limit = _rl("anonymous", RateLimitConfig(50, 5, 60))
         self.limits = {
-            UserType.ANONYMOUS: _rl("anonymous", RateLimitConfig(50, 5, 60)),
+            UserType.ANONYMOUS: anonymous_limit,
+            UserType.EXTERNAL: _rl("external", anonymous_limit),
             UserType.REGISTERED: _rl("registered", RateLimitConfig(500, 20, 60)),
             UserType.PAID: _rl("paid", RateLimitConfig(1000, 50, 60)),
             UserType.PRIVILEGED: _rl("privileged", RateLimitConfig(-1, 100, 60)),

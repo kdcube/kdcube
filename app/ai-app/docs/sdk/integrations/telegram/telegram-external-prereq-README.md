@@ -38,7 +38,8 @@ The bundle or platform still owns:
 
 - public bundle route for the webhook alias
 - validation of `X-Telegram-Bot-Api-Secret-Token`
-- Telegram user allow-list, roles, and KDCube user mapping
+- Telegram user metadata and conversation binding
+- Connection Hub connection-edge lookup for KDCube platform authority
 - conversation binding for Telegram-originated turns
 - workflow submission through conversation `external_events[]`
 - final response delivery through the bundle's Telegram queued-delivery wrapper
@@ -81,6 +82,15 @@ Telegram requires a public HTTPS endpoint. For local development, expose the
 runtime with a tunnel such as ngrok and update both KDCube config and Telegram
 webhook registration whenever the host changes.
 
+New webhook registrations should include the non-secret integration selector:
+
+```text
+https://<PUBLIC_HOST>/api/integrations/bundles/<TENANT>/<PROJECT>/<BUNDLE_ID>/public/telegram_webhook?integration_id=<TELEGRAM_INTEGRATION_ID>
+```
+
+The selector lets the SDK validate the callback against the intended Telegram
+integration row instead of trying every configured Telegram bot.
+
 ## Descriptor Values
 
 Non-secret config typically lives in `bundles.yaml`:
@@ -92,13 +102,16 @@ bundles:
     - id: "<BUNDLE_ID>"
       config:
         integrations:
-          telegram:
+          telegram.default:
+            provider: telegram
             enabled: true
-            webhook_url: "https://<PUBLIC_HOST>/api/integrations/bundles/<TENANT>/<PROJECT>/<BUNDLE_ID>/public/telegram_webhook"
-            send_responses: true
-            stream_activity: true
-            stream_activity_display: true
-            web_app_auth_max_age_seconds: 86400
+            definition:
+              webhook:
+                url: "https://<PUBLIC_HOST>/api/integrations/bundles/<TENANT>/<PROJECT>/<BUNDLE_ID>/public/telegram_webhook?integration_id=telegram.default"
+                send_responses: true
+                stream_activity: true
+                stream_activity_display: true
+              web_app_auth_max_age_seconds: 86400
 ```
 
 Secrets live in `bundles.secrets.yaml` or the configured secrets provider:
@@ -110,9 +123,10 @@ bundles:
     - id: "<BUNDLE_ID>"
       secrets:
         integrations:
-          telegram:
-            bot_token: "<TELEGRAM_BOT_TOKEN>"
-            webhook_secret: "<TELEGRAM_WEBHOOK_SECRET>"
+          telegram.default:
+            definition:
+              bot_token: "<TELEGRAM_BOT_TOKEN>"
+              webhook_secret: "<TELEGRAM_WEBHOOK_SECRET>"
 ```
 
 ## Webhook Secret Token
@@ -135,7 +149,7 @@ printf '%s\n' "$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')"
 Use the same value in two places:
 
 - KDCube bundle secret:
-  `secrets.integrations.telegram.webhook_secret`
+  `secrets.integrations.<integration_id>.definition.webhook_secret`
 - Telegram `setWebhook` request:
   `secret_token=<TELEGRAM_WEBHOOK_SECRET>`
 
@@ -154,7 +168,7 @@ After the bundle exposes the webhook public route, register it through Telegram:
 
 ```bash
 curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
-  -d "url=https://<PUBLIC_HOST>/api/integrations/bundles/<TENANT>/<PROJECT>/<BUNDLE_ID>/public/telegram_webhook" \
+  -d "url=https://<PUBLIC_HOST>/api/integrations/bundles/<TENANT>/<PROJECT>/<BUNDLE_ID>/public/telegram_webhook?integration_id=<TELEGRAM_INTEGRATION_ID>" \
   -d "secret_token=<TELEGRAM_WEBHOOK_SECRET>"
 ```
 
@@ -188,16 +202,28 @@ The static widget URL only loads the Mini App shell and assets. The public API
 calls it makes should validate Telegram Mini App `initData` through the SDK
 `widget_auth` integration.
 
-## User Approval
+## Connection Hub Link
 
-Telegram can reach the webhook before a Telegram user is approved. A typical
-bundle should record pending users and require an operator/admin to assign a
-role such as `registered` or `admin` before allowing turns or Mini App
-operations.
+Telegram can reach the webhook before the Telegram actor is connected to a
+KDCube platform user. In that state, the actor is authenticated by Telegram but
+does not have platform authority or platform economics budget.
 
-The SDK provides `TelegramUserAdminStorage` and configurable user-admin/widget
-helpers. The bundle supplies where that registry lives and what migration or
-role policy applies.
+The recommended behavior is:
+
+```text
+unlinked telegram:<id>
+  -> record Telegram metadata and conversation binding
+  -> reply with a Connection Hub connect prompt
+  -> do not run platform/economics-protected work
+
+linked telegram:<id>
+  -> keep actor user_id=telegram_<id>
+  -> project platform authority through the Connection Hub edge
+  -> run authorized workflows with platform economics attribution
+```
+
+The SDK provides Telegram metadata storage and widget operations. Connection
+Hub owns the connection edge and authority projection.
 
 ## Mini App Download Requirements
 

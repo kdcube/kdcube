@@ -90,7 +90,7 @@ async def test_connection_hub_surface_projects_identity_authority_to_session():
 
     assert session is not None
     assert session.user_id == "telegram_434804821"
-    assert session.user_type == UserType.REGISTERED
+    assert session.user_type == UserType.PRIVILEGED
     assert session.roles == ["kdcube:role:super-admin"]
     assert session.permissions == ["demo:*"]
     assert session.identity_authority["platform_user_id"] == "platform-user-1"
@@ -124,6 +124,62 @@ async def test_connection_hub_surface_declines_when_hub_does_not_authenticate():
     )
 
     assert session is None
+
+
+async def test_connection_hub_surface_marks_verified_unlinked_actor_external():
+    surface = ConnectionHubAuthenticationSurface(
+        redis=None,
+        pg_pool=None,
+        tenant="demo-tenant",
+        project="demo-project",
+    )
+
+    async def _call_connection_hub(_envelope):
+        return AuthenticatedRequest(
+            ok=True,
+            authenticated=True,
+            linked=False,
+            provider="telegram",
+            provider_subject="434804821",
+            actor_user_id="telegram_434804821",
+            connection_id="telegram.support",
+            principal={"roles": ["kdcube:role:chat-user"]},
+            identity_authority={
+                "actor_user_id": "telegram_434804821",
+                "storage_user_id": "telegram_434804821",
+                "economics_user_id": "telegram_434804821",
+                "identity_provider": "telegram",
+                "identity_provider_subject": "434804821",
+                "platform_authority_resolved": False,
+                "platform_authority_error": "platform_user_not_linked",
+            },
+        ).to_dict()
+
+    surface._call_connection_hub = _call_connection_hub
+
+    async def _session_factory(context, user_type, user_data):
+        return UserSession(
+            session_id="s1",
+            user_type=user_type,
+            user_id=user_data["user_id"],
+            username=user_data["username"],
+            roles=user_data["roles"],
+            permissions=user_data["permissions"],
+            request_context=context,
+            identity_authority=user_data["identity_authority"],
+        )
+
+    session = await surface(
+        _request({"X-Telegram-Init-Data": "telegram-proof"}),
+        RequestContext(client_ip="127.0.0.1", user_agent="test"),
+        _session_factory,
+    )
+
+    assert session is not None
+    assert session.user_type == UserType.EXTERNAL
+    assert session.user_id == "telegram_434804821"
+    assert session.roles == []
+    assert session.identity_authority["platform_authority_resolved"] is False
 
 
 async def test_connection_hub_surface_skips_hub_without_selector_hints_or_provider_proof():

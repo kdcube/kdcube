@@ -7,26 +7,26 @@ import pytest
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_economic import BaseEntrypointWithEconomics
 
 
-def test_non_anonymous_plan_lanes_can_use_project_budget_without_plan_name_hardcoding():
+def test_non_anonymous_projected_subjects_can_use_project_budget_without_plan_name_hardcoding():
     entrypoint = object.__new__(BaseEntrypointWithEconomics)
 
     assert entrypoint.wallet_users_use_project_budget_first() is True
     assert entrypoint.project_budget_allowed_for_plan(
-        user_type="paid",
+        is_anonymous=False,
         plan_id="starter",
         plan_source="role",
         has_wallet=True,
         has_active_subscription=False,
     ) is True
     assert entrypoint.project_budget_allowed_for_plan(
-        user_type="known",
+        is_anonymous=False,
         plan_id="team-zero",
         plan_source="role",
         has_wallet=False,
         has_active_subscription=False,
     ) is True
     assert entrypoint.project_budget_allowed_for_plan(
-        user_type="anonymous",
+        is_anonymous=True,
         plan_id="anonymous",
         plan_source="role",
         has_wallet=False,
@@ -69,12 +69,47 @@ def test_economics_run_authority_does_not_trust_legacy_privileged_user_type():
     assert projection.budget_bypass is None
 
 
+def test_economics_run_authority_treats_unlinked_external_actor_as_not_platform_registered():
+    entrypoint = object.__new__(BaseEntrypointWithEconomics)
+    entrypoint.comm_context = SimpleNamespace(
+        user=SimpleNamespace(
+            identity_authority={
+                "actor_user_id": "telegram_434804821",
+                "storage_user_id": "telegram_434804821",
+                "economics_user_id": "telegram_434804821",
+                "identity_provider": "telegram",
+                "identity_provider_subject": "434804821",
+                "platform_authority_resolved": False,
+                "platform_authority_error": "platform_user_not_linked",
+            },
+            roles=("admin",),
+            permissions=(),
+            user_type="external",
+        )
+    )
+    entrypoint._comm = None
+
+    projection = entrypoint._project_economics_run_authority(
+        {
+            "user": "telegram_434804821",
+            "user_type": "external",
+        }
+    )
+
+    assert projection.actor_user_id == "telegram_434804821"
+    assert projection.economics_user_id == "telegram_434804821"
+    assert projection.roles == ()
+    assert projection.budget_bypass is None
+    assert projection.is_anonymous is True
+
+
 def test_economics_run_authority_reads_cross_runtime_context_authority():
     entrypoint = object.__new__(BaseEntrypointWithEconomics)
     entrypoint.comm_context = SimpleNamespace(
         user=SimpleNamespace(
             identity_authority={
                 "actor_user_id": "delegated_client:claude",
+                "platform_user_id": "platform-user-1",
                 "economics_user_id": "platform-user-1",
                 "budget_bypass": False,
                 "roles": ["kdcube:role:chat-user"],

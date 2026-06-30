@@ -205,26 +205,25 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
     def project_budget_allowed_for_plan(
         self,
         *,
-        user_type: str,
+        is_anonymous: bool,
         plan_id: Optional[str],
         plan_source: Optional[str],
         has_wallet: bool,
         has_active_subscription: bool,
     ) -> bool:
         """
-        Return whether the current plan lane may use project budget.
+        Return whether the current projected subject may use project budget.
 
-        Runtime user type is not a plan identifier. A known user can be routed
-        as paid because they have wallet credits, while still having a
-        role/default plan lane backed by project budget. Anonymous traffic has
-        no project-backed plan lane by default.
+        The decision is based on projected authority facts, not runtime
+        ``user_type``. Anonymous traffic has no project-backed plan lane by
+        default.
         """
         del plan_id, plan_source
         if has_active_subscription:
             return False
         if has_wallet and not self.wallet_users_use_project_budget_first():
             return False
-        return str(user_type or "").lower() != "anonymous"
+        return not bool(is_anonymous)
 
     def wallet_users_use_project_budget_first(self) -> bool:
         """
@@ -904,7 +903,7 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
             )
 
         project_budget_allowed = self.project_budget_allowed_for_plan(
-            user_type=str(user_type or ""),
+            is_anonymous=bool(projected_authority.is_anonymous),
             plan_id=plan_id,
             plan_source=plan_source,
             has_wallet=has_wallet,

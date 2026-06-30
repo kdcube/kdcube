@@ -56,7 +56,7 @@ class EconomicsRoleResolver:
     async def ensure_baseline_subscription_for_session(self, session: UserSession) -> None:
         if not session or not session.user_id:
             return
-        if session.user_type == UserType.ANONYMOUS:
+        if session.user_type in {UserType.ANONYMOUS, UserType.EXTERNAL}:
             return
 
         plan_id = "admin" if session.user_type == UserType.PRIVILEGED else "free"

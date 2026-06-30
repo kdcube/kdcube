@@ -55,12 +55,18 @@ subject = EconomicsSubject(
 
 `EconomicsSubject` does not carry a `user_type` lane. Funding, subscription, and
 plan access are resolved from economics state and explicit authority fields.
+Project-budget eligibility uses the projected subject's `is_anonymous` state,
+not a runtime `user_type` string.
 
 For linked/delegated identities the actor and the economics subject may be
 different. A Telegram actor, delegated external client, or bundle-owned identity
 should stay visible as the actor, while Connection Hub projects the economics
 subject, roles, permissions, and explicit budget bypass from the carried
 authority context.
+If an actor is verified only by an external integration and has no platform or
+grantor projection, its runtime label is `external` and economics must treat it
+as no platform economics subject. It may perform low-authority channel work, but
+it cannot consume registered/free platform quota or admin bypass.
 
 ```python
 from kdcube_ai_app.apps.chat.sdk.infra.economics.enforcement import (
@@ -84,6 +90,11 @@ job processor restores it into `ExternalEventPayload.user.identity_authority` an
 that authority projection; it must not be reconstructed from the dispatch queue.
 Background queues may carry `queue_label`, but that label is not authority and
 is not the economics subject.
+
+Surface visibility must not reintroduce `user_type` as an authorization lane.
+Central SDK operation dispatch and Data Bus dispatch ignore `user_types`
+declarations. Use roles and authority/grant policy for protected surfaces; use
+`EconomicsSubject` for quota/funding decisions.
 
 ## `EconomicsGuard` — verify, reserve, settle
 
@@ -198,7 +209,8 @@ logs with the marker:
 ```
 
 The trace payload includes `flow`, `scope_id`, `subject_id`, tenant/project,
-user id/type, and the stage-specific fields. Current stages:
+actor identity, economics subject identity, and the stage-specific fields.
+Current stages:
 
 | Stage | Meaning |
 | --- | --- |

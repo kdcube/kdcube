@@ -157,25 +157,26 @@ X-KDCube-Auth-Authority-ID: telegram.kdcube_ref
 X-KDCube-Auth-Authenticator-ID: telegram.kdcube_ref.init_data
 ```
 
-For provider callbacks where the provider controls the request headers, put the
-same selector into the callback URL. Telegram webhooks should be registered as:
+For provider callbacks where the provider controls the request headers, put a
+stable non-secret integration selector into the callback URL. Telegram webhooks
+should be registered as:
 
 ```text
-/public/telegram_webhook?authenticator_id=telegram.kdcube_ref.webhook
+/public/telegram_webhook?integration_id=telegram.kdcube_ref
 ```
 
-The authority/authenticator ids are configured in app props. They name the
-non-secret authority realm and verifier row used by the app for this surface or
-provider callback. They are not bot ids and not secrets. The Telegram Mini App
-host reads them from server config, forwards them to hosted iframes through the
-standard `CONFIG_RESPONSE`, and attaches them on its own app API calls.
+The integration id is configured in app props. It names the non-secret
+Telegram integration row used by the app for this callback. It is not a bot id
+and not a secret. The Telegram Mini App host reads equivalent auth context
+from server config, forwards it to hosted iframes through the standard
+`CONFIG_RESPONSE`, and attaches it on its own app API calls.
 
 Uncontrolled third-party hooks are the only place where an authenticator module may
 need to infer from raw request shape alone. All new
-controlled webhook examples should include `authenticator_id`; the fallback exists
-for uncontrolled provider callbacks, not as the preferred setup. If a controlled request supplies
-`authenticator_id`, Connection Hub tries that row only and fails closed when no
-enabled row matches or the proof is rejected.
+controlled webhook examples should include `integration_id`; the fallback
+exists for uncontrolled provider callbacks, not as the preferred setup. If a
+controlled request supplies `integration_id`, the Telegram SDK tries that row
+only and fails closed when no enabled row matches or the proof is rejected.
 
 ## Header-Only Auth Paths
 

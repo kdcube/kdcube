@@ -71,6 +71,30 @@ async def test_connection_edges_client_complete_sends_challenge_id():
     assert calls[0].data["challenge_id"] == "abc"
 
 
+@pytest.mark.asyncio
+async def test_connection_edges_client_unwraps_operation_alias_result():
+    calls: list[BundleOperationCall] = []
+
+    async def _caller(call: BundleOperationCall):
+        calls.append(call)
+        return {
+            "telegram_connection_edge_status": {
+                "ok": True,
+                "linked": True,
+                "edge": {"to": {"user_id": "platform-user"}},
+            }
+        }
+
+    with bind_bundle_operation_caller(_caller):
+        result = await ConnectionEdgesClient(_Entrypoint()).telegram_edge_status(
+            telegram_init_data="tg-init",
+        )
+
+    assert result["linked"] is True
+    assert result["edge"]["to"]["user_id"] == "platform-user"
+    assert calls[0].http_method == "GET"
+
+
 def test_request_origin_prefers_forwarded_headers():
     class _Request:
         headers = {"x-forwarded-host": "public.example", "x-forwarded-proto": "https"}

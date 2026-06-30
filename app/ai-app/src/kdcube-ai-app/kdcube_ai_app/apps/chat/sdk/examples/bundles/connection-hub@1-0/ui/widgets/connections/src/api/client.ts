@@ -77,3 +77,7 @@ export function postOp<T>(operation: string, payload: Record<string, unknown> = 
 export function postPublicOp<T>(operation: string, payload: Record<string, unknown> = {}): Promise<T> {
   return request<T>('POST', operation, payload, 'public');
 }
+
+export function getPublicOp<T>(operation: string): Promise<T> {
+  return request<T>('GET', operation, {}, 'public');
+}

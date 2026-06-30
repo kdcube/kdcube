@@ -6,7 +6,10 @@ import base64
 import hashlib
 import hmac
 import json
+import time
 from urllib.parse import urlencode
+
+import pytest
 
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram import (
     TelegramMessage,
@@ -50,7 +53,8 @@ def test_telegram_webapp_init_data_validates_signature():
     assert verified.params["query_id"] == "query-1"
 
 
-def test_telegram_widget_auth_resolves_identity_through_configured_storage():
+@pytest.mark.asyncio
+async def test_telegram_widget_auth_resolves_identity_through_configured_storage():
     class _Storage:
         def resolve_telegram_user(self, *, telegram_user_id, telegram_chat_id="", telegram_username="", create_if_missing=False):
             return {
@@ -71,7 +75,7 @@ def test_telegram_widget_auth_resolves_identity_through_configured_storage():
     init_data = _telegram_init_data(
         bot_token="123:token",
         payload={
-            "auth_date": "1000",
+            "auth_date": str(int(time.time())),
             "query_id": "query-1",
             "user": json.dumps({"id": 42, "username": "elena"}, separators=(",", ":")),
         },
@@ -81,7 +85,7 @@ def test_telegram_widget_auth_resolves_identity_through_configured_storage():
         bot_token=lambda: "123:token",
     )
 
-    identity = widget_auth.resolve_identity(_Entry(), telegram_init_data=init_data)
+    identity = await widget_auth.resolve_identity(_Entry(), telegram_init_data=init_data)
 
     assert identity.user_id == "user-42"
     assert identity.telegram_user_id == "42"
@@ -91,8 +95,8 @@ def test_telegram_widget_auth_resolves_identity_through_configured_storage():
 def test_telegram_submit_helpers_normalize_commands_roles_and_attachments():
     kind, text = telegram_command_kind_and_text("/followup add this")
     assert (kind, text) == ("followup", "add this")
-    assert role_to_user_type("admin") == UserType.PRIVILEGED
-    assert role_to_user_type("registered") == UserType.REGISTERED
+    assert role_to_user_type("admin") == UserType.EXTERNAL
+    assert role_to_user_type("registered") == UserType.EXTERNAL
 
     raw = raw_attachments_from_telegram(
         [

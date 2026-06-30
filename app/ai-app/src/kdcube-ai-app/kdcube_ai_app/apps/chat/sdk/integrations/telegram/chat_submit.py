@@ -23,11 +23,16 @@ def telegram_command_kind_and_text(text: str) -> tuple[str, str]:
 
 
 def role_to_user_type(role: str) -> UserType:
+    """Return the platform session label for a Telegram-local role.
+
+    Telegram roles are channel-local authorization facts. They prove an
+    integration-authenticated actor, not a platform principal. They must not
+    unlock registered/free platform economics or privileged bypass.
+    """
+
     normalized = str(role or "").strip().lower()
-    if normalized == "admin":
-        return UserType.PRIVILEGED
-    if normalized == "registered":
-        return UserType.REGISTERED
+    if normalized in {"admin", "registered"}:
+        return UserType.EXTERNAL
     return UserType.ANONYMOUS
 
 
@@ -118,4 +123,3 @@ def telegram_ingress_config(
             "entrypoint": entrypoint,
         },
     )
-

@@ -102,6 +102,7 @@ async def test_atomic_backpressure_queue_sizes_include_inflight_lists():
 
     assert sizes == {
         "anonymous": 7,
+        "external": 0,
         "registered": 9,
         "privileged": 8,
         "paid": 12,

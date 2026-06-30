@@ -66,6 +66,7 @@ class BundleOperationCall:
     tenant: str | None = None
     project: str | None = None
     route: str = "operations"
+    http_method: str = "POST"
 
 
 @dataclass(frozen=True)
@@ -141,42 +142,10 @@ def _api_enabled(props: Mapping[str, Any] | None, spec: Any) -> bool:
     return _is_truthy_enabled(sub.get(f"{spec.alias}.{spec.http_method}"))
 
 
-_USER_TYPE_VISIBILITY_ORDER: dict[str, int] = {
-    "anonymous": 0,
-    "registered": 1,
-    "paid": 2,
-    "privileged": 3,
-}
-
-
 def _session_user_type(session: Any) -> str:
     value = getattr(session, "user_type", None)
     text = str(getattr(value, "value", value) or "").strip().lower()
     return text
-
-
-def _user_types_visible(required_user_types: tuple[str, ...] | list[str] | None, session: Any) -> bool:
-    user_types = tuple(
-        str(user_type or "").strip().lower()
-        for user_type in (required_user_types or ())
-        if str(user_type or "").strip()
-    )
-    if not user_types:
-        return True
-    current = _session_user_type(session)
-    if not current:
-        return False
-    current_rank = _USER_TYPE_VISIBILITY_ORDER.get(current)
-    if current_rank is None:
-        return current in set(user_types)
-    thresholds = [
-        _USER_TYPE_VISIBILITY_ORDER[user_type]
-        for user_type in user_types
-        if user_type in _USER_TYPE_VISIBILITY_ORDER
-    ]
-    if not thresholds:
-        return current in set(user_types)
-    return current_rank >= min(thresholds)
 
 
 def _raw_roles_visible(required_roles: tuple[str, ...] | list[str] | None, session: Any) -> bool:
@@ -244,9 +213,9 @@ def _endpoint_visible(
     session: Any,
     auth: Mapping[str, Any] | None = None,
 ) -> bool:
+    del required_user_types
     return (
-        _user_types_visible(required_user_types, session)
-        and _raw_roles_visible(required_roles, session)
+        _raw_roles_visible(required_roles, session)
         and _authority_policy_visible(auth, session)
     )
 
@@ -520,7 +489,7 @@ async def _invoke_local_bundle_operation_raw(
     endpoint_spec, allowed_methods = resolve_bundle_api_endpoint(
         workflow,
         alias=operation,
-        http_method="POST",
+        http_method=str(call.http_method or "POST").upper(),
         route=route,
         bundle_id=spec_resolved.id,
     )
@@ -911,6 +880,7 @@ async def call_bundle_operation(
     tenant: str | None = None,
     project: str | None = None,
     route: str = "operations",
+    http_method: str = "POST",
 ) -> Mapping[str, Any]:
     caller = get_current_bundle_operation_caller()
     if caller is None:
@@ -923,6 +893,7 @@ async def call_bundle_operation(
             tenant=str(tenant or "").strip() or None,
             project=str(project or "").strip() or None,
             route=str(route or "operations").strip() or "operations",
+            http_method=str(http_method or "POST").strip().upper() or "POST",
         )
     )
 

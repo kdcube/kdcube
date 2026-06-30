@@ -23,6 +23,11 @@ Use these definitions while testing:
   `plan_part = min(R, Q, P)`, the wallet covers the over‑quota remainder. No paid lane, no switch.
 - **Funding sources**: primary is `subscription` or `project`; the `wallet` is overflow only.
 - **Important**: subscription and wallet never go negative. **Only** project budget can go negative (absorption).
+- **Authority**: economics reads `EconomicsSubject`, not `user_type`.
+  Linked/delegated actors may keep their actor identity while charging the
+  projected platform/economics identity.
+- **Visibility**: central bundle operation dispatch and Data Bus dispatch ignore
+  `user_types`; roles and authority/grants are the supported authorization gates.
 
 ### A) Free user (no wallet, no subscription)
 
@@ -206,12 +211,37 @@ Use this to confirm:
 2. Open **Request lineage** in UI.
 3. Confirm the split matches expectation for that scenario.
 
+### Test G — Linked/delegated identity regression (15 min)
+
+Use this after changing Connection Hub identity projection, Telegram linking,
+delegated credentials, Data Bus, or economics enforcement.
+
+1. Link an external/channel identity to a platform user, for example
+   `telegram_434804821 -> 02e53484-...`.
+2. Trigger paid work from the external identity:
+   - Telegram Mini App memory search or chat;
+   - scheduled automation owned by the Telegram actor;
+   - delegated external client MCP call, if configured.
+3. Verify runtime logs show both identities:
+   - actor identity remains the external/channel identity;
+   - economics subject is the projected platform user;
+   - budget bypass is present only when projected authority grants it.
+4. Check Request lineage for the resulting `turn_id` or accountable
+   `request_id`.
+5. Expected result:
+   - accounting/provenance records the actor that caused the work;
+   - quota/funding is charged to the projected economics subject;
+   - no code path derives admin/budget bypass from `user_type`;
+   - endpoints/widgets/Data Bus handlers are not denied only because their old
+     `user_types` metadata does not match the session label.
+
 ---
 
 If any result differs from this guide, record:
 - user_id
 - plan_id
 - role
+- actor_user_id and economics_user_id when they differ
 - request_id (chat uses turn_id)
 - expected vs observed funding
 - screenshots from Absorption Report and Request Lineage

@@ -263,13 +263,13 @@ class _EP:
     def wallet_users_use_project_budget_first(self) -> bool:
         return True
 
-    def project_budget_allowed_for_plan(self, *, user_type, plan_id, plan_source, has_wallet, has_active_subscription):
+    def project_budget_allowed_for_plan(self, *, is_anonymous, plan_id, plan_source, has_wallet, has_active_subscription):
         # Mirrors BaseEntrypointWithEconomics.project_budget_allowed_for_plan
         if has_active_subscription:
             return False
         if has_wallet and not self.wallet_users_use_project_budget_first():
             return False
-        return str(user_type or "").lower() != "anonymous"
+        return not bool(is_anonymous)
 
     async def run_accounting(self, **kw):
         self.run_accounting_calls.append(kw)

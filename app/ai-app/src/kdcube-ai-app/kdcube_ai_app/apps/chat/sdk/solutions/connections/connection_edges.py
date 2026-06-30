@@ -25,6 +25,19 @@ def _str(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _unwrap_operation_result(operation: str, result: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalize direct and REST-style bundle operation results.
+
+    The in-process bridge may return either the raw operation payload or the
+    same alias-wrapped shape that public REST routes expose. SDK callers should
+    not need to know which transport shape was used.
+    """
+
+    if operation in result and isinstance(result.get(operation), Mapping):
+        return dict(result.get(operation) or {})
+    return dict(result)
+
+
 def _prop(entrypoint: Any, path: str, default: Any = None) -> Any:
     getter = getattr(entrypoint, "bundle_prop", None)
     if callable(getter):
@@ -124,6 +137,21 @@ class ConnectionEdgesClient:
             },
         )
 
+    async def telegram_edge_status(
+        self,
+        *,
+        telegram_init_data: str = "",
+        public_origin: str = "",
+    ) -> dict[str, Any]:
+        return await self._public_call(
+            "telegram_connection_edge_status",
+            {
+                "telegram_init_data": _str(telegram_init_data),
+                "request_origin": _str(public_origin),
+            },
+            http_method="GET",
+        )
+
     async def resolve_identity(self, *, provider: str, provider_subject: str) -> dict[str, Any]:
         return await self._operation_call(
             "identity_resolve",
@@ -133,13 +161,13 @@ class ConnectionEdgesClient:
             },
         )
 
-    async def _public_call(self, operation: str, data: Mapping[str, Any]) -> dict[str, Any]:
-        return await self._call(operation, data=data, route="public")
+    async def _public_call(self, operation: str, data: Mapping[str, Any], *, http_method: str = "POST") -> dict[str, Any]:
+        return await self._call(operation, data=data, route="public", http_method=http_method)
 
-    async def _operation_call(self, operation: str, data: Mapping[str, Any]) -> dict[str, Any]:
-        return await self._call(operation, data=data, route="operations")
+    async def _operation_call(self, operation: str, data: Mapping[str, Any], *, http_method: str = "POST") -> dict[str, Any]:
+        return await self._call(operation, data=data, route="operations", http_method=http_method)
 
-    async def _call(self, operation: str, *, data: Mapping[str, Any], route: str) -> dict[str, Any]:
+    async def _call(self, operation: str, *, data: Mapping[str, Any], route: str, http_method: str) -> dict[str, Any]:
         result = await call_bundle_operation(
             bundle_id=self.bundle_id,
             operation=operation,
@@ -147,8 +175,9 @@ class ConnectionEdgesClient:
             tenant=self.tenant,
             project=self.project,
             route=route,
+            http_method=http_method,
         )
-        return dict(result)
+        return _unwrap_operation_result(operation, result)
 
 
 def connection_hub_bundle_id_from_entrypoint(entrypoint: Any) -> str:

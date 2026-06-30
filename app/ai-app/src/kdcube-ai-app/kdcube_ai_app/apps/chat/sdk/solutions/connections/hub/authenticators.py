@@ -14,7 +14,6 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.authenticators.authority 
     select_authenticator_candidates,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_projection import authority_has_platform_privilege
-from kdcube_ai_app.auth.AuthManager import REGISTERED_ROLE
 
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.hub.edges import (
     ConnectionEdgeStore,
@@ -551,7 +550,7 @@ async def authenticate_request(
         if platform_user_id
         else {
             "platform_user_id": "",
-            "roles": [REGISTERED_ROLE],
+            "roles": [],
             "permissions": [],
             "role_resolution": {"status": "identity_not_linked", "source": "connection_hub"},
         }
@@ -565,7 +564,7 @@ async def authenticate_request(
         source="connection_hub.request_auth",
     )
     edge_grants = set(_safe_list(edge.get("grants")))
-    raw_roles = _safe_list(authority.get("platform_roles") or principal.get("roles") or [REGISTERED_ROLE])
+    raw_roles = _safe_list(authority.get("platform_roles") or principal.get("roles") or [])
     raw_permissions = _safe_list(authority.get("platform_permissions") or principal.get("permissions") or [])
     delegated_roles = [role for role in raw_roles if role in edge_grants]
     delegated_permissions = [permission for permission in raw_permissions if permission in edge_grants]

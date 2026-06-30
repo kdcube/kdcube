@@ -4273,6 +4273,7 @@ async def _call_bundle_op_inner(
         route: str,
         session: UserSession,
         path_tail: Optional[str] = None,
+        method_override: Optional[str] = None,
 ):
     uploaded_files = list(uploaded_files or [])
     workflow, spec_resolved, tenant_id, project_id, comm_context = _unpack_loaded_bundle_workflow(
@@ -4286,7 +4287,7 @@ async def _call_bundle_op_inner(
         )
     )
 
-    request_method = str(getattr(request, "method", "POST") or "POST").upper()
+    request_method = str(method_override or getattr(request, "method", "POST") or "POST").upper()
     endpoint_spec, allowed_methods = resolve_bundle_api_endpoint(
         workflow,
         alias=operation,
@@ -4357,6 +4358,7 @@ async def _call_bundle_op_inner(
                 operation=call.operation,
                 route=call.route or "operations",
                 session=session,
+                method_override=call.http_method or "POST",
             )
 
         peer_redis = _get_app_redis(request)

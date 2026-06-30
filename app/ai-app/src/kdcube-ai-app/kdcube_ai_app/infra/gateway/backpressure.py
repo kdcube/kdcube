@@ -19,7 +19,7 @@ from kdcube_ai_app.infra.redis.client import get_async_redis_client
 
 logger = logging.getLogger(__name__)
 
-QUEUE_USER_TYPES = ("anonymous", "registered", "privileged", "paid")
+QUEUE_USER_TYPES = ("anonymous", "external", "registered", "privileged", "paid")
 
 
 def _queue_key(prefix: str, user_type: str) -> str:
@@ -221,7 +221,7 @@ class BackpressureManager:
         await self.init_redis()
 
         analytics = {}
-        for user_type in ["anonymous", "registered", "privileged", "paid"]:
+        for user_type in QUEUE_USER_TYPES:
             analytics_key = f"{self.QUEUE_ANALYTICS_PREFIX}:{user_type}"
 
             # Get or initialize analytics
@@ -445,6 +445,8 @@ class BackpressureManager:
         # Determine threshold for this user type
         if user_type == UserType.ANONYMOUS:
             threshold = thresholds['anonymous_threshold']
+        elif user_type == UserType.EXTERNAL:
+            threshold = thresholds['anonymous_threshold']
         elif user_type == UserType.REGISTERED:
             threshold = thresholds['registered_threshold']
         elif user_type == UserType.PAID:
@@ -470,7 +472,7 @@ class BackpressureManager:
                 reason = ThrottlingReason.PAID_BACKPRESSURE
                 message = f"System under high pressure - privileged users only ({current_total}/{thresholds['paid_threshold']})"
                 retry_after = 45
-            elif current_total >= thresholds['registered_threshold'] and user_type in (UserType.ANONYMOUS, UserType.REGISTERED):
+            elif current_total >= thresholds['registered_threshold'] and user_type in (UserType.ANONYMOUS, UserType.EXTERNAL, UserType.REGISTERED):
                 reason = ThrottlingReason.REGISTERED_BACKPRESSURE
                 message = f"System under pressure - paid users only ({current_total}/{thresholds['registered_threshold']})"
                 retry_after = 30
@@ -510,11 +512,12 @@ class BackpressureManager:
         local total_size = 0
         
         -- Calculate total across all queues
-        local anonymous_size = redis.call('LLEN', KEYS[4]) + redis.call('LLEN', KEYS[8])
-        local registered_size = redis.call('LLEN', KEYS[5]) + redis.call('LLEN', KEYS[9])
-        local privileged_size = redis.call('LLEN', KEYS[6]) + redis.call('LLEN', KEYS[10])
-        local paid_size = redis.call('LLEN', KEYS[7]) + redis.call('LLEN', KEYS[11])
-        total_size = anonymous_size + registered_size + paid_size + privileged_size
+        local anonymous_size = redis.call('LLEN', KEYS[4]) + redis.call('LLEN', KEYS[9])
+        local external_size = redis.call('LLEN', KEYS[5]) + redis.call('LLEN', KEYS[10])
+        local registered_size = redis.call('LLEN', KEYS[6]) + redis.call('LLEN', KEYS[11])
+        local privileged_size = redis.call('LLEN', KEYS[7]) + redis.call('LLEN', KEYS[12])
+        local paid_size = redis.call('LLEN', KEYS[8]) + redis.call('LLEN', KEYS[13])
+        total_size = anonymous_size + external_size + registered_size + paid_size + privileged_size
         
         -- Check if we can admit this request
         local can_admit = false
@@ -523,7 +526,7 @@ class BackpressureManager:
             can_admit = total_size < hard_limit
         elseif user_type == 'registered' or user_type == 'paid' then
             can_admit = total_size < threshold
-        else  -- anonymous
+        else  -- anonymous or external
             can_admit = total_size < threshold
         end
         
@@ -542,10 +545,12 @@ class BackpressureManager:
         user_inflight_key = f"{self.QUEUE_INFLIGHT_PREFIX}:{user_type.value.lower()}"
         total_counter_key = f"{self.CAPACITY_COUNTER_KEY}:total"
         anonymous_queue_key = f"{self.QUEUE_PREFIX}:anonymous"
+        external_queue_key = f"{self.QUEUE_PREFIX}:external"
         registered_queue_key = f"{self.QUEUE_PREFIX}:registered"
         privileged_queue_key = f"{self.QUEUE_PREFIX}:privileged"
         paid_queue_key = f"{self.QUEUE_PREFIX}:paid"
         anonymous_inflight_key = f"{self.QUEUE_INFLIGHT_PREFIX}:anonymous"
+        external_inflight_key = f"{self.QUEUE_INFLIGHT_PREFIX}:external"
         registered_inflight_key = f"{self.QUEUE_INFLIGHT_PREFIX}:registered"
         privileged_inflight_key = f"{self.QUEUE_INFLIGHT_PREFIX}:privileged"
         paid_inflight_key = f"{self.QUEUE_INFLIGHT_PREFIX}:paid"
@@ -554,15 +559,17 @@ class BackpressureManager:
             # Execute atomic check
             result = await self.redis.eval(
                 lua_script,
-                11,  # Number of keys
+                13,  # Number of keys
                 user_queue_key,
                 total_counter_key,
                 user_inflight_key,
                 anonymous_queue_key,
+                external_queue_key,
                 registered_queue_key,
                 privileged_queue_key,
                 paid_queue_key,
                 anonymous_inflight_key,
+                external_inflight_key,
                 registered_inflight_key,
                 privileged_inflight_key,
                 paid_inflight_key,
@@ -598,7 +605,7 @@ class BackpressureManager:
                 return total_size < thresholds['hard_limit']
             elif user_type in (UserType.REGISTERED, UserType.PAID):
                 return total_size < threshold
-            else:  # ANONYMOUS
+            else:  # ANONYMOUS or EXTERNAL
                 return total_size < threshold
 
         except Exception as e:
@@ -659,17 +666,20 @@ class AtomicBackpressureManager:
         # Lua script for atomic capacity check (without enqueueing)
         self.ATOMIC_CAPACITY_CHECK_SCRIPT = """
         local anon_queue_key = KEYS[1]
-        local reg_queue_key = KEYS[2]
-        local priv_queue_key = KEYS[3]
-        local paid_queue_key = KEYS[4]
-        local anon_inflight_key = KEYS[5]
-        local reg_inflight_key = KEYS[6]
-        local priv_inflight_key = KEYS[7]
-        local paid_inflight_key = KEYS[8]
-        local anon_cont_key = KEYS[9]
-        local reg_cont_key = KEYS[10]
-        local priv_cont_key = KEYS[11]
-        local paid_cont_key = KEYS[12]
+        local ext_queue_key = KEYS[2]
+        local reg_queue_key = KEYS[3]
+        local priv_queue_key = KEYS[4]
+        local paid_queue_key = KEYS[5]
+        local anon_inflight_key = KEYS[6]
+        local ext_inflight_key = KEYS[7]
+        local reg_inflight_key = KEYS[8]
+        local priv_inflight_key = KEYS[9]
+        local paid_inflight_key = KEYS[10]
+        local anon_cont_key = KEYS[11]
+        local ext_cont_key = KEYS[12]
+        local reg_cont_key = KEYS[13]
+        local priv_cont_key = KEYS[14]
+        local paid_cont_key = KEYS[15]
         
         local user_type = ARGV[1]
         local anonymous_ratio = tonumber(ARGV[2])
@@ -681,10 +691,11 @@ class AtomicBackpressureManager:
         
         -- Get current queue sizes
         local anon_queue = redis.call('LLEN', anon_queue_key) + redis.call('LLEN', anon_inflight_key) + tonumber(redis.call('GET', anon_cont_key) or '0')
+        local ext_queue = redis.call('LLEN', ext_queue_key) + redis.call('LLEN', ext_inflight_key) + tonumber(redis.call('GET', ext_cont_key) or '0')
         local reg_queue = redis.call('LLEN', reg_queue_key) + redis.call('LLEN', reg_inflight_key) + tonumber(redis.call('GET', reg_cont_key) or '0')
         local priv_queue = redis.call('LLEN', priv_queue_key) + redis.call('LLEN', priv_inflight_key) + tonumber(redis.call('GET', priv_cont_key) or '0')
         local paid_queue = redis.call('LLEN', paid_queue_key) + redis.call('LLEN', paid_inflight_key) + tonumber(redis.call('GET', paid_cont_key) or '0')
-        local total_queue = anon_queue + reg_queue + paid_queue + priv_queue
+        local total_queue = anon_queue + ext_queue + reg_queue + paid_queue + priv_queue
         
         if actual_capacity <= 0 then
             return {0, "no_healthy_processes", total_queue, 0, healthy_processes}
@@ -709,7 +720,7 @@ class AtomicBackpressureManager:
         elseif user_type == "paid" then
             can_admit = total_queue < paid_threshold_val
             rejection_reason = total_queue >= paid_threshold_val and "paid_threshold_exceeded" or ""
-        else -- anonymous
+        else -- anonymous or external
             can_admit = total_queue < anon_threshold
             rejection_reason = total_queue >= anon_threshold and "anonymous_threshold_exceeded" or ""
         end
@@ -780,10 +791,12 @@ class AtomicBackpressureManager:
     async def _atomic_capacity_check(self, user_type: UserType) -> Tuple[bool, str, Dict[str, Any]]:
         """Perform atomic capacity check without enqueueing"""
         anon_queue_key = f"{self.QUEUE_PREFIX}:anonymous"
+        ext_queue_key = f"{self.QUEUE_PREFIX}:external"
         reg_queue_key = f"{self.QUEUE_PREFIX}:registered"
         priv_queue_key = f"{self.QUEUE_PREFIX}:privileged"
         paid_queue_key = f"{self.QUEUE_PREFIX}:paid"
         anon_inflight_key = f"{self.QUEUE_INFLIGHT_PREFIX}:anonymous"
+        ext_inflight_key = f"{self.QUEUE_INFLIGHT_PREFIX}:external"
         reg_inflight_key = f"{self.QUEUE_INFLIGHT_PREFIX}:registered"
         priv_inflight_key = f"{self.QUEUE_INFLIGHT_PREFIX}:privileged"
         paid_inflight_key = f"{self.QUEUE_INFLIGHT_PREFIX}:paid"
@@ -793,16 +806,19 @@ class AtomicBackpressureManager:
         try:
             result = await self.redis.eval(
                 self.ATOMIC_CAPACITY_CHECK_SCRIPT,
-                12,  # Number of keys
+                15,  # Number of keys
                 anon_queue_key,
+                ext_queue_key,
                 reg_queue_key,
                 priv_queue_key,
                 paid_queue_key,
                 anon_inflight_key,
+                ext_inflight_key,
                 reg_inflight_key,
                 priv_inflight_key,
                 paid_inflight_key,
                 f"{self.QUEUE_CONTINUATION_COUNT_PREFIX}:anonymous",
+                f"{self.QUEUE_CONTINUATION_COUNT_PREFIX}:external",
                 f"{self.QUEUE_CONTINUATION_COUNT_PREFIX}:registered",
                 f"{self.QUEUE_CONTINUATION_COUNT_PREFIX}:privileged",
                 f"{self.QUEUE_CONTINUATION_COUNT_PREFIX}:paid",
@@ -926,7 +942,7 @@ class AtomicBackpressureManager:
         await self.init_redis()
 
         analytics = {}
-        for user_type in ["anonymous", "registered", "privileged", "paid"]:
+        for user_type in QUEUE_USER_TYPES:
             analytics_key = f"{self.QUEUE_ANALYTICS_PREFIX}:{user_type}"
 
             data = await self.redis.get(analytics_key)
@@ -1156,18 +1172,21 @@ class AtomicChatQueueManager:
         self.ATOMIC_CHAT_ENQUEUE_SCRIPT = """
         local queue_key = KEYS[1]
         local capacity_counter_key = KEYS[2]
-        local anon_queue_key = KEYS[3] 
-        local reg_queue_key = KEYS[4]
-        local priv_queue_key = KEYS[5]
-        local paid_queue_key = KEYS[6]
-        local anon_inflight_key = KEYS[7]
-        local reg_inflight_key = KEYS[8]
-        local priv_inflight_key = KEYS[9]
-        local paid_inflight_key = KEYS[10]
-        local anon_cont_key = KEYS[11]
-        local reg_cont_key = KEYS[12]
-        local priv_cont_key = KEYS[13]
-        local paid_cont_key = KEYS[14]
+        local anon_queue_key = KEYS[3]
+        local ext_queue_key = KEYS[4]
+        local reg_queue_key = KEYS[5]
+        local priv_queue_key = KEYS[6]
+        local paid_queue_key = KEYS[7]
+        local anon_inflight_key = KEYS[8]
+        local ext_inflight_key = KEYS[9]
+        local reg_inflight_key = KEYS[10]
+        local priv_inflight_key = KEYS[11]
+        local paid_inflight_key = KEYS[12]
+        local anon_cont_key = KEYS[13]
+        local ext_cont_key = KEYS[14]
+        local reg_cont_key = KEYS[15]
+        local priv_cont_key = KEYS[16]
+        local paid_cont_key = KEYS[17]
         
         local user_type = ARGV[1]
         local chat_task_json = ARGV[2]  -- Processor wakeup payload
@@ -1182,10 +1201,11 @@ class AtomicChatQueueManager:
         
         -- Get current queue sizes
         local anon_queue = redis.call('LLEN', anon_queue_key) + redis.call('LLEN', anon_inflight_key) + tonumber(redis.call('GET', anon_cont_key) or '0')
+        local ext_queue = redis.call('LLEN', ext_queue_key) + redis.call('LLEN', ext_inflight_key) + tonumber(redis.call('GET', ext_cont_key) or '0')
         local reg_queue = redis.call('LLEN', reg_queue_key) + redis.call('LLEN', reg_inflight_key) + tonumber(redis.call('GET', reg_cont_key) or '0')
         local priv_queue = redis.call('LLEN', priv_queue_key) + redis.call('LLEN', priv_inflight_key) + tonumber(redis.call('GET', priv_cont_key) or '0')
         local paid_queue = redis.call('LLEN', paid_queue_key) + redis.call('LLEN', paid_inflight_key) + tonumber(redis.call('GET', paid_cont_key) or '0')
-        local total_queue = anon_queue + reg_queue + paid_queue + priv_queue
+        local total_queue = anon_queue + ext_queue + reg_queue + paid_queue + priv_queue
 
         if actual_capacity <= 0 then
             return {0, "no_healthy_processes", total_queue, 0, healthy_processes}
@@ -1216,7 +1236,7 @@ class AtomicChatQueueManager:
         elseif user_type == "paid" then
             can_admit = total_queue < paid_threshold_val
             rejection_reason = total_queue >= paid_threshold_val and "paid_threshold_exceeded" or ""
-        else -- anonymous
+        else -- anonymous or external
             can_admit = total_queue < anon_threshold
             rejection_reason = total_queue >= anon_threshold and "anonymous_threshold_exceeded" or ""
         end
@@ -1238,9 +1258,9 @@ class AtomicChatQueueManager:
             local stream_ids = {}
             local written_event_keys = {}
             if lane_event_count and lane_event_count > 0 then
-                local lane_log_key = KEYS[15]
+                local lane_log_key = KEYS[18]
                 for i = 1, lane_event_count do
-                    local event_key = KEYS[15 + i]
+                    local event_key = KEYS[18 + i]
                     local message_id = ARGV[10 + i]
                     local event_json = ARGV[10 + lane_event_count + i]
                     if not message_id or message_id == "" or not event_json or event_json == "" then
@@ -1266,7 +1286,7 @@ class AtomicChatQueueManager:
             local push_result = redis.pcall('LPUSH', queue_key, chat_task_json)
             if command_failed(push_result) then
                 if lane_event_count and lane_event_count > 0 then
-                    cleanup_lane_writes(KEYS[15], stream_ids, written_event_keys)
+                    cleanup_lane_writes(KEYS[18], stream_ids, written_event_keys)
                 end
                 return {0, "queue_push_failed", total_queue, actual_capacity, healthy_processes}
             end
@@ -1274,7 +1294,7 @@ class AtomicChatQueueManager:
             if command_failed(incr_result) then
                 redis.pcall('LREM', queue_key, 1, chat_task_json)
                 if lane_event_count and lane_event_count > 0 then
-                    cleanup_lane_writes(KEYS[15], stream_ids, written_event_keys)
+                    cleanup_lane_writes(KEYS[18], stream_ids, written_event_keys)
                 end
                 return {0, "capacity_counter_failed", total_queue, actual_capacity, healthy_processes}
             end
@@ -1332,10 +1352,12 @@ class AtomicChatQueueManager:
         queue_key = f"{self.QUEUE_PREFIX}:{user_type.value}"
         capacity_counter_key = self.CAPACITY_COUNTER_KEY
         anon_queue_key = f"{self.QUEUE_PREFIX}:anonymous"
+        ext_queue_key = f"{self.QUEUE_PREFIX}:external"
         reg_queue_key = f"{self.QUEUE_PREFIX}:registered"
         priv_queue_key = f"{self.QUEUE_PREFIX}:privileged"
         paid_queue_key = f"{self.QUEUE_PREFIX}:paid"
         anon_inflight_key = f"{self.QUEUE_INFLIGHT_PREFIX}:anonymous"
+        ext_inflight_key = f"{self.QUEUE_INFLIGHT_PREFIX}:external"
         reg_inflight_key = f"{self.QUEUE_INFLIGHT_PREFIX}:registered"
         priv_inflight_key = f"{self.QUEUE_INFLIGHT_PREFIX}:privileged"
         paid_inflight_key = f"{self.QUEUE_INFLIGHT_PREFIX}:paid"
@@ -1345,18 +1367,21 @@ class AtomicChatQueueManager:
         try:
             result = await self.redis.eval(
                 self.ATOMIC_CHAT_ENQUEUE_SCRIPT,
-                14,  # Number of keys
+                17,  # Number of keys
                 queue_key,
                 capacity_counter_key,
                 anon_queue_key,
+                ext_queue_key,
                 reg_queue_key,
                 priv_queue_key,
                 paid_queue_key,
                 anon_inflight_key,
+                ext_inflight_key,
                 reg_inflight_key,
                 priv_inflight_key,
                 paid_inflight_key,
                 f"{self.QUEUE_CONTINUATION_COUNT_PREFIX}:anonymous",
+                f"{self.QUEUE_CONTINUATION_COUNT_PREFIX}:external",
                 f"{self.QUEUE_CONTINUATION_COUNT_PREFIX}:registered",
                 f"{self.QUEUE_CONTINUATION_COUNT_PREFIX}:privileged",
                 f"{self.QUEUE_CONTINUATION_COUNT_PREFIX}:paid",
@@ -1435,10 +1460,12 @@ class AtomicChatQueueManager:
         queue_key = f"{self.QUEUE_PREFIX}:{user_type.value}"
         capacity_counter_key = self.CAPACITY_COUNTER_KEY
         anon_queue_key = f"{self.QUEUE_PREFIX}:anonymous"
+        ext_queue_key = f"{self.QUEUE_PREFIX}:external"
         reg_queue_key = f"{self.QUEUE_PREFIX}:registered"
         priv_queue_key = f"{self.QUEUE_PREFIX}:privileged"
         paid_queue_key = f"{self.QUEUE_PREFIX}:paid"
         anon_inflight_key = f"{self.QUEUE_INFLIGHT_PREFIX}:anonymous"
+        ext_inflight_key = f"{self.QUEUE_INFLIGHT_PREFIX}:external"
         reg_inflight_key = f"{self.QUEUE_INFLIGHT_PREFIX}:registered"
         priv_inflight_key = f"{self.QUEUE_INFLIGHT_PREFIX}:privileged"
         paid_inflight_key = f"{self.QUEUE_INFLIGHT_PREFIX}:paid"
@@ -1454,18 +1481,21 @@ class AtomicChatQueueManager:
         try:
             result = await self.redis.eval(
                 self.ATOMIC_CHAT_ENQUEUE_SCRIPT,
-                15 + len(event_keys),
+                18 + len(event_keys),
                 queue_key,
                 capacity_counter_key,
                 anon_queue_key,
+                ext_queue_key,
                 reg_queue_key,
                 priv_queue_key,
                 paid_queue_key,
                 anon_inflight_key,
+                ext_inflight_key,
                 reg_inflight_key,
                 priv_inflight_key,
                 paid_inflight_key,
                 f"{self.QUEUE_CONTINUATION_COUNT_PREFIX}:anonymous",
+                f"{self.QUEUE_CONTINUATION_COUNT_PREFIX}:external",
                 f"{self.QUEUE_CONTINUATION_COUNT_PREFIX}:registered",
                 f"{self.QUEUE_CONTINUATION_COUNT_PREFIX}:privileged",
                 f"{self.QUEUE_CONTINUATION_COUNT_PREFIX}:paid",

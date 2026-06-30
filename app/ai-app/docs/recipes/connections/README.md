@@ -6,6 +6,7 @@ status: active
 tags: ["recipes", "connections", "connection-hub", "connection-edges", "external-channel", "delegated-credentials"]
 updated_at: 2026-06-29
 see_also:
+  - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/integrations/telegram-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/link-from-external-channel-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/use-connected-identities-in-product-feature-README.md
   - repo:kdcube-ai-app/app/ai-app/docs/recipes/connections/protect-bundle-mcp-with-managed-credentials-README.md
@@ -21,6 +22,7 @@ are intentionally shorter and more task-oriented than the SDK architecture docs.
 
 | Recipe | Use when |
 | --- | --- |
+| [Telegram Integration](integrations/telegram-README.md) | A bundle exposes a Telegram webhook and Mini App, and Telegram users should connect to KDCube through Connection Hub before using platform-backed features. |
 | [Link From External Channel](link-from-external-channel-README.md) | A user starts inside Telegram, Slack, WhatsApp, a partner app, or another runtime that already carries provider auth material, and must create a connection edge to their KDCube platform user. |
 | [Use Connected Identities In A Product Feature](use-connected-identities-in-product-feature-README.md) | A product feature stores data by runtime actor, but should read one coherent set across the current user's connected identities. |
 | [Protect Bundle MCP With Managed Credentials](protect-bundle-mcp-with-managed-credentials-README.md) | A bundle exposes MCP tools and wants Connection Hub to manage delegated external-client access with per-tool grants. |

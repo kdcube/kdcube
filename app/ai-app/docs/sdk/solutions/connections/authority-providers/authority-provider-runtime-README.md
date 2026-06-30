@@ -76,7 +76,7 @@ provider-specific proof.
 Provider callbacks can carry the same information in query params:
 
 ```text
-/public/telegram_webhook?authenticator_id=telegram.kdcube_ref.webhook
+/public/telegram_webhook?integration_id=telegram.kdcube_ref
 ```
 
 These hints only narrow the candidate list. Truth is produced only by a

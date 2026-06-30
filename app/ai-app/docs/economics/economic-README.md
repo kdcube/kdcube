@@ -54,6 +54,15 @@ Hub delegation edge, then pass an `EconomicsSubject` into enforcement. Runtime
 `user_type` is not economics authority. Queue/session labels may exist in older
 runtime schemas, but delegated/channel-owned work must charge from the
 `EconomicsSubject` projected out of Connection Hub authority context.
+The `external` session label means “authenticated by an integration/channel but
+not projected to a platform user”; it is treated as no platform economics
+authority until Connection Hub provides a platform/grantor projection.
+
+SDK operation visibility follows the same rule. `user_types` declarations on
+older decorators/descriptors are not authorization. Central bundle-operation and
+Data Bus dispatch ignore `user_types`; surfaces must use roles and/or
+authority/grant requirements. This keeps Telegram, delegated-client, browser,
+and background-job executions on the same authority model.
 
 Admin UI role resolution:
 - The admin endpoints auto‑resolve role from the user’s cached session in Redis.

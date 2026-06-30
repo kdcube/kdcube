@@ -1,18 +1,26 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
 from typing import Any, Dict, Optional
+
+from fastapi import HTTPException
 
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bundle_registry import (
     configured_bundle_id,
     register_config,
     resolve_config,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.connections.connection_edges import (
+    ConnectionEdgesClient,
+    request_origin,
+)
 from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import get_current_bundle_id, get_current_request_context
 from kdcube_ai_app.apps.chat.sdk.runtime.http_ops import BundleBinaryResponse
 
 BUNDLE_ID = ""
 TELEGRAM_WEBAPP_DOWNLOAD_ORIGIN = "https://web.telegram.org"
+LOGGER = logging.getLogger("kdcube.telegram.widget_ops")
 
 automation_operations: Any = None
 telegram_user_admin: Any = None
@@ -75,15 +83,41 @@ def _bundle_id(entrypoint: Any = None) -> str:
     return configured_bundle_id(_config(entrypoint)) or BUNDLE_ID
 
 
+def _webapp_auth_context_config(entrypoint: Any = None, *, integration_id: str = "") -> Dict[str, Any]:
+    app = _config(entrypoint).get("webapp")
+    fn = getattr(app, "_auth_context_config", None)
+    if not callable(fn):
+        return {}
+    try:
+        return fn(entrypoint, integration_id=integration_id)
+    except TypeError:
+        return fn(entrypoint)
+    except Exception:
+        return {}
+
+
+def _webapp_connection_hub_bundle_id(entrypoint: Any = None) -> str:
+    app = _config(entrypoint).get("webapp")
+    fn = getattr(app, "_connection_hub_bundle_id", None)
+    if not callable(fn):
+        return "connection-hub@1-0"
+    try:
+        value = str(fn(entrypoint) or "").strip()
+    except Exception:
+        value = ""
+    return value or "connection-hub@1-0"
+
+
 async def _identity(entrypoint: Any, *, request: Any = None, telegram_init_data: str = ""):
-    cfg = _config(entrypoint)
-    return await cfg["telegram_widget_auth"].resolve_identity(
+    identity = await _profile_identity(entrypoint, request=request, telegram_init_data=telegram_init_data)
+    connection = await _telegram_connection_status(
         entrypoint,
         request=request,
         telegram_init_data=telegram_init_data,
-        allowed_roles=("registered", "admin"),
-        create_if_missing=False,
     )
+    if not connection.get("linked"):
+        raise HTTPException(status_code=403, detail="Connect this Telegram account to KDCube first")
+    return identity
 
 
 async def _profile_identity(entrypoint: Any, *, request: Any = None, telegram_init_data: str = ""):
@@ -116,6 +150,70 @@ def _tenant_project(entrypoint: Any) -> tuple[str, str]:
     return tenant, project
 
 
+def _platform_user_from_edge(edge: Dict[str, Any] | None) -> str:
+    if not isinstance(edge, dict):
+        return ""
+    target = edge.get("to")
+    if not isinstance(target, dict):
+        return ""
+    return str(target.get("user_id") or target.get("subject") or "").strip()
+
+
+async def _telegram_connection_status(
+    entrypoint: Any,
+    *,
+    request: Any = None,
+    telegram_init_data: str = "",
+) -> Dict[str, Any]:
+    init_data = str(telegram_init_data or "").strip()
+    if not init_data:
+        try:
+            init_data = str(getattr(request, "headers", {}).get("X-Telegram-Init-Data") or "").strip()
+        except Exception:
+            init_data = ""
+    try:
+        result = await ConnectionEdgesClient(entrypoint).telegram_edge_status(
+            telegram_init_data=init_data,
+            public_origin=request_origin(request),
+        )
+    except Exception as exc:
+        LOGGER.warning("[telegram.connection] status failed error=%s", exc)
+        return {
+            "ok": False,
+            "linked": False,
+            "required": True,
+            "error": "connection_hub_status_failed",
+            "message": str(exc),
+        }
+    edge = result.get("edge") if isinstance(result.get("edge"), dict) else {}
+    principal = result.get("principal") if isinstance(result.get("principal"), dict) else {}
+    platform_user_id = (
+        str(principal.get("platform_user_id") or "").strip()
+        or _platform_user_from_edge(edge)
+    )
+    linked = bool(result.get("linked") or platform_user_id)
+    LOGGER.info(
+        "[telegram.connection] status provider=%s provider_subject=%s linked=%s platform_user_id=%s error=%s",
+        result.get("provider") or "telegram",
+        result.get("provider_subject") or "",
+        linked,
+        platform_user_id,
+        result.get("error") or "",
+    )
+    return {
+        "ok": bool(result.get("ok", True)),
+        "linked": linked,
+        "required": not linked,
+        "provider": result.get("provider") or "telegram",
+        "provider_subject": result.get("provider_subject") or "",
+        "platform_user_id": platform_user_id,
+        "edge": edge,
+        "principal": principal,
+        "error": result.get("error") or "",
+        "message": result.get("message") or "",
+    }
+
+
 def _with_telegram_download_headers(result: Any):
     if not isinstance(result, BundleBinaryResponse):
         return result
@@ -136,8 +234,21 @@ async def profile(
 ) -> Dict[str, Any]:
     identity = await _profile_identity(entrypoint, request=request, telegram_init_data=telegram_init_data)
     role = str(identity.role or "anonymous").strip().lower() or "anonymous"
-    allowed = role in {"registered", "admin"}
+    connection = await _telegram_connection_status(
+        entrypoint,
+        request=request,
+        telegram_init_data=telegram_init_data,
+    )
+    allowed = bool(connection.get("linked"))
     mapped_kdcube_user_id = str(identity.mapping.get("kdcube_user_id") or "").strip()
+    LOGGER.info(
+        "[telegram.profile] actor_user_id=%s telegram_user_id=%s linked=%s platform_user_id=%s can_use_widget=%s",
+        identity.user_id,
+        identity.telegram_user_id,
+        allowed,
+        connection.get("platform_user_id") or "",
+        allowed,
+    )
     return {
         "ok": True,
         "bundle_id": _bundle_id(entrypoint),
@@ -156,9 +267,11 @@ async def profile(
             "user_id": identity.user_id,
             "mapped_user_id": mapped_kdcube_user_id,
             "role": role,
-            "user_type": role,
+            "user_type": "registered" if allowed else "external",
             "mapped": bool(mapped_kdcube_user_id),
         },
+        "connection": connection,
+        "authContext": _webapp_auth_context_config(entrypoint, integration_id="telegram.kdcube_ref"),
         "permissions": {
             "can_use_chatbot": allowed,
             "can_use_widget": allowed,
@@ -297,8 +410,29 @@ async def webapp_data(
     widget_path: str = "",
     path: str = "",
 ) -> Dict[str, Any]:
-    identity = await _identity(entrypoint, request=request, telegram_init_data=telegram_init_data)
+    identity = await _profile_identity(entrypoint, request=request, telegram_init_data=telegram_init_data)
+    connection = await _telegram_connection_status(
+        entrypoint,
+        request=request,
+        telegram_init_data=telegram_init_data,
+    )
     app = _config(entrypoint)["webapp"]
+    if not connection.get("linked"):
+        return {
+            "ok": True,
+            "auth_surface": "telegram_webapp",
+            "bundle_id": _bundle_id(entrypoint),
+            "connections": {
+                "connection_hub": {
+                    "bundle_id": _webapp_connection_hub_bundle_id(entrypoint),
+                },
+            },
+            "authContext": _webapp_auth_context_config(entrypoint, integration_id="telegram.kdcube_ref"),
+            "connection": connection,
+            "telegram_identity": identity.as_payload(),
+            "memory": None,
+            "conversations": None,
+        }
     payload = await app.payload(
         entrypoint,
         user_id=identity.user_id,
@@ -309,6 +443,7 @@ async def webapp_data(
         include_admin=False,
     )
     payload["auth_surface"] = "telegram_webapp"
+    payload["connection"] = connection
     return payload
 
 

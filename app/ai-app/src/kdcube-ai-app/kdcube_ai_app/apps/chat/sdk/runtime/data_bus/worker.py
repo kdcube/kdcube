@@ -62,14 +62,6 @@ DATA_BUS_LOCK_RETRY_SLEEP_SECONDS = max(
     0.0,
     float(os.getenv("DATA_BUS_LOCK_RETRY_SLEEP_SECONDS", "0.05") or "0.05"),
 )
-_USER_TYPE_VISIBILITY_ORDER = {
-    "anonymous": 0,
-    "registered": 1,
-    "paid": 2,
-    "privileged": 3,
-}
-
-
 @dataclass(frozen=True)
 class _DataBusWorkerKey:
     bundle_id: str
@@ -80,39 +72,11 @@ def _actor_user_id(actor: Mapping[str, Any] | None) -> str | None:
     return actor.get("user_id") or actor.get("fingerprint")
 
 
-def _actor_user_type(actor: Mapping[str, Any] | None) -> str:
-    return str((actor or {}).get("user_type") or "").strip().lower()
-
-
 def _actor_raw_roles(actor: Mapping[str, Any] | None) -> set[str]:
     return {
         role for role in ((actor or {}).get("roles") or [])
         if isinstance(role, str) and role.startswith("kdcube:role:")
     }
-
-
-def _user_types_visible(required_user_types: tuple[str, ...] | list[str] | None, actor: Mapping[str, Any] | None) -> bool:
-    user_types = tuple(
-        str(user_type or "").strip().lower()
-        for user_type in (required_user_types or ())
-        if str(user_type or "").strip()
-    )
-    if not user_types:
-        return True
-    current = _actor_user_type(actor)
-    if not current:
-        return False
-    current_rank = _USER_TYPE_VISIBILITY_ORDER.get(current)
-    if current_rank is None:
-        return current in set(user_types)
-    thresholds = [
-        _USER_TYPE_VISIBILITY_ORDER[user_type]
-        for user_type in user_types
-        if user_type in _USER_TYPE_VISIBILITY_ORDER
-    ]
-    if not thresholds:
-        return current in set(user_types)
-    return current_rank >= min(thresholds)
 
 
 def _raw_roles_visible(required_roles: tuple[str, ...] | list[str] | None, actor: Mapping[str, Any] | None) -> bool:
@@ -123,7 +87,7 @@ def _raw_roles_visible(required_roles: tuple[str, ...] | list[str] | None, actor
 
 
 def _handler_visible(handler_spec: DataBusHandlerSpec, actor: Mapping[str, Any] | None) -> bool:
-    return _user_types_visible(handler_spec.user_types, actor) and _raw_roles_visible(handler_spec.roles, actor)
+    return _raw_roles_visible(handler_spec.roles, actor)
 
 
 def _make_comm_context(message: DataBusMessage) -> ExternalEventPayload:

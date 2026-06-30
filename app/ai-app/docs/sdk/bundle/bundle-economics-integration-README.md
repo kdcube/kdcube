@@ -152,6 +152,15 @@ carry the Connection Hub authority projection into the job envelope as
 domain storage/provenance under the actor identity and let shared economics
 helpers project the billing/quota subject.
 
+Do not use `user_type` to decide economics authority or protected-surface
+visibility. Central SDK operation dispatch and Data Bus dispatch ignore
+`user_types`; use roles and authority/grant policy for authorization, and pass
+the carried `identity_authority` to shared economics helpers for quota/funding.
+If the actor is authenticated by Telegram, Slack, a delegated client, or another
+integration but is not projected to a platform/grantor identity, its runtime
+label is `external`; treat that as channel authentication only, not as platform
+registered/free quota.
+
 If the job opens a nested accounting scope directly, pass the projected
 authority envelope and the actor `user_id`. Do not derive or hardcode
 `economics_user_id` or billing authority in bundle code; those are handled inside

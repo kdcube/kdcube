@@ -71,7 +71,7 @@ Provider runtime
 
 Host app
   The KDCube app loaded inside that provider runtime.
-  Example: Versatile Telegram Mini App.
+  Example: KDCube Companion Telegram Mini App.
   It knows which configured integration it is using.
 
 Connection Hub widget or host UI

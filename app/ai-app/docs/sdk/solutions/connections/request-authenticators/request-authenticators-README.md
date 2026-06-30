@@ -97,15 +97,16 @@ X-KDCube-Auth-Authenticator-ID: telegram.kdcube_ref.init_data
 ```
 
 For third-party callbacks that cannot send custom headers, put the
-authenticator id in the callback URL:
+integration id in the callback URL:
 
 ```text
-/public/telegram_webhook?authenticator_id=telegram.kdcube_ref.webhook
+/public/telegram_webhook?integration_id=telegram.kdcube_ref
 ```
 
 ## Hints
 
-`authority_id` and `authenticator_id` are non-secret selector hints. They
+`authority_id`, `authenticator_id`, and provider-specific integration ids are
+non-secret selector hints. They
 narrow which authenticators may be tried. They are not trusted facts. They are
 the request-side selector contract for KDCube-controlled surfaces.
 
@@ -114,6 +115,16 @@ authenticator_id = telegram.kdcube_ref.init_data
   -> Connection Hub authenticator row
   -> authority_id=telegram.kdcube_ref
   -> secret_ref=identity.authenticators.telegram_kdcube_ref.bot_token
+```
+
+For Telegram webhooks, the SDK accepts the bundle-level `integration_id`
+selector because webhook routes are configured from bundle integration rows:
+
+```text
+integration_id = telegram.kdcube_ref
+  -> bundle integration row
+  -> bot token / webhook secret secret refs
+  -> Telegram webhook verifier
 ```
 
 These hints are not:

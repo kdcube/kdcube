@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AppShell } from './components/AppShell';
 import { ConnectionsPage } from './pages/ConnectionsPage';
 import { ConversationsPage } from './pages/ConversationsPage';
@@ -29,41 +29,60 @@ function telegramDeniedProfile(): TelegramProfile {
   };
 }
 
+function applyRuntimeSettings(data: Pick<WebAppPayload, 'authContext' | 'connections'> | Pick<TelegramProfile, 'authContext' | 'connections'>): void {
+  const settingsUpdate: Partial<AppSettings> = {};
+  if (data.authContext?.headers) {
+    settingsUpdate.authContextHeaders = Object.fromEntries(
+      Object.entries(data.authContext.headers)
+        .filter(([name, value]) => name && value !== undefined && value !== null && String(value) !== '')
+        .map(([name, value]) => [name, String(value)]),
+    );
+  }
+  if (data.connections?.connection_hub?.bundle_id) {
+    settingsUpdate.connectionHubBundleId = data.connections.connection_hub.bundle_id;
+  }
+  if (Object.keys(settingsUpdate).length > 0) {
+    settings.update(settingsUpdate);
+  }
+}
+
 export default function App() {
   const [tab, setTab] = useState<TabId>(activeTabFromPath(ROUTE_CONTEXT.widgetPath));
-  const connectionLinkSurface = isTelegramWebApp() && tab === 'connections';
   const [payload, setPayload] = useState<WebAppPayload>({});
   const [profile, setProfile] = useState<TelegramProfile | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const connectionLinkedRef = useRef<boolean | null>(null);
+
+  const connectionRequired = useMemo(() => {
+    if (!isTelegramWebApp() || !profile) return false;
+    return profile.connection?.linked === false || profile.connection?.required === true;
+  }, [profile]);
 
   const pendingTelegramApproval = useMemo(() => {
     if (!isTelegramWebApp() || !profile) return false;
+    if (connectionRequired) return false;
+    if (profile.connection?.linked === true) return false;
     if (profile.ok === false) return true;
-    if (profile.permissions?.can_use_widget === false) return true;
     if (profile.telegram?.allowed === false) return true;
     return String(profile.telegram?.role || '').toLowerCase() === 'anonymous';
-  }, [profile]);
-  const telegramGateActive = isTelegramWebApp() && !connectionLinkSurface && (loading || !profile || pendingTelegramApproval);
+  }, [profile, connectionRequired]);
+  const telegramGateActive = isTelegramWebApp() && !connectionRequired && (loading || !profile || pendingTelegramApproval);
+
+  useEffect(() => {
+    connectionLinkedRef.current = profile?.connection?.linked ?? null;
+  }, [profile?.connection?.linked]);
 
   async function load() {
     setLoading(true);
     setError('');
     try {
-      if (connectionLinkSurface) {
-        setProfile(null);
-        setPayload({});
-        return;
-      }
       if (isTelegramWebApp()) {
         const nextProfile = await callOperation<TelegramProfile>('telegram_profile', {});
         setProfile(nextProfile);
-        const role = String(nextProfile.telegram?.role || '').toLowerCase();
-        const allowed = nextProfile.ok !== false
-          && nextProfile.permissions?.can_use_widget !== false
-          && nextProfile.telegram?.allowed !== false
-          && role !== 'anonymous';
-        if (!allowed) {
+        applyRuntimeSettings(nextProfile);
+        if (nextProfile.connection?.linked === false || nextProfile.connection?.required === true) {
+          if (tab !== 'connections') setTab('connections');
           setPayload({});
           return;
         }
@@ -74,20 +93,7 @@ export default function App() {
         widget_path: tab === 'conversations' ? 'chats' : 'memory',
         mark_memory_seen: tab === 'memory',
       });
-      const settingsUpdate: Partial<AppSettings> = {};
-      if (data.authContext?.headers) {
-        settingsUpdate.authContextHeaders = Object.fromEntries(
-          Object.entries(data.authContext.headers)
-            .filter(([name, value]) => name && value !== undefined && value !== null && String(value) !== '')
-            .map(([name, value]) => [name, String(value)]),
-        );
-      }
-      if (data.connections?.connection_hub?.bundle_id) {
-        settingsUpdate.connectionHubBundleId = data.connections.connection_hub.bundle_id;
-      }
-      if (Object.keys(settingsUpdate).length > 0) {
-        settings.update(settingsUpdate);
-      }
+      applyRuntimeSettings(data);
       setPayload(data);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -111,11 +117,27 @@ export default function App() {
     void load();
   }, [tab]);
 
+  useEffect(() => {
+    function onConnectionStatusChanged(event: MessageEvent) {
+      const data = event.data;
+      if (!data || typeof data !== 'object') return;
+      if ((data as Record<string, unknown>).type !== 'kdcube-connection-status-changed') return;
+      if ((data as Record<string, unknown>).provider !== 'telegram') return;
+      const linked = Boolean((data as Record<string, unknown>).linked);
+      if (connectionLinkedRef.current === linked) return;
+      connectionLinkedRef.current = linked;
+      void load();
+    }
+    window.addEventListener('message', onConnectionStatusChanged);
+    return () => window.removeEventListener('message', onConnectionStatusChanged);
+  }, []);
+
   return (
     <AppShell
       activeTab={tab}
       hideTabs={telegramGateActive}
-      loading={loading}
+      connectOnly={connectionRequired}
+      loading={loading && !connectionRequired}
       error={pendingTelegramApproval ? '' : error}
       onTabChange={setTab}
     >
@@ -126,9 +148,10 @@ export default function App() {
           detail="Once approved, reopen this Mini App and it will load normally."
         />
       )}
-      {!loading && !pendingTelegramApproval && tab === 'memory' && <MemoryPage memory={payload.memory} reload={load} />}
-      {!loading && !pendingTelegramApproval && tab === 'conversations' && <ConversationsPage conversations={payload.conversations} reload={load} />}
-      {!loading && !pendingTelegramApproval && tab === 'connections' && <ConnectionsPage />}
+      {!pendingTelegramApproval && connectionRequired && <ConnectionsPage />}
+      {!loading && !pendingTelegramApproval && !connectionRequired && tab === 'memory' && <MemoryPage memory={payload.memory} reload={load} />}
+      {!loading && !pendingTelegramApproval && !connectionRequired && tab === 'conversations' && <ConversationsPage conversations={payload.conversations} reload={load} />}
+      {!loading && !pendingTelegramApproval && !connectionRequired && tab === 'connections' && <ConnectionsPage />}
     </AppShell>
   );
 }

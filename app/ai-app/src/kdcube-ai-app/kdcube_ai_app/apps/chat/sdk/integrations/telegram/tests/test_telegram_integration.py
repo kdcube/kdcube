@@ -119,7 +119,7 @@ def test_telegram_user_admin_storage_maps_roles_and_conversations(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_telegram_submit_react_turn_sends_external_events(tmp_path):
+async def test_telegram_submit_react_turn_sends_external_events(tmp_path, monkeypatch):
     from kdcube_ai_app.apps.chat.ingress.ingress_core import IngressResult
     from kdcube_ai_app.apps.chat.sdk.integrations.telegram import TelegramUserAdminStorage
     from kdcube_ai_app.apps.chat.sdk.integrations.telegram import user_admin
@@ -138,6 +138,19 @@ async def test_telegram_submit_react_turn_sends_external_events(tmp_path):
         storage_root_or_error=lambda entrypoint: tmp_path,
         bundle_id="test.telegram-submit",
     )
+    async def _authority(_entrypoint=None, **kwargs):
+        return {
+            "actor_user_id": kwargs["actor_user_id"],
+            "storage_user_id": kwargs["actor_user_id"],
+            "economics_user_id": "user-a",
+            "platform_user_id": "user-a",
+            "platform_roles": ["kdcube:role:chat-user"],
+            "platform_permissions": ["chat:run"],
+            "identity_provider": "telegram",
+            "platform_authority_resolved": True,
+        }
+
+    monkeypatch.setattr(user_admin, "_telegram_platform_authority", _authority)
 
     captured: dict[str, object] = {}
 
@@ -214,6 +227,19 @@ async def test_telegram_inline_run_react_turn_derives_external_event_type(tmp_pa
 
     monkeypatch.setattr(user_admin, "TelegramActivityStreamer", _FakeStreamer)
     monkeypatch.setattr(user_admin, "bot_token", lambda entrypoint=None: "telegram-token")
+    async def _authority(_entrypoint=None, **kwargs):
+        return {
+            "actor_user_id": kwargs["actor_user_id"],
+            "storage_user_id": kwargs["actor_user_id"],
+            "economics_user_id": "user-a",
+            "platform_user_id": "user-a",
+            "platform_roles": ["kdcube:role:chat-user"],
+            "platform_permissions": ["chat:run"],
+            "identity_provider": "telegram",
+            "platform_authority_resolved": True,
+        }
+
+    monkeypatch.setattr(user_admin, "_telegram_platform_authority", _authority)
 
     storage = TelegramUserAdminStorage(tmp_path)
     storage.upsert_user(

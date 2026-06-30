@@ -337,6 +337,7 @@ class RequestContext:
 
 class UserType(Enum):
     ANONYMOUS = "anonymous"
+    EXTERNAL = "external"
     REGISTERED = "registered"
     PRIVILEGED = "privileged"
     PAID = "paid"
@@ -445,6 +446,8 @@ class SessionManager:
             session_key = f"{self.SESSION_PREFIX}:paid:{user_data['user_id']}"
         elif user_type in [UserType.REGISTERED, UserType.PRIVILEGED] and user_data:
             session_key = f"{self.SESSION_PREFIX}:registered:{user_data['user_id']}"
+        elif user_type in [UserType.EXTERNAL, UserType.ANONYMOUS] and user_data and user_data.get("user_id"):
+            session_key = f"{self.SESSION_PREFIX}:external:{user_data['user_id']}"
         else:
             session_key = f"{self.SESSION_PREFIX}:anonymous:{fingerprint}"
 
@@ -532,6 +535,8 @@ class SessionManager:
         if not session_key:
             if session.user_type == UserType.PAID and session.user_id:
                 session_key = f"{self.SESSION_PREFIX}:paid:{session.user_id}"
+            elif session.user_type in [UserType.EXTERNAL, UserType.ANONYMOUS] and session.user_id:
+                session_key = f"{self.SESSION_PREFIX}:external:{session.user_id}"
             elif session.user_id:
                 session_key = f"{self.SESSION_PREFIX}:registered:{session.user_id}"
             elif session.fingerprint:
