@@ -16,6 +16,7 @@ CONVERSATIONS_READ_SCOPE = "conversations:read"
 
 # Discovery document paths (RFC 8414 / RFC 9728).
 WELL_KNOWN_AS_PATH = "/.well-known/oauth-authorization-server"
+WELL_KNOWN_OIDC_PATH = "/.well-known/openid-configuration"
 WELL_KNOWN_PR_PATH = "/.well-known/oauth-protected-resource"
 
 

@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.config import oauth_delegated_config
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.metadata import (
     WELL_KNOWN_AS_PATH,
+    WELL_KNOWN_OIDC_PATH,
     WELL_KNOWN_PR_PATH,
     authorization_server_metadata,
     protected_resource_metadata,
@@ -42,6 +43,7 @@ def resolve_issuer(request: Request) -> str:
 
 
 @router.get(WELL_KNOWN_AS_PATH, include_in_schema=False)
+@router.get(WELL_KNOWN_OIDC_PATH, include_in_schema=False)
 async def well_known_authorization_server(request: Request) -> JSONResponse:
     cfg = oauth_delegated_config(request)
     return JSONResponse(

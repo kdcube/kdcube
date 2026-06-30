@@ -74,6 +74,10 @@ def render_consent_html(
     brand: str = "KDCube",
     form_action: str = "/oauth/authorize/consent",
     config: OAuthDelegatedClientConfig | None = None,
+    grantor_subject: str = "",
+    grantor_label: str = "",
+    signout_action: str = "/oauth/logout",
+    return_to: str = "",
 ) -> str:
     esc = _html.escape
     tools = tools_for_scopes(req.scopes, config=config, resource=req.resource)
@@ -109,6 +113,22 @@ def render_consent_html(
         f'    <input type="hidden" name="{esc(k)}" value="{esc(v)}">' for k, v in hidden_fields
     )
     scope_list = ", ".join(esc(s) for s in req.scopes)
+    account_value = grantor_label or grantor_subject or "current KDCube account"
+    account_html = ""
+    if grantor_subject or grantor_label:
+        account_html = f"""
+    <div class="account">
+      <div>
+        <span class="k">KDCube account</span>
+        <strong>{esc(account_value)}</strong>
+        {f'<code>{esc(grantor_subject)}</code>' if grantor_subject and grantor_subject != account_value else ''}
+      </div>
+      <form class="account-form" method="post" action="{esc(signout_action)}">
+        <input type="hidden" name="next" value="{esc(return_to)}">
+        <button class="signout" type="submit">Sign out of KDCube</button>
+      </form>
+    </div>
+"""
 
     # Never present an arbitrary client with a hardcoded trusted brand. Show the
     # exact client_id + where the code will be sent, and flag clients that are not
@@ -154,6 +174,14 @@ def render_consent_html(
     .details {{ background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: .85rem 1rem; margin: 0 0 1rem; }}
     .details .row {{ display: flex; gap: .6rem; align-items: baseline; margin: .4rem 0; word-break: break-word; }}
     .k {{ flex: 0 0 96px; color: var(--muted); font-size: .8rem; text-transform: uppercase; letter-spacing: .4px; }}
+    .account {{
+      display: flex; justify-content: space-between; gap: 1rem; align-items: center;
+      border: 1px solid #cfe3f5; border-radius: 10px; padding: .8rem .9rem; margin: 0 0 1rem;
+      background: #fbfdff;
+    }}
+    .account strong {{ display: block; font-size: .95rem; margin-top: .12rem; }}
+    .account code {{ display: inline-block; margin-top: .2rem; max-width: 100%; word-break: break-all; }}
+    .account-form {{ margin: 0; flex: 0 0 auto; }}
     code, .scope {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85rem; }}
     code {{ background: #eef2f7; padding: .08rem .35rem; border-radius: 5px; }}
     .badge {{ font-size: .7rem; padding: .12rem .45rem; border-radius: 999px; white-space: nowrap; font-weight: 600; }}
@@ -172,10 +200,19 @@ def render_consent_html(
     .tool .desc, .edge .desc, .desc {{ display: block; color: var(--muted); font-size: .83rem; }}
     .tool .grants, .edge .grants {{ display: block; color: #365f86; font-size: .76rem; margin-top: .16rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }}
     .actions {{ display: flex; gap: .75rem; margin-top: 1.4rem; }}
-    button {{ flex: 1; padding: .7rem; border-radius: 10px; border: 0; font-size: 1rem; font-weight: 600; cursor: pointer; transition: filter .15s; }}
+    button {{ flex: 1; padding: .7rem; border-radius: 10px; border: 0; font-size: 1rem; font-weight: 600; cursor: pointer; transition: filter .15s, opacity .15s; }}
     button:hover {{ filter: brightness(.96); }}
+    button:disabled {{ opacity: .65; cursor: progress; }}
+    button.busy {{ pointer-events: none; }}
+    button.busy::after {{
+      content: ""; display: inline-block; width: .85em; height: .85em; margin-left: .45rem;
+      border: 2px solid currentColor; border-right-color: transparent; border-radius: 999px;
+      vertical-align: -.12em; animation: spin .7s linear infinite;
+    }}
+    @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
     .approve {{ background: var(--accent); color: #fff; }}
     .deny {{ background: #eef1f5; color: #33414f; }}
+    .signout {{ flex: 0 0 auto; background: #fff; color: #c2185b; border: 1px solid #f4c6da; font-size: .86rem; padding: .55rem .75rem; }}
     footer {{ margin-top: 1.3rem; font-size: .8rem; color: var(--muted); text-align: center; }}
     footer a {{ color: var(--accent-700); }}
   </style>
@@ -196,6 +233,7 @@ def render_consent_html(
     <p class="warn-text">Only approve if <strong>you</strong> started this connection and recognize the
     client and the redirect URL above. The connection can receive only the scopes and capabilities
     you approve here, and only if your KDCube account is allowed to delegate them.</p>
+{account_html}
     <form method="post" action="{esc(form_action)}">
 {hidden}
     <p class="pick">Platform account delegation edge:</p>
@@ -210,5 +248,26 @@ def render_consent_html(
     </form>
   </div>
   <footer>Powered by <a href="https://kdcube.tech/" target="_blank" rel="noopener">KDCube</a> · {esc(issuer)}</footer>
+  <script>
+    document.querySelectorAll('form').forEach((form) => {{
+      form.addEventListener('submit', (event) => {{
+        if (form.dataset.submitted === '1') {{
+          event.preventDefault();
+          return;
+        }}
+        form.dataset.submitted = '1';
+        const submitter = event.submitter;
+        if (submitter) {{
+          submitter.classList.add('busy');
+          if (submitter.value === 'approve') submitter.textContent = 'Approving';
+          else if (submitter.value === 'deny') submitter.textContent = 'Denying';
+          else submitter.textContent = 'Working';
+        }}
+        form.querySelectorAll('button').forEach((button) => {{
+          if (button !== submitter) button.disabled = true;
+        }});
+      }});
+    }});
+  </script>
 </body>
 </html>"""

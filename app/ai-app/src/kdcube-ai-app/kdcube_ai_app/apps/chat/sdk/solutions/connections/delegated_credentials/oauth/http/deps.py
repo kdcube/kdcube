@@ -20,10 +20,12 @@ from typing import Any, Awaitable, Callable, Optional
 
 from fastapi import Request
 
+from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.config import oauth_delegated_config
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_projection import (
     authority_has_platform_privilege,
 )
+from kdcube_ai_app.apps.middleware.token_extract import resolve_auth_from_headers_and_cookies
 
 AuthenticateFn = Callable[[str], Awaitable[Optional[dict]]]
 
@@ -36,6 +38,19 @@ def get_authenticate(request: Request) -> AuthenticateFn:
     fn = getattr(request.app.state, "oauth_authenticate", None)
     if fn is not None:
         return fn
+    fn_both = getattr(request.app.state, "oauth_authenticate_with_both", None)
+    if fn_both is not None:
+        async def _authenticate_override(token: str) -> Optional[dict]:
+            _auth_cfg = get_settings().AUTH
+            _, id_token = resolve_auth_from_headers_and_cookies(
+                request.headers.get("authorization"),
+                request.headers.get(_auth_cfg.ID_TOKEN_HEADER_NAME)
+                or request.headers.get(_auth_cfg.ID_TOKEN_HEADER_NAME.lower()),
+                request.cookies,
+            )
+            return await fn_both(token, id_token)
+
+        return _authenticate_override
 
     # delegated_client authenticates TWO distinct token kinds, so try each validator in
     # turn and accept the first that resolves a user. ORDER MATTERS:
@@ -63,16 +78,46 @@ def get_authenticate(request: Request) -> AuthenticateFn:
         create_auth_manager(),
     ]
 
+    def _user_dict(user: Any) -> dict:
+        if hasattr(user, "model_dump"):
+            data = user.model_dump()
+        elif hasattr(user, "dict"):
+            data = user.dict()
+        else:
+            data = {}
+        sub = (
+            data.get("sub")
+            or getattr(user, "sub", None)
+            or data.get("username")
+            or getattr(user, "username", None)
+        )
+        out = {
+            "sub": sub,
+            "user_id": data.get("user_id") or sub,
+            "username": data.get("username") or getattr(user, "username", None),
+            "email": data.get("email") or getattr(user, "email", None),
+            "name": data.get("name") or getattr(user, "name", None),
+            "roles": list(data.get("roles") or getattr(user, "roles", None) or []),
+            "permissions": list(data.get("permissions") or getattr(user, "permissions", None) or []),
+        }
+        return {key: value for key, value in out.items() if value not in (None, "", [])}
+
     async def _authenticate(token: str) -> Optional[dict]:
+        _auth_cfg = get_settings().AUTH
+        _, id_token = resolve_auth_from_headers_and_cookies(
+            request.headers.get("authorization"),
+            request.headers.get(_auth_cfg.ID_TOKEN_HEADER_NAME)
+            or request.headers.get(_auth_cfg.ID_TOKEN_HEADER_NAME.lower()),
+            request.cookies,
+        )
         for manager in managers:
             try:
-                user = await manager.authenticate(token)
+                user = await manager.authenticate_with_both(token, id_token)
             except Exception:
                 continue
             if user is None:
                 continue
-            sub = getattr(user, "sub", None) or getattr(user, "username", None)
-            return {"sub": sub, "roles": list(getattr(user, "roles", None) or [])}
+            return _user_dict(user)
         return None
 
     return _authenticate

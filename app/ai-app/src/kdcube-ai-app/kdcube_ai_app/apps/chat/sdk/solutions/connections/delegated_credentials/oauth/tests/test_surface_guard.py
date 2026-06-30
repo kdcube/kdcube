@@ -6,6 +6,7 @@ from __future__ import annotations
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
+from starlette.requests import Request as StarletteRequest
 
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth import (
     surface_guard,
@@ -276,6 +277,35 @@ def test_managed_guard_rejects_missing_resource(monkeypatch):
     assert response.json()["error_description"] == "delegated credential resource is missing"
 
 
+def test_managed_guard_compares_forwarded_public_resource(monkeypatch):
+    client = _client(
+        monkeypatch,
+        grant_record={
+            "tools": ["conversations_export"],
+            "credential": _authority(
+                resource=(
+                    "https://broodier-maxie-uninferrably.ngrok-free.dev"
+                    "/guard"
+                )
+            ),
+        },
+    )
+
+    response = client.post(
+        "/guard",
+        json=_rpc_tool_call(),
+        headers={
+            "Authorization": "Bearer reader",
+            "Host": "chat-proc:8020",
+            "X-Forwarded-Proto": "http",
+            "X-Forwarded-Host": "broodier-maxie-uninferrably.ngrok-free.dev",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
 def test_managed_guard_requires_bearer(monkeypatch):
     client = _client(
         monkeypatch,
@@ -289,3 +319,35 @@ def test_managed_guard_requires_bearer(monkeypatch):
 
     assert response.status_code == 401
     assert response.json()["error"] == "unauthorized"
+
+
+def test_oauth_challenge_uses_forwarded_public_origin():
+    request = StarletteRequest(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/api/integrations/bundles/demo-tenant/demo-project/kdcube-services@1-0/public/mcp/conversations",
+            "query_string": b"",
+            "server": ("chat-proc", 8020),
+            "headers": [
+                (b"host", b"chat-proc:8020"),
+                (b"x-forwarded-proto", b"http"),
+                (b"x-forwarded-host", b"broodier-maxie-uninferrably.ngrok-free.dev"),
+            ],
+            "path_params": {
+                "tenant": "demo-tenant",
+                "project": "demo-project",
+            },
+        }
+    )
+
+    headers = surface_guard._oauth_challenge_headers(request, {"mode": "managed"})
+
+    challenge = headers["WWW-Authenticate"]
+    assert (
+        "https://broodier-maxie-uninferrably.ngrok-free.dev/"
+        "api/integrations/bundles/demo-tenant/demo-project/connection-hub@1-0/public/oauth"
+    ) in challenge
+    assert "resource=https%3A%2F%2Fbroodier-maxie-uninferrably.ngrok-free.dev" in challenge
+    assert "http%3A%2F%2Fchat-proc%3A8020" not in challenge

@@ -138,17 +138,25 @@ class GrantStore:
 
     async def consume_csrf_token(self, token: Optional[str], sub: str) -> bool:
         """True iff ``token`` exists, is bound to ``sub``, and was not used before."""
+        ok, _reason = await self.consume_csrf_token_with_reason(token, sub)
+        return ok
+
+    async def consume_csrf_token_with_reason(self, token: Optional[str], sub: str) -> tuple[bool, str]:
+        """Consume a CSRF token and return a non-secret diagnostic reason."""
         if not token:
-            return False
+            return False, "missing"
         key = self._key("csrf", token)
         raw = await self._r.get(key)
         if raw is None:
-            return False
+            return False, "not_found"
         await self._r.delete(key)  # single use
         try:
-            return json.loads(raw).get("sub") == sub
+            stored_sub = json.loads(raw).get("sub")
         except Exception:
-            return False
+            return False, "malformed_record"
+        if stored_sub != sub:
+            return False, "subject_mismatch"
+        return True, "ok"
 
     # ------------------------- dynamic client registration -------------------------
 

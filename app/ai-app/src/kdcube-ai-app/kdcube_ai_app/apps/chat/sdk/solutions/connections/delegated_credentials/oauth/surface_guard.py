@@ -12,6 +12,7 @@ grant, and selected-tool checks happen at the proc bridge boundary.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -29,6 +30,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oau
 
 
 MANAGED_MCP_AUTH_MODE = "managed"
+LOGGER = logging.getLogger("kdcube.connection_hub.oauth.mcp_guard")
 
 
 def _as_list(value: Any) -> tuple[str, ...]:
@@ -114,6 +116,70 @@ def _json_response(
     )
 
 
+def _split_first_header_value(value: Any) -> str:
+    return str(value or "").split(",", 1)[0].strip()
+
+
+def _forwarded_parts(value: Any) -> dict[str, str]:
+    raw = _split_first_header_value(value)
+    if not raw:
+        return {}
+    out: dict[str, str] = {}
+    for item in raw.split(";"):
+        if "=" not in item:
+            continue
+        key, raw_value = item.split("=", 1)
+        key = key.strip().lower()
+        value = raw_value.strip().strip('"')
+        if key and value:
+            out[key] = value
+    return out
+
+
+def _is_local_or_internal_host(host: str) -> bool:
+    name = host.split(":", 1)[0].strip().lower()
+    return (
+        not name
+        or name == "localhost"
+        or name.startswith("127.")
+        or name == "::1"
+        or name.endswith(".local")
+        or "." not in name
+    )
+
+
+def _public_proto(proto: str, host: str) -> str:
+    value = (proto or "http").strip().lower()
+    if value == "http" and not _is_local_or_internal_host(host):
+        return "https"
+    return value
+
+
+def _request_public_origin(request: Request) -> str:
+    headers = request.headers
+    forwarded = _forwarded_parts(headers.get("forwarded"))
+    raw_proto = (
+        forwarded.get("proto")
+        or _split_first_header_value(headers.get("x-forwarded-proto"))
+        or str(request.url.scheme or "").strip()
+        or "http"
+    )
+    host = (
+        forwarded.get("host")
+        or _split_first_header_value(headers.get("x-forwarded-host"))
+        or _split_first_header_value(headers.get("host"))
+        or str(request.url.netloc or "").strip()
+    )
+    if not host:
+        return str(request.base_url).rstrip("/")
+    proto = _public_proto(raw_proto, host)
+    return f"{proto}://{host}".rstrip("/")
+
+
+def _request_public_url_without_query(request: Request) -> str:
+    return f"{_request_public_origin(request)}{request.url.path}".rstrip("/")
+
+
 def _oauth_challenge_headers(request: Request, auth: Mapping[str, Any] | None) -> dict[str, str]:
     auth = auth if isinstance(auth, Mapping) else {}
     configured_metadata_url = str(auth.get("resource_metadata_url") or "").strip()
@@ -132,10 +198,10 @@ def _oauth_challenge_headers(request: Request, auth: Mapping[str, Any] | None) -
         return {}
 
     issuer = (
-        f"{str(request.base_url).rstrip('/')}"
+        f"{_request_public_origin(request)}"
         f"/api/integrations/bundles/{tenant}/{project}/{connection_hub_bundle_id}/public/oauth"
     )
-    resource = str(request.url).split("?", 1)[0]
+    resource = _request_public_url_without_query(request)
     metadata_url = protected_resource_metadata_url(issuer, resource=resource)
     return {"WWW-Authenticate": f'Bearer resource_metadata="{metadata_url}"'}
 
@@ -199,7 +265,7 @@ def _normalize_resource(value: Any) -> str:
 
 
 def _request_resource(request: Request) -> str:
-    return _normalize_resource(str(request.url))
+    return _normalize_resource(_request_public_url_without_query(request))
 
 
 def _credential_resource(envelope: CredentialEnvelope) -> str:
@@ -266,6 +332,10 @@ async def authorize_delegated_mcp_request(
 
     token = _extract_bearer(request)
     if not token:
+        LOGGER.info(
+            "[connection-hub.oauth.mcp_guard] denied reason=missing_bearer resource=%s",
+            _request_resource(request),
+        )
         return _json_response(
             401,
             "unauthorized",
@@ -275,6 +345,10 @@ async def authorize_delegated_mcp_request(
 
     user = await _authenticate_delegated_client_access_token(token)
     if user is None:
+        LOGGER.info(
+            "[connection-hub.oauth.mcp_guard] denied reason=invalid_bearer resource=%s",
+            _request_resource(request),
+        )
         return _json_response(
             401,
             "unauthorized",
@@ -286,8 +360,20 @@ async def authorize_delegated_mcp_request(
     permissions = set(user.get("permissions") or [])
 
     if policy.roles and not roles.intersection(policy.roles):
+        LOGGER.info(
+            "[connection-hub.oauth.mcp_guard] denied reason=missing_role required=%s roles=%s resource=%s",
+            list(policy.roles),
+            sorted(roles),
+            _request_resource(request),
+        )
         return _json_response(403, "forbidden", "required role is missing")
     if policy.permissions and not permissions.issuperset(policy.permissions):
+        LOGGER.info(
+            "[connection-hub.oauth.mcp_guard] denied reason=missing_permission required=%s permissions=%s resource=%s",
+            list(policy.permissions),
+            sorted(permissions),
+            _request_resource(request),
+        )
         return _json_response(403, "forbidden", "required permission is missing")
 
     grant_store = await _default_grant_store(request)
@@ -304,12 +390,28 @@ async def authorize_delegated_mcp_request(
 
     if policy.authority_id:
         if envelope.issuer_authority_id != policy.authority_id:
+            LOGGER.info(
+                "[connection-hub.oauth.mcp_guard] denied reason=authority_mismatch required=%s got=%s resource=%s",
+                policy.authority_id,
+                envelope.issuer_authority_id,
+                _request_resource(request),
+            )
             return _json_response(403, "forbidden", "delegated credential authority mismatch")
 
     credential_resource = _credential_resource(envelope)
+    request_resource = _request_resource(request)
     if not credential_resource:
+        LOGGER.info(
+            "[connection-hub.oauth.mcp_guard] denied reason=credential_resource_missing request_resource=%s",
+            request_resource,
+        )
         return _json_response(403, "forbidden", "delegated credential resource is missing")
-    if credential_resource != _request_resource(request):
+    if credential_resource != request_resource:
+        LOGGER.info(
+            "[connection-hub.oauth.mcp_guard] denied reason=resource_mismatch credential_resource=%s request_resource=%s",
+            credential_resource,
+            request_resource,
+        )
         return _json_response(403, "forbidden", "delegated credential resource mismatch")
 
     tool_calls = extract_mcp_tool_calls(body)

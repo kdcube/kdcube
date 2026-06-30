@@ -142,6 +142,24 @@ def test_consent_html_uses_configured_brand():
     assert "Authorize an MCP connection to KDCube" in default     # default brand
 
 
+def test_consent_html_shows_platform_account_and_logout():
+    req = parse_authorize_request(_params())
+    html = render_consent_html(
+        req,
+        issuer=ISSUER,
+        grantor_subject="02e53484-0081-70ce-11c1-e96706b1a182",
+        grantor_label="elena@example.test",
+        signout_action="/api/integrations/bundles/demo/demo/connection-hub@1-0/public/oauth/logout",
+        return_to="/api/integrations/bundles/demo/demo/connection-hub@1-0/public/oauth/authorize?client_id=claude",
+    )
+
+    assert "KDCube account" in html
+    assert "elena@example.test" in html
+    assert "02e53484-0081-70ce-11c1-e96706b1a182" in html
+    assert "Sign out of KDCube" in html
+    assert "/public/oauth/logout" in html
+
+
 # ----------------------------------- routes -----------------------------------
 
 async def _fake_authenticate(token):
@@ -226,6 +244,35 @@ def test_authorize_renders_consent_for_admin(client):
     r = client.get("/oauth/authorize", params=_params(), headers={"Authorization": "Bearer admin-tok"})
     assert r.status_code == 200
     assert "conversations_export" in r.text
+    assert "Sign out of KDCube" in r.text
+
+
+def test_authorize_uses_id_token_when_browser_session_needs_it():
+    app = FastAPI()
+    enable_delegated_client(app, issuer=ISSUER)
+    mount_test_oauth_adapter(app)
+
+    async def _auth_with_both(access_token, id_token):
+        if access_token == "access-only" and id_token == "id-with-roles":
+            return {"sub": "google:admin@example.test", "roles": ["kdcube:role:super-admin"]}
+        if access_token == "access-only":
+            return {"sub": "google:admin@example.test", "roles": []}
+        return None
+
+    app.state.oauth_authenticate_with_both = _auth_with_both
+    app.state.oauth_grant_store = GrantStore(FakeRedis(), tenant="home", project="demo")
+    c = TestClient(app)
+
+    without_id = c.get("/oauth/authorize", params=_params(), headers={"Authorization": "Bearer access-only"})
+    assert without_id.status_code == 403
+
+    with_id = c.get(
+        "/oauth/authorize",
+        params=_params(),
+        headers={"Authorization": "Bearer access-only", "X-ID-Token": "id-with-roles"},
+    )
+    assert with_id.status_code == 200
+    assert "conversations_export" in with_id.text
 
 
 def test_authorize_unknown_client_is_400_not_redirect(client):

@@ -1,0 +1,25 @@
+bundles:
+  version: "1"
+  default_bundle_id: "kdcube-services@1-0"
+  items:
+    - id: "kdcube-services@1-0"
+      name: "KDCube Services"
+      path: "<LOCAL_HOST_BUNDLE_ROOT>"
+      module: "entrypoint"
+      singleton: false
+      config:
+        surfaces:
+          as_provider:
+            bundle:
+              visibility:
+                allowed_roles: []
+            mcp:
+              conversations:
+                auth:
+                  mode: "managed"
+                  authority_id: "delegated_client"
+                  tools:
+                    conversations_export:
+                      grants:
+                        - "conversations:read"
+                  selected_tool_grants: true

@@ -58,6 +58,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oau
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.http.routes import (
     authorize as oauth_authorize,
     authorize_consent as oauth_authorize_consent,
+    oauth_logout,
     register_client as oauth_register_client,
     token as oauth_token,
 )
@@ -379,6 +380,45 @@ def _oauth_public_base_url(request: Any) -> str:
         public_path = path.split(marker, 1)[0] + marker
     else:
         public_path = path.rstrip("/")
+    try:
+        headers = getattr(request, "headers", {}) or {}
+        forwarded = str(headers.get("forwarded") or "").split(",", 1)[0].strip()
+        forwarded_parts: Dict[str, str] = {}
+        for item in forwarded.split(";"):
+            if "=" not in item:
+                continue
+            key, value = item.split("=", 1)
+            key = key.strip().lower()
+            value = value.strip().strip('"')
+            if key and value:
+                forwarded_parts[key] = value
+        raw_proto = (
+            forwarded_parts.get("proto")
+            or str(headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip()
+            or str(getattr(getattr(request, "url", None), "scheme", "") or "").strip()
+            or "http"
+        )
+        host = (
+            forwarded_parts.get("host")
+            or str(headers.get("x-forwarded-host") or headers.get("host") or "").split(",", 1)[0].strip()
+            or str(getattr(getattr(request, "url", None), "netloc", "") or "").strip()
+        )
+        if host:
+            host_name = host.split(":", 1)[0].strip().lower()
+            proto = raw_proto
+            if (
+                raw_proto == "http"
+                and host_name
+                and host_name != "localhost"
+                and not host_name.startswith("127.")
+                and host_name != "::1"
+                and not host_name.endswith(".local")
+                and "." in host_name
+            ):
+                proto = "https"
+            return f"{proto}://{host}{public_path}".rstrip("/")
+    except Exception:
+        pass
     return f"{str(request.base_url).rstrip('/')}{public_path}".rstrip("/")
 
 
@@ -1131,6 +1171,17 @@ class ConnectionHubEntrypoint(BaseEntrypointWithMemory):
                         ],
                         "resources": [
                             {
+                                "resource": "*/api/integrations/bundles/*/*/kdcube-services@1-0/public/mcp/conversations*",
+                                "label": "KDCube conversations MCP",
+                                "tools": {
+                                    "conversations_export": {
+                                        "label": "Export conversations",
+                                        "description": "Read conversation transcripts for feedback triage.",
+                                        "grants": ["conversations:read"],
+                                    },
+                                },
+                            },
+                            {
                                 "resource": "*/api/integrations/bundles/*/*/user-memories@2026-06-26/public/mcp/memories*",
                                 "label": "User memories MCP",
                                 "tools": {
@@ -1294,7 +1345,13 @@ class ConnectionHubEntrypoint(BaseEntrypointWithMemory):
         issuer = str(cfg.get("issuer") or public_base).rstrip("/")
         LOGGER.info("[connection-hub.oauth] GET path=%s issuer=%s", path or ".", issuer)
 
-        if path in {"", ".well-known/oauth-authorization-server", "metadata", "authorization-server"}:
+        if path in {
+            "",
+            ".well-known/oauth-authorization-server",
+            ".well-known/openid-configuration",
+            "metadata",
+            "authorization-server",
+        }:
             parsed_cfg = oauth_delegated_config(request)
             return JSONResponse(
                 authorization_server_metadata(
@@ -1360,6 +1417,8 @@ class ConnectionHubEntrypoint(BaseEntrypointWithMemory):
             return await oauth_register_client(request)
         if path == "authorize/consent":
             return await oauth_authorize_consent(request)
+        if path == "logout":
+            return await oauth_logout(request)
         if path == "token":
             return await oauth_token(request)
 

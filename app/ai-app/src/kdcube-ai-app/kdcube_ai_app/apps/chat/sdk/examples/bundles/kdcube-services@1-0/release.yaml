@@ -1,0 +1,17 @@
+bundle:
+  repo: "kdcube/kdcube-ai-app"
+  ref: "unreleased"
+  description: |
+    Initial built-in KDCube services bundle.
+
+    Highlights
+
+    - Adds managed MCP surface public/mcp/conversations.
+    - Adds conversations_export as the platform-native replacement for the old
+      root /mcp conversation export shortcut.
+    - Uses Connection Hub delegated credentials and descriptor-managed
+      tool-centric grants.
+
+    Known follow-ups
+
+    - Add more KDCube service families as separate modules and MCP aliases.

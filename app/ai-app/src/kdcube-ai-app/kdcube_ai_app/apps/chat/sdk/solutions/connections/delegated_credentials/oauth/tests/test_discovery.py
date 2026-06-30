@@ -71,6 +71,14 @@ def test_well_known_authorization_server_served(client):
     assert resp.json() == authorization_server_metadata(ISSUER)
 
 
+def test_well_known_openid_configuration_alias_served(client):
+    resp = client.get("/.well-known/openid-configuration")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data == authorization_server_metadata(ISSUER)
+    assert data["registration_endpoint"] == f"{ISSUER}/oauth/register"
+
+
 def test_well_known_protected_resource_served(client):
     resource = "https://yey.boats/api/integrations/bundles/demo/prod/app@1/public/mcp/export"
     resp = client.get("/.well-known/oauth-protected-resource", params={"resource": resource})

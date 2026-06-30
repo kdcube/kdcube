@@ -109,6 +109,14 @@ bundles:
                   delegable_permissions:
                     - "knowledge:read"
               resources:
+                - resource: "*/api/integrations/bundles/*/*/kdcube-services@1-0/public/mcp/conversations*"
+                  label: "KDCube conversations MCP"
+                  tools:
+                    conversations_export:
+                      label: "Export conversations"
+                      description: "Read conversation transcripts for feedback triage."
+                      grants:
+                        - "conversations:read"
                 - resource: "*/api/integrations/bundles/*/*/user-memories@2026-06-26/public/mcp/memories*"
                   label: "User memories MCP"
                   identity_scope: "grantor_identity_family"

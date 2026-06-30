@@ -958,7 +958,12 @@ async def _parse_bundle_request_payload(request: Request) -> Tuple[BundleSuggest
         return BundleSuggestionsRequest(), []
 
     content_type = str(request.headers.get("content-type") or "").lower()
-    if "multipart/form-data" not in content_type:
+    is_json = (
+        "application/json" in content_type
+        or content_type.endswith("+json")
+        or "+json;" in content_type
+    )
+    if is_json:
         try:
             raw_body = await request.json()
         except Exception:
@@ -966,6 +971,11 @@ async def _parse_bundle_request_payload(request: Request) -> Tuple[BundleSuggest
         if not raw_body:
             return BundleSuggestionsRequest(), []
         return BundleSuggestionsRequest.model_validate(_normalize_bundle_request_body(raw_body)), []
+
+    if "multipart/form-data" not in content_type:
+        # Form-url-encoded OAuth/authorization callbacks, webhooks with custom
+        # bodies, and other protocol adapters own their raw Request parsing.
+        return BundleSuggestionsRequest(), []
 
     form = await request.form()
     payload_data: Dict[str, Any] = {}

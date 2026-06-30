@@ -12,11 +12,14 @@ hidden fields blindly — and restricts granted tools to those valid for the sco
 from __future__ import annotations
 
 import inspect
+import logging
 from typing import Iterable, Mapping, Optional, Tuple
+from urllib.parse import quote
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
+from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.solutions.connections.delegated_credentials.oauth.clients import (
     client_from_record,
     dcr_redirect_allowed,
@@ -52,6 +55,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.connections.authority_inventory impor
 )
 
 router = APIRouter()
+LOGGER = logging.getLogger("kdcube.connection_hub.oauth")
 
 _AUTHORIZE_FORM_KEYS = (
     "client_id", "redirect_uri", "response_type", "scope",
@@ -64,6 +68,28 @@ def _consent_action(request: Request) -> str:
     if path.endswith("/authorize"):
         return f"{path}/consent"
     return "/oauth/authorize/consent"
+
+
+def _logout_action(request: Request) -> str:
+    path = str(request.url.path or "").rstrip("/")
+    if path.endswith("/authorize"):
+        return f"{path.rsplit('/authorize', 1)[0]}/logout"
+    return "/oauth/logout"
+
+
+def _return_to(request: Request) -> str:
+    out = request.url.path
+    if request.url.query:
+        out += "?" + request.url.query
+    return out
+
+
+def _user_label(user: Mapping[str, object]) -> str:
+    for key in ("email", "name", "username", "sub", "user_id", "id"):
+        value = user.get(key)
+        if value:
+            return str(value)
+    return ""
 
 
 def _error_response(err: AuthorizeError, issuer: str) -> Response:
@@ -134,6 +160,27 @@ def _delegation_denial(scopes: Iterable[str], inventory: AuthorityGrantInventory
             "grants": denied,
             "resource": resource or "",
         },
+    )
+
+
+def _log_inventory(
+    *,
+    stage: str,
+    user: Mapping[str, object],
+    scopes: Iterable[str],
+    inventory: AuthorityGrantInventory,
+    resource: str | None = None,
+) -> None:
+    LOGGER.info(
+        "[connection-hub.oauth] %s grant_inventory subject=%s user_id=%s roles=%s permissions=%s requested=%s available=%s resource=%s",
+        stage,
+        user.get("sub") or "",
+        user.get("user_id") or "",
+        sorted(_as_set(user.get("roles") if isinstance(user, Mapping) else ())),
+        sorted(_as_set(user.get("permissions") if isinstance(user, Mapping) else ())),
+        sorted(_as_set(scopes)),
+        sorted(inventory.grant_names()),
+        resource or "",
     )
 
 
@@ -256,14 +303,12 @@ async def authorize(request: Request) -> Response:
         # survives) instead of a dead-end JSON 401. Authenticated denials still
         # return their JSON payload.
         if getattr(denied, "status_code", None) == 401:
-            from urllib.parse import quote
-            return_to = request.url.path
-            if request.url.query:
-                return_to += "?" + request.url.query
+            return_to = _return_to(request)
             return RedirectResponse(f"/signin?next={quote(return_to, safe='')}", status_code=302)
         return denied
 
     inventory = await _platform_grant_inventory(user or {}, req.scopes, cfg=cfg, resource=req.resource)
+    _log_inventory(stage="authorize", user=user or {}, scopes=req.scopes, inventory=inventory, resource=req.resource)
     visible_scopes = [scope for scope in req.scopes if scope in set(inventory.grant_names())]
     if not visible_scopes:
         delegation_denied = _delegation_denial(req.scopes, inventory, resource=req.resource)
@@ -288,6 +333,12 @@ async def authorize(request: Request) -> Response:
     if not subject:
         return JSONResponse(status_code=401, content={"error": "login_required"})
     csrf = await get_grant_store(request).create_csrf_token(subject)
+    LOGGER.info(
+        "[connection-hub.oauth] authorize csrf_minted subject=%s client_id=%s resource=%s",
+        subject,
+        req.client_id,
+        req.resource or "",
+    )
     # trusted = a statically pre-registered client (not a dynamically-registered one),
     # so the consent screen can flag unknown clients for anti-phishing.
     trusted = get_client(req.client_id, request) is not None
@@ -300,6 +351,10 @@ async def authorize(request: Request) -> Response:
             brand=cfg.brand,
             form_action=_consent_action(request),
             config=cfg,
+            grantor_subject=_user_subject(user or {}),
+            grantor_label=_user_label(user or {}),
+            signout_action=_logout_action(request),
+            return_to=_return_to(request),
         )
     )
 
@@ -334,7 +389,25 @@ async def authorize_consent(request: Request) -> Response:
     # CSRF: the consent POST must carry the single-use token minted for THIS user
     # at GET /oauth/authorize. Blocks a forged cross-site POST riding the session
     # cookie. Checked before the decision branch so deny is protected too.
-    if not await store.consume_csrf_token(form.get("csrf_token"), subject):
+    csrf_value = form.get("csrf_token")
+    if hasattr(store, "consume_csrf_token_with_reason"):
+        csrf_ok, csrf_reason = await store.consume_csrf_token_with_reason(csrf_value, subject)
+    else:
+        csrf_ok = await store.consume_csrf_token(csrf_value, subject)
+        csrf_reason = "ok" if csrf_ok else "invalid"
+    if not csrf_ok:
+        LOGGER.warning(
+            "[connection-hub.oauth] invalid_csrf reason=%s subject=%s client_id=%s resource=%s "
+            "csrf_present=%s form_keys=%s content_type=%s path=%s",
+            csrf_reason,
+            subject,
+            params.get("client_id") or "",
+            params.get("resource") or "",
+            bool(csrf_value),
+            sorted(str(key) for key in form.keys()),
+            request.headers.get("content-type") or "",
+            request.url.path,
+        )
         return JSONResponse(
             status_code=403,
             content={"error": "invalid_csrf", "error_description": "CSRF token missing, expired, or invalid"},
@@ -369,6 +442,7 @@ async def authorize_consent(request: Request) -> Response:
         )
 
     inventory = await _platform_grant_inventory(user or {}, req.scopes, cfg=cfg, resource=req.resource)
+    _log_inventory(stage="authorize.consent", user=user or {}, scopes=req.scopes, inventory=inventory, resource=req.resource)
     delegation_denied = _delegation_denial(selected_scopes, inventory, resource=req.resource)
     if delegation_denied is not None:
         return delegation_denied
@@ -411,6 +485,30 @@ def _minter_accepts_authority_kwargs(minter) -> bool:
     if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values()):
         return True
     return any(name in params for name in ("client_id", "tools", "credential"))
+
+
+@router.post("/oauth/logout", include_in_schema=False)
+async def oauth_logout(request: Request) -> Response:
+    try:
+        form = await request.form()
+    except Exception:
+        form = {}
+    next_url = str(form.get("next") or "/").strip()
+    if not next_url.startswith("/") or next_url.startswith("//"):
+        next_url = "/"
+
+    response = RedirectResponse(f"/signin?next={quote(next_url, safe='')}", status_code=302)
+    auth_cfg = get_settings().AUTH
+    cookie_names = {
+        oauth_delegated_config(request).auth_cookie_name,
+        getattr(auth_cfg, "AUTH_TOKEN_COOKIE_NAME", ""),
+        getattr(auth_cfg, "ID_TOKEN_COOKIE_NAME", ""),
+        getattr(auth_cfg, "MASQUERADED_TOKEN_COOKIE_NAME", ""),
+    }
+    for name in sorted(item for item in cookie_names if item):
+        response.delete_cookie(name, path="/")
+    LOGGER.info("[connection-hub.oauth] logout cleared platform cookies next=%s", next_url)
+    return response
 
 
 async def _issue_tokens(
