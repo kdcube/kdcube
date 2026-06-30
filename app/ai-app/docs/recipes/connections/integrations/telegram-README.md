@@ -22,7 +22,7 @@ The clean model is:
 ```text
 Telegram proves telegram:<id>.
 KDCube platform sign-in proves platform:<id>.
-Connection Hub stores the connection/delegation edge.
+Connection Hub stores the connection edge with selected delegation grants.
 Telegram keeps actor identity telegram_<id>.
 Platform roles/economics are projected only when the edge exists.
 ```
@@ -81,18 +81,30 @@ Connection Hub widget creates a link challenge
         v
 browser opens KDCube claim page
   user signs in to KDCube if needed
-  user confirms delegation/connection edge
+  user confirms the connection edge and selected platform delegation grants
         |
         v
 Connection Hub stores the edge
         |
         v
-Data Bus notifies the Mini App widget
+Data Bus notifies the Mini App widget with connection_hub.edge.changed
   KDCube Companion unlocks Memories and Chats
 ```
 
 The Mini App can show only Connect while the Telegram actor is unlinked. Once
 linked, it can show platform-backed tabs such as Memories and Chats.
+
+The status read is intentionally a public GET operation:
+
+```text
+GET /api/integrations/bundles/<TENANT>/<PROJECT>/connection-hub@1-0/public/telegram_connection_edge_status
+  X-KDCube-Auth-Provider: telegram
+  X-KDCube-Auth-Integration-ID: telegram.kdcube_ref
+  X-Telegram-Init-Data: <Telegram.WebApp.initData>
+```
+
+The start, complete, remove, and Data Bus claim operations remain POST because
+they create, change, or mint state.
 
 ## Descriptor Shape
 
@@ -170,13 +182,28 @@ Recommended BotFather display name:
 KDCube Companion
 ```
 
+If a specific chat still opens an obsolete app after the default menu button is
+correct, clear or reset that chat-specific menu button too:
+
+```bash
+curl -sS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setChatMenuButton" \
+  -H "Content-Type: application/json" \
+  -d "{\"chat_id\":${TELEGRAM_CHAT_ID},\"menu_button\":{\"type\":\"commands\"}}"
+
+curl -sS "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getChatMenuButton?chat_id=${TELEGRAM_CHAT_ID}"
+```
+
+BotFather's Main Mini App URL is still manual configuration and is not changed
+by `setChatMenuButton`.
+
 ## Testing
 
 1. Open the Telegram bot and send `/start`.
 2. If the Telegram actor is unlinked, confirm the bot replies with a connect
    prompt instead of running an economics-protected workflow.
 3. Open KDCube Companion and use the Connect tab.
-4. Complete KDCube sign-in and confirm the connection/delegation edge.
+4. Complete KDCube sign-in and confirm the connection edge and selected
+   delegation grants.
 5. Return to Telegram. The Mini App should show Memories and Chats.
 6. Send another message. Logs should show `user_id=telegram_<id>` and projected
    platform authority/economics subject when the edge exists.
@@ -184,7 +211,10 @@ KDCube Companion
 Useful log markers:
 
 ```text
-[telegram.connection] actor=telegram_<id> linked=<true|false>
+[telegram.connection] status provider=telegram provider_subject=<telegram_id> linked=<true|false> platform_user_id=<platform_user_id>
+[telegram.profile] actor_user_id=telegram_<id> telegram_user_id=<telegram_id> linked=<true|false> can_use_widget=<true|false>
+[connection-hub.data_bus] claim issued ... actor_user_id=telegram_<id> ... linked=<true|false>
+[connection_hub.edge.changed]
 [connection-hub.identity_family_resolve]
 [run] init ... actor_user_id=telegram_<id> economics_user_id=<platform_user_id>
 ```
